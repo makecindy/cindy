@@ -2964,7 +2964,8 @@
         "saveFailed": "保存新对话配置失败",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },
@@ -5326,6 +5327,12 @@
       "openProviders": "打开模型供应商",
       "acknowledge": "知道了",
       "separator": "、"
+    },
+    "promotionalGrant": {
+      "title": "已为你开通 Cindy AI",
+      "desc": "赠送余额 {{amount}} 已到账，有效期至 {{date}}。用完或过期后可随时充值。",
+      "openBilling": "查看用量",
+      "acknowledge": "知道了"
     }
   },
   "voiceInputOverlay": {
@@ -6097,6 +6104,7 @@
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
+      "degraded": "与被控设备的连接不稳定，正在自动重试…",
       "actionsUnavailable": "被控设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
       "loading": "正在从被控设备加载任务…",
@@ -6230,9 +6238,8 @@
         "localMachine": "本机",
         "connecting": "连接中…",
         "tasksLoading": "正在从 {{device}} 读取任务…",
-        "tasksLoadFailed": "无法读取 {{device}} 上的任务。请检查连接后重试。",
-        "tasksPartiallyFailed": "未能读取 {{device}} 上的任务，当前仅显示已加载的内容。",
-        "retryTasks": "重新读取任务",
+        "tasksLoadFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试…",
+        "tasksPartiallyFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试；先显示已加载的内容",
         "devicesLoading": "正在读取远程设备…",
         "devicesLoadFailed": "无法读取远程设备列表。请检查连接后重试。",
         "devicesPartiallyFailed": "无法刷新远程设备列表，当前仅显示已加载的内容。",
@@ -8588,6 +8595,20 @@
           "expired": "已过期",
           "voided": "已作废"
         }
+      }
+    },
+    "orders": {
+      "title": "订单记录",
+      "description": "仅显示在 Cindy 内发起的充值与订阅订单。待支付订单超时后自动取消。",
+      "count": "{{count}} 笔",
+      "incomplete": "订单记录较多，当前仅显示最近的 {{count}} 笔。",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "已完成",
+        "awaitingPayment": "待支付",
+        "canceled": "已取消",
+        "expired": "已过期",
+        "failed": "支付失败"
       }
     },
     "dialogs": {

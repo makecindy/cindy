@@ -1,6 +1,7 @@
 /**
- * 手机客户端说明:来源判据(被控端盖章、不可伪造)、wire 注入形态、以及
- * 「只进喂给 agent 的内容、不进落库原话」这条不变量的源码级守卫。
+ * 手机客户端说明:来源判据(体验分流用,**非**安全边界 —— 平台值由对端自报,见
+ * device-link/invoke-context 的可信度说明)、wire 注入形态、以及「只进喂给 agent 的
+ * 内容、不进落库原话」这条不变量的源码级守卫。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -202,6 +203,21 @@ describe('注入接线(源码级守卫)', () => {
     // 只看 import 与调用形态 —— deps 字段的注释里会提到这个函数名,那不算直连。
     expect(source).not.toMatch(/from '\.\.\/device-link\/invoke-context/);
     expect(source).not.toMatch(/isMobileControllerInvoke\s*\(/);
+  });
+
+  it('注释不得把平台值说成安全边界(平台由对端 hello 自报,无服务端校验)', () => {
+    const files = [
+      'src/main/device-link/invoke-context.ts',
+      'src/main/device-link/controllerPlatform.ts',
+      'src/main/maker-ipc/makerSendTransaction.ts',
+    ].map((rel) => readFileSync(resolve(process.cwd(), rel), 'utf8'));
+    for (const text of files) {
+      expect(text).not.toContain('不可伪造');
+    }
+    // 三处都必须显式声明它只用于体验分流。
+    expect(files[0]).toContain('不是安全 / 鉴权 / 权限边界');
+    expect(files[1]).toContain('仅体验分流,不是安全边界');
+    expect(files[2]).toContain('不是安全判据');
   });
 
   it('装配处每次调用现取,不提前求值缓存', () => {

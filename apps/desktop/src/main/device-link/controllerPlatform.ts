@@ -6,6 +6,11 @@
  * (`ios` / `android`)。两端取值天然不重叠,所以它是现成可用的「控制端是电脑还是
  * 手机」判据 —— 不需要往 relay 协议里新加 clientType 字段。
  *
+ * ⚠️ **可信度:仅体验分流,不是安全边界。** 这个值由对端设备在 hello 帧里自报
+ * (`HelloPayload.platform`,client→server),本仓没有服务端校验或覆盖 —— 一台改过的
+ * 同账号已配对设备可以声称自己是 `ios`。消费方只能拿它做"要不要换个呈现 / 多说一句"
+ * 这类无权限后果的分流;任何鉴权、权限或安全判定都不得建立在它上面。
+ *
  * 单独成模块而不是留在 device-link/index.ts 里,是为了让 dispatch.ts 也能读:
  * index.ts 已经 import dispatch.ts(`index.ts` 顶部),反向 import 会成环。这里是
  * 无依赖叶子模块,两边都能安全引用,且平台事实只有一份。

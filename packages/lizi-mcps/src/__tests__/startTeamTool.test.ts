@@ -22,7 +22,8 @@ describe('start_team tool', () => {
     });
 
     expect(registry.get('start_team')?.description).toContain(
-      '注:start_team 开启的是 session 级、持久、UI 可见的多 worker 协同。若用户要的是一个 subagent(一次性、用完即弃的子任务执行体),请用你自己的原生 subagent 机制(Codex:spawn_agent;Claude Code:Task 工具),不要为此 start_team 开协同。',
+      '注:start_team 开启的是 session 级、持久、UI 可见的多 worker 协同。若用户要的是一个 subagent(一次性、用完即弃的子任务执行体),请用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task 工具),不要为此 start_team 开协同。'
+        + 'Orca 协同永远不是 subagent 的替代品;你没有原生 subagent 机制时,如实告知用户并请他决定,不要拿 Orca 顶替,也不要自己起进程冒充。',
     );
   });
 
@@ -45,7 +46,7 @@ describe('start_team tool', () => {
       ok: false,
       errorCode: 'WORKER_CANNOT_NEST',
       data: {
-        hint: 'start_team 是 Orca worker 协同入口,不是 subagent 入口。若用户明确要求 subagent / 子代理,请使用你自己的原生 subagent 机制(Codex:spawn_agent;Claude Code:Task/Agent 工具),不要使用 Orca start_team / create_worker。',
+        hint: 'start_team 是 Orca worker 协同入口,不是 subagent 入口。若用户明确要求 subagent / 子代理,请使用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task/Agent 工具),不要使用 Orca start_team / create_worker。没有原生 subagent 机制时如实告知用户,Orca 协同不是它的替代品。',
       },
     });
     expect(startTeam).not.toHaveBeenCalled();

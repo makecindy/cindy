@@ -3,8 +3,9 @@
  * ---------------------------------------------------------------------------
  * 结构照 revokedDevicesStore 模板:module 级 Set + subscribe/getSnapshot +
  * useSyncExternalStore hook,供 UI(首页设备行 failed 态、ConnectionBanner)订阅。
- * 状态机本体在 deviceResponsivenessBreaker.ts(纯逻辑,可单测);本文件持有
- * module 级单例并暴露 DeviceLinkContext 发送路径用的门禁 / 收尾 helper。
+ * 状态机本体在 @cindy/maker-shared/device-responsiveness(纯逻辑,可单测,
+ * desktop / mobile 控制端共享);本文件持有 module 级单例并暴露 DeviceLinkContext
+ * 发送路径用的门禁 / 收尾 helper。
  */
 import { useSyncExternalStore } from 'react';
 import { DeviceLinkError, type DeviceLinkErrorCode } from '@cindy/device-link';
@@ -13,7 +14,7 @@ import {
   createDeviceResponsivenessBreaker,
   type BreakerSendSlot,
   type BreakerSettleOutcome,
-} from '@/device-link/deviceResponsivenessBreaker';
+} from '@cindy/maker-shared/device-responsiveness';
 
 const unresponsive = new Set<string>();
 let snapshot: ReadonlySet<string> = new Set();

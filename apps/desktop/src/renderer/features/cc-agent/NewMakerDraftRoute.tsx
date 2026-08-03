@@ -61,6 +61,7 @@ import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
+import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
@@ -3733,6 +3734,14 @@ export function NewMakerDraftRoute() {
                     待办,不该把快速开始顶掉。device-link 草稿不出:连接态在被控端。
                     间距挂在组件自身:外层包一层 div 会在它不可见时留下一段空白 margin。 */}
                 <InheritedSubscriptionNotice
+                  enabled={!isDeviceLinkDraft}
+                  className="mt-6 self-stretch"
+                />
+                {/* 「赠送余额已到账」一次性告知。与上面那条**不互斥**:两者都是告知,同时成立
+                    时按发生顺序竖排(先讲用的是哪个账号,再讲账上有多少钱),都不与快速开始
+                    互斥。device-link 草稿不出:那条对话跑在被控端,本机账号的赠送与它无关。
+                    间距同样挂在组件自身,免得它不可见时留下一段空白 margin。 */}
+                <PromotionalGrantNotice
                   enabled={!isDeviceLinkDraft}
                   className="mt-6 self-stretch"
                 />

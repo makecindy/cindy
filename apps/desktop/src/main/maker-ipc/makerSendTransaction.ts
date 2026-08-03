@@ -154,7 +154,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -180,11 +180,15 @@ export interface MakerSendTransactionDeps {
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   /**
-   * 本次调用是否来自手机控制端(缺省 = 否)。
+   * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
    * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
    * newMakerWorktreePreferenceHandler 把 isDeviceLinkInvoke 做成 deps 的写法)。
-   * 判据本身由被控端盖章、控制端无法伪造,见 device-link/invoke-context.ts。
+   *
+   * ⚠️ 判据里的平台值是**对端设备在 hello 帧自报**的(经 presence 广播进本机缓存),
+   * 本仓没有服务端校验 —— 一台改过的同账号已配对设备可以声称自己是手机。它的唯一
+   * 后果是多追加一段体验说明,所以够用;但不得据它放行权限或跳过任何校验。
+   * 完整可信度说明见 device-link/invoke-context.ts。
    */
   isMobileClientInvoke?(): boolean;
   log: MakerSendTransactionLog;
@@ -646,7 +650,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           onDispatching: () => {
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });

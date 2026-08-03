@@ -89,10 +89,12 @@ describe('Dialogue sidebar section', () => {
     const connectingIndex = sidebarSource.indexOf('selectedMachineConnecting ?');
     expect(failureIndex).toBeGreaterThanOrEqual(0);
     expect(connectingIndex).toBeGreaterThan(failureIndex);
-    expect(sidebarSource).toContain('retryRemoteSessionBootstrap(device.deviceId)');
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'");
-    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.retryTasks'");
+    // 任务读取失败是「自动重试进行中」的状态说明(reconciler 退避重试 + 熔断探测恢复
+    // 自动补拉),不再提供手动重试按钮(2026-08 弱网实测反馈:重连必须全自动)。
+    expect(sidebarSource).not.toContain('retryRemoteSessionBootstrap(device.deviceId)');
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryTasks'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoading'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
     expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoading'");

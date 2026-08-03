@@ -3062,6 +3062,7 @@ interface ElectronAPI {
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
+      unresponsiveDeviceIds: string[];
     }>;
     setEnabled: (enabled: boolean) => Promise<{ remoteControlEnabled: boolean }>;
     setKeepAwake: (enabled: boolean) => Promise<{ keepAwake: boolean }>;
@@ -3117,6 +3118,10 @@ interface ElectronAPI {
     ) => () => void;
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送 */
     onKeepAwakeChanged: (cb: (payload: { keepAwake: boolean }) => void) => () => void;
+    /** 控制端:目标设备「无响应」熔断状态翻转(弱网 / 对端卡死;presence 可能仍在线) */
+    onResponsivenessChanged: (
+      cb: (payload: { deviceId: string; unresponsive: boolean }) => void,
+    ) => () => void;
     /**
      * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见
      * main/device-link/mirrorCacheStore.ts)。只做首屏加速、非权威 —— 缓存里没有 live 态,

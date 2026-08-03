@@ -16,10 +16,18 @@ export interface DeviceLinkInvokeContext {
   /**
    * 控制端平台(presence 登记的 `PresenceSnapshot.platform`);未登记时 undefined。
    *
-   * 与 controllerDeviceId 一样属于**被控端自己盖的章** —— controllerDeviceId 来自
-   * server 填的 `env.src`(客户端传入值会被覆盖,见 device-link-protocol 的 Envelope
-   * 注释),platform 则由本机 presence 缓存按该 id 查出。控制端在线上帧里自报的任何
-   * 字段(如 sendOpts)都不参与,所以不可伪造。
+   * ⚠️ **只用于体验分流,不是安全 / 鉴权 / 权限边界**(review 修正)。两个字段的可信度
+   * 不同,不要混为一谈:
+   *  - `controllerDeviceId` 来自 server 填的 `env.src`(客户端传入值会被覆盖,见
+   *    device-link-protocol 的 Envelope 注释),有服务端背书;
+   *  - `controllerPlatform` 则是**对端设备在 hello 帧里自报**的值
+   *    (`HelloPayload.platform`,client→server),经 relay 的 presence 广播进本机缓存。
+   *    本仓没有任何服务端校验或覆盖逻辑,所以一台改过的同账号已配对设备可以声称
+   *    自己是 `ios`。
+   *
+   * 它比控制端在每次 invoke 的 args / sendOpts 里现报要稳(不随单次调用摆动、由 presence
+   * 统一维护),这就够用来决定"要不要多追加一段体验说明";但**不得**据它放行权限、
+   * 跳过校验或做任何安全判定。
    */
   controllerPlatform?: string;
 }
@@ -42,7 +50,8 @@ export function isDeviceLinkInvoke(): boolean {
 }
 
 /**
- * 当前调用是否来自**手机**控制端。
+ * 当前调用是否来自**手机**控制端 —— **体验分流用,不是安全判据**(见
+ * DeviceLinkInvokeContext.controllerPlatform 的说明)。
  *
  * 本机 renderer 自己发的 invoke 不在 store 里 → false;另一台桌面作控制端 → platform
  * 是 `darwin`/`win32`/`linux` → false;presence 还没到、platform 未知 → 同样 false

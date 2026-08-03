@@ -481,8 +481,12 @@ describe('sendToSession ordering', () => {
     expect(makerSendCreateDbMessageBlock).toContain('const result = await enqueueDurableWrite');
     expect(makerSendCreateDbMessageBlock).not.toContain('notifyAgentIslandUserPrompt(');
     expect(makerSendPreviewHookBlock).toContain('previewUserPrompt: (session, content, options) => {');
-    expect(makerSendPreviewHookBlock).toContain('notifyAgentIslandUserPrompt(session, content, options);');
-    expect(makerSendPreviewHookBlock).toContain('dispatchUserPromptPreview: (sessionId) => {');
+    expect(makerSendPreviewHookBlock).toContain(
+      'const previewed = notifyAgentIslandUserPrompt(session, content, {',
+    );
+    expect(makerSendPreviewHookBlock).toContain(
+      'dispatchUserPromptPreview: (sessionId, clientId) => {',
+    );
     expect(makerSendPreviewHookBlock).toContain('dispatchAgentIslandUserPrompt(sessionId);');
     expect(makerSendPreviewHookBlock).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
     expect(makerSendPreviewHookBlock).toContain('rollbackUserPromptPreview: (sessionId, clientId, source) => {');
