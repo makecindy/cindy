@@ -111,6 +111,7 @@ import {
   extractRolloutUpdatePlanFunctionCallEvent,
   type CodexRuntimeState,
 } from './translator.js';
+import { createSubagentLiveCardTracker } from './subagent-live-cards.js';
 import {
   TurnRetryTracker,
   buildBackendUnreachableMessage,
@@ -3052,6 +3053,40 @@ export class CodexAgent extends BaseAgent {
         unregisterCodexMcpContext(descendantThreadId);
       }
       descendantMcpThreadIds.clear();
+    };
+
+    // ── 子代理卡实时状态(V1 / V2 双轨) ──────────────────────────────────────
+    // 子代理跑在自己的 thread 里,app-server 把子线程的 item / tokenUsage / turn 通知
+    // 一并推给本连接;host 按 lineage 归到 root 后经 descendantNotification 投到这里
+    // (刻意不进主线程 dispatch,否则子代理的 exec 会被渲染成主会话自己的工具调用)。
+    // 聚合逻辑在 subagent-live-cards.ts(纯函数、可单测),这里只负责把快照按 spawn 卡
+    // 的同一 taskId 发成 agent_task_update —— 卡片本体与 Claude 子代理共用
+    // AgentTaskCard,本改动只补 Codex 侧缺失的数据源,不新建 UI。
+    const subagentLiveCards = createSubagentLiveCardTracker();
+
+    const handleDescendantNotification = (
+      childThreadId: string,
+      method: string,
+      params: unknown,
+    ): void => {
+      const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
+      if (!update) return;
+      eventQueue.push({
+        type: 'agent_task_update',
+        data: {
+          provider: 'codex',
+          taskId: update.taskId,
+          parentToolUseId: update.taskId,
+          status: update.status,
+          ...(update.agentPath ? { title: update.agentPath } : {}),
+          usage: {
+            ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
+            ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
+            durationMs: update.durationMs,
+          },
+        },
+        source: 'codex',
+      });
     };
     function currentApprovalConfig(): CodexPermissionConfig {
       return mapPermissionToCodex(
@@ -6673,6 +6708,7 @@ export class CodexAgent extends BaseAgent {
           childThreadId,
         });
       },
+      descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
@@ -6844,6 +6880,8 @@ export class CodexAgent extends BaseAgent {
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
+        // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
+        subagentLiveCards.noteSpawnItem(params.item);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -6878,6 +6916,8 @@ export class CodexAgent extends BaseAgent {
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
+        // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
+        subagentLiveCards.noteSpawnItem(params.item);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -8143,6 +8183,7 @@ export class CodexAgent extends BaseAgent {
         resetUpstreamIdleForTurnEnd();
         unregisterCodexMcpContext(threadId);
         unregisterDescendantCodexMcpContexts();
+        subagentLiveCards.clear();
         // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
         // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
         // 永不返回, server 侧请求卡死。

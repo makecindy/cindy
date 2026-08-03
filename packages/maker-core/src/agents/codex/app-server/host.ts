@@ -123,6 +123,16 @@ function extractThreadId(method: string, params: unknown): string | null {
 export interface ThreadEventHandlers {
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
   descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
+  /**
+   * 子线程(子代理)自己的 notification,按 lineage 归到 root 订阅者。
+   *
+   * 刻意**不复用** dispatchToHandlers 的主线程通道:主线程 handler 带 turn 级簿记
+   * (stale turn 判定、currentTurnId、status 推送、usageTracker 记账),子线程事件
+   * 灌进去会把子代理的 exec/文件改动渲染成主会话自己的工具调用,并污染主 turn 的
+   * 用量与状态机。这里只投递原始 method + params,由上层聚合成子代理卡的实时状态;
+   * 上层不关心的 method 自行忽略。
+   */
+  descendantNotification?: (childThreadId: string, method: string, params: unknown) => void;
   turnStarted?: (params: TurnStartedNotification['params']) => void;
   turnCompleted?: (params: TurnCompletedNotification['params']) => void;
   /** 每次 turn 都会推一次 (turn 完成前), 与 turn/completed 在同 turnId 下成对出现。 */
@@ -758,6 +768,33 @@ export class AppServerHost {
     const handlers = this.subscribers.get(threadId);
     if (handlers) {
       this.dispatchToHandlers(handlers, method, params);
+      return;
+    }
+    // 已知的子线程(子代理):app-server 对连接内所有 loaded thread 主动推送,过滤全在
+    // 本地。此前这里只按 subscribers 精确匹配,子线程的 item/tokenUsage/turn 事件因此
+    // 全部落进 TTL 缓冲后被丢弃 —— 子代理在 UI 上没有任何实时状态。改为按 lineage 归到
+    // root 的独立 descendant 通道(不进主线程 dispatch,见 descendantNotification 注释)。
+    // thread/started 不进这条通道:它已由上面的 routeDescendantThreadStarted 经专用的
+    // descendantThreadStarted handler 投递过。两条通道送同一事件会诱发重复处理,且
+    // 它仍需按原样落缓冲 —— replayBufferedDescendantThreadStarts 靠子线程 id 下的
+    // 缓冲项重建迟到订阅的孙线程血缘。
+    const rootThreadId = method === 'thread/started' ? undefined : this.lineageRoots.get(threadId);
+    if (rootThreadId && rootThreadId !== threadId) {
+      const rootHandlers = this.subscribers.get(rootThreadId);
+      if (rootHandlers?.descendantNotification) {
+        try {
+          rootHandlers.descendantNotification(threadId, method, params);
+        } catch (e) {
+          this.logger.error('descendant notification handler threw', {
+            rootThreadId,
+            childThreadId: threadId,
+            method,
+            message: (e as Error).message,
+          });
+        }
+      }
+      // 血缘已知就地收口:root 不消费时直接丢弃,不进缓冲(缓冲只为解 subscribe 竞争,
+      // 子线程 id 永远不会被 subscribe,堆在那里只会等 TTL 到点白白清一遍)。
       return;
     }
     // subscribe 还没到 — 暂存 + TTL 清理。Codex 协议保证 server 内同 thread 顺序,
