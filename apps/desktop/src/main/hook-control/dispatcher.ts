@@ -96,8 +96,6 @@ export interface HookContinuationWatchRequest {
   workingDir: string;
   /** 原任务的来源标注(决定 Telegram / Slack 的进度渲染差异)。 */
   source?: TaskSource;
-  /** 原任务的渠道形态; 与 run() 同判据地决定进度只发正文还是带过程区。 */
-  laneKind?: 'dm' | 'group';
   /**
    * "这个目录此刻还在本连接的工作目录映射内吗" —— 与 run() 的同名回调同语义, 用来
    * 复核**真正要观察的那个 live session 的 workDir**。
@@ -130,12 +128,6 @@ export interface HookContinuationWatchRequest {
 
 export interface HookRunRequest {
   sessionId: string;
-  /**
-   * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
-   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
-   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
-   */
-  laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
   workingDir: string;
@@ -506,17 +498,6 @@ interface PendingTask {
 }
 
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
-/**
- * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
- * 用于 Telegram 群轮次的权限收紧(见 session-runner 的 isTelegramGroupTurn):
- * 群里的成员可控文本会进 prompt, 所有群轮次都挂破坏性操作强确认; DM 不挂。
- * execute() 与续跑观察共用同一判据, 分叉会让续跑轮的权限档跟正常任务不一致。
- * (进度呈现已不再看它 —— DM 与群用同一套过程区。)
- */
-function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
-}
-
 interface PendingReopen {
   connectionId: string;
   /** 失败那一轮的 requestId —— server 用它定位渠道里那条消息(reopenOf)。 */
@@ -959,7 +940,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       sessionId,
       workingDir: entry.workingDir,
       ...(entry.source ? { source: entry.source } : {}),
-      laneKind: deriveLaneKind(entry.externalKey),
       isDirAuthorized: (dir) => dirStillAllowed(entry.connectionId, dir),
       onClaim: () => {
         if (revoked || !isCurrentGeneration(entry.accountGeneration)) return;
@@ -1309,7 +1289,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
-    const laneKind = deriveLaneKind(payload.externalKey);
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -1325,7 +1304,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         run: {
           sessionId: payload.sessionId,
           isNew: false,
-          laneKind,
           workingDir: info.workingDir as string,
           agentKind,
           model,
@@ -1405,7 +1383,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
-            laneKind,
             // 尚未落库, 没有 meta 可查 —— 用建它时那个刚重新过完映射校验的目录
             workingDir: pendingDir!,
             agentKind,
@@ -1445,7 +1422,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
-            laneKind,
             workingDir,
             agentKind,
             model,
@@ -1532,7 +1508,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
-        laneKind,
         workingDir: runDir,
         agentKind,
         model,
