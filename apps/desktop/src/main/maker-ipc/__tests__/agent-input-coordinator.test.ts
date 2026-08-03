@@ -7172,6 +7172,47 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
   });
 
+  it('队列 move 把普通项移到 auto-resume 前时也切换回 250ms policy', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-policy-replaced-by-move';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+
+    h.coordinator.enqueue(sid, makeItem('q-scheduler-next', 'next heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    }));
+    await flush();
+    h.coordinator.move(sid, 'q-scheduler-next', 0);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(249);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'next heartbeat',
+    });
+  });
+
   it('人工 retryLastError 不打 autoResume(否则会误跳过额度充值)', async () => {
     const h = createHarness();
     const sid = 'manual-retry-no-auto-flag';

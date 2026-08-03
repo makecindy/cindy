@@ -529,6 +529,8 @@ interface SessionInputState {
   /** 当前 retry timer 绑定的队首/compact owner；队首变化时必须替换 timer policy。 */
   sessionRunningRetryOwnerKey: string | null;
   sessionRunningRetryDelayMs: number | null;
+  /** 保护新 generation 的 timer 不被旧 generation 的迟到 callback 清掉。 */
+  sessionRunningRetryToken: symbol | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -584,6 +586,7 @@ function createInitialInputState(generation = 0): SessionInputState {
     sessionRunningRetryGeneration: null,
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
+    sessionRunningRetryToken: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -1624,6 +1627,14 @@ export class AgentInputCoordinator {
       }
       this.emit(sessionId);
     }
+    // steer accepted/removed may change the queue head while an older
+    // SESSION_RUNNING timer is still armed. Rebind its policy now even though
+    // the accepted steer itself keeps the dispatch boundary busy.
+    if (accepted.pendingQueue.length > 0 || accepted.pendingCompacts.length > 0) {
+      this.scheduleSessionRunningRetry(sessionId, 'steer-accepted');
+    } else {
+      this.clearSessionRunningRetry(accepted);
+    }
     this.scheduleDrain(sessionId, 'steer-accepted');
     return true;
   }
@@ -2108,6 +2119,9 @@ export class AgentInputCoordinator {
       this.scheduleDrain(sessionId, 'credential-switch-wait-displaced');
     }
     this.emit(sessionId);
+    // 队首变化也可能切换 SESSION_RUNNING retry policy(auto 10s ↔ 普通 250ms)。
+    // 重新评估当前 busy boundary，替换仍绑定旧队首的 timer。
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'queue-moved');
     return this.getProjection(sessionId);
   }
 
@@ -3160,15 +3174,24 @@ export class AgentInputCoordinator {
       this.clearSessionRunningRetry(state);
     }
     const generation = state.generation;
+    const retryToken = Symbol('session-running-retry');
     state.sessionRunningRetryGeneration = generation;
     state.sessionRunningRetryOwnerKey = policy.ownerKey;
     state.sessionRunningRetryDelayMs = policy.delayMs;
+    state.sessionRunningRetryToken = retryToken;
     state.sessionRunningRetryTimer = setTimeout(() => {
       const latest = this.getState(sessionId);
+      if (
+        latest.sessionRunningRetryToken !== retryToken ||
+        latest.sessionRunningRetryGeneration !== generation
+      ) {
+        return;
+      }
       latest.sessionRunningRetryTimer = null;
       latest.sessionRunningRetryGeneration = null;
       latest.sessionRunningRetryOwnerKey = null;
       latest.sessionRunningRetryDelayMs = null;
+      latest.sessionRunningRetryToken = null;
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
@@ -3215,7 +3238,15 @@ export class AgentInputCoordinator {
     const hasRunnableCompact = Boolean(compact && compact.waitForClientIds.length === 0);
     const hasRunnableQueueHead = Boolean(head && !state.queueEditLocks.includes(head.clientId));
     if (!hasRunnableCompact && !hasRunnableQueueHead) return;
-    if (state.activeTurn !== null) return;
+    if (state.activeTurn !== null) {
+      // A prior busy boundary may have left a fallback timer armed while the
+      // current turn is still active. Rebind it to the newly changed queue
+      // head so a later lost-done fallback does not inherit the old policy.
+      if (state.sessionRunningRetryTimer) {
+        this.scheduleSessionRunningRetry(sessionId, reason);
+      }
+      return;
+    }
     if (state.recovery !== null) return;
     if (state.queuePaused || state.queueAbortPending) return;
     if (state.queueInteractionLocks.length > 0 || state.steeringQueueClientIds.length > 0) return;
@@ -3231,6 +3262,7 @@ export class AgentInputCoordinator {
     state.sessionRunningRetryGeneration = null;
     state.sessionRunningRetryOwnerKey = null;
     state.sessionRunningRetryDelayMs = null;
+    state.sessionRunningRetryToken = null;
   }
 
   /** closed 事件可能早于 sendToAgent 返回；这里先挂起 terminal event，等真实 send outcome 决定 drain 还是 recovery。 */
