@@ -178,7 +178,7 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
   return (
     <span
       ref={containerRef}
-      className="sidebar-title-marquee min-w-0 flex-1 overflow-hidden"
+      className="sidebar-title-marquee min-w-0 max-w-full shrink overflow-hidden"
       title={title}
       onMouseEnter={() => {
         isHoveredRef.current = true;

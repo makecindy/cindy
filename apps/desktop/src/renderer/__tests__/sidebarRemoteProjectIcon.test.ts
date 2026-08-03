@@ -64,7 +64,7 @@ describe('sidebar remote project icon', () => {
 
   it('lets the title text shrink before the adjacent remote icon instead of pushing the icon to the row edge', () => {
     expect(sessionItemSource).toContain(
-      'className="sidebar-title-marquee min-w-0 flex-1 overflow-hidden"',
+      'className="sidebar-title-marquee min-w-0 max-w-full shrink overflow-hidden"',
     );
     expect(sessionItemSource).not.toContain('<span className="min-w-0 flex-1 truncate">');
     expect(sessionCardSource).not.toContain("'min-w-0 flex-1 truncate'");
