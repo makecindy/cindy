@@ -116,6 +116,31 @@ describe('cindy-subagent extension source', () => {
     expect(dispatch).toBeGreaterThan(guard);
   });
 
+  it('reports a terminal failed update before either pre-dispatch guard throws', () => {
+    // 卡片模型在**没有任何** agent_task_update 时按"有工具结果 = completed"兜底,所以派发前直接
+    // throw 会让这次被拒绝的委派在界面上立刻变绿(review)。两道闸都必须先发一帧终态 failed。
+    // 真实效果由集成用例断言(事件流里出现 failed、不出现 completed);这里钉的是**顺序**:
+    // report 的定义要排在两道闸之前,否则闸里根本调不到它(TDZ,而且改回去测试还得能红)。
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    const reportDefined = src.indexOf('const report = function (status: string');
+    const snapshotGuard = src.indexOf('if (!runtime.provider) {');
+    const pendingGuard = src.indexOf('if (runtime.pending) {');
+    expect(reportDefined).toBeGreaterThan(-1);
+    expect(snapshotGuard).toBeGreaterThan(reportDefined);
+    expect(pendingGuard).toBeGreaterThan(reportDefined);
+    // 每道闸内部:先 report('failed', …) 再 throw。
+    for (const guard of [snapshotGuard, pendingGuard]) {
+      const body = src.slice(guard, src.indexOf('}', src.indexOf('throw new Error(', guard)));
+      const reported = body.indexOf("report('failed'");
+      const thrown = body.indexOf('throw new Error(');
+      expect(reported).toBeGreaterThan(-1);
+      expect(reported).toBeLessThan(thrown);
+    }
+    // 而运行中那帧必须还在两道闸之后 —— 被拒时不该先闪一帧 running。
+    // 带分号才是**语句**;不带的那个匹配会落在上面解释顺序的注释里(我先踩了一次)。
+    expect(src.indexOf("report('running');")).toBeGreaterThan(pendingGuard);
+  });
+
   it('defers settling to process close so grace-period usage is still counted', () => {
     // kill() 到 SIGKILL 之间约 2 秒宽限里子进程仍会吐 message_end,那是真实产生的 token/cost。
     // 原来 abort/timeout 立刻 finish + 在 JSON.parse 之前整条短路,这段用量直接丢掉(review)。

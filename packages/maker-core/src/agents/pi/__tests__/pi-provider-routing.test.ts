@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,6 +43,17 @@ const noopLogger: Logger = {
 
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
+
+  /**
+   * runtime 文件名带每运行时 nonce(dev + 打包版 / passive 共用 userData 时的跨实例隔离),
+   * 所以按「前缀 + sessionId」找,不能再拼死名字。前缀含 sessionId → 不会串到别的用例。
+   */
+  const runtimeFileOf = (prefix: string, sessionId: string): string => {
+    const dir = path.join(agentHome, 'runtime');
+    const name = readdirSync(dir).find((f) => f.startsWith(prefix + '-' + sessionId + '-'));
+    if (!name) throw new Error('runtime file not found: ' + prefix + '-' + sessionId + '-*');
+    return path.join(dir, name);
+  };
   let cwd = '';
 
   beforeEach(() => {
@@ -688,7 +699,7 @@ describe('Pi provider-aware model routing', () => {
     // 不得在其后 stale 覆盖(否则 bridge 现读到 bypassPermissions,而 host/UI 已是 Ask)。
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
     const handle = await agent.startSession({ sessionId: 'perm-race', workingDir: cwd, model: 'local-model' });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-race.json');
+    const permFile = runtimeFileOf('perm', 'perm-race');
     const a = handle.setPermissionMode!('bypassPermissions');
     const b = handle.setPermissionMode!('ask');
     await Promise.all([a, b]);
@@ -706,7 +717,7 @@ describe('Pi provider-aware model routing', () => {
       model: 'local-model',
       permissionMode: 'ask',
     });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-recover.json');
+    const permFile = runtimeFileOf('perm', 'perm-recover');
     // 下一次写(尝试放宽到 Full)失败一次；旧文件仍是安全的 ask，此后恢复真实写。
     const spy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
     await handle.setPermissionMode!('bypassPermissions').catch(() => {});
@@ -726,7 +737,7 @@ describe('Pi provider-aware model routing', () => {
       model: 'local-model',
       permissionMode: 'ask',
     });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-failed-intent.json');
+    const permFile = runtimeFileOf('perm', 'perm-failed-intent');
     const spy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
     await expect(handle.setPermissionMode!('bypassPermissions')).rejects.toThrow('transient EIO');
     spy.mockRestore();

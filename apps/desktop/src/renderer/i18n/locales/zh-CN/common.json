@@ -3379,6 +3379,8 @@
         "nodeResident": "Node 程序可常驻后台",
         "nodeResidentDetail": "插件启用期间会一直运行；停用、更新、卸载或退出 Cindy 时关闭。",
         "tool": "工具「{{name}}」",
+        "atResourceProvider": "可在 @ 中用「{{name}}」搜索插件资源",
+        "atResourceProviderDetail": "只有你在 @ 中明确选中这个插件后才会调用该工具；插件作者必须保证搜索没有副作用。",
         "command": "对话指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 停靠主对话区左侧",
         "panelTab": "面板「{{title}}」· 插件页内打开",
@@ -5276,10 +5278,18 @@
       }
     },
     "atMention": {
-      "scanFailed": "扫描工作目录失败",
+      "filesAndFolders": "文件和文件夹",
+      "browserTab": "浏览器标签",
+      "desktopWindow": "应用窗口",
+      "task": "任务",
+      "pluginResources": "插件资源",
+      "pluginResource": "插件资源",
+      "backToAll": "返回全部 @ 内容",
+      "scanFailed": "加载 @ 内容失败",
       "retry": "重试",
       "searching": "搜索中…",
-      "noMatch": "没有匹配的文件",
+      "noMatch": "没有匹配的内容",
+      "typeToSearchFiles": "输入关键字搜索文件和任务",
       "keepTyping": "继续输入以缩小范围…"
     },
     "planReview": {
@@ -6045,6 +6055,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",

@@ -215,6 +215,30 @@ describe('mobile composer document', () => {
     expect(serializeComposerDocument(restored)).toEqual(serialized);
   });
 
+  it('keeps unsupported Desktop Plugin references as exact editable wire text', () => {
+    const href = 'cindy://plugin-resource/issues/search_issues/ISSUE-1';
+    const text = `[Fix login](${href})`;
+    const restored = composerDocumentFromSerializedMessage(text, {
+      agentReferences: [{
+        kind: 'plugin-resource',
+        start: 0,
+        end: text.length,
+        href,
+        ghostId: 'issues',
+        tool: 'search_issues',
+        resourceId: 'ISSUE-1',
+        pluginName: 'Issue Tracker',
+        label: 'Fix login',
+      }],
+    });
+
+    expect(composerDocumentProjectedText(restored)).toBe(text);
+    expect(serializeComposerDocument(restored)).toMatchObject({
+      text,
+      agentReferences: [],
+    });
+  });
+
   it('replaces projected text without changing the surrounding atom', () => {
     const document = {
       version: 1 as const,

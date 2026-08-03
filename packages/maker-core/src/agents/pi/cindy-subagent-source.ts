@@ -610,24 +610,6 @@ export default async function cindySubagent(pi: any) {
     async execute(toolCallId: string, params: unknown, signal: AbortSignal, onUpdate: any) {
       const tasks = normalizeTasks(params);
       const runtime = readRuntimeSnapshot();
-      // 使用点失败关闭:快照读不到(host 写失败后删除 / 目录只读 / 磁盘满)时拒绝派发,
-      // 而不是不带 --provider/--model 让子进程走 pi 默认解析 —— 后者会把 BYOM / 本地
-      // provider 的请求发到错误 endpoint。provider 恒由 host 写入,缺它即视为不可用。
-      if (!runtime.provider) {
-        throw new Error(
-          'subagent is unavailable: Cindy could not read this session\'s model routing snapshot, '
-          + 'so a subagent would run against the wrong provider. Tell the user; do the work yourself.',
-        );
-      }
-      // 模型切换的等待窗口(host 已写新路由、pi 侧尚未确认)里一律不派发。放行就意味着子进程
-      // 用一个**未经确认**的 provider 起来:切换若被拒,host 能回滚文件,却撤不回已经在跑的子
-      // 进程 —— 那才是真正撤不回的父子路由分叉(review)。宁可这一次委派失败。
-      if (runtime.pending) {
-        throw new Error(
-          'subagent is unavailable right now: this session is switching model/provider and the new route '
-          + 'is not confirmed yet. Do this step yourself, or retry the delegation after the switch settles.',
-        );
-      }
       const startedAt = Date.now();
       const label = tasks.map(function (t) { return t.agent; }).join(', ');
       const taskId = String(toolCallId || 'subagent');
@@ -678,6 +660,32 @@ export default async function cindySubagent(pi: any) {
         totals.tokens = tokens;
         totals.usage = usage;
       };
+
+      // 两道**派发前**的失败关闭闸。注意它们排在 report 定义**之后**、report('running')
+      // **之前**:卡片状态机在没有任何 agent_task_update 时会按"有工具结果 = completed"兜底,
+      // 所以在这里直接 throw 会让卡片瞬间变绿 —— 明明这次委派被拒了(review)。必须先发一帧
+      // 终态 failed,再抛错。
+      //
+      // 使用点失败关闭:快照读不到(host 写失败后删除 / 目录只读 / 磁盘满)时拒绝派发,
+      // 而不是不带 --provider/--model 让子进程走 pi 默认解析 —— 后者会把 BYOM / 本地
+      // provider 的请求发到错误 endpoint。provider 恒由 host 写入,缺它即视为不可用。
+      if (!runtime.provider) {
+        report('failed', 'model routing snapshot unavailable');
+        throw new Error(
+          'subagent is unavailable: Cindy could not read this session\'s model routing snapshot, '
+          + 'so a subagent would run against the wrong provider. Tell the user; do the work yourself.',
+        );
+      }
+      // 模型切换的等待窗口(host 已写新路由、pi 侧尚未确认)里一律不派发。放行就意味着子进程
+      // 用一个**未经确认**的 provider 起来:切换若被拒,host 能回滚文件,却撤不回已经在跑的子
+      // 进程 —— 那才是真正撤不回的父子路由分叉(review)。宁可这一次委派失败。
+      if (runtime.pending) {
+        report('failed', 'model switch in progress; routing not confirmed');
+        throw new Error(
+          'subagent is unavailable right now: this session is switching model/provider and the new route '
+          + 'is not confirmed yet. Do this step yourself, or retry the delegation after the switch settles.',
+        );
+      }
 
       report('running');
 

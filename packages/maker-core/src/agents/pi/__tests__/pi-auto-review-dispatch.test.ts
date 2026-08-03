@@ -301,6 +301,49 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(stuck.model).toBe('m');
   });
 
+  it('isolates the routing snapshot per runtime instance (dev + packaged sharing one userData)', async () => {
+    // review P1:dev 与打包版共用同一个 userData、`--passive` 任意多开,都是明确支持的工作流
+    // (单实例锁按 flavor 分域,passive 完全跳过锁)。原来快照只按 sessionId 命名 → 两个**活着的**
+    // 实例打开同一 session 时共用一个文件:任一实例切模型就覆盖掉另一个的路由,那个实例的父会话
+    // 还在自己的路由上,它的下一个子代理却按对面的 provider 起来,提示词发往这个实例里并没选的
+    // 端点。修法沿用 configHome 的隔离:文件名带每运行时 nonce。
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshotsOf = () => readdirSync(runtimeDir).filter((f) => f.startsWith('subagent-s1-'));
+    // 权限档同一个暴露面,而且更严重:另一个实例切到 Full Access 会让本实例的 bridge 现读到
+    // bypassPermissions,本实例的破坏性工具不再确认(跨实例权限提升)。同一把 nonce 一起收口。
+    const permsOf = () => readdirSync(runtimeDir).filter((f) => f.startsWith('perm-s1-'));
+
+    const first = await start();
+    const firstFiles = snapshotsOf();
+    expect(firstFiles).toHaveLength(1);
+    expect(permsOf()).toHaveLength(1);
+    // 第二个实例:同一个 sessionId、同一个 agentHome —— 就是 dev + 打包版共库双开的形状。
+    const second = await start();
+    const bothFiles = snapshotsOf();
+    expect(bothFiles).toHaveLength(2);
+    // 权限档也必须是两份独立文件,否则一个实例切档会改掉另一个实例 bridge 现读的那份。
+    expect(new Set(permsOf()).size).toBe(2);
+    const firstPath = path.join(runtimeDir, firstFiles[0]);
+    const secondPath = path.join(runtimeDir, bothFiles.find((f) => f !== firstFiles[0]) as string);
+    expect(firstPath).not.toBe(secondPath);
+
+    const secondBefore = readFileSync(secondPath, 'utf8');
+    await first.setModel('m-only-in-first');
+
+    // 切换只落在自己那份快照上;另一个活着的实例一个字节都没被动过。
+    expect((JSON.parse(readFileSync(firstPath, 'utf8')) as { model?: string }).model)
+      .toBe('m-only-in-first');
+    expect(readFileSync(secondPath, 'utf8')).toBe(secondBefore);
+
+    // 会话结束要回收:带 nonce 之后文件不再按 sessionId 复用,不回收就随每次 startSession 堆积。
+    await first.close();
+    await second.close();
+    await vi.waitFor(() => {
+      expect(snapshotsOf()).toHaveLength(0);
+      expect(permsOf()).toHaveLength(0);
+    });
+  });
+
   it('marks the routing snapshot pending while set_model is in flight and clears it on confirm', async () => {
     // review P1:原来在 RPC 回包**之前**就把新路由写成"已确认"形状,于是等待窗口里模型发起的
     // 派发会现读快照、按未确认的 provider 起子进程;RPC 随后失败时回滚文件撤不回已起的子进程。

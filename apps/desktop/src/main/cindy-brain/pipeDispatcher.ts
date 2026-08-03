@@ -55,6 +55,10 @@ interface PendingCall {
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 派发时刻(续命天花板从这里起算)。 */
   startedAt: number;
+  /** 本次调用的基础超时档；默认沿用全局档，宿主 UI 查询可显式收短。 */
+  baseTimeoutMs: number;
+  /** 显式短超时是绝对窗口，不接受 hold / tool-progress 续命。 */
+  timeoutExtensionsAllowed: boolean;
   /** 当前生效的超时时刻(hold / 心跳只延不缩,release 才收)。 */
   deadlineAt: number;
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
@@ -124,6 +128,8 @@ export class GhostPipeDispatcher {
      * callId,故由它铸好传入;缺省自铸,老调用方零改动)。
      */
     callId?: string;
+    /** 仅供可信宿主内部调用方收短等待时间；插件不能控制该值。 */
+    timeoutMs?: number;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
 
@@ -157,13 +163,16 @@ export class GhostPipeDispatcher {
 
     return new Promise<GhostToolCallResult>((resolve) => {
       const startedAt = Date.now();
+      const baseTimeoutMs = this.baseTimeoutMs(request.timeoutMs);
       const entry: PendingCall = {
         ghostId,
         tool,
         resolve,
         timer: undefined,
         startedAt,
-        deadlineAt: startedAt + this.baseTimeoutMs(),
+        baseTimeoutMs,
+        timeoutExtensionsAllowed: request.timeoutMs === undefined,
+        deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
       };
       this.pending.set(callId, entry);
@@ -177,8 +186,11 @@ export class GhostPipeDispatcher {
   }
 
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */
-  private baseTimeoutMs(): number {
-    return Math.min(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS, GHOST_PIPE_CALL_MAX_TOTAL_MS);
+  private baseTimeoutMs(override?: number): number {
+    const requested = Number.isFinite(override)
+      ? Math.max(1, Math.floor(override as number))
+      : this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    return Math.min(requested, GHOST_PIPE_CALL_MAX_TOTAL_MS);
   }
 
   /** 按 entry.deadlineAt 重挂超时闹钟(旧闹钟一并清掉)。 */
@@ -232,6 +244,7 @@ export class GhostPipeDispatcher {
   holdCall(ghostId: string, callId: string, budgetMs: number): void {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId) return;
+    if (!entry.timeoutExtensionsAllowed) return;
     entry.holds += 1;
     this.extendDeadline(callId, entry, Date.now() + budgetMs + HOLD_SETTLE_GRACE_MS);
   }
@@ -246,7 +259,7 @@ export class GhostPipeDispatcher {
     if (!entry || entry.ghostId !== ghostId) return;
     entry.holds = Math.max(0, entry.holds - 1);
     if (entry.holds > 0) return;
-    const target = Math.max(entry.startedAt + this.baseTimeoutMs(), Date.now() + HOLD_SETTLE_GRACE_MS);
+    const target = Math.max(entry.startedAt + entry.baseTimeoutMs, Date.now() + HOLD_SETTLE_GRACE_MS);
     if (target < entry.deadlineAt) {
       entry.deadlineAt = target;
       this.armTimer(callId, entry);
@@ -270,7 +283,9 @@ export class GhostPipeDispatcher {
     if (entry.ghostId !== senderGhostId) {
       return { accepted: false, reason: '不是你的卷子' };
     }
-    this.extendDeadline(p.callId, entry, Date.now() + this.baseTimeoutMs());
+    if (entry.timeoutExtensionsAllowed) {
+      this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
+    }
     return { accepted: true };
   }
 

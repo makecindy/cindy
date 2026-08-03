@@ -33,6 +33,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
+      'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
       'local-db:messages:around',

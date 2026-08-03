@@ -37,11 +37,42 @@ export interface AgentInputProjectReference extends AgentInputReferenceBase {
   workingDir: string;
 }
 
+/** One live tab in Cindy's built-in browser for the current task. */
+export interface AgentInputBrowserTabReference extends AgentInputReferenceBase {
+  kind: 'browser-tab';
+  tabId: string;
+  title?: string;
+  url: string;
+}
+
+/** One currently open operating-system application window. */
+export interface AgentInputDesktopWindowReference extends AgentInputReferenceBase {
+  kind: 'desktop-window';
+  windowId: number;
+  pid: number;
+  appName: string;
+  title?: string;
+}
+
+/** One opaque business object selected from an explicitly scoped Plugin search. */
+export interface AgentInputPluginResourceReference extends AgentInputReferenceBase {
+  kind: 'plugin-resource';
+  ghostId: string;
+  tool: string;
+  resourceId: string;
+  pluginName: string;
+  label: string;
+  description?: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
   | AgentInputSessionReference
-  | AgentInputProjectReference;
+  | AgentInputProjectReference
+  | AgentInputBrowserTabReference
+  | AgentInputDesktopWindowReference
+  | AgentInputPluginResourceReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -70,12 +101,109 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function stripDeepLinkPrefix(href: string, route: 'session/' | 'project/'): string | null {
+function stripDeepLinkPrefix(
+  href: string,
+  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/',
+): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+export function buildPluginResourceReferenceHref(args: {
+  ghostId: string;
+  tool: string;
+  resourceId: string;
+}): string {
+  const scheme = allDeepLinkSchemes()[0];
+  const strictEncode = (value: string) => encodeURIComponent(value)
+    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${scheme}://plugin-resource/${strictEncode(args.ghostId)}/${strictEncode(args.tool)}/${strictEncode(args.resourceId)}`;
+}
+
+export function parsePluginResourceReferenceHref(
+  href: string,
+): { ghostId: string; tool: string; resourceId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'plugin-resource/');
+  if (rest === null || rest.length > 1_500 || rest.includes('?') || rest.includes('#')) return null;
+  const [rawGhostId, rawTool, rawResourceId, ...extra] = rest.split('/');
+  if (extra.length > 0) return null;
+  const ghostId = decodeBoundedComponent(rawGhostId, 32);
+  const tool = decodeBoundedComponent(rawTool, 64);
+  const resourceId = decodeBoundedComponent(rawResourceId, 256);
+  if (
+    !ghostId
+    || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(ghostId)
+    || !tool
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(tool)
+    || !resourceId
+    || /[\u0000-\u001f\u007f\u2028\u2029]/.test(resourceId)
+  ) return null;
+  return { ghostId, tool, resourceId };
+}
+
+function decodeBoundedComponent(value: string, maxLength: number): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded && decoded.length <= maxLength ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function queryValue(query: string, key: string, maxLength: number): string | null {
+  for (const pair of query.split('&')) {
+    const equalsIndex = pair.indexOf('=');
+    if (equalsIndex <= 0 || pair.slice(0, equalsIndex) !== key) continue;
+    return decodeBoundedComponent(pair.slice(equalsIndex + 1), maxLength);
+  }
+  return null;
+}
+
+export function parseBrowserTabReferenceHref(
+  href: string,
+): { tabId: string; url: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'browser-tab/');
+  if (rest === null || rest.length > 5_000) return null;
+  const hashIndex = rest.indexOf('#');
+  const withoutHash = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
+  const queryIndex = withoutHash.indexOf('?');
+  if (queryIndex <= 0) return null;
+  const tabId = decodeBoundedComponent(withoutHash.slice(0, queryIndex), 256);
+  const url = queryValue(withoutHash.slice(queryIndex + 1), 'url', 4_096);
+  if (!tabId || !url) return null;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:' ? { tabId, url } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseDesktopWindowReferenceHref(
+  href: string,
+): { pid: number; windowId: number; appName: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'desktop-window/');
+  if (rest === null || rest.length > 1_000) return null;
+  const hashIndex = rest.indexOf('#');
+  const withoutHash = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
+  const queryIndex = withoutHash.indexOf('?');
+  if (queryIndex <= 0) return null;
+  const [rawPid, rawWindowId, ...extra] = withoutHash.slice(0, queryIndex).split('/');
+  if (extra.length > 0) return null;
+  const pid = Number(rawPid);
+  const windowId = Number(rawWindowId);
+  const appName = queryValue(withoutHash.slice(queryIndex + 1), 'app', 200);
+  if (
+    !Number.isSafeInteger(pid)
+    || pid <= 0
+    || !Number.isSafeInteger(windowId)
+    || windowId < 0
+    || !appName
+  ) return null;
+  return { pid, windowId, appName };
 }
 
 /** Remove a trailing slash run in one linear pass over untrusted deep-link input. */
@@ -205,6 +333,55 @@ function readReference(
       workingDir: target.workingDir,
     };
   }
+  if (candidate.kind === 'browser-tab') {
+    const target = parseBrowserTabReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'browser-tab',
+      start,
+      end,
+      href: candidate.href,
+      tabId: target.tabId,
+      url: target.url,
+      ...(nonEmptyString(candidate.title) ? { title: candidate.title } : {}),
+    };
+  }
+  if (candidate.kind === 'desktop-window') {
+    const target = parseDesktopWindowReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'desktop-window',
+      start,
+      end,
+      href: candidate.href,
+      windowId: target.windowId,
+      pid: target.pid,
+      appName: target.appName,
+      ...(nonEmptyString(candidate.title) ? { title: candidate.title } : {}),
+    };
+  }
+  if (
+    candidate.kind === 'plugin-resource'
+    && nonEmptyString(candidate.pluginName)
+    && candidate.pluginName.length <= 128
+    && nonEmptyString(candidate.label)
+    && candidate.label.length <= 128
+  ) {
+    const target = parsePluginResourceReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'plugin-resource',
+      start,
+      end,
+      href: candidate.href,
+      ...target,
+      pluginName: oneLine(candidate.pluginName),
+      label: oneLine(candidate.label),
+      ...(nonEmptyString(candidate.description) && candidate.description.length <= 256
+        ? { description: oneLine(candidate.description) }
+        : {}),
+    };
+  }
   return null;
 }
 
@@ -232,6 +409,14 @@ function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function quotedMetadata(value: string): string {
+  return JSON.stringify(value)
+    .replace(/\[/g, '\\u005b')
+    .replace(/\]/g, '\\u005d')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 function formatReference(reference: AgentInputReference): string {
   if (reference.kind === 'message') {
     const bounded = boundAgentReferenceText(reference.text ?? '');
@@ -252,6 +437,39 @@ function formatReference(reference: AgentInputReference): string {
       `Title: ${oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`}`,
       `Session ID: ${reference.sessionId}`,
       '[/Referenced conversation]',
+    ].join('\n');
+  }
+  if (reference.kind === 'browser-tab') {
+    return [
+      '[Referenced browser tab]',
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || reference.url)}`,
+      `URL: ${quotedMetadata(reference.url)}`,
+      `Tab ID: ${quotedMetadata(reference.tabId)}`,
+      '[/Referenced browser tab]',
+    ].join('\n');
+  }
+  if (reference.kind === 'desktop-window') {
+    return [
+      '[Referenced desktop window]',
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || reference.appName)}`,
+      `Application: ${quotedMetadata(oneLine(reference.appName))}`,
+      `PID: ${reference.pid}`,
+      `Window ID: ${reference.windowId}`,
+      '[/Referenced desktop window]',
+    ].join('\n');
+  }
+  if (reference.kind === 'plugin-resource') {
+    return [
+      '[Referenced plugin resource]',
+      `Plugin: ${quotedMetadata(oneLine(reference.pluginName))} (${reference.ghostId})`,
+      `Resource ID: ${quotedMetadata(reference.resourceId)}`,
+      `Label: ${quotedMetadata(oneLine(reference.label))}`,
+      ...(reference.description
+        ? [`Summary: ${quotedMetadata(oneLine(reference.description))}`]
+        : []),
+      `Search tool: ${reference.tool}`,
+      'Resolution: call the search tool with query equal to the Resource ID.',
+      '[/Referenced plugin resource]',
     ].join('\n');
   }
   return [
@@ -321,6 +539,11 @@ export function projectLiteralUserText(source: AgentFacingTextSource): string {
 export function describeAgentInputReference(reference: AgentInputReference): string | null {
   if (reference.kind === 'session') return oneLine(reference.title ?? '') || null;
   if (reference.kind === 'project') return oneLine(reference.name) || null;
+  if (reference.kind === 'browser-tab') return oneLine(reference.title ?? reference.url) || null;
+  if (reference.kind === 'desktop-window') {
+    return oneLine(reference.title ?? reference.appName) || null;
+  }
+  if (reference.kind === 'plugin-resource') return oneLine(reference.label) || null;
   return oneLine(reference.text ?? '') || null;
 }
 

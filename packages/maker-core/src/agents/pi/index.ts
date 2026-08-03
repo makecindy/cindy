@@ -47,6 +47,7 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -715,9 +716,21 @@ export class PiAgent extends BaseAgent {
     if (sid !== undefined && (sid === '.' || sid === '..' || /[\\/\0]/.test(sid))) {
       throw new Error(`pi: unsafe sessionId for runtime path: ${JSON.stringify(sid)}`);
     }
+    // 每运行时 nonce —— 与 configHome(`agentHome/run-tmp/<hex>`)同一套隔离思路。
+    //
+    // dev + 打包版共用同一个 userData、以及 `--passive` 任意多开,都是**明确支持**的工作流
+    // (单实例锁按 flavor 分域,passive 完全跳过锁;见 `bootstrap-electron.ts` 的单实例锁注释)。
+    // 那种拓扑下 runtimeDir 里只按 sessionId 命名的文件会被另一个**活着的**实例覆盖:
+    //   - 路由快照被覆盖 → 本实例的父会话还在自己的路由上,它的下一个子代理却按另一个进程的
+    //     provider 起来 —— 提示词发往用户在**这个**实例里并没选的端点(review);
+    //   - 权限档被覆盖 → 另一个实例切到 Full Access,本实例的 bridge 下一次 tool_call 现读到
+    //     bypassPermissions,本实例的破坏性工具不再确认。这是跨实例权限提升,比路由更严重,
+    //     属于「本 PR 代码路径会走到的权限类缺陷」,一并收口而不是外推。
+    // 代价是文件按 startSession 而非 sessionId 唯一 → 必须显式回收,见 cleanupRuntimeFiles。
+    const runtimeInstanceId = randomBytes(8).toString('hex');
     const permissionFile = path.join(
       runtimeDir,
-      `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}.json`,
+      `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}.json`,
     );
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
@@ -725,8 +738,19 @@ export class PiAgent extends BaseAgent {
     // BYOM 直连原生 provider)。扩展每次派子代理现读本文件。
     const subagentRuntimeFile = path.join(
       runtimeDir,
-      `subagent-${sid ?? `anon-${process.pid}-${Date.now()}`}.json`,
+      `subagent-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}.json`,
     );
+    let runtimeFilesCleaned = false;
+    /**
+     * 回收本运行时的两个 runtime 文件(幂等)。带 nonce 之后它们不再按 sessionId 复用,
+     * 不回收就会随每次 startSession 无界堆积在 runtimeDir 里。
+     */
+    const cleanupRuntimeFiles = (): void => {
+      if (runtimeFilesCleaned) return;
+      runtimeFilesCleaned = true;
+      void fs.rm(permissionFile, { force: true }).catch(() => {});
+      void fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
+    };
     // auto 保留(Cindy 侧 dispatcher 用);bridge 只特判 bypassPermissions,auto 在
     // 桥内行为同 ask(非只读全部冒泡)。其余档(default/acceptEdits/plan)归 ask 最严。
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
@@ -971,7 +995,21 @@ export class PiAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
+    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
+    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
+    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
+    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+      autoReviewUnavailableNotice.reset();
     };
+    // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
+    // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      queue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'pi',
+      });
+    });
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
       const request = {
         sessionId: opts.sessionId,
@@ -1088,6 +1126,7 @@ export class PiAgent extends BaseAgent {
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
+              notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
             }));
             return;
           }
@@ -1121,8 +1160,9 @@ export class PiAgent extends BaseAgent {
               });
             }
           }
-          // 进程已死:隔离的 configHome(models.json + extension)不再被读,清理。
+          // 进程已死:隔离的 configHome(models.json + extension)与 runtime 文件不再被读,清理。
           cleanupConfigHome();
+          cleanupRuntimeFiles();
           queue.end();
         },
       });
@@ -1133,6 +1173,7 @@ export class PiAgent extends BaseAgent {
         /* best-effort:注销失败不掩盖原始构造错误 */
       }
       cleanupConfigHome();
+      cleanupRuntimeFiles();
       throw err;
     }
 
@@ -1323,6 +1364,7 @@ export class PiAgent extends BaseAgent {
       }
       await proc.close().catch(() => {});
       cleanupConfigHome();
+      cleanupRuntimeFiles();
       throw err;
     }
 
@@ -1489,6 +1531,8 @@ export class PiAgent extends BaseAgent {
       activeEffortSnapshot = nextEffortSnapshot;
       if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
       autoReviewDecisionCache.clear();
+      // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
+      autoReviewUnavailableNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -1576,8 +1620,9 @@ export class PiAgent extends BaseAgent {
           });
         }
         await proc.close();
-        // 会话结束:清理隔离的 configHome(onExit 幂等,二者先到先清)。
+        // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
         cleanupConfigHome();
+        cleanupRuntimeFiles();
       },
 
       events(): AsyncIterable<AgentEvent> {
@@ -1616,9 +1661,19 @@ export class PiAgent extends BaseAgent {
       async setPermissionMode(mode): Promise<void> {
         // ask/auto/bypass 三档;extension 每次 tool_call 现读,写完即生效。
         // auto 的差异在 Cindy 侧 dispatcher(handleExtensionUiRequest),bridge 无感知。
+        const nextMode = normalizePermissionMode(mode);
+        // 用户自己动过权限档 → 一次性提示重新武装(与 Claude / Codex 同口径)。
+        // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
+        // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
+        // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
+        // 值得再提醒一次。
+        if (nextMode !== requestedPermissionSnapshot.mode) {
+          autoReviewDecisionCache.clear();
+          autoReviewUnavailableNotice.reset();
+        }
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
-          mode: normalizePermissionMode(mode),
+          mode: nextMode,
         });
       },
 
@@ -2054,6 +2109,8 @@ export class PiAgent extends BaseAgent {
       workspaceRoots: string[];
       readRoots: string[];
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+      /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
+      notifyAutoReviewUnavailable: () => void;
     },
   ): void {
     const method = typeof event.method === 'string' ? event.method : '';
@@ -2079,6 +2136,7 @@ export class PiAgent extends BaseAgent {
         workspaceRoots,
         readRoots,
         reviewAutoAction,
+        notifyAutoReviewUnavailable,
       } = getPermissionCtx();
       const requestUserConfirmation = async (): Promise<boolean> => {
         if (!resolver) {
@@ -2146,9 +2204,13 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'block') {
+            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
+            // 后者按 Auto 本意保持静默。动作两种都仍然 confirmed:false。
+            if (decision.unavailable) notifyAutoReviewUnavailable();
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
+              unavailable: decision.unavailable === true,
             });
           }
           proc.send({

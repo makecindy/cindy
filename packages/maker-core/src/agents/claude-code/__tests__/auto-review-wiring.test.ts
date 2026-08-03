@@ -7,6 +7,7 @@
  *   - auto + 灰区 → lightweight reviewer 的 allow/block 静默处理，只有 ask 才弹窗
  *   - auto + 确定危险命令 → 弹窗且 suggestion 被剥(不可持久化授权)
  *   - 送审阅器的 model 恒为目录 id(不是 [1m] wire 串),切模后仍然如此
+ *   - 审阅器不可用(而非模型判定危险)时,会话里出现一条一次性提示
  *   - default 档 → 内置工具不走 auto-review 策略(照旧弹窗),证明只作用于 auto
  */
 import { promises as fs } from 'node:fs';
@@ -386,6 +387,159 @@ describe('Auto-review wiring: the reviewer routes through the catalog model id',
       { toolUseID: 'catalog-model-switched' },
     );
     expect(reviewedRequest(reviewAutoPermissionAction).model).toBe('claude-sonnet-5');
+    await handle.close();
+  });
+});
+
+/**
+ * 「审阅器不可用」要在会话里说一次(issue #1574)。
+ *
+ * 以前 delegate 缺失 / 超时 / 抛错和「模型判定动作危险」在上层都是同一个 `block`,
+ * UI 层零呈现 —— 用户看到的是「工具一直被拒、没有弹窗、重启无效」,却拿不到任何原因。
+ * 现在前者额外发一条会话级**一次性**提示(走既有的非终止 error 事件 + `[CODE]` 约定),
+ * 动作本身仍然 deny,安全边界不变。
+ */
+describe('Auto-review wiring: reviewer outages surface once per session', () => {
+  /**
+   * 单一后台消费者收集会话级提示(非终止 error)。
+   *
+   * 事件流是**单消费者** AsyncQueue:如果改用「每次断言时新建 iterator + 超时丢弃」的
+   * 写法,被超时丢弃的那个 pending `next()` 仍挂在 waiters 里,下一条 push 会被它吃掉,
+   * 断言就会莫名少一条。所以整个用例只订阅一次。
+   */
+  function startNoticeCollector(
+    handle: { events(): AsyncIterable<{ type: string; data?: { message?: unknown } }> },
+  ) {
+    const notices: string[] = [];
+    // 刻意不返回这个 promise:fakeQuery 的消息流永远挂起,forward loop 不退出,close()
+    // 之后事件流也不会 end —— await 它就是等到测试超时。收集器随测试进程一起结束。
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'error' && typeof event.data?.message === 'string') {
+          notices.push(event.data.message);
+        }
+      }
+    })().catch(() => {
+      /* 队列在 teardown 时被丢弃,不是测试失败 */
+    });
+    return { notices };
+  }
+
+  /** 让 push 进队列的事件 fan-out 到收集器。 */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('emits one notice for a broken reviewer, not one per blocked action', async () => {
+    // reviewer 抛错 = resolveAutoReviewDecision 走 unavailable 兜底 block。
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    const { notices } = startNoticeCollector(handle);
+
+    const first = await canUseTool('Write', { file_path: '/tmp/a.conf' }, { toolUseID: 'n1' });
+    const second = await canUseTool('Write', { file_path: '/tmp/b.conf' }, { toolUseID: 'n2' });
+    expect(first.behavior).toBe('deny');
+    expect(second.behavior).toBe('deny');
+    await settle();
+
+    // 两次都被拒,但只说一次 —— 逐条提示会把 Auto 退化成比 Ask 更烦的东西。
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('[AUTO_REVIEW_UNAVAILABLE]');
+    await handle.close();
+  });
+
+  it('stays silent when the model itself blocks the action', async () => {
+    const { handle, canUseTool } = await startSession('auto', { reviewVerdict: 'block' });
+    const { notices } = startNoticeCollector(handle);
+
+    const result = await canUseTool('Bash', { command: 'npm install left-pad' }, { toolUseID: 'n3' });
+    expect(result).toMatchObject({ behavior: 'deny', message: 'reviewed' });
+    await settle();
+
+    // 模型判定的 block 按 Auto 本意保持静默 —— 只把 reason 喂给模型,不打扰用户。
+    expect(notices).toHaveLength(0);
+    await handle.close();
+  });
+
+  /**
+   * 裁决缓存的 key 不含 permissionMode。用户切离 Auto、等审阅器恢复、再切回 Auto 时,
+   * 同一个动作会命中先前那条 `unavailable` block —— 审阅器早就好了,动作还是被拒
+   * (greptile P1 of #1574)。切档必须连缓存一起清。
+   */
+  it('drops cached unavailable verdicts when the permission mode changes', async () => {
+    let reviewerBroken = true;
+    const reviewer = vi.fn(async () => {
+      if (reviewerBroken) throw new Error('reviewer offline');
+      return { verdict: 'allow' as const };
+    });
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer,
+      attachResolver: false,
+    });
+
+    const sameAction = { file_path: '/tmp/cached.conf' };
+    const denied = await canUseTool('Write', sameAction, { toolUseID: 'cache-1' });
+    expect(denied.behavior).toBe('deny');
+
+    // 用户接管 → 审阅器恢复 → 切回 Auto。
+    await handle.setPermissionMode?.('ask');
+    reviewerBroken = false;
+    await handle.setPermissionMode?.('auto');
+
+    const allowed = await canUseTool('Write', sameAction, { toolUseID: 'cache-2' });
+    expect(allowed.behavior).toBe('allow');
+    // 缓存真的清了才会有第二次 reviewer 调用。
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  /**
+   * ErrorBanner 那份提示只活到下一条非 error 事件(renderer 的 handleStreamEvent 会清
+   * recoverableError),所以「整个会话只说一次」会让用户在后续轮次里完全看不到。每轮
+   * 至多一条:不刷屏,又保证每一轮遇到时都有机会看见。
+   */
+  it('re-arms the notice on each new user turn', async () => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    const { notices } = startNoticeCollector(handle);
+
+    await canUseTool('Write', { file_path: '/tmp/t1.conf' }, { toolUseID: 'turn1-a' });
+    await canUseTool('Write', { file_path: '/tmp/t2.conf' }, { toolUseID: 'turn1-b' });
+    await settle();
+    expect(notices).toHaveLength(1); // 同一轮内两次被拒 → 仍只一条
+
+    await handle.send({ type: 'user', content: 'Try something else then.' });
+    await canUseTool('Write', { file_path: '/tmp/t3.conf' }, { toolUseID: 'turn2-a' });
+    await settle();
+    expect(notices).toHaveLength(2); // 新一轮 → 重新武装
+    await handle.close();
+  });
+
+  it('re-arms the notice after the user changes the permission mode', async () => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    const { notices } = startNoticeCollector(handle);
+
+    await canUseTool('Write', { file_path: '/tmp/c.conf' }, { toolUseID: 'n4' });
+    await settle();
+    expect(notices).toHaveLength(1);
+
+    // 用户自己动过档位之后又回到 Auto、又不可用 → 有权再看到一次。
+    await handle.setPermissionMode?.('ask');
+    await handle.setPermissionMode?.('auto');
+    await canUseTool('Write', { file_path: '/tmp/d.conf' }, { toolUseID: 'n5' });
+    await settle();
+    expect(notices).toHaveLength(2);
     await handle.close();
   });
 });

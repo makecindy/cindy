@@ -1699,7 +1699,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       // 这条用例验的是那个拒绝**真的挡住了进程**:结构性断言只能证明源码里有这段判断,证明
       // 不了子进程没起来。判据用"子代理画像 prompt 只出现在子进程自己的请求里"——一个字节都
       // 没出现 = 一个子进程都没起来。
-      const { readFileSync } = await import('node:fs');
+      const { readdirSync, readFileSync } = await import('node:fs');
       const nativeBodies: string[] = [];
       // 第 1 个请求(父)派子代理;若真起了子进程,它的请求会是第 2 个。
       const nativeScript = [
@@ -1753,17 +1753,22 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         // 把快照改成 host 在等待窗口里写的那个形状(model/provider 不变,只多 pending)。
         // 这样"没起子进程"唯一可能的原因就是 pending 闸:路由本身仍然完全可用。
-        // 按 sessionId 精确定位,**不要**用 find(startsWith('subagent-')):agentHome 是整组共享的,
-        // 其它用例留下的快照会被先找到(实测拿到了另一个会话的 localresponses,单跑绿、全量红)。
+        // 文件名带每运行时 nonce(跨实例隔离),所以按「前缀 + sessionId」找。**不要**只用
+        // startsWith('subagent-'):agentHome 是整组共享的,别的用例留下的快照会被先找到
+        // (实测拿到了另一个会话的 localresponses,单跑绿、全量红)。
         const runtimeDir = path.join(agentHome, 'runtime');
-        const snapshotPath = path.join(runtimeDir, 'subagent-pending-switch-session.json');
-        expect(existsSync(snapshotPath)).toBe(true);
+        const snapshotName = readdirSync(runtimeDir)
+          .find((f) => f.startsWith('subagent-pending-switch-session-'));
+        expect(snapshotName).toBeTruthy();
+        const snapshotPath = path.join(runtimeDir, snapshotName as string);
         const confirmed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
         expect(confirmed.provider).toBe('localbyom');
         writeFileSync(snapshotPath, JSON.stringify({ ...confirmed, pending: true }) + '\n');
 
+        const events: AgentEvent[] = [];
         const done = (async () => {
           for await (const ev of handle!.events()) {
+            events.push(ev);
             if (ev.type === 'done') break;
           }
         })();
@@ -1776,6 +1781,13 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(nativeBodies.some((b) => b.includes('scout subagent'))).toBe(false);
         // 而且拒绝理由回传给了父模型(不是静默无事发生 —— 模型要知道该自己干)。
         expect(nativeBodies.some((b) => b.includes('not confirmed yet'))).toBe(true);
+        // 卡片必须收到一帧终态 failed。少这一帧,两端的卡片模型都会按"有工具结果 = completed"
+        // 兜底,于是这次被拒绝的委派在界面上立刻变绿(review)。
+        const cardStatuses = events
+          .filter((e) => e.type === 'agent_task_update')
+          .map((e) => (e.data as { status?: string }).status);
+        expect(cardStatuses).toContain('failed');
+        expect(cardStatuses).not.toContain('completed');
       } finally {
         await handle?.close();
         await new Promise<void>((r) => nativeServer.close(() => r()));

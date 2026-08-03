@@ -3379,6 +3379,8 @@
         "nodeResident": "Node プログラムをバックグラウンドで常駐実行できます",
         "nodeResidentDetail": "プラグインが有効な間は実行を続け、無効化、更新、アンインストール、または Cindy 終了時に停止します。",
         "tool": "ツール「{{name}}」",
+        "atResourceProvider": "@ で「{{name}}」を使ってプラグインリソースを検索できます",
+        "atResourceProviderDetail": "@ でこのプラグインを明示的に選択した後にのみツールが実行されます。プラグイン作者は検索に副作用がないことを保証する必要があります。",
         "command": "チャット指令 ${{command}}",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
         "panelTab": "パネル「{{title}}」· プラグインページ内で開く",
@@ -5276,10 +5278,18 @@
       }
     },
     "atMention": {
-      "scanFailed": "作業ディレクトリのスキャンに失敗しました",
+      "filesAndFolders": "ファイルとフォルダ",
+      "browserTab": "ブラウザタブ",
+      "desktopWindow": "アプリウィンドウ",
+      "task": "タスク",
+      "pluginResources": "プラグインリソース",
+      "pluginResource": "プラグインリソース",
+      "backToAll": "すべての @ コンテンツに戻る",
+      "scanFailed": "@ コンテンツの読み込みに失敗しました",
       "retry": "再試行",
       "searching": "検索中…",
-      "noMatch": "一致するファイルがありません",
+      "noMatch": "一致する項目がありません",
+      "typeToSearchFiles": "キーワードを入力してファイルとセッションを検索",
       "keepTyping": "入力を続けて絞り込み…"
     },
     "planReview": {
@@ -6045,6 +6055,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが一時的に利用できないため、レビューが必要な操作は拒否されます。ご自身で承認する場合は、このセッションをデフォルト権限に切り替えてください。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
