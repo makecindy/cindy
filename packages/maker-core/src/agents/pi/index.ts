@@ -921,6 +921,12 @@ export class PiAgent extends BaseAgent {
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
+        // 子代理路由快照:虽然不是凭证,但它是**控制面** —— 一次获批的 bash 拿到路径就能改写
+        // provider/model,让后续每次委派都打到攻击者选定的 endpoint(提示词与代码随之外泄)。
+        // 与 CINDY_PI_PERMISSION_FILE 同一类:靠改写受信文件给后续调用永久换向(review)。
+        // 只从 bash/模型工具的 spawn 边界剥离;子代理自己的 spawn 不走 bridge 的 bash 钩子,
+        // 扩展照旧现读快照,能力不受影响。
+        CINDY_SUBAGENT_ENV.runtimeFile,
       ]));
       const spawnEnv: NodeJS.ProcessEnv = {
         ...process.env,

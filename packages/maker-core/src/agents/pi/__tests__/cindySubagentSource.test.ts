@@ -112,6 +112,20 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_FILENAME).toBe('cindy-subagent.ts');
   });
 
+  it('strips the MCP bridge from the child env so subagents do not open MCP transports', () => {
+    // 子进程继承 PI_CODING_AGENT_DIR → 会加载 cindy-bridge(权限门要靠这个)。bridge 一见到
+    // CINDY_PI_MCP_BRIDGE 就逐个 connect 所有 MCP server 并持有有状态 transport,而子代理的
+    // --tools 白名单里根本没有 MCP 工具 —— 纯浪费:每个子代理一整套连接、并发 4 单批最多 8,
+    // 且子代理不显式 close。实测:一个 depth=1 的 pi 进程对 fake MCP server 发了 3 次请求,
+    // 剥掉该 env 后为 0,而 bridge 的 bash 覆盖与权限门注册在 MCP 段**之前**,不受影响。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('delete childEnv[MCP_BRIDGE_ENV];');
+    // 权限门与网关路由必须**保留**:这两个被剥掉才是真事故(子代理越权 / 打错 endpoint)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('delete childEnv[RUNTIME_FILE_ENV]');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("delete childEnv['CINDY_PI_PERMISSION_FILE']");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("delete childEnv['PI_CODING_AGENT_DIR']");
+  });
+
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
     // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。

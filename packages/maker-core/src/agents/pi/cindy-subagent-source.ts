@@ -119,6 +119,8 @@ const MARKER = '__cindySubagent';
 const BINARY_ENV = 'CINDY_PI_SUBAGENT_BINARY';
 const DEPTH_ENV = 'CINDY_PI_SUBAGENT_DEPTH';
 const RUNTIME_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNTIME_FILE';
+// cindy-bridge 用它决定要不要连 MCP server;子代理不需要,spawn 时剥掉(见 runTask)。
+const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 // PARENT_PID_ENV 与 PARENT_WATCHDOG_INTERVAL_MS 由末尾追加的看门狗段声明(那段要能独立
 // 跑起来受测)。**别在这里重复声明** —— 同名 const 会让拼接后的模块直接 SyntaxError,
 // 整个扩展加载失败。有测试守这条。
@@ -297,6 +299,12 @@ function runTask(binary, task, runtime, signal, onProgress) {
     childEnv[DEPTH_ENV] = String(readDepth() + 1);
     // 父 pid:子进程里的看门狗据此在父进程消失后自杀(SIGTERM/SIGKILL 打不到孙进程)。
     childEnv[PARENT_PID_ENV] = String(process.pid);
+    // MCP 桥必须剥掉。子进程继承 PI_CODING_AGENT_DIR 会加载 cindy-bridge(权限门要靠这个,
+    // 见文件头),而 bridge 一见到 CINDY_PI_MCP_BRIDGE 就会**逐个 connect 所有 MCP server**
+    // 并持有有状态 transport。子代理的 --tools 白名单里根本没有 MCP 工具,所以这些连接纯属
+    // 浪费:每个子代理一整套连接、每次派发一轮连接风暴(并发 4、单次最多 8),而且子代理不会
+    // 显式 close,只能等进程退出(review)。剥这一个变量即可 —— 权限门与网关路由不受影响。
+    delete childEnv[MCP_BRIDGE_ENV];
 
     let child;
     try {

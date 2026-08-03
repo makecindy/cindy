@@ -167,6 +167,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         'CINDY_PI_API_KEY',
         'CINDY_PI_SESSION_ID',
         'CINDY_PI_SESSION_TOKEN',
+        // 子代理路由快照是**控制面**:一次获批的 bash 拿到路径就能改写 provider/model,
+        // 让后续每次委派打到攻击者选定的 endpoint。与 permission file 同类,必须从
+        // bash/模型工具的 spawn 边界剥离(review)。
+        'CINDY_PI_SUBAGENT_RUNTIME_FILE',
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
