@@ -110,6 +110,23 @@ type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 
+/**
+ * 回挂目标的请求级凭据: 记住本次出站真正带上的那个目标身份。
+ * null = 本次没挂回(无需提交)。提交必须凭它校身份, 不能按 userId 当前槽位盲删。
+ */
+type ReplyTargetLease = { userId: string; messageId: string } | null;
+
+/**
+ * 队列里是否存在比 current 更新的触发消息 —— Telegram 同一 chat 内 message_id
+ * 单调递增, 因此更大的 id 就意味着槽位里那个已经过时。
+ * current 解不出数字(不应发生)时不阴拦领取。
+ */
+function hasNewerTrigger(queue: Array<{ id: string }>, current: string): boolean {
+  const currentId = Number(current);
+  if (!Number.isFinite(currentId)) return true;
+  return queue.some((entry) => Number(entry.id) > currentId);
+}
+
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
 interface PendingAlbum {
   messages: TgMessage[];
@@ -616,14 +633,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
+    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
     const sent = await this.callSend<TgMessage>('sendMessage', {
       ...target,
-      ...this.peekReplyParams(userId),
+      ...replyParams,
       text: html,
       parse_mode: 'HTML',
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
-    this.commitReplyParams(userId);
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
   }
@@ -1277,38 +1295,65 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     else this.turnReplyTargets.delete(userId);
   }
 
-  /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
+  /**
+   * 独立输出入口用的领取: 队列有货, 且槽位为空 **或槽位已过时** 时领取。
+   *
+   * 为何不能拿「槽位非空」当忙: 槽位里的目标可能是上一轮的残留 —— 某轮领取后
+   * 出站失败且调用方直接放弃(如 processOne 捕到 unsupportedOnly 后 return), 目标就会
+   * 一直占着。旧判据下下一条入站消息领不到自己的新目标, 回复会持续落后一条。
+   *
+   * 过时判据不靠猜失败原因(传输层无法区分「调用方还会重试」与「已放弃」), 而是用
+   * Telegram 的硬事实: 同一 chat 内 message_id 单调递增 —— 队列里出现更大的 id,
+   * 就证明有更新的触发消息到达过, 槽位那个已经不是"当前该回的那条"。
+   * 这比分类失败路径更嬽: 任何原因造成的残留都会在下一条入站消息处自愈。
+   */
   private claimTurnReplyTargetIfIdle(userId: string): void {
-    if (this.turnReplyTargets.has(userId)) return;
-    if (!this.pendingReplyTargets.has(userId)) return;
+    const queue = this.pendingReplyTargets.get(userId);
+    if (!queue || queue.length === 0) return;
+    const current = this.turnReplyTargets.get(userId);
+    if (current !== undefined && !hasNewerTrigger(queue, current)) return;
     this.claimTurnReplyTarget(userId);
   }
 
   /**
-   * 本轮回挂目标 → reply_parameters(首条出站专用), **只读不消耗**。
-   * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   * 租借本次出站的回挂目标: 同时返回 reply_parameters 与**请求级凭据**(lease),
+   * **只读不消耗**。allow_sending_without_reply: 触发消息被删时降级为普通消息。
    *
-   * 读与消耗必须分开: 首条出站失败(网络/限流耗尽)时调用方会重试 —— 发前就消耗
+   * 读与消耗分开的原因: 首条出站失败(网络/限流耗尽)时调用方会重试 —— 发前就消耗
    * 会让重试那条丢掉引用('first' 档于是整轮不再挂回)。旧 sendRichFinal 就是这么
    * 做的, DM 改走经典路径后该语义必须留在共用发送入口上。
    */
-  private peekReplyParams(
-    userId: string,
-  ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
+  private leaseReplyTarget(userId: string): {
+    params:
+      | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
+      | Record<string, never>;
+    lease: ReplyTargetLease;
+  } {
     const target = this.turnReplyTargets.get(userId);
-    if (!target) return {};
+    if (!target) return { params: {}, lease: null };
     return {
-      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+      params: {
+        reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+      },
+      lease: { userId, messageId: target },
     };
   }
 
-  /** 出站确定成功后才消耗本轮目标(群 'all' 档保留整轮)。 */
-  private commitReplyParams(userId: string): void {
-    if (!this.turnReplyTargets.has(userId)) return;
+  /**
+   * 出站确定成功后才消耗 —— 且只能消耗**本次请求真正带上的那个目标**。
+   *
+   * 身份校验不可省: 旧轮请求还在途时新一轮可能已 claim 了新目标写进同一个槽位,
+   * 此时若按 userId 无条件删除, 旧请求的迟到成功会吃掉新轮的目标 —— 新轮首条
+   * 答案于是丢引用(群里就是一条与提问脉络不上的回答)。不匹配 = 本次与当前槽位无关,
+   * 什么都不做。
+   */
+  private commitReplyTarget(lease: ReplyTargetLease): void {
+    if (!lease) return;
+    if (this.turnReplyTargets.get(lease.userId) !== lease.messageId) return;
     // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
     const keepForAll =
-      decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
-    if (!keepForAll) this.turnReplyTargets.delete(userId);
+      decodeLaneUserId(lease.userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
+    if (!keepForAll) this.turnReplyTargets.delete(lease.userId);
   }
 
 
@@ -1366,7 +1411,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     markdownChunk: string,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
-    const replyParams = this.peekReplyParams(userId);
+    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {
@@ -1389,7 +1434,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         throw err;
       }
     }
-    this.commitReplyParams(userId);
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, markdownChunk, sent);
     return {
       messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)),
@@ -1401,14 +1446,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const target = this.targetOf(userId);
     let firstMessageId = '';
     for (const chunk of chunkTelegramSource(text)) {
+      // 只首条挂回: 后续分段不租借、也不提交(lease 为 null 时 commit 是 noop)。
+      const { params: replyParams, lease } =
+        firstMessageId === '' ? this.leaseReplyTarget(userId) : { params: {}, lease: null };
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
-        ...(firstMessageId === '' ? this.peekReplyParams(userId) : {}),
+        ...replyParams,
         text: chunk || '…',
         link_preview_options: { is_disabled: true },
       });
       if (!firstMessageId) {
-        this.commitReplyParams(userId);
+        this.commitReplyTarget(lease);
         firstMessageId = encodeMessageId(String(sent.chat.id), String(sent.message_id));
       }
       this.recordOwnEcho(userId, chunk, sent);
