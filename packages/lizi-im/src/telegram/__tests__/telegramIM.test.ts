@@ -475,6 +475,58 @@ describe('TelegramIM', () => {
     expect((sends[1].params.reply_parameters as { message_id: number }).message_id).toBe(61);
   });
 
+  it('群里的授权卡改投宿主私聊: 不落群、带触发消息深链、不吃回挂配额', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '改一下代码', fromId: 111, messageId: 70, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendInteractiveCard(events[0].senderId, {
+      title: '需要授权',
+      body: '要修改 src/app.ts 吗？',
+      buttons: [{ id: 'allow', label: '允许', type: 'primary' }],
+    });
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    // 群里的授权卡消不掉, 且只有 owner 能回答它 —— 一律投宿主私聊, 群里一条都不发
+    expect(card.params.chat_id).toBe(OWNER_ID);
+    expect(
+      api.calls.some((c) => c.method === 'sendMessage' && c.params.chat_id === '-100200'),
+    ).toBe(false);
+    // 私聊里看不出是哪个群问的, 所以带触发消息深链(-100 前缀私有超级群)
+    expect(String(card.params.text)).toContain('https://t.me/c/200/70');
+    // 群里的回挂目标不被卡片消耗: 本轮真正的回答仍然挂回那条提问
+    expect(card.params.reply_parameters).toBeUndefined();
+    await im.sendText(events[0].senderId, '改完了');
+    const answer = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === '-100200')
+      .at(-1)!;
+    expect(answer.params.reply_parameters).toEqual({
+      message_id: 70,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it('私聊的授权卡照旧落在私聊、正文不加群来源说明', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('needs approval', 111, 71)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendInteractiveCard(events[0].senderId, {
+      title: 'Approval',
+      body: 'Continue?',
+      buttons: [{ id: 'yes', label: 'Yes' }],
+    });
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe(OWNER_ID);
+    expect(String(card.params.text)).not.toContain('t.me/c/');
+    expect(String(card.params.text)).not.toContain('授权卡不会发到群里');
+  });
+
   it('私聊出站不回挂 reply', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

@@ -57,6 +57,14 @@ import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+
+/**
+ * 群/topic 里的交互卡改投宿主私聊时, 加在卡片正文顶部的说明。
+ *
+ * 中英双语一行, 与非 owner 礼貌回应(UNBOUND_REPLY)同口径 —— 这一层没有 i18n 通道。
+ */
+const GROUP_APPROVAL_OWNER_DM_NOTE =
+  '🔐 群聊里的任务需要你授权，授权卡不会发到群里。\nApproval needed for a group-chat task; approval cards are never posted in the group.';
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
@@ -613,6 +621,33 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     userId: string,
     spec: InteractiveCardSpec,
   ): Promise<{ messageId: string }> {
+    // 群 / topic lane 的交互卡改投**宿主私聊**(Chris 2026-08-03 要求, 官方 bot 侧同批
+    // 同口径): 群里的授权卡消不掉, 而且只有 owner 能回答它 —— 留在群里既是噪音也是误导。
+    // owner 未知时(理论上不该发生: 群 lane 的触发条件本身就是 owner @bot / reply)保持原
+    // lane 投递, 不吞掉这次交互。
+    const groupLane = this.ownerUserId ? decodeLaneUserId(userId) : null;
+    if (groupLane) {
+      const link = groupMessageLink(groupLane.chatId, this.peekReplyTargetId(userId));
+      const { html, replyMarkup } = buildCardPayload({
+        ...spec,
+        // 私聊里看不出是哪个群问的, 所以带说明 + 触发消息深链
+        body: `${GROUP_APPROVAL_OWNER_DM_NOTE}${link === null ? '' : `\n${link}`}\n\n${spec.body}`,
+      });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      // 刻意不动群 lane 的回挂目标: 那条触发消息在私聊里不存在, 消耗掉还会让本轮真正的
+      // 回答失去引用。回声按**实际落地**的私聊维度记, 否则群窗口会以为 bot 在群里说过这段。
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
     this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
@@ -625,6 +660,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     });
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+  }
+
+  /** 本轮回挂目标的消息 id(**只读不消耗**, 给私聊授权卡拼触发消息深链用)。 */
+  private peekReplyTargetId(userId: string): string | null {
+    return (
+      this.turnReplyTargets.get(userId) ?? this.pendingReplyTargets.get(userId)?.at(-1)?.id ?? null
+    );
   }
 
   async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
@@ -1808,6 +1850,20 @@ export type { TelegramGroupWindowEntry } from './inbound.js';
  * reason 保留原文供日志/诊断; code 是给 UI 用的稳定分类 —— 渲染层按 code 取
  * i18n 文案, 不再把这些英文技术串直接怼给用户看。
  */
+/**
+ * 私有超级群里某条消息的深链(`t.me/c/<internal>/<messageId>`) —— 授权卡改投宿主私聊后,
+ * 用它告诉宿主「是哪个群的哪条消息」。
+ *
+ * 只对 `-100` 前缀的私有超级群成立(公开群要 username, 这一层没有持久化群名/username)。
+ * 形状对不上返回 null, 调用方省掉那一行, 不拼一个点不开的链接。
+ */
+function groupMessageLink(chatId: string, messageId: string | null): string | null {
+  if (messageId === null || !chatId.startsWith('-100')) return null;
+  const internal = chatId.slice(4);
+  if (!/^\d+$/.test(internal) || !/^\d+$/.test(messageId)) return null;
+  return `https://t.me/c/${internal}/${messageId}`;
+}
+
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {
