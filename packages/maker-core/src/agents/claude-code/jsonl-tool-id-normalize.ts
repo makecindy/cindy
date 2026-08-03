@@ -295,19 +295,41 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // (translator 转发为 tool_result.data.toolUseIds)。归一化改名后必须同步, 否则
   // 关联断裂 / summary 挂不上归一化后的卡片。
   //
-  // 配对必须**按行作用域**: 每个引用记录指向「它所在位置之前最近的同名 call」的终 id ——
-  // 同一原始 id 重铸多次时, 第 N 个 subagent/summary 挂第 N 次调用, 而非全部挂最后一个
-  // duplicate(单一 last mapping 会把首个记录错误挂到后面的卡片上, codex-connector P2)。
+  // 配对必须**按行作用域 + 同行 FIFO**: 每个引用记录指向「它所在位置之前最近的同名
+  // call」的终 id —— 同一原始 id 重铸多次时, 第 N 个 subagent/summary 挂第 N 次调用,
+  // 而非全部挂最后一个 duplicate(单一 last mapping 会把首个记录错误挂到后面的卡片上,
+  // codex-connector P2)。同一 assistant 行内同 id 并行调用(同行多 occurrence)时,
+  // 多条子记录按**内容顺序**各挂各次调用, 与 tool_result 的同批 FIFO 配对一致
+  // (codex-connector P2: Preserve same-line subagent occurrence refs —— 否则同行块被
+  // 折叠成单一 latest line mapping, 首个子记录错挂到块内最后一个调用)。
   if (occurrenceByOriginal.size > 0) {
-    // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标(其 line < 当前 index)。
+    // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标。初始 -1。
     const occPtr = new Map<string, number>();
-    // 单个原始 id → 终 id 的行作用域解析(推进 occPtr 并返回最近的终 id;该行之前
-    // 无同名 call 时返回 undefined)。
+    // 单个原始 id → 终 id 的行作用域解析。推进规则:
+    //   - 同行块内继续(当前 ptr 所在块行 < index 且块内还有下一个): 消费下一个
+    //     (FIFO —— 同一条 assistant 消息内同 id 并行调用, 多条子记录按内容顺序);
+    //   - 否则: 跳到「最近的行 < index 的块」的**块首**(块内按出现序, 首个即内容
+    //     顺序第一个)。跨行(重铸在更早的行)整体跳过, 引用取最近那次调用。
+    // 该行之前无同名 call 时返回 undefined。
     const resolveOccurrence = (val: string, index: number): string | undefined => {
       const occs = occurrenceByOriginal.get(val);
       if (!occs || occs.length === 0) return undefined;
       let ptr = occPtr.get(val) ?? -1;
-      while (ptr + 1 < occs.length && occs[ptr + 1].line < index) ptr += 1;
+      if (
+        ptr >= 0 &&
+        ptr + 1 < occs.length &&
+        occs[ptr].line === occs[ptr + 1].line &&
+        occs[ptr + 1].line < index
+      ) {
+        ptr += 1;
+      } else {
+        let next = ptr + 1;
+        while (next < occs.length && occs[next].line < index) {
+          ptr = next; // 块首(内容顺序第一个)
+          while (next + 1 < occs.length && occs[next + 1].line === occs[next].line) next += 1;
+          next += 1;
+        }
+      }
       occPtr.set(val, ptr);
       return ptr < 0 ? undefined : occs[ptr].finalId;
     };

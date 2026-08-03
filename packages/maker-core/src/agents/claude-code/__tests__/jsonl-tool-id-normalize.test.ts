@@ -358,6 +358,38 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_x210']);
   });
 
+  it('同一 assistant 行内同 id 并行调用: 子记录按内容顺序 FIFO 各挂各次(codex-connector P2)', () => {
+    // 同一条 assistant 消息含两个 Bash_210(并行) → Bash_x210 + Bash_210_dup2。
+    // 两条 subagent 记录引用 Bash_210: 第一条应挂第一个调用(Bash_x210),
+    // 第二条挂第二个(Bash_210_dup2) —— 同行块不能折叠成单一 last mapping。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210'), toolUse('Bash_210')]),
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        parent_tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      }),
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-2',
+        parent_tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      }),
+      userEntry('u1', [toolResult('Bash_210'), toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // 同行两个并行调用分别定终: 第一个偏移, 第二个去重
+    const callIds = contentOf(entries[0]).map((b) => b.id);
+    expect(callIds[0]).toBe('Bash_x210');
+    expect(callIds[1]).toBe('Bash_210_dup2');
+    // 两条子记录按内容顺序 FIFO: 第一条挂首个调用, 第二条挂第二个
+    expect((entries[1] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+    expect((entries[2] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_210_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
