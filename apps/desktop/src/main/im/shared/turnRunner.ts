@@ -1383,6 +1383,8 @@ export function createTurnRunner(
       return;
     }
 
+    const migratedSourceMessageId =
+      sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
     let messageId: string;
     try {
       const result = await richIm.sendInteractiveCard(userId, spec, {
@@ -1391,7 +1393,14 @@ export function createTurnRunner(
         // 留在原 lane(它们在群里可见是合理的), 命令卡与会话选择卡更不能转 —— 那会让
         // 回调落到私聊锁上。
         ...(req.kind === 'permission'
-          ? { deliverToOwnerDm: true, ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE }
+          ? {
+              deliverToOwnerDm: true,
+              ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+              // 迁移路径同样按业务 turn 取来源消息(可能没有进行中的 turn)。
+              ...(migratedSourceMessageId !== undefined
+                ? { ownerDmSourceMessageId: migratedSourceMessageId }
+                : {}),
+            }
           : {}),
       });
       messageId = result.messageId;
@@ -2595,6 +2604,10 @@ export function createTurnRunner(
       // (eventually resolved) interaction card — not into the pre-existing card
       // that sits above it. Without this, the user sees the conclusion stream
       // into a card chronologically older than the "✅ 已选择" patch.
+      // 深链身份必须在 finalizeActiveStream **之后**照样可用: 它取自本 turn 的
+      // userMessageId(业务事实), 与流式 handle 生命周期无关 —— 传输层猜不出这个。
+      const ownerDmSourceMessageId =
+        sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
       let messageId: string;
@@ -2603,7 +2616,11 @@ export function createTurnRunner(
           threadTs: scopeKey,
           // 同上: 只有 permission 卡转宿主私聊
           ...(req.kind === 'permission'
-            ? { deliverToOwnerDm: true, ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE }
+            ? {
+                deliverToOwnerDm: true,
+                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
+              }
             : {}),
         });
         messageId = result.messageId;

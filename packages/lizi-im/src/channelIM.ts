@@ -101,6 +101,16 @@ export interface RichChannelIM extends TextChannelIM {
        * 传输层不造文案(它没有 locale, 也不该持有产品措辞)。
        */
       ownerDmNote?: string;
+      /**
+       * 触发本轮的那条渠道消息 id(本接口的 messageId 形态)。`deliverToOwnerDm` 生效时
+       * 用来拼「来源」深链 —— 宿主在私聊里收到的卡片否则看不出是哪个群、哪个问题。
+       *
+       * **必须由调用方给**: 只有它知道这张卡属于哪一轮业务 turn。传输层能看到的只有
+       * 回挂状态与流式 handle 生命周期, 两者都不等于业务轮次 —— 回挂目标在
+       * `replyQuoteGroup:'first'` 下发出首条回复就被消耗, 而发卡前调用方会主动收口
+       * 流式 handle。不传则不渲染深链(不猜)。
+       */
+      ownerDmSourceMessageId?: string;
     },
   ): Promise<{ messageId: string }>;
 

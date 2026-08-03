@@ -128,6 +128,21 @@ function hasNewerTrigger(queue: Array<{ id: string }>, current: string): boolean
   return queue.some((entry) => Number(entry.id) > currentId);
 }
 
+/**
+ * 调用方给的「本轮触发消息」编码 id → 同群的原生 message_id(给私聊授权卡拼深链)。
+ *
+ * 解不开、或解出来属于**别的 chat** 时返回 null(不渲染深链): 链到别的会话比没有链更糟。
+ */
+function sourceMessageIdIn(chatId: string, encoded: string | undefined): string | null {
+  if (encoded === undefined) return null;
+  try {
+    const decoded = decodeMessageId(encoded);
+    return decoded.chatId === chatId ? decoded.messageId : null;
+  } catch {
+    return null;
+  }
+}
+
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
 interface PendingAlbum {
   messages: TgMessage[];
@@ -257,14 +272,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
   private readonly turnReplyTargets = new Map<string, string>();
   /**
-   * 当前轮触发消息的 id(**整轮保留, 不随 reply_parameters 被消耗**)。
-   * 私聊授权卡的来源深链只需要"哪条消息触发了这一轮"这个身份, 不能借用回挂状态:
-   * 'first' 档下首条群回复一发出去 turnReplyTargets 就被 consumeReplyParams 清了,
-   * 此后拼深链要么拿到 null(无来源链接), 要么误取队列里下一轮的提问(链到别的问题)。
-   * 它的时效同样由 activeStreamRounds 界定 —— 回合收口后这个缓存就属于上一轮了。
-   */
-  private readonly turnTriggerIds = new Map<string, string>();
-  /**
    * 活动流式回合计数(userId → 未收口的 handle 数) —— 回挂目标槽位的**归属权**。
    *
    * 为何必需: A 回合正在流式输出时, B 消息到达会入队并立即发一条排队提示
@@ -365,7 +372,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
-    this.turnTriggerIds.clear();
     await this.stopPolling();
     if (!this.botId) this.botId = botIdFromToken(token);
     this.setStatus({ kind: 'offline', appId: this.botContextId });
@@ -421,7 +427,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
-    this.turnTriggerIds.clear();
     await this.stopPolling();
     // bot 身份是上一个账号的连接期产物: 登出/换账号后必须清干净, 否则下一个
     // 账号在 offline 等拿不到 getMe 的状态下会继承旧账号的 bot 名字。
@@ -650,7 +655,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
-    opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
+    opts?: {
+      threadTs?: string;
+      deliverToOwnerDm?: boolean;
+      ownerDmNote?: string;
+      ownerDmSourceMessageId?: string;
+    },
   ): Promise<{ messageId: string }> {
     // **只有授权类卡片**转宿主私聊(调用方用 deliverToOwnerDm 点名): 群里的授权卡消不掉,
     // 且只有 owner 能回答它。命令卡 / 会话选择卡(/ctr 等)不传这个开关 —— 它们的回调必须
@@ -660,7 +670,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const groupLane =
       opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
     if (groupLane) {
-      const link = groupMessageLink(groupLane.chatId, this.peekReplyTargetId(userId));
+      // 来源深链只认调用方给的那条触发消息 id —— 只有它知道这张卡属于哪一轮业务 turn。
+      // 传输层能看到的两个信号都不等于业务轮次: 回挂目标在 'first' 档发出首条回复即被
+      // consumeReplyParams 消耗, 而调用方在发卡前会主动收口流式 handle(turnRunner 的
+      // finalizeActiveStream), 所以"有活动流式回合"同样为假。宁可不渲染深链, 不猜。
+      const link = groupMessageLink(
+        groupLane.chatId,
+        sourceMessageIdIn(groupLane.chatId, opts?.ownerDmSourceMessageId),
+      );
       // 卡片不再发到群里 —— callSend 只停它自己那条 chat 的 typing loop(这里是宿主私聊),
       // 群里那条会继续每 4.5s 打一次 sendChatAction, 于是群里一直显示「正在输入…」。
       // 手动停掉原群的那条(review 指出的回归)。
@@ -700,30 +717,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
-  }
-
-  /**
-   * 本轮触发消息的 id(**只读不消耗**, 给私聊授权卡拼来源深链用)。
-   *
-   * 先读整轮保留的 turnTriggerIds(且回合仍活着 / 队列里没有更新的触发消息) —— 回挂状态
-   * 在 'first' 档会被首条群回复消耗掉, 拿它当
-   * 深链身份会在"先流式回一句、再请求授权"的正常时序下直接失效。本轮还没领过目标时
-   * (授权发生在任何输出之前)才退到待配对队列, 且按 **FIFO** 取队首 —— 与
-   * claimTurnReplyTarget 同序; 取 `.at(-1)` 会拿到**后到**的那条触发消息(群里连发两问
-   * 时), 深链就指向了另一轮的提问。
-   */
-  private peekReplyTargetId(userId: string): string | null {
-    const queue = this.pendingReplyTargets.get(userId);
-    const head = queue?.[0]?.id ?? null;
-    const cached = this.turnTriggerIds.get(userId);
-    if (cached === undefined) return head;
-    // 回合活着 = 缓存就是当前这一轮领的目标。
-    if (this.hasActiveStreamRound(userId)) return cached;
-    // 无活动回合 = 缓存是上一轮的残留(与 claimTurnReplyTargetIfIdle 同一判据): 队列里出现
-    // 更大的 message_id 就证明有更新的触发消息到达过, 本轮在产出任何输出前就请求授权时
-    // 走的正是这条路 —— 深链必须指向当前这条, 否则链回上一轮的问题。
-    if (queue && hasNewerTrigger(queue, cached)) return head;
-    return cached;
   }
 
   async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
@@ -1395,13 +1388,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     while (queue && queue.length > 0 && queue[0].at < cutoff) queue.shift();
     const next = queue?.shift();
     if (queue && queue.length === 0) this.pendingReplyTargets.delete(userId);
-    if (next) {
-      this.turnReplyTargets.set(userId, next.id);
-      this.turnTriggerIds.set(userId, next.id);
-    } else {
-      this.turnReplyTargets.delete(userId);
-      this.turnTriggerIds.delete(userId);
-    }
+    if (next) this.turnReplyTargets.set(userId, next.id);
+    else this.turnReplyTargets.delete(userId);
   }
 
   /**
@@ -1885,7 +1873,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
-    this.turnTriggerIds.clear();
     await this.stopPolling();
     const latchWritten = this.host.secrets.write(OFFLINE_SECRET_KEY, '1');
     const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';

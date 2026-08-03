@@ -491,8 +491,13 @@ describe('TelegramIM', () => {
         body: '要修改 src/app.ts 吗？',
         buttons: [{ id: 'allow', label: '允许', type: 'primary' }],
       },
-      // 授权卡由调用方点名转私聊, 并把用户可见说明一起传进来(传输层不造文案)
-      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+      // 授权卡由调用方点名转私聊, 并把用户可见说明与**本轮触发消息 id** 一起传进来
+      // (传输层不造文案, 也不猜这张卡属于哪一轮)
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
     );
     const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
     // 群里的授权卡消不掉, 且只有 owner 能回答它 —— 一律投宿主私聊, 群里一条都不发
@@ -557,11 +562,11 @@ describe('TelegramIM', () => {
     expect(String(card.params.text)).not.toContain('t.me/c/');
   });
 
-  it('授权卡深链指向**正在处理的那一轮**触发消息(待配对队列取队首, FIFO)', async () => {
+  it('授权卡深链认调用方指定的那一轮, 同 lane 后到的消息不影响它', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
     await connect();
-    // 群里连发两问 —— 两条触发消息都在待配对队列里, 第一轮处理的是 80
+    // 群里连发两问 —— 处理中的是 80, 81 已在队列里等下一轮
     api.pushUpdates([
       groupMessage({ text: '第一问', fromId: 111, messageId: 80, mentionBot: true }),
       groupMessage({ text: '第二问', fromId: 111, messageId: 81, mentionBot: true }),
@@ -571,12 +576,49 @@ describe('TelegramIM', () => {
     await im.sendInteractiveCard(
       events[0].senderId,
       { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
-      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
     );
     const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
-    // 取 .at(-1) 会指向后到的 81, 那是另一轮的提问
     expect(String(card.params.text)).toContain('https://t.me/c/200/80');
     expect(String(card.params.text)).not.toContain('/81');
+  });
+
+  it('深链只认同群的来源 id: 缺省或跨 chat 一律不渲染链接(不猜, 也不链错群)', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '问题', fromId: 111, messageId: 85, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 不传来源 id: 传输层不得靠回挂状态/流式回合猜, 直接不渲染深链
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    expect(
+      String(api.calls.filter((c) => c.method === 'sendMessage').at(-1)!.params.text),
+    ).not.toContain('t.me/c/');
+
+    // 来源 id 属于别的 chat: 链到别的会话比没有链更糟 —— 同样不渲染
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: '-100999|85',
+      },
+    );
+    expect(
+      String(api.calls.filter((c) => c.method === 'sendMessage').at(-1)!.params.text),
+    ).not.toContain('t.me/c/');
   });
 
   it("授权卡深链在本轮已发过群回复后仍然有效('first' 档会消耗回挂目标)", async () => {
@@ -595,38 +637,15 @@ describe('TelegramIM', () => {
     await im.sendInteractiveCard(
       events[0].senderId,
       { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
-      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
     );
     const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
     expect(card.params.chat_id).toBe('111');
     expect(String(card.params.text)).toContain('https://t.me/c/200/90');
-  });
-
-  it('授权卡深链不得链到上一轮: 本轮尚未产出输出时按待领取队首取', async () => {
-    const events: IMMessageEvent[] = [];
-    im.onMessage((e) => events.push(e));
-    await connect();
-    // 第一轮完整跑完(领过目标、出过话、回合收口) —— turnTriggerIds 里留着 100。
-    api.pushUpdates([
-      groupMessage({ text: '第一轮', fromId: 111, messageId: 100, mentionBot: true }),
-    ]);
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    const first = await im.startStreamingText(events[0].senderId, '在看');
-    await first.finalize('第一轮答完');
-
-    // 第二轮的触发消息只在待配对队列里(还没开始产出就先请求授权)。
-    api.pushUpdates([
-      groupMessage({ text: '第二轮', fromId: 111, messageId: 101, mentionBot: true }),
-    ]);
-    await vi.waitFor(() => expect(events).toHaveLength(2));
-    await im.sendInteractiveCard(
-      events[1].senderId,
-      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
-      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
-    );
-    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
-    expect(String(card.params.text)).toContain('https://t.me/c/200/101');
-    expect(String(card.params.text)).not.toContain('/100');
   });
 
   it('私聊出站不回挂 reply', async () => {
