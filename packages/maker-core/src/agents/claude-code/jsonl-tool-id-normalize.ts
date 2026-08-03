@@ -194,7 +194,11 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   let offsetBlockCount = 0;
   let duplicateIdCount = 0;
   const callSeen = new Map<string, number>();
-  const openCalls = new Map<string, Array<{ originalId: string; finalId: string }>>();
+  // openCalls[originalId] = 该 id 尚未配对的 call,按出现顺序;每项带所在
+  // assistant 消息 index(batch)用于「同批内顺序配对」。
+  const openCalls = new Map<string, Array<{ originalId: string; finalId: string; batch: number }>>();
+  // 最近一次 assistant 消息的 index —— result 的「同批」= 紧跟的那个 assistant 批。
+  let lastAssistantBatch = -1;
   const firstFinalByOriginal = new Map<string, string>();
   entries.forEach((entry, index) => {
     const blocks = messageContentBlocks(entry);
@@ -203,6 +207,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     let lineChanged = false;
     for (const block of blocks) {
       if (role === 'assistant' && isToolUseBlock(block)) {
+        lastAssistantBatch = index;
         const originalId = block.id;
         const n = (callSeen.get(originalId) ?? 0) + 1;
         callSeen.set(originalId, n);
@@ -229,10 +234,23 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           stack = [];
           openCalls.set(originalId, stack);
         }
-        stack.push({ originalId, finalId });
+        stack.push({ originalId, finalId, batch: index });
       } else if (role === 'user' && isToolResultBlock(block)) {
         const originalId = block.tool_use_id;
-        const matched = openCalls.get(originalId)?.pop();
+        // 配对顺序(同批 FIFO, 跨批 LIFO):
+        //   - 同一 assistant 消息内的 parallel calls 同时发出,result 按调用顺序
+        //     回来 → 应配同批内按出现序最前的未配对 call(内容顺序,避免 LIFO
+        //     倒配 swap 输出,codex-connector review P2)。「同批」= 最近一个
+        //     assistant 消息(index === lastAssistantBatch)里的 call。
+        //   - 跨批(孤儿 call + 重铸 call)时,重铸 call 在孤儿之后,result 属于
+        //     最近发出的那个 → 配数组尾部(最近)。先找同批最前,找不到回退最近。
+        const stack = openCalls.get(originalId);
+        let matched: { originalId: string; finalId: string; batch: number } | undefined;
+        if (stack) {
+          const batchMatch = stack.find((c) => c.batch === lastAssistantBatch);
+          matched = batchMatch ?? stack[stack.length - 1];
+          stack.splice(stack.indexOf(matched), 1);
+        }
         const inherited = matched?.finalId ?? firstFinalByOriginal.get(originalId);
         if (inherited !== undefined) {
           if (inherited !== originalId) {

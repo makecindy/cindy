@@ -140,6 +140,24 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_210_dup2');
   });
 
+  it('同批 parallel 同 id call: result 按内容顺序配对,不 swap(codex-connector P2)', () => {
+    // 同一 assistant 消息内两个同 id tool_use(病态但存在), 后随 user 消息的
+    // tool_result 按调用顺序: 修复前 LIFO pop 会倒配(第一个 result 配第二个
+    // call, 输出 swap)。同批内必须按出现序(FIFO)配对。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5'), toolUse('Bash_5')]), // 同批 parallel
+      userEntry('u1', [toolResult('Bash_5', '第一个结果'), toolResult('Bash_5', '第二个结果')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    // 第一个 call 保持首现(偏移), 第二个 call 去重为 _dup2
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x5');
+    expect(contentOf(entries[0])[1].id).toBe('Bash_5_dup2');
+    // 第一个 result 配第一个 call(顺序), 第二个 result 配第二个 call —— 不 swap
+    expect(contentOf(entries[1])[0].tool_use_id).toBe('Bash_x5');
+    expect(contentOf(entries[1])[1].tool_use_id).toBe('Bash_5_dup2');
+  });
+
   it('位置配对: 孤儿 call + 重铸 call 并存时 result 配给真实执行的那次', () => {
     // 孤儿 Bash_5(无 result,中断残留) + 重铸 Bash_5(有 result):
     // 出现序配对会把 result 错配给孤儿,位置配对必须配给重铸 call。
