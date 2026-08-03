@@ -31,9 +31,16 @@ let lastReportedBusy = false;
 /** 是否已为当前这段连续 probe 失败记过日志(边界切换期每 5s 一条纯噪音)。 */
 let probeFailureLogged = false;
 
-/** register.ts 注入:返回本机当前是否有任意 session 在 turn 中。传 null 解绑。 */
+/**
+ * register.ts 注入:返回本机当前是否有任意 session 在 turn 中。传 null 解绑。
+ *
+ * 换 probe 一并重置失败日志抑制:抑制只应作用于**同一段**连续失败。否则解绑后再注入
+ * 一个仍会抛错的 probe(账号切换后重建 maker 即走这条路),新一段的首条 warn 会被上一
+ * 段的标志吃掉,排障时看不到它曾经不可用。
+ */
 export function setBusyProbe(probe: (() => boolean) | null): void {
   busyProbe = probe;
+  probeFailureLogged = false;
 }
 
 /**

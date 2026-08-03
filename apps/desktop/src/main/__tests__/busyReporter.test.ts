@@ -2,7 +2,20 @@
  * busyReporter 单测 —— 被控端 busy presence 的 dedupe 与重连补正(PR #166 review New-F)。
  * 核心:hello 必须报当前真实 busy 并同步 dedupe 基线,否则 turn 进行中重连会让其它设备整轮看成空闲。
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const logSpies = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock('../logger', () => ({
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: logSpies.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
+
 import {
   setBusyProbe,
   currentBusy,
@@ -12,7 +25,10 @@ import {
   __testing,
 } from '../device-link/busyReporter';
 
-beforeEach(() => __testing.reset());
+beforeEach(() => {
+  __testing.reset();
+  logSpies.warn.mockClear();
+});
 
 describe('busyReporter', () => {
   it('无 probe → currentBusy=false', () => {
@@ -124,6 +140,41 @@ describe('busyReporter · probe 不可用(issue #1358)', () => {
     probe = () => true;
     expect(pollBusyChange()).toBe(true);
     expect(__testing.getLastReported()).toBe(true);
+  });
+
+  it('同一段连续失败只记一条 warn,probe 恢复后重新武装', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    pollBusyChange();
+    pollBusyChange();
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(1); // 边界期每 5s 一条纯噪音,抑制掉
+
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true); // 恢复 → 抑制解除
+    probe = () => {
+      throw boundaryError();
+    };
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(2); // 新一段失败重新记一条
+  });
+
+  it('换 probe 会重置失败日志抑制 —— 新一段的首条 warn 不被上一段吃掉', () => {
+    const throwing = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(throwing);
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(1);
+
+    // 账号切换后重建 maker 会走「解绑 → 重新注入」;若不在这里重置抑制标志,
+    // 新 probe 仍不可用时的首条 warn 会被上一段的标志静默吃掉。
+    setBusyProbe(null);
+    setBusyProbe(throwing);
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(2);
   });
 
   it('currentBusy / helloBusy 在 probe 不可用时按 false,且能自我纠正', () => {
