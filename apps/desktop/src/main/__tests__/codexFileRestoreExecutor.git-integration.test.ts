@@ -333,6 +333,53 @@ describe('executeCodexFileRestorePlan', () => {
     }
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
+  it('never restores through a symlinked parent that escapes the repository', async () => {
+    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
+    await writeFile('evil/target.txt', 'baseline\n');
+    await commitAll('seed evil');
+    const turnStart = await shadowSavepoint('turn-start');
+    // 本轮删除该文件(基线有 → 回退方向是恢复)。
+    await fs.rm(path.join(repoPath, 'evil'), { recursive: true });
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    // 用户把 evil 换成指向仓库外的符号链接,外部目录里有同名文件。
+    const outside = await fs.mkdtemp(path.join(path.dirname(repoPath), 'outside-'));
+    try {
+      await fs.writeFile(path.join(outside, 'target.txt'), 'external data\n', 'utf8');
+      await fs.symlink(outside, path.join(repoPath, 'evil'));
+
+      const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+      const result = await executeCodexFileRestorePlan(plan, {
+        createRollbackId: () => 'rb-restore-symlink',
+      });
+
+      // 恢复目标的最近存在祖先(evil)真实路径在仓库外 → 跳过恢复,
+      // 基线 blob 绝不写到仓库外;外部文件原样。
+      expect(result?.restoredFiles).toEqual([]);
+      expect(await fs.readFile(path.join(outside, 'target.txt'), 'utf8')).toBe('external data\n');
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('aborts when a collision directory contains files outside the rewind scope', async () => {
+    await writeFile('swap', 'base\n');
+    await commitAll('seed swap file');
+    const turnStart = await shadowSavepoint('turn-start');
+    await writeFile('swap', 'edited\n');
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    // 保存点之后,用户把 swap 换成目录并放入未被任何 turn 记录的手工文件。
+    await fs.rm(path.join(repoPath, 'swap'));
+    await writeFile('swap/notes.txt', 'manual notes\n');
+    const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+
+    await expect(
+      executeCodexFileRestorePlan(plan, { createRollbackId: () => 'rb-scope' }),
+    ).rejects.toMatchObject({ code: 'REWIND_GIT_FAILED' });
+
+    // 中止且自愈:范围外的手工文件原样保留,目录未被清空。
+    expect(await readFile('swap/notes.txt')).toBe('manual notes\n');
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('aborts before mutating when an affected file is currently skipped by the safety filter', async () => {
     await writeFile('grow.txt', 'base\n');
     await commitAll('seed grow');

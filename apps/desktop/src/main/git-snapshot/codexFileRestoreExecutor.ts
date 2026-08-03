@@ -393,9 +393,29 @@ async function makeWorktreeMatchCommit(
   }
 
   if (toRestore.length > 0) {
+    // git restore 会写穿指向仓库外的符号链接父目录(创建前导目录时 stat 跟随
+    // 链接),所以恢复目标也要过 realpath 围栏:最近存在祖先的真实路径必须
+    // 仍在仓库内,否则跳过该路径并告警(基线内容仍在保存点树里,不丢)。
+    const restorable: string[] = [];
+    for (const filePath of toRestore) {
+      const abs = resolveSnapshotGitPath(repoRoot, filePath);
+      if (!abs) continue;
+      if (await nearestExistingAncestorEscapes(repoReal, abs)) {
+        log.warn('[file-restore] restore skipped: real parent escapes the repository', {
+          repoRoot,
+          filePath,
+        });
+        continue;
+      }
+      restorable.push(filePath);
+    }
+    toRestore.length = 0;
+    toRestore.push(...restorable);
+
     // A turn may have replaced a file with a directory; git restore cannot
     // write a blob over an existing directory, so clear such collisions
     // first (contents are recoverable from the pre-rollback savepoint).
+    const affectedSet = new Set(paths);
     for (const filePath of toRestore) {
       const abs = resolveSnapshotGitPath(repoRoot, filePath);
       if (!abs) continue;
@@ -409,26 +429,88 @@ async function makeWorktreeMatchCommit(
         });
         continue;
       }
+      // 碰撞目录里可能有用户在保存点之后手工放入、未被任何 turn 记录的文件:
+      // 它们不在受影响集合里,成功路径不会恢复、补偿也不覆盖。发现即在改动
+      // 任何文件前中止(与安全过滤盲区同款语义),交用户先处理该目录。
+      const outOfScope = await listDescendantsOutsideScope(realAbs, filePath, affectedSet);
+      if (outOfScope.length > 0) {
+        throw new CodexFileRewindExecutionError(
+          'REWIND_GIT_FAILED',
+          `文件回退已中止:${filePath} 现在是目录,且包含本次回退范围之外的文件(如 ${outOfScope.slice(0, 3).join('、')}),请先移出或删除这些文件后重试`,
+        );
+      }
       await fs.rm(realAbs, { recursive: true, force: true });
     }
-    await withPathspecFile(
-      toRestore.map((p) => `:(literal)${p}`),
-      (pathspecFile) =>
-        deps.gitExec(
-          [
-            'restore',
-            `--source=${targetCommit}`,
-            '--worktree',
-            '--pathspec-from-file',
-            pathspecFile,
-            '--pathspec-file-nul',
-          ],
-          repoRoot,
-        ),
-    );
+    if (toRestore.length > 0) {
+      await withPathspecFile(
+        toRestore.map((p) => `:(literal)${p}`),
+        (pathspecFile) =>
+          deps.gitExec(
+            [
+              'restore',
+              `--source=${targetCommit}`,
+              '--worktree',
+              '--pathspec-from-file',
+              pathspecFile,
+              '--pathspec-file-nul',
+            ],
+            repoRoot,
+          ),
+      );
+    }
   }
 
   return { restored: toRestore, deleted: toDelete };
+}
+
+/**
+ * True when the closest existing ancestor of the (lexically in-repo) path
+ * resolves outside the repository — i.e. a parent segment is currently a
+ * symlink escaping the repo. Missing ancestors are walked upward so that
+ * restoring into not-yet-existing directories stays allowed.
+ */
+async function nearestExistingAncestorEscapes(
+  repoReal: string,
+  absPath: string,
+): Promise<boolean> {
+  let dir = path.dirname(absPath);
+  for (;;) {
+    const real = await fs.realpath(dir).catch(() => null);
+    if (real) {
+      return real !== repoReal && !real.startsWith(repoReal + path.sep);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return true;
+    dir = parent;
+  }
+}
+
+/**
+ * Lists files under a collision directory whose repo paths are NOT part of
+ * the restore scope. Symlink entries are treated as files (never followed).
+ */
+async function listDescendantsOutsideScope(
+  realDirPath: string,
+  gitDirPath: string,
+  affectedSet: ReadonlySet<string>,
+): Promise<string[]> {
+  const outOfScope: string[] = [];
+  const stack: Array<{ realPath: string; gitPath: string }> = [
+    { realPath: realDirPath, gitPath: gitDirPath },
+  ];
+  while (stack.length > 0) {
+    const { realPath, gitPath } = stack.pop() as { realPath: string; gitPath: string };
+    const entries = await fs.readdir(realPath, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const childGitPath = `${gitPath}/${entry.name}`;
+      if (entry.isDirectory()) {
+        stack.push({ realPath: path.join(realPath, entry.name), gitPath: childGitPath });
+        continue;
+      }
+      if (!affectedSet.has(childGitPath)) outOfScope.push(childGitPath);
+    }
+  }
+  return outOfScope.sort();
 }
 
 /**
