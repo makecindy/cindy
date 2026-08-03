@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
+  resolveEffort,
   resolveProviderSwitchEffort,
   type Effort,
   type ProviderView,
@@ -80,7 +81,42 @@ describe('resolveProviderModelEfforts', () => {
     ).toBe('low');
   });
 
-  it('ChatInput 把目标 provider 贯穿换源与跨引擎 effort 解析后才组装 setModel 选择', () => {
+  it('model-only 切换在 BYOM defaultEffort=null 时仍只从该来源的显式档位回落', () => {
+    const providers = [
+      piProvider({
+        id: 'openai',
+        source: 'builtin',
+        efforts: ['minimal', 'low', 'medium', 'high'],
+        defaultEffort: 'high',
+      }),
+      piProvider({
+        id: 'my-byom',
+        source: 'user',
+        efforts: ['low', 'high'],
+        defaultEffort: null,
+      }),
+    ];
+
+    const target = resolveProviderModelEfforts({
+      providers,
+      providerId: 'my-byom',
+      modelId: 'shared-reasoner',
+      agentKind: 'pi',
+    });
+
+    expect(target).toEqual({ efforts: ['low', 'high'], defaultEffort: null });
+    expect(
+      resolveEffort({
+        ...target!,
+        // 内置来源支持的 medium 不能穿进 BYOM；null 默认应回落到 BYOM 首个显式档位。
+        activeEffort: 'medium',
+        providerEffort: 'medium',
+        rememberedEffort: 'medium',
+      }),
+    ).toBe('low');
+  });
+
+  it('ChatInput 把目标 provider 贯穿 model-only、换源与跨引擎 effort 解析后才组装 setModel 选择', () => {
     const source = readFileSync(
       resolve(__dirname, '../../components/new-chat/ChatInput.tsx'),
       'utf8',
@@ -90,12 +126,16 @@ describe('resolveProviderModelEfforts', () => {
     const providerChangeEnd = source.indexOf('const handleProviderChange = useCallback(');
     const agentSwitchStart = source.indexOf('const performAgentSwitch = useCallback(');
     const agentSwitchEnd = source.indexOf('const performModelChange = useCallback(');
+    const modelChangeStart = agentSwitchEnd;
+    const modelChangeEnd = source.indexOf('const handleModelChange = useCallback(');
 
     expect(switchResolverStart).toBeGreaterThan(-1);
     expect(providerChangeStart).toBeGreaterThan(switchResolverStart);
     expect(providerChangeEnd).toBeGreaterThan(providerChangeStart);
     expect(agentSwitchStart).toBeGreaterThan(-1);
     expect(agentSwitchEnd).toBeGreaterThan(agentSwitchStart);
+    expect(modelChangeStart).toBeGreaterThan(-1);
+    expect(modelChangeEnd).toBeGreaterThan(modelChangeStart);
     expect(source.slice(switchResolverStart, providerChangeStart)).toContain(
       'resolveModelEfforts(targetModelId, providerId)',
     );
@@ -104,6 +144,9 @@ describe('resolveProviderModelEfforts', () => {
     );
     expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain(
       'resolveModelEfforts(\n          newModelId,\n          providerId,\n          targetAgentKind,\n        )',
+    );
+    expect(source.slice(modelChangeStart, modelChangeEnd)).toContain(
+      'resolveModelEfforts(\n        newModelId,\n        effectiveSourceId,\n      )',
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
       '{ effort: eff, fastMode: restoredFast }',

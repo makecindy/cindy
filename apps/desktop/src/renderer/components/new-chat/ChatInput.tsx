@@ -4403,9 +4403,12 @@ export function ChatInput({
         setRememberedEffort(activeModel, committedActiveEffort);
       }
 
-      // effort 档走 catalog(含自定义供应商模型);恢复优先级:
-      // (agent,model) 全局预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId);
+      // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
+      // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
