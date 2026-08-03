@@ -96,7 +96,10 @@ function profileNames() {
 
 /**
  * 现读子代理运行期快照(model + provider)。每次派子代理都读 —— 会话中途 setModel 后
- * 立即生效。读不到就返回空:退回 pi 自己的默认解析,绝不拿 spawn 时定型的旧值顶。
+ * 立即生效。
+ *
+ * 读不到返回空对象,调用方**必须据此失败关闭**:退回 pi 默认解析会把 BYOM / 本地
+ * provider 的请求发到错误 endpoint,那比"本次没有子代理"糟糕得多(review)。
  */
 function readRuntimeSnapshot() {
   const file = process.env[RUNTIME_FILE_ENV];
@@ -282,6 +285,10 @@ function runTask(binary, task, runtime, signal, onProgress) {
     if (timer && typeof timer.unref === 'function') timer.unref();
 
     const feed = createLineReader(function (line) {
+      // 终态已上报后丢弃迟到输出:kill() 到 SIGKILL 之间有约 2 秒宽限,子进程仍可能吐
+      // stdout;finish() 之后再回调 onProgress 会把已上报的 stopped/failed 重新写成
+      // running(review)。这里在解析之前就短路,连 JSON.parse 都省掉。
+      if (settled) return;
       let event;
       try {
         event = JSON.parse(line);
@@ -330,6 +337,9 @@ export default async function cindySubagent(pi: any) {
   const binary = process.env[BINARY_ENV];
   // 拿不到 pi 二进制路径就不注册:宁可没有这个工具,也不让模型调用一个必然失败的工具。
   if (typeof binary !== 'string' || binary.trim().length === 0) return;
+  // host 未能持久化路由快照时会**不传**该 env → 本次会话完全不暴露子代理工具(fail-closed)。
+  const runtimeFile = process.env[RUNTIME_FILE_ENV];
+  if (typeof runtimeFile !== 'string' || runtimeFile.trim().length === 0) return;
 
   pi.registerTool({
     name: TOOL_NAME,
@@ -367,6 +377,15 @@ export default async function cindySubagent(pi: any) {
     async execute(toolCallId: string, params: unknown, signal: AbortSignal, onUpdate: any) {
       const tasks = normalizeTasks(params);
       const runtime = readRuntimeSnapshot();
+      // 使用点失败关闭:快照读不到(host 写失败后删除 / 目录只读 / 磁盘满)时拒绝派发,
+      // 而不是不带 --provider/--model 让子进程走 pi 默认解析 —— 后者会把 BYOM / 本地
+      // provider 的请求发到错误 endpoint。provider 恒由 host 写入,缺它即视为不可用。
+      if (!runtime.provider) {
+        throw new Error(
+          'subagent is unavailable: Cindy could not read this session\'s model routing snapshot, '
+          + 'so a subagent would run against the wrong provider. Tell the user; do the work yourself.',
+        );
+      }
       const startedAt = Date.now();
       const label = tasks.map(function (t) { return t.agent; }).join(', ');
       const taskId = String(toolCallId || 'subagent');

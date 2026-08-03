@@ -84,6 +84,29 @@ describe('cindy-subagent extension source', () => {
     );
   });
 
+  it('fails closed when the routing snapshot is unavailable', () => {
+    // host 写快照失败时会不传 runtime 文件 env 并删除该文件。扩展必须两处都失败关闭:
+    // 注册期不暴露工具、使用期拒绝派发 —— 退回 pi 默认解析会把 BYOM / 本地 provider 的
+    // 请求发到错误 endpoint,比「本次没有子代理」糟糕得多(review)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "if (typeof runtimeFile !== 'string' || runtimeFile.trim().length === 0) return;",
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('if (!runtime.provider) {');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('subagent is unavailable');
+  });
+
+  it('drops late child output after the task already settled', () => {
+    // kill() 到 SIGKILL 之间有约 2 秒宽限,子进程仍可能吐 stdout;终态上报后再回调
+    // onProgress 会把 stopped/failed 重新写成 running(review)。解析前就短路。
+    const feedGuard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const feed = createLineReader');
+    const parseAt = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('JSON.parse(line)');
+    const settledGuard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (settled) return;', feedGuard);
+    expect(feedGuard).toBeGreaterThan(-1);
+    expect(settledGuard).toBeGreaterThan(feedGuard);
+    // 守卫必须在 JSON.parse 之前。
+    expect(settledGuard).toBeLessThan(parseAt);
+  });
+
   it('ships as its own extension file rather than being folded into cindy-bridge', () => {
     expect(CINDY_SUBAGENT_EXTENSION_FILENAME).toBe('cindy-subagent.ts');
   });

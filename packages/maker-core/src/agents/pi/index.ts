@@ -713,34 +713,46 @@ export class PiAgent extends BaseAgent {
     // 走 pi 默认解析,直接跑错 endpoint(review)。setModel 同理:切完模型立刻派子代理必须already
     // 看到新值。
     //
-    // 写失败时**删除**该文件而不是留旧内容:让扩展退回 pi 默认解析,而不是拿一个已知过期的
-    // 显式模型顶 —— 后者正是本条 review 要消除的行为。删除本身也是 best-effort。
+    // **写失败一律 fail-closed,不许 catch 成功**(review):runtime 目录只读 / 磁盘满时,
+    // 若把失败吞成成功,子代理会带着空快照或旧快照继续跑 —— BYOM / 本地 provider 的请求
+    // 就发到错误 endpoint 去了。返回 false 表示"本次未能持久化",调用方据此**禁用本次会话
+    // 的子代理路由**;失败时还会 best-effort 删掉该文件,让扩展在使用点也失败关闭
+    // (它把"读不到快照"当作不可用,而不是退回 pi 默认解析)。
     let subagentRuntimeWriteChain: Promise<void> = Promise.resolve();
     let subagentRuntimeWriteGen = 0;
-    const writeSubagentRuntimeFile = (next: { model?: string; provider?: string }): Promise<void> => {
+    /** 快照持久化失败 → 本次会话不暴露子代理工具/不接受子代理调用。 */
+    let subagentRoutingEnabled = true;
+    const writeSubagentRuntimeFile = async (
+      next: { model?: string; provider?: string },
+    ): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
       };
-      const run = subagentRuntimeWriteChain.then(async () => {
-        // 已被更晚的意图取代:旧内容不得在新内容之后落盘。
-        if (gen !== subagentRuntimeWriteGen) return;
-        try {
-          await fs.writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
-        } catch (error) {
-          this.deps.logger.warn('pi subagent runtime snapshot write failed; clearing stale snapshot', {
-            message: error instanceof Error ? error.message : String(error),
-          });
-          await fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
-        }
+      const run = subagentRuntimeWriteChain.then(async (): Promise<boolean> => {
+        // 已被更晚的意图取代:旧内容不得在新内容之后落盘(视作成功,最新那次负责收口)。
+        if (gen !== subagentRuntimeWriteGen) return true;
+        await fs.writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
+        return true;
       });
       // 链永不停在 rejected 上(同权限档):否则一次写失败后续写永远追加不进去。
-      subagentRuntimeWriteChain = run.catch(() => {});
-      return run;
+      subagentRuntimeWriteChain = run.then(() => {}, () => {});
+      try {
+        return await run;
+      } catch (error) {
+        this.deps.logger.error('pi subagent runtime snapshot write failed; disabling subagent routing', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        // 留着旧内容比没有更危险(会把请求发到过期 provider),删掉让使用点也失败关闭。
+        await fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
+        return false;
+      }
     };
     // 会话暴露前先落初始快照(await:模型第一次调 subagent 时文件必须已经在)。
-    await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider });
+    if (!(await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider }))) {
+      subagentRoutingEnabled = false;
+    }
 
     // MCP 桥:host 把 in-process MCP providers 暴露成 localhost streamable-HTTP。
     // 传 session 身份(sessionId/workingDir/vendorOptions)让 host 在 bridge 上注册
@@ -924,7 +936,9 @@ export class PiAgent extends BaseAgent {
         // process.execPath —— host 本来就知道本次会话用的是哪个 pi。
         [CINDY_SUBAGENT_ENV.binary]: this.deps.binaryPath,
         // 只给文件路径:model/provider 由扩展每次现读,setModel 后立即生效。
-        [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
+        // 快照没能持久化时**不传**该 env —— 扩展据此完全不注册 subagent 工具(fail-closed,
+        // 宁可本次会话没有子代理,也不让它带着空/旧快照把请求发到错误 endpoint)。
+        ...(subagentRoutingEnabled ? { [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
         PI_OFFLINE: '1',
@@ -1329,8 +1343,12 @@ export class PiAgent extends BaseAgent {
         mutableModel = model;
         mutablePiProviderId = provider;
         // 子代理读的是运行期文件,不是 spawn 时定型的 env —— 必须**等写入落盘**再返回,
-        // 否则切完模型立刻派子代理会读到旧值(review)。
-        await writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId });
+        // 否则切完模型立刻派子代理会读到旧值(review)。写失败时禁用子代理路由:模型切换
+        // 本身已在 server 侧生效,不该因此报错,但子代理不能再按过期路由跑(文件已被删,
+        // 扩展在使用点失败关闭)。
+        if (!(await writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId }))) {
+          subagentRoutingEnabled = false;
+        }
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };
