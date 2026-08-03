@@ -25,6 +25,7 @@
  */
 
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
+import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -282,8 +283,13 @@ export interface AgentInputCoordinatorDeps {
   /**
    * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
    * host 必须把压住的 error 行补落，否则那次中断在历史里彻底消失（不变量 I2）。
+   * `surfaceError` 只在这条 error 本身成为最终用户可见失败时为 true；被新输入或另一条
+   * 技术错误顶替时只补历史，不能再拿旧错误打扰用户。
    */
-  onResumableTurnErrorDiscarded?: (sessionId: string) => void;
+  onResumableTurnErrorDiscarded?: (
+    sessionId: string,
+    options: { surfaceError: boolean },
+  ) => void;
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
@@ -321,10 +327,22 @@ export interface AgentInputCoordinatorDeps {
   beforeDispatchUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
    * Called when a user row crossed the persistence boundary but never reached
-   * vendor dispatch. Hosts use this to discard turn-start side effects that
-   * would otherwise be consumed by a later retry/turn.
+   * vendor dispatch. `cancelled` is an explicit user lifecycle boundary
+   * (Stop/remove/clear/new input); `failed` means the attempted delivery itself
+   * failed and remains user-visible. Hosts use this to finalize retry ownership
+   * and discard turn-start side effects that would otherwise leak into a later turn.
    */
-  onUndispatchedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  onUndispatchedUserTurn?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    disposition: 'cancelled' | 'failed',
+  ) => void;
+  /**
+   * The delivery pipeline rejected this item for a technical/policy reason
+   * before vendor dispatch. Unlike Stop/remove/clear, this is a real failed
+   * attempt rather than explicit user cancellation.
+   */
+  onRejectedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   onAcceptedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
@@ -355,7 +373,8 @@ export interface AgentInputCoordinatorDeps {
    */
   onUiRetry?: (sessionId: string, clientId: string, source: 'manual' | 'auto') => void;
   /**
-   * 用户/上游用一条**新**消息接管了这个会话(enqueue 或 steer 回落为普通 turn)。
+   * 用户接管了这个会话（新消息 enqueue、steer 回落为普通 turn，或在自动退避中
+   * clearError 以继续既有队列）。
    *
    * hook-control 用它作废该会话的待续跑记账: 会话已经被别的内容推进, 再把结果接回
    * 渠道那条旧消息只会显示无关输出。判据刻意用**入口**而不是消息文本 ——
@@ -1333,6 +1352,7 @@ export class AgentInputCoordinator {
           if (cur.pendingQueue.length === 0) cur.queuePaused = false;
         }
         this.deps.onUserMessageBlocked?.(sessionId, item, verdict);
+        this.notifyRejectedUserTurn(sessionId, item);
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'steer-ghost-blocked');
@@ -1417,12 +1437,23 @@ export class AgentInputCoordinator {
       if (markerStillPresent) {
         latest.error = errorMessage(err);
         latest.recovery = null;
+        // 视觉 capability 拒绝发生在 Pi RPC 之前，投递结果确定为“未接收”。把原消息
+        // 恢复到队首并留下 typed recovery；用户切换到视觉模型后可原样重试。与 ack
+        // 超时不同，这里不暂停队列，因为不存在重复投递风险。marker 已被 Stop/clear
+        // 清掉时不会进本分支，因此不会把显式丢弃的消息复活。
+        if (isPiImageInputUnsupportedError(err)) {
+          this.movePreparedItemToQueueFront(latest, item, true);
+          this.movePendingCompactWaitClientIdToFront(latest, item.clientId);
+          latest.recovery = { kind: 'queue-head', clientId: item.clientId };
+          latest.queuePaused = false;
+          latest.queuePausedByRestore = false;
+        }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"
         // 没有落点——用户按草稿重发同一段文字时模型可能双份消费,review #939 第三轮)
         // 并暂停队列,不让 turn 结束后的自动 drain 把它再派发一遍。用户确认模型
         // 已回应就删行,没回应就点「继续发送」。队列行入口 prepend 幂等,无副作用。
-        if (isSteerDeliveryUncertainError(err)) {
+        else if (isSteerDeliveryUncertainError(err)) {
           this.prependQueueHeadIfMissing(latest, item);
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
@@ -1819,6 +1850,9 @@ export class AgentInputCoordinator {
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
+    // clearError can immediately wake an already queued turn. Release the old
+    // backoff owner before that drain, or its Island filter can swallow the new tail.
+    if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
     state.error = null;
     state.stickyError = null;
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery
@@ -2073,6 +2107,20 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      if (
+        active &&
+        state.recovery?.kind === 'queue-head' &&
+        isPiImageInputUnsupportedError(state.error)
+      ) {
+        // A Pi capability guard rejected a newer steer before RPC and restored it as the
+        // recoverable queue head. The terminal error belongs to the original active turn: close
+        // that old boundary, but do not replace the newer queue-head recovery/banner with an
+        // active-turn retry. The paired done path below preserves the same recovery as well.
+        state.activeTurn = null;
+        state.stickyError = null;
+        this.emit(sessionId);
+        return;
+      }
       if (active?.persisted) {
         state.activeTurn = null;
         state.stickyError = null;
@@ -2218,10 +2266,10 @@ export class AgentInputCoordinator {
     // 同轮注入的 steer 在飞期间,老 turn 的 done 可能先到(注入前 turn 恰好收尾)。
     // marker 属于 steer 事务而不是老 turn,必须留到 steer() 自己 resolve/reject
     // 或 Stop/close 取消,这里不动 steeringQueueClientIds。
-    if (!active && state.recovery?.kind === 'queue-head') {
-      // A pre-accept rollback has already restored the failed head. A late
-      // done/closed-style wake from the old turn must not clear that recovery,
-      // otherwise the next drain tick would silently resend it without Retry.
+    if (state.recovery?.kind === 'queue-head') {
+      // A pre-accept rollback or a capability-rejected steer has already restored the failed
+      // head. The latter can still have the original active turn here; its done boundary must
+      // not clear the steer recovery, otherwise the next drain silently resends without Retry.
       this.emit(sessionId);
       return;
     }
@@ -2514,6 +2562,7 @@ export class AgentInputCoordinator {
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;
           this.deps.onUserMessageBlocked?.(sessionId, head, verdict);
+          this.notifyRejectedUserTurn(sessionId, head);
           this.deps.onDiscardedQueuedMessage?.(sessionId, head);
           this.emit(sessionId);
           this.scheduleDrain(sessionId, 'ghost-hook-blocked');
@@ -2677,6 +2726,7 @@ export class AgentInputCoordinator {
           reason,
           error: latest.error,
         });
+        this.notifyRejectedUserTurn(sessionId, head);
         this.emit(sessionId);
         return;
       }
@@ -2694,7 +2744,8 @@ export class AgentInputCoordinator {
         // (review #944 第十轮 P1)。
         latest.activeTurn = null;
       }
-      this.notifyUndispatchedUserTurn(sessionId, head);
+      this.notifyRejectedUserTurn(sessionId, head);
+      this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -2744,6 +2795,11 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
         ...logFields,
       });
+      const cancelledByUserBoundary =
+        latest.queueAbortPending &&
+        result.kind === 'session-dispatch' &&
+        result.reason === 'cancelled-before-dispatch';
+      if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
       this.emit(sessionId);
       return;
     }
@@ -2758,7 +2814,16 @@ export class AgentInputCoordinator {
     // 注:isPromptTracked 用的 hasQueuedItemWhere 默认不含 recovery,所以摘掉它不会影响
     // runner 的排队存活探测。
     const schedulerOrigin = this.setActiveTurnRecovery(latest, item) === 'dropped-scheduler';
-    this.notifyUndispatchedUserTurn(sessionId, item);
+    const cancelledByUserBoundary =
+      latest.queueAbortPending &&
+      result.kind === 'session-dispatch' &&
+      result.reason === 'cancelled-before-dispatch';
+    if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
+    this.notifyUndispatchedUserTurn(
+      sessionId,
+      item,
+      cancelledByUserBoundary ? 'cancelled' : 'failed',
+    );
     if (latest.queueAbortPending && result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch') {
       latest.queueAbortPending = false;
     }
@@ -3038,7 +3103,7 @@ export class AgentInputCoordinator {
       // 同 onTurnEvent / handleSendNotDispatched:scheduler 的 prompt 不留重试入口
       // (判据内建在 setActiveTurnRecovery,第十八轮 P1)。
       const schedulerOrigin = this.setActiveTurnRecovery(state, item) === 'dropped-scheduler';
-      this.notifyUndispatchedUserTurn(sessionId, item);
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
       log.warn(
         schedulerOrigin
           ? 'session closed before dispatch after persistence; dropped scheduler prompt (no user retry)'
@@ -3080,7 +3145,7 @@ export class AgentInputCoordinator {
     const item = active.item;
     if (!item) return;
     if (active.persisted) {
-      this.notifyUndispatchedUserTurn(sessionId, item);
+      this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
       // 第六条终态路径(本轮自查补上,不是等 reviewer 报的):用户 Stop 赢在 pre-vendor
       // await 窗口。scheduler 的 prompt 同样不留重试入口 —— runner 会按 abort 收口这一轮,
       // 克隆重跑没有 FireContext 回调也不计 run 账(判据内建在 setActiveTurnRecovery)。
@@ -3420,6 +3485,13 @@ export class AgentInputCoordinator {
     }));
   }
 
+  private movePendingCompactWaitClientIdToFront(state: SessionInputState, clientId: string): void {
+    state.pendingCompacts = state.pendingCompacts.map((entry) => ({
+      ...entry,
+      waitForClientIds: [clientId, ...entry.waitForClientIds.filter((id) => id !== clientId)],
+    }));
+  }
+
   /**
    * **唯一的 active-turn recovery 出口。**任何终态路径想留「重试上一轮」入口都必须经这里,
    * 不要再直接写 `state.recovery = { kind: 'active-turn', ... }`。
@@ -3538,21 +3610,28 @@ export class AgentInputCoordinator {
    */
   private discardOnStaleActiveTurn(sessionId: string, active: ActiveTurn): boolean {
     if (this.isActiveTurnCurrent(sessionId, active)) return false;
-    this.discardDeferredResumableCandidate(sessionId, active);
+    this.discardDeferredResumableCandidate(sessionId, active, { surfaceError: false });
     return true;
   }
 
-  private discardDeferredResumableCandidate(sessionId: string, active: ActiveTurn): void {
+  private discardDeferredResumableCandidate(
+    sessionId: string,
+    active: ActiveTurn,
+    options: { surfaceError: boolean } = { surfaceError: true },
+  ): void {
     const pending = active.pendingTerminalEvent;
     if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
     active.pendingTerminalEvent = null;
-    this.notifyResumableTurnErrorDiscarded(sessionId);
+    this.notifyResumableTurnErrorDiscarded(sessionId, options);
   }
 
-  /** 被按住的 error 没能走到决策 → 通知 host 补落 error 行（不变量 I2）。 */
-  private notifyResumableTurnErrorDiscarded(sessionId: string): void {
+  /** 被按住的 error 没能走到决策 → 通知 host 按最终 disposition 释放它（不变量 I2）。 */
+  private notifyResumableTurnErrorDiscarded(
+    sessionId: string,
+    options: { surfaceError: boolean },
+  ): void {
     try {
-      this.deps.onResumableTurnErrorDiscarded?.(sessionId);
+      this.deps.onResumableTurnErrorDiscarded?.(sessionId, options);
     } catch (err) {
       log.warn('onResumableTurnErrorDiscarded failed', { sessionId, error: errorMessage(err) });
     }
@@ -3570,11 +3649,27 @@ export class AgentInputCoordinator {
     if (!cancelledPrepared && (hadPendingTakeover || surfacedMessage)) this.emit(sessionId);
   }
 
-  private notifyUndispatchedUserTurn(sessionId: string, item: AgentInputQueuedMessage): void {
+  private notifyUndispatchedUserTurn(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    disposition: 'cancelled' | 'failed',
+  ): void {
     try {
-      this.deps.onUndispatchedUserTurn?.(sessionId, item);
+      this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
+        sessionId,
+        clientId: item.clientId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  private notifyRejectedUserTurn(sessionId: string, item: AgentInputQueuedMessage): void {
+    try {
+      this.deps.onRejectedUserTurn?.(sessionId, item);
+    } catch (err) {
+      log.warn('onRejectedUserTurn failed', {
         sessionId,
         clientId: item.clientId,
         error: errorMessage(err),
@@ -3669,7 +3764,9 @@ export class AgentInputCoordinator {
       });
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
-        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
+        if (deferredPersistSuppressed) {
+          this.notifyResumableTurnErrorDiscarded(sessionId, { surfaceError: true });
+        }
         // 与 onTurnEvent 的 persisted 分支同款处置:没有 recovery 挡住"紧随的 done",
         // 必须用配对标记吃掉它,否则失败呈现会被 done 擦成"已完成"(第二十一轮 P1)。
         // recovery 不留 → 没有"用户点 clearError / Retry"这个唤醒源,队里压着的消息
@@ -3702,7 +3799,11 @@ export class AgentInputCoordinator {
         state.error = null;
       } else {
         state.error = terminalEvent.message ?? state.error;
-        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
+        if (deferredPersistSuppressed) {
+          this.notifyResumableTurnErrorDiscarded(sessionId, {
+            surfaceError: terminalEvent.supersededByUser !== true,
+          });
+        }
         if (schedulerItem) {
           state.recovery = null;
           this.markPendingExternalTerminalDone(sessionId, state);

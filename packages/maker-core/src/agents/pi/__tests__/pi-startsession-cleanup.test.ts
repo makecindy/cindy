@@ -69,6 +69,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   let cwd = '';
   let disposed = 0;
   let proxyDisposed = 0;
+  let preparedMcpContext: unknown;
 
   beforeEach(() => {
     knobs.ctorThrows = false;
@@ -78,6 +79,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.spawnedEnvs = [];
     disposed = 0;
     proxyDisposed = 0;
+    preparedMcpContext = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-cleanup-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-cleanup-cwd-'));
   });
@@ -107,14 +109,22 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       resolvePiAgentHome: () => agentHome,
       registerPiProxySession: () => () => { proxyDisposed++; },
       // 注册身份并回传 disposeSessionCtx 探针(servers 空,无需真桥)。
-      preparePiExtraSpawnConfig: async () => ({
-        mcpBridge: { token: 'itest', servers: [] },
-        disposeSessionCtx: () => { disposed++; },
-      }),
+      preparePiExtraSpawnConfig: async (_providers, context) => {
+        preparedMcpContext = context;
+        return {
+          mcpBridge: { token: 'itest', servers: [] },
+          disposeSessionCtx: () => { disposed++; },
+        };
+      },
     };
   }
 
-  const opts = () => ({ sessionId: 's1', workingDir: cwd, model: 'm' });
+  const opts = () => ({
+    sessionId: 's1',
+    sessionInstanceId: 'pi-instance-1',
+    workingDir: cwd,
+    model: 'm',
+  });
 
   it('disposes ctx (and does not close a nonexistent proc) when the process constructor throws synchronously', async () => {
     knobs.ctorThrows = true;
@@ -137,6 +147,11 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   it('does not dispose ctx on the success path (dispose is deferred to close())', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());
+    expect(preparedMcpContext).toMatchObject({
+      sessionId: 's1',
+      sessionInstanceId: 'pi-instance-1',
+      workingDir: cwd,
+    });
     expect(disposed).toBe(0);
     expect(proxyDisposed).toBe(0);
     await handle.close();

@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "当前任务正在运行，请稍后再试。",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任务中运行，本次来源切换未生效（本任务仍使用原来源）。等它结束后再试。",
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目标模型或来源需要不同的远端路由，请关闭并重新创建远程任务后生效。",
     "REMOTE_PROVIDER_UPDATING": "供应商凭证正在更新，请稍后重试",
@@ -126,6 +127,7 @@
       "subagentModels": "Subagent",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
+      "composer": "消息输入",
       "linkOpen": "链接打开方式",
       "compatMode": "小技巧",
       "voiceInput": "语音输入",
@@ -1254,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 计费",
+        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
-        "billingLabel": "按 token 计费",
+        "billingLabel": "按 token 从余额扣费",
         "disconnectConfirm": {
           "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"
@@ -1278,7 +1280,14 @@
           "confirm": "轮换"
         },
         "rotateSuccess": "密钥已轮换",
-        "rotateFailed": "轮换失败，请稍后重试"
+        "rotateFailed": "轮换失败，请稍后重试",
+        "copyKeyAria": "复制 Cindy AI Key",
+        "copyKeySuccess": "已复制 Cindy AI Key",
+        "copyKeyFailed": "复制失败，请稍后重试",
+        "asset": {
+          "viewUsage": "查看用量",
+          "syncFailed": "凭据同步失败，暂时无法获取余额。已保存的模型配置不受影响。"
+        }
       },
       "custom": {
         "tag": "自定义",
@@ -1310,6 +1319,8 @@
           "modelNamePlaceholder": "显示名称",
           "modelContextWindowPlaceholder": "上下文(tokens)",
           "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
+          "modelSupportsImageInput": "支持图片输入",
+          "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1569,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "推荐",
-        "desc": "登录 Cindy 即可开通官方 Cindy AI 服务，全部模型开箱即用，无需管理任何 Key。",
+        "desc": "官方服务，全部模型开箱即用，无需管理任何 Key。",
+        "grantBadge": "新用户含赠送余额",
         "cta": "登录 Cindy"
       },
       "menu": {
@@ -2217,6 +2229,14 @@
         "label": "默认 shell",
         "description": "修改默认只影响新建的终端 tab，已有 tab 不受影响。",
         "selectAria": "选择默认终端 shell"
+      }
+    },
+    "composer": {
+      "title": "消息输入",
+      "sendShortcut": {
+        "label": "使用 {{shortcut}} 发送",
+        "hint": "开启后按 {{shortcut}} 发送消息；关闭后按 Enter 发送消息，按 Shift+Enter 换行。",
+        "ariaLabel": "使用 {{shortcut}} 发送消息"
       }
     },
     "linkOpen": {
@@ -2968,7 +2988,8 @@
         "saveFailed": "保存新对话配置失败",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },
@@ -2984,6 +3005,7 @@
         "systemReserved": "该组合键被系统保留",
         "conflict": "与「{{name}}」冲突",
         "voiceConflict": "与语音输入快捷键冲突",
+        "composerVoiceConflict": "与语音输入快捷键冲突，请修改发送或语音输入快捷键。",
         "menuAccelerator": "该组合键无法注册为菜单快捷键"
       },
       "items": {
@@ -3110,12 +3132,15 @@
         "clearSearch": "清除插件搜索",
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
+        "installedSection": "已安装",
+        "recommendedSection": "推荐",
+        "updatesAvailable": "{{count}} 个插件有可用更新",
+        "updateAll": "全部更新",
+        "ignoreRound": "忽略本轮",
+        "updateTo": "更新到 v{{version}}",
+        "updateAria": "将 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 创建",
-        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、右侧栏页签、对话卡片还是无界面）、$ 点名词、启动模式、是否联网、是否需要设置页；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
-        "installedTitle": "已安装的插件",
-        "installedExpand": "展开另外 {{count}} 个已安装插件",
-        "installedCollapse": "收起其他已安装插件",
-        "allTitle": "全部插件",
+        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、插件页内面板、对话卡片还是无界面）、$ 点名词、启动模式、是否联网、是否需要设置页；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
         "filterAll": "全部",
         "filtersAria": "按来源筛选插件",
         "origin": {
@@ -3125,8 +3150,15 @@
           "custom": "自定义"
         },
         "emptyFiltered": "没有找到匹配的插件",
-        "useAction": "使用",
-        "useAria": "使用 {{name}}"
+        "useAria": "使用 {{name}}",
+        "usePanelAction": "使用",
+        "chatAction": "对话",
+        "chatAria": "与 {{name}} 对话",
+        "manageAction": "管理",
+        "manageAria": "管理 {{name}}",
+        "agentInvoked": "Agent 自动调用",
+        "upToDate": "已是最新",
+        "installAria": "安装 {{name}}"
       },
       "market": {
         "scopeAria": "筛选插件来源",
@@ -3141,9 +3173,6 @@
         "install": "安装",
         "details": "详情",
         "update": "从市场更新",
-        "updateAvailable": "可更新",
-        "updateAction": "更新",
-        "updateAria": "更新 {{name}}",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
         "conflict": "插件标识冲突",
@@ -3298,7 +3327,7 @@
         "meta": "版本 {{version}}。将安装到本机，可随时卸载。",
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
         "enableNow": "安装后立即生效",
-        "enableNowOpenTab": "安装后立即生效并打开页签",
+        "enableNowOpenPanel": "安装后立即生效并打开面板",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
       },
@@ -3345,7 +3374,7 @@
         "tool": "工具「{{name}}」",
         "command": "对话指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 停靠主对话区左侧",
-        "panelTab": "面板「{{title}}」· 右侧栏页签",
+        "panelTab": "面板「{{title}}」· 插件页内打开",
         "code": "可执行代码",
         "codeDetail": "在独立沙箱中运行，无法访问你的文件与网络。",
         "resident": "常驻运行(生效后即启动，不调用也保持后台进程)",
@@ -3428,6 +3457,7 @@
         "openLocation": "打开安装位置",
         "panelDocked": "已停靠 · 最小宽 {{min}}px",
         "panelNotDocked": "未停靠(布局中暂无位置记录)",
+        "panelPageHosted": "从插件页打开 · 离开插件页自动关闭",
         "panelNone": "这个插件不含面板",
         "customSlotTitle": "插件自定义设置区",
         "dangerTitle": "卸载插件",
@@ -3467,6 +3497,9 @@
         "descriptionExpand": "展开",
         "descriptionCollapse": "收起",
         "useAction": "使用",
+        "chatAction": "对话",
+        "enabledLabel": "已启用",
+        "disabledLabel": "已停用",
         "useDisabled": "请先开启插件",
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
@@ -3516,6 +3549,29 @@
       "workspace": {
         "dialogTitle": "选择项目文件夹",
         "dialogMessage": "插件「{{name}}」请求你选择一个项目文件夹，用于在侧边栏创建任务"
+      },
+      "panelHost": {
+        "close": "关闭面板"
+      },
+      "updateAll": {
+        "title": "全部更新 · {{count}} 个插件",
+        "description": "权限无变化的更新会自动完成；涉及权限变更的需要你逐项确认。",
+        "versionRange": "v{{from}} → v{{to}}",
+        "permissionChanged": "权限有变更",
+        "reviewOutdated": "权限差异已过期",
+        "rereview": "重新审阅",
+        "reviewDiff": "查看并确认",
+        "collapseDiff": "收起",
+        "approve": "同意并更新",
+        "skip": "跳过此项",
+        "statusPending": "排队中",
+        "statusInstalling": "更新中…",
+        "statusDone": "已更新",
+        "statusSkipped": "已跳过",
+        "statusFailed": "更新失败",
+        "background": "后台继续",
+        "doneAction": "完成",
+        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成"
       }
     },
     "mcp": {
@@ -4191,13 +4247,10 @@
       "addAria": "添加标签",
       "addFailed": "添加标签失败",
       "tabCloseAria": "关闭标签",
-      "pinAria": "钉住，在所有任务中保留",
-      "unpinAria": "取消钉住，仅保留在当前任务",
       "menu": {
         "addLabel": "添加标签",
         "comingSoon": "即将支持",
-        "alreadyOpen": "已打开",
-        "pluginGroup": "插件"
+        "alreadyOpen": "已打开"
       },
       "kinds": {
         "fileBrowser": "文件浏览器",
@@ -4218,9 +4271,7 @@
       "contextMenu": {
         "close": "关闭",
         "closeOthers": "关闭其他",
-        "closeAll": "关闭所有",
-        "pin": "钉住",
-        "unpin": "取消钉住"
+        "closeAll": "关闭所有"
       },
       "empty": {
         "eyebrow": "右侧栏",
@@ -4236,9 +4287,6 @@
         "browserSub": "Browser",
         "openTerminal": "打开终端",
         "terminalSub": "Terminal",
-        "pluginSub": "插件",
-        "pluginGroup": "插件面板",
-        "pluginGroupSub": "{{count}} 个插件",
         "addMoreHint": "可通过顶部 + 按钮选择更多面板类型"
       },
       "placeholderHint": "{{kind}} — 内容将在后续阶段加入"
@@ -4771,6 +4819,7 @@
       "send": "发送消息",
       "queue": "排队发送",
       "queueTooltip": "点击排队发送；按 {{shortcut}} 插话，不打断当前任务",
+      "queueTooltipSendMode": "点击可排队；按 {{shortcut}} 发送此消息",
       "stop": "停止生成"
     },
     "pluginSetup": {
@@ -4907,6 +4956,11 @@
         "generic": "订阅直连模型协议暂不支持 SSH 远程会话"
       },
       "discovering": "正在获取模型…",
+      "remoteLoading": "正在从远程设备读取模型…",
+      "remoteLoadFailed": "无法读取远程设备上的模型。请检查连接后重试。",
+      "remoteLoadFailedShort": "模型读取失败",
+      "retryRemoteModels": "重新读取模型",
+      "remoteEmpty": "这台设备没有可用模型",
       "effortLabel": "推理强度",
       "edit": "编辑",
       "options": "选项",
@@ -5072,6 +5126,8 @@
       "browseProjectFolder": "选择其他项目文件夹",
       "dialogue": "对话",
       "dialogueOrSelectProject": "对话或选择项目",
+      "remoteProjectsLoadFailed": "无法读取 {{device}} 上的项目。请检查连接后重试。",
+      "retryRemoteProjects": "重新读取项目",
       "removeFromList": "从列表中移除",
       "missingDir": "目录不存在"
     },
@@ -5274,7 +5330,7 @@
         "title": "Cindy AI",
         "desc": "官方服务 · 全部模型 · Claude Code / Codex 通用",
         "loginTitle": "登录 Cindy",
-        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型"
+        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型，新用户含赠送余额"
       },
       "othersToggle": "其他供应商({{count}})",
       "presetSub": "填入 API Key 即可连接",
@@ -5295,6 +5351,12 @@
       "openProviders": "打开模型供应商",
       "acknowledge": "知道了",
       "separator": "、"
+    },
+    "promotionalGrant": {
+      "title": "已为你开通 Cindy AI",
+      "desc": "赠送余额 {{amount}} 已到账，有效期至 {{date}}。用完或过期后可随时充值。",
+      "openBilling": "查看用量",
+      "acknowledge": "知道了"
     }
   },
   "voiceInputOverlay": {
@@ -5473,6 +5535,9 @@
       "retry": "重试",
       "continueAfterReset": "恢复后继续",
       "continueAfterResetTitle": "创建一次性自动化，在用量恢复后继续当前任务",
+      "gatewayQuotaExhausted": "Cindy AI 余额不足，请充值后继续",
+      "viewBalance": "查看余额",
+      "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
       "credentialSwitchBusy": "Codex 正在其它任务中运行，暂时无法按本任务选择的模型来源切换（需要重启共享的 Codex 后台进程）。等它结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
@@ -5884,6 +5949,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "附件：",
+      "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
       "attachmentSaved": "附件 {{name}} 已保存",
       "attachmentSavedUnsupported": "附件 {{name}} 已保存，但当前平台可能无法直接使用此文件类型",
@@ -6065,6 +6131,7 @@
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
+      "degraded": "与被控设备的连接不稳定，正在自动重试…",
       "actionsUnavailable": "被控设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
       "loading": "正在从被控设备加载任务…",
@@ -6181,6 +6248,7 @@
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
+      "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "任务已不再处于活跃状态",
@@ -6196,6 +6264,13 @@
         "allMachines": "所有",
         "localMachine": "本机",
         "connecting": "连接中…",
+        "tasksLoading": "正在从 {{device}} 读取任务…",
+        "tasksLoadFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试…",
+        "tasksPartiallyFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试；先显示已加载的内容",
+        "devicesLoading": "正在读取远程设备…",
+        "devicesLoadFailed": "无法读取远程设备列表。请检查连接后重试。",
+        "devicesPartiallyFailed": "无法刷新远程设备列表，当前仅显示已加载的内容。",
+        "retryDevices": "重新读取设备",
         "remoteSettings": "远程连接设置",
         "multiSelect": "多选",
         "deselect": "取消勾选",
@@ -8547,6 +8622,20 @@
           "expired": "已过期",
           "voided": "已作废"
         }
+      }
+    },
+    "orders": {
+      "title": "订单记录",
+      "description": "仅显示在 Cindy 内发起的充值与订阅订单。待支付订单超时后自动取消。",
+      "count": "{{count}} 笔",
+      "incomplete": "订单记录较多，当前仅显示最近的 {{count}} 笔。",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "已完成",
+        "awaitingPayment": "待支付",
+        "canceled": "已取消",
+        "expired": "已过期",
+        "failed": "支付失败"
       }
     },
     "dialogs": {

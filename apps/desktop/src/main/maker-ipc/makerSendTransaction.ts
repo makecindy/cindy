@@ -112,6 +112,21 @@ export interface MakerSendTransactionDeps {
     sessionId: string,
     message: unknown,
   ): Promise<IpcUserMessage>;
+  /**
+   * Direct device-link sends may carry OSS attachment references that need to
+   * become local paths before normalization. Keep this after the transaction's
+   * session/workdir preflight so rejected sends do not materialize local copies.
+   */
+  materializeDirectSendOssAttachments?: (
+    sessionId: string,
+    message: unknown,
+    sendOpts: unknown,
+  ) => Promise<{
+    message: unknown;
+    sendOpts: unknown;
+    cleanupAfterAcceptance?: () => void;
+    cleanupBeforeAcceptance?: () => void | Promise<void>;
+  }>;
   createDbMessage(
     sessionId: string,
     message: {
@@ -137,7 +152,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -462,7 +477,47 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const normalized = await deps.prepareSendUserMessage(sessionId, message);
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      if (
+        requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
+        typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
+      }
+      let outgoingMessage = message;
+      let outgoingSendOpts = sendOpts;
+      let cleanupAfterAcceptance: (() => void) | undefined;
+      let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
+      let sendAccepted = false;
+      if (deps.materializeDirectSendOssAttachments) {
+        const materialized = await deps.materializeDirectSendOssAttachments(
+          sessionId,
+          outgoingMessage,
+          outgoingSendOpts,
+        );
+        outgoingMessage = materialized.message;
+        outgoingSendOpts = materialized.sendOpts;
+        cleanupAfterAcceptance = materialized.cleanupAfterAcceptance;
+        cleanupBeforeAcceptance = materialized.cleanupBeforeAcceptance;
+      }
+      const cleanupBeforeAcceptanceIfNeeded = async (): Promise<void> => {
+        if (!cleanupBeforeAcceptance) return;
+        try {
+          await cleanupBeforeAcceptance();
+        } catch (err) {
+          deps.log.warn('send: direct OSS materialization cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      let normalized: IpcUserMessage;
+      try {
+        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+      } catch (err) {
+        await cleanupBeforeAcceptanceIfNeeded();
+        throw err;
+      }
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
@@ -470,13 +525,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
-      const so = (sendOpts ?? {}) as MakerSendOptions;
-      if (
-        so.ackInterruptedTurnOnDispatch !== undefined &&
-        typeof so.ackInterruptedTurnOnDispatch !== 'boolean'
-      ) {
-        throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
-      }
+      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       const persistUserMessage = readPersistUserMessageOption(so);
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;
@@ -577,10 +626,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           onDispatching: () => {
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });
+        sendAccepted = sendResult.accepted;
+        if (sendAccepted) cleanupAfterAcceptance?.();
+        else await cleanupBeforeAcceptanceIfNeeded();
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
@@ -618,6 +673,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           }),
         );
       } catch (err) {
+        if (!sendAccepted) await cleanupBeforeAcceptanceIfNeeded();
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           deps.rollbackUserPromptPreview?.(
             userPromptPreviewSessionId,

@@ -123,7 +123,48 @@ function createHandle(args: {
   };
 }
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe('Maker session creation singleflight', () => {
+  it('binds each rebuilt business session to a fresh runtime instance id', async () => {
+    const seenInstanceIds: string[] = [];
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      seenInstanceIds.push(opts.sessionInstanceId ?? '');
+      return createHandle({ id: `thread-${seenInstanceIds.length}` });
+    });
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-rebuilt',
+      sessionInstanceId: 'caller-must-not-control-this',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    const first = await maker.createSession(options);
+    expect(first.instanceId).toBe(seenInstanceIds[0]);
+    expect(first.instanceId).not.toBe('caller-must-not-control-this');
+
+    await maker.closeSession(options.id!);
+    const second = await maker.createSession(options);
+
+    expect(second.instanceId).toBe(seenInstanceIds[1]);
+    expect(second.instanceId).not.toBe(first.instanceId);
+  });
+
   it('shares one startup when the same business session is restored concurrently', async () => {
     let resolveStart!: (handle: AgentSessionHandle) => void;
     const startPending = new Promise<AgentSessionHandle>((resolve) => {
@@ -186,6 +227,198 @@ describe('Maker session creation singleflight', () => {
 
     await expect(maker.createSession({ ...options })).resolves.toBeInstanceOf(Session);
     expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a second business task using the same live Codex thread until close completes', async () => {
+    const threadId = '11111111-1111-1111-1111-111111111111';
+    const closeGate = createDeferred();
+    const firstHandle = createHandle({ id: threadId });
+    firstHandle.close = vi.fn(() => closeGate.promise);
+    const secondHandle = createHandle({ id: threadId });
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(secondHandle);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const options = (id: string): CreateSessionOptions => ({
+      id,
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+      resumeSessionId: threadId,
+    });
+
+    await maker.createSession(options('session-a'));
+    await expect(maker.createSession(options('session-b'))).rejects.toThrow(
+      /already active in another Cindy task/i,
+    );
+    expect(startSession).toHaveBeenCalledTimes(1);
+
+    const closing = maker.closeSession('session-a');
+    await vi.waitFor(() => expect(firstHandle.close).toHaveBeenCalledTimes(1));
+    await expect(maker.createSession(options('session-b'))).rejects.toThrow(
+      /already active in another Cindy task/i,
+    );
+    expect(startSession).toHaveBeenCalledTimes(1);
+
+    closeGate.resolve();
+    await closing;
+    const replacement = await maker.createSession(options('session-b'));
+    expect(replacement.sdkSessionId).toBe(threadId);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await replacement.close();
+  });
+
+  it('scopes Codex thread claims by remote target and permits different threads', async () => {
+    const sharedThread = '22222222-2222-2222-2222-222222222222';
+    const otherThread = '33333333-3333-3333-3333-333333333333';
+    const startSession = vi.fn(async (opts: CreateSessionOptions) =>
+      createHandle({ id: opts.resumeSessionId! }),
+    );
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const base = {
+      agentKind: 'codex' as const,
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    const local = await maker.createSession({
+      ...base,
+      id: 'session-local',
+      resumeSessionId: sharedThread,
+    });
+    const remote = await maker.createSession({
+      ...base,
+      id: 'session-remote',
+      remoteHostId: 'remote-1',
+      resumeSessionId: sharedThread,
+    });
+    const other = await maker.createSession({
+      ...base,
+      id: 'session-other-thread',
+      resumeSessionId: otherThread,
+    });
+
+    expect(startSession).toHaveBeenCalledTimes(3);
+    await Promise.all([local.close(), remote.close(), other.close()]);
+  });
+
+  it('releases a provisional Codex thread claim when startup fails', async () => {
+    const threadId = '44444444-4444-4444-4444-444444444444';
+    const startSession = vi.fn()
+      .mockRejectedValueOnce(new Error('resume failed'))
+      .mockResolvedValueOnce(createHandle({ id: threadId }));
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const options = (id: string): CreateSessionOptions => ({
+      id,
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+      resumeSessionId: threadId,
+    });
+
+    await expect(maker.createSession(options('session-failed'))).rejects.toThrow('resume failed');
+    const recovered = await maker.createSession(options('session-recovered'));
+
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await recovered.close();
+  });
+
+  it('moves the Codex thread claim when the live handle reports a replacement id', async () => {
+    const firstThread = '55555555-5555-5555-5555-555555555555';
+    const nextThread = '66666666-6666-6666-6666-666666666666';
+    const firstEvents = createAsyncQueue<AgentEvent>();
+    const firstHandle = createHandle({ id: firstThread });
+    firstHandle.events = () => firstEvents;
+    const startSession = vi.fn(async (opts: CreateSessionOptions) =>
+      opts.id === 'session-a'
+        ? firstHandle
+        : createHandle({ id: opts.resumeSessionId! }),
+    );
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const base = {
+      agentKind: 'codex' as const,
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+    const first = await maker.createSession({
+      ...base,
+      id: 'session-a',
+      resumeSessionId: firstThread,
+    });
+    const moved = new Promise<void>((resolve) => {
+      const unsubscribe = first.onEvent((event) => {
+        if (event.type !== 'session_id' || event.data !== nextThread) return;
+        unsubscribe();
+        resolve();
+      });
+    });
+
+    firstEvents.push({ type: 'session_id', data: nextThread, source: 'codex' });
+    await moved;
+
+    const oldThreadReuse = await maker.createSession({
+      ...base,
+      id: 'session-old-thread-reuse',
+      resumeSessionId: firstThread,
+    });
+    await expect(maker.createSession({
+      ...base,
+      id: 'session-next-thread-conflict',
+      resumeSessionId: nextThread,
+    })).rejects.toThrow(/already active in another Cindy task/i);
+
+    await Promise.all([first.close(), oldThreadReuse.close()]);
+  });
+
+  it('closes the Codex handle and releases its claim when session storage fails', async () => {
+    const threadId = '77777777-7777-7777-7777-777777777777';
+    const storage = createStorage();
+    const create = storage.create.bind(storage);
+    storage.create = vi.fn()
+      .mockRejectedValueOnce(new Error('storage unavailable'))
+      .mockImplementation(create);
+    const failedHandle = createHandle({ id: threadId });
+    failedHandle.close = vi.fn(async () => {});
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(failedHandle)
+      .mockResolvedValueOnce(createHandle({ id: threadId }));
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage,
+      logger: createLogger(),
+    });
+    const options = (id: string): CreateSessionOptions => ({
+      id,
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+      resumeSessionId: threadId,
+    });
+
+    await expect(maker.createSession(options('session-storage-failed'))).rejects.toThrow(
+      'storage unavailable',
+    );
+    expect(failedHandle.close).toHaveBeenCalledTimes(1);
+
+    const recovered = await maker.createSession(options('session-storage-recovered'));
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await recovered.close();
   });
 });
 
@@ -1426,12 +1659,14 @@ describe('Session permission mode leases', () => {
     });
 
     const permissionChange = session.setPermissionModeTracked('ask');
+    expect(session.stablePermissionModeState).toBeNull();
     const nextTurn = session.send('after permission restore');
     await vi.waitFor(() => expect(handle.setPermissionMode).toHaveBeenCalledOnce());
 
     expect(handle.send).not.toHaveBeenCalled();
     releasePermission();
     await expect(permissionChange).resolves.toMatchObject({ mode: 'ask' });
+    expect(session.stablePermissionModeState).toEqual({ mode: 'ask', generation: 1 });
     await expect(nextTurn).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledOnce();
   });
@@ -1472,6 +1707,7 @@ describe('Session permission mode leases', () => {
     await Promise.resolve();
 
     expect(applied).toEqual(['ask']);
+    expect(session.stablePermissionModeState).toBeNull();
     await expect(
       session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions'),
     ).resolves.toBe(false);

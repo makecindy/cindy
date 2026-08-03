@@ -53,7 +53,12 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import {
+  dismissErrorMessage,
+  listDeletableSessionPersistedChatAttachmentPaths,
+  rebroadcastAgentSwitchBoundary,
+} from './messages';
+import { cleanupStagedChatAttachments } from '../../file-browser/remote-file-cache';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
@@ -449,8 +454,8 @@ export async function getSessionRowSnapshot(id: string): Promise<{
 
 /**
  * 按 session id 查 fs 槽(意识写文件)守门要看的会话快照:workdir 位置、
- * permission 模式(claude / codex 共用这一列,codex 的 approval/sandbox 由
- * 它映射派生)、plan 开关、远程工作区标记。失败 swallow 返 null(调用方按
+ * permission 模式(claude / codex / pi 共用这一列,codex 的 approval/sandbox
+ * 由它映射派生)、plan 开关、远程工作区标记。失败 swallow 返 null(调用方按
  * 「会话不存在」拒绝写入,不抛)。
  */
 export async function getSessionFsSnapshot(id: string): Promise<{
@@ -1302,6 +1307,14 @@ export async function patchSessionMetaInDb(
         err: err instanceof Error ? err.message : String(err),
       });
     });
+    void listDeletableSessionPersistedChatAttachmentPaths(sessionId)
+      .then((filePaths) => cleanupStagedChatAttachments(filePaths))
+      .catch((err) => {
+        log.warn('staged chat attachment cleanup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
   removeHookAttachmentDir(sessionId, patch.status);
   scheduleWorktreeRecycleForStatusChange(sessionId, patch.status);

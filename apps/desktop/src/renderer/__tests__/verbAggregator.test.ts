@@ -71,6 +71,16 @@ describe('verbForTool', () => {
     expect(verbForTool('web_search')).toBe('fetched');
   });
 
+  it('maps pi builtin lowercase tools', () => {
+    expect(verbForTool('bash')).toBe('ran');
+    expect(verbForTool('read')).toBe('read');
+    expect(verbForTool('ls')).toBe('read');
+    expect(verbForTool('edit')).toBe('edited');
+    expect(verbForTool('write')).toBe('created');
+    expect(verbForTool('grep')).toBe('searched');
+    expect(verbForTool('find')).toBe('searched');
+  });
+
   it('falls back to "used" for unknown tools', () => {
     expect(verbForTool('FooBar')).toBe('used');
     expect(verbForTool('')).toBe('used');

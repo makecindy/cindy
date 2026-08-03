@@ -43,8 +43,9 @@
  *   but the first user reply hits "localDb not ready: call ensureReady(userId)
  *   first" — see chat with 王韬 (group 混(派科夫)) on 2026-05-07.
  *   `startImConnection()` is the explicit gate; it's idempotent and a no-op
- *   when the auto-update service is staging a relaunch (skip + retry on the
- *   next cold boot).
+ *   when the auto-update service is about to relaunch this process (skip +
+ *   retry on the next cold boot). "About to relaunch" is NOT the same as "a
+ *   patch is staged" — see `isUpdateRelaunchImminent()`.
  *
  * Credentials are independent from Cindy auth: the bot uses the user's own
  * channel credentials and keeps them across logout. Runtime connectivity is
@@ -90,7 +91,7 @@ import type { ImOrchestratorConfig } from './shared/types';
 import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
-import { getUpdateStatus } from '../updateService';
+import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -583,10 +584,17 @@ configureImAccountScope({
  * effect. FeishuIM.init() is a no-op when no credentials are saved, so the bot
  * stays idle until the user pastes appId / appSecret in Settings.
  *
- * Skips when an update is downloading or staged for relaunch — bringing the
- * bot up just to tear it down within seconds would spam the owner with
- * online/offline notifications. The next cold boot (after the update) will
+ * Skips only when the updater is actually about to replace this process —
+ * bringing the bot up just to tear it down within seconds would spam the owner
+ * with online/offline notifications. The next cold boot (after the update) will
  * connect normally.
+ *
+ * The gate MUST be `isUpdateRelaunchImminent()`, not the raw update status: a
+ * `ready` (staged) patch never relaunches on its own when the user turned
+ * auto-relaunch off, so gating on the status left this permanently skipped on
+ * every cold boot of an out-of-date install — the bot never came online and
+ * `feishuBot:save` kept failing with `[IM_NOT_READY]` (the account boundary is
+ * activated inside `im.init()`), with no way out but manually updating.
  */
 export function startImConnection(): void {
   if (connectionLifecycle.isStarted()) {
@@ -594,10 +602,9 @@ export function startImConnection(): void {
     return;
   }
 
-  const updateStatus = getUpdateStatus();
-  if (updateStatus === 'downloading' || updateStatus === 'ready') {
+  if (isUpdateRelaunchImminent()) {
     log.info(
-      `startImConnection: skip (updateService status=${updateStatus}); will connect on next cold boot`,
+      `startImConnection: skip (update relaunch imminent, updateService status=${getUpdateStatus()}); will connect on next cold boot`,
     );
     return;
   }

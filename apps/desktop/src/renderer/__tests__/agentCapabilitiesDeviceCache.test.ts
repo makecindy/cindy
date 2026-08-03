@@ -11,13 +11,21 @@ beforeEach(() => {
 });
 
 interface Caps {
-  availableModels: Array<{ id: string; displayName: string; contextWindow: number }>;
+  availableModels: Array<{
+    id: string;
+    displayName: string;
+    contextWindow: number;
+    efforts: string[];
+    defaultEffort: string | null;
+  }>;
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
 }
 const caps = (label: string, ctx = 1): Caps => ({
-  availableModels: [{ id: 'm', displayName: label, contextWindow: ctx }],
+  availableModels: [
+    { id: 'm', displayName: label, contextWindow: ctx, efforts: [], defaultEffort: null },
+  ],
   hasFastMode: false,
   effortLevels: [],
   permissionModes: [],
@@ -77,6 +85,102 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     // 本地缓存不受影响(没预热过)
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
   });
+
+  it('非法 capabilities 响应进入 error，不得发布 ready 或落缓存', async () => {
+    const invoke = vi.fn(async () => null);
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid')).toBeNull();
+  });
+
+  it('capabilities 模型数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid'),
+      availableModels: [...caps('valid').availableModels, null],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-item', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-item');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')).toBeNull();
+  });
+
+  it('模型默认 effort 不在可用列表中时不得落缓存', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid-effort'),
+      availableModels: [
+        {
+          id: 'm',
+          displayName: 'Invalid Effort',
+          contextWindow: 1,
+          efforts: ['low'],
+          defaultEffort: 'high',
+        },
+      ],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-effort', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-effort');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')).toBeNull();
+  });
+
+  it.each(['effortLevels', 'permissionModes'] as const)(
+    '%s 混入非法 descriptor 时不得发布 ready',
+    async (field) => {
+      const invoke = vi.fn(async () => ({
+        ...caps('invalid-descriptor'),
+        [field]: [{ id: 'invalid', displayName: null }],
+      }));
+      const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+      vi.stubGlobal('window', {
+        electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+      });
+      const mod = await import('@/hooks/useAgentCapabilities');
+      const listener = vi.fn();
+      mod.subscribeDeviceCapabilities(`dev-invalid-${field}`, 'codex', listener);
+
+      await mod.prefetchDeviceCapabilities(`dev-invalid-${field}`);
+
+      expect(listener).toHaveBeenCalledWith({
+        status: 'error',
+        error: 'Invalid agent capabilities response',
+      });
+      expect(mod.getCachedCapabilities('codex', `dev-invalid-${field}`)).toBeNull();
+    },
+  );
 
   it('key 隔离:local / dev-1 / dev-2 各自独立不串', async () => {
     stubElectron();

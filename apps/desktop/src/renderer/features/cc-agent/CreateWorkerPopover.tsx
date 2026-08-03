@@ -169,6 +169,7 @@ export function CreateWorkerPopover({
       providers,
       providersLoading,
       providersError,
+      providersUnsupported: deviceId ? remoteProviders.unsupported : false,
       excludeSubscriptionDirect: sshRemote === true,
       excludeChatBridgedCodex: sshRemote === true,
       isVisible: deviceId
@@ -182,11 +183,18 @@ export function CreateWorkerPopover({
     providers,
     providersError,
     providersLoading,
+    remoteProviders.unsupported,
     sshRemote,
     visibilityVersion,
   ]);
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
+  const remoteModelListBlocked =
+    !!deviceId &&
+    (activeCapabilitiesState.loading ||
+      activeCapabilitiesState.error !== null ||
+      providersLoading ||
+      (!!providersError && !remoteProviders.unsupported));
 
   // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被**停用**」时有效;
   // 其余(断开/下架/停用/换了模型)收窄为 null 交回默认路由解析。停用判据 =
@@ -554,6 +562,7 @@ export function CreateWorkerPopover({
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
     !customRoleError &&
+    !remoteModelListBlocked &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');

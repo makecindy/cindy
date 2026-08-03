@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "이 세션은 현재 작업을 실행 중입니다. 잠시 후 다시 시도해 주세요.",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 새 Pi 작업을 시작하세요.",
     "CREDENTIAL_SWITCH_BUSY": "다른 Codex 작업이 실행 중이어서 이번 제공자 전환은 적용되지 않았습니다(세션은 기존 제공자를 유지합니다). 다른 작업이 끝난 후 다시 시도해 주세요.",
     "REMOTE_WORKDIR_INVALID": "원격 프로젝트 경로가 올바르지 않습니다. 프로젝트 폴더를 다시 선택하세요.",
     "REMOTE_WORKDIR_NOT_FOUND": "원격 프로젝트 폴더가 없습니다. 프로젝트 폴더를 다시 선택하세요.",
@@ -126,6 +127,7 @@
       "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
+      "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
@@ -1254,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위 과금",
+        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위로 잔액에서 차감",
         "modelLabel": "모든 모델",
-        "billingLabel": "토큰 단위 과금",
+        "billingLabel": "토큰 단위로 잔액에서 차감",
         "disconnectConfirm": {
           "title": "Cindy AI 연결을 해제할까요?",
           "description": "연결을 해제하면 로컬에 저장된 Cindy AI Key가 삭제됩니다. Cindy AI 모델을 계속 사용하려면 다시 연결해야 합니다."
@@ -1278,7 +1280,14 @@
           "confirm": "교체"
         },
         "rotateSuccess": "키를 교체했습니다",
-        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요"
+        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요",
+        "copyKeyAria": "Cindy AI Key 복사",
+        "copyKeySuccess": "Cindy AI Key를 복사했습니다",
+        "copyKeyFailed": "복사에 실패했습니다. 나중에 다시 시도해 주세요",
+        "asset": {
+          "viewUsage": "사용량 보기",
+          "syncFailed": "자격 증명 동기화에 실패해 잔액을 가져올 수 없습니다. 저장된 모델 설정은 영향을 받지 않습니다."
+        }
       },
       "custom": {
         "tag": "사용자 지정",
@@ -1310,6 +1319,8 @@
           "modelNamePlaceholder": "표시 이름",
           "modelContextWindowPlaceholder": "컨텍스트(tokens)",
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
+          "modelSupportsImageInput": "이미지 입력 지원",
+          "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",
@@ -1569,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "추천",
-        "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "desc": "공식 서비스. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "grantBadge": "신규 사용자 프로모션 잔액 제공",
         "cta": "Cindy 로그인"
       },
       "menu": {
@@ -2252,6 +2264,14 @@
         "label": "기본 셸",
         "description": "기본값을 변경해도 새 터미널 탭에만 적용되며 기존 터미널은 영향을 받지 않습니다.",
         "selectAria": "기본 터미널 셸 선택"
+      }
+    },
+    "composer": {
+      "title": "메시지 입력",
+      "sendShortcut": {
+        "label": "{{shortcut}}로 보내기",
+        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기"
       }
     },
     "linkOpen": {
@@ -2968,7 +2988,8 @@
         "saveFailed": "새 대화 설정 저장에 실패했습니다",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },
@@ -2984,6 +3005,7 @@
         "systemReserved": "운영 체제에서 예약된 조합입니다",
         "conflict": "\"{{name}}\"과(와) 충돌합니다",
         "voiceConflict": "음성 입력 단축키와 충돌합니다",
+        "composerVoiceConflict": "음성 입력 단축키와 충돌합니다. 메시지 입력의 보내기 단축키 또는 음성 입력 단축키를 변경하세요.",
         "menuAccelerator": "이 조합은 메뉴 단축키로 등록할 수 없습니다"
       },
       "items": {
@@ -3110,12 +3132,15 @@
         "clearSearch": "플러그인 검색 지우기",
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
+        "installedSection": "설치됨",
+        "recommendedSection": "추천",
+        "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
+        "updateAll": "모두 업데이트",
+        "ignoreRound": "이번은 무시",
+        "updateTo": "v{{version}}(으)로 업데이트",
+        "updateAria": "{{name}}을(를) v{{version}}(으)로 업데이트",
         "createWithCindy": "Cindy로 만들기",
-        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 오른쪽 사이드바 탭 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
-        "installedTitle": "설치된 플러그인",
-        "installedExpand": "설치된 플러그인 {{count}}개 더 보기",
-        "installedCollapse": "추가 설치 플러그인 숨기기",
-        "allTitle": "모든 플러그인",
+        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
         "filterAll": "전체",
         "filtersAria": "출처별 플러그인 필터",
         "origin": {
@@ -3125,8 +3150,15 @@
           "custom": "사용자 지정"
         },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
-        "useAction": "사용",
-        "useAria": "{{name}} 사용"
+        "useAria": "{{name}} 사용",
+        "usePanelAction": "사용",
+        "chatAction": "대화",
+        "chatAria": "{{name}}과(와) 대화",
+        "manageAction": "관리",
+        "manageAria": "{{name}} 관리",
+        "agentInvoked": "Agent가 자동 호출",
+        "upToDate": "최신 상태",
+        "installAria": "{{name}} 설치"
       },
       "market": {
         "scopeAria": "플러그인 출처 필터",
@@ -3141,9 +3173,6 @@
         "install": "설치",
         "details": "상세",
         "update": "마켓에서 업데이트",
-        "updateAvailable": "업데이트 가능",
-        "updateAction": "업데이트",
-        "updateAria": "{{name}} 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
         "conflict": "플러그인 ID 충돌",
@@ -3298,7 +3327,7 @@
         "meta": "버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
-        "enableNowOpenTab": "설치 후 바로 활성화하고 탭 열기",
+        "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
@@ -3345,7 +3374,7 @@
         "tool": "도구 \"{{name}}\"",
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
-        "panelTab": "패널 \"{{title}}\" · 오른쪽 사이드바 탭",
+        "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
         "code": "실행 코드",
         "codeDetail": "격리된 샌드박스에서 실행되며 파일과 네트워크에 접근할 수 없습니다.",
         "resident": "상주 실행(활성화하면 시작되며 호출이 없어도 백그라운드 프로세스 유지)",
@@ -3428,6 +3457,7 @@
         "openLocation": "설치 위치 열기",
         "panelDocked": "도킹됨 · 최소 너비 {{min}}px",
         "panelNotDocked": "도킹되지 않음(레이아웃에 위치 기록 없음)",
+        "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
         "customSlotTitle": "플러그인 사용자 정의 설정 영역",
         "dangerTitle": "플러그인 제거",
@@ -3467,6 +3497,9 @@
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
         "useAction": "Plugin 사용",
+        "chatAction": "대화",
+        "enabledLabel": "사용 중",
+        "disabledLabel": "사용 안 함",
         "useDisabled": "사용하기 전에 Plugin을 활성화하세요",
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
@@ -3516,6 +3549,29 @@
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 사이드바에 세션을 만들기 위해 프로젝트 폴더 선택을 요청합니다"
+      },
+      "panelHost": {
+        "close": "패널 닫기"
+      },
+      "updateAll": {
+        "title": "모두 업데이트 · {{count}}개",
+        "description": "권한 변경이 없는 업데이트는 자동으로 완료됩니다. 권한이 확장되는 업데이트는 항목별 확인이 필요합니다.",
+        "versionRange": "v{{from}} → v{{to}}",
+        "permissionChanged": "권한 변경됨",
+        "reviewOutdated": "권한 변경 내역이 오래되었습니다",
+        "rereview": "다시 검토",
+        "reviewDiff": "확인",
+        "collapseDiff": "접기",
+        "approve": "동의 후 업데이트",
+        "skip": "건너뛰기",
+        "statusPending": "대기 중",
+        "statusInstalling": "업데이트 중…",
+        "statusDone": "업데이트됨",
+        "statusSkipped": "건너뜀",
+        "statusFailed": "업데이트 실패",
+        "background": "백그라운드에서 계속",
+        "doneAction": "완료",
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
       }
     },
     "mcp": {
@@ -4191,13 +4247,10 @@
       "addAria": "탭 추가",
       "addFailed": "탭을 추가하지 못했습니다",
       "tabCloseAria": "탭 닫기",
-      "pinAria": "고정 — 모든 세션에서 유지",
-      "unpinAria": "고정 해제 — 현재 세션에서만 유지",
       "menu": {
         "addLabel": "탭 추가",
         "comingSoon": "지원 예정",
-        "alreadyOpen": "열림",
-        "pluginGroup": "플러그인"
+        "alreadyOpen": "열림"
       },
       "kinds": {
         "fileBrowser": "파일 브라우저",
@@ -4218,9 +4271,7 @@
       "contextMenu": {
         "close": "닫기",
         "closeOthers": "다른 탭 닫기",
-        "closeAll": "모두 닫기",
-        "pin": "고정",
-        "unpin": "고정 해제"
+        "closeAll": "모두 닫기"
       },
       "empty": {
         "eyebrow": "오른쪽 사이드바",
@@ -4236,9 +4287,6 @@
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
         "terminalSub": "Terminal",
-        "pluginSub": "Plugin",
-        "pluginGroup": "플러그인 패널",
-        "pluginGroupSub": "플러그인 {{count}}개",
         "addMoreHint": "위쪽 + 버튼에서 다른 패널 유형을 선택할 수 있어요"
       },
       "placeholderHint": "{{kind}} — 콘텐츠는 이후 단계에서 추가됩니다"
@@ -4771,6 +4819,7 @@
       "send": "메시지 전송",
       "queue": "대기열에 추가",
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
+      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
       "stop": "생성 중지"
     },
     "pluginSetup": {
@@ -4907,6 +4956,11 @@
         "generic": "구독 직결 모델은 SSH 원격 세션을 아직 지원하지 않습니다"
       },
       "discovering": "모델 가져오는 중…",
+      "remoteLoading": "원격 기기에서 모델을 불러오는 중…",
+      "remoteLoadFailed": "원격 기기의 모델을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
+      "remoteLoadFailedShort": "모델 불러오기 실패",
+      "retryRemoteModels": "모델 다시 불러오기",
+      "remoteEmpty": "이 기기에 사용 가능한 모델이 없습니다",
       "effortLabel": "추론 강도",
       "edit": "편집",
       "options": "옵션",
@@ -5072,6 +5126,8 @@
       "browseProjectFolder": "다른 프로젝트 폴더 선택",
       "dialogue": "대화",
       "dialogueOrSelectProject": "대화 또는 프로젝트 선택",
+      "remoteProjectsLoadFailed": "{{device}}의 프로젝트를 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
+      "retryRemoteProjects": "프로젝트 다시 불러오기",
       "removeFromList": "목록에서 제거",
       "missingDir": "폴더를 찾을 수 없음"
     },
@@ -5274,7 +5330,7 @@
         "title": "Cindy AI",
         "desc": "공식 서비스 · 전체 모델 · Claude Code / Codex 지원",
         "loginTitle": "Cindy 로그인",
-        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
+        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다. 신규 사용자에게는 프로모션 잔액이 제공됩니다"
       },
       "othersToggle": "기타 제공자 ({{count}})",
       "presetSub": "API 키를 입력하여 연결",
@@ -5295,6 +5351,12 @@
       "openProviders": "모델 제공자 열기",
       "acknowledge": "확인",
       "separator": ", "
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI 사용이 시작되었습니다",
+      "desc": "프로모션 잔액 {{amount}}이 지급되었으며 {{date}}까지 사용할 수 있습니다. 모두 사용하거나 기간이 지난 뒤에도 언제든 충전할 수 있습니다.",
+      "openBilling": "사용량 보기",
+      "acknowledge": "확인"
     }
   },
   "voiceInputOverlay": {
@@ -5473,6 +5535,9 @@
       "retry": "다시 시도",
       "continueAfterReset": "재설정 후 계속",
       "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
+      "gatewayQuotaExhausted": "Cindy AI 잔액이 부족합니다. 충전한 후 계속하세요.",
+      "viewBalance": "잔액 보기",
+      "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
@@ -5884,6 +5949,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "첨부: ",
+      "attachmentAttachedAria": "{{name}} 첨부됨",
       "saveAttachmentAs": "첨부 파일 {{name}} 다른 이름으로 저장",
       "attachmentSaved": "첨부 파일 {{name}} 저장됨",
       "attachmentSavedUnsupported": "첨부 파일 {{name}} 저장됨. 현재 플랫폼에서는 이 파일 형식을 직접 사용하지 못할 수 있습니다",
@@ -6065,6 +6131,7 @@
     "remoteSession": {
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
+      "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",
       "actionsUnavailable": "제어 대상 기기를 사용할 수 없습니다. 다시 연결한 뒤 이 세션을 변경하세요.",
       "resync": "다시 동기화",
       "loading": "원격 기기에서 세션을 불러오는 중…",
@@ -6181,6 +6248,7 @@
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
       "remoteNativeOauthUnavailable": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
+      "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
       "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
       "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
@@ -6196,6 +6264,13 @@
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",
+        "tasksLoading": "{{device}}에서 세션을 불러오는 중…",
+        "tasksLoadFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중…",
+        "tasksPartiallyFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중이며 불러온 내용만 표시합니다",
+        "devicesLoading": "원격 기기를 불러오는 중…",
+        "devicesLoadFailed": "원격 기기 목록을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
+        "devicesPartiallyFailed": "원격 기기 목록을 새로 고치지 못했습니다. 불러온 내용만 표시합니다.",
+        "retryDevices": "기기 다시 불러오기",
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
@@ -8547,6 +8622,20 @@
           "expired": "만료됨",
           "voided": "무효"
         }
+      }
+    },
+    "orders": {
+      "title": "주문 내역",
+      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "count": "{{count}}건",
+      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "완료",
+        "awaitingPayment": "결제 대기",
+        "canceled": "취소됨",
+        "expired": "만료됨",
+        "failed": "결제 실패"
       }
     },
     "dialogs": {

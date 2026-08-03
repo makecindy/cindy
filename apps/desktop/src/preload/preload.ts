@@ -535,6 +535,8 @@ const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-
 const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
+// 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
+const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
@@ -1031,6 +1033,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
         allowPermissionExpansion?: boolean;
+        /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
+        reviewedBaseline?: string;
       },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
@@ -2832,6 +2836,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPath: (filePathOrUrl: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:open-path', filePathOrUrl),
 
+  // 危险本地附件入托盘前先复制成受控缓存里的 `.bin` 副本。显示名仍由
+  // renderer 单独保留，后续只能经“另存为”恢复原始扩展名。
+  stageChatAttachment: (params: {
+    sourcePath: string;
+    suggestedName: string;
+  }): Promise<
+    | { success: true; path: string }
+    | {
+        success: false;
+        code:
+          | 'invalid_source'
+          | 'forbidden'
+          | 'not_found'
+          | 'not_file'
+          | 'unsupported_type'
+          | 'copy_failed';
+      }
+  > => ipcRenderer.invoke('chat-attachment:stage', params),
+
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]): Promise<void> =>
+    ipcRenderer.invoke('chat-attachment:cleanup', filePaths),
+
   // 安全降级聊天附件另存为。main 校验源路径并清洗 suggestedName；保存后
   // 只返回结果，不自动打开或执行目标文件。
   saveChatAttachmentAs: (params: {
@@ -3217,6 +3244,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
+      unresponsiveDeviceIds: string[];
     }> => ipcRenderer.invoke('device-link:get-state'),
     setEnabled: (enabled: boolean): Promise<{ remoteControlEnabled: boolean }> =>
       ipcRenderer.invoke('device-link:set-enabled', enabled),
@@ -3288,6 +3316,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlTargetChanged: fanOutDeviceLinkControlTargetChanged,
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送,payload: { keepAwake: boolean } */
     onKeepAwakeChanged: fanOutDeviceLinkKeepAwakeChanged,
+    /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
+    onResponsivenessChanged: fanOutDeviceLinkResponsivenessChanged,
     /**
      * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见 main/device-link/mirrorCacheStore.ts)。
      * 只做首屏加速,非权威;fresh 数据一到由 renderer 整体接管。

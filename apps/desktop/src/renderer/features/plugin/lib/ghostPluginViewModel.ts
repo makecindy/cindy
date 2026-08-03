@@ -23,8 +23,27 @@ export interface GhostPluginListItem {
   version: string;
   enabled: boolean;
   canUse: boolean;
+  /** 声明了插件页内独占面板(panel.position:'tab'),主动作为「使用」(打开面板)。 */
+  tabPanel: boolean;
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
+}
+
+/**
+ * 卡片主动作的三分法(与设计稿一致):
+ * - `panel`:有页签面板 → 「使用」直接打开面板;
+ * - `command`:只有 $指令 → 「对话」把指令插进输入框起话题;
+ * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮,点卡片进管理页。
+ * 停靠形态(left/right)的面板由布局树承载,不算 panel 主动作。
+ */
+export type GhostPrimaryAction = 'panel' | 'command' | 'manage';
+
+export function ghostPrimaryAction(
+  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse'>,
+): GhostPrimaryAction {
+  if (item.tabPanel) return 'panel';
+  if (item.canUse) return 'command';
+  return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
   trust: GhostTrustInfo;
@@ -165,6 +184,7 @@ export function toGhostPluginListItem(
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
+    tabPanel: manifest.panel?.position === 'tab',
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,
@@ -204,4 +224,31 @@ export function toGhostPluginDetail(
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };
+}
+
+/**
+ * 插件页内面板宿主的数据归属键。
+ *
+ * 面板承载的是 webview,里面可能存着账号 A 的登录态、表单、已加载数据。
+ * 两个账号装了**同 id、同版本、同入口**的插件时,只按 ghostId 做宿主 key
+ * 会让 React 复用同一实例——切到账号 B 后 A 的 DOM 与内存态原样留着。
+ * 所以 key 必须含 owner 代际:换身份即卸载重建。
+ */
+export function ghostPanelOwnerKey(
+  mode: 'signed-out' | 'local' | 'cloud',
+  dataOwnerId: string | null,
+): string {
+  return `${mode}:${dataOwnerId ?? ''}`;
+}
+
+/**
+ * owner 变化时在开的面板应保留还是关闭。
+ * 返回下一个 openPanelId:身份变了一律关(返回 null),没变则原样保留。
+ */
+export function nextOpenPanelIdForOwner(
+  previousOwnerKey: string,
+  nextOwnerKey: string,
+  currentOpenPanelId: string | null,
+): string | null {
+  return previousOwnerKey === nextOwnerKey ? currentOpenPanelId : null;
 }

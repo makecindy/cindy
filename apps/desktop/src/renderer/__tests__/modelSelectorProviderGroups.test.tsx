@@ -78,7 +78,9 @@ vi.mock('@/components/ui/popover', async () => {
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: null }),
+  evictDeviceCapabilities: vi.fn(),
+  prefetchDeviceCapabilities: vi.fn(async () => {}),
+  useAgentCapabilities: () => ({ capabilities: null, loading: false, error: null }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -150,7 +152,14 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [], loading: false }),
+  evictDeviceProviders: vi.fn(),
+  prefetchDeviceProviders: vi.fn(async () => {}),
+  useDeviceProviders: () => ({
+    providers: [],
+    loading: false,
+    error: null,
+    unsupported: false,
+  }),
 }));
 
 vi.mock('@/lib/providerModels', () => ({
@@ -230,6 +239,60 @@ describe('ModelSelector provider groups', () => {
     expect(within(anthropicGroup).getByText('Sonnet 4.6')).toBeTruthy();
     expect(within(dashscopeGroup).getByText('qwen3.7-plus')).toBeTruthy();
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
+  });
+
+  it('reselects the connected fallback source when the stored source is disconnected', async () => {
+    const modelId = 'claude-fable-5';
+    const model = {
+      id: modelId,
+      name: 'Fable 5',
+      contextWindow: 200000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    };
+    providersRef.providers = [
+      {
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: { 'claude-code': {} },
+        connected: false,
+        models: { 'claude-code': [model] },
+      },
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'api-key' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: { 'claude-code': [model] },
+      },
+    ] as unknown[];
+    const onProviderChange = vi.fn();
+
+    renderSelector({
+      modelId,
+      effort: 'high',
+      currentProviderId: 'anthropic',
+      sourceDisconnected: true,
+      reselectEmitsChange: true,
+      onProviderChange,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /已断开/ }));
+    });
+
+    const popover = screen.getByTestId('model-options-popover');
+    const xdGroup = within(popover).getByRole('group', { name: 'Cindy AI' });
+    const fallbackRow = within(xdGroup).getByRole('option', { name: /Fable 5/ });
+    expect(fallbackRow.getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(fallbackRow);
+    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId);
   });
 
   it('does not render group headings in flat mode (no onProviderChange)', async () => {

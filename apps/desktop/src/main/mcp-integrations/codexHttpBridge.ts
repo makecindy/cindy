@@ -88,14 +88,32 @@ export function computeRemoteMcpFingerprint(opts: {
   bridgeInstanceId: string;
   remotePort: number;
   serverNames: readonly string[];
+  /** Remote Claude query identity; omitted for the shared remote Codex daemon. */
+  sessionInstanceId?: string;
 }): string {
+  const instancePart = opts.sessionInstanceId
+    ? `|session-instance:${opts.sessionInstanceId}`
+    : '';
   return createHash('sha256')
     .update(
-      `${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}|${[...opts.serverNames].sort().join(',')}`,
+      `${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}|${[...opts.serverNames].sort().join(',')}${instancePart}`,
       'utf8',
     )
     .digest('hex')
     .slice(0, 12);
+}
+
+/** Append the opaque host-owned identity used to route one harness MCP client. */
+export function withMcpRouteIdentity(
+  rawUrl: string,
+  identity: { sessionId?: string; sessionInstanceId?: string },
+): string {
+  const url = new URL(rawUrl);
+  if (identity.sessionId) url.searchParams.set('session', identity.sessionId);
+  if (identity.sessionInstanceId) {
+    url.searchParams.set('instance', identity.sessionInstanceId);
+  }
+  return url.toString();
 }
 /**
  * init request body 上限 (1MB)。codex MCP init payload 实际 < 1KB,
@@ -118,7 +136,7 @@ export interface CodexHttpBridge {
   /** 拼出 codex 端 config 用的 URL，例如 http://127.0.0.1:54321/mcp/lizi_feishu */
   url(serverName: string): string;
   registerThreadContext(threadId: string, ctx: LiziMcpSessionContext): void;
-  unregisterThreadContext(threadId: string): void;
+  unregisterThreadContext(threadId: string, expectedSessionInstanceId?: string): void;
   /**
    * sessionId → session ctx 直绑通道 (远端 Claude Code 用)。
    * cc 远端经 SSH remote-forward 直连本 bridge,但其 MCP 请求的 _meta 里没有
@@ -221,10 +239,11 @@ export async function startCodexHttpBridge(
       // 路由参数,未命中说明 query 已注销或id 系伪造,不能按无 ctx 放行。
       // 不带 ?session= 的 (本地 codex 子进程) 走请求体 threadId 路由。
       const sessionQuery = url.searchParams.get('session');
+      const instanceQuery = url.searchParams.get('instance');
       let sessionTokenCtx: LiziMcpSessionContext | undefined;
       if (sessionQuery !== null) {
-        sessionTokenCtx = sessionCtxById.get(sessionQuery);
-        if (!sessionTokenCtx) {
+        const registeredCtx = sessionCtxById.get(sessionQuery);
+        if (!registeredCtx) {
           res.statusCode = 401;
           res.end();
           // 不落完整 url:query 里的明文 sessionId 无诊断价值,只记路径与
@@ -235,6 +254,24 @@ export async function startCodexHttpBridge(
           });
           return;
         }
+        if (
+          instanceQuery !== null &&
+          registeredCtx.sessionInstanceId !== instanceQuery
+        ) {
+          res.statusCode = 401;
+          res.end();
+          log.warn('rejected request with mismatched session instance query', {
+            path: url.pathname,
+            session: prefixId(sessionQuery),
+          });
+          return;
+        }
+        // Legacy URLs keep ordinary session-aware tools working, but the
+        // permission-sensitive Full Access shortcut must not accept a context
+        // whose concrete Session instance was never carried by the request.
+        sessionTokenCtx = instanceQuery === null
+          ? withoutSessionInstanceId(registeredCtx)
+          : registeredCtx;
       }
       if (!url.pathname.startsWith(MCP_PATH_PREFIX)) {
         res.statusCode = 404;
@@ -275,6 +312,7 @@ export async function startCodexHttpBridge(
         threadContextStore,
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
+        threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
       });
     } catch (err) {
       log.error('request handler threw', {
@@ -439,6 +477,8 @@ interface DispatchOpts {
   pluginId?: string;
   /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
   sessionTokenCtx?: LiziMcpSessionContext;
+  /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
+  threadInstanceQuery: string | null;
 }
 
 interface SessionTransport {
@@ -456,7 +496,18 @@ interface SessionTransport {
  * 重新 init MCP server 的开销)。
  */
 async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
-  const { req, res, createMcpServer, transports, serverName, log, threadContextStore, pluginId, sessionTokenCtx } = opts;
+  const {
+    req,
+    res,
+    createMcpServer,
+    transports,
+    serverName,
+    log,
+    threadContextStore,
+    pluginId,
+    sessionTokenCtx,
+    threadInstanceQuery,
+  } = opts;
 
   const sessionIdHeader = req.headers['mcp-session-id'];
   const sessionId = typeof sessionIdHeader === 'string' ? sessionIdHeader : undefined;
@@ -486,7 +537,10 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       }
       if (!activeContext) {
         const threadId = extractCodexThreadId(parsedBody);
-        activeContext = threadContextStore.getContextForThreadId(threadId);
+        activeContext = contextForThreadRoute(
+          threadContextStore.getContextForThreadId(threadId),
+          threadInstanceQuery,
+        );
         let decision: 'no_thread_id' | 'thread_unregistered' | 'ctx_resolved';
         if (!threadId) {
           decision = 'no_thread_id';
@@ -504,10 +558,29 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         });
       }
     }
+    if (
+      !sessionTokenCtx &&
+      threadInstanceQuery !== null &&
+      hasUnverifiedInstanceBoundToolCall(parsedBody, threadContextStore, threadInstanceQuery)
+    ) {
+      res.statusCode = 401;
+      res.end('Session instance mismatch');
+      log.warn('rejected Codex MCP tool call with stale session instance route', {
+        serverName,
+        mcpSessionId: prefixId(sessionId),
+      });
+      return;
+    }
     // per-session token (远端 cc) 命中时身份来自 URL token,tools/call 的
     // policy 边界同样要用这份 ctx,不能回落到 threadId 路由后判 missing。
     const blockedToolCall = pluginId
-      ? findBlockedToolCall(parsedBody, threadContextStore, pluginId, sessionTokenCtx)
+      ? findBlockedToolCall(
+          parsedBody,
+          threadContextStore,
+          pluginId,
+          sessionTokenCtx,
+          threadInstanceQuery,
+        )
       : undefined;
     if (blockedToolCall && pluginId) {
       log.info('blocked Codex built-in tool call', {
@@ -624,6 +697,7 @@ function findBlockedToolCall(
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
   pluginId: string,
   sessionTokenCtx?: LiziMcpSessionContext,
+  threadInstanceQuery: string | null = null,
 ): BlockedToolCall | undefined {
   const messages = Array.isArray(body) ? body : [body];
   // ?session= 路由时 threadId 不参与任何判定 (强优先, 见下), ambiguity
@@ -641,7 +715,10 @@ function findBlockedToolCall(
     // 一个已注册 threadId 就能绕过本 session 冻结的 built-in plugin
     // disabled policy (执行态身份同样是 sessionTokenCtx 强优先)。
     const threadId = extractCodexThreadIdFromMessage(message);
-    const context = sessionTokenCtx ?? threadContextStore.getContextForThreadId(threadId);
+    const context = sessionTokenCtx ?? contextForThreadRoute(
+      threadContextStore.getContextForThreadId(threadId),
+      threadInstanceQuery,
+    );
     // Ordinary built-in providers are initialized globally, so the bridge is
     // their only deterministic per-thread policy boundary. A malformed or
     // stale client must not bypass that boundary by omitting an id or naming
@@ -655,6 +732,44 @@ function findBlockedToolCall(
     }
   }
   return undefined;
+}
+
+/**
+ * Resolve a Codex thread only when its registered Session instance matches the
+ * per-thread MCP URL. An unbound legacy URL retains the ordinary context after
+ * removing the instance capability, so Full Access remains fail closed.
+ */
+function contextForThreadRoute(
+  context: LiziMcpSessionContext | undefined,
+  instanceQuery: string | null,
+): LiziMcpSessionContext | undefined {
+  if (!context) return undefined;
+  if (instanceQuery === null) return withoutSessionInstanceId(context);
+  return context.sessionInstanceId === instanceQuery ? context : undefined;
+}
+
+function hasUnverifiedInstanceBoundToolCall(
+  body: unknown,
+  threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
+  instanceQuery: string,
+): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  for (const message of messages) {
+    if (!isToolCallMessage(message)) continue;
+    const threadId = extractCodexThreadIdFromMessage(message);
+    const context = threadContextStore.getContextForThreadId(threadId);
+    if (!threadId || context?.sessionInstanceId !== instanceQuery) return true;
+  }
+  return false;
+}
+
+function withoutSessionInstanceId(
+  context: LiziMcpSessionContext,
+): LiziMcpSessionContext {
+  if (!context.sessionInstanceId) return context;
+  const { sessionInstanceId: _sessionInstanceId, ...legacyContext } = context;
+  void _sessionInstanceId;
+  return legacyContext;
 }
 
 function writeBlockedToolCallResponse(

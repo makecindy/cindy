@@ -5,7 +5,7 @@ import {
   BREAKER_PROBE_BACKOFF_MAX_MS,
   createDeviceResponsivenessBreaker,
   type BreakerSendSlot,
-} from '@/device-link/deviceResponsivenessBreaker';
+} from '../deviceResponsiveness';
 
 const DEV = 'dev-1';
 

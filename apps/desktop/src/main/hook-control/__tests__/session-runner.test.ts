@@ -919,7 +919,7 @@ describe('进度快照(turn.progress 链路)', () => {
       const outcome = await p;
       expect(outcome.status).toBe('ok');
       // 整轮拼接(上面「多消息 turn」用例里 Slack 的正确行为)会把过程叙述原样
-      // 发到公开时间线, 还挤占 280 字符额度 —— X 只发最后一条。
+      // 发到公开时间线, 稀释最终结论 —— X 只发最后一条。
       expect(outcome.finalText).toBe('结论: 该库已停止维护。');
       expect(outcome.finalText).not.toContain('我先看看');
     } finally {

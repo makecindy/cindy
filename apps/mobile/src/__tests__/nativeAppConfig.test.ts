@@ -447,6 +447,10 @@ describe('mobile native app config', () => {
     const audioPlugin = appJson.expo.plugins.find(
       (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-audio',
     );
+    const imagePickerPlugin = appJson.expo.plugins.find(
+      (plugin: unknown) =>
+        Array.isArray(plugin) && plugin[0] === 'expo-image-picker',
+    );
 
     expect(audioPlugin).toEqual([
       'expo-audio',
@@ -456,6 +460,13 @@ describe('mobile native app config', () => {
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
       },
+    ]);
+    expect(imagePickerPlugin).toEqual([
+      'expo-image-picker',
+      expect.objectContaining({
+        microphonePermission:
+          'Cindy needs microphone access for voice input in remote sessions.',
+      }),
     ]);
     const foregroundOnlyPluginIndex = appJson.expo.plugins.indexOf(
       './plugins/with-foreground-only-audio',

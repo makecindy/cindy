@@ -526,6 +526,55 @@ describe('parseClaudeCodeMessageLine', () => {
     }
   });
 
+  it('rejects internal review-channel sessions from scan and full summaries', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-review-channel-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-review-channel',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content:
+            '<channel source="review-session-channel" source="local-review" id="review-1">\nReview this change',
+        },
+      })}\n`,
+    );
+
+    try {
+      expect(await readClaudeCodeSessionScanSummary(file)).toBeNull();
+      expect(await readClaudeCodeSessionSummary(file)).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps ordinary user-facing channel sessions importable', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-user-channel-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-feishu-channel',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content: '<channel source="feishu" chat_id="chat-1">\nPlease summarize this conversation',
+        },
+      })}\n`,
+    );
+
+    try {
+      expect(await readClaudeCodeSessionScanSummary(file)).toMatchObject({ sdkSessionId });
+      expect(await readClaudeCodeSessionSummary(file)).toMatchObject({ sdkSessionId });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('skips unchanged Claude JSONL files after importing them once', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
     const projectsDir = path.join(home, '.claude', 'projects', '-tmp-project');
@@ -882,6 +931,42 @@ describe('parseClaudeCodeMessageLine', () => {
     }
   });
 
+  it('revalidates and rejects internal review sessions imported directly by id', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
+    const projectsDir = path.join(home, '.claude', 'projects', '-tmp-project');
+    fs.mkdirSync(projectsDir, { recursive: true });
+    const file = path.join(projectsDir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-local-review',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content: '<channel source="local-review" id="review-1">\nReview this change',
+        },
+      })}\n`,
+    );
+
+    const db = createLocalDb();
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    setLocalDb(db);
+
+    try {
+      const result = await importExternalClaudeCodeSessions([sdkSessionId]);
+
+      expect(result).toMatchObject({ scanned: 1, inserted: 0, updated: 0 });
+      const rows = db.prepare('SELECT id FROM sessions').all();
+      expect(rows).toEqual([]);
+    } finally {
+      homedir.mockRestore();
+      resetLocalDb();
+      db.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('normalizes Windows backslash cwd to storage form on import (#537)', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
     const projectsDir = path.join(home, '.claude', 'projects', 'D--Project-001');
@@ -1071,6 +1156,47 @@ describe('parseClaudeCodeMessageLine', () => {
       const summary = await readClaudeCodeSessionScanSummary(file);
 
       expect(summary?.title).toBe('Please use the input after the boundary row');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not surface an unresolved candidate when the first real user input is past the line cap', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-scan-unresolved-cap-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    const noiseRows = Array.from({ length: 399 }, (_, index) =>
+      line({
+        type: 'system',
+        subtype: 'noise',
+        cwd: '/tmp/project',
+        seq: index,
+      }),
+    );
+    fs.writeFileSync(
+      file,
+      [
+        line({
+          type: 'user',
+          uuid: 'user-synthetic',
+          cwd: '/tmp/project',
+          message: { role: 'user', content: '<local-command-caveat>ignore</local-command-caveat>' },
+        }),
+        ...noiseRows,
+        line({
+          type: 'user',
+          uuid: 'user-review-after-cap',
+          cwd: '/tmp/project',
+          message: {
+            role: 'user',
+            content: '<channel source="review-session-channel">\nReview this change',
+          },
+        }),
+      ].join('\n'),
+    );
+
+    try {
+      expect(await readClaudeCodeSessionScanSummary(file)).toBeNull();
+      expect(await readClaudeCodeSessionSummary(file)).toBeNull();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

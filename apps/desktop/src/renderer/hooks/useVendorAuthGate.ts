@@ -26,11 +26,14 @@ import { useTranslation } from 'react-i18next';
 import {
   connectedProvidersForAgent,
   type AgentKind as ProviderAgentKind,
-  type ProviderView,
 } from '@cindy/model-providers';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useVendorReadiness, type Readiness } from '@/hooks/useVendorReadiness';
+import {
+  isDeviceProvidersUnsupportedError,
+  parseDeviceProvidersPayload,
+} from '@/hooks/useDeviceProviders';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { AgentKind } from '@/lib/ccAgent.types';
 
@@ -133,12 +136,13 @@ function pickCopy(
  * OAuth / 网关 key 专属口径,认不出 provider 体系的其他来源(xAI / 通用 OAuth /
  * 自定义供应商),会把「没登 Codex 但配了其他 GPT 来源」的被控端误判成未登录。
  *
- * 三个输入均可为 null(= 对应查询失败 / 老被控端不支持):
+ * 三个输入均可为 null(= 对应信息在已确认的旧端兼容路径里不可用):
  *   - binaryReady:codex 的运行时前提,false 优先返回 binary-missing(cc 随包,不参与);
  *   - sourceReady:provider 维度来源判定,可用时是唯一真相;
  *   - authReady:老被控端(allowlist 无 maker:provider:list)的回退口径,仅在
  *     sourceReady 不可用时消费,维持旧行为;
- *   - 全部不可用 → ready(控制端不臆断,放行交给被控端 create-session / send 权威校验)。
+ *   - 全部不可用 → ready(仅供两个相关 channel 都明确 unsupported 的旧端兼容路径)。
+ * 真正的连接 / 协议失败由调用方在进入本函数前 fail closed，不能折叠成 null。
  */
 export function deriveRemoteReadiness(
   vendor: AgentKind,
@@ -158,19 +162,44 @@ export function deriveRemoteReadiness(
 
 /**
  * device-link:把隧道 `maker:provider:list` 的响应解析成 sourceReady。纯函数,便于单测。
- * 协议异常(providers 字段缺失 / 非数组)返回 null = 判定不可用,走 authReady 回退,
- * 而非把被控端误判成「无来源」。
+ * 协议异常返回 null；resolveRemoteProviderProbe 会把它结算为真实错误。只有
+ * structured DEVICE_LINK_CHANNEL_NOT_ALLOWED 才允许走 authReady 旧端回退。
  */
 export function sourceReadyFromProviderList(
   value: unknown,
   agent: ProviderAgentKind,
   opts?: { includeSuspended?: boolean },
 ): boolean | null {
-  const providers = (value as { providers?: ProviderView[] } | null)?.providers;
-  if (!Array.isArray(providers)) return null;
-  return connectedProvidersForAgent(providers, agent, {
-    includeSuspended: opts?.includeSuspended === true,
-  }).length > 0;
+  try {
+    const { providers } = parseDeviceProvidersPayload(value);
+    return connectedProvidersForAgent(providers, agent, {
+      includeSuspended: opts?.includeSuspended === true,
+    }).length > 0;
+  } catch {
+    return null;
+  }
+}
+
+export type RemoteProviderProbe =
+  | { status: 'ready'; sourceReady: boolean }
+  | { status: 'unsupported'; sourceReady: null }
+  | { status: 'error'; sourceReady: null };
+
+/** provider:list 探测分类：只有结构化 channel unsupported 可进入旧端回退。 */
+export function resolveRemoteProviderProbe(
+  result: PromiseSettledResult<unknown>,
+  agent: ProviderAgentKind,
+  opts?: { includeSuspended?: boolean },
+): RemoteProviderProbe {
+  if (result.status === 'rejected') {
+    return isDeviceProvidersUnsupportedError(result.reason)
+      ? { status: 'unsupported', sourceReady: null }
+      : { status: 'error', sourceReady: null };
+  }
+  const sourceReady = sourceReadyFromProviderList(result.value, agent, opts);
+  return sourceReady === null
+    ? { status: 'error', sourceReady: null }
+    : { status: 'ready', sourceReady };
 }
 
 interface GateResult {
@@ -237,8 +266,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       // device-link:远程草稿 / 远程会话 → 就绪态以**被控端**为准(控制端本机配置无关)。
       // 两条隧道查询并行:provider:list 提供与本地 / 手机同源的来源判定(唯一真相),
       // agent:status 提供 codex binary 轴 + 老被控端的 authReady 回退口径。
-      // 任一查询失败不在控制端臆断(见 deriveRemoteReadiness 的 null 语义),
-      // 全部失败放行交给被控端 create-session / send 做权威校验(host = 单一真相源)。
+      // provider:list 只有结构化 unsupported 才能回退 agent:status。真实网络 / 协议失败
+      // 必须 fail closed，否则模型选择器已经显示读取失败，发送门禁却仍会放行旧快照。
       const deviceId = options?.deviceId;
       if (deviceId) {
         const providerAgent: ProviderAgentKind =
@@ -251,12 +280,29 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
           statusRes.status === 'fulfilled'
             ? (statusRes.value as { binaryReady: boolean; authReady: boolean })
             : null;
+        const providerProbe = resolveRemoteProviderProbe(providersRes, providerAgent, {
+          includeSuspended: options?.existingSessionRoute === true,
+        });
+        const statusUnsupported =
+          statusRes.status === 'rejected' &&
+          isDeviceProvidersUnsupportedError(statusRes.reason);
+        if (
+          providerProbe.status === 'error' ||
+          (providerProbe.status === 'unsupported' &&
+            statusRes.status === 'rejected' &&
+            !statusUnsupported)
+        ) {
+          await confirm({
+            title: t('newChat.modelSelector.remoteLoadFailedShort'),
+            description: t('newChat.modelSelector.remoteLoadFailed'),
+            confirmText: t('logic.confirm.gotIt'),
+            showCancel: false,
+            autoFocusConfirm: true,
+          });
+          return { proceed: false };
+        }
         const sourceReady =
-          providersRes.status === 'fulfilled'
-            ? sourceReadyFromProviderList(providersRes.value, providerAgent, {
-                includeSuspended: options?.existingSessionRoute === true,
-              })
-            : null;
+          providerProbe.status === 'ready' ? providerProbe.sourceReady : null;
         const remoteReadiness = deriveRemoteReadiness(vendor, {
           binaryReady: status?.binaryReady ?? null,
           sourceReady,

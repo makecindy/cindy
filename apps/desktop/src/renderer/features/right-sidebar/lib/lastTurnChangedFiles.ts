@@ -7,7 +7,8 @@
 
 import type { ChatMessage } from '@/lib/makerChatStore';
 
-const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// CC 大写(file_path 字段)+ pi 小写(path 字段,见 toolUseDescriptor.ts 数据来源约定)。
+const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write']);
 
 function slashPath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+/g, '/');
@@ -75,7 +76,7 @@ function extractToolFilePaths(msg: ChatMessage): string[] {
   const input = (msg.toolInput as Record<string, unknown> | null) ?? null;
   if (msg.toolName === 'file_change') return collectCodexFileChangePaths(input);
   if (!EDIT_TOOL_NAMES.has(msg.toolName)) return [];
-  const filePath = input?.file_path;
+  const filePath = input?.file_path ?? input?.path;
   return typeof filePath === 'string' && filePath ? [filePath] : [];
 }
 

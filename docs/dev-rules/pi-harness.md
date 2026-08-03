@@ -31,6 +31,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、Linux 只读 bind mount / seccomp),
   **本阶段未接入**。选择 Full access 即接受上述风险;需要硬边界时用 ask/auto 档,或等 OS
   沙箱落地。改动权限相关代码时不要再堆「看起来能拦」的正则并当成安全边界。
+  与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
+  `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
+  的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
+  实例不匹配／查询失败均 fail closed，且不得扩到 workspace、Setup、安装／更新、OAuth、
+  Secret／凭证等其它授权面。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
+  注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
+  instance，使 Full Access 自动交接保持 fail closed。
 - **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP,
   bridge 用极简 client `tools/list` + `registerTool` 成 `mcp__<server>__<tool>`。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume

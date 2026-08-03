@@ -225,6 +225,9 @@ function createHarness() {
   const onDiscardedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
   >(() => {});
+  const onRejectedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>
+  >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -235,6 +238,7 @@ function createHarness() {
     onUiRetry,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -289,6 +293,7 @@ function createHarness() {
     onUiRetry,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -2764,6 +2769,10 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
     expect(projection.errorRetryText).toBe('first');
     expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-1' }),
+    );
 
     h.coordinator.retryLastError(sid);
     await flush();
@@ -2774,6 +2783,23 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the Pi image-capability marker for display-side localization', async () => {
+    const h = createHarness();
+    const sid = 'pi-image-capability';
+    h.sendToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, makeItem('q-image', 'describe the screenshot'));
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-image']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
 
   it('retries a queue-head recovery when an external live reservation clears without a terminal event', async () => {
@@ -3190,7 +3216,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBe('turn/start failed');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('recovers a persisted turn when terminal error arrives before send resolves', async () => {
@@ -3334,7 +3360,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps a persisted ordinary send recoverable when a host failure is reported late', async () => {
@@ -3365,7 +3391,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('WORKDIR_MISSING');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps ordinary send DB writes linear while draining queued turns', async () => {
@@ -3427,7 +3453,8 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
+    expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
 
     h.coordinator.resume(sid);
     await flush();
@@ -3598,7 +3625,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
 
     h.coordinator.resume(sid);
     await flush();
@@ -4317,6 +4344,101 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(afterDone.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
   });
 
+  it('restores a capability-rejected steer to the queue head for retry after switching models', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-retry';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(projection.queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Capability rejection is pre-RPC, so finishing the old turn must not auto-send. Once the
+    // user has switched models, the explicit Retry consumes the preserved queue row exactly once.
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
+  it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-active-error';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'original turn failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Switching to an image-capable model is represented by the next host send succeeding.
+    // Only the explicit Retry may consume the preserved steer, and it must do so once.
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
   it('screens same-turn steers through ghost hooks: block discards without injecting or persisting', async () => {
     // review #939 第四轮:steer 直达 steerToAgent 不经 drain,必须补同一道
     // will-user-message 筛查,否则被拦消息可经插话原样注入并落库。
@@ -4345,6 +4467,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       expect.objectContaining({ clientId: 'q-2' }),
       expect.objectContaining({ ghostId: 'g-1' }),
+    );
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-2' }),
     );
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     const projection = latestProjection(h.projections);
@@ -7030,11 +7156,13 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const sid = 'takeover-cleared-by-clear-error';
     h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     await failAfterDispatch(h, sid);
+    h.onUserEnqueue.mockClear();
 
     h.coordinator.clearError(sid);
     await flush();
 
     expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(h.onUserEnqueue, 'host 必须先释放退避簿记与 Agent Island filter').toHaveBeenCalledWith(sid);
   });
 
   it('recovery 已被用户清掉时 autoRetryLastError 返回 false(调用方据此回滚额度)', async () => {
@@ -7083,7 +7211,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     releasePersist();
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: false });
   });
 
   it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
@@ -7178,7 +7306,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const projection = latestProjection(h.projections);
     expect(projection.autoResumePending ?? null).toBeNull();
     expect(projection.error, '不接管就得把横幅还给用户').toBe(truncationMessage);
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: true });
   });
 
   it('延后结算:候选窗口里用户自己发了消息 → 不接管、不消耗额度,回落成常规错误', async () => {
@@ -7210,7 +7338,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending ?? null, '用户已接手 → 不该再显示重连').toBeNull();
     expect(projection.error, '回落成常规错误呈现,让用户自己决定要不要续跑').toBe(truncationMessage);
     expect(h.onResumableTurnError, '连问都不该问(不消耗额度)').not.toHaveBeenCalled();
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: false });
   });
 
   it('退避窗口里用户自己发了消息 → autoRetryLastError 判 superseded(不抢在他前面代发)', async () => {
@@ -7284,7 +7412,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     rejectPersist(new Error('disk full'));
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: true });
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
   });
 });

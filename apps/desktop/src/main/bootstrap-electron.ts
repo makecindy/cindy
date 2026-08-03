@@ -199,6 +199,14 @@ import {
   REMOTE_IMAGE_MAX_BYTES,
 } from './lightboxMediaActions';
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
+import { createChatAttachmentStageHandler } from './chatAttachmentStage';
+import {
+  cleanupOwnedUnpersistedStagedChatAttachments,
+  getChatAttachmentCacheRoot,
+  getRemoteFileCacheRoot,
+  stageLocalFileToCache,
+  sweepStagedChatAttachmentsOnStartup,
+} from './file-browser/remote-file-cache';
 import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -236,6 +244,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -288,10 +297,15 @@ import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
-import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
+import {
+  initDeviceLinkService,
+  releaseDeviceLinkOwnershipBeforeLogout,
+  handleDeviceLinkSystemResume,
+} from './device-link';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
 import {
@@ -2611,8 +2625,13 @@ const registerIpcHandlers = () => {
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
   })?.setAppFocused(hasFocusedAppWindow());
-  setSessionsSubscribedListener(() => {
-    getAgentIslandService()?.replaySessionActivity();
+  // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
+  // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
+  // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  setSessionsSubscribedListener((controllerDeviceId) => {
+    getAgentIslandService()?.replaySessionActivity((payload) => {
+      pushSessionActivityToController(controllerDeviceId, payload);
+    });
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
@@ -5049,13 +5068,67 @@ const registerIpcHandlers = () => {
     getDownloadsDir: () => app.getPath('downloads'),
     getAllowedSourceRoots: () => [
       imageCacheStore.getCacheRoot(),
-      path.join(app.getPath('userData'), 'remote-file-cache'),
+      getChatAttachmentCacheRoot(),
+      getRemoteFileCacheRoot(),
     ],
   });
+  const stageChatAttachment = createChatAttachmentStageHandler({
+    isPathAllowed,
+    realpath: (filePath) => fs.promises.realpath(filePath),
+    stat: (filePath) => fs.promises.stat(filePath, { bigint: true }),
+    openSource: async (filePath) => {
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | noFollow);
+      return {
+        stat: () => handle.stat({ bigint: true }),
+        copyTo: async (targetPath) => {
+          await pipeline(
+            handle.createReadStream({ autoClose: false, start: 0 }),
+            fs.createWriteStream(targetPath, { flags: 'wx' }),
+          );
+        },
+        close: () => handle.close(),
+      };
+    },
+    stageCopy: (params) => {
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId) throw new Error('Cannot stage an attachment without an active data owner');
+      return stageLocalFileToCache({ ...params, ownerId });
+    },
+  });
+  ipcMain.handle(
+    'chat-attachment:stage',
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return stageChatAttachment(params);
+    },
+  );
+  ipcMain.handle(
+    'chat-attachment:cleanup',
+    async (event, filePaths: readonly string[]) => {
+      assertTrustedAppRendererEvent(event);
+      if (!Array.isArray(filePaths)) return;
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) return;
+      const protectedPaths = await listPersistedChatAttachmentPaths();
+      const isCurrentOwner = () =>
+        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
+      if (!isCurrentOwner()) return;
+      await cleanupOwnedUnpersistedStagedChatAttachments({
+        ownerId,
+        filePaths,
+        protectedPaths,
+        canRemove: isCurrentOwner,
+      });
+    },
+  );
   ipcMain.handle(
     'chat-attachment:save-as',
-    (_event, params: { sourcePath?: unknown; suggestedName?: unknown }) =>
-      saveChatAttachment(params),
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return saveChatAttachment(params);
+    },
   );
 
   // Settings → About: 打开 <userData>/logs 在系统文件管理器。
@@ -5856,6 +5929,26 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
+      try {
+        const protectedPaths = await listPersistedChatAttachmentPaths();
+        const result = await sweepStagedChatAttachmentsOnStartup({
+          ownerId: userId,
+          protectedPaths,
+          createdBeforeMs: PROCESS_STARTED_AT_MS,
+        });
+        if (result.removed > 0 || result.protected > 0) {
+          dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
+            ...result,
+            ownerId: userId,
+          });
+        }
+      } catch (err) {
+        dbClientLog.warn('[ChatAttachment] startup staged attachment sweep failed (non-fatal)', {
+          ownerId: userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。
@@ -6180,6 +6273,8 @@ app.on('ready', async () => {
   powerMonitor.on('resume', () => {
     authManager.handleResume();
     handleProviderModelSystemResume();
+    // device-link:睡醒立即重连 relay,不干等退避计时器 + 心跳判死(最坏合计 ~75s)。
+    handleDeviceLinkSystemResume();
   });
   powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
@@ -6435,14 +6530,12 @@ function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
     }
     const agentInput = input.agents as Record<string, unknown>;
     const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    if ('claude-code' in agentInput) {
-      agentsPatch['claude-code'] = parseImDefaultAgentSettings(
-        'claude-code',
-        agentInput['claude-code'],
-      );
-    }
-    if ('codex' in agentInput) {
-      agentsPatch.codex = parseImDefaultAgentSettings('codex', agentInput.codex);
+    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
+    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
+    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+      if (kind in agentInput) {
+        agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
+      }
     }
     patch.agents = agentsPatch;
   }

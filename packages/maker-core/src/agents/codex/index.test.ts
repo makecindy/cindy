@@ -319,6 +319,7 @@ function installFakeHost(
     remoteCompactionProviderId?: string;
     userAgent?: string;
     codexHome?: string;
+    buildSessionMcpConfig?: (sessionInstanceId?: string) => Record<string, unknown>;
   } = {},
 ) {
   const ensureStarted = vi.fn(async () => ({
@@ -366,6 +367,9 @@ function installFakeHost(
   const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
+  const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
+    opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
+  );
   const host = {
     ensureStarted,
     // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
@@ -376,6 +380,7 @@ function installFakeHost(
     unsubscribeThread,
     isCodexProxyActive,
     getRemoteCompactionProviderId,
+    getSessionMcpConfig,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
   };
@@ -5167,6 +5172,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const handle = await agent.startSession({
       sessionId: 'session-codex-mcp-context',
+      sessionInstanceId: 'instance-codex-mcp-context',
       model: 'gpt-5.4',
       workingDir: '/repo',
       vendorOptions: { orcaRole: 'lead' },
@@ -5176,13 +5182,60 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(registerCodexMcpThreadContext).toHaveBeenCalledWith({
       threadId: 'start-thread-id',
       sessionId: 'session-codex-mcp-context',
+      sessionInstanceId: 'instance-codex-mcp-context',
       workingDir: '/repo',
       vendorOptions: { orcaRole: 'lead' },
     });
 
     await handle.close();
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledTimes(1);
-    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith(
+      'start-thread-id',
+      'instance-codex-mcp-context',
+    );
+  });
+
+  it('applies instance-bound MCP URLs to both thread/start and thread/resume', async () => {
+    const buildConfig = (sessionInstanceId?: string) => ({
+      'mcp_servers.cindy_ghosts.url': `http://127.0.0.1:47100/mcp/cindy_ghosts?instance=${sessionInstanceId}`,
+    });
+
+    const startAgent = new CodexAgent(createDeps());
+    const startHost = installFakeHost(startAgent, undefined, {
+      buildSessionMcpConfig: buildConfig,
+    });
+    const startHandle = await startAgent.startSession({
+      sessionId: 'session-instance-start',
+      sessionInstanceId: 'instance-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const startParams = startHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(startHost.getSessionMcpConfig).toHaveBeenCalledWith('instance-start');
+    expect(startParams.config).toMatchObject(buildConfig('instance-start'));
+
+    const resumeAgent = new CodexAgent(createDeps());
+    const resumeHost = installFakeHost(resumeAgent, undefined, {
+      buildSessionMcpConfig: buildConfig,
+    });
+    const resumeHandle = await resumeAgent.startSession({
+      sessionId: 'session-instance-resume',
+      sessionInstanceId: 'instance-resume',
+      resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const resumeParams = resumeHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(resumeHost.getSessionMcpConfig).toHaveBeenCalledWith('instance-resume');
+    expect(resumeParams.config).toMatchObject(buildConfig('instance-resume'));
+    expect(resumeParams.config).not.toEqual(startParams.config);
+
+    await startHandle.close();
+    await resumeHandle.close();
   });
 
   it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
@@ -5209,7 +5262,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(transport!.closed).toBe(false);
   });
 
-  it('finishes closing when the app-server stays connected without answering thread/unsubscribe', async () => {
+  it('retires the shared app-server when thread/unsubscribe stays unanswered', async () => {
     vi.useFakeTimers();
     try {
       MockCodexTransport.dropThreadUnsubscribe = true;
@@ -5225,10 +5278,59 @@ describe('CodexAgent MCP thread context hooks', () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(closePromise).resolves.toBeUndefined();
-      expect(createdTransports[0]?.closed).toBe(false);
+      // A timed-out thread/unsubscribe means the daemon may still keep the
+      // thread loaded. Retiring the shared host prevents a later Cindy task
+      // from resuming that loaded thread with a stale MCP identity/config.
+      expect(createdTransports[0]?.closed).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retires the captured host and rejects an unused-thread replacement when release fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: `replacement-thread-${++threadStartSeq}` },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    });
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-unused-replacement-release-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    await expect(
+      handle.send(
+        { type: 'user', content: 'use the reference on the first turn' },
+        { throwOnStartFailure: true },
+      ),
+    ).rejects.toThrow(/session expired|reference profile replacement cleanup/i);
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'unused profile replacement release',
+      expect.objectContaining({ failIfActive: false }),
+    );
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
   });
 
   describe('websocket body recovery auto-retry', () => {
@@ -12080,6 +12182,9 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'fork-thread-id',
       numTurns: 2,
     });
+    expect(host.unsubscribeThread).toHaveBeenNthCalledWith(1, 'fork-thread-id');
+    expect(host.unsubscribeThread).toHaveBeenNthCalledWith(2, 'rollback-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
     expect(result.newSdkSessionId).toBe('rollback-thread-id');
     expect(result.uuidMap.size).toBe(0);
   });
@@ -12100,8 +12205,58 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
     });
+    expect(host.unsubscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
     expect(result.newSdkSessionId).toBe('fork-thread-id');
     expect(result.uuidMap.size).toBe(0);
+  });
+
+  it('unloads the forked child when rollback fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) throw new Error('rollback failed');
+      return undefined;
+    });
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 1,
+    })).rejects.toThrow('rollback failed');
+
+    expect(host.unsubscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
+  it('retires the captured host and rejects when a forked child cannot be unloaded', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    })).rejects.toThrow('unsubscribe failed');
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'Codex fork child fork-thread-id could not be unloaded safely',
+      expect.objectContaining({
+        failIfActive: false,
+        logPrefix: 'codex fork child cleanup',
+        expectedGeneration: 0,
+      }),
+    );
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
   });
 
   it('forks from a temporary rollout copy without unsafe payload lines', async () => {
@@ -12257,6 +12412,45 @@ describe('CodexAgent rewind', () => {
       text: registeredText,
     });
     await handle.close();
+  });
+
+  it('retires the captured host and terminates the handle when rollback subscription release fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-release-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+
+    await expect(
+      commitRewindFiles('', '', { tailTurnsToDrop: 1 }),
+    ).rejects.toThrow(/session expired|thread\/rollback subscription cleanup/i);
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'thread/rollback subscription release',
+      expect.objectContaining({ failIfActive: false }),
+    );
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    await expect(
+      handle.send(
+        { type: 'user', content: 'must stay closed after cleanup failure' },
+        { throwOnStartFailure: true },
+      ),
+    ).rejects.toThrow(/closed/i);
   });
 
   it('discards the replacement thread when close races with rollback cleanup', async () => {

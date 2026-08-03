@@ -1111,8 +1111,9 @@ describe('GoalController', () => {
   it('continues to a second turn when the verdict is continue', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```', tokens: 100 });
-    await tick();
-    expect(h.session.sends).toHaveLength(2);
+    // 固定 10ms tick 在慢 CI(Windows runner)上不够续轮走完异步链,改用有界
+    // 轮询等到续轮真正发出,消除调度抖动依赖。
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
     expect((await h.storage.get('s1'))?.turnsUsed).toBe(1);
     expect((await h.storage.get('s1'))?.tokensUsed).toBe(100);
   });

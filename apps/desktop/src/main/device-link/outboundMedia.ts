@@ -44,6 +44,7 @@ const EXT_BY_MIME: Record<string, string> = {
 };
 
 interface AttachmentSource {
+  name?: unknown;
   url?: unknown;
   path?: unknown;
   base64?: unknown;
@@ -77,7 +78,12 @@ function persistedIntegrityFields(
 /** 把一个附件源上传 OSS,返回 OSS 引用串。无可用来源 / 上传失败 → 抛错。 */
 async function uploadAttachment(src: AttachmentSource): Promise<string> {
   const mimeType = typeof src.mimeType === 'string' ? src.mimeType : undefined;
-  const originalName = typeof src.originalName === 'string' ? src.originalName : undefined;
+  const originalName =
+    typeof src.originalName === 'string' && src.originalName
+      ? src.originalName
+      : typeof src.name === 'string' && src.name
+        ? src.name
+        : undefined;
 
   // 1) 内存 base64(剪贴板/截图,视觉上下文语义)→ 压缩 → uploadBuffer(不把字节内联进 relay)
   if (typeof src.base64 === 'string' && src.base64) {
@@ -198,20 +204,49 @@ function isAttachmentBlock(b: unknown): b is AttachmentSource & { type: string }
   );
 }
 
+function sourceRefKey(src: AttachmentSource): string {
+  return typeof src.url === 'string' && src.url
+    ? src.url
+    : typeof src.path === 'string' && src.path
+      ? src.path
+      : '';
+}
+
+async function uploadAttachmentOnce(
+  src: AttachmentSource,
+  refMap: Map<string, string>,
+): Promise<string> {
+  const key = sourceRefKey(src);
+  const cached = key ? refMap.get(key) : undefined;
+  if (cached) return cached;
+  const ref = await uploadAttachment(src);
+  if (key) refMap.set(key, ref);
+  return ref;
+}
+
 /** 改写 send/steer 的 message(content-block 形态)。无附件 → 原样。 */
-async function rewriteMessage(message: unknown): Promise<unknown> {
+async function rewriteMessage(
+  message: unknown,
+  refMap: Map<string, string> = new Map(),
+): Promise<unknown> {
   if (!message || typeof message !== 'object') return message; // string / null:无附件
   const m = message as { type?: unknown; content?: unknown };
   if (m.type !== 'user' || !Array.isArray(m.content)) return message;
   const content: unknown[] = [];
   for (const raw of m.content) {
     if (isAttachmentBlock(raw)) {
-      const ref = await uploadAttachment(raw);
+      const ref = await uploadAttachmentOnce(raw, refMap);
+      const originalName =
+        typeof raw.originalName === 'string' && raw.originalName
+          ? raw.originalName
+          : typeof raw.name === 'string' && raw.name
+            ? raw.name
+            : undefined;
       content.push({
         type: raw.type,
         path: ref,
         mimeType: raw.mimeType,
-        originalName: raw.originalName,
+        ...(originalName ? { originalName } : {}),
       });
     } else {
       content.push(raw);
@@ -278,19 +313,6 @@ async function rewriteQueued(item: unknown): Promise<unknown> {
 
   // 原始 ref(url 或 path 字符串)→ OSS 引用;同一附件只传一次,供 files[] + persistedContent 复用。
   const refMap = new Map<string, string>();
-  const uploadOnce = async (src: AttachmentSource): Promise<string> => {
-    const key =
-      typeof src.url === 'string' && src.url
-        ? src.url
-        : typeof src.path === 'string' && src.path
-          ? src.path
-          : '';
-    const cached = key ? refMap.get(key) : undefined;
-    if (cached) return cached;
-    const ref = await uploadAttachment(src);
-    if (key) refMap.set(key, ref);
-    return ref;
-  };
 
   const files: unknown[] = [];
   for (const f of it.files) {
@@ -301,7 +323,7 @@ async function rewriteQueued(item: unknown): Promise<unknown> {
         (f as AttachmentSource).path ||
         (f as AttachmentSource).base64)
     ) {
-      const ref = await uploadOnce(f as AttachmentSource);
+      const ref = await uploadAttachmentOnce(f as AttachmentSource, refMap);
       // url 优先被 buildMakerUserMessage 取用;清掉 base64 避免把字节内联进 relay。
       files.push({
         ...(f as object),
@@ -334,7 +356,33 @@ export async function rewriteOutboundMedia(channel: string, args: unknown[]): Pr
   if (!isQueued && !isMessage) return args;
   const next = [...args];
   if (next[1] === undefined) return next;
-  next[1] = isQueued ? await rewriteQueued(next[1]) : await rewriteMessage(next[1]);
+  if (isQueued) {
+    next[1] = await rewriteQueued(next[1]);
+  } else {
+    // Direct maker:send carries the same attachment twice: once in the agent
+    // message and once in sendOpts.persistUserMessage.content for DB history.
+    // Rewrite both with one ref map so every file uploads exactly once.
+    const refMap = new Map<string, string>();
+    next[1] = await rewriteMessage(next[1], refMap);
+    if (channel === 'maker:send') {
+      const sendOpts = next[3];
+      if (sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)) {
+        const persist = (sendOpts as { persistUserMessage?: unknown }).persistUserMessage;
+        if (persist && typeof persist === 'object' && !Array.isArray(persist)) {
+          const content = (persist as { content?: unknown }).content;
+          if (typeof content === 'string') {
+            const rewrittenContent = rewritePersistedContent(content, refMap);
+            if (rewrittenContent !== content) {
+              next[3] = {
+                ...(sendOpts as object),
+                persistUserMessage: { ...(persist as object), content: rewrittenContent },
+              };
+            }
+          }
+        }
+      }
+    }
+  }
   log.debug(`outbound media rewritten for ${channel}`);
   return next;
 }
@@ -344,6 +392,7 @@ export const __testing = {
   rewriteMessage,
   rewriteQueued,
   rewritePersistedContent,
+  uploadAttachmentOnce,
   MESSAGE_SHAPE_CHANNELS,
   QUEUED_SHAPE_CHANNELS,
 };

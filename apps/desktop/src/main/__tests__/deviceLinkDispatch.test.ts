@@ -384,6 +384,7 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
+  pushSessionActivityToController,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
@@ -398,6 +399,8 @@ import { MAKER_PUSH } from '../maker-ipc/channels';
 function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'online') {
   let frameHandler: ((env: Envelope) => unknown | Promise<unknown>) | null = null;
   let status = initialStatus;
+  let reliableSendQueueDepth = 0;
+  let nextPushError: Error | null = null;
   const calls = {
     linkAccept: [] as Array<{ dst: string; requestId: string }>,
     closed: [] as Array<{ dst: string; reason: string }>,
@@ -412,16 +415,29 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
     },
     sendLinkAccept: (dst: string, requestId: string) => calls.linkAccept.push({ dst, requestId }),
     closeLink: (dst: string, reason: string) => calls.closed.push({ dst, reason }),
-    sendPush: (dst: string, channel: string, payload: unknown) =>
-      calls.push.push({ dst, channel, payload }),
+    sendPush: (dst: string, channel: string, payload: unknown) => {
+      if (nextPushError) {
+        const err = nextPushError;
+        nextPushError = null;
+        throw err;
+      }
+      calls.push.push({ dst, channel, payload });
+    },
     sendInvokeResult: (dst: string, requestId: string, payload: unknown) =>
       calls.invokeResult.push({ dst, requestId, payload }),
+    getReliableSendQueueDepth: () => reliableSendQueueDepth,
   };
   return {
     client: client as never,
     calls,
     setStatus: (nextStatus: 'stopped' | 'connecting' | 'online') => {
       status = nextStatus;
+    },
+    setReliableSendQueueDepth: (depth: number) => {
+      reliableSendQueueDepth = depth;
+    },
+    failNextPush: (err: Error) => {
+      nextPushError = err;
     },
     feed: (env: Envelope) => frameHandler?.(env),
   };
@@ -1595,6 +1611,36 @@ describe('被控端订阅 registry + topic 转发', () => {
     )).toBe(false);
   });
 
+  it('link-close(transport-timeout) 保留被控端反向控制状态;永久关闭 reason 维持清理语义', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    // 对端(另一台桌面)作为控制端订阅本机 sessions
+    feed(subFrame('ctrl-desktop', SUB, ['sessions'], 'OtherMac'));
+    calls.push.length = 0;
+
+    // 对端作为**被控端**对另一条方向的 link 做瞬时重置 → 发来 transport-timeout。
+    // 互控场景下这不得清掉它作为控制端的订阅/记忆路由——否则反向实时推送
+    // 静默断流而对端毫不知情。
+    feed({
+      v: 1,
+      kind: 'link-close',
+      src: 'ctrl-desktop',
+      payload: { reason: 'transport-timeout' },
+    });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    expect(calls.push).toEqual([
+      { dst: 'ctrl-desktop', channel: 'local-db:sessions:created', payload: { sessionId: 's1' } },
+    ]);
+
+    // 永久关闭(user)仍完整清理
+    calls.push.length = 0;
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-desktop', payload: { reason: 'user' } });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's2' });
+    expect(calls.push).toEqual([]);
+  });
+
   it('subscribe 帧 → 回 invoke-result;sessions topic 只发列表订阅者,不发未订阅的 heavy 事件', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
@@ -1657,6 +1703,171 @@ describe('被控端订阅 registry + topic 转发', () => {
         },
       },
     ]);
+  });
+
+  describe('会话活动出站整流(latest-wins 暂存)', () => {
+    it('窗口占用达软上限时暂存并合并同会话帧;窗口空出后只发最新值', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'step 1' });
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'step 2' });
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's2', phase: 'running', compactDetail: 'other' });
+        expect(calls.push).toEqual([]);
+        // 同一会话只保留最新值 → 暂存里只有 s1 + s2 两个键
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(2);
+
+        setReliableSendQueueDepth(0);
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'running', compactDetail: 'step 2' },
+          },
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's2', phase: 'running', compactDetail: 'other' },
+          },
+        ]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('BACKPRESSURE 保留暂存退避重试;其它错误沿 best-effort 丢弃不堵队', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, failNextPush } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        failNextPush(new DeviceLinkError('BACKPRESSURE', 'buffer full'));
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'busy' });
+        expect(calls.push).toEqual([]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'running', compactDetail: 'busy' },
+          },
+        ]);
+
+        // 非背压错误(如 PAYLOAD_TOO_LARGE)丢弃该条,后续帧不受影响
+        calls.push.length = 0;
+        failNextPush(new DeviceLinkError('PAYLOAD_TOO_LARGE', 'too large'));
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's3', phase: 'running', compactDetail: 'x' });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's4', phase: 'running', compactDetail: 'y' });
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's4', phase: 'running', compactDetail: 'y' },
+          },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('定向 replay 只投给目标控制端,不扇出给其它订阅者;未订阅目标为 no-op', () => {
+      remoteControlEnabled = true;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+      feed(subFrame('ctrl-b', SUB, ['sessions'], 'MacB'));
+      calls.push.length = 0;
+
+      pushSessionActivityToController('ctrl-b', { sessionId: 's1', phase: 'running', compactDetail: 'replay' });
+      expect(calls.push).toEqual([
+        {
+          dst: 'ctrl-b',
+          channel: SESSION_ACTIVITY_CHANNEL,
+          payload: { sessionId: 's1', phase: 'running', compactDetail: 'replay' },
+        },
+      ]);
+
+      // 未订阅 sessions 的控制端:不投递、不暂存
+      calls.push.length = 0;
+      pushSessionActivityToController('ctrl-unknown', { sessionId: 's1', phase: 'running', compactDetail: 'replay' });
+      expect(calls.push).toEqual([]);
+      expect(dispatchTesting.sessionActivityStageSize('ctrl-unknown')).toBe(0);
+    });
+
+    it('relay 离线期间保持退避重试,恢复在线后无需新事件即自动投递暂存值', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setStatus, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        // 背压下暂存 → 随后 relay 离线
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+        setStatus('connecting');
+        setReliableSendQueueDepth(0);
+
+        // 离线期间定时器照常触发:不投递、不丢暂存、继续自我调度
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs * 3);
+        expect(calls.push).toEqual([]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        // 恢复在线:无需新活动事件/重订阅,下一轮重试自动投递
+        setStatus('online');
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false },
+          },
+        ]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('退订 sessions 清空该控制端暂存(含排期中的重试)', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'staged' });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        feed(subFrame('ctrl-a', UNSUB, ['sessions']));
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+
+        setReliableSendQueueDepth(0);
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs * 2);
+        expect(calls.push).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('订阅 session:<id> → heavy 事件转发 + 横幅亮;纯 sessions 不亮横幅', () => {

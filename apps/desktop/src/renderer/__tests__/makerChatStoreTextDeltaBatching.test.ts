@@ -464,6 +464,48 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
+  it('refreshes the plan update timestamp when update_plan completes in place', () => {
+    const startedAt = 1_700_000_000_000;
+    vi.setSystemTime(startedAt);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan-1',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Finish work', status: 'in_progress' }] },
+        },
+      },
+      persistId: 'plan-message-1',
+    });
+
+    vi.setSystemTime(startedAt + 5_000);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan-1',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Finish work', status: 'completed' }] },
+        },
+      },
+      persistId: 'plan-message-1',
+    });
+
+    const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      clientId: 'plan-message-1',
+      createdAt: new Date(startedAt).toISOString(),
+      planUpdatedAtMs: startedAt + 5_000,
+      toolInput: { plan: [{ step: 'Finish work', status: 'completed' }] },
+    });
+  });
+
   it('flushes pending text before a permission interaction request on the separate IPC channel', () => {
     const snapshots: Array<{ roles: string[]; pendingPermission: string | null }> = [];
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {

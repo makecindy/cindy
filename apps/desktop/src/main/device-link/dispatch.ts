@@ -36,11 +36,13 @@ import {
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
+  type LinkClosePayload,
   type LinkOpenPayload,
   type Topic,
 } from '@cindy/device-link';
@@ -412,12 +414,31 @@ const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT = 16;
 const REMOTE_INVOKE_RESULT_OUTBOX_BYTES = 16 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
+/**
+ * relay 离线期间 outbox 不再按 500ms 盲自旋(每轮对每个 peer trySend → 必然抛
+ * NOT_CONNECTED,空转最长两分钟、日志噪音掩盖真问题):离线时只按慢节奏做 TTL
+ * 出清,真正的投递由事件驱动 —— ws-online 全量 flush(index.ts 接线)、link-open /
+ * subscribe 定向 flush(已有)。
+ */
+const REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS = 5_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   30_000,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
 );
-/** 再保留一轮同等重连窗口后才放弃无人等待的回包。 */
+/** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+
+/**
+ * outbox 条目的逐 channel 保留时长:控制端对该 channel 的等待预算(两端共享
+ * INVOKE_TIMEOUT_OVERRIDES_MS,缺省 30s)× 2(再留一轮重连窗口),封顶全局上限。
+ * 控制端超时后不会再认领旧 requestId 的回包(重发用新 id),listing 类回包在
+ * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
+ * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
+ */
+function outboxEntryMaxAgeMs(channel: string | undefined): number {
+  const budgetMs = (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || 30_000;
+  return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+}
 /**
  * ipcMain handler 没有统一 AbortSignal，不能在 30s 客户端超时时假装取消副作用。
  * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
@@ -535,6 +556,127 @@ function notifySessionsSubscribed(controllerDeviceId: string): void {
   }
 }
 
+// ─── 会话活动出站整流(latest-wins 键控暂存) ────────────────────────────
+//
+// sessions:activity 是纯状态镜像:同一会话只有**最新值**有意义。把每个事件帧
+// 直接塞进 per-peer 可靠传输窗口(64 槽单 FIFO)会在 replay/爆发时占满窗口,
+// 把 subscribe 的 invoke-result(控制端判定被控端存活的唯一凭据)挤到饿死——
+// v0.1.26 线上:一毫秒 76 帧 replay → 回包排不进窗口 → 手机 15s 超时重订阅 →
+// 每次重订阅再触发一轮 replay,拥塞自放大。这里按 (控制端, sessionId) 键控暂存,
+// 只保留最新值,并在窗口占用超过软上限时停止灌入、退避重试:爆发量从
+// O(事件数) 收敛到 O(会话数),窗口始终给控制面帧留余量。
+const SESSION_ACTIVITY_STAGE_MAX_KEYS = 512;
+const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
+/** 可靠窗口软上限:活动镜像最多占半窗,剩余留给 invoke-result 与其它推送。 */
+const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
+
+interface SessionActivityStage {
+  /** sessionId → 最新 payload;Map 插入序即更新序,超限时淘汰最旧键。 */
+  queue: Map<string, unknown>;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+}
+const sessionActivityStages = new Map<string, SessionActivityStage>();
+
+function sessionActivityKey(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' && sessionId ? sessionId : null;
+}
+
+function stageSessionActivityPush(dst: string, payload: unknown): void {
+  const key = sessionActivityKey(payload);
+  // 无 sessionId 的活动帧无法键控(契约上不存在);丢弃而不是绕行,避免未知
+  // 形状绕过整流重新制造窗口竞争。
+  if (!key) return;
+  let stage = sessionActivityStages.get(dst);
+  if (!stage) {
+    stage = { queue: new Map(), retryTimer: null };
+    sessionActivityStages.set(dst, stage);
+  }
+  stage.queue.delete(key);
+  stage.queue.set(key, payload);
+  while (stage.queue.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
+    const oldest = stage.queue.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    stage.queue.delete(oldest);
+  }
+  drainSessionActivityStage(dst, stage);
+}
+
+function drainSessionActivityStage(dst: string, stage: SessionActivityStage): void {
+  if (stage.retryTimer) {
+    clearTimeout(stage.retryTimer);
+    stage.retryTimer = null;
+  }
+  if (!activeClient) return;
+  // relay 离线时保持退避重试(不清暂存):若只等下一个活动事件/重订阅触发,
+  // 短暂 relay 闪断(控制端未察觉、不会重订阅)+ 无后续活动的场景下,暂存的
+  // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
+  // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
+  // handleControllerOffline 会清空暂存、终止重试。
+  if (activeClient.getStatus() !== 'online') {
+    scheduleSessionActivityRetry(dst, stage);
+    return;
+  }
+  while (stage.queue.size > 0) {
+    if (activeClient.getReliableSendQueueDepth(dst) >= SESSION_ACTIVITY_WINDOW_SOFT_CAP) {
+      scheduleSessionActivityRetry(dst, stage);
+      return;
+    }
+    const next = stage.queue.entries().next().value as [string, unknown] | undefined;
+    if (!next) return;
+    const [key, payload] = next;
+    try {
+      activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, payload);
+      stage.queue.delete(key);
+    } catch (err) {
+      if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
+        scheduleSessionActivityRetry(dst, stage);
+        return;
+      }
+      // 其它错误(LINK_NOT_OPEN / PAYLOAD_TOO_LARGE 等)沿 best-effort 语义丢弃该条,
+      // 不让一条坏帧堵死整个暂存队列。
+      stage.queue.delete(key);
+      log.warn(`session activity push dropped for ${shortId(dst)}: ${String(err)}`);
+    }
+  }
+}
+
+function scheduleSessionActivityRetry(dst: string, stage: SessionActivityStage): void {
+  if (stage.retryTimer) return;
+  stage.retryTimer = setTimeout(() => {
+    stage.retryTimer = null;
+    const current = sessionActivityStages.get(dst);
+    if (current) drainSessionActivityStage(dst, current);
+  }, SESSION_ACTIVITY_DRAIN_RETRY_MS);
+}
+
+function clearSessionActivityStage(dst: string): void {
+  const stage = sessionActivityStages.get(dst);
+  if (!stage) return;
+  if (stage.retryTimer) clearTimeout(stage.retryTimer);
+  sessionActivityStages.delete(dst);
+}
+
+function clearAllSessionActivityStages(): void {
+  for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
+}
+
+/**
+ * 会话活动 replay 的**定向**投递:只发给刚完成 sessions 订阅的那一台控制端。
+ * 走同一条 latest-wins 暂存链路(与 tap 路径同 key 合并),不经 topic 扇出——
+ * 一台控制端 subscribe 不应把全量活动快照重复灌给其它所有控制端
+ * (v0.1.26 线上:两台手机互相被对方的 subscribe 风暴灌爆窗口)。
+ */
+export function pushSessionActivityToController(
+  controllerDeviceId: string,
+  payload: unknown,
+): void {
+  if (!activeClient) return;
+  if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
+  stageSessionActivityPush(controllerDeviceId, payload);
+}
+
 /**
  * 按 topic 把一条本机广播转发给订阅了它的控制端。listener 注册后每条 tap 都过这里
  * (live 读 registry,topic 变化即时生效)。topic 算不出(无 session 标识)→ 丢弃。
@@ -575,6 +717,11 @@ function forwardPush(channel: string, payload: unknown): void {
     }
   }
   for (const dst of liveTargets) {
+    // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
+    if (channel === SESSION_ACTIVITY_CHANNEL) {
+      stageSessionActivityPush(dst, remotePayload);
+      continue;
+    }
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
@@ -724,7 +871,7 @@ export function dropAllControllers(
   ]);
   for (const dst of controllerIds) {
     try {
-      client.closeLink(dst, reason);
+      client.closeLink(dst, reason, 'inbound');
     } catch (err) {
       // 本地授权/订阅清理不能依赖弱网下 link-close 真正写进 socket。
       log.warn(`closeLink to ${shortId(dst)} failed during ${reason}: ${String(err)}`);
@@ -735,6 +882,8 @@ export function dropAllControllers(
   topicSubscriptionControllers.clear();
   acceptedLinkControllers.clear();
   offlinePushQueue.clear();
+  clearAllSessionActivityStages();
+  cancelAllLinkAcceptRetries();
   syncForwarding();
 }
 
@@ -746,6 +895,8 @@ export function dropAllControllers(
  */
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
+  clearSessionActivityStage(deviceId);
+  cancelLinkAcceptRetry(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -759,6 +910,8 @@ export function forgetControllerInvokeState(deviceId: string): void {
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
   offlinePushQueue.clear(deviceId);
+  clearSessionActivityStage(deviceId);
+  cancelLinkAcceptRetry(deviceId);
   subscriptions.forgetKnownController(deviceId);
   topicSubscriptionControllers.delete(deviceId);
   acceptedLinkControllers.delete(deviceId);
@@ -790,8 +943,21 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       return;
     case 'link-close':
       if (!src) return;
+      // transport-timeout 是对端对「它作为被控端服务本机控制」的那条 link 做的
+      // peer 级瞬时重置,与本机作为被控端服务对端控制的**反向**状态无关。
+      // 两台桌面互控时若照常清理,会把对端作为控制端的订阅/记忆路由/去重
+      // 缓存/离线队列静默删掉而对端毫不知情 → 反向实时推送断流。瞬时重置
+      // 的恢复由控制端 wiring 负责(index.ts 立即 openRemoteLink / mobile
+      // rehydrate);此处保持被控端状态原样,重建后双向继续。永久关闭
+      // (user/toggle-off/shutdown/revoked)维持完整清理语义。
+      if ((env.payload as LinkClosePayload | undefined)?.reason === 'transport-timeout') {
+        log.info(`transport-timeout link reset from ${shortId(src)}; host-side controller state retained`);
+        return;
+      }
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
+      clearSessionActivityStage(src);
+      cancelLinkAcceptRetry(src);
       acceptedLinkControllers.delete(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
       // A modern controller must reconnect and explicitly subscribe; restoring the
@@ -816,12 +982,65 @@ function isControllerRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
 }
 
+/**
+ * link-accept 发送失败(WS 背压 / 瞬时 socket 竞态)的有限重试。
+ *
+ * 控制端的 openLink 正拿着 30s 预算干等 accept;此前发送失败直接静默放弃,
+ * 控制端必然等满超时再靠订阅重放/熔断恢复兜底重开(2026-08-03 线上现场:
+ * 被控端上行拥塞时反复出现 no link-accept within 30000ms)。背压是瞬时状态,
+ * 短退避内发送缓冲大概率已排空;重试走完整 handleLinkOpen(复验开关/撤权),
+ * 每 src 只保留最新一次(新 link-open 顶掉旧重试)。耗尽后回到原语义:
+ * 等控制端重发 link-open。
+ */
+const LINK_ACCEPT_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
+const linkAcceptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelLinkAcceptRetry(src: string): void {
+  const timer = linkAcceptRetryTimers.get(src);
+  if (!timer) return;
+  clearTimeout(timer);
+  linkAcceptRetryTimers.delete(src);
+}
+
+function cancelAllLinkAcceptRetries(): void {
+  for (const src of [...linkAcceptRetryTimers.keys()]) cancelLinkAcceptRetry(src);
+}
+
+/** @param failedAttempts 已失败的发送次数(≥1);第 n 次失败用 delays[n-1] 档退避。 */
+function scheduleLinkAcceptRetry(
+  client: DeviceLinkClient,
+  src: string,
+  requestId: string,
+  payload: LinkOpenPayload | undefined,
+  failedAttempts: number,
+): void {
+  if (failedAttempts > LINK_ACCEPT_RETRY_DELAYS_MS.length) {
+    log.warn(
+      `link-accept to ${shortId(src)} gave up after ${failedAttempts} attempts; waiting for controller to re-open`,
+    );
+    return;
+  }
+  cancelLinkAcceptRetry(src);
+  const timer = setTimeout(() => {
+    linkAcceptRetryTimers.delete(src);
+    // 世代/连接校验:client 已更换或 relay 已断线时放弃——断线会 fail 掉控制端
+    // 的 pending openLink,它必然重发 link-open,旧 requestId 的 accept 已无意义。
+    if (activeClient !== client || client.getStatus() !== 'online') return;
+    handleLinkOpen(client, src, requestId, payload, failedAttempts);
+  }, LINK_ACCEPT_RETRY_DELAYS_MS[failedAttempts - 1]);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  linkAcceptRetryTimers.set(src, timer);
+}
+
 function handleLinkOpen(
   client: DeviceLinkClient,
   src: string,
   requestId: string,
   payload: LinkOpenPayload | undefined,
+  acceptAttempt = 0,
 ): void {
+  // 同 src 的新 link-open / 本轮执行顶掉遗留的 accept 重试(requestId 已过时)
+  cancelLinkAcceptRetry(src);
   // 第二道开关校验(server 已是第一道)
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     // server 正常不会转发到这里;真到了说明状态不一致,静默不 accept
@@ -833,7 +1052,7 @@ function handleLinkOpen(
   if (isControllerRevoked(src)) {
     log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
     purgeRevokedController(src);
-    client.closeLink(src, 'revoked');
+    client.closeLink(src, 'revoked', 'inbound');
     return;
   }
   const name =
@@ -849,10 +1068,20 @@ function handleLinkOpen(
     || rememberedModernTopics;
   // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
   // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
-  client.sendLinkAccept(src, requestId, {
-    appVersion: app.getVersion(),
-    allowlistHash: computeAllowlistHash(),
-  });
+  try {
+    client.sendLinkAccept(src, requestId, {
+      appVersion: app.getVersion(),
+      allowlistHash: computeAllowlistHash(),
+    });
+  } catch (err) {
+    // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),
+    // 订阅状态不提交(幽灵订阅防护语义保持不变)。
+    log.warn(
+      `link-accept send failed for ${shortId(src)} (attempt ${acceptAttempt + 1}): ${String(err)}`,
+    );
+    scheduleLinkAcceptRetry(client, src, requestId, payload, acceptAttempt + 1);
+    return;
+  }
   acceptedLinkControllers.add(src);
   if (knownModernController) {
     subscriptions.updateControllerMetadata(src, name, capabilities);
@@ -1384,11 +1613,23 @@ function clearRemoteInvokeResultOutboxTimer(): void {
 
 function scheduleRemoteInvokeResultOutboxFlush(): void {
   if (remoteInvokeResultOutboxTimer || remoteInvokeResultOutbox.size === 0) return;
+  // relay 在线才值得 500ms 快重试;离线只保留慢节奏 TTL 出清,投递由事件驱动
+  // (ws-online 全量 / link-open、subscribe 定向)。
+  const delayMs = activeClient?.getStatus() === 'online'
+    ? REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS
+    : REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS;
   remoteInvokeResultOutboxTimer = setTimeout(() => {
     remoteInvokeResultOutboxTimer = null;
     flushRemoteInvokeResultOutbox();
-  }, REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS);
+  }, delayMs);
   (remoteInvokeResultOutboxTimer as unknown as { unref?: () => void }).unref?.();
+}
+
+/** ws-online 等连接级事件的全量 flush 入口(index.ts 接线);挂起的慢扫描立即换快挡。 */
+export function flushRemoteInvokeResultOutboxOnReconnect(): void {
+  if (remoteInvokeResultOutbox.size === 0) return;
+  clearRemoteInvokeResultOutboxTimer();
+  flushRemoteInvokeResultOutbox();
 }
 
 function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
@@ -1397,11 +1638,12 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     scheduleRemoteInvokeResultOutboxFlush();
     return;
   }
+  const relayOnline = client.getStatus() === 'online';
   const now = Date.now();
   const blockedPeers = new Set<string>();
   for (const [key, queued] of remoteInvokeResultOutbox) {
     if (onlySrc && queued.src !== onlySrc) continue;
-    if (now - queued.queuedAt >= REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS) {
+    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel)) {
       log.warn(
         `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
         `to ${shortId(queued.src)}`,
@@ -1409,6 +1651,8 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
       removeRemoteInvokeResultOutboxEntry(key);
       continue;
     }
+    // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
+    if (!relayOnline) continue;
     if (blockedPeers.has(queued.src)) continue;
     const attempt = trySendInvokeResult(
       client,
@@ -1721,6 +1965,8 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     }
   } else {
     subscriptions.unsubscribe(src, topics);
+    // 退订 sessions 后暂存里的活动快照不应再投递(含已排期的重试)。
+    if (topics.includes('sessions')) clearSessionActivityStage(src);
   }
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
@@ -1992,6 +2238,8 @@ export const __testing = {
     onSessionsSubscribed = null;
     activeClient = null;
     offlinePushQueue.clear();
+    clearAllSessionActivityStages();
+    cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
   },
   getActiveControllers,
@@ -2008,10 +2256,19 @@ export const __testing = {
   remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,
   flushRemoteInvokeResultOutbox,
+  outboxEntryMaxAgeMs,
+  linkAcceptRetryDelaysMs: LINK_ACCEPT_RETRY_DELAYS_MS,
+  pendingLinkAcceptRetryCount: () => linkAcceptRetryTimers.size,
   forwardPush,
   queuedPushesFor(deviceId: string) {
     return offlinePushQueue.snapshot(deviceId);
   },
+  sessionActivityStageSize(deviceId: string): number {
+    return sessionActivityStages.get(deviceId)?.queue.size ?? 0;
+  },
+  sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
+  sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,
+  sessionActivityDrainRetryMs: SESSION_ACTIVITY_DRAIN_RETRY_MS,
   handleLinkOpen,
   handleSubscriptionFrame,
   purgeRevokedController,

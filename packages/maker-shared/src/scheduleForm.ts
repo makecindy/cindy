@@ -35,6 +35,18 @@ export interface MobileScheduleDraft {
   cronExpr: string;
   timezone: string;
   intervalMinutes: string;
+  /**
+   * 原任务的 intervalMs。表单只表达得了 1-59 分钟 / 整点小时,MCP 可以设出
+   * 表单区间外的间隔(如 90 分钟),这时 intervalMinutes 折叠成 '' ——保存时
+   * 必须能区分「表达不了」和「用户清空」,否则只改 prompt 也会静默清掉间隔
+   * (copilot review 发现)。
+   */
+  sourceIntervalMs?: number;
+  /**
+   * 用户是否动过间隔(输入框编辑、切 manual、套模板都算)。动过且为空 =
+   * 明确清空;没动过为空 = 保留 sourceIntervalMs 原值。
+   */
+  intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
   model: string;
   providerId: string;
@@ -100,6 +112,7 @@ export function createMobileScheduleDraft(
     cronExpr: schedule.cronExpr?.trim() || DEFAULT_CRON,
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
+    ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.agentKind ?? 'claude-code',
     model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
     providerId: schedule.providerId ?? '',
@@ -140,7 +153,9 @@ export function applyTemplateToMobileScheduleDraft(
     runMode: template.recurring === false ? 'manual' : 'recurring',
     cronExpr: template.cronExpr?.trim() || draft.cronExpr,
     timezone: template.timezone?.trim() || draft.timezone,
+    // 模板显式定义 cadence:清空间隔是模板的意图,不是「表达不了」,按已触碰处理。
     intervalMinutes: '',
+    intervalMinutesTouched: true,
     agentKind,
     model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
@@ -254,7 +269,20 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     timezone: draft.timezone.trim(),
     recurring,
     manual: !recurring,
-    intervalMs: recurring && intervalMinutes ? intervalMinutes * 60_000 : undefined,
+    // Mobile 表单是全量提交:没填间隔(或 manual 模式)就是要清空间隔。清空必须
+    // 发 null 而不是 undefined——这个 input 经 device-link JSON.stringify 传输,
+    // undefined 的 key 会被丢掉,desktop 端真 partial 语义下旧 intervalMs 会被
+    // 保留,清空间隔 / manual 切回 recurring 就静默失效(codex review 发现)。
+    // 例外:表单区间表达不了的既有间隔(sourceIntervalMs 在、intervalMinutes 折叠
+    // 为 '' 且用户没动过)原值回传,只改 prompt 不得顺手清 cadence(copilot review
+    // 发现;touched 语义见 MobileScheduleDraft.intervalMinutesTouched)。
+    intervalMs: recurring && intervalMinutes
+      ? intervalMinutes * 60_000
+      : recurring
+          && !draft.intervalMinutesTouched
+          && typeof draft.sourceIntervalMs === 'number'
+        ? draft.sourceIntervalMs
+        : null,
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
@@ -308,6 +336,27 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+/**
+ * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ *
+ * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
+ *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
+ * - 旧 desktop 没有归一化逻辑,null 会被旧引擎当成已设间隔算出 now + null
+ *   立即触发(codex review 发现);对它必须回退旧 wire 形态——**省略 key**,
+ *   旧引擎「带 cronExpr 不带 intervalMs = 隐式清空」恰好承担等价的清空语义。
+ *
+ * 能力探测失败按不支持处理:错发省略 key 到新 desktop 最坏是清空 no-op
+ * (重新保存可纠正),错发 null 到旧 desktop 是立即触发,失败方向必须朝前者。
+ */
+export function applyScheduleWireCompat(
+  input: RemoteScheduleWriteInput,
+  opts: { supportsIntervalNullClear: boolean },
+): RemoteScheduleWriteInput {
+  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
+  const { intervalMs: _legacyDropped, ...legacy } = input;
+  return legacy;
+}
+
 export function updateDraftAgentKind(
   draft: MobileScheduleDraft,
   agentKind: RemoteScheduleAgentKind,
@@ -323,6 +372,36 @@ export function updateDraftAgentKind(
   };
 }
 
+/** 间隔输入框的编辑入口:任何编辑(含清空)都标记 touched,与「表达不了被折叠成空」区分。 */
+export function updateDraftIntervalMinutes(
+  draft: MobileScheduleDraft,
+  intervalMinutes: string,
+): MobileScheduleDraft {
+  return { ...draft, intervalMinutes, intervalMinutesTouched: true };
+}
+
+/**
+ * cron 表达式输入的编辑入口:编辑任何可见 cadence 字段都是显式 cadence 操作,
+ * 一并丢弃表单表达不了的隐藏 interval——否则用户改了看得见的 cron,保存后隐藏
+ * interval 仍是权威,刚改的排期完全不生效(codex review 发现)。不变量:保存后
+ * 的 cadence 语义 = 用户在表单看到并确认的状态;隐藏 interval 只在编辑无关
+ * 字段(prompt / 名称 / 通知等)时保留。
+ */
+export function updateDraftCronExpr(
+  draft: MobileScheduleDraft,
+  cronExpr: string,
+): MobileScheduleDraft {
+  return { ...draft, cronExpr, intervalMinutesTouched: true };
+}
+
+/** 时区输入的编辑入口:与 updateDraftCronExpr 同一 cadence 不变量。 */
+export function updateDraftTimezone(
+  draft: MobileScheduleDraft,
+  timezone: string,
+): MobileScheduleDraft {
+  return { ...draft, timezone, intervalMinutesTouched: true };
+}
+
 export function updateDraftRunMode(
   draft: MobileScheduleDraft,
   runMode: MobileScheduleRunMode,
@@ -332,6 +411,9 @@ export function updateDraftRunMode(
     ...draft,
     runMode,
     intervalMinutes: runMode === 'manual' ? '' : draft.intervalMinutes,
+    // 切 manual 是对 cadence 的显式操作:之后切回 recurring 也不该复活旧间隔
+    // (2026-08-03 codex review:manual 切回 recurring 仍按旧间隔跑就是事故形态)。
+    ...(runMode === 'manual' ? { intervalMinutesTouched: true } : {}),
   };
 }
 

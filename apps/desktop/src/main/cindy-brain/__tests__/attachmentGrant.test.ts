@@ -1,6 +1,6 @@
 /**
  * attachmentGrant.test.ts — 用户图片过户单测(纯 DI,无 Electron)。
- * 覆盖:happy path 记账链路(blob 入账 + ghost-grant 引用 + 指纹返回)、
+ * 覆盖:happy path 记账链路(blob 入账 + 人工/工具交接引用 + 指纹返回)、
  * 地址解析失败整批拒且零副作用、张数上限、空批直通、落库中途失败报错。
  */
 
@@ -88,7 +88,7 @@ describe('grantAttachmentsToGhost', () => {
     expect((r as { message: string }).message).toContain('disk full');
   });
 
-  it('解析层给出 originKind(异步解析,总仓 blob 账本闸)→ 过户行按真实出生记账', async () => {
+  it('工具出生附件使用独立 ghost-tool-grant，避免旧版误当人工永久授权', async () => {
     const { deps, addRef } = makeDeps({
       // 异步 resolveImageUrl(接线层查账后附带出生);会话内生成图 = tool。
       resolveImageUrl: async () => ({
@@ -99,7 +99,9 @@ describe('grantAttachmentsToGhost', () => {
     });
     const r = await grantAttachmentsToGhost(deps, { ghostId: 'g', urls: ['cindy-media://blobs/x.jpg'] });
     expect(r.ok).toBe(true);
-    expect(addRef).toHaveBeenCalledWith(expect.objectContaining({ originKind: 'tool' }));
+    expect(addRef).toHaveBeenCalledWith(
+      expect.objectContaining({ refKind: 'ghost-tool-grant', originKind: 'tool' }),
+    );
   });
 
   it('账本闸策略拒(GrantPolicyError)→ 整批拒零副作用,拒绝理由原样透出不落格式教学文案', async () => {

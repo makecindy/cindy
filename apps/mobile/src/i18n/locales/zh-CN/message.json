@@ -147,6 +147,7 @@
     "systemInstruction": "系统指令",
     "retrySend": "重试发送",
     "clearError": "清除错误",
+    "piImageInputUnsupported": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "credentialSwitchWait": "正在等待其它 Codex 任务结束，结束后自动发送",
     "aborting": "正在停止，排队消息会保留在这里",
     "paused": "队列已暂停，排队消息不会自动发送",

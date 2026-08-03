@@ -135,8 +135,23 @@ describe('selectWorkerModels', () => {
         providers: [],
         providersLoading: false,
         providersError: 'unknown channel',
+        providersUnsupported: true,
       }),
     ).toEqual([standard, budget]);
+  });
+
+  it('fails closed when the controlled-device provider list has a real read error', () => {
+    expect(
+      selectWorkerModels({
+        agent: 'codex',
+        capabilities: caps,
+        deviceId: 'offline-device',
+        providers: [provider('openai', true, 'codex', [standard])],
+        providersLoading: false,
+        providersError: 'proxy policy: request not allowed remotely',
+        providersUnsupported: false,
+      }),
+    ).toEqual([]);
   });
 
   it('does not submit a stale selection while a new device provider snapshot is loading', () => {

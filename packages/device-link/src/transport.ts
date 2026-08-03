@@ -9,6 +9,14 @@ import { PROTOCOL_VERSION, type Envelope } from './protocol.js';
  */
 export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1';
 
+/**
+ * 声明本端理解 link-close(transport-timeout) 的瞬时重置语义(收到后保留可靠层
+ * 并立即重建链路)。被控端**只对声明了该能力的控制端**发送 transport-timeout;
+ * 对旧控制端(未声明)保留整连接重连的兼容恢复路径——旧版把未知 reason 当永久
+ * 关闭处理且不会自动重开,relay/presence 又保持在线,订阅与在途请求会静默挂死。
+ */
+export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 
@@ -34,6 +42,14 @@ export const MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
 export const TRANSPORT_RETRY_INTERVAL_MS = 2_000;
 /** 连续重发上限；之后保留消息等待重连，避免弱网下无限制造流量。 */
 export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
+/**
+ * pending 里 push 帧的最大滞留时长（按单调时钟计量，不受墙钟校正影响）。push 是
+ * 尽力而为的实时镜像旁路，长时间未被 ACK（典型是对端离线）后只剩历史价值；
+ * 超龄后在普通入队压力下被兜底清扫，避免陈旧 push 独占有界 pending 缓冲。
+ * 重连重放前与 invoke-result 腾位不看此 TTL：这两条路径直接丢弃队头整个可丢弃
+ * 前缀（含新鲜 push 与 transport-skip 占位），保证 invoke-result 是最早的 live seq。
+ */
+export const TRANSPORT_PENDING_PUSH_MAX_AGE_MS = 5 * 60_000;
 
 const TRANSPORT_MARKER = '__cindyDeviceLinkTransport';
 const TRANSPORT_SKIP_MARKER = '__cindyDeviceLinkTransportSkip';

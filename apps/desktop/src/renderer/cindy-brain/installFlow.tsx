@@ -1,7 +1,6 @@
 import type { TFunction } from 'i18next';
 import type { ReactNode } from 'react';
 
-import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -11,7 +10,6 @@ import {
   type GhostTrustInfo,
   type InstalledGhost,
 } from '../../shared/ghost';
-import { openGhostTabInSidebar } from '../features/right-sidebar/lib/openGhostTabInSidebar';
 import { GhostInstallReview, GhostUpdateReview } from './GhostPermissionList';
 import { ghostInstallErrorKey } from './installErrorKey';
 
@@ -57,18 +55,15 @@ interface InstallFlowDeps {
     checkboxDefaultChecked?: boolean;
   }) => Promise<{ ok: boolean; checked: boolean }>;
   /**
-   * 当前右侧栏会话 id;无会话视图的入口(插件页)不传或返回 null。
-   * 只在「tab 型插件 + 勾选立即开启」时消费:装完自动展开右侧栏并打开页签。
+   * 打开插件页内的页签面板(面板收束后 tab 型插件的唯一宿主)。只在
+   * 「tab 型插件 + 勾选立即开启」时消费:插件页原地开面板,其它入口
+   * 导航到 /plugins?panel=<id>。不传 = 该入口不许诺"打开"。
    */
-  getSidebarSessionId?: () => string | null;
-  /** 打开/聚焦插件页签;缺省 openGhostTabInSidebar,测试注入用。 */
-  openGhostTab?: (sessionId: string, ghostId: string) => Promise<void>;
+  openPluginPanel?: (ghostId: string) => void;
 }
 
 /** 意识装入/更新确认框统一宽度:权限清单是富内容,默认 400px 折行到累。 */
 const GHOST_CONFIRM_MAX_WIDTH = 520;
-
-const installFlowLog = createLogger('ghost-install-flow');
 
 /** 同 id 已装清单查询(sendSync,极小)。 */
 function findInstalled(id: string): InstalledGhost | null {
@@ -160,10 +155,10 @@ export async function confirmAndInstallGhost(
   // "立即开启"勾选(2026-07-25 Lizi 定案,改自 2026-07-09 的默认不勾):
   // 默认勾选 = 装入即带电;用户显式取消勾选才装成沉睡。确认弹窗本身
   // 仍是授权边界 —— 权限清单如实展示,点"装入"即同意运行。
-  // tab 型插件(panel.position:'tab')在有会话可落时,勾选语义升级为
-  // 「立即开启并打开页签」——文案与真实行为一致,无会话入口不许诺"打开"。
-  const sidebarSessionId = deps.getSidebarSessionId?.() ?? null;
-  const willOpenTab = manifest.panel?.position === 'tab' && sidebarSessionId !== null;
+  // tab 型插件(panel.position:'tab')在入口能打开插件页面板时,勾选语义
+  // 升级为「立即开启并打开面板」——面板收束后页签面板只住在插件页,
+  // 不再创建右侧栏 ghost 页签;入口给不出面板宿主就不许诺"打开"。
+  const willOpenPanel = manifest.panel?.position === 'tab' && deps.openPluginPanel !== undefined;
   const { ok, checked: enable } = await confirmWithCheckbox({
     title: t('settings.ghosts.installConfirm.title', { name: manifest.name }),
     content: (
@@ -178,8 +173,8 @@ export async function confirmAndInstallGhost(
     confirmText: t('settings.ghosts.installConfirm.confirm'),
     cancelText: t('settings.ghosts.installConfirm.cancel'),
     checkboxLabel: t(
-      willOpenTab
-        ? 'settings.ghosts.installConfirm.enableNowOpenTab'
+      willOpenPanel
+        ? 'settings.ghosts.installConfirm.enableNowOpenPanel'
         : 'settings.ghosts.installConfirm.enableNow',
     ),
     checkboxDefaultChecked: true,
@@ -198,26 +193,9 @@ export async function confirmAndInstallGhost(
         ? t('settings.ghosts.toast.installed', { name: ghost.manifest.name })
         : t('settings.ghosts.toast.installedAsleep', { name: ghost.manifest.name }),
     );
-    if (enable && willOpenTab) {
-      // 兑现勾选文案:展开右侧栏并打开/聚焦页签(侧栏抽离时路由到子窗口)。
-      // main 在 install() resolve 前已广播 ghosts:changed,Tab 注册表通常已就位;
-      // 极端竞态下 Shell 的 PlaceholderBody 兜底,注册到位即自愈。
-      // 打开失败不回滚安装,只记日志——装入本身已成功,toast 不改口。
-      // 重新读取会话 ID——用户可能在确认弹窗/安装期间切换了会话,
-      // 用安装完成时的当前会话,而非弹窗出现时的快照。
-      const currentSessionId = deps.getSidebarSessionId?.() ?? null;
-      if (currentSessionId !== null) {
-        const openGhostTab = deps.openGhostTab ?? openGhostTabInSidebar;
-        try {
-          await openGhostTab(currentSessionId, ghost.manifest.id);
-        } catch (err) {
-          installFlowLog.warn('open ghost tab after install failed', {
-            ghostId: ghost.manifest.id,
-            sessionId: currentSessionId,
-            err,
-          });
-        }
-      }
+    if (enable && willOpenPanel) {
+      // 兑现勾选文案:进入插件页并打开该插件的页签面板。
+      deps.openPluginPanel?.(ghost.manifest.id);
     }
   } catch (err) {
     toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));

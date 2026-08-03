@@ -45,6 +45,7 @@ import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
   normalizeDisplayCommand,
+  piEditReplacements,
   type CommandIntent,
   type ToolUseDescriptor,
 } from '@cindy/maker-shared';
@@ -69,7 +70,17 @@ import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 
-const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read']);
+/**
+ * 点击走「文件类」交互(diff / 文稿 / 图片 lightbox)的工具:CC 大写 + pi 小写
+ * (pi 内置工具名全小写、文件字段为 path,见 toolUseDescriptor.ts)。
+ *
+ * 注意这**不是**「所有 kind='file' 描述符」的集合:pi 的 `ls` 也被归一化成
+ * kind='file'(读取语义)并渲染文件 chip,但**刻意不列入本集合** —— 它的目标是
+ * 目录,开文稿/图片 lightbox 没有意义,因此点击仍走命令类的就地展开路径
+ * (isInlineExpand)。新增工具时按「点击后该看到什么」判断是否入列,别按
+ * 描述符 kind 判断。
+ */
+const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read', 'edit', 'write', 'read']);
 
 /**
  * v10 (2026-04-20): 命令类工具(Bash/Grep/Glob/WebFetch/WebSearch/...)的
@@ -451,6 +462,7 @@ function formatInlineInput(
   if (!inp) return '';
   switch (toolName) {
     case 'Bash':
+    case 'bash':
     case 'exec': {
       // description 已上移为行主文案(issue #450),这里只展示命令原文 + cwd,
       // 避免同一句话在折叠行和展开区重复出现。
@@ -458,7 +470,8 @@ function formatInlineInput(
       const cwd = typeof inp.cwd === 'string' && inp.cwd ? `cwd: ${inp.cwd}` : '';
       return cwd ? `${cmd}\n${cwd}` : cmd;
     }
-    case 'Grep': {
+    case 'Grep':
+    case 'grep': {
       const pattern = typeof inp.pattern === 'string' ? inp.pattern : '';
       const path = typeof inp.path === 'string' ? inp.path : '';
       const glob = typeof inp.glob === 'string' ? inp.glob : '';
@@ -474,10 +487,16 @@ function formatInlineInput(
         .filter(Boolean)
         .join('\n');
     }
-    case 'Glob': {
+    case 'Glob':
+    case 'find': {
       const pattern = typeof inp.pattern === 'string' ? inp.pattern : '';
       const path = typeof inp.path === 'string' ? inp.path : '';
       return path ? `${pattern}\nin: ${path}` : pattern;
+    }
+    case 'ls': {
+      // pi ls:path 可缺省(默认当前目录)。
+      const path = typeof inp.path === 'string' ? inp.path : '';
+      return path;
     }
     case 'WebFetch': {
       const url = typeof inp.url === 'string' ? inp.url : '';
@@ -536,7 +555,7 @@ function buildDiffPayload(
       ],
     };
   }
-  if (toolName === 'Write') {
+  if (toolName === 'Write' || toolName === 'write') {
     const c = typeof inp.content === 'string' ? inp.content : '';
     return {
       kind: 'diff',
@@ -545,6 +564,24 @@ function buildDiffPayload(
           key: filePath,
           filePath,
           diffs: [{ key: 'write:0', oldString: '', newString: c }],
+        },
+      ],
+    };
+  }
+  // pi edit:声明 schema 的 edits[] 与 legacy 顶层 {oldText,newText} 两种形态,
+  // 由共享的 piEditReplacements 归一化(只认一种会让另一种退化成空 diff)。
+  if (toolName === 'edit') {
+    return {
+      kind: 'diff',
+      files: [
+        {
+          key: filePath,
+          filePath,
+          diffs: piEditReplacements(inp).map((edit, index) => ({
+            key: `edit:${index}`,
+            oldString: edit.oldText,
+            newString: edit.newText,
+          })),
         },
       ],
     };
@@ -719,7 +756,7 @@ export function AgentActionRow({
       return;
     }
     triggerRef.current = anchor;
-    if (toolName === 'Read' && filePath) {
+    if ((toolName === 'Read' || toolName === 'read') && filePath) {
       // 模型可能给相对路径(runtime 按会话工作目录解析后 Read 照样成功),而
       // 预览 / 定位 IPC 一律要求绝对路径 —— 先按 workingDir 补齐,镜像 runtime
       // 语义,保证 chip 打开的就是 agent 实际读到的那个文件。
