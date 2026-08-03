@@ -35,13 +35,13 @@ export interface LifecycleProbes {
   assess(id: string): GhostSetupAssessment;
 }
 
-/** 单插件投影:优先级 blocked > degraded > unknown > reauth > setup > ready。 */
+/** 单插件投影:优先级 blocked > degraded(仅 fused) > unknown > reauth > setup > ready。 */
 export function projectGhostLifecycle(facts: GhostLifecycleFacts): GhostLifecycleEntry {
   const base = { id: facts.id, name: facts.name, enabled: facts.enabled };
   if (!facts.accountAvailable) {
     return { ...base, readiness: 'blocked' };
   }
-  if (facts.runtimeState === 'crashed' || facts.runtimeState === 'fused') {
+  if (facts.runtimeState === 'fused') {
     return { ...base, readiness: 'degraded', runtimeState: facts.runtimeState };
   }
   if (facts.assessment instanceof Error) {
@@ -110,7 +110,7 @@ export function readinessSummary(entry: GhostLifecycleEntry): string | null {
     case 'blocked':
       return '需要登录并恢复云端服务后可用;请引导用户完成登录,不要盲调。';
     case 'degraded':
-      return '插件运行异常(崩溃或已熔断);请引导用户到插件页重载,不要重试调用。';
+      return '插件已熔断(反复崩溃);请引导用户到插件页重载,不要重试调用。';
     case 'unknown':
       return '配置状态暂时无法判定;请引导用户到插件页检查该插件状态,不要盲调。';
     default:

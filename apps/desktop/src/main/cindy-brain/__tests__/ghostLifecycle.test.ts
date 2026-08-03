@@ -75,6 +75,17 @@ describe('projectGhostLifecycle 优先级链', () => {
     expect(entry.runtimeState).toBe('fused');
   });
 
+  it('crashed 仍保持可调用,由派发器按需重新拉起', () => {
+    const entry = projectGhostLifecycle({
+      ...base,
+      runtimeState: 'crashed',
+      assessment: READY,
+    });
+    expect(entry.readiness).toBe('ready');
+    expect(entry.runtimeState).toBeUndefined();
+    expect(isCallable(entry, false)).toBe(true);
+  });
+
   it('评估失败 → unknown(显式降级,不折叠成 ready)', () => {
     const entry = projectGhostLifecycle({ ...base, assessment: new SyntaxError('bad store') });
     expect(entry.readiness).toBe('unknown');
