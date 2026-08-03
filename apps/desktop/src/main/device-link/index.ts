@@ -400,7 +400,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 断线期间 relay 不会为对端补发 offline presence,重连后同一台电脑仍以
     // online 到达,`wasOnline` 还是 true —— 上线握手不会触发,而断线这段时间的
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
-    if (status !== 'online') presenceOnlineByDevice.clear();
+    // availability 同理(presence 是增量广播,verdict 只在连接代内有效,mobile
+    // resetPresenceAvailabilityForConnection 同款):不清的话,断线期间目标离线
+    // → 重连首轮重放吃 DEVICE_OFFLINE 永久放弃 → 目标再上线时 wasAvailable
+    // 仍是 true,「不可用→可用」翻转永远不发生,推送流一直缺到下次无关恢复
+    // 事件(review P1)。
+    if (status !== 'online') {
+      presenceOnlineByDevice.clear();
+      presenceAvailableByDevice.clear();
+    }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') {
@@ -450,7 +458,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
     handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
-    if (available && wasAvailable === false) {
+    // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
+    // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——它是
+    // DEVICE_OFFLINE 永久放弃后的唯一恢复事件。目标本就在线时 ws-online 重放已
+    // 先行,这里多发的一次 subscribe 幂等(重放代次翻代收敛)。
+    if (available && wasAvailable !== true) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
     // 词典同步不看「允许被控」开关(push 帧不是控制类帧,这是自己设备之间的数据
@@ -1273,11 +1285,23 @@ export async function remoteInvoke(
 ): Promise<InvokeResultPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
+  // 取消代次快照(不变量 3 的对称路径,review P1):等待上线期间用户 CLOSE_LINK
+  // 时,上线后的发送会吃到 LINK_NOT_OPEN,而恢复回调若按**关闭后**的新代次重新
+  // 建链,就把用户刚执行的断开又建了回来。代次在进入任何 await 之前快照,发送
+  // 前与自动重开前都复验:跨过 CLOSE_LINK 的在途调用一律失效,不进恢复。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const assertLinkNotClosedSinceStart = (): void => {
+    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+    }
+  };
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
     await ensureOnlineForRequest();
-    // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(review P1)。
+    // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(复验
+    // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
     assertRemoteControlTargetEnabled(deviceId);
+    assertLinkNotClosedSinceStart();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
   };
@@ -1285,7 +1309,12 @@ export async function remoteInvoke(
     invokeWithClosedLinkRecovery(
       invoke,
       // 已在外层 guardInvoke 观测内:openLink 失败由外层统一记账,不重复观测。
-      () => openRemoteLink(deviceId, { observed: false }),
+      // 重开前复验取消代次:openRemoteLink 自身按**调用时**代次快照,对本次
+      // invoke 启动后发生的 CLOSE_LINK 无感知,必须由持有旧代次的这里拒绝。
+      () => {
+        assertLinkNotClosedSinceStart();
+        return openRemoteLink(deviceId, { observed: false });
+      },
       () => assertRemoteControlTargetEnabled(deviceId),
       () => closeRemoteLink(deviceId),
     );
@@ -1318,12 +1347,19 @@ export async function remoteSubscribe(
     );
     return topics.filter((topic) => live.has(topic));
   };
+  // 取消代次快照(不变量 3 的对称路径,与 remoteInvoke 同款):等待期间用户
+  // CLOSE_LINK 后,这条在途订阅不得按需把用户刚关的链路重新建起来。只挡跨过
+  // CLOSE_LINK 的在途调用;之后的新调用(重放重试 / 用户重开)按新代次照常。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const run = async (): Promise<InvokeResultPayload> => {
     await ensureOnlineForRequest();
     let liveTopics = liveTopicsNow();
     if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     if (requiresSessionLink(liveTopics) && !client.isLinkReady(deviceId)) {
+      if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+        throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+      }
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
       await openRemoteLink(deviceId, { observed: false });
       // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
