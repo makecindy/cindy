@@ -62,12 +62,20 @@ describe('SessionCard review regressions', () => {
       "container.style.removeProperty('--sidebar-title-marquee-duration');",
     );
     expect(sessionItemSource).toContain('const viewportCount = Math.max(');
+    expect(sessionItemSource).toContain(
+      'calc(var(--motion-sidebar-title-marquee-per-viewport) * ${viewportCount})',
+    );
+    expect(sessionItemSource).not.toContain('var(--motion-base) * ${viewportCount * 12}');
   });
 
-  it('remeasures hovered titles when the sidebar or highlighted content resizes', () => {
+  it('observes layout changes only while the title is hovered', () => {
+    expect(sessionItemSource).toContain('const resizeObserverRef = useRef<ResizeObserver | null>(null);');
     expect(sessionItemSource).toContain("typeof ResizeObserver === 'undefined'");
     expect(sessionItemSource).toContain('observer.observe(container);');
     expect(sessionItemSource).toContain('observer.observe(track);');
+    expect(sessionItemSource).toContain('resizeObserverRef.current?.disconnect();');
+    expect(sessionItemSource).toContain('startObserving();');
+    expect(sessionItemSource).toContain('stopObserving();');
     expect(sessionItemSource).toContain('if (isHoveredRef.current) startMarquee();');
   });
 

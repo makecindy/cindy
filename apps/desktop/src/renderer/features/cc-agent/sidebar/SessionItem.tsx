@@ -124,6 +124,7 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
   const containerRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
   const isHoveredRef = useRef(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const stopMarquee = useCallback(() => {
     const container = containerRef.current;
@@ -153,16 +154,18 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     );
     container.style.setProperty(
       '--sidebar-title-marquee-duration',
-      `calc(var(--motion-base) * ${viewportCount * 12})`,
+      `calc(var(--motion-sidebar-title-marquee-per-viewport) * ${viewportCount})`,
     );
     container.dataset.titleOverflowing = 'true';
   }, []);
 
-  useLayoutEffect(() => {
-    if (isHoveredRef.current) startMarquee();
-  }, [startMarquee, title]);
+  const stopObserving = useCallback(() => {
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+  }, []);
 
-  useEffect(() => {
+  const startObserving = useCallback(() => {
+    stopObserving();
     const container = containerRef.current;
     const track = trackRef.current;
     if (!container || typeof ResizeObserver === 'undefined') return;
@@ -172,8 +175,14 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     });
     observer.observe(container);
     if (track) observer.observe(track);
-    return () => observer.disconnect();
-  }, [startMarquee]);
+    resizeObserverRef.current = observer;
+  }, [startMarquee, stopObserving]);
+
+  useLayoutEffect(() => {
+    if (isHoveredRef.current) startMarquee();
+  }, [startMarquee, title]);
+
+  useEffect(() => () => stopObserving(), [stopObserving]);
 
   return (
     <span
@@ -183,9 +192,11 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
       onMouseEnter={() => {
         isHoveredRef.current = true;
         startMarquee();
+        startObserving();
       }}
       onMouseLeave={() => {
         isHoveredRef.current = false;
+        stopObserving();
         stopMarquee();
       }}
     >
