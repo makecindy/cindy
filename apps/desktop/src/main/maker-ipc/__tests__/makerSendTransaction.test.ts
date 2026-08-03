@@ -650,7 +650,7 @@ describe('maker SEND transaction', () => {
 
   it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
     const failedSession = createSession({
-      getStatus: vi.fn(() => 'error'),
+      getStatus: vi.fn(() => 'error' as const),
     });
     const recoveredSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
     const createOpts: MakerSessionCreateOpts = {
