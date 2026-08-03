@@ -16,6 +16,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'Your quota has been exceeded',
     'You exceeded your current quota',
     'usage limit',
+    'account budget exhausted',
     'session budget exhausted',
     'usage budget has been exceeded',
     'ExceededBudget',
@@ -32,6 +33,8 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'HTTP 429 Too Many Requests',
     'Too Many Requests',
     'rate limit exceeded',
+    'retry budget exhausted',
+    'exhausted daemon retry budget',
     'exceeded retry limit, last status: 429 Too Many Requests',
   ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(false);

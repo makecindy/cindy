@@ -16,6 +16,13 @@ describe('terminal rate-limit retry', () => {
         { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
       ),
     ).toBe(true);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'retry budget exhausted',
+        undefined,
+        { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+      ),
+    ).toBe(true);
   });
 
   it('recognizes the legacy text fallback only when it also carries status 429', () => {
@@ -33,6 +40,13 @@ describe('terminal rate-limit retry', () => {
         undefined,
       ),
     ).toBe(false);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit, retry budget exhausted, last status: 429',
+        429,
+        undefined,
+      ),
+    ).toBe(true);
   });
 
   it('does not short-retry account usage limits', () => {
