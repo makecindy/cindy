@@ -354,6 +354,40 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     });
 
     /**
+     * 「识别规则本身失效」必须能独立发现:CC 若改了分类器的 system 前缀或 max_tokens
+     * 上界,所有真实分类器请求都会掉进 errorsNotClassifier —— 那时既没有漏检 warn
+     * (它们在身份判据之后)、也没有升级 debug(永远识别不出来),整条链路重新全静默。
+     * 所以这个计数要有自己的周期性快照(codex P2)。
+     */
+    it('periodically snapshots the unmatched-identity tally on its own', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(() => 'session-1', () => t);
+      const notClassifier = requestBody({ system: 'ordinary assistant' });
+
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      // 不刷 warn —— 正常运行时这是大头。
+      expect(logger.warn).not.toHaveBeenCalled();
+      // 但必须自己落一条 debug 快照,不能只等后续 warn 捎带。
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      expect(logger.debug.mock.calls[0][0]).toContain('identity did not match');
+
+      // 同一窗口内限流,不刷屏。
+      for (let i = 0; i < 5; i += 1) {
+        t += 1_000;
+        observer(ctx({ status: 429, requestBody: notClassifier }));
+      }
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+
+      // 越窗后重新可见,且快照里 classifierFailures 恒为 0 —— 识别率归零的信号。
+      t += 60_000;
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.debug).toHaveBeenCalledTimes(2);
+      const snapshot = (logger.debug.mock.calls[1]?.[1] as { counters?: Record<string, number> })
+        ?.counters;
+      expect(snapshot).toMatchObject({ classifierFailures: 0, errorsNotClassifier: 7 });
+    });
+
+    /**
      * observer 挂在**共享**的 anthropic-compat-proxy 上(见 anthropic-compat-proxy-host
      * 的 composeResponseObservers):普通 turn、PI 以及其它复用该 proxy 的 runtime 的响应
      * 全都流经这里。身份判据必须最先过,否则这些无关响应会把漏检计数顶满,而那两个计数

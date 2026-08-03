@@ -207,18 +207,27 @@ export function createClaudeAutoClassifierFailureObserver(
     recoveryMissingSessionHeader: 0,
   };
   /** 每个 reason 各自限流,免得高频的那个把另一个饿死。 */
-  const lastWarnAt = new Map<string, number>();
-  const warnThrottled = (reason: string, fields: Record<string, unknown>): void => {
+  const lastLogAt = new Map<string, number>();
+  const logThrottled = (
+    level: 'warn' | 'debug',
+    reason: string,
+    fields: Record<string, unknown>,
+  ): void => {
     if (!logger) return;
     const ts = now();
-    const last = lastWarnAt.get(reason);
+    const last = lastLogAt.get(reason);
     if (last !== undefined && ts - last < OBSERVER_WARN_THROTTLE_MS) return;
-    lastWarnAt.set(reason, ts);
-    logger.warn(`auto classifier failure observer: ${reason}`, {
+    lastLogAt.set(reason, ts);
+    logger[level](`auto classifier failure observer: ${reason}`, {
       ...fields,
       counters: { ...counters },
     });
   };
+  const warnThrottled = (reason: string, fields: Record<string, unknown>): void =>
+    logThrottled('warn', reason, fields);
+  /** 周期性快照用 debug —— 正常运行时它每窗口一条,不该当告警刷 warn。 */
+  const debugThrottled = (reason: string, fields: Record<string, unknown>): void =>
+    logThrottled('debug', reason, fields);
 
   return (ctx: ResponseObserverCtx) => {
     if (ctx.status < 400) {
@@ -265,8 +274,16 @@ export function createClaudeAutoClassifierFailureObserver(
     // 顶满,识别率信号彻底失效 —— 而这两个计数存在的唯一目的就是回答「分类器在报错但我们
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
-      // 正常大头:非分类器的错误响应。只计数当分母,不 warn。
       counters.errorsNotClassifier += 1;
+      // 这个计数必须能**独立**落盘,不能只搭后续 warn / 升级 debug 的便车:一旦 CC 改了
+      // 分类器的 system 前缀或 max_tokens 上界,所有真实分类器请求都会掉进这个分支 ——
+      // 那时既没有漏检 warn(它们在身份判据之后)、也没有升级 debug(永远识别不出来),
+      // 整条链路重新变成完全静默,而「识别规则失效」恰恰是这套记账最该发现的事(codex P2)。
+      // 所以按同一套 per-reason 限流打一条周期性快照:`classifierFailures: 0` 配上持续
+      // 增长的 errorsNotClassifier,就是识别率归零的信号。用 debug 级,正常运行时不吵。
+      debugThrottled('classifier identity did not match any error response in this window', {
+        status: ctx.status,
+      });
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
