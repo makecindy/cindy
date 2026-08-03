@@ -379,6 +379,37 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_x5', 'Bash_5_dup2']);
   });
 
+  it('child/task 记录先消费 occPtr 后, summary 数组仍按调用顺序(P2: Keep summary occurrence cursors independent)', () => {
+    // 两个重复 Task_1 调用后, 先有 child/task 记录(推进共享 occPtr), 再出现 summary
+    // 数组 ['Task_1','Task_1']。若数组用共享 occPtr, 起点被 child 改写推到第二个
+    // occurrence, 变成 ['Task_1_dup2','Task_1_dup2'] 而非 [首个, 第二个]。数组必须
+    // 用独立游标, 不受标量/child 消费污染。
+    const text = [
+      assistantEntry('a1', [toolUse('Task_1'), toolUse('Task_1')]),
+      JSON.stringify({
+        type: 'task_progress',
+        subtype: 'task_progress',
+        task_id: 'task-1',
+        tool_use_id: 'Task_1',
+        status: 'running',
+      }),
+      JSON.stringify({
+        type: 'tool_use_summary',
+        summary: 'ran tasks',
+        preceding_tool_use_ids: ['Task_1', 'Task_1'],
+      }),
+      userEntry('u1', [toolResult('Task_1'), toolResult('Task_1')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Task_x1', 'Task_1_dup2']);
+    // child 记录挂首个调用(childRef 复用)
+    expect((entries[1] as Record<string, unknown>).tool_use_id).toBe('Task_x1');
+    // summary 数组独立游标: 不受 child 消费污染, 按调用顺序 [首个, 第二个]
+    expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Task_x1', 'Task_1_dup2']);
+  });
+
   it('同一 assistant 行内同 id 并行调用: 子记录按内容顺序 FIFO 各挂各次(codex-connector P2)', () => {
     // 同一条 assistant 消息含两个 Bash_210(并行) → Bash_x210 + Bash_210_dup2。
     // 两条 subagent 记录引用 Bash_210: 第一条应挂第一个调用(Bash_x210),

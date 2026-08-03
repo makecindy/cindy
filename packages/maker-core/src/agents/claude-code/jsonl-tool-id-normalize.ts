@@ -416,6 +416,22 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       }
       return resolveOccurrence(val, index) ?? resolveAhead(val, index);
     };
+    // summary 数组独立游标: preceding_tool_use_ids 的每一项按「该 id 在本数组内第几次
+    // 出现」消费 occurrence —— 数组按调用顺序列, 第 k 项对应第 k 个 occurrence。
+    // **不共享 occPtr / aheadPtr / childRef**: 标量/child 字段的改写会推进共享指针,
+    // 若数组项用同一 occPtr, 前面 child 记录先消费后, 数组起点错位 —— 如
+    // ['Task_1','Task_1'] 在 task/stream 行之后会归一化成 ['Task_1_dup2','Task_1_dup2']
+    // 而非 [首个, 第二个], 挂错 tool card(codex-connector P2: Keep summary occurrence
+    // cursors independent)。
+    const summaryArrCount = new Map<string, number>();
+    const resolveSummaryItem = (val: string): string | undefined => {
+      const occs = occurrenceByOriginal.get(val);
+      if (!occs || occs.length === 0) return undefined;
+      const k = summaryArrCount.get(val) ?? 0;
+      summaryArrCount.set(val, k + 1);
+      if (k < occs.length) return occs[k].finalId;
+      return occs[occs.length - 1].finalId; // 超出(异常)fallback 最近
+    };
     entries.forEach((entry, index) => {
       let entryChanged = false;
       // entry 级缓存: 同一条记录内多个字段引用同一 id 时共享解析结果 —— 否则标量
@@ -439,19 +455,21 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           entryChanged = true;
         }
       }
-      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写。
+      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按调用顺序消费 occurrence。
       // 数组项**绕过 entryRef / childRef 缓存**: 每一项对应一个独立的 tool call,
       // 同一 id 重复出现是两个重复调用, 需各自消费 occurrence —— 若走 resolveField,
       // 同 entry 内同 id 的缓存会让 ['Bash_5','Bash_5'] 变成 ['Bash_x5','Bash_x5'],
       // 而不是消费第二个 occurrence 得 Bash_5_dup2, resume/import 把第二个 summary
       // 挂到错误的 tool card 上(codex-connector P2: Resolve repeated summary IDs
-      // independently)。用纯行作用域解析(后顾优先 + 前瞻 fallback)。
+      // independently)。用独立游标 resolveSummaryItem(见上), 不受标量/child 改写的
+      // 共享 occPtr 污染(codex-connector P2: Keep summary occurrence cursors
+      // independent)。
       const arr = entry.preceding_tool_use_ids;
       if (Array.isArray(arr)) {
         for (let i = 0; i < arr.length; i += 1) {
           const item = arr[i];
           if (typeof item !== 'string') continue;
-          const mapped = resolveOccurrence(item, index) ?? resolveAhead(item, index);
+          const mapped = resolveSummaryItem(item);
           if (mapped !== undefined && mapped !== item) {
             arr[i] = mapped;
             entryChanged = true;
