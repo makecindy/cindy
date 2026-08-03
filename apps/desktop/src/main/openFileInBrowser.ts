@@ -3,6 +3,9 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const INVALID_BROWSER_FILE_TARGET_ERROR = '路径必须是绝对路径或本地 file:// URL';
+const OPEN_BROWSER_FILE_ERROR = '无法在系统浏览器中打开该本地页面';
+
 export interface BrowserFileTarget {
   filePath: string;
   fileUrl: string;
@@ -55,7 +58,10 @@ export interface OpenFileInBrowserDeps {
   existsSync(filePath: string): boolean;
   openExternal(url: string): Promise<void>;
   openPath(filePath: string): Promise<string>;
+  /** Windows-only fallback that hands the complete file URL to the OS shell. */
+  openUrlWithWindowsStart?(url: string): Promise<void>;
   onOpenExternalError?(details: { filePath: string; hasUrlState: boolean; error: unknown }): void;
+  onWindowsUrlFallbackError?(details: { filePath: string; error: unknown }): void;
 }
 
 export async function handleOpenFileInBrowser(
@@ -65,7 +71,7 @@ export async function handleOpenFileInBrowser(
   try {
     const target = resolveBrowserFileTarget(value);
     if (!target) {
-      return { success: false, error: 'Path must be absolute or a local file URL' };
+      return { success: false, error: INVALID_BROWSER_FILE_TARGET_ERROR };
     }
     if (!deps.isPathAllowed(target.filePath)) {
       return { success: false, error: '不允许访问该路径' };
@@ -86,15 +92,26 @@ export async function handleOpenFileInBrowser(
         hasUrlState: target.hasUrlState,
         error,
       });
-      // openPath only accepts a native path. Falling back when the original URL
-      // has query/hash would silently open the wrong SPA route or page state.
+      // openPath only accepts a native path. On Windows, hand the complete URL
+      // to `start` first so query/hash state survives the fallback.
       if (target.hasUrlState) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        if (deps.openUrlWithWindowsStart) {
+          try {
+            await deps.openUrlWithWindowsStart(target.fileUrl);
+            return { success: true };
+          } catch (fallbackError) {
+            deps.onWindowsUrlFallbackError?.({
+              filePath: target.filePath,
+              error: fallbackError,
+            });
+          }
+        }
+        return { success: false, error: OPEN_BROWSER_FILE_ERROR };
       }
       const errorMessage = await deps.openPath(target.filePath);
       return errorMessage ? { success: false, error: errorMessage } : { success: true };
     }
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) };
+    return { success: false, error: OPEN_BROWSER_FILE_ERROR };
   }
 }

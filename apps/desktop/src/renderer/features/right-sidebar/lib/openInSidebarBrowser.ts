@@ -42,7 +42,8 @@ export function pathToFileUrl(absPath: string): string {
  *   file:///Users/a%20b/x.html  → /Users/a b/x.html
  *   file:///E:/out/index.html   → E:\out\index.html (win32 风格分隔)
  *
- * 只取 pathname(忽略 hash / query);非 file: 或解析失败 → null。
+ * 仅接受无凭证且 authority 为空或 localhost 的本地 file URL；只取 pathname
+ * (忽略 hash / query)，非 file:、远端 authority 或解析失败 → null。
  */
 export function fileUrlToAbsPath(url: string): string | null {
   let parsed: URL;

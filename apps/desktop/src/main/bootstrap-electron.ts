@@ -4962,6 +4962,26 @@ const registerIpcHandlers = () => {
   // `shell:open-external` 分开是因为后者只放行 http(s) 防滥用;这里收窄到
   // 受控的扩展名集合后,放行 file:// 是可控的。
   const openFileInBrowserLog = createLogger('shell:open-file-in-browser');
+  const openFileUrlWithWindowsStart =
+    process.platform === 'win32'
+      ? (fileUrl: string) =>
+          new Promise<void>((resolve, reject) => {
+            const command = `start "" "${fileUrl.replace(/"/g, '""')}"`;
+            execFile(
+              process.env.ComSpec?.trim() || process.env.COMSPEC?.trim() || 'cmd.exe',
+              ['/d', '/s', '/c', command],
+              { windowsHide: true },
+              (error, _stdout, stderr) => {
+                if (!error) {
+                  resolve();
+                  return;
+                }
+                const detail = String(stderr).trim();
+                reject(new Error(detail || error.message));
+              },
+            );
+          })
+      : undefined;
   ipcMain.handle(
     'shell:open-file-in-browser',
     async (
@@ -4975,11 +4995,22 @@ const registerIpcHandlers = () => {
         existsSync: fs.existsSync,
         openExternal: (url) => shell.openExternal(url),
         openPath: (filePath) => shell.openPath(filePath),
+        openUrlWithWindowsStart: openFileUrlWithWindowsStart,
         onOpenExternalError: ({ filePath, hasUrlState, error }) => {
           openFileInBrowserLog.warn('openExternal failed', {
             filePath,
             hasUrlState,
-            fallback: hasUrlState ? 'disabled' : 'openPath',
+            fallback: hasUrlState
+              ? openFileUrlWithWindowsStart
+                ? 'windows-start'
+                : 'disabled'
+              : 'openPath',
+            error: String(error),
+          });
+        },
+        onWindowsUrlFallbackError: ({ filePath, error }) => {
+          openFileInBrowserLog.warn('Windows file URL fallback failed', {
+            filePath,
             error: String(error),
           });
         },

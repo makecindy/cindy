@@ -15,7 +15,9 @@ function harness(overrides: Partial<OpenFileInBrowserDeps> = {}) {
     existsSync: vi.fn(() => true),
     openExternal: vi.fn(async () => undefined),
     openPath: vi.fn(async () => ''),
+    openUrlWithWindowsStart: vi.fn(async () => undefined),
     onOpenExternalError: vi.fn(),
+    onWindowsUrlFallbackError: vi.fn(),
     ...overrides,
   };
   return deps;
@@ -72,6 +74,23 @@ describe('handleOpenFileInBrowser', () => {
     expect(deps.openPath).toHaveBeenCalledWith(filePath);
   });
 
+  it('uses the Windows URL fallback without dropping query or hash', async () => {
+    const url = pathToFileURL(path.resolve('/tmp', 'preview.html'));
+    url.search = '?mode=review';
+    url.hash = '#/section';
+    const deps = harness({
+      openExternal: vi.fn(async () => {
+        throw new Error('file URL unavailable');
+      }),
+    });
+
+    await expect(handleOpenFileInBrowser(url.toString(), deps)).resolves.toEqual({
+      success: true,
+    });
+    expect(deps.openUrlWithWindowsStart).toHaveBeenCalledWith(url.toString());
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
   it('does not discard URL state when openExternal fails', async () => {
     const url = pathToFileURL(path.resolve('/tmp', 'preview.html'));
     url.hash = '#/section';
@@ -79,12 +98,22 @@ describe('handleOpenFileInBrowser', () => {
       openExternal: vi.fn(async () => {
         throw new Error('browser rejected URL');
       }),
+      openUrlWithWindowsStart: undefined,
     });
 
     await expect(handleOpenFileInBrowser(url.toString(), deps)).resolves.toEqual({
       success: false,
-      error: 'browser rejected URL',
+      error: '无法在系统浏览器中打开该本地页面',
     });
     expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
+  it('returns a localized error for invalid input', async () => {
+    await expect(
+      handleOpenFileInBrowser('https://example.test/index.html', harness()),
+    ).resolves.toEqual({
+      success: false,
+      error: '路径必须是绝对路径或本地 file:// URL',
+    });
   });
 });
