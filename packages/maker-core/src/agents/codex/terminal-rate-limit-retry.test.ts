@@ -71,6 +71,20 @@ describe('terminal rate-limit retry', () => {
         undefined,
       ),
     ).toBe(false);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit, last status: 429: insufficient credit balance',
+        429,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit, last status: 429: ExceededBudget',
+        429,
+        undefined,
+      ),
+    ).toBe(false);
   });
 
   it('does not retry a plain terminal 429 or a non-429 exhausted response', () => {

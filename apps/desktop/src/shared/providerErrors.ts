@@ -12,7 +12,10 @@
  */
 
 /** 结构化错误码 —— renderer 按 `providerError.<code>` 取 i18n 文案。 */
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  matchesDeterministicUsageExhaustionText,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 
 export type ProviderErrorCode =
   /** 401：key 无效 / OAuth token 失效。 */
@@ -80,8 +83,6 @@ const MODEL_NOT_FOUND_RE =
 /** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
 const CONTEXT_TOO_LONG_RE =
   /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
-/** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞。 */
-const QUOTA_RE = /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|余额不足|欠费/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
@@ -98,7 +99,7 @@ const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorize
  * 新增 pattern 仍需真实错误体为证（见文件头注释）。
  */
 export function matchesQuotaExhaustedText(text: string): boolean {
-  return QUOTA_RE.test(text);
+  return matchesDeterministicUsageExhaustionText(text);
 }
 
 /**
@@ -136,7 +137,9 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
-    if (QUOTA_RE.test(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    if (matchesDeterministicUsageExhaustionText(body)) {
+      return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    }
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
     return { code: 'UNKNOWN', retryable: false, detail };
