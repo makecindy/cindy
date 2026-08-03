@@ -16,6 +16,8 @@ import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
+  CirclePlus,
+  FoldVertical,
   GitFork,
   Play,
   RotateCcw,
@@ -41,6 +43,7 @@ import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { isContextOverflowError } from '@/utils/contextOverflowError';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
@@ -93,6 +96,11 @@ interface ErrorBannerProps {
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
+  /** 上下文超限(context-overflow)时的「压缩上下文」入口。父组件只对支持手动
+   *  compact 的会话传(codex 走服务端自动压缩没有该入口,与 Context 环同款门控)。 */
+  onCompactContext?: () => void | Promise<void>;
+  /** 无手动 compact 能力的 live 会话使用真正可点击的「新建任务」恢复入口。 */
+  onNewSession?: () => void;
   /** 当前 error 是非终止的 recoverableError(turn 还在跑,agent/daemon 在自动
    *  重试,如 codex 网络 retry-loop 透出)。网络类分支据此区分文案:「正在自动
    *  重试…」vs「服务暂时不可达,可点击重试」。历史尾部行恒为 false。 */
@@ -120,6 +128,8 @@ export function ErrorBanner({
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
+  onCompactContext,
+  onNewSession,
   isRecoverable = false,
   style,
   className,
@@ -252,6 +262,12 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
+  // 上下文超限(#1429):请求本身超出模型 / 网关的窗口上限被 4xx 拒绝。与过载 / 网络类
+  // 的根本区别是**重试必败**(原样重发同一份超长 payload),所以 Retry 必须隐藏,
+  // 恢复动作换成「压缩上下文」(onCompactContext,cc 会话)与新建任务引导。
+  // 判定优先吃 errorReason 的稳定 key(maker-core 的 CONTEXT_OVERFLOW_REASON);
+  // 文案匹配保留作历史持久化错误行(只有原文可用)与老 maker-core 的兜底。
+  const isContextOverflowErr = isContextOverflowError(error, errorReason);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -264,7 +280,9 @@ export function ErrorBanner({
     showInvalidEncryptedContentRecovery ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
-    isCodexLocalOAuthAuthMissing;
+    isCodexLocalOAuthAuthMissing ||
+    // 超限重试 = 原样重发同一份超长 payload,必然再撞同一个 4xx(与 codex 401 同理)。
+    isContextOverflowErr;
   const safeRetryText = !hideRetry && retryText ? retryText : null;
   const [showRawNetworkError, setShowRawNetworkError] = useState(false);
   const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
@@ -308,6 +326,16 @@ export function ErrorBanner({
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
     displayError = t('chat.errorBanner.gatewayQuotaExhausted');
+  } else if (isContextOverflowErr) {
+    // 上下文超限:原始报错(litellm 整段 JSON / "prompt is too long")对用户没有行动
+    // 价值,换成友好文案 + 明确的下一步(压缩 / 新建任务);原始错误折叠可查。
+    // 放在过载类之前:两者 pattern 集合不相交,但语义上超限更具体(重试必败 vs
+    // 重试可自愈),文案与按钮完全不同。
+    displayError = t(
+      onCompactContext
+        ? 'chat.errorBanner.contextOverflow'
+        : 'chat.errorBanner.contextOverflowNoCompact',
+    );
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -487,7 +515,10 @@ export function ErrorBanner({
             {t('chat.errorBanner.budgetModelHint')}
           </span>
         )}
-        {(isNetworkishError || isOverloadError || isClaudeGatewayOpusPlanMismatch) && (
+        {(isNetworkishError ||
+          isOverloadError ||
+          isClaudeGatewayOpusPlanMismatch ||
+          isContextOverflowErr) && (
           // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
           // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
@@ -594,6 +625,40 @@ export function ErrorBanner({
         >
           <Spinner icon={RefreshCw} size={12} spinning={syncing} />
           {syncing ? t('chat.errorBanner.syncAuthSyncing') : t('chat.errorBanner.syncAuth')}
+        </button>
+      )}
+      {isContextOverflowErr && onCompactContext && (
+        // 「压缩上下文」:走与 Context 环同一条 silent compact 链路(#940 已放行
+        // recovery 态下的手动压缩)。新增控件走 --error-fg token(规则 16)。
+        <button
+          type="button"
+          onClick={() => void onCompactContext()}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.compactContextTitle')}
+        >
+          <FoldVertical size={12} />
+          {t('chat.errorBanner.compactContext')}
+        </button>
+      )}
+      {isContextOverflowErr && !onCompactContext && onNewSession && (
+        // Codex 没有手动 compact 协议：live 横幅必须给实际可执行的逃生口，而不是
+        // 只写一句「新建任务」。创建仍交给既有 draft 路由，不在横幅里直接落库。
+        <button
+          type="button"
+          onClick={onNewSession}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.newSessionTitle')}
+        >
+          <CirclePlus size={12} />
+          {t('chat.errorBanner.newSession')}
         </button>
       )}
       {isSilentStopExhausted && onSilentStopContinue && (

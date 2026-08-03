@@ -53,11 +53,38 @@ describe('classifyProviderError', () => {
     expect(classifyProviderError({ status: 400, bodyText: 'prompt is too long: 250000 tokens' }).code).toBe(
       'CONTEXT_TOO_LONG',
     );
+    expect(
+      classifyProviderError({
+        status: 400,
+        bodyText: 'Your input exceeds the context window of this model.',
+      }).code,
+    ).toBe('CONTEXT_TOO_LONG');
     expect(classifyProviderError({ status: 400, bodyText: 'insufficient_quota' }).code).toBe('QUOTA_EXCEEDED');
     expect(classifyProviderError({ status: 400, bodyText: 'Extra inputs are not permitted' }).code).toBe(
       'WIRE_INCOMPATIBLE',
     );
     expect(classifyProviderError({ status: 400, bodyText: 'something odd' }).code).toBe('UNKNOWN');
+  });
+
+  it('不把速率、输出或工具参数限制误判成上下文超限', () => {
+    expect(
+      classifyProviderError({
+        status: 429,
+        bodyText: 'Rate limit exceeded: too many tokens per minute',
+      }),
+    ).toMatchObject({ code: 'RATE_LIMITED', retryable: true });
+    expect(
+      classifyProviderError({
+        status: 400,
+        bodyText: 'Maximum output tokens reached: too many tokens',
+      }).code,
+    ).toBe('UNKNOWN');
+    expect(
+      classifyProviderError({
+        status: 400,
+        bodyText: 'Tool argument validation failed: input length exceeds 1000 characters',
+      }).code,
+    ).toBe('UNKNOWN');
   });
 
   it('403 命中鉴权措辞归 AUTH_INVALID（部分网关 key 无效报 403）', () => {

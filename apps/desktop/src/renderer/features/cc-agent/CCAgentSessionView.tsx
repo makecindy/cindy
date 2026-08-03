@@ -2551,6 +2551,11 @@ export function CCAgentSessionView({
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
   // 多个 confirm,逐个确认就会发多次 compact 请求。in-flight 期间后续点击直接 no-op。
   const compactRequestInFlightRef = useRef(false);
+  const handleNewSessionAfterContextOverflow = useCallback(() => {
+    if (!ownsWindowRoute) return;
+    navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+  }, [navigate, ownsWindowRoute]);
+
   const handleCompactRequest = useCallback(async () => {
     if (!session) return;
     if (!session.workingDir) return;
@@ -3366,6 +3371,11 @@ export function CCAgentSessionView({
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
+                  onCompactContext={
+                    // 与 Context 环同款门控(codex 走服务端自动压缩无手动入口);
+                    // 刻意不要求 contextTokens > 0 —— 超限自锁的会话读数可能停在 0(#1429)。
+                    !isCodex && session != null ? handleCompactRequest : undefined
+                  }
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
@@ -3416,6 +3426,16 @@ export function CCAgentSessionView({
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
+                onCompactContext={
+                  // 门控与 error-tail 同款(见上);live 超限错误同样给压缩入口。
+                  !isCodex && session != null ? handleCompactRequest : undefined
+                }
+                onNewSession={
+                  // Codex 无手动 compact 协议；仅窗口路由主实例能接管顶层导航。
+                  isCodex && ownsWindowRoute && session != null
+                    ? handleNewSessionAfterContextOverflow
+                    : undefined
+                }
                 style={{ width: inputWidth }}
                 className="py-1"
               />
