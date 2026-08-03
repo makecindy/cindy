@@ -22,6 +22,7 @@ export function PinnedPlanPanel({
   messages,
   animated,
   width,
+  taskHistoryMayBeIncomplete = false,
   visible = true,
 }: {
   sessionId: string | null;
@@ -30,10 +31,14 @@ export function PinnedPlanPanel({
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
   width: number;
+  taskHistoryMayBeIncomplete?: boolean;
   /** 交互卡接管底部区域时只隐藏视图,保留完成后的计时与已收起状态。 */
   visible?: boolean;
 }): React.ReactElement | null {
-  const insertion = useMemo(() => findLatestMessageTodoInsertion(messages), [messages]);
+  const insertion = useMemo(
+    () => findLatestMessageTodoInsertion(messages, { taskHistoryMayBeIncomplete }),
+    [messages, taskHistoryMayBeIncomplete],
+  );
   const allDone = Boolean(
     insertion &&
     insertion.todos.length > 0 &&
@@ -91,7 +96,7 @@ export function PinnedPlanPanel({
   if (
     !visible ||
     !insertion ||
-    insertion.todos.length === 0 ||
+    insertion.todos.length < 2 ||
     completedPlanExpired ||
     hiddenInsertionKey === insertion.key
   )

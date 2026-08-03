@@ -194,6 +194,7 @@ interface UseCCAgentChatReturn {
   loadOlderMessages: () => void;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
+  historyWindowHasIsland: boolean;
   /** F-PERM-2: Currently pending permission request */
   pendingPermission: PendingPermission | null;
   /** F-PERM-2: Respond to a pending permission request */
@@ -845,6 +846,7 @@ export function useCCAgentChat(
     loadOlderMessages,
     isLoadingMore: lightState.isLoadingMore,
     hasMoreMessages: lightState.hasMoreMessages,
+    historyWindowHasIsland: lightState.historyWindowHasIsland === true,
     pendingPermission: lightState.pendingPermission,
     respondToPermission,
     pendingAskUser: lightState.pendingAskUser,

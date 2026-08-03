@@ -2553,6 +2553,95 @@ describe('codex proxy host', () => {
     });
   });
 
+  // OpenAI/Codex collab 历史里的 agent_message 不是 xAI ModelInput 变体；跨源 resume
+  // 到 grok 时原样转发 → 422 "data did not match any variant of untagged enum ModelInput"。
+  // (2026-08-03 实测: gpt-5.6-sol collab 会话切 xai/grok-4.5 必挂;新建 grok 会话正常。)
+  describe('xAI collab agent_message 跨源回放', () => {
+    async function runXaiInputTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-agent-message-${suffix}`;
+      const threadId = `thread-agent-message-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    it('把 agent_message 降级成 assistant message，丢掉 content 里的 encrypted_content', async () => {
+      const out = await runXaiInputTransforms('collab-to-message', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+          {
+            type: 'agent_message',
+            author: '/root/official_pr_rules',
+            recipient: '/root',
+            content: [
+              {
+                type: 'input_text',
+                text: 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+              },
+              { type: 'encrypted_content', encrypted_content: 'gAAAAA-openai-collab-blob' },
+            ],
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+          },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(2);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+      expect(input[1]).toEqual({
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text:
+              '[collab /root/official_pr_rules]\n'
+              + 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+          },
+        ],
+      });
+      // 不得残留 collab 专有键或 OpenAI 密文 part。
+      expect(JSON.stringify(input[1])).not.toContain('agent_message');
+      expect(JSON.stringify(input[1])).not.toContain('encrypted_content');
+      expect(JSON.stringify(input[1])).not.toContain('gAAAAA-openai-collab-blob');
+    });
+
+    it('未知 input type 直接丢掉，不原样透传给 xAI', async () => {
+      const out = await runXaiInputTransforms('drop-unknown', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'web_search_end', call_id: 'c1', query: 'x' },
+          { type: 'mcp_tool_call_end', call_id: 'c2' },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(1);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+    });
+  });
+
   it('leaves custom_tool_call history untouched for non-xAI requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

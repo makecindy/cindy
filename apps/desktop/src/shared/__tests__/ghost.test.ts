@@ -2225,6 +2225,87 @@ describe('ghost · network 详单校验', () => {
     expect(ghostContentKeys(r.manifest)).toContain('slotNotify');
     const item = ghostPermissionItems(r.manifest).find((i) => i.key === 'notify');
     expect(item).toMatchObject({ kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
+    // 没声明 notify.badge 的老包不该凭空多出未读角标权限。
+    expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
+  });
+
+  it('badge 槽出**独立**权限条目 —— 老包加这一档必须触发扩权重新确认', () => {
+    const before = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify'] });
+    const after = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify', 'badge'] });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionItems(after.manifest).find((i) => i.key === 'badge')).toMatchObject({
+      kind: 'notify',
+      labelKey: 'badge',
+      detailKey: 'badgeDetail',
+    });
+    // 关键回归:并进既有 notify key 会让 added 为空,扩权确认框永远不弹
+    // (与 subscribe 的 activity topic 同一先例)。
+    const diff = diffGhostPermissionItems(before.manifest, after.manifest);
+    expect(diff.added.map((i) => i.key)).toEqual(['badge']);
+    expect(diff.removed).toHaveLength(0);
+  });
+
+  it('badge 与 notify 槽并列:不要 toast 也能要绿点(最小必要权限)', () => {
+    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const keys = ghostPermissionItems(r.manifest).map((i) => i.key);
+    expect(keys).toContain('badge');
+    expect(keys).not.toContain('notify');
+  });
+
+  it('存量兼容(红线):老包里任何形态的 notify 顶层字段都照旧被忽略,不影响装入', () => {
+    // `notify` 顶层字段从头到尾就没被登记过,校验器「宽进严出」直接忽略。
+    // 现在角标改由 `badge` **卡槽**声明,这个字段更是彻底不参与解释——
+    // 老包里写成什么形态都装得进来,也不会因此白拿角标能力。
+    for (const shape of [true, 'badge', ['badge'], { badge: true }, { sound: true }, {}]) {
+      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
+      expect(r.ok, `notify: ${JSON.stringify(shape)} 不该被判 invalid`).toBe(true);
+      // **关键**:哪怕老包恰好写成 { badge: true } 且有 panel,也不得凭空获得能力
+      // ——它没有经过任何安装/更新确认(codex review P1)。
+      if (r.ok) expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
+    }
+  });
+
+  it('badge 槽是**可证明**的新声明:老包不可能带它(未知槽名一律拒装)', () => {
+    // slots 是硬白名单,当年装老包的客户端遇到未登记的 'badge' 会直接拒绝整份清单。
+    // 所以「清单里有 badge 槽」⇒「这份清单是本能力上线之后写的」,严格校验才安全。
+    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'not-a-real-slot'] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('未知卡槽');
+  });
+
+  it('来源投影丢掉 badge 槽时,包里的 badge 必须被识别成「未审权限」', () => {
+    // 场景:服务端市场那份平行校验器不认识 `badge` 槽(它连 `confirm` 都还没有),
+    // 投影出的 manifest 少了这一档 → 确认框漏列;而下载的 .cindy 包里 ghost.json
+    // 原样带着。装入出口就是拿这个 diff 拦下的(codex review P1)。
+    const reviewed = validateGhostManifest({ ...goodManifest(), slots: ['panel'] });
+    const packed = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
+    expect(reviewed.ok && packed.ok).toBe(true);
+    if (!reviewed.ok || !packed.ok) return;
+    const unreviewed = diffGhostPermissionItems(reviewed.manifest, packed.manifest).added;
+    expect(unreviewed.map((i) => i.key)).toEqual(['badge']);
+    // 反向:两份一致时不得误报,否则正常安装会被闸门全拦死。
+    expect(diffGhostPermissionItems(packed.manifest, packed.manifest).added).toHaveLength(0);
+  });
+
+  it('badge 槽与 panel 严格成对:声明了槽却没有面板一律拒装', () => {
+    // 这里可以放心用严格拒绝:带 badge 槽的清单必然是本能力上线之后写的,
+    // 不存在"拒了会让存量插件消失"的问题(见上一条的可证明性)。
+    const noPanel = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['tool', 'badge'],
+      panel: undefined,
+      tools: [{ name: 'ping', description: 'ping' }],
+    });
+    expect(noPanel.ok).toBe(false);
+    if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
+
+    // 有面板就通过,并落成权限项。
+    const ok = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ghostPermissionItems(ok.manifest).map((i) => i.key)).toContain('badge');
   });
 });
 

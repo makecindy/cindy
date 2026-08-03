@@ -95,8 +95,10 @@
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
-- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，或新增 IPC channel／推送事件
-  前，必须先读 `docs/dev-rules/remote-and-mobile-adaptation.md`。
+- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
+  或修改 device-link 的重试／超时／断链恢复逻辑前，必须先读
+  `docs/dev-rules/remote-and-mobile-adaptation.md`；其中恢复路径改动必须回答该文件的
+  「故障半径三问」。
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
 

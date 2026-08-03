@@ -418,6 +418,163 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
   });
 
+  it('continues plan backfill when the visible TaskCreate may be a later step in the same plan', async () => {
+    const sessionId = sid('initial-plan-missing-earlier-create');
+    vi.mocked(messageService.list).mockClear();
+    const filler = Array.from({ length: 47 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (100 + i) * 1000).toISOString(),
+      ),
+    );
+    const laterCreate = dbToolUseMessage(
+      sessionId,
+      'later-task-create',
+      'TaskCreate',
+      { subject: 'Fix renderer' },
+      new Date(BASE_TIME.getTime() + 200_000).toISOString(),
+    );
+    const laterResult = dbToolResultMessage(
+      sessionId,
+      'later-task-result',
+      'tool-later-task-create',
+      'Task #2 created successfully: Fix renderer',
+      new Date(BASE_TIME.getTime() + 201_000).toISOString(),
+    );
+    const laterUpdate = dbToolUseMessage(
+      sessionId,
+      'later-task-update',
+      'TaskUpdate',
+      { taskId: '2', status: 'in_progress' },
+      new Date(BASE_TIME.getTime() + 202_000).toISOString(),
+    );
+    const earlierCreate = dbToolUseMessage(
+      sessionId,
+      'earlier-task-create',
+      'TaskCreate',
+      { subject: 'Inspect logs' },
+      new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+    );
+    const earlierResult = dbToolResultMessage(
+      sessionId,
+      'earlier-task-result',
+      'tool-earlier-task-create',
+      'Task #1 created successfully: Inspect logs',
+      new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+    );
+
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...filler, laterCreate, laterResult, laterUpdate])
+      .mockResolvedValueOnce([earlierCreate, earlierResult]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
+      limit: 50,
+      before: 'latest-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('earlier-task-create');
+  });
+
+  it('continues plan backfill past an unrelated visible task until the updated task is found', async () => {
+    const sessionId = sid('initial-plan-unrelated-task');
+    vi.mocked(messageService.list).mockClear();
+    const fillerPage = (prefix: string, startOffsetSeconds: number, count = 49) =>
+      Array.from({ length: count }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    const latestTaskUpdate = dbToolUseMessage(
+      sessionId,
+      'latest-task-update',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 3_000_000).toISOString(),
+    );
+    const unrelatedCreate = dbToolUseMessage(
+      sessionId,
+      'unrelated-task-create',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      new Date(BASE_TIME.getTime() + 1_100_000).toISOString(),
+    );
+    const unrelatedResult = dbToolResultMessage(
+      sessionId,
+      'unrelated-task-result',
+      'tool-unrelated-task-create',
+      'Task #def created successfully: Fix existing tests',
+      new Date(BASE_TIME.getTime() + 1_100_001).toISOString(),
+    );
+    const targetCreate = dbToolUseMessage(
+      sessionId,
+      'target-task-create',
+      'TaskCreate',
+      { subject: 'Run stress tests' },
+      new Date(BASE_TIME.getTime() - 4_000).toISOString(),
+    );
+    const targetResult = dbToolResultMessage(
+      sessionId,
+      'target-task-result',
+      'tool-target-task-create',
+      'Task #abc created successfully: Run stress tests',
+      new Date(BASE_TIME.getTime() - 3_000).toISOString(),
+    );
+    const missingOlderUpdate = dbToolUseMessage(
+      sessionId,
+      'missing-task-update',
+      'TaskUpdate',
+      { taskId: 'legacy', status: 'completed' },
+      new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+    );
+    const missingOlderCreate = dbToolUseMessage(
+      sessionId,
+      'missing-task-create',
+      'TaskCreate',
+      { subject: 'Inspect collision failures' },
+      new Date(BASE_TIME.getTime() - 6_000).toISOString(),
+    );
+    const missingOlderResult = dbToolResultMessage(
+      sessionId,
+      'missing-task-result',
+      'tool-missing-task-create',
+      'Task #legacy created successfully: Inspect collision failures',
+      new Date(BASE_TIME.getTime() - 5_000).toISOString(),
+    );
+
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...fillerPage('latest', 2000), latestTaskUpdate])
+      .mockResolvedValueOnce([
+        ...fillerPage('middle', 1000, 48),
+        unrelatedCreate,
+        unrelatedResult,
+      ])
+      .mockResolvedValueOnce([
+        ...fillerPage('older-target', 100, 47),
+        targetCreate,
+        targetResult,
+        missingOlderUpdate,
+      ])
+      .mockResolvedValueOnce([missingOlderCreate, missingOlderResult]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    expect(messageService.list).toHaveBeenCalledTimes(4);
+    expect(messageService.list).toHaveBeenNthCalledWith(4, sessionId, {
+      limit: 50,
+      before: 'target-task-create',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('missing-task-create');
+  });
+
   it('caps initial plan resolution backfill when a latest TaskUpdate cannot be resolved', async () => {
     const sessionId = sid('initial-plan-task-boundary-missing');
     vi.mocked(messageService.list).mockClear();
@@ -595,6 +752,7 @@ describe('makerChatStore active view tracking', () => {
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
     expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
       dbMessage(sessionId, 'latest-page-oldest', 'latest page oldest', '2026-05-19T00:10:00.000Z'),

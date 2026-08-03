@@ -32,6 +32,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import type {
   AgentKind,
@@ -367,7 +368,11 @@ async function collectOutboundForFinalText(
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
 ): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
-  const { publicText, wholeTurn } = texts;
+  // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
+  // maker-core, but older persisted/continuation text and future adapters must
+  // never forward private Web citation delimiters to an external channel.
+  const publicText = stripInternalWebCitations(texts.publicText);
+  const wholeTurn = stripInternalWebCitations(texts.wholeTurn);
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }

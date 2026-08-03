@@ -1057,6 +1057,7 @@ export type SessionChatLightState = Pick<
   | 'continuationInFlightProjectionCapability'
   | 'isLoadingMore'
   | 'hasMoreMessages'
+  | 'historyWindowHasIsland'
   | 'isFirstMessage'
   | 'historyLoaded'
   | 'pendingPermission'
@@ -5014,6 +5015,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
+    historyWindowHasIsland: state.historyWindowHasIsland,
     isFirstMessage: state.isFirstMessage,
     historyLoaded: state.historyLoaded,
     pendingPermission: state.pendingPermission,
@@ -5056,6 +5058,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.isLoadingMore === b.isLoadingMore &&
 
     a.hasMoreMessages === b.hasMoreMessages &&
+    a.historyWindowHasIsland === b.historyWindowHasIsland &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
     a.pendingPermission === b.pendingPermission &&
@@ -5965,7 +5968,7 @@ function ensureInitialMessages(sessionId: string): void {
       while (hasMore) {
         const needsAnchorBackfill =
           merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
-        const planState = historyRowsPlanBackfillState(merged);
+        const planState = historyRowsPlanBackfillState(merged, hasMore);
         const needsPlanResolution =
           planState.hasPlanEvent &&
           !planState.isResolved &&
@@ -10210,11 +10213,13 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
 }
 
-function historyRowsPlanBackfillState(rows: Message[]): {
+function historyRowsPlanBackfillState(rows: Message[], taskHistoryMayBeIncomplete: boolean): {
   hasPlanEvent: boolean;
   isResolved: boolean;
 } {
-  const state = getLatestMessageTodoState(mapServerMessages(rows));
+  const state = getLatestMessageTodoState(mapServerMessages(rows), {
+    taskHistoryMayBeIncomplete,
+  });
   return {
     hasPlanEvent: state.hasPlanEvent,
     isResolved: state.isResolved,

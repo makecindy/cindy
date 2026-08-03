@@ -301,6 +301,12 @@ export class Session {
   /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
   private terminationStarted = false;
   private eventLoopStarted = false;
+  /**
+   * 最近一次已观察到的终态事件属于哪个 Session turn generation；用于 iterator
+   * 崩溃时避免重复收口。不能只存一个 bool：上一轮已排队的 done 可能在新 turn
+   * 开始后才从 iterator 返回，不能拿它覆盖新 turn 的终态判据。
+   */
+  private terminalEventObservedGeneration: number | null = null;
   private sendReservation: SendReservation | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
@@ -470,6 +476,7 @@ export class Session {
       // 关联到具体 turn 事件而非单槽位(maker-core 热路径重构,规则 10),留作独立后续。
       previousTurnOrigin = this.currentTurnOrigin;
       this.currentTurnOrigin = handleOpts.origin ?? null;
+      this.terminalEventObservedGeneration = null;
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
@@ -607,17 +614,29 @@ export class Session {
   }
 
   private async performClose(): Promise<void> {
+    let closeSucceeded = false;
     try {
       this.clearTurnStallWatchdog();
       this.cancelSendReservation(this.sendReservation);
       await this.handle.close();
+      closeSucceeded = true;
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus('closed');
       this.eventListeners.clear();
-      this.statusListeners.clear();
       this.interactionListener = null;
+      if (closeSucceeded) {
+        this.setStatus('closed');
+        this.statusListeners.clear();
+      } else {
+        // handle.close() rejected: keep the Session in error rather than
+        // claiming the underlying transport is gone.  Clear the rejected
+        // close promise so Maker can retry the same close before rebuilding
+        // this id; retain status listeners so a later successful retry still
+        // removes the Session from Maker.activeSessions.
+        this.closePromise = null;
+        this.setStatus('error');
+      }
     }
   }
 
@@ -1086,7 +1105,7 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
-  private fanOutEvent(event: AgentEvent): void {
+  private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
     this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
@@ -1094,11 +1113,26 @@ export class Session {
     if (this.currentTurnOrigin && event.turnOrigin === undefined) {
       event.turnOrigin = this.currentTurnOrigin;
     }
+    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
+    if (isTerminal) {
+      // 事件迭代器可能早在上一轮就已开始等待，上一轮排队的 done/error 会在新
+      // turn dispatch 后才返回。默认按 next() 开始等待时的 generation 归属；唯一
+      // 例外是 Codex provider send 仍 pending、handle 尚未置 running 时先到的 terminal
+      // error。Codex adapter 已按 turnId 过滤迟到错误，只有它允许 error 早于 turn/start
+      // response；其它 provider 不能靠 Session 的 reservation 瞬时状态推断归属。
+      const terminalBeforeProviderStartSettled =
+        event.type === 'error' &&
+        event.source === 'codex' &&
+        this.sendReservation?.phase === 'dispatching' &&
+        !this.isHandleTurnRunning();
+      if (observedGeneration === this.turnGeneration || terminalBeforeProviderStartSettled) {
+        this.terminalEventObservedGeneration = this.turnGeneration;
+      }
+    }
     const listenerEvent = redactEventForListeners(event);
     for (const listener of this.eventListeners) {
       try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
     }
-    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
     // turn 真正结束后清 origin,下一轮无 origin 的 turn 不被污染。
     // 关键:**只**在 done / 终止型 error 上清,**不要**在 status(isRunning=false)
     // 上清 —— translator 收尾是先 push end-status(isRunning=false)、紧接着 push
@@ -1341,18 +1375,43 @@ export class Session {
 
   private async runEventLoop(): Promise<void> {
     try {
-      for await (const event of this.handle.events()) {
+      const iterator = this.handle.events()[Symbol.asyncIterator]();
+      while (true) {
+        const awaitingGeneration = this.turnGeneration;
+        const result = await iterator.next();
+        if (result.done) break;
+        const event = result.value;
         this.releaseSendReservationIfObserved();
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。
-        this.fanOutEvent(event);
+        this.fanOutEvent(event, awaitingGeneration);
       }
     } catch (e) {
       this.logger.error('event loop crashed', { error: String(e) });
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.clearTurnStallWatchdog();
-      this.setStatus('error');
+      if (this.closePromise || this.status === 'closed') return;
+      // 先占住 closing gate：terminal error 的 listener 可能同步尝试 send，不能让它
+      // 在底层 iterator 已经崩掉的窗口里重新进入 provider。复用 performClose，让
+      // closePromise 代表真实的 handle.close()，并在底层资源释放后再发布 closed。
+      this.closePromise = this.performClose();
+      // 终态事件可能属于已结束的上一轮，但新 turn 已经在 event loop 崩溃前被
+      // Session 接受。此时不能因为上一轮的 done/error 已观察过就吞掉本轮的
+      // `session_event_loop_crashed`，否则新 turn 只有 closed 没有终态 error。
+      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+        this.fanOutEvent({
+          type: 'error',
+          data: {
+            message: `Session event loop stopped unexpectedly: ${String(e)}`,
+            isTerminal: true,
+            reason: 'session_event_loop_crashed',
+          },
+          source: this.agentKind,
+        });
+      }
+      try {
+        await this.closePromise;
+      } catch (closeError) {
+        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+      }
       return;
     }
     // handle.events() 自然结束 (iterator return) = 底层 handle 已死、不会再发任何事件。
@@ -1368,13 +1427,39 @@ export class Session {
     // activeSessions.delete + emit 'session:closed' + lifecycleHooks.onClose → 下次
     // send 自然走 IPC lazy create-session 路径, 重建 handle / transport / 远端连接。
     //
-    // 仅当当前 status 还是 'active' 时切 — 'closed' / 'error' 已经表达终态, 不覆盖。
-    if (this.status === 'active') {
-      this.logger.debug('event loop ended (handle dead), auto-closing session');
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.setStatus('closed');
+    // iterator 自然结束同样表示底层 handle 已死。显式 close/detach 已经占有收口权时，
+    // 不能让这里提前发布 closed:performClose 必须等 transport 真正关闭后再发布，失败
+    // 则保持 error 以便调用方重试。若活跃 turn 还没有观察到终态，先补一条与 crash
+    // 分支一致的 terminal error，避免 Desktop 把这一轮静默丢掉。
+    if (this.terminationStarted || this.status === 'closed' || this.status === 'error') return;
+    const unfinishedTurn =
+      this.status === 'active' &&
+      this.isTurnRunning() &&
+      this.terminalEventObservedGeneration !== this.turnGeneration;
+    this.logger.debug('event loop ended (handle dead), auto-closing session', { unfinishedTurn });
+    this.terminationStarted = true;
+    // 先占住 closing gate：terminal error 的 listener 可能同步尝试 send，不能让它在
+    // 底层 iterator 已经结束的窗口里重新进入 provider。
+    this.closePromise = Promise.resolve();
+    if (unfinishedTurn) {
+      this.fanOutEvent({
+        type: 'error',
+        data: {
+          message: 'Session event loop stopped unexpectedly without a terminal event',
+          isTerminal: true,
+          reason: 'session_event_loop_crashed',
+        },
+        source: this.agentKind,
+      });
     }
+    this.clearTurnStallWatchdog();
+    this.cancelSendReservation(this.sendReservation);
+    this.sendReservation = null;
+    this.currentTurnOrigin = null;
+    this.setStatus('closed');
+    this.eventListeners.clear();
+    this.statusListeners.clear();
+    this.interactionListener = null;
   }
 
   private isHandleTurnRunning(): boolean {

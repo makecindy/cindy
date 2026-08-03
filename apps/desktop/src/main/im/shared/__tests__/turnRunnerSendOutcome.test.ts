@@ -1279,7 +1279,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       const { turnPromise } = await startDefaultTurn();
       await turnPromise;
 
-      h.emit({ type: 'text', data: { text: 'complete text only', isFinal: true } });
+      h.emit({
+        type: 'text',
+        data: {
+          text: 'complete text only\uE200cite\uE202turn17search1\uE202turn17search2\uE201',
+          isFinal: true,
+        },
+      });
       h.emit({ type: 'done', data: {} });
       await flushMicrotasks();
 
