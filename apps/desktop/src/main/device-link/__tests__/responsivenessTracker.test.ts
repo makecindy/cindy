@@ -16,7 +16,6 @@ import {
   OPEN_LINK_OBSERVATION_CHANNEL,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
-  classifyOpenLinkFailure,
   createResponsivenessTracker,
 } from '../responsivenessTracker';
 
@@ -208,8 +207,19 @@ describe('responsivenessTracker', () => {
 });
 
 describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
-  it('仅 INVOKE_TIMEOUT 计失败,其余不定论', () => {
+  it('INVOKE_TIMEOUT 计失败;终态 relay 应答是恢复证据;其余不定论', () => {
     expect(classifyDeviceSendFailure(timeoutError())).toBe('timeout');
+    // 终态 = relay/对端在明确应答,「无响应」不成立;presence 竞态下归不定论
+    // 会让熔断 open 后的周期探测永远关不上(review P2)。
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
+    ).toBe('responded');
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('REMOTE_DISABLED', 'disabled')),
+    ).toBe('responded');
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
+    ).toBe('responded');
     expect(
       classifyDeviceSendFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
     ).toBe('inconclusive');
@@ -230,29 +240,15 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('openLink 失败分类:超时计失败,终态 relay 应答是恢复证据,其余不定论', async () => {
-    expect(classifyOpenLinkFailure(timeoutError())).toBe('timeout');
-    expect(
-      classifyOpenLinkFailure(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
-    ).toBe('responded');
-    expect(
-      classifyOpenLinkFailure(new DeviceLinkError('REMOTE_DISABLED', 'remote disabled')),
-    ).toBe('responded');
-    expect(
-      classifyOpenLinkFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
-    ).toBe('responded');
-    expect(
-      classifyOpenLinkFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
-    ).toBe('inconclusive');
-    expect(classifyOpenLinkFailure(new Error('random'))).toBe('inconclusive');
-
-    // 行为:熔断 open 后,探测窗口内的 openLink 收到终态 relay 应答 → 关熔断
-    // (presence 未及时翻转的竞态下,终态 UI 不再被「无响应」长期遮蔽)。
+  it('熔断 open 后收到终态 relay 应答 → 关熔断(任意 channel,含嵌套 openLink 冒泡)', async () => {
+    // presence 未及时翻转的竞态下,终态 UI 不再被「无响应」长期遮蔽;分类对
+    // 全部 channel 统一适用,observed:false 的嵌套 openLink 失败冒泡到外层业务
+    // channel 时同样命中,无需知道失败来源。
     const h = harness();
     await openBreaker(h);
     h.advance(BREAKER_PROBE_BACKOFF_BASE_MS + 1);
     await expect(
-      h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_CHANNEL, () =>
+      h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () =>
         Promise.reject(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
       ),
     ).rejects.toThrow('target offline');

@@ -69,25 +69,6 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
  */
 export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:observe:open-link';
 
-/**
- * openLink 观测的失败分类(mobile classifyLinkOpenFailure 同款):超时照常计失败
- * ——link-open 都等不到回包说明被控端链路层都没在应答;**终态 relay 应答**
- * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
- * 恢复证据(responded)——熔断 open 且 presence 未及时翻转的竞态下,若把终态
- * 归为不定论,周期探测永远无法关熔断,「无响应」会长期遮蔽更可操作的终态 UI。
- */
-export function classifyOpenLinkFailure(error: unknown): BreakerSettleOutcome {
-  if (!(error instanceof DeviceLinkError)) return 'inconclusive';
-  if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
-  if (
-    error.code === 'DEVICE_OFFLINE'
-    || error.code === 'REMOTE_DISABLED'
-    || error.code === 'VERSION_MISMATCH'
-  ) {
-    return 'responded';
-  }
-  return 'inconclusive';
-}
 
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:media:fetch',
@@ -100,13 +81,25 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;NOT_CONNECTED /
- * relay 层错误 / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
+ * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;**终态 relay 应答**
+ * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
+ * 恢复证据(responded)——「无响应」语义只对无回包成立,relay 已给出终态时应
+ * 让位给对应的终态 UI;presence 未及时翻转的竞态下,若归不定论,熔断 open 后的
+ * 周期探测收到同类终态也永远关不上(review P2)。对**任何** channel(含嵌套
+ * openLink 冒泡到外层业务 channel 的失败)统一适用,失败来源无需特判。
+ * NOT_CONNECTED / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
  */
 export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome {
-  return error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT'
-    ? 'timeout'
-    : 'inconclusive';
+  if (!(error instanceof DeviceLinkError)) return 'inconclusive';
+  if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
+  if (
+    error.code === 'DEVICE_OFFLINE'
+    || error.code === 'REMOTE_DISABLED'
+    || error.code === 'VERSION_MISMATCH'
+  ) {
+    return 'responded';
+  }
+  return 'inconclusive';
 }
 
 /**
@@ -211,13 +204,7 @@ export function createResponsivenessTracker(
       settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
       return result;
     } catch (err) {
-      settle(
-        deviceId,
-        slot,
-        channel === OPEN_LINK_OBSERVATION_CHANNEL
-          ? classifyOpenLinkFailure(err)
-          : classifyDeviceSendFailure(err),
-      );
+      settle(deviceId, slot, classifyDeviceSendFailure(err));
       throw err;
     }
   };

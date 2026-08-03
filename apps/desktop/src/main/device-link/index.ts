@@ -29,6 +29,7 @@ import {
   type LinkClosePayload,
   type Envelope,
   type PushPayload,
+  DeviceLinkError,
   INVOKE_TIMEOUT_OVERRIDES_MS,
 } from '@cindy/device-link';
 import * as authManager from '../authManager';
@@ -830,6 +831,29 @@ const SUBSCRIPTION_REPLAY_RETRY_BASE_MS = 3_000;
 const SUBSCRIPTION_REPLAY_RETRY_MAX_MS = 30_000;
 const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+/**
+ * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
+ * (协议不符 / 对端明确拒绝 / 授权被收回 / 本机 fail-closed 门),各自有独立的
+ * 恢复事件,不归退避循环管。DeviceLinkError.code 优先,兜底解析 message 里的
+ * [CODE] 编码(本机门禁抛的是普通 Error)。
+ */
+const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
+  'VERSION_MISMATCH',
+  'REMOTE_DISABLED',
+  'DEVICE_OFFLINE',
+  'ACCESS_REVOKED',
+  'CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_CONTROL_DISABLED',
+  'DEVICE_LINK_STANDBY',
+]);
+
+function isPermanentSubscriptionReplayError(err: unknown): boolean {
+  if (err instanceof DeviceLinkError) return PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(err.code);
+  const message = err instanceof Error ? err.message : String(err);
+  const code = /\[([A-Z_]+)\]/.exec(message)?.[1];
+  return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
+}
+
 function replayDeviceSubscription(
   deviceId: string,
   topics: string[],
@@ -843,6 +867,16 @@ function replayDeviceSubscription(
     subscriptionReplayRetryTimers.delete(deviceId);
   }
   void remoteSubscribe(deviceId, topics).catch((err) => {
+    // 永久失败不进收敛循环(review P2):VERSION_MISMATCH 等终态下 presence 可能
+    // 一直 online、熔断也把终态应答记为恢复证据,定时器的终止条件全不命中,
+    // 移除次数上限后会永久每 30s 重发刷 warn。放弃后由对应终态自己的恢复事件
+    // 兜底(presence 翻转 / 版本升级后重连 / 用户显式重开)。
+    if (isPermanentSubscriptionReplayError(err)) {
+      log.warn(
+        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, permanent, giving up: ${String(err)}`,
+      );
+      return;
+    }
     const delay = Math.min(
       SUBSCRIPTION_REPLAY_RETRY_BASE_MS * 2 ** attempt,
       SUBSCRIPTION_REPLAY_RETRY_MAX_MS,
@@ -1130,6 +1164,9 @@ export async function openRemoteLink(
 
   const doOpen = async (): Promise<LinkAcceptPayload> => {
     await ensureOnlineForRequest();
+    // fail-closed 边界不得跨 await 失效:1.5s 等待期间用户可能已在设置里关闭
+    // 对该设备的控制,发送前必须复验(review P1)。
+    assertRemoteControlTargetEnabled(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.openLink(deviceId, {
       controllerName: deviceName(),
@@ -1191,6 +1228,8 @@ export async function remoteInvoke(
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
     await ensureOnlineForRequest();
+    // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(review P1)。
+    assertRemoteControlTargetEnabled(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
   };
@@ -1221,8 +1260,17 @@ export async function remoteSubscribe(
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   const run = async (): Promise<InvokeResultPayload> => {
     await ensureOnlineForRequest();
+    // 上线等待期间窗口可能已退订/销毁(refcount 引用已移除):按当前快照过滤,
+    // 只发仍被引用的 topics——照旧发送会在被控端留下本地已无引用、以后也不会
+    // 退订的幽灵订阅(mobile 等待后 shouldSend 复验同款,review P2)。全部失效
+    // 则幂等成功返回,不上管道。
+    const live = new Set(
+      snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId)?.topics ?? [],
+    );
+    const liveTopics = topics.filter((topic) => live.has(topic));
+    if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
+    if (requiresSessionLink(liveTopics) && !client.isLinkReady(deviceId)) {
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
       await openRemoteLink(deviceId, { observed: false });
     }
@@ -1232,7 +1280,7 @@ export async function remoteSubscribe(
       channel: DL_SUBSCRIBE_CHANNEL,
       args: [
         {
-          topics,
+          topics: liveTopics,
           controllerName: deviceName(),
           capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
         },
