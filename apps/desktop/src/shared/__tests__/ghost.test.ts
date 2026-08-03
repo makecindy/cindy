@@ -2225,6 +2225,78 @@ describe('ghost · network 详单校验', () => {
     expect(ghostContentKeys(r.manifest)).toContain('slotNotify');
     const item = ghostPermissionItems(r.manifest).find((i) => i.key === 'notify');
     expect(item).toMatchObject({ kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
+    // 没声明 notify.badge 的老包不该凭空多出未读角标权限。
+    expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('notify:badge');
+  });
+
+  it('notify.badge 出**独立**权限条目 —— 老包加这一档必须触发扩权重新确认', () => {
+    const before = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify'] });
+    const after = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['panel', 'notify'],
+      notify: { badge: true },
+    });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionItems(after.manifest).find((i) => i.key === 'notify:badge')).toMatchObject({
+      kind: 'notify',
+      labelKey: 'notifyBadge',
+      detailKey: 'notifyBadgeDetail',
+    });
+    // 关键回归:并进既有 notify key 会让 added 为空,扩权确认框永远不弹
+    // (与 subscribe 的 activity topic 同一先例)。
+    const diff = diffGhostPermissionItems(before.manifest, after.manifest);
+    expect(diff.added.map((i) => i.key)).toEqual(['notify:badge']);
+    expect(diff.removed).toHaveLength(0);
+  });
+
+  it('notify.badge 必须与 notify 槽成对,且必须声明 panel', () => {
+    // ① 有 badge 详单、无 notify 槽 → 拒
+    const noSlot = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['panel'],
+      notify: { badge: true },
+    });
+    expect(noSlot.ok).toBe(false);
+
+    // ② 有 notify 槽、有 badge,但没有面板 → 拒(未读点承诺"点开能看到内容")
+    const noPanel = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['tool', 'notify'],
+      panel: undefined,
+      tools: [{ name: 'ping', description: 'ping' }],
+      notify: { badge: true },
+    });
+    expect(noPanel.ok).toBe(false);
+    if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
+
+    // ③ 未知字段 / 非布尔值 → 拒(不给作者"写了没生效"的沉默失败)
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        slots: ['panel', 'notify'],
+        notify: { badge: true, sound: true },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        slots: ['panel', 'notify'],
+        notify: { badge: 'yes' },
+      }).ok,
+    ).toBe(false);
+
+    // ④ badge:false 与空详单都合法,且不落成权限条目(存量兼容:老包无此字段)
+    const off = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['panel', 'notify'],
+      notify: { badge: false },
+    });
+    expect(off.ok).toBe(true);
+    if (off.ok) {
+      expect(off.manifest.notify).toBeUndefined();
+      expect(ghostPermissionItems(off.manifest).map((i) => i.key)).not.toContain('notify:badge');
+    }
   });
 });
 

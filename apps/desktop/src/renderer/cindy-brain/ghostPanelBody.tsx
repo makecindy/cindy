@@ -13,6 +13,7 @@ import { toast } from '@/lib/toast';
 
 import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
+import { clearGhostUnread, useGhostUnread } from './ghostUnreadStore';
 
 /**
  * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与插件页内面板
@@ -176,6 +177,21 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * 面板体挂载 = 未读已读(notify.badge 的 explicit 清零)。
+   *
+   * 清零收在这里而不是各宿主的"打开"动作里:面板体有三个宿主(插件页页签
+   * GhostPagePanelHost、布局停靠 ghostPanels、独立窗口 GhostPanelWindowLayout),
+   * 挂载到本组件才是"内容确实在用户眼前"的唯一判据,三处天然对称。
+   * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
+   * 正看着它,不该留一颗清不掉的点。
+   */
+  const unread = useGhostUnread(manifest.id);
+  useEffect(() => {
+    if (!unread) return;
+    clearGhostUnread(manifest.id);
+  }, [manifest.id, unread]);
 
   const panelHtml = manifest.panel?.html;
   useEffect(() => {

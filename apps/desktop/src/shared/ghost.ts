@@ -152,6 +152,22 @@ export interface GhostCardNeeds {
  * - 每插件同时最多 1 单在途,任务表在内存(重启即丢,查询按"查无此单、
  *   可重新提交"处理)。
  */
+/**
+ * notify 槽的能力详单(2026-08-03)。不声明本字段 = 只有基础的一次性 toast。
+ *
+ * `badge` 是加档:除了弹提示,还能点亮插件入口与插件卡上的**未读绿点**,
+ * 并把最新一条摘要显示在卡片简介位。它比 toast 更持久(用户没看就一直亮着),
+ * 所以在装入确认框里**单列一项**权限,不并进 notify。
+ */
+export interface GhostNotifyNeeds {
+  /**
+   * 申请未读角标。**只有同时声明了 `panel` 的意识可用**
+   * (validateGhostManifest 强制):未读点承诺「点开能看到内容」,
+   * 没有可打开界面的意识给了就是骗点击。
+   */
+  badge?: boolean;
+}
+
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
@@ -1180,6 +1196,8 @@ export interface GhostManifest {
   launch?: GhostLaunchMode;
   /** Agent 新回合能力详单；须与 slots 中的 `agent` 成对。 */
   agent?: GhostAgentNeeds;
+  /** 系统提示能力详单；须与 slots 中的 `notify` 成对。 */
+  notify?: GhostNotifyNeeds;
   /** 随包本地 Node 工作进程详单；须与 slots 中的 `node` 成对。 */
   node?: GhostNodeNeeds;
   /**
@@ -1769,6 +1787,20 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     else if (slot === 'notify') {
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
+      // badge **单列一项**,不并进上面的 notify(同 subscribe 的 activity topic
+      // 判例):diffGhostPermissionItems 按 key + detail 比对,若并进固定的
+      // notify key,已装插件从「只有 notify」更新到「notify + badge」时 added
+      // 为空,plugin-market 的扩权确认就不会拦——用户会在毫不知情的情况下
+      // 多给出一个常驻的注意力入口。旧 key 保持原样,只声明 notify 的存量
+      // 插件权限清单逐字不变(批准状态不 churn)。
+      if (manifest.notify?.badge === true) {
+        items.push({
+          key: 'notify:badge',
+          kind: 'notify',
+          labelKey: 'notifyBadge',
+          detailKey: 'notifyBadgeDetail',
+        });
+      }
     }
   }
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
@@ -2743,6 +2775,38 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     if (cardRaw.externalLinks === true) {
       card = { externalLinks: true };
+    }
+  }
+
+  // notify 槽能力详单:有详单必有槽;有槽无详单 = 只有基础的一次性 toast
+  // (存量插件的既有形态,必须继续可装)。badge 是加档,额外钉两条:
+  // ① 必须成对声明 notify 槽 —— 角标走的就是 notify 那条上行通道;
+  // ② 必须声明 panel —— 未读点承诺「点开能看到内容」,纯工具型 / 对话型
+  //    意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
+  let notify: GhostNotifyNeeds | undefined;
+  if (raw.notify !== undefined) {
+    if (!isPlainObject(raw.notify)) {
+      return { ok: false, reason: 'notify 能力详单必须是对象(如 { "badge": true })' };
+    }
+    if (!slots.includes('notify')) {
+      return { ok: false, reason: '声明了 notify 能力详单但 slots 未包含 "notify"' };
+    }
+    const notifyRaw = raw.notify as Record<string, unknown>;
+    const unknownNotifyField = Object.keys(notifyRaw).find((key) => key !== 'badge');
+    if (unknownNotifyField) {
+      return { ok: false, reason: `notify 含不允许的字段 ${JSON.stringify(unknownNotifyField)}` };
+    }
+    if (notifyRaw.badge !== undefined && typeof notifyRaw.badge !== 'boolean') {
+      return { ok: false, reason: 'notify.badge 必须是布尔值' };
+    }
+    if (notifyRaw.badge === true) {
+      if (!slots.includes('panel')) {
+        return {
+          ok: false,
+          reason: 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+        };
+      }
+      notify = { badge: true };
     }
   }
 
@@ -4148,6 +4212,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       slots,
       ...(tools !== undefined ? { tools } : {}),
       ...(card !== undefined ? { card } : {}),
+      ...(notify !== undefined ? { notify } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(agent !== undefined ? { agent } : {}),
       ...(node !== undefined ? { node } : {}),
@@ -4825,6 +4890,47 @@ export interface GhostPipeNotify {
 
 /** notify 的 invoke 返回(失败带人话原因,供意识作者调试;不涉他人信息)。 */
 export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * 上行:未读角标(notify.badge,2026-08-03)。意识告诉主机"我这儿有新内容了",
+ * 主机在插件入口与插件卡上点一颗**绿点**,并把 summary 显示在卡片简介位。
+ *
+ * 与 notify 的分工:notify 是"弹一条即走"的一次性 toast(错过就没了);本消息
+ * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。
+ *
+ * 门槛(validateGhostManifest 强制):只有声明了 `panel` 的意识能申请。理由是
+ * 未读点承诺"点开能看到内容",纯工具型/对话型意识没有可打开的界面,给了就是
+ * 骗点击。
+ *
+ * 信任边界与 notify 同款:意识只供纯文本 summary(净化 + 限长),点的颜色、
+ * 位置、身份头全由主机画;意识改不了别人的角标(id 由沙箱绑定,不看载荷自报)。
+ */
+export interface GhostPipeBadge {
+  type: 'badge';
+  /** true = 有未读(点亮);false = 自己清零(如意识内已读)。 */
+  unread: boolean;
+  /**
+   * 最新一条的摘要(纯文本,≤ GHOST_BADGE_SUMMARY_MAX_CHARS)。
+   * 显示在插件卡的简介位,替代静态描述——用户扫一眼就知道新内容是什么。
+   * unread:false 时忽略。
+   */
+  summary?: string;
+}
+
+/** badge 的 invoke 返回(与 notify 同款结构化拒绝,不抛异常穿透沙箱)。 */
+export type GhostPipeBadgeResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * 未读摘要长度上限。比 notify 正文更短:它要挤进卡片一行、单行省略,
+ * 太长的部分用户根本看不到,不如让作者自己裁。
+ */
+export const GHOST_BADGE_SUMMARY_MAX_CHARS = 80;
+
+/**
+ * 同一意识两次角标上报的最小间隔 ms。比 notify 宽松得多——角标是幂等的
+ * 状态写入(不像 toast 每条都打扰用户),但仍要挡住死循环刷写。
+ */
+export const GHOST_BADGE_MIN_INTERVAL_MS = 500;
 
 /** 提示正文长度上限(与订阅槽 block reason ≤200 同量级:一眼能读完的量)。 */
 export const GHOST_NOTIFY_MAX_CHARS = 200;
