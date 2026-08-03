@@ -1120,11 +1120,15 @@ function forward(
     // 复现确认)。
     // 压缩 SSE(gzip/br)不接管:改写器按明文换行切行,压缩字节会漏改甚至误改;
     // 压缩流下保持字节透传(不删 content-length,客户端自行解压),与扩展前一致
-    // (Greptile review)。
+    // (Greptile review)。identity 是合法的「不压缩」编码,不视为压缩(Greptile
+    // review P1,否则明文 SSE 被误跳过改写)。
     const isSse = String(upstreamRes.headers['content-type'] ?? '')
       .toLowerCase()
       .startsWith('text/event-stream');
-    const isCompressed = String(upstreamRes.headers['content-encoding'] ?? '') !== '';
+    const contentEncoding = String(upstreamRes.headers['content-encoding'] ?? '')
+      .trim()
+      .toLowerCase();
+    const isCompressed = contentEncoding !== '' && contentEncoding !== 'identity';
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
     if (responseToolUseIds && responseToolUseIds.size > 0 && isSse && !isCompressed) {
       delete respHeaders['content-length'];

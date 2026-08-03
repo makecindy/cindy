@@ -2298,4 +2298,33 @@ describe('压缩 SSE 不接管(Greptile review)', () => {
     expect(res.text).toContain('"id":"Bash_210"');
     expect(res.text).not.toContain('Bash_210_dup2');
   });
+
+  it('content-encoding: identity(明文,不压缩)仍接管改写(Greptile P1)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-encoding': 'identity',
+        'content-length': String(Buffer.byteLength(sseBody)),
+      });
+      res.end(sseBody);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // identity 是明文:必须接管并改名(改写后长度变化,content-length 被剥离)
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+  });
 });
