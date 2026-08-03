@@ -461,14 +461,18 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // stream_event 的 event.content_block.id(content_block_start 的 tool_use)也要
       // 改写: handleStreamEvent 用它驱动 tool-use start / tool-name 状态, replay/import
       // 会以旧 id 发 tool card, 与归一化后的 tool_result / summary 指向不一致
-      // (codex-connector P2: Rewrite stream-event tool IDs too)。用 resolveField
-      // (后顾优先 + 前瞻 fallback), 可先于 assistant 行到达(前瞻匹配即将出现的
-      // occurrence); 与同 entry 顶层标量共享 entryRef, 保证一致。
+      // (codex-connector P2: Rewrite stream-event tool IDs too)。
+      // **独立解析, 绕过 entryRef**: content_block.id 是「当前正在流的 tool 调用」,
+      // 与顶层 parent_tool_use_id(父 agent 调用)语义不同 —— 即使字符串相同
+      // (如父 Task_1 与子自己启动的首个 Task_1), 也指向不同 occurrence。若走
+      // resolveField, 父的映射被缓存后嵌套复用, replay/import 把子 tool 挂到父 id 下
+      // (codex-connector P1: Resolve nested stream IDs independently)。用纯行作用域
+      // 解析(后顾优先 + 前瞻 fallback), 与数组项一致。
       const evt = entry.event;
       if (isRecord(evt) && evt.type === 'content_block_start') {
         const cb = evt.content_block;
         if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-          const mapped = resolveField(cb.id);
+          const mapped = resolveOccurrence(cb.id, index) ?? resolveAhead(cb.id, index);
           if (mapped !== undefined && mapped !== cb.id) {
             cb.id = mapped;
             entryChanged = true;

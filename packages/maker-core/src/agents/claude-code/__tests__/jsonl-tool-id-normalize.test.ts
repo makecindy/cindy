@@ -628,6 +628,38 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[3] as Record<string, unknown>).tool_use_id).toBe('Bash_5_dup2');
   });
 
+  it('content_block.id 独立解析, 不复用父的 entryRef 映射(P1: Resolve nested stream IDs independently)', () => {
+    // 父调用 Task_1 与子自己启动的首个 Task_1 字符串相同但指向不同 occurrence。
+    // 若 content_block.id 走 resolveField 复用标量缓存的父映射, replay/import 把子
+    // tool 挂到父 id 下。content_block.id 必须独立消费 occurrence。
+    const text = [
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'child-stream',
+        parent_tool_use_id: 'Task_1',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Task_1', name: 'Task', input: {} },
+        },
+      }),
+      assistantEntry('a1', [toolUse('Task_1')]), // 父调用(第一个 Task_1)
+      userEntry('u1', [toolResult('Task_1')]),
+      assistantEntry('a2', [toolUse('Task_1')]), // 子调用(第二个 Task_1)
+      userEntry('u2', [toolResult('Task_1')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[1]).map((b) => b.id)).toEqual(['Task_x1']);
+    expect(contentOf(entries[3]).map((b) => b.id)).toEqual(['Task_1_dup2']);
+    // 标量 parent_tool_use_id(父调用)→ 前瞻匹配第一个 Task_1 → Task_x1
+    expect((entries[0] as Record<string, unknown>).parent_tool_use_id).toBe('Task_x1');
+    // content_block.id(子调用)→ 独立解析匹配第二个 Task_1 → Task_1_dup2,
+    // 不复用父映射
+    const evt = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
+    expect((evt.content_block as Record<string, unknown>).id).toBe('Task_1_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
