@@ -61,12 +61,26 @@ export interface ReopenAuthorizationInputs {
   /** 本机已对该设备关闭控制(disabledControlDeviceIds,与 openRemoteLink 的
    * fail-closed 门同源)。 */
   controlDisabledLocally: boolean;
+  /**
+   * 本机仍在控制该设备的**方向证据**:持有出站订阅,或仍有在等它回包的出站业务
+   * 请求(invoke)。openRemoteLink 语义是「本机去控制对方」,失去证据后继续重建
+   * 会在本机毫无控制意图时把链路建起来,对端还会显示非用户发起的受控横幅。
+   *
+   * 必须在**每次尝试前**复查而非只在 trigger 时过一次:退避等待期间用户可能关掉
+   * 最后一个远程会话窗口 / 退订最后一个 topic(review P1)。
+   *
+   * 判据里刻意不含在途 link-open:重建动作本身就是发 link-open,算进来会形成
+   * 「重建在途 → 因此有权重建」的自我论证闭环。
+   */
+  hasOutboundControlIntent: boolean;
 }
 
 export function shouldAbortTransportTimeoutReopen(
   inputs: ReopenAuthorizationInputs,
 ): boolean {
-  return !inputs.clientOnline || !inputs.isOwner || inputs.controlDisabledLocally;
+  if (!inputs.clientOnline || !inputs.isOwner) return true;
+  if (inputs.controlDisabledLocally) return true;
+  return !inputs.hasOutboundControlIntent;
 }
 
 /**

@@ -1646,7 +1646,7 @@
     "gitSafety": {
       "title": "Git Safety",
       "autoSnapshotTitle": "Git safety snapshots",
-      "description": "Create automatic savepoint commits after agent edits. Codex rewind is shown only when this is enabled.",
+      "description": "Automatically record hidden savepoints in the project's Git repository after agent edits — no commits are added to your branch. Codex rewind is shown only when this is enabled.",
       "toggleAria": "Toggle Git safety snapshots",
       "saveFailed": "Failed to save Git safety setting"
     },

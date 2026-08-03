@@ -154,6 +154,9 @@ const transportTimeoutReopen = createTransportTimeoutReopenLoop({
     // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制
     // 时不重建,避免把被禁用的链路反复拉起又失败空转。
     controlDisabledLocally: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    // 方向证据每次尝试前复查:退避等待期间用户可能退掉最后一个订阅 / 关掉窗口
+    // (review P1)。
+    hasOutboundControlIntent: hasOutboundControlIntent(deviceId),
   }),
   log: {
     info: (msg) => log.info(msg),
@@ -166,44 +169,45 @@ let authRealmReconnectGeneration = 0;
 let unsubscribeAuthState: (() => void) | null = null;
 /** ownership store 按 DbClient 实例缓存(避免每 tick 建对象);换库(换账号)自动重建 */
 let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
-const pendingPeerLinkReopens = new Set<string>();
-let pendingPeerLinkReopenRetryTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * 本机是否仍在控制该设备 —— 重开链路的**方向判据**(trigger 与每次重试共用)。
+ *
+ * 两项证据任一成立即算:
+ * - 出站订阅:常态判据(本机订阅了它的 topic = 本机在控制它);
+ * - 在途出站业务请求:订阅可能先于回包被退掉(用户关掉最后一个会话视图而 invoke
+ *   还没回包),此时迟到的可靠 invoke-result —— 尤其大结果无法回退成单帧 legacy
+ *   —— 仍需重开链路才能交付。
+ *
+ * 两项都只反映出站方向:被控端方向的入站请求不在 client 的 pending 里,纯被控端
+ * 方向不会被误判成「该重开」;在途 link-open 也刻意不算(重建动作本身就是发
+ * link-open,算进来会自我论证)。
+ */
+function hasOutboundControlIntent(deviceId: string): boolean {
+  if (!client) return false;
+  // 用户显式断开出站控制后一票否决:残留的在途请求(走 legacy 路径的不在可靠
+  // pending 里,不会被 abandonReliablePending 清掉)与残留订阅都不得把链路拉回来
+  // (review P1)。openLink 是「意图续新」,client 侧会自动清除该标记。
+  if (client.isOutboundExplicitlyClosed(deviceId)) return false;
+  if (snapshotSubscriptions(deviceId).length > 0) return true;
+  return client.hasPendingRequestsTo(deviceId);
+}
 
-function schedulePendingPeerLinkReopenRetry(): void {
-  if (pendingPeerLinkReopenRetryTimer !== null || linkTornDown || pendingPeerLinkReopens.size === 0) return;
+/**
+ * ownership 接管后的重建补发:接管前到达的 before-link 帧那时会被 shouldAbort
+ * (非持有者)挡掉,而对端未必再发帧。对本机仍在控制、且 link 确实未就绪的设备各
+ * 触发一次收敛循环;循环自带 per-device 去重,已在跑的不受影响。
+ */
+function retriggerReopenForControlledDevices(): void {
+  if (!client || linkTornDown) return;
   if (arbiter && !arbiter.isOwner()) return;
-  pendingPeerLinkReopenRetryTimer = setTimeout(() => {
-    pendingPeerLinkReopenRetryTimer = null;
-    flushPendingPeerLinkReopens();
-  }, 5_000);
-  pendingPeerLinkReopenRetryTimer.unref?.();
-}
-
-function flushPendingPeerLinkReopens(): void {
-  if (linkTornDown || (arbiter && !arbiter.isOwner())) return;
-  for (const deviceId of pendingPeerLinkReopens) {
-    log.debug(`peer link stale-frame recovery for ${deviceId.slice(0, 8)}`);
-    void openRemoteLink(deviceId).then(
-      () => {
-        pendingPeerLinkReopens.delete(deviceId);
-        if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
-          clearTimeout(pendingPeerLinkReopenRetryTimer);
-          pendingPeerLinkReopenRetryTimer = null;
-        }
-      },
-      (err) => {
-        log.debug(`peer link stale-frame recovery failed for ${deviceId.slice(0, 8)}`, err);
-        schedulePendingPeerLinkReopenRetry();
-      },
-    );
-  }
-}
-
-function cancelPendingPeerLinkReopen(deviceId: string): void {
-  pendingPeerLinkReopens.delete(deviceId);
-  if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
-    clearTimeout(pendingPeerLinkReopenRetryTimer);
-    pendingPeerLinkReopenRetryTimer = null;
+  const seen = new Set<string>();
+  for (const { deviceId } of snapshotSubscriptions()) {
+    if (seen.has(deviceId)) continue;
+    seen.add(deviceId);
+    if (client.isLinkReady(deviceId)) continue;
+    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) continue;
+    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after ownership takeover`);
+    transportTimeoutReopen.trigger(deviceId);
   }
 }
 /**
@@ -392,11 +396,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       warn: (...args) => log.warn(...args),
       error: (...args) => log.error(...args),
     },
-    onPeerLinkNeedsReopen: (deviceId) => {
-      if (linkTornDown) return;
-      pendingPeerLinkReopens.add(deviceId);
-      flushPendingPeerLinkReopens();
-    },
     // 弱网收紧:默认 20s ping × (2+1) tick 要 ~60s 才判死半开连接,期间所有请求黑洞。
     // 15s ping 把判死缩到 ~45s;不动 pongMissLimit——高延迟链路(实测响应性可达 ~10s)
     // 下更激进的宽限会把「慢但活着」误判成死链,造成重连循环(mobile 用 10s×1 是因为
@@ -490,13 +489,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();
   });
   // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
-  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。只对本机确实在控制
-  // (有活跃订阅)的设备主动重建;被控端方向(控制端给本机发帧)没有订阅记录,
-  // 自然忽略。重建走 transport-timeout 同一条重开收敛循环,而不是一次性
-  // openRemoteLink:两者语义同为「link 需要重建」,一次失败(对端瞬时繁忙 /
-  // relay 抖动)不该放弃——循环自带退避、per-device 去重与授权边界复验。
+  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。重建走 transport-timeout
+  // 同一条重开收敛循环(而不是另起一条队列):两者语义同为「link 需要重建」,
+  // 循环自带退避、per-device 去重、世代守卫与**每次尝试前**的授权边界复验。
+  // 入队与每次尝试都过同一个方向判据(见 hasOutboundControlIntent):只对本机
+  // 确实在控制的设备重建,被控端方向的入站帧自然忽略。
   client.onReliableFrameBeforeLink((deviceId) => {
-    if (snapshotSubscriptions(deviceId).length === 0) return;
+    if (!hasOutboundControlIntent(deviceId)) return;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
     log.info(`re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`);
     transportTimeoutReopen.trigger(deviceId);
@@ -581,9 +580,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // shutdown/revoked/未知新值)都是永久关闭——必须终止已在进行的重开
       // 循环,否则刚被断开的控制链会被退避重试重新建起。
       routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
-      if (reason !== 'transport-timeout') {
-        cancelPendingPeerLinkReopen(env.src);
-      }
       if (reason === 'revoked') {
         // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
         // 作废在途结果(翻代),避免 unresponsive 状态与撤权状态并存(对齐 mobile 语义)。
@@ -706,8 +702,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
-      // 可靠帧可能在 ownership 接管前到达；接管后补发一次 link-open，避免启动竞态留下半开链路。
-      setTimeout(flushPendingPeerLinkReopens, 250);
+      // 可靠帧可能在 ownership 接管前到达(那时非持有者,重建被 shouldAbort 挡掉):
+      // 接管后对本机仍在控制、且 link 未就绪的设备补发一次重建,避免启动竞态留下
+      // 半开链路,不必等对端下一帧。
+      setTimeout(retriggerReopenForControlledDevices, 250);
       setContactsDeviceLinkOwnerActive(true);
       refreshAppliedSettingsSnapshot();
       pollContactsDeviceSyncSettingChange();
@@ -868,11 +866,6 @@ export function getMobileNotifyGeneration(): number {
 function teardownActiveLink(): void {
   if (!client || linkTornDown) return;
   linkTornDown = true;
-  if (pendingPeerLinkReopenRetryTimer !== null) {
-    clearTimeout(pendingPeerLinkReopenRetryTimer);
-    pendingPeerLinkReopenRetryTimer = null;
-  }
-  pendingPeerLinkReopens.clear();
   mobileNotifyGeneration += 1;
   if (relayAuthRecoveryRetryTimer !== null) {
     clearTimeout(relayAuthRecoveryRetryTimer);
@@ -1358,7 +1351,6 @@ export function closeRemoteLink(deviceId: string): void {
   //   5. remoteInvoke / remoteSubscribe 在途调用(经 4 的代次在发送/重开前自败)。
   // 新增任何 per-device 重试/恢复机制时必须同步登记到本清单。
   transportTimeoutReopen.cancel(deviceId);
-  cancelPendingPeerLinkReopen(deviceId);
   cancelSubscriptionReplay(deviceId);
   // 在途建链可能正 park 在上线等待里(map 删除挡不住它):翻代,让它在等待
   // 结束后的复验处自我取消。

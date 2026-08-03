@@ -1645,7 +1645,7 @@
     "gitSafety": {
       "title": "Git 安全",
       "autoSnapshotTitle": "Git 安全保存点",
-      "description": "Agent 修改后自动创建保存点 commit。只有开启后才显示 Codex rewind 入口。",
+      "description": "Agent 修改后自动在项目 Git 仓库里记录隐藏保存点，不会在你的分支上产生 commit。只有开启后才显示 Codex rewind 入口。",
       "toggleAria": "切换 Git 安全保存点",
       "saveFailed": "保存 Git 安全设置失败"
     },
