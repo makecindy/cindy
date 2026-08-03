@@ -19,6 +19,7 @@ import {
 } from './protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_CHUNK_BYTES,
   MAX_TRANSPORT_PENDING_BYTES,
@@ -263,6 +264,32 @@ interface PeerTransportState {
   reliable: boolean;
   linkReady: boolean;
   explicitlyClosed: boolean;
+  /**
+   * 该 peer 当前是否有**活动的入站控制方向**(对方作为控制端被本机 accept
+   * 且尚未永久关闭)。可靠重试耗尽的止损分级依据:被控端同一条 relay 连接
+   * 服务多个控制端,只重置超时 peer 的 link;纯控制端(恒 false)维持整连接
+   * 重连兼作恢复探测。
+   *
+   * 生命周期:
+   * - 置位:sendLinkAccept(接受入站 link-open)。
+   * - 撤销:永久关闭——收到对端永久 link-close(user/toggle-off/shutdown/
+   *   revoked 及未知新值)或本地 closeLink。入站方向被用户明确关闭后,出站
+   *   重试耗尽不得再发 transport-timeout 诱使对端自动重开已关闭的控制方向。
+   * - **不撤销**:transport-timeout(瞬时重置,方向仍活动)与出站 link-accept
+   *   (互控时两方向共享本状态,出站握手不得覆盖仍活动的入站方向)。
+   * 方向歧义处(如本地 closeLink 区分不了方向)一律保守撤销:代价只是回到
+   * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
+   */
+  linkAcceptedInbound: boolean;
+  /**
+   * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
+   * 迟到 transport-timeout 的拦截依据:只有本机不再主动控制对方时才吞帧;
+   * 入站方向的撤权/踢控制端(direction='inbound')不置位——互控时仍存续的
+   * 主动控制方向必须保留可恢复。openLink(意图续新)与收到 link-accept 时清除。
+   */
+  outboundExplicitlyClosed: boolean;
+  /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
+  supportsTransportTimeoutClose: boolean;
   /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
   unlinkedLegacyResponseIds: Set<string>;
   pending: Map<number, PendingReliableMessage>;
@@ -339,6 +366,8 @@ export class DeviceLinkClient {
   private readonly peerTransport = new Map<string, PeerTransportState>();
   /** 入站 link-open 只记录提议；host 真正 sendLinkAccept 后才提交能力/stream 基线。 */
   private readonly pendingInboundLinkOffers = new Map<string, PendingInboundLinkOffer>();
+  /** transport-timeout 重置通知的待重发计时器(per dst,有界重试)。 */
+  private readonly timeoutCloseNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 只串行旧协议业务帧；pong / ACK / 可靠 stream 各自独立，不被慢 handler 堵住。 */
   private legacyInboundChain: Promise<void> | null = null;
   private legacyInboundFrames = 0;
@@ -535,6 +564,8 @@ export class DeviceLinkClient {
 
   /** 控制端:向目标设备发起 link-open,等待 link-accept */
   async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
+    // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
+    this.getPeerTransport(dst).outboundExplicitlyClosed = false;
     const linkPayload = this.addLocalCapabilities(dst, payload);
     const env = await this.request(
       { v: PROTOCOL_VERSION, kind: 'link-open', dst, payload: linkPayload },
@@ -546,26 +577,60 @@ export class DeviceLinkClient {
     return env.payload as LinkAcceptPayload;
   }
 
-  /** 任一端:解除控制链路(fire-and-forget) */
-  closeLink(dst: string, reason: LinkCloseReason): void {
+  /**
+   * 任一端:解除控制链路(fire-and-forget)。
+   *
+   * `direction` 声明本次关闭的是哪个控制方向(PeerTransportState 按 deviceId
+   * 共享两方向,互控时必须区分):
+   * - 'outbound'(默认):本机主动结束**控制对方**(closeRemoteLink / mobile 断开)。
+   *   置 outboundExplicitlyClosed —— 此后迟到的 transport-timeout 被拦截,
+   *   不再自动重建用户关掉的控制链。
+   * - 'inbound':本机结束**对方对本机的控制**(撤权/踢控制端)。不碰
+   *   outboundExplicitlyClosed —— 若本机仍在主动控制对方,对方发来的
+   *   transport-timeout 仍应触发重建,保留可恢复的主动控制方向。
+   */
+  closeLink(
+    dst: string,
+    reason: LinkCloseReason,
+    direction: 'outbound' | 'inbound' = 'outbound',
+  ): void {
+    // 本地永久关闭必须同步撤销已排期的 transport-timeout 重试通知:否则迟到
+    // 的回调会在链路已关闭后补发瞬时重置帧,诱使对端重开用户已关掉的控制方向。
+    this.cancelTimeoutCloseNotify(dst);
     this.pendingInboundLinkOffers.delete(dst);
-    this.rejectPendingLinkOpen(
-      dst,
-      'LINK_NOT_OPEN',
-      `control link closed locally (${reason})`,
-    );
     const peer = this.peerTransport.get(dst);
-    if (peer) {
-      peer.linkReady = false;
-      peer.explicitlyClosed = true;
-      peer.unlinkedLegacyResponseIds.clear();
-      // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
-      // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
-      peer.reliable = false;
-      peer.remoteStreamId = null;
-      peer.remoteBaseSeq = 1;
-      peer.receive.clear();
-      this.abandonReliablePending(dst, `control link closed locally (${reason})`);
+    if (direction === 'inbound') {
+      // 入站方向关闭(撤权/踢控制端):PeerTransportState 按 deviceId 共享两个
+      // 方向,互控时仍存续的**出站**可靠层不得陪葬——不置 explicitlyClosed、
+      // 不拆 reliable/stream、不清 pending、不 reject 在途请求与出站 openLink 等待,
+      // 否则本机仍在进行的主动控制会立刻吃到 LINK_NOT_OPEN、在途调用被丢。
+      // 只撤销入站语义:活动入站标记(后续重试耗尽回退整连接重连,升级前
+      // 语义)并通知对端。纯被控场景(无出站活动)下保留的传输层状态无害:
+      // dispatch 已清订阅,不会再有新流量灌入。
+      if (peer) peer.linkAcceptedInbound = false;
+    } else {
+      this.rejectPendingLinkOpen(
+        dst,
+        'LINK_NOT_OPEN',
+        `control link closed locally (${reason})`,
+      );
+      if (peer) {
+        peer.linkReady = false;
+        peer.explicitlyClosed = true;
+        peer.unlinkedLegacyResponseIds.clear();
+        // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
+        // 保守撤销的代价只是回到整连接重连语义(安全侧),而保留错误的 true
+        // 会让 transport-timeout 重开用户已关闭的控制方向。
+        peer.linkAcceptedInbound = false;
+        peer.outboundExplicitlyClosed = true;
+        // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
+        // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
+        peer.reliable = false;
+        peer.remoteStreamId = null;
+        peer.remoteBaseSeq = 1;
+        peer.receive.clear();
+        this.abandonReliablePending(dst, `control link closed locally (${reason})`);
+      }
     }
     // 显式关闭的本地语义不能依赖 relay 当前可写；离线时只跳过通知，
     // 已经清掉的可靠 pending 也绝不能在下一次 openLink 后复活。
@@ -651,6 +716,9 @@ export class DeviceLinkClient {
         matchingOffer.transportBaseSeq,
       );
     }
+    peer.linkAcceptedInbound = true;
+    // 对端已重开链路:若仍有待重发的 transport-timeout 通知,不再需要。
+    this.cancelTimeoutCloseNotify(dst);
     if (peerSupportsReliable) {
       const resumedLink = !peer.linkReady;
       peer.linkReady = true;
@@ -1272,10 +1340,16 @@ export class DeviceLinkClient {
               accepted?.capabilities,
               accepted?.transportStreamId,
               accepted?.transportBaseSeq,
+              'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
             const resumedLink = !peer.linkReady;
             peer.linkReady = true;
+            peer.outboundExplicitlyClosed = false;
+            // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
+            // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
+            // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
+            // 的重试耗尽误拆整条共享 relay(字段注释有完整语义)。
             this.resumeReceiveStreams(env.src, peer);
             this.replayPending(env.src, resumedLink);
           }
@@ -1358,8 +1432,40 @@ export class DeviceLinkClient {
             });
           }
         } else if (env.kind === 'link-close' && env.src) {
-          this.pendingInboundLinkOffers.delete(env.src);
           const close = env.payload as LinkClosePayload | undefined;
+          if (close?.reason === 'transport-timeout') {
+            // 本地已显式关闭该链路(closeLink 置了 explicitlyClosed):我们的永久
+            // link-close 可能因背压/发送异常未送达,对端为保留消息耗尽重试后
+            // 发来瞬时重置。本机已无主动控制意图,拦截不交 app 层——否则
+            // desktop 会 openRemoteLink/mobile 会 rehydrate,把用户刚关闭的控制链
+            // 重新建起。吞帧即稳态:对端通知重试自行终止,其保留 pending 等待
+            // 将来显式重开或其自身清理路径回收。
+            const existing = this.peerTransport.get(env.src);
+            // 按控制方向判断:只有本机已显式结束**出站**控制(closeRemoteLink /
+            // mobile 断开)才吞帧。入站方向的撤权(revokeController →
+            // closeLink('revoked','inbound'))也会置共享的 explicitlyClosed,但本机
+            // 可能仍在主动控制对方——若据此吞帧,存续的主动控制方向永不恢复。
+            if (existing?.outboundExplicitlyClosed) {
+              this.log.debug(
+                `ignoring late transport-timeout from ${env.src.slice(0, 8)} after local outbound close`,
+              );
+              return true;
+            }
+            // 对端(被控端)对本机的可靠重试耗尽,做了 peer 级瞬时重置。这不是
+            // 永久关闭:不置 explicitlyClosed、不拆可靠层、不拒在途请求——保留
+            // stream 与 pending,重新 link-open/link-accept 后按 reconnect-continuity
+            // 语义同 seq 续传,在途 invoke-result 仍可送达(超时由各请求自身的
+            // requestTimeout 兕底)。帧照常交给 app 层:mobile 据此立即发起 rehydrate,
+            // desktop 控制端据此立即重新 openLink(见各自 link-close 处理)。
+            const peer = this.getPeerTransport(env.src);
+            peer.linkReady = false;
+            if (peer.retryTimer) {
+              clearInterval(peer.retryTimer);
+              peer.retryTimer = null;
+            }
+            return this.emitFrame(env);
+          }
+          this.pendingInboundLinkOffers.delete(env.src);
           this.rejectPendingLinkOpen(
             env.src,
             close?.reason === 'revoked' ? 'ACCESS_REVOKED' : 'LINK_NOT_OPEN',
@@ -1371,6 +1477,16 @@ export class DeviceLinkClient {
           peer.linkReady = false;
           peer.explicitlyClosed = true;
           peer.unlinkedLegacyResponseIds.clear();
+          // 收到永久关闭同样撤销已排期的 transport-timeout 重试通知(与本地
+          // closeLink 对称):链路已死,迟到通知只会诱使对端重开已关闭的方向。
+          this.cancelTimeoutCloseNotify(env.src);
+          // 永久关闭同时撤销「当前活动入站方向」标记:互控时入站方向被对方
+          // 用户明确关闭后,后续出站方向的重试耗尽不得再误判为「仍有活动
+          // 入站」而发 transport-timeout——那会让对端自动重开用户已关掉的控制
+          // 方向。回到整连接重连语义是安全侧;对方重新 link-open 时
+          // sendLinkAccept 会重新置位;transport-timeout(瞬时重置)不走本分支
+          // 也不清此标记。
+          peer.linkAcceptedInbound = false;
           // 对端关闭与本地 closeLink 语义对称：撤掉 streaming 可靠层，
           // 后续不依赖 link-open 的 listing/control invoke 可回退 legacy。
           peer.reliable = false;
@@ -1879,6 +1995,9 @@ export class DeviceLinkClient {
         reliable: false,
         linkReady: false,
         explicitlyClosed: false,
+        linkAcceptedInbound: false,
+        outboundExplicitlyClosed: false,
+        supportsTransportTimeoutClose: false,
         unlinkedLegacyResponseIds: new Set(),
         pending: new Map(),
         pendingBytes: 0,
@@ -1970,12 +2089,25 @@ export class DeviceLinkClient {
     capabilities?: readonly string[],
     remoteStreamId?: string,
     remoteBaseSeq?: number,
+    source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
   ): void {
     const peer = this.getPeerTransport(dst);
     const reliable = (
       Array.isArray(capabilities)
       && capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     );
+    // supportsTransportTimeoutClose 只跟随**入站 link-open**的声明:它刷新的是
+    // 「对端作为控制端能否理解 transport-timeout」。出站 openLink 换回的
+    // link-accept 由对端 sendLinkAccept 生成,生产形态只回显 reliable 能力——
+    // 互控场景下若让它覆盖,会把入站方向已协商到的 true 清掉,入站重试耗尽
+    // 退回拆整条共享 relay。入站方向的重新声明(含对端降级为旧版后的
+    // 不再声明)仍正常刷新,降级安全。
+    if (source === 'inbound-open') {
+      peer.supportsTransportTimeoutClose = (
+        Array.isArray(capabilities)
+        && capabilities.includes(DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE)
+      );
+    }
     const nextRemoteStreamId = reliable && typeof remoteStreamId === 'string' && remoteStreamId
       ? remoteStreamId
       : null;
@@ -2006,6 +2138,7 @@ export class DeviceLinkClient {
       ...payload,
       capabilities: this.mergeCapabilities(payload.capabilities, [
         DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
       ]),
       transportStreamId: typeof payload.transportStreamId === 'string'
         ? payload.transportStreamId
@@ -2171,7 +2304,7 @@ export class DeviceLinkClient {
     for (const pending of peer.pending.values()) {
       if (!force && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) continue;
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
-        this.forceReconnectForReliableTimeout(dst, pending.seq);
+        this.handleReliableRetryExhausted(dst, pending.seq);
         return;
       }
       try {
@@ -2201,6 +2334,110 @@ export class DeviceLinkClient {
     }
     this.retryPending(dst, true);
     this.ensureRetryTimer(dst);
+  }
+
+  /**
+   * 可靠重试耗尽的**止损分级**:
+   *
+   * - 入站接受的 link(本机是被控端,同一条 relay 连接服务多个控制端):只重置
+   *   该 peer 的 link,不炸整条 relay 连接。v0.1.26 线上:一台休眠 iPhone 的 ACK
+   *   耗尽单日把整条 relay 连接强拆 38 次,其它 peer(另一台手机 / 飞书 hook)全部
+   *   陪葬,重连风暴又放大成订阅风暴。重置语义:
+   *   - linkReady=false + 停重试计时器;**不清 pending**——live invoke-result 等
+   *     下次 link-accept 后按原 seq 重放(陈旧 push 前缀由重放前清扫丢弃),
+   *     不丢在途回包,也不碰 dispatch 层的去重缓存与订阅状态;
+   *   - best-effort 发 link-close(transport-timeout):存活但卡流的对端在
+   *     接收端按**瞬时重置**处理(不置 explicitlyClosed、不拒在途请求,见
+   *     dispatchEnvelope 的 link-close 分支),并由 app 层立即重建:mobile
+   *     触发 rehydrate,desktop 控制端重新 openLink;真休眠的对端收不到
+   *     该帧,唤醒后自会 rehydrate → link-open。
+   * - 出站发起的 link(本机是控制端,单 peer):维持原语义——整连接重连兼作
+   *   恢复探测,与 mobile 现有 rehydrate/熔断流程耦合,不在此改变。
+   */
+  private handleReliableRetryExhausted(dst: string, seq: number): void {
+    if (this.stopped || this.status !== 'online') return;
+    const peer = this.peerTransport.get(dst);
+    // 能力门:旧控制端(未声明 transport-timeout-close-v1)把未知 reason 当永久
+    // 关闭且不会自动重开——relay/presence 保持在线时订阅与在途请求会静默挂死。
+    // 对这类对端保留整连接重连的兼容恢复路径(presence 闪断触发其既有 rehydrate)。
+    if (!peer?.linkAcceptedInbound || !peer.supportsTransportTimeoutClose) {
+      this.forceReconnectForReliableTimeout(dst, seq);
+      return;
+    }
+    this.log.warn(
+      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; resetting peer link (relay connection kept alive)`,
+    );
+    peer.linkReady = false;
+    if (peer.retryTimer) {
+      clearInterval(peer.retryTimer);
+      peer.retryTimer = null;
+    }
+    this.notifyTransportTimeoutClose(dst, 1);
+  }
+
+  /**
+   * transport-timeout 重置通知的投递与有界重试。
+   *
+   * relay 保持在线意味着没有 presence/重连事件可依赖——若本地发送因 WebSocket
+   * 背压/异常失败就放弃,存活但卡流的对端永远收不到重建信号,保留的 pending
+   * 会无限停滞。故失败时按 transportRetryIntervalMs 退避重发,上限
+   * transportMaxRetryAttempts 次;重试回调中任一成立即停:对端已重开
+   * (linkReady 回 true,由 sendLinkAccept 取消)、relay 已断开(断线重连路径接管
+   * 恢复,presence 闪断会触发对端 rehydrate)、client 已 stop。耗尽后放弃本地
+   * 重试:对端若存活,其后续请求超时/自身重试耗尽会走它自己的恢复路径;若
+   * 休眠,唤醒重连即重开。两条兜底都不拆共享 relay 连接、不丢保留的 pending。
+   */
+  private notifyTransportTimeoutClose(dst: string, attempt: number): void {
+    try {
+      this.sendEnvelope({
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        dst,
+        payload: { reason: 'transport-timeout' } satisfies LinkClosePayload,
+      });
+      this.cancelTimeoutCloseNotify(dst);
+    } catch (err) {
+      this.log.debug(
+        `transport-timeout link-close notification failed for ${dst.slice(0, 8)} (attempt ${attempt})`,
+        err,
+      );
+      if (attempt >= this.timing.transportMaxRetryAttempts) {
+        this.cancelTimeoutCloseNotify(dst);
+        return;
+      }
+      this.scheduleTimeoutCloseNotifyRetry(dst, attempt + 1);
+    }
+  }
+
+  private scheduleTimeoutCloseNotifyRetry(dst: string, attempt: number): void {
+    this.cancelTimeoutCloseNotify(dst);
+    const timer = setTimeout(() => {
+      this.timeoutCloseNotifyTimers.delete(dst);
+      // 发送前全量复验:排期到触发之间状态可能已变(永久关闭、对端重开、
+      // 能力失效、relay 断开、stop)——任一不满足即终止,不补发迟到的瞬时
+      // 重置帧(它会诱使对端 rehydrate/reopen 用户已关闭的控制方向)。
+      if (this.stopped || this.status !== 'online') return;
+      const peer = this.peerTransport.get(dst);
+      if (
+        !peer
+        || peer.linkReady // 对端已重开,通知不再需要
+        || peer.explicitlyClosed // 已进入永久关闭态
+        || !peer.linkAcceptedInbound // 活动入站方向已被撤销
+        || !peer.supportsTransportTimeoutClose // 能力已失效(对端降级重声明)
+      ) {
+        return;
+      }
+      this.notifyTransportTimeoutClose(dst, attempt);
+    }, this.timing.transportRetryIntervalMs);
+    this.timeoutCloseNotifyTimers.set(dst, timer);
+  }
+
+  private cancelTimeoutCloseNotify(dst: string): void {
+    const timer = this.timeoutCloseNotifyTimers.get(dst);
+    if (timer) {
+      clearTimeout(timer);
+      this.timeoutCloseNotifyTimers.delete(dst);
+    }
   }
 
   private forceReconnectForReliableTimeout(dst: string, seq: number): void {
@@ -2251,6 +2488,8 @@ export class DeviceLinkClient {
       if (peer.retryTimer) clearInterval(peer.retryTimer);
     }
     this.peerTransport.clear();
+    for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);
+    this.timeoutCloseNotifyTimers.clear();
   }
 
   private rememberInboundLinkOffer(src: string, offer: PendingInboundLinkOffer): void {

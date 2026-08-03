@@ -273,6 +273,19 @@ export async function listBranches(baseRepo: string): Promise<ListBranchesResp> 
 }
 
 /**
+ * 把 ref(如 HEAD)解析为 commit SHA;repoDir 可以是主仓根或 linked worktree
+ * 路径。解析失败返回 null(调用方自行回退)。
+ */
+export async function revParseCommit(repoDir: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await gitExec(['rev-parse', '--verify', `${ref}^{commit}`], repoDir);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 列出已被本仓库占用的名字: store 里 sessionId → name + git 分支 xdt/* 去前缀。
  * 用于 nameGenerator 冲突避让 + create 阶段二次校验。
  */
@@ -345,16 +358,19 @@ const STAGE_CHECKOUT_PATHS = [
  */
 async function stageCheckout(
   worktreePath: string,
-  baseRepo: string,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
 
-  // 1. 找出白名单中实际存在于 HEAD 的路径(没的就跳过, 避免 git checkout 报错)
+  // 1. 找出白名单中实际存在于 HEAD 的路径(没的就跳过, 避免 git checkout 报错)。
+  //    必须在 **worktree** 里解析 HEAD(= 新分支/sourceBranch 的树),不能用
+  //    baseRepo 的当前 checkout:sourceBranch 可能是刚 fetch 的远端默认分支,
+  //    与 baseRepo 本地 HEAD 相差可以很远——规则文件只存在于新基底时,按旧树
+  //    枚举会漏检,agent 就会在 AGENTS.md/CLAUDE.md 落盘前启动。
   let existingPaths: string[] = [];
   try {
     const { stdout } = await gitExec(
       ['ls-tree', '--name-only', 'HEAD', '--', ...STAGE_CHECKOUT_PATHS],
-      baseRepo,
+      worktreePath,
     );
     existingPaths = stdout
       .split(/\r?\n/)
@@ -461,6 +477,10 @@ export interface CopyClaudeSiviDirsOptions {
 interface CopyDirOptions extends CopyClaudeSiviDirsOptions {
   /** Top-level children under src that should not be copied. */
   excludeTopLevelDirs?: ReadonlySet<string>;
+  /** 仓库根相对(posix 分隔)路径黑名单:命中的文件不复制(受控内容由 checkout 提供)。 */
+  skipRepoRelPaths?: ReadonlySet<string>;
+  /** 计算 skipRepoRelPaths 相对路径所用的仓库根。 */
+  repoRoot?: string;
 }
 
 function shouldCopyPath(srcRoot: string, srcPath: string, opts?: CopyDirOptions): boolean {
@@ -493,6 +513,10 @@ export async function copyDirIfExists(
     force: true,
     filter: async (srcPath, destPath) => {
       if (!shouldCopyPath(src, srcPath, opts)) return false;
+      if (opts?.skipRepoRelPaths && opts.repoRoot) {
+        const rel = path.relative(opts.repoRoot, srcPath).split(path.sep).join('/');
+        if (opts.skipRepoRelPaths.has(rel)) return false;
+      }
       if (opts?.overwriteExisting !== false) return true;
       const srcStat = await fs.lstat(srcPath);
       if (srcStat.isDirectory()) return true;
@@ -506,16 +530,86 @@ export async function copyDirIfExists(
   });
 }
 
+/**
+ * .claude/.sivi 下应受保护(复制时跳过)的受控文件集(仓库根相对路径,posix 分隔),
+ * 取两个来源的**并集**:
+ *  - baseRepo 索引的跟踪文件:上游已删除的也要保护,不把旧文件补回新基底;
+ *  - 目标 worktree HEAD 树(= sourceBranch)的文件:baseRepo 尚未跟踪、sourceBranch
+ *    已开始跟踪的场景必须靠它——否则本地未跟踪的同名旧配置会覆盖新基底刚检出的
+ *    受控内容并立刻 dirty。
+ * 单侧查询失败按空集处理(fail-open,最坏退回全量复制的旧行为)。
+ */
+async function listProtectedClaudeSiviPaths(
+  baseRepo: string,
+  worktreePath: string,
+): Promise<ReadonlySet<string>> {
+  const out = new Set<string>();
+  try {
+    const { stdout } = await gitExec(['ls-files', '-z', '--', '.claude', '.sivi'], baseRepo);
+    for (const p of stdout.split('\0')) if (p) out.add(p);
+  } catch {
+    /* fail-open */
+  }
+  try {
+    const { stdout } = await gitExec(
+      ['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', '.claude', '.sivi'],
+      worktreePath,
+    );
+    for (const p of stdout.split('\0')) if (p) out.add(p);
+  } catch {
+    /* fail-open */
+  }
+  return out;
+}
+
+/**
+ * git worktree add 参数(导出仅供单测断言)。--no-track 是分支边界约束:sourceBranch
+ * 现在常是远端跟踪引用(refs/remotes/<remote>/<默认分支>),不加它 git 会按
+ * branch.autoSetupMerge 默认给新 xdt/* 分支挂上对远端默认分支的 upstream 配置
+ * (branch.<name>.remote/merge)——此后裸 git push/pull 可能误推/误并默认分支,
+ * 破坏自动 worktree 的独立分支边界;起点是本地分支时 --no-track 为无害 no-op。
+ */
+export function buildWorktreeAddArgs(
+  branch: string,
+  worktreePath: string,
+  sourceBranch: string,
+): string[] {
+  return [
+    '-c',
+    'core.longpaths=true',
+    'worktree',
+    'add',
+    '--no-checkout',
+    '--no-track',
+    '-b',
+    branch,
+    worktreePath,
+    sourceBranch,
+  ];
+}
+
 export async function copyClaudeSiviDirs(
   baseRepo: string,
   worktreePath: string,
   options: CopyClaudeSiviDirsOptions = {},
 ): Promise<void> {
+  // 只补复制 baseRepo 里**未被 git 跟踪**的本地配置(settings.local.json 之类):
+  // 被跟踪的受控内容已由 stageCheckout / 池 reset 按 worktree 的 sourceBranch
+  // 检出——用 baseRepo 旧 checkout 覆盖会让自动 worktree 带着旧 Agent 配置启动,
+  // 且这些文件与新 HEAD 不同时一创建就 dirty(后台完整 checkout 明确排除
+  // .claude/.sivi,永远不会修复)。
+  const tracked = await listProtectedClaudeSiviPaths(baseRepo, worktreePath);
   await copyDirIfExists(path.join(baseRepo, '.claude'), path.join(worktreePath, '.claude'), {
     excludeTopLevelDirs: CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS,
     overwriteExisting: options.overwriteExisting,
+    skipRepoRelPaths: tracked,
+    repoRoot: baseRepo,
   });
-  await copyDirIfExists(path.join(baseRepo, '.sivi'), path.join(worktreePath, '.sivi'), options);
+  await copyDirIfExists(path.join(baseRepo, '.sivi'), path.join(worktreePath, '.sivi'), {
+    overwriteExisting: options.overwriteExisting,
+    skipRepoRelPaths: tracked,
+    repoRoot: baseRepo,
+  });
 }
 
 /**
@@ -652,7 +746,7 @@ async function createWorktreeInner(
     //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
     //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
     const branch = getBranchName(name);
-    const addArgs = ['-c', 'core.longpaths=true', 'worktree', 'add', '--no-checkout', '-b', branch, worktreePath, req.sourceBranch];
+    const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
     try {
       await timed('git worktree add', () => gitExec(addArgs, baseRepo));
     } catch (err) {
@@ -678,7 +772,7 @@ async function createWorktreeInner(
     //     失败仅日志, 不阻塞 IPC 返回。
     let bgPromise: Promise<void> | undefined;
     try {
-      const stageRes = await timed('stage checkout', () => stageCheckout(worktreePath, baseRepo));
+      const stageRes = await timed('stage checkout', () => stageCheckout(worktreePath));
       bgPromise = stageRes.fullCheckoutPromise;
     } catch (err) {
       // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命

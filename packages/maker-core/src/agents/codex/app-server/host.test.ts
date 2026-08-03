@@ -178,7 +178,10 @@ describe('AppServerHost.request startup timeout', () => {
     await expect(host.request('turn/start', {}, { timeoutMs: 50 })).rejects.toThrow(
       /timed out after \d+ms|consumed the entire/,
     );
-    expect(Date.now() - startedAt).toBeLessThan(70);
+    // 1× 语义 ~50ms vs 2× 语义 ~90ms 的判别线。原值 70 在慢 CI(Windows runner)
+    // 上恰好压线(实测 elapsed===70 被 < 判挂):50ms 定时器 + 调度抖动可到
+    // 70–80ms。放宽到 <80 仍与 2× 语义的 ~90ms 保持 ≥10ms 判别余量。
+    expect(Date.now() - startedAt).toBeLessThan(80);
 
     await host.shutdown();
   });

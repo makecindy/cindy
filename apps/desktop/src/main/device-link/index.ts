@@ -43,6 +43,11 @@ import {
 } from './ownership';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
 import {
+  createTransportTimeoutReopenLoop,
+  routeLinkCloseForReopen,
+  shouldAbortTransportTimeoutReopen,
+} from './transportTimeoutReopen';
+import {
   readDeviceLinkSettings,
   rememberLastKnownDeviceName,
   updateDeviceLinkSetting,
@@ -108,6 +113,31 @@ export function deviceLinkApiBase(): string {
 }
 
 let client: DeviceLinkClient | null = null;
+
+/**
+ * transport-timeout 重开循环(控制端):被控端瞬时重置后 relay/presence 都不会
+ * 再来事件,一次 openRemoteLink 失败就放弃会让在途回包与实时订阅长期挂起。
+ * 退避重试 + per-device 去重,终止于:成功 / 撤权 / 待命态 / relay 离线(断线后
+ * 由 presence 闪断路径接管恢复) / 次数耗尽(用户下次打开远程视图惰性重建)。
+ */
+const transportTimeoutReopen = createTransportTimeoutReopenLoop({
+  reopen: (deviceId) => openRemoteLink(deviceId),
+  // 授权边界见 shouldAbortTransportTimeoutReopen 注释:刻意**不看**
+  // revokedControllers——那是「对方不再允许控制本机」,与本机主动控制对方
+  // 无关;互控且仅反向撤权时重建必须照常。目标侧撤销本机控制权由入站
+  // link-close('revoked') 经 routeLinkCloseForReopen 的永久关闭分支终止循环。
+  shouldAbort: (deviceId) => shouldAbortTransportTimeoutReopen({
+    clientOnline: client !== null && client.getStatus() === 'online',
+    isOwner: arbiter === null || arbiter.isOwner(),
+    // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制
+    // 时不重建,避免把被禁用的链路反复拉起又失败空转。
+    controlDisabledLocally: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+  }),
+  log: {
+    info: (msg) => log.info(msg),
+    warn: (msg) => log.warn(msg),
+  },
+});
 let arbiter: DeviceLinkOwnershipArbiter | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let authRealmReconnectGeneration = 0;
@@ -287,7 +317,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   client.onStatusChange((status) => {
-    if (status !== 'online') openLinkInFlight.clear();
+    if (status !== 'online') {
+      openLinkInFlight.clear();
+      // relay 离线:重开循环全部终止,恢复交给断线重连后的 presence 闪断路径。
+      transportTimeoutReopen.dispose();
+    }
     // 断线期间 relay 不会为对端补发 offline presence,重连后同一台电脑仍以
     // online 到达,`wasOnline` 还是 true —— 上线握手不会触发,而断线这段时间的
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
@@ -370,6 +404,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
+      // reason → 重开循环动作统一路由:transport-timeout(可恢复瞬时重置,
+      // 可靠层保留 stream/pending,被控端保留订阅与在途回包,link-accept 后
+      // 双向同 seq 续传)触发有界退避重建;其它一切 reason(user/toggle-off/
+      // shutdown/revoked/未知新值)都是永久关闭——必须终止已在进行的重开
+      // 循环,否则刚被断开的控制链会被退避重试重新建起。
+      routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
       if (reason === 'revoked') {
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       }
@@ -737,7 +777,7 @@ export async function revokeController(deviceId: string): Promise<void> {
   );
   // 在线连着的:发 link-close('revoked'),控制端据此立即移除本机项目/对话 + 标记「已撤销」。
   try {
-    client?.closeLink(deviceId, 'revoked');
+    client?.closeLink(deviceId, 'revoked', 'inbound');
   } catch (err) {
     log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
   }
@@ -831,7 +871,7 @@ function pollExternalSettingsChange(): void {
   const newlyRevoked = revokedControllers.filter((id) => !prev.revokedControllers.includes(id));
   for (const deviceId of newlyRevoked) {
     try {
-      client.closeLink(deviceId, 'revoked');
+      client.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
       log.warn(
         `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,
@@ -908,6 +948,9 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
+  // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
+  // 链路建回来。
+  transportTimeoutReopen.cancel(deviceId);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }

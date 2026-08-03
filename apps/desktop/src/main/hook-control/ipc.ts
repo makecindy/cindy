@@ -25,7 +25,7 @@ import { getMaker, restartCodexAfterAuthModeChange } from '../maker-host/index.j
 import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirror.js';
-import { WorktreeManager } from '../worktree/index.js';
+import { resolveFreshSourceBranch, WorktreeManager } from '../worktree/index.js';
 import { prepareHandoffWorktree } from '../maker-ipc/handoffWorktree.js';
 import {
   onUiContinuation,
@@ -348,8 +348,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               detectCwd: WorktreeManager.detectCwd,
               suggestName: WorktreeManager.suggestName,
               listBranches: WorktreeManager.listBranches,
+              resolveCommit: WorktreeManager.revParseCommit,
               createWorktree: WorktreeManager.createWorktree,
               createId: () => randomUUID(),
+              resolveFreshSource: resolveFreshSourceBranch,
             },
             undefined, // hook 派发没有 dispatcher session, 直接从 workingDir 解析 base repo
             workingDir,
