@@ -183,7 +183,9 @@ function readRuntimeSnapshot() {
     const provider = typeof parsed.provider === 'string' && parsed.provider.trim().length > 0
       ? parsed.provider.trim()
       : undefined;
-    return { model: model, provider: provider };
+    // pending = host 已写入这份路由但 pi 侧还没确认(set_model RPC 在飞)。这段窗口里派发是
+    // 不安全的:用它就是用未确认的 provider,RPC 若被拒,子进程已经起来了、撤不回。
+    return { model: model, provider: provider, pending: parsed.pending === true };
   } catch (err) {
     console.error('[cindy-subagent] runtime snapshot unreadable: ' + String(err));
     return {};
@@ -615,6 +617,15 @@ export default async function cindySubagent(pi: any) {
         throw new Error(
           'subagent is unavailable: Cindy could not read this session\'s model routing snapshot, '
           + 'so a subagent would run against the wrong provider. Tell the user; do the work yourself.',
+        );
+      }
+      // 模型切换的等待窗口(host 已写新路由、pi 侧尚未确认)里一律不派发。放行就意味着子进程
+      // 用一个**未经确认**的 provider 起来:切换若被拒,host 能回滚文件,却撤不回已经在跑的子
+      // 进程 —— 那才是真正撤不回的父子路由分叉(review)。宁可这一次委派失败。
+      if (runtime.pending) {
+        throw new Error(
+          'subagent is unavailable right now: this session is switching model/provider and the new route '
+          + 'is not confirmed yet. Do this step yourself, or retry the delegation after the switch settles.',
         );
       }
       const startedAt = Date.now();

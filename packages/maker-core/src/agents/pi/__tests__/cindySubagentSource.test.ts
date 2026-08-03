@@ -96,6 +96,26 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('subagent is unavailable');
   });
 
+  it('refuses to dispatch while the routing snapshot is pending, before anything spawns', () => {
+    // host 在 set_model 的等待窗口里写的是带 `pending: true` 的新路由。放行这段窗口 = 子进程用
+    // 一个尚未确认的 provider 起来,而 RPC 若被拒,host 能回滚文件却撤不回已经在跑的子进程
+    // (review P1)。真实拒绝由集成用例(真 pi 进程 + 原生端点零请求)验证;这里钉的是
+    // **顺序** —— 判断必须在任何 spawn 之前,否则"有这段代码"照样成立而进程已经起来了。
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    expect(src).toContain('pending: parsed.pending === true');
+    expect(src).toContain('if (runtime.pending) {');
+    expect(src).toContain('is not confirmed yet');
+    const guard = src.indexOf('if (runtime.pending) {');
+    const execute = src.indexOf('async execute(toolCallId');
+    const spawn = src.indexOf('child = spawn(binary, args');
+    expect(guard).toBeGreaterThan(execute);
+    // runTask 里的 spawn 在源码里位于 execute 之前(函数声明顺序),所以不能只比字符位置 ——
+    // 关键是这道闸在 execute 的**早返回段**里,即在 tasks 循环启动之前。
+    expect(spawn).toBeLessThan(execute);
+    const dispatch = src.indexOf('runTask(', guard);
+    expect(dispatch).toBeGreaterThan(guard);
+  });
+
   it('defers settling to process close so grace-period usage is still counted', () => {
     // kill() 到 SIGKILL 之间约 2 秒宽限里子进程仍会吐 message_end,那是真实产生的 token/cost。
     // 原来 abort/timeout 立刻 finish + 在 JSON.parse 之前整条短路,这段用量直接丢掉(review)。

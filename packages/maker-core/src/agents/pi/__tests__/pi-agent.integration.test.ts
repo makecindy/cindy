@@ -1687,4 +1687,100 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  it(
+    'refuses to dispatch while a model switch is unconfirmed (no child spawns in the pending window)',
+    { timeout: 120_000 },
+    async () => {
+      // review P1:host 原来在 set_model 回包**之前**就把新路由写进快照,于是等待窗口里模型
+      // 发起的派发会按一个尚未确认的 provider 起子进程;RPC 随后返回失败时,回滚文件撤不回
+      // 已经在跑的子进程。修法是这段窗口里的快照带 `pending: true`,扩展见到就拒绝派发。
+      //
+      // 这条用例验的是那个拒绝**真的挡住了进程**:结构性断言只能证明源码里有这段判断,证明
+      // 不了子进程没起来。判据用"子代理画像 prompt 只出现在子进程自己的请求里"——一个字节都
+      // 没出现 = 一个子进程都没起来。
+      const { readFileSync } = await import('node:fs');
+      const nativeBodies: string[] = [];
+      // 第 1 个请求(父)派子代理;若真起了子进程,它的请求会是第 2 个。
+      const nativeScript = [
+        anthropicToolUseBody('subagent', { agent: 'scout', task: 'must not run during a pending switch' }),
+        anthropicStreamBody('parent handled it without delegating'),
+      ];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += String(chunk); });
+        req.on('end', () => {
+          nativeBodies.push(body);
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          res.end(nativeScript.shift() ?? anthropicStreamBody('native done'));
+        });
+      });
+      await new Promise<void>((r) => nativeServer.listen(0, '127.0.0.1', r));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl = typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) => (options?.providerId === 'localbyom'
+        ? { authenticated: true, identity: 'Local BYOM', authSource: 'api-key' as const }
+        : { authenticated: false });
+      deps.auth.getAuthEnv = async () => ({ CINDY_PI_API_KEY: 'gateway-unavailable-placeholder' });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localbyom',
+            name: 'Local BYOM',
+            baseUrl: nativeUrl,
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALBYOM',
+            models: [{ id: 'byom-model', name: 'BYOM Model' }],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALBYOM: 'byom-secret-key' },
+      });
+
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-pending-switch-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'pending-switch-session',
+          workingDir,
+          model: 'byom-model',
+          // 派子代理本身要过审批门(ask 档无 resolver 即拒);本例只验 pending 闸,给最宽档,
+          // 免得"没起子进程"其实是被权限门挡的。
+          permissionMode: 'bypassPermissions',
+        });
+
+        // 把快照改成 host 在等待窗口里写的那个形状(model/provider 不变,只多 pending)。
+        // 这样"没起子进程"唯一可能的原因就是 pending 闸:路由本身仍然完全可用。
+        // 按 sessionId 精确定位,**不要**用 find(startsWith('subagent-')):agentHome 是整组共享的,
+        // 其它用例留下的快照会被先找到(实测拿到了另一个会话的 localresponses,单跑绿、全量红)。
+        const runtimeDir = path.join(agentHome, 'runtime');
+        const snapshotPath = path.join(runtimeDir, 'subagent-pending-switch-session.json');
+        expect(existsSync(snapshotPath)).toBe(true);
+        const confirmed = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+        expect(confirmed.provider).toBe('localbyom');
+        writeFileSync(snapshotPath, JSON.stringify({ ...confirmed, pending: true }) + '\n');
+
+        const done = (async () => {
+          for await (const ev of handle!.events()) {
+            if (ev.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'delegate now' });
+        await done;
+
+        // 父进程确实调了工具(否则这条用例什么都没验证)。
+        expect(nativeBodies.length).toBeGreaterThanOrEqual(1);
+        // 一个子进程都没起来:画像 prompt 只出现在子进程自己的请求里。
+        expect(nativeBodies.some((b) => b.includes('scout subagent'))).toBe(false);
+        // 而且拒绝理由回传给了父模型(不是静默无事发生 —— 模型要知道该自己干)。
+        expect(nativeBodies.some((b) => b.includes('not confirmed yet'))).toBe(true);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((r) => nativeServer.close(() => r()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

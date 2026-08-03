@@ -830,12 +830,15 @@ export class PiAgent extends BaseAgent {
      */
     let subagentRoutingEnabled = true;
     const writeSubagentRuntimeFile = async (
-      next: { model?: string; provider?: string },
+      next: { model?: string; provider?: string; pending?: boolean },
     ): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
+        // `pending: true` = 这条路由**尚未**被 pi 确认。扩展见到它就拒绝派发(fail-closed),
+        // 于是模型切换的等待窗口里一个子进程都起不来 —— 详见 setModel 的注释。
+        ...(next.pending ? { pending: true } : {}),
       };
       const run = subagentRuntimeWriteChain.then(async (): Promise<boolean> => {
         // 已被更晚的意图取代:旧内容不得在新内容之后落盘(视作成功,最新那次负责收口)。
@@ -1345,6 +1348,153 @@ export class PiAgent extends BaseAgent {
       throw new PiImageInputUnsupportedError();
     };
 
+    /** setModel 的串行闸(见 handle.setModel)。 */
+    let setModelChain: Promise<void> = Promise.resolve();
+    /**
+     * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
+     * 并发进入会让 pending / 落定两次写交错。
+     */
+    const switchModel = async (
+      model: string,
+      setOpts?: { providerId?: string | null; effort?: Effort },
+    ): Promise<void> => {
+      const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
+        ? setOpts.providerId
+        : undefined;
+      // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
+      // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
+      // 配置后从中删/改了这个 model。两种都会让 resolveProviderForModel 静默回落 cindy 网关;
+      // 若该 model id 也在网关目录里则 set_model “成功”、后续 prompt 发往网关而非用户选的
+      // 本地/自定义端点(codex review P1)。提示重启会话以刷新启动快照,而不是静默换目的地。
+      if (explicitByomUnresolvable(requestedProviderId, model)) {
+        throw new Error(
+          `pi: BYOM provider '${requestedProviderId}' cannot serve model '${model}' in this session's ` +
+            'startup provider set (provider not present, or it no longer offers this model); restart the ' +
+            'session to use it (refusing to fall back to the Cindy gateway).',
+        );
+      }
+      const provider = resolveProviderForModel(model, requestedProviderId);
+      // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
+      // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
+      const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
+      if (setOpts?.effort) {
+        assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+      }
+      // 子代理路由快照必须**先落盘、再切 pi 侧模型**,顺序不能反(review)。
+      //
+      // 上一版是先 set_model 成功、再写快照,写失败就置 `subagentRoutingEnabled = false`。
+      // 那个撤销是**无效的**:该标志只在构造 spawnEnv 时读一次(会话启动、进程 spawn 之前),
+      // 进程起来之后改它既不能收回已注入的 env、也不能让扩展停止读那个文件。于是"写失败 +
+      // 删除也失败"(只读挂载 / 磁盘满)时,父会话已经切到新 provider,而子代理还在按**上一个
+      // 有效快照**跑 —— 委派请求发往旧 endpoint,提示词与代码随之外泄到用户并没选的目的地。
+      //
+      // 改为:写不成就**让整个模型切换失败**,一个字节都不改。父子路由要么一起前进、要么都
+      // 不动,不存在"父已切、子没切"的中间态。代价是只读文件系统下切不了模型 —— 那是显式
+      // 报错、用户看得见,远好过静默把委派发到错误端点。
+      //
+      // 但"先落盘"单独还不够。落的若是**新路由**,那么从这一刻到 RPC 回包之间存在一个等待
+      // 窗口:pi 侧仍在旧模型上,而这段时间里模型发起的 subagent 派发会现读快照、按新 provider
+      // 起子进程。RPC 随后返回 `success: false` 时,回滚快照撤不回已经起来的子进程 —— 它已经
+      // 在用一个 pi 明确拒绝了的 endpoint 干活(review)。
+      //
+      // 所以这一步落的是**带 pending 标记的**新路由:内容已经就位(证明可写、内容可回滚),但
+      // 扩展见到 `pending: true` 就拒绝派发。等待窗口里一个子进程都起不来,既不会用未确认的新
+      // 路由、也不会用与父不一致的旧路由;确认后再清掉标记放行。
+      const previousSnapshot = { model: mutableModel, provider: mutablePiProviderId };
+      if (!(await writeSubagentRuntimeFile({ model, provider, pending: true }))) {
+        throw new Error(
+          'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
+          + '请检查运行目录是否可写后重试。',
+        );
+      }
+      let resp;
+      try {
+        resp = await proc.request({ type: 'set_model', provider, modelId: model });
+      } catch (err) {
+        // RPC **reject / 超时 / 写 stdin 失败 / 进程已退出**:与 `success:false` 有本质区别 ——
+        // 那种情况我们**知道**没生效,可以回滚;这里我们**不知道** pi 侧到底切没切。
+        //
+        // 因此两条路都不能走:回滚可能与真实状态正好相反(RPC 其实生效了,回滚后父会话在新
+        // 模型、快照指向旧模型);放行则可能相反(RPC 没生效,快照却指向新模型)。任一方向都是
+        // 父子路由分叉 —— 下一次委派打到用户并未启用的端点(错误计费 + 提示词外泄)。
+        //
+        // 也没选"重新读取并校准":`get_state` 在本文件消费的形状里只暴露 `contextWindow`,
+        // 拿不到权威的 model / provider 身份;靠未经验证的字段去猜,比直接失败更糟。而且 RPC
+        // 刚超时,紧接着再发一条 RPC 很可能同样挂住。
+        //
+        // 所以按 fail-closed 收口:终止会话,让这个 pi 进程不再有下一次派发。快照**刻意**保持
+        // `pending: true` 不动:它既不是已确认的新路由、也不是旧路由,扩展会一律拒绝派发 ——
+        // 这条路径上留着 pending 正是我们想要的终态,不要"顺手"回滚成旧值。
+        deps.logger.error('pi: set_model RPC did not confirm; terminating session to avoid split subagent routing', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        try {
+          await proc.close();
+        } catch (closeErr) {
+          deps.logger.warn('pi: session termination after unconfirmed set_model also failed', {
+            message: closeErr instanceof Error ? closeErr.message : String(closeErr),
+          });
+        }
+        throw new Error(
+          'pi: 模型切换请求未收到确认(超时或链路错误),无法确定 pi 侧是否已生效;'
+          + '已终止本会话以避免子代理按不确定的路由派发。请重开会话后再切换模型。',
+        );
+      }
+      if (!resp.success) {
+        // pi 侧没切成:快照必须回滚成上一份**已确认**的路由,否则子代理会一直被 pending 挡住。
+        // 这次回滚是安全的 —— 等待窗口里 pending 标记挡住了全部派发,不存在"已经起来的子进程
+        // 正在用被拒绝的 provider"这种撤不回的状态(review)。
+        if (!(await writeSubagentRuntimeFile(previousSnapshot))) {
+          // 回滚也失败(第一次写成功之后文件系统才转只读之类):此刻盘上的快照指向**被拒绝的**
+          // provider/model,而父会话仍在旧路由 —— 子代理的下一次派发就会打到用户并未启用的
+          // 端点(错误计费 + 提示词与仓库上下文外泄)。
+          //
+          // 这里**不能**再退回 `subagentRoutingEnabled = false`(上一版就是这么写的,而它是个
+          // 空操作,我在上面的注释里已经承认过):该标志只在构造 spawnEnv 时读一次,进程早就
+          // 起来了,改它既收不回已注入的 env,也拦不住扩展继续读那个文件。删除文件同样已经
+          // 试过并失败 —— 使用点的 fail-closed 因此也指望不上。
+          //
+          // 写不了、删不掉,唯一还能保证的手段就是**让这个 pi 进程不再有下一次派发**:直接
+          // 终止会话。代价明确(会话中断,用户要重开),但它是可证明有效的;继续跑下去的代价
+          // 是把提示词发到错误端点,那个不可接受。
+          deps.logger.error(
+            'pi: set_model failed and the subagent routing snapshot could not be rolled back; '
+            + 'terminating the session because subagent delegation would otherwise route to the rejected provider',
+          );
+          try {
+            await proc.close();
+          } catch (err) {
+            deps.logger.warn('pi: session termination after routing rollback failure also failed', {
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          throw new Error(
+            'pi: 模型切换失败且子代理路由快照无法回滚,已终止本会话以避免委派请求发往未启用的端点。'
+            + '请检查运行目录是否可写后重开会话。',
+          );
+        }
+        throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
+      }
+      // pi 已确认 → 清掉 pending 标记放行派发。写失败时**不**抛错:模型切换本身确实成功了,
+      // 谎报失败会让上层与 UI 状态和 pi 真实状态背离。代价是这个会话的子代理一直被 pending
+      // 挡住(可见的降级、拒绝时有明确文案),而它是安全方向 —— 绝不会把委派发到错误 endpoint。
+      if (!(await writeSubagentRuntimeFile({ model, provider }))) {
+        deps.logger.error(
+          'pi: model switch confirmed but the subagent routing snapshot stayed pending; '
+          + 'subagent delegation stays disabled for this session (fail-closed)',
+        );
+      }
+      mutableModel = model;
+      mutablePiProviderId = provider;
+      activeEffortSnapshot = nextEffortSnapshot;
+      if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
+      autoReviewDecisionCache.clear();
+      const data = (resp.data ?? {}) as { contextWindow?: number };
+      if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
+        ctx.contextWindow = data.contextWindow;
+      }
+    };
+
     const handle: AgentSessionHandle = {
       // getter 而非固定值:setModel / commitRewindFiles 会更新闭包里的 mutableModel /
       // sdkSessionId,Session.model / Session.sdkSessionId 直读这两个 handle 属性 ——
@@ -1443,119 +1593,14 @@ export class PiAgent extends BaseAgent {
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
-        const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
-          ? setOpts.providerId
-          : undefined;
-        // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
-        // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
-        // 配置后从中删/改了这个 model。两种都会让 resolveProviderForModel 静默回落 cindy 网关;
-        // 若该 model id 也在网关目录里则 set_model “成功”、后续 prompt 发往网关而非用户选的
-        // 本地/自定义端点(codex review P1)。提示重启会话以刷新启动快照,而不是静默换目的地。
-        if (explicitByomUnresolvable(requestedProviderId, model)) {
-          throw new Error(
-            `pi: BYOM provider '${requestedProviderId}' cannot serve model '${model}' in this session's ` +
-              'startup provider set (provider not present, or it no longer offers this model); restart the ' +
-              'session to use it (refusing to fall back to the Cindy gateway).',
-          );
-        }
-        const provider = resolveProviderForModel(model, requestedProviderId);
-        // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
-        // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
-        const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
-        if (setOpts?.effort) {
-          assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
-        }
-        // 子代理路由快照必须**先落盘、再切 pi 侧模型**,顺序不能反(review)。
-        //
-        // 上一版是先 set_model 成功、再写快照,写失败就置 `subagentRoutingEnabled = false`。
-        // 那个撤销是**无效的**:该标志只在构造 spawnEnv 时读一次(会话启动、进程 spawn 之前),
-        // 进程起来之后改它既不能收回已注入的 env、也不能让扩展停止读那个文件。于是"写失败 +
-        // 删除也失败"(只读挂载 / 磁盘满)时,父会话已经切到新 provider,而子代理还在按**上一个
-        // 有效快照**跑 —— 委派请求发往旧 endpoint,提示词与代码随之外泄到用户并没选的目的地。
-        //
-        // 改为:写不成就**让整个模型切换失败**,一个字节都不改。父子路由要么一起前进、要么都
-        // 不动,不存在"父已切、子没切"的中间态。代价是只读文件系统下切不了模型 —— 那是显式
-        // 报错、用户看得见,远好过静默把委派发到错误端点。
-        const previousSnapshot = { model: mutableModel, provider: mutablePiProviderId };
-        if (!(await writeSubagentRuntimeFile({ model, provider }))) {
-          throw new Error(
-            'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
-            + '请检查运行目录是否可写后重试。',
-          );
-        }
-        let resp;
-        try {
-          resp = await proc.request({ type: 'set_model', provider, modelId: model });
-        } catch (err) {
-          // RPC **reject / 超时 / 写 stdin 失败 / 进程已退出**:与 `success:false` 有本质区别 ——
-          // 那种情况我们**知道**没生效,可以回滚;这里我们**不知道** pi 侧到底切没切。
-          //
-          // 因此两条路都不能走:回滚可能与真实状态正好相反(RPC 其实生效了,回滚后父会话在新
-          // 模型、快照指向旧模型);放行则可能相反(RPC 没生效,快照却指向新模型)。任一方向都是
-          // 父子路由分叉 —— 下一次委派打到用户并未启用的端点(错误计费 + 提示词外泄)。
-          //
-          // 也没选"重新读取并校准":`get_state` 在本文件消费的形状里只暴露 `contextWindow`,
-          // 拿不到权威的 model / provider 身份;靠未经验证的字段去猜,比直接失败更糟。而且 RPC
-          // 刚超时,紧接着再发一条 RPC 很可能同样挂住。
-          //
-          // 所以按 fail-closed 收口:终止会话,让这个 pi 进程不再有下一次派发。
-          deps.logger.error('pi: set_model RPC did not confirm; terminating session to avoid split subagent routing', {
-            message: err instanceof Error ? err.message : String(err),
-          });
-          try {
-            await proc.close();
-          } catch (closeErr) {
-            deps.logger.warn('pi: session termination after unconfirmed set_model also failed', {
-              message: closeErr instanceof Error ? closeErr.message : String(closeErr),
-            });
-          }
-          throw new Error(
-            'pi: 模型切换请求未收到确认(超时或链路错误),无法确定 pi 侧是否已生效;'
-            + '已终止本会话以避免子代理按不确定的路由派发。请重开会话后再切换模型。',
-          );
-        }
-        if (!resp.success) {
-          // pi 侧没切成:快照必须回滚,否则子代理会按"新模型"跑而父会话还在旧模型上。
-          if (!(await writeSubagentRuntimeFile(previousSnapshot))) {
-            // 回滚也失败(第一次写成功之后文件系统才转只读之类):此刻盘上的快照指向**被拒绝的**
-            // provider/model,而父会话仍在旧路由 —— 子代理的下一次派发就会打到用户并未启用的
-            // 端点(错误计费 + 提示词与仓库上下文外泄)。
-            //
-            // 这里**不能**再退回 `subagentRoutingEnabled = false`(上一版就是这么写的,而它是个
-            // 空操作,我在上面的注释里已经承认过):该标志只在构造 spawnEnv 时读一次,进程早就
-            // 起来了,改它既收不回已注入的 env,也拦不住扩展继续读那个文件。删除文件同样已经
-            // 试过并失败 —— 使用点的 fail-closed 因此也指望不上。
-            //
-            // 写不了、删不掉,唯一还能保证的手段就是**让这个 pi 进程不再有下一次派发**:直接
-            // 终止会话。代价明确(会话中断,用户要重开),但它是可证明有效的;继续跑下去的代价
-            // 是把提示词发到错误端点,那个不可接受。
-            deps.logger.error(
-              'pi: set_model failed and the subagent routing snapshot could not be rolled back; '
-              + 'terminating the session because subagent delegation would otherwise route to the rejected provider',
-            );
-            try {
-              await proc.close();
-            } catch (err) {
-              deps.logger.warn('pi: session termination after routing rollback failure also failed', {
-                message: err instanceof Error ? err.message : String(err),
-              });
-            }
-            throw new Error(
-              'pi: 模型切换失败且子代理路由快照无法回滚,已终止本会话以避免委派请求发往未启用的端点。'
-              + '请检查运行目录是否可写后重开会话。',
-            );
-          }
-          throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
-        }
-        mutableModel = model;
-        mutablePiProviderId = provider;
-        activeEffortSnapshot = nextEffortSnapshot;
-        if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
-        autoReviewDecisionCache.clear();
-        const data = (resp.data ?? {}) as { contextWindow?: number };
-        if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
-          ctx.contextWindow = data.contextWindow;
-        }
+        // 会话级串行闸:整段"写待切换快照 → set_model RPC → 落定/回滚"必须是一个临界区。
+        // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
+        // 内容,盘上就会出现没人确认过的组合。串行化之后每次切换都看到确定的前一状态,
+        // `previousSnapshot` 才是真正可回滚的那一份(review)。
+        const run = setModelChain.then(() => switchModel(model, setOpts));
+        // 链永不停在 rejected 上:一次失败之后的切换仍要能排进来。
+        setModelChain = run.then(() => {}, () => {});
+        return run;
       },
 
       async setEffort(effort: Effort): Promise<void> {

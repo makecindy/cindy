@@ -26,6 +26,8 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   onAfterSetModel: null as null | (() => void),
+  // 卡住 set_model 的回包,让测试能在"RPC 在飞"的那一刻观察盘上的路由快照。
+  holdSetModel: null as null | Promise<void>,
   closed: false,
 }));
 
@@ -45,6 +47,9 @@ vi.mock('../rpc-client.js', () => ({
       cmd: Record<string, unknown> & { type: string },
     ): Promise<{ success: boolean; data?: unknown }> {
       captured.requests.push(cmd);
+      if (cmd.type === 'set_model' && captured.holdSetModel) {
+        await captured.holdSetModel;
+      }
       if (cmd.type === 'set_model' && captured.rejectSetModel) {
         throw new Error('pi rpc timeout after 30000ms: set_model');
       }
@@ -94,6 +99,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.onAfterSetModel = null;
+    captured.holdSetModel = null;
     captured.closed = false;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-cwd-'));
@@ -288,6 +294,87 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await expect(handle.setModel('m')).rejects.toThrow(/未收到确认/);
     // 会话必须真的被关掉:进程还活着就意味着"下一次委派"仍可能发生。
     expect(captured.closed).toBe(true);
+    // 快照**刻意**停在 pending:它既不是已确认的新路由、也不是旧路由,扩展一律拒绝派发。
+    // 这条路径上"顺手回滚成旧值"是错的 —— 我们并不知道 pi 侧到底切没切。
+    const stuck = JSON.parse(readFileSync(snapshotPath, 'utf8')) as { pending?: boolean; model?: string };
+    expect(stuck.pending).toBe(true);
+    expect(stuck.model).toBe('m');
+  });
+
+  it('marks the routing snapshot pending while set_model is in flight and clears it on confirm', async () => {
+    // review P1:原来在 RPC 回包**之前**就把新路由写成"已确认"形状,于是等待窗口里模型发起的
+    // 派发会现读快照、按未确认的 provider 起子进程;RPC 随后失败时回滚文件撤不回已起的子进程。
+    // 修法:窗口内快照带 `pending: true`,扩展见到就拒绝派发(拒绝的真实性由集成用例验证)。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+    const before = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    // 起点必须是已确认形状 —— 否则下面的 pending 断言证明不了任何东西。
+    expect(before.pending).toBeUndefined();
+
+    let release = () => {};
+    captured.holdSetModel = new Promise<void>((r) => { release = r; });
+    captured.requests = [];
+    const switching = handle.setModel('m-next');
+
+    // 等到 RPC 真的在飞。
+    await vi.waitFor(() => {
+      expect(captured.requests.map((r) => r.type)).toContain('set_model');
+    });
+    // 窗口内:内容已经是新路由(可写、可回滚),但带 pending → 扩展拒绝派发。
+    const during = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(during.pending).toBe(true);
+    expect(during.model).toBe('m-next');
+
+    release();
+    await switching;
+    // 确认后标记必须清掉,否则这个会话的子代理会被永久挡住。
+    const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(after.pending).toBeUndefined();
+    expect(after.model).toBe('m-next');
+    expect(after.provider).toBe(before.provider);
+
+    await handle.close();
+  });
+
+  it('serializes concurrent model switches so no unconfirmed combination is ever published', async () => {
+    // 并发/连点切换(本地 + 远程控制端同时切)若交错:A 写 pending、B 写 pending、A 落定 B 的
+    // 内容 —— 盘上就会出现没人确认过的 model/provider 组合,而 `previousSnapshot` 也不再是真正
+    // 可回滚的那一份。串行闸保证第二次切换在第一次落定之后才开始。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+
+    let release = () => {};
+    captured.holdSetModel = new Promise<void>((r) => { release = r; });
+    captured.requests = [];
+    const first = handle.setModel('m-first');
+    const second = handle.setModel('m-second');
+
+    await vi.waitFor(() => {
+      expect(captured.requests.map((r) => r.type)).toContain('set_model');
+    });
+    // 第一次还在飞 → 第二次必须一个字节都还没写:盘上是 m-first + pending,不是 m-second。
+    const during = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(during.model).toBe('m-first');
+    expect(during.pending).toBe(true);
+    // 而且第二条 set_model 还没发出去(否则 pi 侧会收到乱序的两次切换)。
+    expect(captured.requests.filter((r) => r.type === 'set_model')).toHaveLength(1);
+
+    captured.holdSetModel = null;
+    release();
+    await Promise.all([first, second]);
+
+    // 两次切换按调用序抵达 pi,终态是最后一次、且已确认。
+    const setModelCalls = captured.requests.filter((r) => r.type === 'set_model');
+    expect(setModelCalls.map((r) => r.modelId)).toEqual(['m-first', 'm-second']);
+    const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
+    expect(after.model).toBe('m-second');
+    expect(after.pending).toBeUndefined();
+
+    await handle.close();
   });
 
   it('rolls back to the user-selected provider when set_model cleanly reports failure', async () => {
@@ -304,8 +391,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // 会话不该因为一次干净的失败被终止(那是 reject/超时才有的代价)。
     expect(captured.closed).toBe(false);
     // 快照已回滚到切换前的值 —— 父进程路由与下一次委派一致。
-    const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as { model?: string; provider?: string };
+    const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as
+      { model?: string; provider?: string; pending?: boolean };
     expect(after).toEqual(before);
+    // 回滚必须**同时**清掉 pending,否则子代理会被永久挡在门外(一次干净的失败不该有这个代价)。
+    expect(after.pending).toBeUndefined();
 
     await handle.close();
   });
