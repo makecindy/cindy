@@ -512,13 +512,19 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // 与顶层 parent_tool_use_id(父 agent 调用)语义不同 —— 即使字符串相同
       // (如父 Task_1 与子自己启动的首个 Task_1), 也指向不同 occurrence。若走
       // resolveField, 父的映射被缓存后嵌套复用, replay/import 把子 tool 挂到父 id 下
-      // (codex-connector P1: Resolve nested stream IDs independently)。用纯行作用域
-      // 解析(后顾优先 + 前瞻 fallback), 与数组项一致。
+      // (codex-connector P1: Resolve nested stream IDs independently)。
+      // **前瞻优先**: content_block_start 预告的是**即将出现**的 tool call, 即使存在
+      // 更早的旧 occurrence(line < index), 也应匹配未来 —— 重铸后新调用的 start 记录
+      // 若后顾命中旧调用, 会被改写为首个卡片而非新调用(codex-connector P2: Map
+      // pre-assistant duplicate stream IDs forward)。resolveAhead 本身已有「无 future
+      // 时按内容顺序 fallback 之前 occurrence」的逻辑, 覆盖 start 落在 assistant 之后
+      // 的场景; aheadPtr 跨字段推进保证同一 entry 内 parent_tool_use_id 先占的
+      // occurrence 不会与 content_block.id 冲突(nested 场景父/子各匹配各次)。
       const evt = entry.event;
       if (isRecord(evt) && evt.type === 'content_block_start') {
         const cb = evt.content_block;
         if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-          const mapped = resolveOccurrence(cb.id, index) ?? resolveAhead(cb.id, index);
+          const mapped = resolveAhead(cb.id, index);
           if (mapped !== undefined && mapped !== cb.id) {
             cb.id = mapped;
             entryChanged = true;

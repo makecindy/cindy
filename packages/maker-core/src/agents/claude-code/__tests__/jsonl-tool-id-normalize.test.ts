@@ -712,6 +712,34 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((evt.content_block as Record<string, unknown>).id).toBe('Task_1_dup2');
   });
 
+  it('重铸后新调用的 content_block_start 前瞻匹配新调用, 不后顾命中旧调用(P2: Map pre-assistant duplicate stream IDs forward)', () => {
+    // 旧调用 Bash_5(line 0)已存在, 之后重铸新调用(line 3)。content_block_start(line 2)
+    // 预告的是新调用 —— 后顾优先会命中旧 Bash_x5, 但语义上应前瞻匹配 Bash_5_dup2。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5')]),
+      userEntry('u1', [toolResult('Bash_5')]),
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Bash_5', name: 'Bash', input: {} },
+        },
+      }),
+      assistantEntry('a2', [toolUse('Bash_5')]),
+      userEntry('u2', [toolResult('Bash_5')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // 旧调用 → Bash_x5, 重铸新调用 → Bash_5_dup2
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x5');
+    expect(contentOf(entries[3])[0].id).toBe('Bash_5_dup2');
+    // content_block_start 前瞻匹配新调用(不是旧调用)
+    const evt = (entries[2] as Record<string, unknown>).event as Record<string, unknown>;
+    expect((evt.content_block as Record<string, unknown>).id).toBe('Bash_5_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
