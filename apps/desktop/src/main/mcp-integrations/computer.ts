@@ -1771,10 +1771,10 @@ async function buildWindowsWin32ListAppsFallback(): Promise<unknown> {
  * Cheap, read-only window catalog for the Composer's `@` palette.
  *
  * Windows uses the bounded Win32 snapshot directly instead of starting a CUA
- * MCP session. On macOS we only query when a prior passive/explicit permission
- * check already proved Accessibility is granted, so opening the palette can
- * never become a permission prompt. Results are briefly cached because the
- * palette rescans while the user types.
+ * MCP session. On macOS a cold app cache first refreshes permission state via
+ * the driver's strictly read-only status command; unsupported/older drivers
+ * fail closed, so opening the palette can never become a permission prompt.
+ * Results are briefly cached because the palette rescans while the user types.
  */
 export async function listComputerWindowsForAtMention(): Promise<unknown> {
   const now = Date.now();
@@ -1786,6 +1786,14 @@ export async function listComputerWindowsForAtMention(): Promise<unknown> {
   if (process.platform === 'win32') {
     result = await buildWindowsWin32ListWindowsFallback({});
   } else {
+    if (process.platform === 'darwin' && cachedPermissionProbe === null) {
+      // App restarts clear the in-memory permission cache even when TCC still
+      // grants Accessibility. Bootstrap it once through the read-only status
+      // command; older drivers fail closed without probing or prompting.
+      await getComputerDriverStatus({
+        passivePermissionProbeOnly: true,
+      });
+    }
     if (
       process.platform === 'darwin'
       && cachedPermissionProbe?.state.accessibility !== 'granted'
