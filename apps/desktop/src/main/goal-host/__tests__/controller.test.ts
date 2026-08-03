@@ -1493,6 +1493,7 @@ describe('GoalController', () => {
     ): Promise<SessionSendResult> => {
       const content = typeof message === 'string' ? message : message.content;
       local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
       sendCalls += 1;
       return sendCalls === 2 ? blockedOldSend : { accepted: true };
     });
@@ -2345,6 +2346,76 @@ describe('GoalController', () => {
       await tick();
     },
   );
+
+  it('does not re-mark a goal turn when its terminal event arrives before send resolves', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releaseFinalizeGet!: (state: GoalState | null) => void;
+    const blockedFinalizeGet = new Promise<GoalState | null>((resolve) => {
+      releaseFinalizeGet = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      vi.spyOn(local.storage, 'get').mockImplementationOnce(() => blockedFinalizeGet);
+      local.session.emitGoalTurn({
+        toolUse: true,
+        verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
+        origin: 'goal',
+      });
+      return { accepted: true };
+    });
+
+    await startGoal(local);
+    const active = seededGoal({ objective: 'make tests pass' });
+    local.session.running = true;
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toBeNull();
+    releaseFinalizeGet(active);
+    await tick();
+  });
+
+  it('does not cancel the send signal after the goal crosses the dispatch boundary', async () => {
+    const local = makeController();
+    let releaseSend!: () => void;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      signal = opts?.signal;
+      opts?.onDispatching?.();
+      local.session.emitGoalTurn({
+        toolUse: true,
+        verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+        origin: 'goal',
+      });
+      await sendPending;
+      return signal?.aborted
+        ? { accepted: false, reason: 'cancelled-before-dispatch' }
+        : { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.completions).toHaveLength(1));
+
+    expect(signal?.aborted).toBe(false);
+    releaseSend();
+    await setPromise;
+    expect(await local.storage.get('s1')).toBeNull();
+  });
 
   it('clearGoal still removes persisted state when stopping the goal turn throws', async () => {
     const local = makeController({

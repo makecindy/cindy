@@ -1802,7 +1802,14 @@ export class GoalController {
           // send Promise 返回后才登记：派发调用尚未返回时用户点清除，clearGoal 必须
           // 已经知道这个 turn 属于目标模式，才能立即走 Stop 边界。
           onDispatching: () => {
-            if (isCurrentDispatch()) this.goalTurnsInFlight.add(sessionId);
+            if (!isCurrentDispatch()) return;
+            this.goalTurnsInFlight.add(sessionId);
+            // signal 只负责取消 dispatch 前的 gate。跨过这个边界后由 coordinator Stop
+            // 负责 active turn；否则快速终态的 stopSession 会把真实已派发轮次误报为
+            // cancelled-before-dispatch。
+            if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
+              this.goalDispatchAbortControllers.delete(sessionId);
+            }
           },
           signal: dispatchAbortController.signal,
         },
@@ -1823,7 +1830,8 @@ export class GoalController {
           baselineStarted = false;
           return;
         }
-        this.goalTurnsInFlight.add(sessionId);
+        // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
+        // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
       }
     } catch (e) {
