@@ -27,9 +27,11 @@
  * 消费方：
  *  - claude-code / codex translator：终态 error 事件附带 `CONTEXT_OVERFLOW_REASON`。
  *  - claude-code translator：命中时调 `tracker.markContextOverflow()`（见 usage-tracker.ts）。
- *  - renderer ErrorBanner 有一份**语义一致**的同名判定
- *    （apps/desktop/src/renderer/utils/contextOverflowError.ts，不跨 bundle 共享代码，
- *    与 overload / network 两端一致性同款惯例）。修改 pattern 时两处同步。
+ *    Codex 压缩由后端原生管理，没有 host `AutoCompactController` / 手动 `/compact` 链路；
+ *    这里只附稳定 reason，未返回 usage 时的圆环精度不冒充同一套 auto-compact 解锁。
+ *  - 配套 Desktop PR #1478 落地后，renderer ErrorBanner 侧有一份**语义一致**的
+ *    同名判定（apps/desktop/src/renderer/utils/contextOverflowError.ts）。两个 PR
+ *    没有编译依赖、可独立合并；两边都落地后修改 pattern 时同步。
  *  - desktop main 的 providerErrors.ts `CONTEXT_TOO_LONG_RE` 是第三份同语义 pattern
  *    （供应商上游错误分类，作用域是 proxy 层响应体而非 turn error）。三处的措辞
  *    集合保持同步。

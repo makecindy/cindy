@@ -7861,7 +7861,10 @@ function compactSession(
   effort: string,
   permissionMode: string,
   workingDir: string,
-  opts?: { vendorOptions?: Record<string, unknown> },
+  opts?: {
+    vendorOptions?: Record<string, unknown>;
+    continueAfterCompact?: boolean;
+  },
 ): Promise<boolean> {
   if (!sessionId || !workingDir) return Promise.resolve(false);
   const current = getOrCreateState(sessionId);
@@ -7877,8 +7880,27 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
+  const continueAfterCompact = opts?.continueAfterCompact
+    ? buildQueuedMessage(
+        sessionId,
+        CONTINUE_AFTER_ERROR_PROMPT,
+        model,
+        effort,
+        permissionMode,
+        workingDir,
+        undefined,
+        undefined,
+        { vendorOptions: opts.vendorOptions },
+      )
+    : undefined;
+  if (continueAfterCompact) {
+    continueAfterCompact.createOpts.planMode = false;
+  }
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    input.compact(sessionId, createOpts, { userName: currentUserName }),
+    input.compact(sessionId, createOpts, {
+      userName: currentUserName,
+      ...(continueAfterCompact ? { continueAfterCompact } : {}),
+    }),
   )
     // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
     .then(({ projection }) => projection.error === null)

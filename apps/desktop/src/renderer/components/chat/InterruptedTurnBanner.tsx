@@ -125,6 +125,7 @@ export function ErrorTailErrorBanner({
   errorReason,
   onSilentStopContinue,
   onCompactContext,
+  onNewSession,
   className,
   style,
 }: {
@@ -150,6 +151,8 @@ export function ErrorTailErrorBanner({
   onSilentStopContinue?: () => void;
   /** 上下文超限历史行的「压缩上下文」入口(透传 ErrorBanner,见其 prop 注释)。 */
   onCompactContext?: () => void | Promise<void>;
+  /** Codex 历史超限行没有 compact 能力，透传真正可点击的新建任务入口。 */
+  onNewSession?: () => void;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -173,6 +176,7 @@ export function ErrorTailErrorBanner({
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}
       onCompactContext={onCompactContext}
+      onNewSession={onNewSession}
       className={className}
       style={style}
     />

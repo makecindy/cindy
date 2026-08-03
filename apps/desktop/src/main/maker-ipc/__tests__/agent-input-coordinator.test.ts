@@ -1622,6 +1622,55 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
   });
 
+  it('queues recovery continuation only after compact really completes', async () => {
+    const h = createHarness();
+    const sid = 'compact-then-continue';
+    const createOpts = makeItem('q-compact', 'ignored').createOpts;
+    const continuation = makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT, {
+      originalSyntheticTrigger: 'continue',
+    });
+
+    await h.coordinator.compact(sid, createOpts, { continueAfterCompact: continuation });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: '/compact' });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, continuation.clientId, 'manual');
+  });
+
+  it('does not continue when recovery compact fails', async () => {
+    const h = createHarness();
+    const sid = 'compact-failed-no-continue';
+    const continuation = makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT, {
+      originalSyntheticTrigger: 'continue',
+    });
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts, {
+      continueAfterCompact: continuation,
+    });
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'compact failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.onUiRetry).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).error).toBe('compact failed');
+  });
+
   it('blocks queued turns while silent compact is active until Done', async () => {
     const h = createHarness();
     const sid = 'compact-blocks-queue';

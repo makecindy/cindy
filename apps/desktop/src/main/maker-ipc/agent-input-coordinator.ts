@@ -418,12 +418,16 @@ interface ActiveTurn {
   /** 当前 vendor turn 由哪条 Continue 合成项发起；同轮 steer 会继承它。 */
   continuationOwnerClientId: string | null;
   controlKind?: 'compact';
+  /** 仅 context-overflow 恢复压缩携带；compact 真正 done 后才入队，失败时丢弃。 */
+  continueAfterCompact?: AgentInputQueuedMessage;
 }
 
 interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
   userName?: string;
   waitForClientIds: string[];
+  /** 仅 context-overflow 恢复入口使用；普通 Context 环压缩不携带。 */
+  continueAfterCompact?: AgentInputQueuedMessage;
 }
 
 type ActiveTurnDispatchLifecycle = 'preparing' | 'awaiting-dispatch-hooks' | 'sending' | 'dispatched';
@@ -1112,7 +1116,11 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
-  async compact(sessionId: string, createOpts: AgentInputCreateOpts, opts?: { userName?: string }): Promise<AgentInputProjection> {
+  async compact(
+    sessionId: string,
+    createOpts: AgentInputCreateOpts,
+    opts?: { userName?: string; continueAfterCompact?: AgentInputQueuedMessage },
+  ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
     // vendor dispatch 的隐藏 scheduler 续跑，再让 host 终止对应 run waiter；
@@ -1136,6 +1144,9 @@ export class AgentInputCoordinator {
       createOpts,
       userName: opts?.userName,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
+      ...(opts?.continueAfterCompact
+        ? { continueAfterCompact: captureOriginalSyntheticTrigger(opts.continueAfterCompact) }
+        : {}),
     };
 
     if (
@@ -1180,6 +1191,7 @@ export class AgentInputCoordinator {
       pendingTerminalEvent: null,
       continuationOwnerClientId: null,
       controlKind: 'compact',
+      continueAfterCompact: request.continueAfterCompact,
     };
     state.activeTurn = active;
     this.emit(sessionId);
@@ -2263,6 +2275,15 @@ export class AgentInputCoordinator {
       return;
     }
     state.activeTurn = null;
+    if (active?.controlKind === 'compact' && active.continueAfterCompact) {
+      this.enqueueContinuationAfterCompact(sessionId, state, active.continueAfterCompact);
+      state.error = null;
+      state.stickyError = null;
+      state.recovery = null;
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'compact-continue');
+      return;
+    }
     // 同轮注入的 steer 在飞期间,老 turn 的 done 可能先到(注入前 turn 恰好收尾)。
     // marker 属于 steer 事务而不是老 turn,必须留到 steer() 自己 resolve/reject
     // 或 Stop/close 取消,这里不动 steeringQueueClientIds。
@@ -2475,6 +2496,29 @@ export class AgentInputCoordinator {
     if (this.getDrainableCompact(sessionId, state)) return null;
     if (state.queueEditLocks.includes(head.clientId)) return null;
     return head;
+  }
+
+  /**
+   * Recovery compact 的 continuation 只能在 /compact 的真实 done 边界后进入普通队列。
+   * 提前 enqueue 会因 Continue 的队首优先级反而挡住 pending compact；直接调用
+   * retryLastError 又会因 compact 已按用户动作放弃 recovery 而 no-op。
+   */
+  private enqueueContinuationAfterCompact(
+    sessionId: string,
+    state: SessionInputState,
+    item: AgentInputQueuedMessage,
+  ): void {
+    const continuation = captureOriginalSyntheticTrigger(item);
+    if (this.isDuplicateEnqueueClientId(state, continuation.clientId)) return;
+    this.rememberEnqueuedClientId(state, continuation.clientId);
+    this.deps.onUiRetry?.(sessionId, continuation.clientId, 'manual');
+    state.pendingQueue.unshift(continuation);
+    state.autoResumePending = null;
+    this.touchUserSend(sessionId);
+    log.info('queued continuation after successful recovery compact', {
+      sessionId,
+      clientId: continuation.clientId,
+    });
   }
 
   private getDrainableCompact(sessionId: string, state: SessionInputState): PendingCompactRequest | null {

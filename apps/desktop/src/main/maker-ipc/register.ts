@@ -9004,11 +9004,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typedCreateOpts.agentKind !== 'claude-code') {
       throwIpcError('INVALID_PARAMS', 'compact only supports claude-code sessions');
     }
-    return inputCoordinator.compact(
-      sid,
-      typedCreateOpts,
-      opts && typeof opts === 'object' ? opts as { userName?: string } : undefined,
-    );
+    const typedOpts = opts && typeof opts === 'object'
+      ? opts as { userName?: string; continueAfterCompact?: unknown }
+      : undefined;
+    const continueAfterCompact = typedOpts?.continueAfterCompact
+      ? requireQueuedMessage(typedOpts.continueAfterCompact)
+      : undefined;
+    return inputCoordinator.compact(sid, typedCreateOpts, {
+      ...(typedOpts?.userName !== undefined ? { userName: typedOpts.userName } : {}),
+      ...(continueAfterCompact ? { continueAfterCompact } : {}),
+    });
   });
 
   ipcMain.handle(MAKER_INVOKE.INPUT_STEER, async (_e, sessionId: unknown, item: unknown, opts?: unknown) => {

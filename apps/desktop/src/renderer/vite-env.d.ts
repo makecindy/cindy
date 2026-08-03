@@ -4438,7 +4438,10 @@ interface ElectronAPI {
       compact: (
         sessionId: string,
         createOpts: import('../shared/agentInputQueue').AgentInputCreateOpts,
-        opts?: { userName?: string },
+        opts?: {
+          userName?: string;
+          continueAfterCompact?: import('../shared/agentInputQueue').AgentInputQueuedMessage;
+        },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       steer: (
         sessionId: string,

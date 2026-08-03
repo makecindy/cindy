@@ -4,11 +4,11 @@
  * `400 ... "code": "context_length_exceeded"` 整段 JSON)换成友好文案 + 可执行
  * 恢复动作,并隐藏必败的 Retry —— 原样重发必然再撞同一个 4xx。
  *
- * 判定与 maker-core 的 `packages/maker-core/src/agents/shared/context-overflow-error.ts`
- * **语义一致**(那份决定 translator 是否给 error 事件带稳定 reason、tracker 是否锁到
- * 窗口满载;不跨 bundle 共享代码,与 overloadError / networkError 的两端一致性同款
- * 惯例)。desktop main 的 providerErrors.ts `CONTEXT_TOO_LONG_RE` 是第三份同语义
- * pattern(作用域是 proxy 层响应体)。修改措辞集合时三处同步。
+ * 配套 maker-core PR #1476 落地后，本判定与
+ * `packages/maker-core/src/agents/shared/context-overflow-error.ts` **语义一致**（那份决定
+ * translator 是否给 error 事件带稳定 reason、tracker 是否锁到窗口满载）。两个 PR
+ * 没有编译依赖、可独立合并；两边都落地后，连同 desktop main 的 providerErrors.ts
+ * `CONTEXT_TOO_LONG_RE` 共三份同语义 pattern，修改措辞集合时必须同步。
  *
  * **与 overloadError / networkError 的分工**:那两份管"上游没容量 / 网络到不了",
  * 都可能重试自愈;本份管"请求本身太大被拒",重试必败 —— 恢复动作是压缩上下文或

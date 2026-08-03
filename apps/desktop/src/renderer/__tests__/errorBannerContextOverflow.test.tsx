@@ -28,6 +28,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorTailErrorBanner } from '@/components/chat/InterruptedTurnBanner';
 import { CONTEXT_OVERFLOW_REASON } from '@/utils/contextOverflowError';
 
 afterEach(() => {
@@ -99,6 +100,24 @@ describe('ErrorBanner context-overflow guidance (#1429)', () => {
     expect(screen.getByText('chat.errorBanner.contextOverflowNoCompact')).toBeTruthy();
     fireEvent.click(screen.getByTitle('chat.errorBanner.newSessionTitle'));
     expect(onNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers the same new-session action for a persisted Codex error tail', () => {
+    const onNewSession = vi.fn();
+    render(
+      createElement(ErrorTailErrorBanner, {
+        errorText: OVERFLOW_ERROR,
+        errorReason: CONTEXT_OVERFLOW_REASON,
+        onContinue: vi.fn(),
+        onDismiss: vi.fn(),
+        agentKind: 'codex',
+        onNewSession,
+      }),
+    );
+
+    fireEvent.click(screen.getByTitle('chat.errorBanner.newSessionTitle'));
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
   });
 
   it('keeps the raw error inspectable behind the collapse toggle', () => {

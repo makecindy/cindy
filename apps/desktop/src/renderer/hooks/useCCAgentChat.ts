@@ -133,7 +133,10 @@ interface UseCCAgentChatReturn {
     effort: string,
     permissionMode: string,
     workingDir: string,
-    opts?: { vendorOptions?: Record<string, unknown> },
+    opts?: {
+      vendorOptions?: Record<string, unknown>;
+      continueAfterCompact?: boolean;
+    },
   ) => Promise<boolean>;
   steerMessage: (
     text: string,
@@ -424,7 +427,10 @@ export function useCCAgentChat(
       effort: string,
       permissionMode: string,
       workingDir: string,
-      opts?: { vendorOptions?: Record<string, unknown> },
+      opts?: {
+        vendorOptions?: Record<string, unknown>;
+        continueAfterCompact?: boolean;
+      },
     ) => {
       if (!sessionId) return Promise.resolve(false);
       return makerChatStore.compactSession(

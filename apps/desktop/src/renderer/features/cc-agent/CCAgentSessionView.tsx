@@ -2557,7 +2557,7 @@ export function CCAgentSessionView({
     navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
   }, [navigate, ownsWindowRoute]);
 
-  const handleCompactRequest = useCallback(async () => {
+  const handleCompactRequest = useCallback(async (continueAfterCompact = false) => {
     if (!session) return;
     if (!session.workingDir) return;
     if (compactRequestInFlightRef.current) return;
@@ -2589,6 +2589,7 @@ export function CCAgentSessionView({
         session.effort as Effort,
         session.permissionMode as PermissionMode,
         session.workingDir,
+        { continueAfterCompact },
       );
     } finally {
       compactRequestInFlightRef.current = false;
@@ -3375,7 +3376,14 @@ export function CCAgentSessionView({
                   onCompactContext={
                     // 与 Context 环同款门控(codex 走服务端自动压缩无手动入口);
                     // 刻意不要求 contextTokens > 0 —— 超限自锁的会话读数可能停在 0(#1429)。
-                    !isCodex && session != null ? handleCompactRequest : undefined
+                    !isCodex && session != null
+                      ? () => handleCompactRequest(true)
+                      : undefined
+                  }
+                  onNewSession={
+                    isCodex && ownsWindowRoute && session != null
+                      ? handleNewSessionAfterContextOverflow
+                      : undefined
                   }
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -3428,8 +3436,8 @@ export function CCAgentSessionView({
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
                 onCompactContext={
-                  // 门控与 error-tail 同款(见上);live 超限错误同样给压缩入口。
-                  !isCodex && session != null ? handleCompactRequest : undefined
+                  // 超限恢复专用：compact 真正完成后由 main 再派隐藏续跑指令。
+                  !isCodex && session != null ? () => handleCompactRequest(true) : undefined
                 }
                 onNewSession={
                   // Codex 无手动 compact 协议；仅窗口路由主实例能接管顶层导航。
@@ -3867,7 +3875,7 @@ export function CCAgentSessionView({
                     onCompact={
                       // codex 无手动 compact;context 为 0 时压缩无意义 → 两种情况保持纯展示
                       !isCodex && session != null && agentStatus.contextTokens > 0
-                        ? handleCompactRequest
+                        ? () => handleCompactRequest(false)
                         : undefined
                     }
                   />

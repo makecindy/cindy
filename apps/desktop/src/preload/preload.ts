@@ -5164,7 +5164,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       compact: (
         sessionId: string,
         createOpts: import('../shared/agentInputQueue').AgentInputCreateOpts,
-        opts?: { userName?: string },
+        opts?: {
+          userName?: string;
+          continueAfterCompact?: import('../shared/agentInputQueue').AgentInputQueuedMessage;
+        },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:compact', sessionId, createOpts, opts),
       steer: (

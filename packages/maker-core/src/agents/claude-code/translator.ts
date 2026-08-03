@@ -1487,8 +1487,8 @@ function handleResult(
   //      contextTokens 如实反映"已超限"(status Done / done 事件跟随);
   //  (b) 下方 ctx.onUsageUpdate 用该 endSnapshot 把 ratio=1.0 喂给 auto-compact /
   //      memory-flush, turn end 即触发一次静默 /compact。best-effort: 压缩请求自身
-  //      发送全量历史, 真超限时可能同样失败; 失败轮不产生 compact_boundary,
-  //      AutoCompactController.fired 保持置位, 不会循环重压;
+  //      发送全量历史, 真超限时可能同样失败; 普通路径由 fire-once 锁住。仅既有
+  //      bridge compact 取消路径会重新 arm 一次，故同一用户轮最多再尝试一次，不会无限重压;
   //  (c) endTurn 的 replaceLastApi 守卫加 !isContextOverflowTurn: 失败轮的 usage delta
   //      通常为 0, 放任覆盖会把 (a) 刚锁上的满载值又冲回 0;
   //  (d) is_error 分支给 error 事件带 CONTEXT_OVERFLOW_REASON, renderer 按稳定 key
