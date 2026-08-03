@@ -194,6 +194,17 @@ export interface HookTurnObserver {
    * 最后一条为空白时回退整轮正文: 公开回帖宁可带上过程, 也不能发成空。
    */
   finalSegment(): string;
+  /**
+   * 在过程区挂 / 摘一行状态说明(渲染成 `> ⏳ …`, 与过载重试同一个位置)。
+   *
+   * 用途: agent 挂起等用户授权时, 渠道那条消息除了"工作中"什么都不显示 ——
+   * 而卡片可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊了), 群里
+   * 看起来就是彻底静止。**刻意不写卡片去了哪**: 投递位置由 hook server 决定,
+   * 客户端不知道对端版本, 说"已发到私聊"可能是假的。
+   *
+   * null = 摘掉。不新增任何渠道消息, 只改已经在发的那条快照。
+   */
+  setNotice(notice: string | null): void;
 }
 
 /** 挂上事件监听并开始观察。调用方必须 await finished 或自己 stop()。 */
@@ -458,6 +469,13 @@ export function observeHookTurn(
     stop(): void {
       stopListening?.();
       stopListening = undefined;
+    },
+    setNotice(notice: string | null): void {
+      if (!setActivityNotice(activity, notice)) return;
+      // ticker 让过程区的「第 N 步 · 42s」继续走时间: 等授权期间没有任何 agent
+      // 事件, 不续 ticker 那条消息会连耗时都冻住。
+      progress?.ensureTicker();
+      progress?.schedule();
     },
     text(): string {
       return assistantText;

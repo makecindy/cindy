@@ -1895,6 +1895,57 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     };
   }
 
+  it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const cards: Array<{ interactionId: string }> = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: (card: { interactionId: string }) => void cards.push(card),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const decisionPromise = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-notice',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cards).toHaveLength(1);
+      // 卡片发出的同时过程区出现状态行: 等授权期间没有任何 agent 事件, 渠道那条消息
+      // 会彻底静止, 而卡片可能根本不在这个会话里(群里的授权卡改投宿主私聊)。
+      // 它只改已经在发的那条快照, 不新增任何渠道消息。
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-notice', 'ask:0')).toBe(true);
+      await decisionPromise;
+      // 授权通过、agent 继续干活: 后续快照不得再带那行状态(否则它会一直挂在过程区
+      // 顶上, 与 review #844 里"重试提示留在终稿正上方"是同一个坑)。
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-1', toolName: 'Read', input: { file_path: '/tmp/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 a.ts');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ask 请求 -> 中央 Router 发卡 -> 按钮决策回流 resolve; 收口后释放 route', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeInteractiveSession(opts.id ?? 'sess-x'),
