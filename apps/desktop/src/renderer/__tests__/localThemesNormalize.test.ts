@@ -14,6 +14,8 @@ function rgb(value: string | undefined): Rgb {
   return parsed;
 }
 
+const SWITCH_DERIVATION_TARGET = 3.2;
+
 describe('normalizeLocalThemeColors', () => {
   it('迁移旧 connected badge override 并保留原中性色给文字 token', () => {
     const out = normalizeLocalThemeColors({
@@ -121,7 +123,8 @@ describe('normalizeLocalThemeColors', () => {
     const thumb = rgb(out['switch-thumb-off']);
 
     expect(out['switch-track-off']).not.toBe(input['text-secondary']);
-    expect(contrastRatio(track, thumb), 'thumb x track').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(track, thumb), 'thumb x track')
+      .toBeGreaterThanOrEqual(SWITCH_DERIVATION_TARGET);
     for (const surfaceId of [
       'surface',
       'surface-elevated',
@@ -132,7 +135,7 @@ describe('normalizeLocalThemeColors', () => {
       expect(
         contrastRatio(track, rgb(out[surfaceId])),
         `track x ${surfaceId}`,
-      ).toBeGreaterThanOrEqual(3);
+      ).toBeGreaterThanOrEqual(SWITCH_DERIVATION_TARGET);
     }
   });
 

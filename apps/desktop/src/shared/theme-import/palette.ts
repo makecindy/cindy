@@ -33,6 +33,7 @@ import {
   toRgbaString,
   type Rgb,
 } from './color';
+import { UnsupportedThemePaletteError } from './errors';
 
 export type ThemeTypeName = 'light' | 'dark';
 
@@ -202,7 +203,8 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
 
 const WHITE: Rgb = { r: 255, g: 255, b: 255 };
 const BLACK: Rgb = { r: 0, g: 0, b: 0 };
-const MIN_NON_TEXT_CONTRAST = 3;
+// 3:1 是非文字组件的合规底线；自动派生多留 0.2，避免表面微调或 hex 量化后掉线。
+const UNCHECKED_SWITCH_DERIVATION_TARGET = 3.2;
 const RGB_SEARCH_STEPS = 255;
 
 function minimumContrast(color: Rgb, against: readonly Rgb[]): number {
@@ -215,14 +217,14 @@ function minimumContrast(color: Rgb, against: readonly Rgb[]): number {
  * 改动更小的一侧。整数步进与最终 hex 精度一致，也避免多背景约束下的非单调误判。
  */
 export function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb[]): Rgb {
-  if (minimumContrast(preferred, against) >= MIN_NON_TEXT_CONTRAST) return preferred;
+  if (minimumContrast(preferred, against) >= UNCHECKED_SWITCH_DERIVATION_TARGET) return preferred;
 
   let best: { color: Rgb; distance: number; contrast: number } | null = null;
   for (const target of [BLACK, WHITE]) {
     for (let step = 1; step <= RGB_SEARCH_STEPS; step += 1) {
       const candidate = mix(preferred, target, step / RGB_SEARCH_STEPS);
       const candidateContrast = minimumContrast(candidate, against);
-      if (candidateContrast < MIN_NON_TEXT_CONTRAST) continue;
+      if (candidateContrast < UNCHECKED_SWITCH_DERIVATION_TARGET) continue;
 
       const distance = (candidate.r - preferred.r) ** 2
         + (candidate.g - preferred.g) ** 2
@@ -239,7 +241,9 @@ export function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb
   }
 
   if (best) return best.color;
-  throw new Error('Unable to derive unchecked Switch colors with 3:1 contrast');
+  throw new UnsupportedThemePaletteError(
+    'Unable to derive unchecked Switch colors with 3.2:1 contrast',
+  );
 }
 
 /**

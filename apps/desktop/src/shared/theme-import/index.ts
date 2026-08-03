@@ -16,6 +16,7 @@ import { collectObsidianVars, extractObsidianPalette } from './obsidian';
 import { extractVsCodePalette, parseVsCodeThemeJson } from './vscode';
 
 export type { ConvertedTheme, ThemeConversionResult } from './types';
+export { UnsupportedThemePaletteError } from './errors';
 export { TEMPLATE_TOKEN_IDS, buildThemeColorsFromPalette } from './palette';
 export { isProtectedToken, stripProtectedTokens } from './protected-tokens';
 

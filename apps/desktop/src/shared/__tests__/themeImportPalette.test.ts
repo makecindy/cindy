@@ -42,6 +42,8 @@ function rgb(hex: string): Rgb {
   return parsed;
 }
 
+const SWITCH_DERIVATION_TARGET = 3.2;
+
 /** one-dark-pro.ts 头部的手写色板（dark 代表）。 */
 const ONE_DARK_PRO_PALETTE: ThemePalette = {
   surface: rgb('#282c34'),
@@ -193,13 +195,14 @@ describe.each([
     } satisfies ThemePalette,
   ],
 ] as const)('theme-import 模板 · %s 低对比度输入', (type, palette) => {
-  it('为关闭态 Switch 派生满足 3:1 的轨道与滑块色', () => {
+  it('为关闭态 Switch 派生带余量的轨道与滑块色', () => {
     const out = buildThemeColorsFromPalette(palette, type);
     const track = rgb(out['switch-track-off']);
     const thumb = rgb(out['switch-thumb-off']);
 
     expect(out['switch-track-off']).not.toBe(normalize(toHex(palette.textSecondary)));
-    expect(contrastRatio(track, thumb), 'thumb x track').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(track, thumb), 'thumb x track')
+      .toBeGreaterThanOrEqual(SWITCH_DERIVATION_TARGET);
 
     for (const surfaceId of [
       'surface',
@@ -211,7 +214,7 @@ describe.each([
       expect(
         contrastRatio(track, rgb(out[surfaceId])),
         `track x ${surfaceId}`,
-      ).toBeGreaterThanOrEqual(3);
+      ).toBeGreaterThanOrEqual(SWITCH_DERIVATION_TARGET);
     }
   });
 });
