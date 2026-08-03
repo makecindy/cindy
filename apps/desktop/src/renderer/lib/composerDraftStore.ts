@@ -31,6 +31,7 @@
  */
 
 import type { AttachedFile } from '@/lib/fileTypes';
+import type { NewMakerEntryIntent } from '@/state/newMakerDraft';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import type { ChatQuote } from '@/lib/chatQuotes';
 import {
@@ -50,6 +51,12 @@ export interface ComposerDraft {
   text: JSONContent | null;
   /** Snapshot of attachments at save time. Empty array means no attachments. */
   attachments: AttachedFile[];
+  /**
+   * Routed-entry intent that must follow text moved from New Maker into a real session composer.
+   * In-memory only; successful send clears the whole draft. Ordinary editor/attachment saves omit
+   * this field, so saveDraft preserves an existing value until that explicit clear.
+   */
+  entryIntent?: NewMakerEntryIntent;
   /** Plugin-page handoff consumed by ChatInput after its editor hydration. */
   pendingGhostId?: string;
   /**
@@ -244,14 +251,22 @@ export function saveDraft(
   opts?: { silent?: boolean },
 ): void {
   const key = draftKey(sessionId);
+  const existing = drafts.get(key);
+  const withEntryIntent =
+    draft.entryIntent === undefined && existing?.entryIntent
+      ? { ...draft, entryIntent: existing.entryIntent }
+      : draft;
   const withQuotes =
-    draft.quotes && draft.quotes.length > 0
+    withEntryIntent.quotes && withEntryIntent.quotes.length > 0
       ? {
-          ...draft,
-          text: prependLegacyQuotesToComposerDocument(draft.text, draft.quotes),
+          ...withEntryIntent,
+          text: prependLegacyQuotesToComposerDocument(
+            withEntryIntent.text,
+            withEntryIntent.quotes,
+          ),
           quotes: [],
         }
-      : draft;
+      : withEntryIntent;
   drafts.set(key, withQuotes);
   if (!opts?.silent) {
     const set = listeners.get(key);

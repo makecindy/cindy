@@ -9,6 +9,7 @@ const ready = {
   enabled: true,
   pluginEnabled: true,
   codexMcpReady: true,
+  piMcpReady: true,
 };
 
 describe('contacts AI session send guard', () => {
@@ -82,6 +83,23 @@ describe('contacts AI session send guard', () => {
     await expect(checkContactsAiSessionBeforeSend(input)).resolves.toBe('codex-deferred');
     await expect(checkContactsAiSessionBeforeSend(input)).resolves.toBeNull();
     expect(readReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it('Pi 只在新会话会取得已应用的 contacts server 时放行', async () => {
+    const readReadiness = vi
+      .fn()
+      .mockResolvedValueOnce({ ...ready, piMcpReady: false })
+      .mockResolvedValueOnce(ready);
+    const input = {
+      entryIntent: 'contacts-ai-management' as const,
+      vendor: 'pi' as const,
+      workingDir: '/project',
+      isLocalTarget: true,
+      readReadiness,
+    };
+
+    await expect(checkContactsAiSessionBeforeSend(input)).resolves.toBe('unavailable');
+    await expect(checkContactsAiSessionBeforeSend(input)).resolves.toBeNull();
   });
 
   it('切到远端目标后不拿本机通讯录状态放行', async () => {

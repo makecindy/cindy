@@ -5,7 +5,11 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(
   new URL('../features/cc-agent/NewMakerDraftRoute.tsx', import.meta.url),
   'utf8',
-);
+).replaceAll('\r', '');
+const sessionViewSource = readFileSync(
+  new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
+  'utf8',
+).replaceAll('\r', '');
 
 function sliceBetween(start: string, end: string): string {
   const startAt = source.indexOf(start);
@@ -72,6 +76,41 @@ describe('New Maker contacts AI guard wiring', () => {
     expect(worktree.slice(guardAt, updateAt)).toContain('workingDir: newDir');
     expect(worktree.slice(guardAt, updateAt)).toContain('restoreFirstMessageDraft();');
     expect(worktree.slice(guardAt, updateAt)).toContain('return;');
+  });
+
+  it('session handoff 保留意图，并在恢复后的已有会话发送前再次校验', () => {
+    const remoteProject = sliceBetween(
+      'const handleRemoteProjectAdded = useCallback(',
+      '// ─── 切 vendor',
+    );
+    expect(remoteProject).toContain('const existingDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY)');
+    expect(remoteProject).toContain(
+      'saveComposerDraft(newSession.id, {\n            ...existingDraft,',
+    );
+
+    const send = sliceBetween(
+      'const handleSend = useCallback(',
+      '// 首页「新建目标」:精简本地 create 路径',
+    );
+    expect(send).toContain('...(entryIntentAtSend ? { entryIntent: entryIntentAtSend } : {}),');
+
+    const sessionSend = sessionViewSource.slice(
+      sessionViewSource.indexOf('const handleSend = useCallback('),
+      sessionViewSource.indexOf('const handleStopSession = useCallback('),
+    );
+    const authAt = sessionSend.indexOf('await vendorAuthGate.checkAndConfirm(authVendor');
+    const guardAt = sessionSend.indexOf('await checkContactsAiSessionBeforeSend({');
+    const dispatchAt = sessionSend.indexOf('const dispatch =');
+    expect(authAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(authAt);
+    expect(dispatchAt).toBeGreaterThan(guardAt);
+    expect(sessionSend.slice(guardAt, dispatchAt)).toContain(
+      'getComposerDraft(sessionId)?.entryIntent',
+    );
+    expect(sessionSend.slice(guardAt, dispatchAt)).toContain(
+      'isLocalTarget: !remoteDeviceId && !session?.remoteHostId',
+    );
+    expect(sessionSend.slice(guardAt, dispatchAt)).toContain('return false;');
   });
 
   it('worktree 校验失败前不清除通讯录入口意图', () => {

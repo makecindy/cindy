@@ -4974,6 +4974,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         isCustomized: boolean;
         pluginEnabled: boolean;
         codexMcpReady: boolean;
+        piMcpReady: boolean;
       }> => ipcRenderer.invoke('maker:contacts:settings:get', workingDir),
       // codexMcpRefreshed:false = 开关已落盘但 Codex 失效失败(会话正忙), 对 Codex 延迟生效
       settingsSet: (enabled: boolean): Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }> =>

@@ -128,6 +128,7 @@ import {
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { resolveCodexContactsMcpReady } from './codex-contacts-readiness.js';
+import { isPiMcpServerReadyForNextSession } from '../mcp-integrations/piEnvironment.js';
 
 /**
  * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
@@ -153,6 +154,7 @@ export function getContactsAiReadiness(workingDir?: string): {
   enabled: boolean;
   pluginEnabled: boolean;
   codexMcpReady: boolean;
+  piMcpReady: boolean;
 } {
   const enabled = readContactsSettings().enabled;
   const pluginEnabled = getPluginRegistry().isEnabled('contacts', workingDir);
@@ -166,6 +168,8 @@ export function getContactsAiReadiness(workingDir?: string): {
       appliedOwnerScope: codexAppliedContactsOwnerScope,
       appliedEnabled: codexAppliedContactsEnabled,
     }),
+    piMcpReady:
+      enabled && pluginEnabled && isPiMcpServerReadyForNextSession('cindy_contacts'),
   };
 }
 import {

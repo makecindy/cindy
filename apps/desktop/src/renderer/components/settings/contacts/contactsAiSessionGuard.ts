@@ -4,6 +4,7 @@ export interface ContactsAiSessionReadiness {
   enabled: boolean;
   pluginEnabled: boolean;
   codexMcpReady: boolean;
+  piMcpReady: boolean;
 }
 
 export type ContactsAiSessionBlockReason = 'unavailable' | 'codex-deferred';
@@ -34,5 +35,6 @@ export async function checkContactsAiSessionBeforeSend(input: {
   const readiness = await input.readReadiness(input.workingDir);
   if (!readiness.enabled || !readiness.pluginEnabled) return 'unavailable';
   if (input.vendor === 'codex' && !readiness.codexMcpReady) return 'codex-deferred';
+  if (input.vendor === 'pi' && !readiness.piMcpReady) return 'unavailable';
   return null;
 }

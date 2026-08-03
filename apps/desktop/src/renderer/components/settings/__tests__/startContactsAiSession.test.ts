@@ -30,6 +30,7 @@ describe('prefillContactsAiSessionDraft', () => {
     expect(mocks.saveDraft).toHaveBeenCalledWith('new-maker', {
       text: { type: 'doc', text: 'manage contacts' },
       attachments: [],
+      entryIntent: 'contacts-ai-management',
     });
     expect(mocks.resetDraftWorkspaceTargets).toHaveBeenCalledOnce();
     expect(mocks.patchDraft).toHaveBeenCalledWith({ entryIntent: 'contacts-ai-management' });

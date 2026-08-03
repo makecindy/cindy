@@ -71,10 +71,17 @@ export interface ContactsIpcDeps {
    * 返回给 renderer 提示"对 Codex 延迟生效", 静默成功会掩盖开关与 Codex 实际状态失同步。
    */
   invalidateCodexMcp?: () => Promise<void>;
-  /** 当前 owner + workingDir 的有效插件开关与 Codex applied 快照。 */
-  readAiReadiness?: (workingDir?: string) =>
-    | { pluginEnabled: boolean; codexMcpReady: boolean }
-    | Promise<{ pluginEnabled: boolean; codexMcpReady: boolean }>;
+  /**
+   * Pi bridge 与 Codex app-server 生命周期独立；即使 Codex busy 拒绝重启也必须调用。
+   * 生产实现只让下一条 Pi 会话换代，已有 lease 继续服务当前会话。
+   */
+  invalidatePiMcp?: () => void | Promise<void>;
+  /** 当前 owner + workingDir 的有效插件开关与 Codex / Pi applied 快照。 */
+  readAiReadiness?: (
+    workingDir?: string,
+  ) =>
+    | { pluginEnabled: boolean; codexMcpReady: boolean; piMcpReady: boolean }
+    | Promise<{ pluginEnabled: boolean; codexMcpReady: boolean; piMcpReady: boolean }>;
   readDeviceSyncStatus?: () => unknown | Promise<unknown>;
   setDeviceSyncEnabled?: (enabled: boolean) => Promise<void>;
   syncNow?: () => Promise<void>;
@@ -131,13 +138,15 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
         ? ((await deps.readAiReadiness?.(effectiveWorkingDir)) ?? {
             pluginEnabled: true,
             codexMcpReady: true,
+            piMcpReady: true,
           })
-        : { pluginEnabled: false, codexMcpReady: false };
+        : { pluginEnabled: false, codexMcpReady: false, piMcpReady: false };
       return {
         enabled: state.value.enabled,
         isCustomized: state.isCustomized,
         pluginEnabled: readiness.pluginEnabled,
         codexMcpReady: readiness.codexMcpReady,
+        piMcpReady: readiness.piMcpReady,
       };
     },
     [MAKER_INVOKE.CONTACTS_SETTINGS_SET]: async (enabled) => {
@@ -162,6 +171,14 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
           await deps.invalidateCodexMcp?.();
         } catch {
           codexMcpRefreshed = false;
+        }
+        // 不放进上面的 try：Codex busy / deferred 不能阻止 Pi bridge 独立换代。
+        // Pi 失效本身失败时 settingsGet 会继续按旧 generation 的真实 serverNames
+        // 返回 piMcpReady:false，发送 guard 因而 fail closed。
+        try {
+          await deps.invalidatePiMcp?.();
+        } catch {
+          // 设置已落盘；保留旧 bridge 真值给 readiness，不伪造刷新成功。
         }
       }
       return { enabled, codexMcpRefreshed };
@@ -381,6 +398,7 @@ export function registerContactsIpc(): void {
       return {
         pluginEnabled: readiness.pluginEnabled,
         codexMcpReady: readiness.codexMcpReady,
+        piMcpReady: readiness.piMcpReady,
       };
     },
     invalidateCodexMcp: async () => {
@@ -397,17 +415,26 @@ export function registerContactsIpc(): void {
         throw err;
       }
       try {
-        // Codex 与 Pi 各自的 MCP bridge 都在首个会话冻结 server 集合;contacts 开关变更后
-        // 两者都要 invalidate,否则新会话仍暴露已禁用的 contacts server(Pi 侧 codex review P1)。
-        const [{ shutdownCodexEnvironment }, { invalidatePiEnvironment }] = await Promise.all([
-          import('../mcp-integrations/codexEnvironment.js'),
-          import('../mcp-integrations/piEnvironment.js'),
-        ]);
+        const { shutdownCodexEnvironment } =
+          await import('../mcp-integrations/codexEnvironment.js');
         await shutdownCodexEnvironment();
+      } catch (err) {
+        log.warn(
+          'shutdown Codex MCP environment on contacts toggle failed — cached spawn config still stale',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
+        throw err;
+      }
+    },
+    invalidatePiMcp: async () => {
+      try {
+        const { invalidatePiEnvironment } = await import('../mcp-integrations/piEnvironment.js');
         invalidatePiEnvironment();
       } catch (err) {
         log.warn(
-          'shutdown agent MCP environments on contacts toggle failed — cached spawn config still stale',
+          'invalidate Pi MCP environment on contacts toggle failed — new Pi sessions keep the old server set',
           {
             error: err instanceof Error ? err.message : String(err),
           },

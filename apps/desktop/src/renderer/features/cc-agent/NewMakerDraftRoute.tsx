@@ -2722,6 +2722,7 @@ export function NewMakerDraftRoute() {
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
+                  ...(entryIntentAtSend ? { entryIntent: entryIntentAtSend } : {}),
                 });
                 // 第一条消息退回草稿 = 它没被交出去,也就永远不会有权威标题回流。
                 // 不撤回的话标题预览会一直盖着 DB 里的哨兵(每次全量刷新后重新盖上),

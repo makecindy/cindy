@@ -69,6 +69,7 @@ beforeEach(() => {
     isCustomized: true,
     pluginEnabled: true,
     codexMcpReady: true,
+    piMcpReady: true,
   });
   mocks.settingsSet.mockResolvedValue({ enabled: true, codexMcpRefreshed: true });
   mocks.syncStatusGet.mockResolvedValue(syncStatus);
@@ -114,6 +115,7 @@ describe('ContactsSection AI 管理入口', () => {
       isCustomized: true,
       pluginEnabled: false,
       codexMcpReady: false,
+      piMcpReady: false,
     });
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
     render(<ContactsSection />);
@@ -128,6 +130,7 @@ describe('ContactsSection AI 管理入口', () => {
       isCustomized: true,
       pluginEnabled: true,
       codexMcpReady: false,
+      piMcpReady: true,
     });
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
     render(<ContactsSection />);
@@ -145,12 +148,14 @@ describe('ContactsSection AI 管理入口', () => {
         isCustomized: true,
         pluginEnabled: true,
         codexMcpReady: true,
+        piMcpReady: true,
       })
       .mockResolvedValueOnce({
         enabled: false,
         isCustomized: true,
         pluginEnabled: false,
         codexMcpReady: false,
+        piMcpReady: false,
       });
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
     const view = render(<ContactsSection />);
@@ -167,6 +172,7 @@ describe('ContactsSection AI 管理入口', () => {
       isCustomized: true,
       pluginEnabled: true,
       codexMcpReady: true,
+      piMcpReady: true,
     });
     render(<ContactsSection />);
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));

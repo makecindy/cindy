@@ -4668,6 +4668,7 @@ interface ElectronAPI {
         isCustomized: boolean;
         pluginEnabled: boolean;
         codexMcpReady: boolean;
+        piMcpReady: boolean;
       }>;
       settingsSet: (enabled: boolean) => Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }>;
       syncStatusGet: () => Promise<unknown>;

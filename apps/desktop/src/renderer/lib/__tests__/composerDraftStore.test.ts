@@ -112,6 +112,20 @@ describe('draftHasContent', () => {
   });
 });
 
+describe('routed entry intent', () => {
+  it('survives ordinary editor saves until the session draft is explicitly cleared', () => {
+    const id = 'contacts-handoff';
+    saveDraft(id, draft({ text: textDoc, entryIntent: 'contacts-ai-management' }));
+
+    // ChatInput / useAttachments overwrite text and attachments without knowing routed metadata.
+    saveDraft(id, draft({ text: emptyDoc }));
+    expect(getDraft(id)?.entryIntent).toBe('contacts-ai-management');
+
+    clearDraft(id);
+    expect(getDraft(id)).toBeUndefined();
+  });
+});
+
 describe('owner isolation', () => {
   it('does not expose a New Maker draft across data-owner switches', () => {
     const key = '__new_maker_draft__';
