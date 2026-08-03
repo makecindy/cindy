@@ -127,6 +127,7 @@
       "subagentModels": "サブエージェント",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
+      "composer": "メッセージ入力",
       "linkOpen": "リンクの開き方",
       "compatMode": "ヒント",
       "voiceInput": "音声入力",
@@ -2257,6 +2258,14 @@
         "selectAria": "デフォルトターミナルシェルを選択"
       }
     },
+    "composer": {
+      "title": "メッセージ入力",
+      "sendShortcut": {
+        "label": "{{shortcut}}で送信",
+        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信"
+      }
+    },
     "linkOpen": {
       "title": "リンクの開き方",
       "description": "メッセージ内のリンクや HTML ファイルを左クリックしたときの既定の開き先です。",
@@ -2971,6 +2980,7 @@
         "systemReserved": "OS によって予約されています",
         "conflict": "「{{name}}」と競合しています",
         "voiceConflict": "音声入力のショートカットと競合しています",
+        "composerVoiceConflict": "音声入力のショートカットと競合しています。メッセージ入力の送信ショートカットまたは音声入力のショートカットを変更してください。",
         "menuAccelerator": "この組み合わせはメニューショートカットとして登録できません"
       },
       "items": {
@@ -4788,6 +4798,7 @@
       "send": "メッセージを送信",
       "queue": "キューに追加",
       "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
+      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
       "stop": "生成を停止"
     },
     "pluginSetup": {

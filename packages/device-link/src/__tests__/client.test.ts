@@ -7,6 +7,7 @@ import { DeviceLinkClient, type WsLike } from '../client.js';
 import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
@@ -108,6 +109,12 @@ async function establishInboundReliableLink(
   streamId: string,
   transportBaseSeq = 1,
   src = 'dev-b',
+  // 默认模拟新版控制端(addLocalCapabilities 会自动声明两项);传入仅
+  // RELIABLE 可模拟旧版控制端(不认识 transport-timeout 的瞬时重置语义)。
+  capabilities: string[] = [
+    DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+    DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+  ],
 ): Promise<void> {
   const id = `inbound-link-${++inboundLinkId}`;
   const off = h.client.onFrame((env) => {
@@ -126,7 +133,7 @@ async function establishInboundReliableLink(
       controllerName: 'Remote',
       protocolVersion: 1,
       appVersion: '1',
-      capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+      capabilities,
       transportStreamId: streamId,
       transportBaseSeq,
     },
@@ -604,16 +611,20 @@ describe('DeviceLinkClient', () => {
         data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
       },
     });
-    // Windows 的零延时 timer 可能晚于两个 8ms 心跳周期才被调度；先启动 pong，
-    // 确保本用例验证的是慢业务 handler 与控制帧解耦，而不是测试端尚未开始响应。
-    const ponger = setInterval(() => {
-      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-    }, 4);
+    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖
+    // (旧写法用 4ms setInterval 自由跑,慢 CI/Windows 上会落后两个 8ms 心跳
+    // 周期触发误断网)。语义不变:若慢业务 handler 真堵住帧处理,push 进来的
+    // pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
+    const originalSend = ws.send.bind(ws);
+    ws.send = (data: string) => {
+      originalSend(data);
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+    };
     await tick();
     expect(release).toBeTypeOf('function');
 
     await tick(40);
-    clearInterval(ponger);
 
     expect(ws.terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
@@ -738,6 +749,624 @@ describe('DeviceLinkClient', () => {
         payload: { streamId: firstMeta.streamId, ackSeq: firstMeta.seq },
       },
     });
+    h.client.stop();
+  });
+
+  it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+
+    const firstSocket = h.current();
+    // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
+    h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
+    h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
+    const firstReliable = firstSocket.sent.find((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ))!;
+    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+
+    // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
+    await vi.waitFor(() => {
+      expect(firstSocket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
+    expect(firstSocket.terminated).toBe(false);
+    expect(firstSocket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(1);
+
+    // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
+    const sentBefore = firstSocket.sent.length;
+    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+    const replayed = firstSocket.sent.slice(sentBefore);
+    const replays = replayed.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ));
+    expect(replays).toHaveLength(1);
+    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+      streamId: firstMeta.streamId,
+      seq: firstMeta.seq,
+    });
+    expect(replayed.filter((env) => (
+      env.kind === 'push'
+      && parseTransportPayload(env.payload)
+    ))).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+        requestTimeoutMs: 5_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 1) 对端作为控制端接入(入站 accept → linkAcceptedInbound=true)
+    await establishInboundReliableLink(h, 'mutual-stream');
+
+    // 2) 本机随后也作为控制端 openLink 到对端——出站 link-accept 到达
+    //    (回归点:曾把共享的入站标记覆盖回 false)
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.filter((e) => e.kind === 'link-open').at(-1)!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        // 生产形态:对端 sendLinkAccept 只回显 reliable 能力,**不带**
+        // transport-timeout-close-v1——回归点:这样的反向 accept 曾把入站
+        // link-open 协商到的 supportsTransportTimeoutClose 覆盖回 false。
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 3) 入站方向的可靠帧对端不再 ACK → 重试耗尽 → 必须仍是 peer 级重置
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'mutual-replay', { ok: true, result: [] });
+    await vi.waitFor(() => {
+      expect(socket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // 共享 relay 连接完好:没有因互控覆盖误走整连接重连
+    expect(socket.terminated).toBe(false);
+    expect(h.sockets).toHaveLength(1);
+    h.client.stop();
+  });
+
+  it('已排期的通知重试在本地永久 closeLink 后被撤销,不补发迟到的 transport-timeout', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'late-notify-local-close');
+
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'late-1', { ok: true, result: [] });
+
+    // 让 link-close 的首发持续失败 → 重试被排期
+    const originalSend = socket.send.bind(socket);
+    let blockedCloses = 0;
+    socket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close') {
+        blockedCloses += 1;
+        throw new Error('simulated backpressure');
+      }
+      originalSend(data);
+    };
+    await vi.waitFor(() => expect(blockedCloses).toBeGreaterThanOrEqual(1));
+
+    // 重试排期期间,本地永久关闭该链路(如用户断开/被控开关关闭)
+    socket.send = originalSend;
+    h.client.closeLink('dev-b', 'user');
+    const sentBefore = socket.sent.length;
+
+    // 超过数个重试周期:不得再补发任何 transport-timeout
+    await tick(100);
+    const lateTimeouts = socket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ));
+    expect(lateTimeouts).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('收到对端永久 link-close 后,迟到的通知重试回调复验状态后终止,不补发 transport-timeout', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 3,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'late-notify-peer-close');
+
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'late-2', { ok: true, result: [] });
+
+    const originalSend = socket.send.bind(socket);
+    let blockedCloses = 0;
+    socket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close') {
+        blockedCloses += 1;
+        throw new Error('simulated backpressure');
+      }
+      originalSend(data);
+    };
+    await vi.waitFor(() => expect(blockedCloses).toBeGreaterThanOrEqual(1));
+
+    // 重试排期期间收到对端的永久关闭(对方用户关掉了它对本机的控制)
+    socket.send = originalSend;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'user' },
+    });
+    await tick();
+    const sentBefore = socket.sent.length;
+
+    await tick(150);
+    const lateTimeouts = socket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ));
+    expect(lateTimeouts).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('入站方向被永久关闭后,出站重试耗尽不得再发 transport-timeout(不诱使对端重开用户已关闭的方向)', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+        requestTimeoutMs: 5_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 1) 互控:对方作为控制端接入(活动入站标记置位)
+    await establishInboundReliableLink(h, 'perm-close-stream');
+
+    // 2) 对方用户明确关闭它对本机的控制(永久 link-close 'user')
+    const firstSocket = h.current();
+    firstSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'user' },
+    });
+    await tick();
+
+    // 3) 本机仍作为控制端 openLink 到对方,出站可靠帧耗尽重试
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = firstSocket.sent.filter((e) => e.kind === 'link-open').at(-1)!;
+    firstSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'perm-close-host-stream',
+      },
+    });
+    await open;
+    h.client.sendInvokeResult('dev-b', 'after-perm-close', { ok: true, result: [] });
+
+    // 入站方向已永久关闭 → 回退整连接重连语义,绝不发 transport-timeout
+    await vi.waitFor(() => expect(firstSocket.terminated).toBe(true));
+    expect(firstSocket.sent.some((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ))).toBe(false);
+    h.client.stop();
+  });
+
+  it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    // 旧版控制端:只声明 reliable,不声明 transport-timeout-close-v1
+    await establishInboundReliableLink(
+      h,
+      'legacy-stream',
+      1,
+      'dev-b',
+      [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+    );
+
+    const firstSocket = h.current();
+    h.client.sendInvokeResult('dev-b', 'legacy-replay', { ok: true, result: [] });
+
+    // 对旧对端不能发它不理解的 reason(会被当永久关闭且永不重开):
+    // 回退到旧的整连接重连,靠 presence 闪断触发对端既有 rehydrate。
+    await vi.waitFor(() => expect(firstSocket.terminated).toBe(true));
+    await vi.waitFor(() => expect(h.sockets.length).toBe(2));
+    expect(firstSocket.sent.some((env) => env.kind === 'link-close')).toBe(false);
+    h.client.stop();
+  });
+
+  it('transport-timeout 通知首发失败后按退避重发;对端重开后仍同 seq 续传', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'notify-retry-stream');
+
+    const firstSocket = h.current();
+    h.client.sendInvokeResult('dev-b', 'keep-me-2', { ok: true, result: [] });
+    const firstReliable = firstSocket.sent.find((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ))!;
+    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+
+    // 让 link-close 的首次发送失败(模拟 WebSocket 背压/发送异常),后续恢复
+    const originalSend = firstSocket.send.bind(firstSocket);
+    let failedOnce = false;
+    firstSocket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close' && !failedOnce) {
+        failedOnce = true;
+        throw new Error('simulated send backpressure');
+      }
+      originalSend(data);
+    };
+
+    // 对端永不 ACK → 重试耗尽 → 首发通知失败 → 退避重发成功
+    await vi.waitFor(() => {
+      expect(failedOnce).toBe(true);
+      expect(firstSocket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // 重发期间 relay 连接始终未被拆
+    expect(firstSocket.terminated).toBe(false);
+    expect(h.sockets).toHaveLength(1);
+
+    // 对端重开 → 保留的 live invoke-result 按原 seq 重放
+    const sentBefore = firstSocket.sent.length;
+    await establishInboundReliableLink(h, 'notify-retry-stream');
+    const replays = firstSocket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ));
+    expect(replays).toHaveLength(1);
+    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+      streamId: firstMeta.streamId,
+      seq: firstMeta.seq,
+    });
+    h.client.stop();
+  });
+
+  it('入站方向 closeLink 不拆共享可靠层:在途出站请求不被拒、后续发送不报 LINK_NOT_OPEN、回包照常送达', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 互控:入站 accept + 本机出站 openLink
+    await establishInboundReliableLink(h, 'iso-mutual-stream');
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'iso-mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 在途出站 invoke(尚无回包)
+    const invokeResult = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    let settled = false;
+    void invokeResult.finally(() => { settled = true; });
+    const invokeFrame = h.current().sent.find((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ))!;
+
+    // 入站方向撤权:不得陪葬仍存续的出站可靠层
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+    await tick();
+    expect(settled).toBe(false); // 在途请求未被拒
+    // 后续可靠发送不报 LINK_NOT_OPEN(可靠层未被拆)
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { still: 'alive' })).not.toThrow();
+
+    // 回包到达 → 在途请求正常完成
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: invokeFrame.id,
+      src: 'dev-b',
+      payload: { ok: true, result: [] },
+    });
+    await expect(invokeResult).resolves.toMatchObject({ ok: true });
+    h.client.stop();
+  });
+
+  it('入站方向撤权(closeLink inbound)不封死仍存续的主动控制:transport-timeout 照常交 app 层触发重建', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 互控:对方控制本机(入站)+ 本机控制对方(出站)
+    await establishInboundReliableLink(h, 'revoke-mutual-stream');
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'revoke-mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 本机撤销对方对本机的控制(入站方向):revoked 帧可能丢失,对方无感知
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+
+    // 对方(作为本机出站控制的被控端)发来 transport-timeout:本机仍在主动
+    // 控制对方,必须照常交 app 层(desktop 据此 openRemoteLink 重建)
+    const seenFrames: Envelope[] = [];
+    const off = h.client.onFrame((env) => {
+      seenFrames.push(env);
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    expect(seenFrames.filter((env) => env.kind === 'link-close')).toHaveLength(1);
+    off();
+    h.client.stop();
+  });
+
+  it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 控制端建链后用户显式断开(closeLink 的永久关闭帧可能因背压未送达对端)
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'closed-host-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    // 对端因保留消息耗尽重试,发来迟到的瞬时重置
+    const seenFrames: Envelope[] = [];
+    const off = h.client.onFrame((env) => {
+      seenFrames.push(env);
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+
+    // 不交 app 层(app 层看不到帧,就不会 openRemoteLink/rehydrate 重建)
+    expect(seenFrames.filter((env) => env.kind === 'link-close')).toHaveLength(0);
+    // 已关闭状态不变:后续可靠发送仍被挡(未被瞬时重置分支“激活”)
+    expect(() => h.client.sendInvokeResult('dev-b', 'x', { ok: true, result: [] })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    off();
+    h.client.stop();
+  });
+
+  it('控制端收到 transport-timeout link-close:瞬时重置而非永久关闭——在途请求不被拒,重开后同 seq 续传并可正常完成', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 5_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 控制端视角:出站 openLink 建可靠链路
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'host-stream',
+      },
+    });
+    await open;
+
+    // 发一条 invoke(在途,尚无回包)
+    const invokeResult = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    let settled = false;
+    void invokeResult.finally(() => { settled = true; });
+    const invokeFrame = h.current().sent.find((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ))!;
+    const invokeMeta = parseTransportPayload(invokeFrame.payload)!.meta;
+
+    // 被控端对本机可靠重试耗尽 → 发来 transport-timeout
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    // 在途请求不被拒(瞬时重置 ≠ 永久关闭)
+    expect(settled).toBe(false);
+    // 可靠层未被拆:新的可靠发送不抛 LINK_NOT_OPEN,进入 pending 等重建
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { queued: true })).not.toThrow();
+
+    // 重新 openLink → link-accept(同 stream)→ 在途 invoke 按原 seq 重放
+    const sentBefore = h.current().sent.length;
+    const reopen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const reopenFrame = h.current().sent.slice(sentBefore).find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: reopenFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'host-stream',
+      },
+    });
+    await reopen;
+    const replayedInvokes = h.current().sent.slice(sentBefore).filter((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ));
+    expect(replayedInvokes.length).toBeGreaterThanOrEqual(1);
+    expect(parseTransportPayload(replayedInvokes[0].payload)?.meta).toMatchObject({
+      streamId: invokeMeta.streamId,
+      seq: invokeMeta.seq,
+    });
+
+    // 回包送达 → 在途请求正常完成
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: invokeFrame.id,
+      src: 'dev-b',
+      payload: { ok: true, result: [] },
+    });
+    await expect(invokeResult).resolves.toMatchObject({ ok: true });
     h.client.stop();
   });
 

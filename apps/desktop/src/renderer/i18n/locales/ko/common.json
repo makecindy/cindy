@@ -127,6 +127,7 @@
       "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
+      "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
@@ -2257,6 +2258,14 @@
         "selectAria": "기본 터미널 셸 선택"
       }
     },
+    "composer": {
+      "title": "메시지 입력",
+      "sendShortcut": {
+        "label": "{{shortcut}}로 보내기",
+        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+      }
+    },
     "linkOpen": {
       "title": "링크 열기 방식",
       "description": "메시지의 링크나 HTML 파일을 왼쪽 클릭했을 때 기본으로 여는 위치입니다.",
@@ -2971,6 +2980,7 @@
         "systemReserved": "운영 체제에서 예약된 조합입니다",
         "conflict": "\"{{name}}\"과(와) 충돌합니다",
         "voiceConflict": "음성 입력 단축키와 충돌합니다",
+        "composerVoiceConflict": "음성 입력 단축키와 충돌합니다. 메시지 입력의 보내기 단축키 또는 음성 입력 단축키를 변경하세요.",
         "menuAccelerator": "이 조합은 메뉴 단축키로 등록할 수 없습니다"
       },
       "items": {
@@ -4788,6 +4798,7 @@
       "send": "메시지 전송",
       "queue": "대기열에 추가",
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
+      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
       "stop": "생성 중지"
     },
     "pluginSetup": {

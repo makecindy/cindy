@@ -148,13 +148,6 @@ export interface ImChannelAdapter {
     persisted: boolean;
   }): Promise<void>;
   /**
-   * 流式进度"只发正文"判定(按出站目标粒度)。Telegram 私聊的可编辑消息被
-   * 客户端渲染成带动画的 Rich draft, 过程时间线反复重排会清空重播 —— 返回
-   * true 时中间态只显示正文;零产出的过载重试窗口仍显示 notice 单行(否则
-   * 退避期间毫无反馈)。缺省 = 完整过程时间线(卡片渠道的既有行为)。
-   */
-  answerOnlyProgress?(userId: string): boolean;
-  /**
    * 送模型正文的改写钩子(群上下文拼装等): 返回 agentText 替换发给 agent 的
    * 文本 —— 落库与标题生成仍用渠道原文, 桌面 transcript 不被上下文前缀污染。
    * commit 在路由解析成功(消息确定会被派发/排队)时调用, 是群窗口游标推进的
