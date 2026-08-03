@@ -125,14 +125,9 @@ export async function resolveGhostAtResourceWorkingDir(
       ...(snapshot.workingDir ? { workingDir: snapshot.workingDir } : {}),
     };
   }
-  // New-task drafts have no persisted session yet; their trusted app
-  // renderer supplies the selected local project until the first send.
-  return {
-    allowed: true,
-    ...(typeof raw.workingDir === 'string'
-      ? { workingDir: raw.workingDir.slice(0, 32_768) }
-      : {}),
-  };
+  // New-task drafts have no persisted session yet. The renderer's workingDir
+  // cannot be used as a Plugin policy scope because it is not authoritative.
+  return { allowed: false };
 }
 
 function oneLine(value: unknown, maxLength: number): string {

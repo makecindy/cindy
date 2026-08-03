@@ -1,7 +1,10 @@
 import { createLogger } from '@/lib/logger';
 import type { Session } from '@/lib/ccAgent.types';
 import { buildSessionDeepLink, strictEncodeURIComponent } from '@/lib/deepLink';
-import type { ConversationSearchResponse } from '../../shared/conversationSearch';
+import {
+  conversationSearchTitle,
+  type ConversationSearchResponse,
+} from '../../shared/conversationSearch';
 
 const log = createLogger('AtResourceService');
 /**
@@ -86,6 +89,8 @@ export interface AtResourceScanContext {
   includeLocalContext?: boolean;
   /** Historical tasks are read from the execution device's local database. */
   includeTaskHistory?: boolean;
+  /** Resolved i18n label used to match and display untitled tasks. */
+  unnamedLabel?: string;
   /** Emit usable sources immediately while slower providers are still loading. */
   onPartial?: (result: ScanResult) => void;
 }
@@ -224,6 +229,7 @@ function normalizeHistoricalTaskResources(
   sessions: Session[] | null,
   currentSessionId: string | undefined,
   deviceId: string | undefined,
+  unnamedLabel: string | undefined,
 ): AtResourceItem[] {
   const historicalTasks: AtResourceItem[] = [];
   for (const session of sessions ?? []) {
@@ -234,7 +240,7 @@ function normalizeHistoricalTaskResources(
       || session.status !== 'active'
       || (!session.userSendAt && (session._count?.messages ?? 0) === 0)
     ) continue;
-    const title = oneLineText(session.title, 240);
+    const title = oneLineText(conversationSearchTitle(session.title, unnamedLabel), 240);
     if (!title) continue;
     const description = oneLineText(session.summary || session.preview, 300);
     const relPath = buildSessionDeepLink(taskId, { deviceId });
@@ -255,13 +261,14 @@ function normalizeHistoricalTaskSearchResources(
   response: ConversationSearchResponse | null,
   currentSessionId: string | undefined,
   deviceId: string | undefined,
+  unnamedLabel: string | undefined,
 ): AtResourceItem[] {
   const historicalTasks: AtResourceItem[] = [];
   for (const result of response?.results ?? []) {
     const session = result.session;
     const taskId = oneLineText(session.id, 256);
     if (!taskId || taskId === currentSessionId || session.status !== 'active') continue;
-    const title = oneLineText(session.title, 240);
+    const title = oneLineText(conversationSearchTitle(session.title, unnamedLabel), 240);
     if (!title) continue;
     const description = oneLineText(result.contentHit?.preview, 300);
     historicalTasks.push({
@@ -281,6 +288,7 @@ async function searchRemoteHistoricalTasks(
   deviceId: string,
   query: string,
   currentSessionId: string | undefined,
+  unnamedLabel: string | undefined,
 ): Promise<AtResourceItem[]> {
   try {
     const response = await window.electronAPI.deviceLink.invoke(
@@ -292,9 +300,15 @@ async function searchRemoteHistoricalTasks(
         sortBy: 'relevance',
         semanticMode: 'keyword',
         filters: { status: 'active' },
+        ...(unnamedLabel ? { unnamedLabel } : {}),
       }],
     ) as ConversationSearchResponse;
-    return normalizeHistoricalTaskSearchResources(response, currentSessionId, deviceId);
+    return normalizeHistoricalTaskSearchResources(
+      response,
+      currentSessionId,
+      deviceId,
+      unnamedLabel,
+    );
   } catch {
     // Older controlled clients do not allow the conversation-search channel.
     const sessions = await window.electronAPI.deviceLink.invoke(
@@ -302,7 +316,7 @@ async function searchRemoteHistoricalTasks(
       'local-db:sessions:list',
       [100, 'active'],
     ) as Session[];
-    return normalizeHistoricalTaskResources(sessions, currentSessionId, deviceId);
+    return normalizeHistoricalTaskResources(sessions, currentSessionId, deviceId, unnamedLabel);
   }
 }
 
@@ -375,17 +389,24 @@ export async function scanAtResources(
   const taskHistoryPromise: Promise<AtResourceItem[] | null> = includeTaskHistory
     ? normalizedTaskQuery
       ? deviceId
-        ? searchRemoteHistoricalTasks(deviceId, normalizedTaskQuery, context?.sessionId)
+        ? searchRemoteHistoricalTasks(
+            deviceId,
+            normalizedTaskQuery,
+            context?.sessionId,
+            context?.unnamedLabel,
+          )
         : window.electronAPI.localDb.conversations.search({
             query: normalizedTaskQuery,
             limit: TASK_SEARCH_CANDIDATE_LIMIT,
             sortBy: 'relevance',
             semanticMode: 'keyword',
             filters: { status: 'active' },
+            ...(context?.unnamedLabel ? { unnamedLabel: context.unnamedLabel } : {}),
           }).then((response) => normalizeHistoricalTaskSearchResources(
             response,
             context?.sessionId,
             undefined,
+            context?.unnamedLabel,
           ))
       : deviceId
         ? (window.electronAPI.deviceLink.invoke(
@@ -396,12 +417,14 @@ export async function scanAtResources(
             sessions,
             context?.sessionId,
             deviceId,
+            context?.unnamedLabel,
           ))
         : window.electronAPI.localDb.sessions.list(100, 'active').then(
             (sessions) => normalizeHistoricalTaskResources(
               sessions,
               context?.sessionId,
               undefined,
+              context?.unnamedLabel,
             ),
           )
     : Promise.resolve(null);

@@ -442,17 +442,17 @@ function formatReference(reference: AgentInputReference): string {
   if (reference.kind === 'browser-tab') {
     return [
       '[Referenced browser tab]',
-      `Title: ${oneLine(reference.title ?? '') || reference.url}`,
-      `URL: ${reference.url}`,
-      `Tab ID: ${reference.tabId}`,
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || reference.url)}`,
+      `URL: ${quotedMetadata(reference.url)}`,
+      `Tab ID: ${quotedMetadata(reference.tabId)}`,
       '[/Referenced browser tab]',
     ].join('\n');
   }
   if (reference.kind === 'desktop-window') {
     return [
       '[Referenced desktop window]',
-      `Title: ${oneLine(reference.title ?? '') || reference.appName}`,
-      `Application: ${oneLine(reference.appName)}`,
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || reference.appName)}`,
+      `Application: ${quotedMetadata(oneLine(reference.appName))}`,
       `PID: ${reference.pid}`,
       `Window ID: ${reference.windowId}`,
       '[/Referenced desktop window]',

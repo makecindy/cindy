@@ -46,7 +46,7 @@ function deps(overrides: Partial<GhostAtResourceProviderDeps> = {}): GhostAtReso
 }
 
 describe('Plugin @ resource providers', () => {
-  it('uses authoritative local session scope and limits draft fallback', async () => {
+  it('uses authoritative local session scope and rejects draft paths', async () => {
     const getSessionSnapshot = vi.fn(async (sessionId: string) => {
       if (sessionId === 'local') return { workingDir: '/db/repo', remoteHostId: null };
       if (sessionId === 'remote') return { workingDir: '/remote/repo', remoteHostId: 'host-1' };
@@ -64,7 +64,9 @@ describe('Plugin @ resource providers', () => {
     await expect(resolveGhostAtResourceWorkingDir({ sessionId: 'missing' }, getSessionSnapshot))
       .resolves.toEqual({ allowed: false });
     await expect(resolveGhostAtResourceWorkingDir({ workingDir: '/draft/repo' }, getSessionSnapshot))
-      .resolves.toEqual({ allowed: true, workingDir: '/draft/repo' });
+      .resolves.toEqual({ allowed: false });
+    await expect(resolveGhostAtResourceWorkingDir({}, getSessionSnapshot))
+      .resolves.toEqual({ allowed: false });
   });
 
   it('lists eligible metadata without dispatching a tool', () => {

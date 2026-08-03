@@ -3326,6 +3326,7 @@ export function ChatInput({
           sessionId,
           includeLocalContext: !remoteDeviceId,
           includeTaskHistory: !!normalizedQuery,
+          unnamedLabel: t('ccAgent.common.unnamedSession'),
           onPartial: (partial) => {
             if (atScanSeqRef.current !== seq || !partial.success) return;
             setAtState((prev) => ({
@@ -3353,7 +3354,7 @@ export function ChatInput({
           setAtState({ kind: 'error', message: m });
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t],
   );
 
   useEffect(() => {

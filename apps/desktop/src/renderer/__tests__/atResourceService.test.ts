@@ -462,11 +462,11 @@ describe('scanAtResources context providers', () => {
   it('searches all active task history through the indexed conversation search', async () => {
     stubApi({
       taskSearch: {
-        query: 'legacy',
+        query: '未命名',
         results: [{
           session: {
             id: 'older-than-sidebar-cap',
-            title: 'Legacy release task',
+            title: 'New Maker',
             status: 'active',
             workingDir: 'D:\\repo',
           },
@@ -478,21 +478,23 @@ describe('scanAtResources context providers', () => {
       },
     });
 
-    const result = await scanAtResources('', 'codex', 2000, 'legacy', undefined, {
+    const result = await scanAtResources('', 'codex', 2000, '未命名', undefined, {
       includeTaskHistory: true,
+      unnamedLabel: '未命名任务',
     });
 
     expect(result.items).toMatchObject([{
       type: 'session',
-      name: 'Legacy release task',
+      name: '未命名任务',
       relPath: 'cindy://session/older-than-sidebar-cap',
     }]);
     expect(window.electronAPI.localDb.conversations.search).toHaveBeenCalledWith({
-      query: 'legacy',
+      query: '未命名',
       limit: 20,
       sortBy: 'relevance',
       semanticMode: 'keyword',
       filters: { status: 'active' },
+      unnamedLabel: '未命名任务',
     });
     expect(window.electronAPI.localDb.sessions.list).not.toHaveBeenCalled();
   });
@@ -500,11 +502,11 @@ describe('scanAtResources context providers', () => {
   it('uses indexed task search on the controlled device', async () => {
     stubApi({
       deviceTaskSearch: {
-        query: 'remote',
+        query: 'untitled',
         results: [{
           session: {
             id: 'remote-history',
-            title: 'Remote task',
+            title: 'New Maker',
             status: 'active',
             workingDir: '/repo',
           },
@@ -516,23 +518,26 @@ describe('scanAtResources context providers', () => {
       },
     });
 
-    const result = await scanAtResources('', 'codex', 2000, 'remote', 'device-1', {
+    const result = await scanAtResources('', 'codex', 2000, 'untitled', 'device-1', {
       includeTaskHistory: true,
+      unnamedLabel: 'Untitled session',
     });
 
     expect(result.items).toMatchObject([{
       type: 'session',
+      name: 'Untitled session',
       relPath: 'cindy://session/remote-history?device=device-1',
     }]);
     expect(window.electronAPI.deviceLink.invoke).toHaveBeenCalledWith(
       'device-1',
       'local-db:conversations:search',
       [{
-        query: 'remote',
+        query: 'untitled',
         limit: 20,
         sortBy: 'relevance',
         semanticMode: 'keyword',
         filters: { status: 'active' },
+        unnamedLabel: 'Untitled session',
       }],
     );
   });
