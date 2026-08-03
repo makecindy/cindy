@@ -383,11 +383,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       warn: (...args) => log.warn(...args),
       error: (...args) => log.error(...args),
     },
-    onPeerLinkNeedsReopen: (deviceId) => {
-      if (linkTornDown) return;
-      pendingPeerLinkReopens.add(deviceId);
-      flushPendingPeerLinkReopens();
-    },
     // 弱网收紧:默认 20s ping × (2+1) tick 要 ~60s 才判死半开连接,期间所有请求黑洞。
     // 15s ping 把判死缩到 ~45s;不动 pongMissLimit——高延迟链路(实测响应性可达 ~10s)
     // 下更激进的宽限会把「慢但活着」误判成死链,造成重连循环(mobile 用 10s×1 是因为
@@ -462,16 +457,19 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();
   });
   // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
-  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。只对本机确实在控制
-  // (有活跃订阅)的设备主动重建链路;client 侧已 30s/peer 节流,openRemoteLink
-  // 自带 in-flight 去重。被控端方向(控制端给本机发帧)没有订阅记录,自然忽略。
-  client.onReliableFrameBeforeLink((deviceId) => {
-    if (snapshotSubscriptions(deviceId).length === 0) return;
+  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。client 侧已 30s/peer
+  // 节流,这里进有界退避队列(见 flushPendingPeerLinkReopens):一次 openRemoteLink
+  // 失败不放弃,直到成功 / 显式关闭 / 撤权 / 待命 / teardown 终止。
+  client.onReliableFrameBeforeLink((deviceId, info) => {
+    if (linkTornDown) return;
+    // 显式关闭(本机 closeLink 或对端永久 link-close)后飞来的迟到帧不得把用户
+    // 关掉的链路自动建回来;这类 peer 的重开只能由用户显式操作重新发起。
+    if (info.explicitlyClosed) return;
+    // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制时
+    // 不入队,避免队列在必然失败的 openRemoteLink 上按 5s 无限重试空转。
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
-    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`);
-    openRemoteLink(deviceId).catch((err) => {
-      log.debug(`re-open link for ${deviceId.slice(0, 8)} failed`, err);
-    });
+    pendingPeerLinkReopens.add(deviceId);
+    flushPendingPeerLinkReopens();
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);

@@ -3004,7 +3004,7 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('connectNow:force 丢弃半开 socket 并复位所有 peer 的旧 link 状态', async () => {
+  it('restartConnection 丢弃半开 socket 并复位所有 peer 的旧 link 状态', async () => {
     const h = makeHarness();
     h.client.start();
     await tick();
@@ -3015,7 +3015,7 @@ describe('DeviceLinkClient', () => {
     expect(h.client.isLinkReady('ctrl-force-a')).toBe(true);
     expect(h.client.isLinkReady('ctrl-force-b')).toBe(true);
 
-    h.client.connectNow('system-resume', { force: true });
+    h.client.restartConnection('system-resume');
     expect(h.client.isLinkReady('ctrl-force-a')).toBe(false);
     expect(h.client.isLinkReady('ctrl-force-b')).toBe(false);
     await tick();
@@ -3630,6 +3630,56 @@ describe('DeviceLinkClient', () => {
         h.current().push({ ...frame, src: 'dev-b' });
         await tick();
         expect(notified).toEqual(['dev-b', 'dev-b']);
+        h.client.stop();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('C2:before-link 通知带 explicitlyClosed —— 显式关闭后的迟到帧仍通知,但标记为不可自动重建', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      let nowMs = 3_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+        const seen: Array<{ deviceId: string; explicitlyClosed: boolean }> = [];
+        h.client.onReliableFrameBeforeLink((deviceId, info) => {
+          seen.push({ deviceId, explicitlyClosed: info.explicitlyClosed });
+        });
+        h.client.start();
+        await makeLinkDownPeer(h, 'dev-c');
+
+        const staleFrame = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-c',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-c',
+          1,
+          1,
+        )[0]!;
+
+        // 普通断链(非显式关闭):控制端可自动重建
+        h.current().push({ ...staleFrame, src: 'dev-c' });
+        await tick();
+        expect(seen).toEqual([{ deviceId: 'dev-c', explicitlyClosed: false }]);
+
+        // 对端显式永久关闭后,迟到帧仍通知(host 需要「对端存活」这条证据),
+        // 但 explicitlyClosed=true —— 控制端据此不把用户关掉的链路自动建回来。
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'link-close',
+          src: 'dev-c',
+          payload: { reason: 'user' },
+        });
+        await tick();
+        nowMs += 30_001; // 跨过 per-peer 通知节流窗口
+        h.current().push({ ...staleFrame, src: 'dev-c' });
+        await tick();
+        expect(seen.at(-1)).toEqual({ deviceId: 'dev-c', explicitlyClosed: true });
         h.client.stop();
       } finally {
         clock.mockRestore();
