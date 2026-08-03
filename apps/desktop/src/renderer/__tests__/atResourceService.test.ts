@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { scanAtResources, scanPluginAtResources } from '@/lib/atResourceService';
+import {
+  filterAtResources,
+  getAtDirectoryCompletionQuery,
+  scanAtResources,
+  scanPluginAtResources,
+} from '@/lib/atResourceService';
 
 function stubApi(options: {
   workspace?: unknown;
@@ -51,6 +56,64 @@ function stubApi(options: {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('filterAtResources', () => {
+  const items = [
+    { type: 'file' as const, name: 'README.md', relPath: 'README.md' },
+    { type: 'dir' as const, name: 'apps', relPath: 'apps' },
+    { type: 'session' as const, name: 'Release planning', relPath: 'cindy://session/1' },
+    { type: 'agent' as const, name: 'reviewer', relPath: '.claude/agents/reviewer.md' },
+    { type: 'plugin-provider' as const, name: 'Issues', relPath: 'issues' },
+  ];
+
+  it('hides files and directories until the user types a query', () => {
+    expect(filterAtResources(items, '').map((item) => item.type)).toEqual([
+      'agent',
+      'session',
+      'plugin-provider',
+    ]);
+  });
+
+  it('keeps each empty-query source compact', () => {
+    const tasks = Array.from({ length: 5 }, (_, index) => ({
+      type: 'session' as const,
+      name: `Task ${index}`,
+      relPath: `cindy://session/${index}`,
+    }));
+
+    expect(filterAtResources(tasks, '')).toHaveLength(3);
+  });
+
+  it('searches files and directories and caps the global result list', () => {
+    const files = Array.from({ length: 12 }, (_, index) => ({
+      type: 'file' as const,
+      name: `file-${index}.ts`,
+      relPath: `src/file-${index}.ts`,
+    }));
+    const results = filterAtResources(files, 'file');
+
+    expect(results).toHaveLength(8);
+    expect(results.every((item) => item.type === 'file')).toBe(true);
+  });
+});
+
+describe('getAtDirectoryCompletionQuery', () => {
+  it('turns a directory into a path prefix for continued search', () => {
+    expect(getAtDirectoryCompletionQuery({
+      type: 'dir',
+      name: 'desktop',
+      relPath: 'apps/desktop',
+    })).toBe('apps/desktop/');
+  });
+
+  it('falls back to a mention for directory paths that cannot stay in an @ query', () => {
+    expect(getAtDirectoryCompletionQuery({
+      type: 'dir',
+      name: 'design notes',
+      relPath: 'docs/design notes',
+    })).toBeNull();
+  });
 });
 
 describe('scanAtResources context providers', () => {

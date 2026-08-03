@@ -27,6 +27,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import {
+  AT_MENTION_SEARCH_RESULT_LIMIT,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
@@ -87,8 +88,11 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    return scopedProviderName ? state.items.slice(0, 25) : filterAtResources(state.items, query);
+    return scopedProviderName
+      ? state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT)
+      : filterAtResources(state.items, query);
   }, [state, query, scopedProviderName]);
+  const isEmptyRootQuery = !scopedProviderName && !query.trim();
 
   useEffect(() => {
     if (filtered.length === 0) return;
@@ -317,20 +321,34 @@ export function AtMentionPanel({
           <div
             className={cn(
               'flex items-center justify-center',
-              'h-[40px] text-[13px]',
+              'select-none h-[40px] text-[13px]',
               'text-[var(--cmd-palette-empty)]',
             )}
           >
-            {state.searching ? t('newChat.atMention.searching') : t('newChat.atMention.noMatch')}
+            {state.searching
+              ? t('newChat.atMention.searching')
+              : isEmptyRootQuery
+                ? t('newChat.atMention.typeToSearchFiles')
+                : t('newChat.atMention.noMatch')}
           </div>
         )}
         {state.kind === 'ready' && filtered.length > 0 && (
           <>
             {filtered.map((item, idx) => renderItemRow(item, idx))}
-            {state.truncated && (
+            {isEmptyRootQuery && (
               <div
                 className={cn(
-                  'px-[10px] py-[8px] text-[12px]',
+                  'select-none px-[10px] py-[8px] text-[12px]',
+                  'text-[var(--cmd-palette-item-meta)]',
+                )}
+              >
+                {t('newChat.atMention.typeToSearchFiles')}
+              </div>
+            )}
+            {!isEmptyRootQuery && state.truncated && (
+              <div
+                className={cn(
+                  'select-none px-[10px] py-[8px] text-[12px]',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >

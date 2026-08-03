@@ -5290,6 +5290,7 @@
       "retry": "Retry",
       "searching": "Searching…",
       "noMatch": "No matching items",
+      "typeToSearchFiles": "Type to search project files",
       "keepTyping": "Keep typing to narrow down…"
     },
     "planReview": {

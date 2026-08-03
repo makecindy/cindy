@@ -57,6 +57,18 @@ export interface ScanResult {
   truncated: boolean;
 }
 
+export const AT_MENTION_SEARCH_RESULT_LIMIT = 8;
+export const AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP = 3;
+
+const EMPTY_QUERY_SECTION_LIMIT = 3;
+const EMPTY_QUERY_RESULT_LIMIT = 12;
+const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
+  new Set(['browser-tab', 'desktop-window']),
+  new Set(['agent']),
+  new Set(['session']),
+  new Set(['plugin-provider']),
+];
+
 export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
 
 export interface AtResourceScanContext {
@@ -405,26 +417,56 @@ function fuzzyInOrder(hay: string, needle: string): boolean {
   return i === needle.length;
 }
 
+function emptyQueryResources(items: AtResourceItem[], limit: number): AtResourceItem[] {
+  const selected: AtResourceItem[] = [];
+  for (const types of EMPTY_QUERY_SECTIONS) {
+    let sectionCount = 0;
+    for (const item of items) {
+      if (!types.has(item.type)) continue;
+      selected.push(item);
+      sectionCount += 1;
+      if (selected.length >= limit) return selected;
+      if (sectionCount >= EMPTY_QUERY_SECTION_LIMIT) break;
+    }
+  }
+  return selected;
+}
+
+/** Return a path prefix when a directory can remain inside the active @ query. */
+export function getAtDirectoryCompletionQuery(item: AtResourceItem): string | null {
+  if (item.type !== 'dir') return null;
+  const relPath = item.relPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!relPath || /[\s"@]/.test(relPath)) return null;
+  return `${relPath}/`;
+}
+
 /**
- * Filter + rank against a query. Agents and files are ranked together in
- * the same pool (F5: "agent 项与文件项完全平铺"), no artificial boost for
- * one type over the other — the raw scorer already privileges name matches
- * and agents tend to have short memorable names so they naturally rise.
+ * Empty queries expose only a small curated set of contextual resources.
+ * Once the user types, every source — including files and directories — is
+ * ranked in the same pool and capped to a compact global result list.
  */
 export function filterAtResources(
   items: AtResourceItem[],
   query: string,
-  limit = 25,
+  limit?: number,
 ): AtResourceItem[] {
   const q = query.trim().toLowerCase();
+  const resultLimit = limit ?? (
+    q ? AT_MENTION_SEARCH_RESULT_LIMIT : EMPTY_QUERY_RESULT_LIMIT
+  );
+  if (!q) return emptyQueryResources(items, resultLimit);
   const scored: Array<{ item: AtResourceItem; score: number }> = [];
   for (const item of items) {
     const s = scoreItem(item, q);
     if (s >= 0) scored.push({ item, score: s });
   }
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => (
+    b.score - a.score
+    || a.item.name.localeCompare(b.item.name)
+    || a.item.relPath.localeCompare(b.item.relPath)
+  ));
   // Cap rendered items — the panel is max ~9 visible rows; rendering
-  // beyond `limit` wastes DOM nodes and causes jank on large projects.
-  if (scored.length > limit) scored.length = limit;
+  // beyond `resultLimit` wastes DOM nodes and causes jank on large projects.
+  if (scored.length > resultLimit) scored.length = resultLimit;
   return scored.map((s) => s.item);
 }

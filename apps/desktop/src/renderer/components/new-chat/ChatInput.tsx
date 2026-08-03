@@ -194,6 +194,9 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
+  AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
+  AT_MENTION_SEARCH_RESULT_LIMIT,
+  getAtDirectoryCompletionQuery,
   scanAtResources,
   scanPluginAtResources,
   filterAtResources,
@@ -3276,12 +3279,13 @@ export function ChatInput({
   // At-panel scan state
   const [atState, setAtState] = useState<AtPanelState>({ kind: 'loading' });
   const atScanSeqRef = useRef(0);
-  const atFallbackScanTimerRef = useRef<number | null>(null);
+  const atLastScanQueryRef = useRef('');
+  const atQueryScanTimerRef = useRef<number | null>(null);
   useEffect(
     () => () => {
       atScanSeqRef.current += 1;
-      if (atFallbackScanTimerRef.current !== null) {
-        window.clearTimeout(atFallbackScanTimerRef.current);
+      if (atQueryScanTimerRef.current !== null) {
+        window.clearTimeout(atQueryScanTimerRef.current);
       }
     },
     [],
@@ -3299,6 +3303,7 @@ export function ChatInput({
         deviceLinkDeviceId ?? (sessionId ? getSessionDeviceId(sessionId) : undefined);
       const seq = ++atScanSeqRef.current;
       const normalizedQuery = query?.trim() ?? '';
+      atLastScanQueryRef.current = normalizedQuery;
       setAtState((prev) => {
         if (prev.kind === 'ready' && normalizedQuery) {
           return { ...prev, searching: true };
@@ -3308,7 +3313,7 @@ export function ChatInput({
       scanAtResources(
         workingDir ?? '',
         paletteAgentKind,
-        2000,
+        normalizedQuery ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
         normalizedQuery || undefined,
         remoteDeviceId,
         {
@@ -3418,7 +3423,7 @@ export function ChatInput({
     if (!atQuery && trigger.kind !== 'at') return [];
     if (atState.kind !== 'ready') return [];
     return atPluginScope
-      ? atState.items.slice(0, 25)
+      ? atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT)
       : filterAtResources(atState.items, atQuery);
   }, [atState, atQuery, trigger.kind, atPluginScope]);
 
@@ -3438,26 +3443,25 @@ export function ChatInput({
   }, [atPluginScope?.provider.pluginId, atQuery]);
 
   useEffect(() => {
-    if (atFallbackScanTimerRef.current !== null) {
-      window.clearTimeout(atFallbackScanTimerRef.current);
-      atFallbackScanTimerRef.current = null;
+    if (atQueryScanTimerRef.current !== null) {
+      window.clearTimeout(atQueryScanTimerRef.current);
+      atQueryScanTimerRef.current = null;
     }
     if (trigger.kind !== 'at') return;
     if (atPluginScope) return;
-    if (!atQuery.trim()) return;
-    if (atState.kind !== 'ready') return;
-    if (filteredAt.length > 0) return;
-    atFallbackScanTimerRef.current = window.setTimeout(() => {
-      atFallbackScanTimerRef.current = null;
-      runAtScan(atQuery);
-    }, 200);
+    const normalizedQuery = atQuery.trim();
+    if (normalizedQuery === atLastScanQueryRef.current) return;
+    atQueryScanTimerRef.current = window.setTimeout(() => {
+      atQueryScanTimerRef.current = null;
+      runAtScan(normalizedQuery);
+    }, normalizedQuery ? 200 : 0);
     return () => {
-      if (atFallbackScanTimerRef.current !== null) {
-        window.clearTimeout(atFallbackScanTimerRef.current);
-        atFallbackScanTimerRef.current = null;
+      if (atQueryScanTimerRef.current !== null) {
+        window.clearTimeout(atQueryScanTimerRef.current);
+        atQueryScanTimerRef.current = null;
       }
     };
-  }, [trigger.kind, workingDir, atQuery, atState.kind, filteredAt.length, runAtScan, atPluginScope]);
+  }, [trigger.kind, workingDir, atQuery, runAtScan, atPluginScope]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3666,6 +3670,20 @@ export function ChatInput({
         atScanSeqRef.current += 1;
         setAtPluginScope({ provider: item, triggerFrom: from });
         setAtState({ kind: 'loading' });
+        return;
+      }
+      const directoryQuery = getAtDirectoryCompletionQuery(item);
+      if (directoryQuery) {
+        editor
+          .chain()
+          .focus()
+          .command(({ tr }) => {
+            tr.replaceWith(from, to, editor.schema.text(`@${directoryQuery}`));
+            return true;
+          })
+          .run();
+        setAtFocus(0);
+        setAtPluginScope(null);
         return;
       }
       const attrs: MentionChipAttrs = {
