@@ -86,6 +86,9 @@ function encodeRequest(
       type: 'state' as const,
       state,
       capabilities: [CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS],
+      ...(options.database.capabilityNonce
+        ? { capabilityNonce: options.database.capabilityNonce }
+        : {}),
       ...(options.database.requestReply ? { requestReply: true } : {}),
     };
     return encodeContactsSyncJsonInProcess(
@@ -118,6 +121,7 @@ function decodeRequest(
         : {}),
       ...(message.requestReply ? { requestReply: true } : {}),
       ...(message.capabilities ? { capabilities: [...message.capabilities] } : {}),
+      ...(message.capabilityNonce ? { capabilityNonce: message.capabilityNonce } : {}),
     };
   });
 }

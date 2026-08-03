@@ -14,6 +14,7 @@ import {
   CONTACTS_SYNC_MAX_COMPRESSED_BYTES,
   createContactsSyncFrames,
   isContactsSyncCapabilities,
+  isContactsSyncCapabilityNonce,
   isContactsSyncStateMessage,
   type ContactsSyncAppliedStateResult,
   type ContactsSyncCodec,
@@ -365,7 +366,8 @@ function isAppliedStateResult(value: unknown): value is ContactsSyncAppliedState
     isClockArray(result.clocks) &&
     (result.mergeClocks === undefined || isClockArray(result.mergeClocks)) &&
     (result.requestReply === undefined || typeof result.requestReply === 'boolean') &&
-    isContactsSyncCapabilities(result.capabilities)
+    isContactsSyncCapabilities(result.capabilities) &&
+    isContactsSyncCapabilityNonce(result.capabilityNonce)
   );
 }
 

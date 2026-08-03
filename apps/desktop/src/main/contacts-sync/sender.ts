@@ -36,6 +36,7 @@ interface ContactsSyncOutboundDependencies {
   getKnownMergeClocks(deviceId: string): ContactsSyncClock[] | undefined;
   peerSupportsMergeRedirects(deviceId: string): boolean;
   getPeerDeliveryEpoch(deviceId: string): number;
+  getCapabilityNonce(deviceId: string): string | undefined;
   onLocalMaterialized(): void;
   announceKey(deviceId: string): void;
   onError(error: unknown): void;
@@ -109,12 +110,14 @@ export class ContactsSyncOutbound {
     const peerDeliveryEpoch = this.deps.getPeerDeliveryEpoch(deviceId);
     const knownClocks = this.deps.getKnownClocks(deviceId);
     const knownMergeClocks = this.deps.getKnownMergeClocks(deviceId);
+    const capabilityNonce = this.deps.getCapabilityNonce(deviceId);
     const encoded = await encodeContactsSyncDatabaseState({
       database: {
         source: this.deps.getDatabaseSource(),
         ...(knownClocks ? { knownClocks } : {}),
         ...(knownMergeClocks ? { knownMergeClocks } : {}),
         peerSupportsMergeRedirects: this.deps.peerSupportsMergeRedirects(deviceId),
+        ...(capabilityNonce ? { capabilityNonce } : {}),
         ...(requestReply ? { requestReply: true } : {}),
       },
       ownPrivateKey: identity.privateKey,

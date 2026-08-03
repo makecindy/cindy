@@ -110,6 +110,7 @@ describe('contacts sync codec worker client', () => {
         knownClocks: [{ nodeId: 'node-a', counter: 2 }],
         knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
         peerSupportsMergeRedirects: true,
+        capabilityNonce: 'current-runtime-nonce',
         requestReply: true,
       },
       ownPrivateKey: own.privateKey,
@@ -127,6 +128,7 @@ describe('contacts sync codec worker client', () => {
           source: { dbPath: '/tmp/contacts.db' },
           knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
           peerSupportsMergeRedirects: true,
+          capabilityNonce: 'current-runtime-nonce',
         },
       },
     });

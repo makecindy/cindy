@@ -6,6 +6,8 @@
  * 确定性程序逻辑，不调用模型、不产生 token 消耗。
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type { ContactsSyncClock } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
@@ -88,6 +90,8 @@ const peerKnownClocks = new Map<string, ContactsSyncClock[]>();
 const peerKnownMergeClocks = new Map<string, ContactsSyncClock[]>();
 const peersSupportingMergeRedirects = new Set<string>();
 const peerDeliveryEpochs = new Map<string, number>();
+const sentCapabilityNonces = new Map<string, string>();
+const peerCapabilityNonces = new Map<string, string>();
 let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
 let syncAttemptTimer: NodeJS.Timeout | null = null;
@@ -131,6 +135,7 @@ const outbound = new ContactsSyncOutbound({
   getKnownMergeClocks: (deviceId) => peerKnownMergeClocks.get(deviceId),
   peerSupportsMergeRedirects: (deviceId) => peersSupportingMergeRedirects.has(deviceId),
   getPeerDeliveryEpoch: (deviceId) => peerDeliveryEpochs.get(deviceId) ?? 0,
+  getCapabilityNonce: (deviceId) => peerCapabilityNonces.get(deviceId),
   onLocalMaterialized: () => broadcastContactsChanged({ origin: 'remote' }),
   announceKey,
   onError: recordError,
@@ -195,6 +200,8 @@ export function stopContactsDeviceSyncRuntime(): void {
   peerKnownMergeClocks.clear();
   peersSupportingMergeRedirects.clear();
   peerDeliveryEpochs.clear();
+  sentCapabilityNonces.clear();
+  peerCapabilityNonces.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);
@@ -435,6 +442,7 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
   // DB-bound encode 有意串行：N 台在线设备不应把正常 fan-out 塞爆全局 worker 队列。
   for (const peer of peers) {
     if (!outbound.isCurrent(context)) break;
+    if (requestReply) announceKey(peer.deviceId);
     await outbound.ensureKeyThenSend(peer.deviceId, requestReply, context);
   }
   if (outbound.isCurrent(context)) scheduleSyncAttemptTimeout();
@@ -549,6 +557,8 @@ export function handleContactsPeerPresenceChanged(peer: {
     respondedToKeyAnnouncement.delete(peer.deviceId);
     peerKnownClocks.delete(peer.deviceId);
     peerKnownMergeClocks.delete(peer.deviceId);
+    sentCapabilityNonces.delete(peer.deviceId);
+    peerCapabilityNonces.delete(peer.deviceId);
     invalidatePeerMergeCapability(peer.deviceId);
   }
   refreshOnlineCount();
@@ -572,13 +582,45 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
   }
   if (raw.type === 'key') {
     // 合法 key 帧本身就表示新的运行连接：在任何异步 pin/文件锁等待前同步
-    // 失效旧 capability 与在途 payload，不能给降级后的 peer 留竞态窗口。
+    // 失效旧 capability、nonce 与在途 payload，不能给降级后的 peer 留竞态窗口。
+    const previousPeerNonce = peerCapabilityNonces.get(srcDeviceId);
+    const currentChallenge = sentCapabilityNonces.get(srcDeviceId);
+    const isChallengeResponse =
+      raw.capabilityReplyTo !== undefined && raw.capabilityReplyTo === currentChallenge;
+    let challengeResponse: { capabilityNonce: string; capabilityReplyTo: string } | undefined;
+    if (raw.capabilityNonce) {
+      peerCapabilityNonces.set(srcDeviceId, raw.capabilityNonce);
+      if (!isChallengeResponse) {
+        // 首次双向握手复用刚主动发出的 challenge，避免两端互相旋转；同一
+        // deviceId 声明新的 peer nonce 时则立即换代，旧 transfer 无法趁 pin 等待重授权。
+        const capabilityNonce =
+          previousPeerNonce !== undefined && previousPeerNonce !== raw.capabilityNonce
+            ? randomUUID()
+            : (currentChallenge ?? randomUUID());
+        sentCapabilityNonces.set(srcDeviceId, capabilityNonce);
+        challengeResponse = {
+          capabilityNonce,
+          capabilityReplyTo: raw.capabilityNonce,
+        };
+      }
+    } else {
+      peerCapabilityNonces.delete(srcDeviceId);
+    }
     invalidatePeerMergeCapability(srcDeviceId);
     prepareAndRun(async (isCurrent) => {
       const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
       if (!isCurrent() || !deviceLinkOwnerActive || !transport?.isPeerAllowed(srcDeviceId)) return;
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
-      respondToKey(srcDeviceId);
+      if (challengeResponse) {
+        sendKeyAnnouncement(
+          srcDeviceId,
+          Date.now(),
+          challengeResponse.capabilityNonce,
+          challengeResponse.capabilityReplyTo,
+        );
+      } else if (!raw.capabilityNonce) {
+        respondToKey(srcDeviceId);
+      }
       startLan();
       runSyncTask(() => outbound.send(srcDeviceId, true));
     });
@@ -635,9 +677,10 @@ function handleIncomingCipherFrame(
       peerKnownMergeClocks.delete(srcDeviceId);
     }
     const supportedMergeRedirectsBefore = peersSupportingMergeRedirects.has(srcDeviceId);
-    const declaresMergeRedirects = message.capabilities?.includes(
-      CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS,
-    );
+    const declaresMergeRedirects =
+      message.capabilities?.includes(CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS) === true &&
+      message.capabilityNonce !== undefined &&
+      message.capabilityNonce === sentCapabilityNonces.get(srcDeviceId);
     if (declaresMergeRedirects) {
       peersSupportingMergeRedirects.add(srcDeviceId);
     } else {
@@ -679,10 +722,19 @@ function respondToKey(deviceId: string): void {
   respondedToKeyAnnouncement.set(deviceId, now);
 }
 
-function sendKeyAnnouncement(deviceId: string, announcedAt: number): void {
+function sendKeyAnnouncement(
+  deviceId: string,
+  announcedAt: number,
+  capabilityNonce: string = randomUUID(),
+  capabilityReplyTo?: string,
+): void {
   if (!transport || !transport.isPeerAllowed(deviceId)) return;
   const identity = contactsSyncKeyStore.getIdentity();
-  transport.sendRelayFrame(deviceId, createContactsSyncKeyFrame(identity.publicKey));
+  sentCapabilityNonces.set(deviceId, capabilityNonce);
+  transport.sendRelayFrame(
+    deviceId,
+    createContactsSyncKeyFrame(identity.publicKey, capabilityNonce, capabilityReplyTo),
+  );
   announcedTo.set(deviceId, announcedAt);
 }
 
@@ -984,6 +1036,8 @@ function ensureCurrentOwnerStatus(): void {
   peerKnownMergeClocks.clear();
   peersSupportingMergeRedirects.clear();
   peerDeliveryEpochs.clear();
+  sentCapabilityNonces.clear();
+  peerCapabilityNonces.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);

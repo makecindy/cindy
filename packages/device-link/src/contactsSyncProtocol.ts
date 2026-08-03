@@ -16,6 +16,10 @@ export interface ContactsSyncKeyFrame {
   version: typeof CONTACTS_SYNC_WIRE_VERSION;
   type: "key";
   publicKey: string;
+  /** 可选以兼容旧客户端；新客户端用它发起本次连接能力挑战。 */
+  capabilityNonce?: string;
+  /** 新客户端响应另一端挑战时回填；旧客户端会忽略。 */
+  capabilityReplyTo?: string;
 }
 
 export interface ContactsSyncCipherChunkFrame {
@@ -40,7 +44,15 @@ export function isContactsSyncWireFrame(
 ): value is ContactsSyncWireFrame {
   if (!isRecord(value) || value.version !== CONTACTS_SYNC_WIRE_VERSION)
     return false;
-  if (value.type === "key") return isX25519SpkiBase64Shape(value.publicKey);
+  if (value.type === "key") {
+    return (
+      isX25519SpkiBase64Shape(value.publicKey) &&
+      (value.capabilityNonce === undefined ||
+        isBoundedText(value.capabilityNonce, 64)) &&
+      (value.capabilityReplyTo === undefined ||
+        isBoundedText(value.capabilityReplyTo, 64))
+    );
+  }
   if (value.type !== "cipher-chunk") return false;
   return (
     isX25519SpkiBase64Shape(value.senderPublicKey) &&

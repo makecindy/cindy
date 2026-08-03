@@ -54,6 +54,7 @@ const harness = vi.hoisted(() => {
       },
     ),
     peerPublicKey: 'peer-public' as string | null,
+    lastSentCapabilityNonce: null as string | null,
     prepareKeyStore: vi.fn(async (): Promise<void> => undefined),
     pinPeerPublicKey: vi.fn(async (_: string, publicKey: string) => {
       const firstSeen = harness.peerPublicKey === null;
@@ -181,7 +182,20 @@ vi.mock('../lanTransport.js', () => ({
 }));
 
 vi.mock('../wire.js', () => ({
-  createContactsSyncKeyFrame: () => ({ version: 1, type: 'key', publicKey: 'own-public' }),
+  createContactsSyncKeyFrame: (
+    _publicKey: string,
+    capabilityNonce?: string,
+    capabilityReplyTo?: string,
+  ) => {
+    harness.lastSentCapabilityNonce = capabilityNonce ?? null;
+    return {
+      version: 1,
+      type: 'key',
+      publicKey: 'own-public',
+      ...(capabilityNonce ? { capabilityNonce } : {}),
+      ...(capabilityReplyTo ? { capabilityReplyTo } : {}),
+    };
+  },
   encodeContactsSyncDatabaseState: harness.encodeContactsSyncMessage,
   isContactsSyncWireFrame: (raw: unknown) =>
     typeof raw === 'object' && raw !== null && 'type' in raw,
@@ -234,6 +248,7 @@ beforeEach(() => {
     materialized: false,
   }));
   harness.peerPublicKey = 'peer-public';
+  harness.lastSentCapabilityNonce = null;
   harness.pinPeerPublicKey.mockClear();
   harness.prepareKeyStore.mockClear();
   harness.lanStart.mockReset();
@@ -316,7 +331,9 @@ describe('contacts sync runtime ownership', () => {
     finishLanSend!(false);
     await enabling;
 
-    expect(harness.relaySend).not.toHaveBeenCalled();
+    expect(
+      harness.relaySend.mock.calls.filter(([, frame]) => frame.type === 'cipher-chunk'),
+    ).toHaveLength(0);
     expect(driver.getContactsDeviceSyncStatus().phase).toBe('off');
   });
 
@@ -348,7 +365,9 @@ describe('contacts sync runtime ownership', () => {
 
     expect(oldOwnerSignal?.aborted).toBe(true);
     await enabling;
-    expect(harness.relaySend).not.toHaveBeenCalled();
+    expect(
+      harness.relaySend.mock.calls.filter(([, frame]) => frame.type === 'cipher-chunk'),
+    ).toHaveLength(0);
   });
 
   it('applies a sync toggle written by another shared-userData instance', async () => {
@@ -833,6 +852,15 @@ describe('contacts sync runtime ownership', () => {
     ).toBe(false);
 
     harness.encodeContactsSyncMessage.mockClear();
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+      capabilityNonce: 'peer-runtime-1',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+
+    harness.encodeContactsSyncMessage.mockClear();
     harness.decoderAccept.mockResolvedValueOnce({
       version: 1,
       type: 'applied-state',
@@ -840,6 +868,7 @@ describe('contacts sync runtime ownership', () => {
       clocks: [],
       mergeClocks: [],
       capabilities: ['merge-redirects-v1'],
+      capabilityNonce: harness.lastSentCapabilityNonce!,
     });
     driver.handleIncomingContactsRelayFrame('peer-device', {
       version: 1,
@@ -858,6 +887,7 @@ describe('contacts sync runtime ownership', () => {
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,
     ).toBe(true);
+    const oldConnectionChallenge = harness.lastSentCapabilityNonce!;
 
     // 同时模拟旧连接的一帧仍在 worker 解码；离线后它的 capability 结果必须作废。
     let releaseStaleDecode:
@@ -868,6 +898,7 @@ describe('contacts sync runtime ownership', () => {
           clocks: [];
           mergeClocks: [];
           capabilities: string[];
+          capabilityNonce: string;
         }) => void)
       | undefined;
     harness.decoderAccept.mockImplementationOnce(
@@ -917,6 +948,7 @@ describe('contacts sync runtime ownership', () => {
       clocks: [],
       mergeClocks: [],
       capabilities: ['merge-redirects-v1'],
+      capabilityNonce: oldConnectionChallenge,
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(harness.encodeContactsSyncMessage.mock.calls).toHaveLength(sendsAfterReconnect);
@@ -924,6 +956,52 @@ describe('contacts sync runtime ownership', () => {
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,
     ).toBe(false);
+
+    // 旧运行的整批 transfer 若全部延迟到重连后才抵达，epoch 是新的，但
+    // runtime nonce 仍是旧的，不能重新授权同一 deviceId。
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      mergeClocks: [],
+      requestReply: true,
+      capabilities: ['merge-redirects-v1'],
+      capabilityNonce: oldConnectionChallenge,
+    });
+    const decoderCallsBeforeWholeDelayedTransfer = harness.decoderAccept.mock.calls.length;
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'whole-transfer-from-old-runtime',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() =>
+      expect(harness.decoderAccept.mock.calls.length).toBe(
+        decoderCallsBeforeWholeDelayedTransfer + 1,
+      ),
+    );
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+
+    // 新运行先用 key 声明自己的 runtime nonce，随后再完成 capability 协商。
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+      capabilityNonce: 'peer-runtime-2',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
 
     // 重新协商后，再验证缺失 capability 的单条回包也会立即降级。
     harness.encodeContactsSyncMessage.mockClear();
@@ -935,6 +1013,7 @@ describe('contacts sync runtime ownership', () => {
       mergeClocks: [],
       requestReply: true,
       capabilities: ['merge-redirects-v1'],
+      capabilityNonce: harness.lastSentCapabilityNonce!,
     });
     driver.handleIncomingContactsRelayFrame('peer-device', {
       version: 1,
@@ -993,6 +1072,15 @@ describe('contacts sync runtime ownership', () => {
     await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
 
     harness.encodeContactsSyncMessage.mockClear();
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+      capabilityNonce: 'peer-runtime-key-test',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+
+    harness.encodeContactsSyncMessage.mockClear();
     harness.decoderAccept.mockResolvedValueOnce({
       version: 1,
       type: 'applied-state',
@@ -1000,6 +1088,7 @@ describe('contacts sync runtime ownership', () => {
       clocks: [],
       mergeClocks: [],
       capabilities: ['merge-redirects-v1'],
+      capabilityNonce: harness.lastSentCapabilityNonce!,
     });
     driver.handleIncomingContactsRelayFrame('peer-device', {
       version: 1,
@@ -1031,6 +1120,7 @@ describe('contacts sync runtime ownership', () => {
       version: 1,
       type: 'key',
       publicKey: 'peer-public',
+      capabilityNonce: 'peer-runtime-after-restart',
     });
     await vi.waitFor(() => expect(harness.pinPeerPublicKey).toHaveBeenCalled());
 

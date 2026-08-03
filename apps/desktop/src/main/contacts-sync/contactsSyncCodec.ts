@@ -33,6 +33,8 @@ export interface ContactsSyncStateMessage {
   requestReply?: boolean;
   /** 可选以兼容旧客户端；每条消息都声明本次运行实际支持的能力。 */
   capabilities?: string[];
+  /** 回显接收方最近一次 key announcement 的连接 nonce。 */
+  capabilityNonce?: string;
 }
 
 interface ContactsSyncEncodeCommonOptions {
@@ -62,6 +64,7 @@ export interface ContactsSyncDatabaseEncodeOptions extends ContactsSyncEncodeCom
     knownMergeClocks?: ContactsSyncClock[];
     /** 未提供时按未知旧端处理，禁止发送 merge redirect 交付单元。 */
     peerSupportsMergeRedirects?: boolean;
+    capabilityNonce?: string;
     requestReply?: boolean;
   };
 }
@@ -90,6 +93,7 @@ export interface ContactsSyncAppliedStateResult {
   mergeClocks?: ContactsSyncClock[];
   requestReply?: boolean;
   capabilities?: string[];
+  capabilityNonce?: string;
 }
 
 export type ContactsSyncDecodeResult = ContactsSyncStateMessage | ContactsSyncAppliedStateResult;
@@ -236,7 +240,8 @@ export function isContactsSyncStateMessage(value: unknown): value is ContactsSyn
     value.type === 'state' &&
     value.state !== undefined &&
     (value.requestReply === undefined || typeof value.requestReply === 'boolean') &&
-    isContactsSyncCapabilities(value.capabilities)
+    isContactsSyncCapabilities(value.capabilities) &&
+    isContactsSyncCapabilityNonce(value.capabilityNonce)
   );
 }
 
@@ -247,6 +252,12 @@ export const inProcessContactsSyncCodec: ContactsSyncCodec = {
   },
   decode: async (options) => decodeContactsSyncMessageInProcess(options),
 };
+
+export function isContactsSyncCapabilityNonce(value: unknown): value is string | undefined {
+  return (
+    value === undefined || (typeof value === 'string' && value.length >= 1 && value.length <= 64)
+  );
+}
 
 export function isContactsSyncCapabilities(value: unknown): value is string[] | undefined {
   return (

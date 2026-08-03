@@ -18,6 +18,15 @@ describe("contacts sync protocol", () => {
     expect(
       isContactsSyncWireFrame({
         version: 1,
+        type: "key",
+        publicKey,
+        capabilityNonce: "connection-nonce",
+        capabilityReplyTo: "peer-connection-nonce",
+      }),
+    ).toBe(true);
+    expect(
+      isContactsSyncWireFrame({
+        version: 1,
         type: "cipher-chunk",
         senderPublicKey: publicKey,
         transferId: "transfer-1",
@@ -37,6 +46,14 @@ describe("contacts sync protocol", () => {
         version: 1,
         type: "key",
         publicKey: "not-a-key",
+      }),
+    ).toBe(false);
+    expect(
+      isContactsSyncWireFrame({
+        version: 1,
+        type: "key",
+        publicKey,
+        capabilityNonce: "x".repeat(65),
       }),
     ).toBe(false);
     expect(

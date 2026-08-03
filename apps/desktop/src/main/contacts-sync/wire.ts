@@ -45,9 +45,19 @@ interface PendingTransfer {
   totalBytes: number;
 }
 
-export function createContactsSyncKeyFrame(publicKey: string): ContactsSyncKeyFrame {
+export function createContactsSyncKeyFrame(
+  publicKey: string,
+  capabilityNonce?: string,
+  capabilityReplyTo?: string,
+): ContactsSyncKeyFrame {
   if (!isValidContactsSyncPublicKey(publicKey)) throw new Error('invalid contacts sync public key');
-  return { version: CONTACTS_SYNC_WIRE_VERSION, type: 'key', publicKey };
+  return {
+    version: CONTACTS_SYNC_WIRE_VERSION,
+    type: 'key',
+    publicKey,
+    ...(capabilityNonce ? { capabilityNonce } : {}),
+    ...(capabilityReplyTo ? { capabilityReplyTo } : {}),
+  };
 }
 
 export function encodeContactsSyncMessage(

@@ -82,6 +82,7 @@ describe('contacts sync crypto and wire', () => {
           state,
           requestReply: true,
           capabilities: ['merge-redirects-v1'],
+          capabilityNonce: 'connection-nonce-a',
         },
         ownPrivateKey: a.privateKey,
         ownPublicKey: a.publicKey,
@@ -112,6 +113,7 @@ describe('contacts sync crypto and wire', () => {
       state,
       requestReply: true,
       capabilities: ['merge-redirects-v1'],
+      capabilityNonce: 'connection-nonce-a',
     });
   });
 
