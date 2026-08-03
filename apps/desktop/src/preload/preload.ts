@@ -895,9 +895,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { entries: [] };
       }
     },
-    /** 用户侧熄灭未读(打开面板 = 明确已读)。 */
-    clearUnread: (id: string): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('ghosts:clear-unread', id),
+    /**
+     * 用户侧熄灭未读(打开面板 = 明确已读)。
+     * `seenAt` = renderer **当时实际看到的那条**的点亮时刻,必须原样转发:
+     * main 靠它做条件删除,不转发的话 handler 收到 undefined 就退化成无条件
+     * 删除,插件的新点亮先到时会把用户还没看到的新摘要一并抹掉(codex review)。
+     */
+    clearUnread: (id: string, seenAt?: number): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('ghosts:clear-unread', id, seenAt),
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
