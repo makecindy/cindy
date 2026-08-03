@@ -2699,7 +2699,9 @@
           "removeWorkspace": "この作業ディレクトリを削除",
           "changeDir": "クリックしてディレクトリを変更(別名と設定は保持)",
           "defaultWorkspaceChip": "デフォルト: {{name}}",
-          "defaultWorkspaceAria": "X から発行するタスクの既定の作業ディレクトリを選択"
+          "defaultWorkspaceAria": "タスク発行時に使う既定の作業ディレクトリを選択",
+          "defaultWorkspaceRadioAria": "「{{name}}」を既定の作業ディレクトリに設定",
+          "defaultWorkspaceRowHint": "選択したディレクトリが既定の作業ディレクトリです。Telegram の個別チャット・グループ・トピックのうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/workspace で個別に選んだ会話はそのまま）。選択したディレクトリの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのリポジトリ内でフルアクセスで実行されます。"
         },
         "binding": {
           "copyLink": "リンクをコピー",
@@ -2985,8 +2987,7 @@
           "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
           "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
           "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
-          "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
-          "officialHook": "公式 bot の新規会話では、この Agent とモデルを使用します。Telegram と X はこの設定を共有し、Slack は独自の設定（Slack カードで設定）を使います。権限モードは上の「作業ディレクトリのマッピング」でディレクトリごとに設定します。既存の会話には /new で適用します。"
+          "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。"
         },
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",

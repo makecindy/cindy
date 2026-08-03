@@ -37,7 +37,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
 
 import { Switch } from '@/components/ui/switch';
 import {
@@ -48,6 +48,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
@@ -66,7 +67,6 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
@@ -122,6 +122,44 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} aria-hidden />
       {label}
     </span>
+  );
+}
+
+/**
+ * 目录行头部的「设为默认工作目录」单选(row 形态; Telegram 用)。
+ *
+ * 视觉沿用 LanguageSection 的选中态范式与 --settings-menu-* 语义 token —— 双模式
+ * 由 token 自动覆盖, 不写任何硬编码色; 选中用对勾, 与 DESIGN.md §16.3 协议 radio
+ * 的仓内口径一致。模块级组件而非内联: 内联组件每次渲染都会重建类型导致子树
+ * remount, 别名输入框会在输入中途失焦(同 renderWorkdirSection 的理由)。
+ */
+function DefaultWorkspaceRadio({
+  selected,
+  label,
+  onSelect,
+}: {
+  selected: boolean;
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={label}
+      title={label}
+      tabIndex={selected ? 0 : -1}
+      onClick={onSelect}
+      className={cn(
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+        selected
+          ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
+          : 'border-[var(--border-default)] text-transparent hover:border-[var(--settings-menu-border-selected)]',
+      )}
+    >
+      <Check size={12} aria-hidden />
+    </button>
   );
 }
 
@@ -312,17 +350,21 @@ export function HookConnectionsSection() {
   );
 
   /**
-   * X 的默认工作目录写入。
+   * 默认工作目录写入(Telegram / X)。
    *
-   * 只有 X 有这个控件: Slack / Telegram 能在会话里当场挑目录, X 一次交互只允许
-   * 回一条公开推文, 没有承载选择面板的位置 —— 不预设的话所有任务都只能落在
-   * 「对话」上, 碰不到本地仓库。
+   * 生效顺序恒为 **会话显式映射 > 这里的默认值 > 「对话」**, 判定在 hook server。
+   * X 一次交互只允许回一条公开推文, 没有承载目录选择面板的位置; Telegram 虽有
+   * inline keyboard 可以当场 /workspace, 但那是**每会话各自**设的 —— 用户在设置页
+   * 绑好目录后进一个新群, agent 仍在无仓库模式跑, 与他的预期不符。
    */
-  const setXDefaultWorkspace = useCallback(
-    async (alias: string | null) => {
+  const setProviderDefaultWorkspace = useCallback(
+    async (provider: 'telegram' | 'x', alias: string | null) => {
       try {
         const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setXDefaultWorkspace(alias);
+        const res = await window.electronAPI.hookControl.setProviderDefaultWorkspace(
+          provider,
+          alias,
+        );
         if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
       } catch (err) {
         toast.error(
@@ -794,8 +836,16 @@ export function HookConnectionsSection() {
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
-    /** 非空 = 该卡显示「默认目录」选择器(目前只有 X 传)。 */
-    defaultWorkspace?: { value: string | null },
+    /**
+     * 非空 = 该卡显示默认工作目录选择器。
+     * `chip` = 标题行右侧的下拉 chip(X 沿用); `row` = 目录行内的选中态单选
+     * (Telegram: 目录本来就一行一个, 行内选中比再开一个下拉更直白)。
+     */
+    defaultWorkspace?: {
+      value: string | null;
+      mode: 'chip' | 'row';
+      provider: 'telegram' | 'x';
+    },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -835,9 +885,9 @@ export function HookConnectionsSection() {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          {/* X 专属: 默认工作目录。X 一条推文里没有目录选择面板的位置, 不预设
-              就只能永远落在「对话」上、碰不到本地仓库(见 setXDefaultWorkspace)。 */}
-          {defaultWorkspace ? (
+          {/* chip 形态(X): 一条推文里没有目录选择面板的位置, 不预设就只能永远
+              落在「对话」上、碰不到本地仓库(见 setProviderDefaultWorkspace)。 */}
+          {defaultWorkspace?.mode === 'chip' ? (
             <DropdownMenu>
               <DropdownMenuTrigger
                 aria-label={t('settings.remoteControl.hook.form.defaultWorkspaceAria')}
@@ -851,11 +901,18 @@ export function HookConnectionsSection() {
                 <ChevronDown size={12} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => void setXDefaultWorkspace(null)}>
+                <DropdownMenuItem
+                  onClick={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
+                >
                   {t('settings.tina.chat.title')}
                 </DropdownMenuItem>
                 {Object.keys(hook.workspaces).map((alias) => (
-                  <DropdownMenuItem key={alias} onClick={() => void setXDefaultWorkspace(alias)}>
+                  <DropdownMenuItem
+                    key={alias}
+                    onClick={() =>
+                      void setProviderDefaultWorkspace(defaultWorkspace.provider, alias)
+                    }
+                  >
                     {alias}
                   </DropdownMenuItem>
                 ))}
@@ -866,6 +923,13 @@ export function HookConnectionsSection() {
         <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
           {t('settings.remoteControl.hook.form.workspacesCardDescription')}
         </span>
+        {/* row 形态才需要解释"选中即默认"这层语义, 并把权限档的后果说在选之前。
+            文案不用方位词指代("下面的目录") —— 同一区块也渲染进确认门弹窗。 */}
+        {defaultWorkspace?.mode === 'row' ? (
+          <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+            {t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}
+          </span>
+        ) : null}
         {prefsState.hint !== null && (
           <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
             <span>{prefsState.hint}</span>
@@ -880,10 +944,30 @@ export function HookConnectionsSection() {
             )}
           </div>
         )}
+        {/* row 形态: 整个目录清单是一组单选 —— 选中的那个就是默认工作目录。
+            aria 分组挂在这里, 各行头部的 role="radio" 按钮是它的选项。 */}
+        <div
+          className="flex flex-col gap-2"
+          {...(defaultWorkspace?.mode === 'row'
+            ? {
+                role: 'radiogroup',
+                'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+              }
+            : {})}
+        >
         {/* 内置「对话」伪目录: 与真实目录同级, 常驻第一位, 不可改名/删除;
             Slack 那头对应保留别名 chat, 偏好与 /model 选 chat 同一份 */}
         <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5">
           <div className="flex items-center gap-1.5">
+            {defaultWorkspace?.mode === 'row' ? (
+              <DefaultWorkspaceRadio
+                selected={defaultWorkspace.value === null}
+                label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
+                  name: t('settings.tina.chat.title'),
+                })}
+                onSelect={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
+              />
+            ) : null}
             <span className="w-36 shrink-0 px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]">
               {t('settings.tina.chat.title')}
             </span>
@@ -903,6 +987,22 @@ export function HookConnectionsSection() {
             className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5"
           >
             <div className="flex items-center gap-1.5">
+              {defaultWorkspace?.mode === 'row' ? (
+                <DefaultWorkspaceRadio
+                  // 别名正在编辑(未保存)时不能当选中目标: 写进去的别名要与
+                  // workspaces 里那份一致, 否则 store 校验直接拒。
+                  selected={defaultWorkspace.value === row.alias.trim()}
+                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
+                    name: row.alias.trim(),
+                  })}
+                  onSelect={() =>
+                    void setProviderDefaultWorkspace(
+                      defaultWorkspace.provider,
+                      row.alias.trim(),
+                    )
+                  }
+                />
+              ) : null}
               <input
                 value={row.alias}
                 onChange={(e) => {
@@ -935,6 +1035,7 @@ export function HookConnectionsSection() {
             <WorkspacePrefsEditor alias={row.alias.trim()} state={prefsState} />
           </div>
         ))}
+        </div>
         <button
           type="button"
           onClick={() => void handleAddWorkspace()}
@@ -1106,18 +1207,19 @@ export function HookConnectionsSection() {
 
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
           {view.enabled
-            ? renderWorkdirSection(
-                prefsState,
-                undefined,
-                provider === 'x' ? { value: view.defaultWorkspace } : undefined,
-              )
+            ? renderWorkdirSection(prefsState, undefined, {
+                value: view.defaultWorkspace,
+                // Telegram 的目录本来就一行一个, 行内选中比再开一个下拉更直白;
+                // X 沿用标题行的 chip(它的卡上没有别的行内控件可对齐)。
+                mode: provider === 'telegram' ? 'row' : 'chip',
+                provider,
+              })
             : null}
           {provider === 'telegram' && cs.confirmed ? (
             <div
               key={cs.binding?.bindingId ?? 'telegram-unbound'}
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
-              <ImDefaultSettingsSection descriptionChannel="officialHook" embedded />
               {view.behaviorAvailable === true ? (
                 <>
                   <TelegramBehaviorSettings

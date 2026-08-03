@@ -62,11 +62,14 @@ export function ImDefaultSettingsSection({
   /** Omit to edit the global defaults used by official hook channels. */
   channel?: ImDefaultSettingsChannel;
   /**
-   * 只换说明文案的键(不影响读写 scope)。'officialHook' 给官方 bot 用:
-   * 它不传 channel(写 global scope), 读写的是 Telegram / Slack / X 共用的那
-   * 一份 —— 不能再拿「Telegram 新对话…」的文案让人以为只影响 Telegram。
+   * 只换说明文案的键(不影响读写 scope)。
+   *
+   * 官方 hook 卡曾有一个 'officialHook' 变体(写 global scope), 已随「新对话配置」
+   * 区块一并移除 —— 它与目录行的 agent/model/effort 是同一份配置的两个入口, 画成
+   * 平级两套只会让人以为可以分别设。global scope 仍是目录行的兜底层, 只是不再有
+   * UI 入口(与 X 卡今天一致)。
    */
-  descriptionChannel?: ImDefaultSettingsChannel | 'officialHook';
+  descriptionChannel?: ImDefaultSettingsChannel;
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {

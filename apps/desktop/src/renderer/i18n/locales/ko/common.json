@@ -2699,7 +2699,9 @@
           "removeWorkspace": "이 작업 디렉터리 삭제",
           "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)",
           "defaultWorkspaceChip": "기본값: {{name}}",
-          "defaultWorkspaceAria": "X에서 보낸 작업에 사용할 기본 작업 디렉터리 선택"
+          "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 작업 디렉터리 선택",
+          "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 작업 디렉터리로 설정",
+          "defaultWorkspaceRowHint": "선택한 디렉터리가 기본 작업 디렉터리입니다. Telegram 개인 대화·그룹·주제 중 프로젝트를 따로 고르지 않은 대화의 작업은 모두 여기에서 실행됩니다(/workspace로 따로 고른 대화는 그대로 유지). 선택한 디렉터리 행의 권한 모드를 확인하세요. ‘전체 액세스’로 두면 어느 그룹에서 @로 불러도 해당 저장소에서 전체 액세스로 실행됩니다."
         },
         "binding": {
           "copyLink": "링크 복사",
@@ -2985,8 +2987,7 @@
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
           "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
           "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
-          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
-          "officialHook": "공식 bot의 새 대화는 이 Agent와 모델을 사용합니다. Telegram과 X가 이 설정을 공유하고, Slack은 자체 설정(Slack 카드에서 설정)을 사용합니다. 권한 모드는 위의 '작업 디렉터리 매핑'에서 디렉터리별로 설정합니다. 기존 대화에는 /new를 보내 적용하세요."
+          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",

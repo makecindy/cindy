@@ -3353,8 +3353,9 @@ interface ElectronAPI {
     setWorkspaces: (
       workspaces: Record<string, string>,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    /** X 派发任务的默认工作目录别名(null = 内置「对话」伪目录)。 */
-    setXDefaultWorkspace: (
+    /** 该 provider 派发任务的默认工作目录别名(null = 内置「对话」伪目录)。 */
+    setProviderDefaultWorkspace: (
+      provider: 'telegram' | 'x',
       alias: string | null,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;

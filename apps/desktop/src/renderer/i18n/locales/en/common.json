@@ -2700,7 +2700,9 @@
           "removeWorkspace": "Remove this working directory",
           "changeDir": "Click to change directory (alias and preferences kept)",
           "defaultWorkspaceChip": "Default: {{name}}",
-          "defaultWorkspaceAria": "Choose the default working directory for tasks dispatched from X"
+          "defaultWorkspaceAria": "Choose the default working directory for dispatched tasks",
+          "defaultWorkspaceRadioAria": "Set \"{{name}}\" as the default working directory",
+          "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository."
         },
         "binding": {
           "copyLink": "Copy link",
@@ -2986,8 +2988,7 @@
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
           "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
           "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
-          "officialHook": "New conversations from the official bot use this Agent and model. Telegram and X share this one; Slack keeps its own (configured on the Slack card). Permission mode is set per directory under Workspace mapping above. Send /new in an existing conversation to apply it."
+          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",

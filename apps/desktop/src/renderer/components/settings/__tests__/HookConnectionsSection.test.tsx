@@ -17,7 +17,7 @@ const ipc = vi.hoisted(() => ({
   revokeTeam: vi.fn(),
   openProviderAction: vi.fn(),
   openExternal: vi.fn(),
-  setXDefaultWorkspace: vi.fn(),
+  setProviderDefaultWorkspace: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
@@ -167,7 +167,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
         cancelPendingBind: ipc.cancelPendingBind,
         revokeTeam: ipc.revokeTeam,
         openProviderAction: ipc.openProviderAction,
-        setXDefaultWorkspace: ipc.setXDefaultWorkspace,
+        setProviderDefaultWorkspace: ipc.setProviderDefaultWorkspace,
       },
       openExternal: ipc.openExternal,
     };
@@ -822,7 +822,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
   });
 
-  it('shows global official Telegram defaults, behavior, and group settings only after linking', async () => {
+  it('官方 Telegram 卡不再有「新对话配置」, 行为与群设置在绑定后出现', async () => {
     ipc.get.mockResolvedValue({
       hook: {
         ...BASE_HOOK,
@@ -850,16 +850,18 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
 
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
-    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
     expect(screen.getByTestId('telegram-behavior').getAttribute('data-binding-id')).toBe(
       'binding-settings',
     );
+    // 它与目录行的 agent/model/effort 是同一份配置的两个入口, 画成平级两套只会
+    // 让人以为可以分别设 —— global scope 仍是目录行的兜底, 只是不再有 UI 入口。
+    expect(screen.queryByTestId('im-defaults-global')).toBeNull();
     expect(screen.getByTestId('telegram-groups').getAttribute('data-binding-id')).toBe(
       'binding-settings',
     );
   });
 
-  it('keeps local Telegram defaults visible when the linked server lacks behavior capability', async () => {
+  it('老服务端(无 behavior 能力)时不渲染行为/群设置, 也不回退出「新对话配置」', async () => {
     ipc.get.mockResolvedValue({
       hook: {
         ...BASE_HOOK,
@@ -887,9 +889,11 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
 
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
-    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
+    // 卡确实展开了(目录区渲染出来了), 只是没有行为/群设置那两块
+    expect(await screen.findAllByRole('radio')).not.toHaveLength(0);
     expect(screen.queryByTestId('telegram-behavior')).toBeNull();
     expect(screen.queryByTestId('telegram-groups')).toBeNull();
+    expect(screen.queryByTestId('im-defaults-global')).toBeNull();
   });
 
   it('does not remove a changed Slack binding from a stale confirmation', async () => {
@@ -941,11 +945,11 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
   });
 
-  it('默认工作目录控件只出现在 X 卡, 且展示当前生效的目录名', async () => {
-    // X 一次交互只有一条公开推文, 没有目录选择面板的位置 —— 不预设就只能永远
-    // 落在「对话」上、碰不到本地仓库, 所以这个入口是 X 的唯一目录来源。
-    // 注: 下拉展开后的写入路径没在这里覆盖(Radix 菜单在 jsdom 下不展开, 本仓
-    // 同款 team chip 也没测); 写入语义由 store 层的默认目录用例保证。
+  it('X 卡是 chip 形态, Telegram 卡是目录行内的选中态单选', async () => {
+    // X 一次交互只有一条公开推文, 没有目录选择面板的位置; Telegram 虽能在会话里
+    // /workspace, 但那是每会话各自设的 —— 设置页绑好目录后进新群仍会落「对话」。
+    // 注: chip 下拉展开后的写入路径没在这里覆盖(Radix 菜单在 jsdom 下不展开, 本仓
+    // 同款 team chip 也没测); Telegram 的行内单选可以直接点, 下面就点了。
     const xView = {
       enabled: true,
       url: 'wss://x-hook.example.test',
@@ -966,18 +970,27 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
 
     render(<HookConnectionsSection />);
     await expandChannelCard(X_CARD);
+    // X: 标题行的 chip, 且没有行内单选
     expect(
       await screen.findByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
     ).toBeTruthy();
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
 
-    // Telegram 能在会话里当场选目录, 不该出现这个预设控件。
     cleanup();
     ipc.get.mockResolvedValue({ hook });
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
-    expect(
-      screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
-    ).toBeNull();
+    // Telegram: 目录清单是一组单选 —— 「对话」+ 一个真实目录
+    const radios = await screen.findAllByRole('radio');
+    expect(radios).toHaveLength(2);
+    // defaultWorkspace=null → 选中的是「对话」那一行
+    expect(radios[0].getAttribute('aria-checked')).toBe('true');
+    expect(radios[1].getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(radios[1]);
+    await waitFor(() =>
+      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
+    );
   });
 
   /**
