@@ -613,9 +613,17 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
     peerKnownClocks.delete(srcDeviceId);
     peerKnownMergeClocks.delete(srcDeviceId);
     invalidatePeerMergeCapability(srcDeviceId);
+    const keyDeliveryEpoch = peerDeliveryEpochs.get(srcDeviceId) ?? 0;
     prepareAndRun(async (isCurrent) => {
       const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
-      if (!isCurrent() || !deviceLinkOwnerActive || !transport?.isPeerAllowed(srcDeviceId)) return;
+      if (
+        !isCurrent() ||
+        (peerDeliveryEpochs.get(srcDeviceId) ?? 0) !== keyDeliveryEpoch ||
+        !deviceLinkOwnerActive ||
+        !transport?.isPeerAllowed(srcDeviceId)
+      ) {
+        return;
+      }
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
       if (challengeResponse) {
         sendKeyAnnouncement(

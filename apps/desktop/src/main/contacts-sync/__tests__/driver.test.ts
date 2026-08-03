@@ -1110,26 +1110,35 @@ describe('contacts sync runtime ownership', () => {
     ).toBe(true);
     const previousConnectionChallenge = harness.lastSentCapabilityNonce!;
 
-    let releasePin: ((firstSeen: boolean) => void) | undefined;
+    let releaseSupersededPin: ((firstSeen: boolean) => void) | undefined;
     harness.pinPeerPublicKey.mockImplementationOnce(
       () =>
         new Promise<boolean>((resolve) => {
-          releasePin = resolve;
+          releaseSupersededPin = resolve;
         }),
     );
+    const pinCallsBeforeRestart = harness.pinPeerPublicKey.mock.calls.length;
     harness.encodeContactsSyncMessage.mockClear();
     driver.handleIncomingContactsRelayFrame('peer-device', {
       version: 1,
       type: 'key',
       publicKey: 'peer-public',
+      capabilityNonce: 'superseded-capable-runtime',
     });
-    await vi.waitFor(() => expect(harness.pinPeerPublicKey).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(harness.pinPeerPublicKey.mock.calls.length).toBe(pinCallsBeforeRestart + 1),
+    );
 
-    // pin 仍卡在异步锁上时，presence-online 可能主动发送；此时必须已降级。
-    driver.handleContactsPeerPresenceChanged({
-      deviceId: 'peer-device',
-      online: true,
+    // 前一个 capable key 仍在 pin 时，同 deviceId 以旧客户端 key 重连并先完成。
+    // 后者必须清除 challenge/clocks，并使前一个异步回调的 epoch 过期。
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
     });
+    await vi.waitFor(() =>
+      expect(harness.pinPeerPublicKey.mock.calls.length).toBe(pinCallsBeforeRestart + 2),
+    );
     await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
     expect(
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
@@ -1142,7 +1151,7 @@ describe('contacts sync runtime ownership', () => {
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database?.knownMergeClocks,
     ).toBeUndefined();
 
-    // 旧运行的完整 state 在 key 后、pin 完成前抵达时，旧 challenge 已同步失效；
+    // 旧运行的完整 state 在旧版 key pin 完成后抵达时，旧 challenge 已同步失效；
     // 该消息不能更新当前 clocks、请求回包或重新授权 capability。
     harness.encodeContactsSyncMessage.mockClear();
     harness.decoderAccept.mockResolvedValueOnce({
@@ -1159,7 +1168,7 @@ describe('contacts sync runtime ownership', () => {
       version: 1,
       type: 'cipher-chunk',
       senderPublicKey: 'peer-public',
-      transferId: 'late-state-while-old-key-pin-waits',
+      transferId: 'late-state-after-old-client-key',
       index: 0,
       total: 1,
       iv: 'iv',
@@ -1170,17 +1179,12 @@ describe('contacts sync runtime ownership', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(harness.encodeContactsSyncMessage).not.toHaveBeenCalled();
 
-    const callsBeforePinRelease = harness.encodeContactsSyncMessage.mock.calls.length;
-    releasePin?.(false);
-    await vi.waitFor(() =>
-      expect(harness.encodeContactsSyncMessage.mock.calls.length).toBeGreaterThan(
-        callsBeforePinRelease,
-      ),
-    );
-    expect(
-      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
-        ?.peerSupportsMergeRedirects,
-    ).toBe(false);
+    // 最后释放较早的 capable pin；其旧 challengeResponse 和 state 回包都不能复活。
+    const relayCallsBeforeSupersededPinRelease = harness.relaySend.mock.calls.length;
+    releaseSupersededPin?.(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.relaySend.mock.calls).toHaveLength(relayCallsBeforeSupersededPinRelease);
+    expect(harness.encodeContactsSyncMessage).not.toHaveBeenCalled();
   });
 
   it('responds to an incoming key even after a recent proactive announcement', async () => {
