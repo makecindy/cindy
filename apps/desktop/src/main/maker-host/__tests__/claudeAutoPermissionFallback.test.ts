@@ -359,32 +359,43 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
      * (它们在身份判据之后)、也没有升级 debug(永远识别不出来),整条链路重新全静默。
      * 所以这个计数要有自己的周期性快照(codex P2)。
      */
-    it('periodically snapshots the unmatched-identity tally on its own', () => {
+    it('warns at a production-visible level once identity never matches', () => {
       let t = 0;
       const { logger, observer } = createObserver(() => 'session-1', () => t);
       const notClassifier = requestBody({ system: 'ordinary assistant' });
 
-      observer(ctx({ status: 429, requestBody: notClassifier }));
-      // 不刷 warn —— 正常运行时这是大头。
+      // 样本不足 → 不报(普通 turn 的稀疏错误不该触发告警)。
+      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
       expect(logger.warn).not.toHaveBeenCalled();
-      // 但必须自己落一条 debug 快照,不能只等后续 warn 捎带。
-      expect(logger.debug).toHaveBeenCalledTimes(1);
-      expect(logger.debug.mock.calls[0][0]).toContain('identity did not match');
 
-      // 同一窗口内限流,不刷屏。
-      for (let i = 0; i < 5; i += 1) {
-        t += 1_000;
-        observer(ctx({ status: 429, requestBody: notClassifier }));
-      }
-      expect(logger.debug).toHaveBeenCalledTimes(1);
+      // 攒到阈值且一条都没识别出来 → 报,且必须是 warn:打包版默认 level=info,
+      // debug 会被 logger 的 shouldLog 直接丢掉,在生产环境等于没落盘。
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('has matched the classifier identity');
+      expect(warnCounters(logger)).toMatchObject({
+        classifierFailures: 0,
+        errorsNotClassifier: 50,
+      });
 
-      // 越窗后重新可见,且快照里 classifierFailures 恒为 0 —— 识别率归零的信号。
+      // 同窗口限流,越窗后重新可见。
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.warn).toHaveBeenCalledTimes(1);
       t += 60_000;
       observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.debug).toHaveBeenCalledTimes(2);
-      const snapshot = (logger.debug.mock.calls[1]?.[1] as { counters?: Record<string, number> })
-        ?.counters;
-      expect(snapshot).toMatchObject({ classifierFailures: 0, errorsNotClassifier: 7 });
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays silent once the classifier has been recognised at least once', () => {
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      observer(ctx({ status: 429 })); // 识别成功一次 → classifierFailures = 1
+      for (let i = 0; i < 60; i += 1) {
+        observer(ctx({ status: 429, requestBody: requestBody({ system: 'ordinary assistant' }) }));
+      }
+
+      // 识别链路是好的,只是这些响应不是分类器的 —— 不该报。
+      expect(logger.warn).not.toHaveBeenCalled();
     });
 
     /**

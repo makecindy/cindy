@@ -177,6 +177,15 @@ interface ClassifierObserverCounters {
 const OBSERVER_WARN_THROTTLE_MS = 60_000;
 
 /**
+ * 「一条都没识别出来」的告警样本下限。
+ *
+ * 正常运行下分类器只要报过一次错,`classifierFailures` 就 > 0,这条永不触发;真正的
+ * 识别规则失效会让 errorsNotClassifier 单边快速累积。取 50:普通 turn 的错误响应本就
+ * 稀疏,攒到 50 条而分类器一次都没识别出来,才值得当信号报。
+ */
+const IDENTITY_MISS_ALERT_THRESHOLD = 50;
+
+/**
  * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
  * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
  * 无记账时不 parse、不返回 sink,不碰 SSE 热路径。
@@ -225,9 +234,6 @@ export function createClaudeAutoClassifierFailureObserver(
   };
   const warnThrottled = (reason: string, fields: Record<string, unknown>): void =>
     logThrottled('warn', reason, fields);
-  /** 周期性快照用 debug —— 正常运行时它每窗口一条,不该当告警刷 warn。 */
-  const debugThrottled = (reason: string, fields: Record<string, unknown>): void =>
-    logThrottled('debug', reason, fields);
 
   return (ctx: ResponseObserverCtx) => {
     if (ctx.status < 400) {
@@ -275,15 +281,25 @@ export function createClaudeAutoClassifierFailureObserver(
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
       counters.errorsNotClassifier += 1;
-      // 这个计数必须能**独立**落盘,不能只搭后续 warn / 升级 debug 的便车:一旦 CC 改了
-      // 分类器的 system 前缀或 max_tokens 上界,所有真实分类器请求都会掉进这个分支 ——
-      // 那时既没有漏检 warn(它们在身份判据之后)、也没有升级 debug(永远识别不出来),
-      // 整条链路重新变成完全静默,而「识别规则失效」恰恰是这套记账最该发现的事(codex P2)。
-      // 所以按同一套 per-reason 限流打一条周期性快照:`classifierFailures: 0` 配上持续
-      // 增长的 errorsNotClassifier,就是识别率归零的信号。用 debug 级,正常运行时不吵。
-      debugThrottled('classifier identity did not match any error response in this window', {
-        status: ctx.status,
-      });
+      // 「识别规则本身失效」必须能独立落盘:一旦 CC 改了分类器的 system 前缀或 max_tokens
+      // 上界,所有真实分类器请求都会掉进这个分支 —— 那时既没有漏检 warn(它们在身份判据
+      // 之后)、也没有升级日志(永远识别不出来),整条链路重新完全静默,而这恰恰是这套记账
+      // 最该发现的事(codex P2)。
+      //
+      // 级别必须是 **warn**:打包版默认 level=info(logger.ts 的 initLogger),而 emit() 前的
+      // shouldLog 会直接丢掉 debug —— 用 debug 等于在生产环境里根本不落盘,要排查的场景
+      // 依旧查不到。
+      //
+      // 用阈值门控把噪音压住:只有「一条都没识别出来」且样本已经够多时才报。正常运行下
+      // 只要分类器真的报过一次错,classifierFailures 就 > 0,这条永远不触发。
+      if (
+        counters.classifierFailures === 0
+        && counters.errorsNotClassifier >= IDENTITY_MISS_ALERT_THRESHOLD
+      ) {
+        warnThrottled('no error response has matched the classifier identity yet', {
+          status: ctx.status,
+        });
+      }
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
