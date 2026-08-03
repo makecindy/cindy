@@ -496,7 +496,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
-    if (!available && wasAvailable === true) responsivenessTracker?.clearDevice(snap.deviceId);
+    // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
+    // (wasAvailable=undefined)同样必须清——否则断线前已 open 的熔断残留,而
+    // presence 不可用又让探测永久不合格,「无响应」会一直遮蔽真实离线/禁用态
+    // (review P2)。翻转判据统一为「观察到进入某状态(含从未知)即触发一次」。
+    if (!available && wasAvailable !== false) responsivenessTracker?.clearDevice(snap.deviceId);
     presencePlatformByDevice.set(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
