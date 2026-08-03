@@ -16917,6 +16917,128 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  it('迟到 completed 证明旧 turn 已结束时，即使两次 interrupt 都 reject 也不退役共享 host', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstInterrupt = deferred<never>();
+      const secondInterrupt = deferred<never>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      let interruptCall = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        if (method === Method.TurnInterrupt) {
+          interruptCall += 1;
+          return interruptCall === 1 ? firstInterrupt.promise : secondInterrupt.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-completed-before-interrupt-rejects',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      let eventsEnded = false;
+      void (async () => {
+        for await (const event of handle.events()) void event;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      firstInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      secondInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(eventsEnded).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handle close 等待期间到达的 completed 也会阻止退役共享 host', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstInterrupt = deferred<never>();
+      const secondInterrupt = deferred<never>();
+      const closeRelease = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      let interruptCall = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        if (method === Method.TurnInterrupt) {
+          interruptCall += 1;
+          return interruptCall === 1 ? firstInterrupt.promise : secondInterrupt.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-completed-during-close',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected reconnect-stall subscription');
+      const closeReleasePromise = closeRelease.promise;
+      release.mockImplementationOnce(() => closeReleasePromise);
+      let eventsEnded = false;
+      void (async () => {
+        for await (const event of handle.events()) void event;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      firstInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      secondInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(release).toHaveBeenCalledOnce();
+
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      closeRelease.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(eventsEnded).toBe(true);
+      expect(retireHostKey).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('interrupt 不响应时关闭 handle 并退役坏 host，下一次发送可重建', async () => {
     vi.useFakeTimers();
     try {

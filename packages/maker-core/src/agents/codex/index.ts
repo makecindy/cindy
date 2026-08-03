@@ -4351,6 +4351,7 @@ export class CodexAgent extends BaseAgent {
     // auto-resume backoff can admit a new turn while the old server turn is
     // still running (PR #1410).
     let reconnectStallCleanupTurnId: string | null = null;
+    let reconnectStallDeferredTurnCompletion: TurnCompletedParams | null = null;
     /** 还需要清醒等待的重连额度；系统挂起的片段不扣除。 */
     let reconnectStallRemainingMs = 0;
     /** 当前重连计时分片的起始壁钟时刻，用于识别系统挂起。 */
@@ -4376,6 +4377,22 @@ export class CodexAgent extends BaseAgent {
       reconnectStallTurnGeneration = 0;
       reconnectStallRemainingMs = 0;
       reconnectStallSliceStartedAt = 0;
+    }
+    function clearReconnectStallCleanup(turnId?: string): void {
+      if (turnId && reconnectStallCleanupTurnId !== turnId) return;
+      reconnectStallCleanupTurnId = null;
+      reconnectStallDeferredTurnCompletion = null;
+    }
+    function settleReconnectStallCleanup(
+      turnId: string,
+      fallback?: TurnCompletedParams,
+    ): boolean {
+      if (reconnectStallCleanupTurnId !== turnId) return false;
+      const completion = reconnectStallDeferredTurnCompletion ?? fallback;
+      if (!completion) return false;
+      clearReconnectStallCleanup(turnId);
+      if (!closed) handleTurnCompleted(completion);
+      return true;
     }
     function armUpstreamIdle(): void {
       clearUpstreamIdle();
@@ -4612,6 +4629,7 @@ export class CodexAgent extends BaseAgent {
         // close/retire fallback) settles. Desktop may already have received
         // the terminal error and queued a continuation by then.
         reconnectStallCleanupTurnId = turnId;
+        reconnectStallDeferredTurnCompletion = null;
       }
       log.warn(opts?.logLabel ?? 'upstream-response-idle watchdog tripped — interrupting current turn', {
         idleMs,
@@ -4711,19 +4729,21 @@ export class CodexAgent extends BaseAgent {
           suppressFailureEvent: true,
         });
         if (interrupted) {
-          if (!closed && reconnectStallCleanupTurnId === turnId) {
-            reconnectStallCleanupTurnId = null;
-            handleTurnCompleted({
+          if (!settleReconnectStallCleanup(turnId, {
               threadId,
               turn: { id: turnId, status: 'failed' },
-            } as TurnCompletedParams);
-          } else {
-            reconnectStallCleanupTurnId = null;
-          }
+            } as TurnCompletedParams)) clearReconnectStallCleanup(turnId);
+          return;
+        }
+        if (settleReconnectStallCleanup(turnId)) {
+          log.info('reconnect-stall turn completed while interrupt was settling; keeping shared host', {
+            threadId,
+            turnId,
+          });
           return;
         }
         if (closed) {
-          reconnectStallCleanupTurnId = null;
+          clearReconnectStallCleanup(turnId);
           return;
         }
         // 重连路径在等待窗口内仍保持原 turn busy；generation / turn 身份复核
@@ -4742,7 +4762,7 @@ export class CodexAgent extends BaseAgent {
               turnStartGeneration,
             },
           );
-          reconnectStallCleanupTurnId = null;
+          clearReconnectStallCleanup(turnId);
           return;
         }
         // 走到这里有两种可能,处置相同:两次 ack 都超时(daemon 哑火),或 host 已被
@@ -4756,6 +4776,13 @@ export class CodexAgent extends BaseAgent {
           await handle.close();
         } catch (e) {
           log.warn('upstream-idle watchdog close threw', { error: String(e) });
+        }
+        if (settleReconnectStallCleanup(turnId)) {
+          log.info('reconnect-stall turn completed during handle close; keeping shared host', {
+            threadId,
+            turnId,
+          });
+          return;
         }
         // close() 只放掉本 thread 的订阅并结束自己的事件队列,**共享的 AppServerHost 仍
         // 留在 this.hosts 缓存里** —— 下一次 lazy create 会经 getHost 拿到同一个已确诊
@@ -4773,7 +4800,7 @@ export class CodexAgent extends BaseAgent {
         } catch (e) {
           log.warn('upstream-idle watchdog host retire threw', { error: String(e) });
         } finally {
-          reconnectStallCleanupTurnId = null;
+          clearReconnectStallCleanup(turnId);
         }
       })();
     }
@@ -6074,8 +6101,11 @@ export class CodexAgent extends BaseAgent {
       const turn = params.turn;
       if (reconnectStallCleanupTurnId === turn.id) {
         // The watchdog already published the terminal error and is still
-        // waiting for turn/interrupt. A late turn/completed must not clear
-        // the local busy guard before the ACK is known.
+        // waiting for turn/interrupt. Keep the local busy guard until the
+        // handshake settles, but retain this authoritative completion: it
+        // proves the old turn ended and the host event path is alive, so a
+        // double interrupt rejection must not retire healthy sibling sessions.
+        reconnectStallDeferredTurnCompletion ??= params;
         log.debug('deferring reconnect-stall turn completion until interrupt settles', {
           threadId,
           turnId: turn.id,

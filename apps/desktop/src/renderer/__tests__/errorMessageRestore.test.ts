@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
-import { ERROR_REASON_I18N_KEYS } from '@/components/chat/ErrorMessageCard';
+import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';

@@ -41,6 +41,7 @@ import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
@@ -252,6 +253,7 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
+  const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -341,7 +343,11 @@ export function ErrorBanner({
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
   } else {
-    displayError = error;
+    // Keep the raw message available to every specialized gate above. Only
+    // the final fallback uses the stable reason map, so auth/network/overload
+    // recovery behavior keeps its existing priority while generic maker-core
+    // English fallbacks are localized in both the live and tail banner.
+    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : error;
     hasSpecialGuidance = false;
   }
 
