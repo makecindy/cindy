@@ -63,7 +63,12 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
-  useCodexAuth: () => ({ state: null }),
+  useCodexAuth: () => ({
+    state: { kind: 'unauthenticated' },
+    reconnectCredentialScope: null,
+    recoveryCheck: 'idle',
+    refresh: vi.fn(),
+  }),
   isChatGptConnectionConnected: () => false,
 }));
 
@@ -93,7 +98,11 @@ describe('ErrorBanner billing CTA', () => {
   beforeEach(() => {
     mocks.navigate.mockClear();
     mocks.auth.mockReturnValue({ mode: 'cloud', user: { membershipKind: 'personal' } });
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: false });
     mocks.claudeOAuthConnected.mockReturnValue(null);
     mocks.runtimeRoute.mockReturnValue({ authInjection: 'env-key', resolved: true });
@@ -107,7 +116,12 @@ describe('ErrorBanner billing CTA', () => {
   it('never uses the current shared codex route for persisted (error-tail) failures', () => {
     // 共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由:切换鉴权模式后
     // 重开旧会话,持久化错误不得按当前 env-key 分类成网关计费。
-    renderBanner({ providerId: null, agentKind: 'codex', modelId: 'gpt-5.5', persistedError: true });
+    renderBanner({
+      providerId: null,
+      agentKind: 'codex',
+      modelId: 'gpt-5.5',
+      persistedError: true,
+    });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
 
@@ -154,13 +168,21 @@ describe('ErrorBanner billing CTA', () => {
   });
 
   it('shows CTA for cc default-route sessions only when the observed billing route is gateway', () => {
-    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     renderBanner({ providerId: null });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 
   it('hides CTA for cc default-route sessions on the subscription route', () => {
-    mocks.claudeRoute.mockReturnValue({ route: 'subscription', lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'subscription',
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
@@ -175,7 +197,11 @@ describe('ErrorBanner billing CTA', () => {
   it('never relabels subscription-bridge (chatgpt/) quota errors even with a stale gateway route', () => {
     // bridge 请求在 proxy 提前分流、不更新会话路由观察值:残留的 gateway 观察值
     // 不得把 ChatGPT 的配额错误贴成 Cindy 余额不足。
-    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     renderBanner({ providerId: null, modelId: 'chatgpt/gpt-5.5' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
@@ -185,14 +211,22 @@ describe('ErrorBanner billing CTA', () => {
     // 子代理按请求覆写 chatgpt/ 模型:会话顶层模型与主路由都还是 gateway,
     // 但失败归因(响应侧落账)指向 bridge 花个人订阅额度——不得引导购买
     // Cindy 点数(PR review P1)。
-    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: true, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'gateway',
+      lastFailedRequestBridge: true,
+      resolved: true,
+    });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
   it('hides the CTA when the latest failure source is unknown instead of reusing stale attribution', () => {
-    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: null, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'gateway',
+      lastFailedRequestBridge: null,
+      resolved: true,
+    });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
@@ -201,7 +235,11 @@ describe('ErrorBanner billing CTA', () => {
   it('honors the bridge-failure veto for cc sessions on budget (codex/) top-level models', () => {
     // cc 会话顶层是 codex/ 骨折模型:子代理照样可以覆写 bridge 请求,失败归因
     // 指向 bridge 时 codex/ 子句不得再按顶层模型判成网关计费(PR review P1)。
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: true, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: true,
+      resolved: true,
+    });
     renderBanner({ providerId: null, agentKind: 'cc', modelId: 'codex/gpt-5.5' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
@@ -210,7 +248,11 @@ describe('ErrorBanner billing CTA', () => {
   it('keeps the CTA hidden for explicit XD cc sessions until failure attribution resolves', () => {
     // 观察状态清空/首查在途时的占位 false 不是权威「非 bridge」:GET 落地前
     // 放行会闪现一帧错误的购买引导再消失(PR review P1)。
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: false });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: false,
+      resolved: false,
+    });
     renderBanner({ providerId: 'xd' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
   });
@@ -228,6 +270,32 @@ describe('ErrorBanner billing CTA', () => {
         agentKind="cc"
         providerId="xd"
         sessionId="s1"
+      />,
+    );
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
+  it('waits for cold-loaded session metadata before freezing billing attribution', () => {
+    // 深链路首帧只有 sessionId + error，来源尚未回填。这一帧必须
+    // fail closed；同一错误的元数据到达后再冻结真实的自定义来源(review P1)。
+    const view = renderBanner({
+      providerId: null,
+      modelId: undefined,
+      sourceMetadataReady: false,
+    });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+
+    view.rerender(
+      <ErrorBanner
+        error={QUOTA_ERROR}
+        retryText="retry me"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        providerId="my-custom-provider"
+        modelId="custom-model"
+        sessionId="s1"
+        sourceMetadataReady
       />,
     );
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
@@ -264,7 +332,11 @@ describe('ErrorBanner billing CTA', () => {
   it('hides the CTA for explicit XD sessions when the failed request was a bridge override', () => {
     // 显式 XD 会话的子代理 bridge 覆写按请求绕过会话来源:providerId=xd +
     // 顶层网关模型也不得把 bridge 配额失败引导去充值(PR review P1)。
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: true, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: true,
+      resolved: true,
+    });
     renderBanner({ providerId: 'xd' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
@@ -273,7 +345,11 @@ describe('ErrorBanner billing CTA', () => {
   it('falls back to the gateway-key heuristic for live errors without a route observation', () => {
     // live 错误刚由当前凭证形态的请求产生:观察值缺失时按活性凭证回落,存有
     // 网关 key 判 gateway,引导保留。
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
     renderBanner({ providerId: null });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
@@ -283,7 +359,11 @@ describe('ErrorBanner billing CTA', () => {
     // 重启后观察值丢失、且失败那一轮之后凭证可能已变:订阅失败后配上网关 key,
     // 按当前 key 回落判 gateway 会把订阅错误贴成 Cindy 余额不足——持久化错误
     // 不回落启发式。
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
     renderBanner({ providerId: null, persistedError: true });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
@@ -292,13 +372,21 @@ describe('ErrorBanner billing CTA', () => {
 
   it('keeps the CTA for persisted cc failures when the session observation itself says gateway', () => {
     // 同 run 的错误尾部:会话观察值仍在内存且绑定该会话失败流量,可信。
-    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     renderBanner({ providerId: null, persistedError: true });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
   });
 
   it('stays silent while the gateway key is still reconciling (form undecided)', () => {
-    mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: true });
+    mocks.claudeRoute.mockReturnValue({
+      route: null,
+      lastFailedRequestBridge: false,
+      resolved: true,
+    });
     mocks.apiKey.mockReturnValue({ hasSavedKey: false, isReconciling: true });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();

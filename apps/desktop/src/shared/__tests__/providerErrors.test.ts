@@ -119,6 +119,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     'credits depleted',
     'credits exhausted',
     'credit balance too low',
+    // LiteLLM 会用 RateLimitError 包装明确的预算耗尽。外层的 rate
+    // 措辞不得否决内层 BudgetExceededError(review P1)。
+    'litellm.RateLimitError: litellm.BudgetExceededError: Budget has been exceeded!',
     // makerChatStore 从结构化 errorStatus 保留的稳定后缀:正文即使只有通用
     // Payment Required,消息级 ErrorBanner 也必须识别为余额耗尽(review P2)。
     'Payment Required (HTTP 402)',
@@ -128,6 +131,15 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     'Error code: 402 - Payment Required',
   ])('matches quota wording: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(true);
+  });
+
+  it('classifies a wrapped LiteLLM budget depletion as non-retryable quota exhaustion', () => {
+    expect(
+      classifyProviderError({
+        status: 429,
+        bodyText: 'litellm.RateLimitError: litellm.BudgetExceededError: Budget has been exceeded!',
+      }),
+    ).toMatchObject({ code: 'QUOTA_EXCEEDED', retryable: false });
   });
 
   it.each([

@@ -80,10 +80,13 @@ const MODEL_NOT_FOUND_RE =
 /** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
 const CONTEXT_TOO_LONG_RE =
   /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
-/** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞、
- *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关余额不足的实际形状)。 */
-const QUOTA_RE =
-  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
+/** 明确的余额 / 预算耗尽措辞：即使外层同时带 RateLimitError，也不得
+ *  被速率限额排除。LiteLLM 的实际形状会把 BudgetExceededError 包在
+ *  RateLimitError 里(review P1)。 */
+const EXPLICIT_DEPLETION_RE =
+  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
+/** 单独出现的 quota exceeded 可能是余额配额，也可能是每分钟 / token 速率配额。 */
+const AMBIGUOUS_QUOTA_RE = /quota.{0,20}exceed/i;
 /** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
  *  metric 'requests per minute'"、紧凑斜杠写法 "100 requests/minute"、
  *  "1M tokens/day"、缩写斜杠写法 "100 requests/min"、"500 tokens/sec"、单字母斜杠
@@ -100,7 +103,8 @@ const HTTP_402_MESSAGE_RE =
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
-const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
+const AUTH_RE =
+  /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
 
 /**
  * 消息级「余额 / 配额耗尽」判定:给只有错误文本、拿不到 HTTP status 的消费方用
@@ -111,7 +115,11 @@ const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorize
  * pattern,避免两处口径漂移。
  */
 export function isQuotaExceededMessage(text: string): boolean {
-  return HTTP_402_MESSAGE_RE.test(text) || (QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text));
+  return (
+    HTTP_402_MESSAGE_RE.test(text) ||
+    EXPLICIT_DEPLETION_RE.test(text) ||
+    (AMBIGUOUS_QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text))
+  );
 }
 
 /**
@@ -124,7 +132,8 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   const detail = body ? redactSensitiveText(body.slice(0, 500)) : undefined;
 
   if (networkErrorCode) {
-    if (TIMEOUT_CODES.has(networkErrorCode)) return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
+    if (TIMEOUT_CODES.has(networkErrorCode))
+      return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
     if (UNREACHABLE_CODES.has(networkErrorCode)) {
       return { code: 'UPSTREAM_UNREACHABLE', retryable: true, detail: networkErrorCode };
     }
@@ -153,7 +162,8 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   }
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
+    if (CONTEXT_TOO_LONG_RE.test(body))
+      return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
