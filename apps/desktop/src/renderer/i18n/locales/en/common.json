@@ -8609,6 +8609,20 @@
         }
       }
     },
+    "orders": {
+      "title": "Order history",
+      "description": "Only top-up and subscription orders started inside Cindy are listed. Orders awaiting payment are canceled automatically once they time out.",
+      "count": "{{count}} orders",
+      "incomplete": "There are many order records. Only the latest {{count}} are shown.",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "Completed",
+        "awaitingPayment": "Awaiting payment",
+        "canceled": "Canceled",
+        "expired": "Expired",
+        "failed": "Payment failed"
+      }
+    },
     "dialogs": {
       "subscription": {
         "title": "Choose a subscription plan"

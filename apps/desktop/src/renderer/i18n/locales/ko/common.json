@@ -8596,6 +8596,20 @@
         }
       }
     },
+    "orders": {
+      "title": "주문 내역",
+      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "count": "{{count}}건",
+      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "완료",
+        "awaitingPayment": "결제 대기",
+        "canceled": "취소됨",
+        "expired": "만료됨",
+        "failed": "결제 실패"
+      }
+    },
     "dialogs": {
       "subscription": {
         "title": "구독 요금제 선택"

@@ -8596,6 +8596,20 @@
         }
       }
     },
+    "orders": {
+      "title": "注文履歴",
+      "description": "Cindy 内で開始した残高チャージとサブスクリプションの注文のみを表示します。支払い待ちの注文は、期限を過ぎると自動的にキャンセルされます。",
+      "count": "{{count}}件",
+      "incomplete": "注文履歴が多いため、最新の{{count}}件のみ表示しています。",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "完了",
+        "awaitingPayment": "支払い待ち",
+        "canceled": "キャンセル済み",
+        "expired": "期限切れ",
+        "failed": "支払い失敗"
+      }
+    },
     "dialogs": {
       "subscription": {
         "title": "サブスクリプションプランを選択"
