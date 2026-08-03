@@ -27,6 +27,7 @@ function createLogger() {
  */
 function createControllableHandle(opts?: {
   sendError?: Error;
+  sendErrorOnSend?: number;
   agentKind?: AgentKind;
   dispatchEvent?: AgentEvent;
   dispatchOnSend?: number;
@@ -47,7 +48,9 @@ function createControllableHandle(opts?: {
     model: 'gpt-5.4',
     async send() {
       sendCount += 1;
-      if (opts?.sendError) throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
+      if (opts?.sendError && (opts.sendErrorOnSend ?? 1) === sendCount) {
+        throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
+      }
       if (opts?.dispatchEvent && (opts.dispatchOnSend ?? 1) === sendCount) {
         if (push) push(opts.dispatchEvent);
         else buffered.push(opts.dispatchEvent);
@@ -517,6 +520,44 @@ describe('Session per-turn origin 打标', () => {
     // 事件循环已起(startEventLoopIfNeeded 在 handle.send 前调),别的 turn 的事件流进来
     await emit({ type: 'text', data: { text: '别的 turn 的事件', isFinal: true } });
     expect(seen.at(-1)?.turnOrigin).toBeUndefined(); // origin 已清,不误打
+  });
+
+  it('dispatch 失败且没有旧尾事件时，drain 超时关闭歧义 session', async () => {
+    const { handle, closeCalls } = createControllableHandle({
+      sendError: new Error('boom-dispatch'),
+      sendErrorOnSend: 1,
+    });
+    const session = makeSession(handle);
+
+    await expect(session.send('failed', { turnAttemptToken: 1 })).rejects.toThrow('boom-dispatch');
+    await expect(session.send('next', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(closeCalls()).toBe(1);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('dispatch 失败后的迟到终态不能冒领下一次 turn 的 token', async () => {
+    const { handle, emit } = createControllableHandle({
+      sendError: new Error('boom-dispatch'),
+      sendErrorOnSend: 1,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await expect(session.send('failed', { turnAttemptToken: 1 })).rejects.toThrow('boom-dispatch');
+    await expect(session.send('next', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await emit({ type: 'done', data: { reason: 'late failed-dispatch tail' } });
+    await session.send('next', { turnAttemptToken: 2 });
+    await emit({ type: 'text', data: { text: 'next turn progress', isFinal: false } });
+
+    expect(seen[0]?.turnAttemptToken).toBeUndefined();
+    expect(seen[1]?.turnAttemptToken).toBe(2);
   });
 
   it('失败 send 还原(而非清空)正在跑 turn 的 origin —— turn1 的 done 仍带 origin(回归 Greptile P1)', async () => {

@@ -545,6 +545,13 @@ export class Session {
         this.currentTurnOrigin = previousTurnOrigin;
         this.currentTurnAttemptToken = previousTurnAttemptToken;
         this.turnGeneration = previousTurnGeneration;
+        // runEventLoop may already be awaiting the failed generation. Reusing
+        // the rolled-back generation immediately creates an ABA window where
+        // a delayed terminal event from this failed dispatch can claim the
+        // next turn's origin/token. Reuse the existing bounded tail fence:
+        // an old terminal event releases it; no tail closes the ambiguous
+        // Session so Maker can rebuild before the next send.
+        this.armTerminalErrorDrain(previousTurnGeneration);
       }
     }
   }
