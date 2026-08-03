@@ -2314,8 +2314,10 @@ describe('ghost · network 详单校验', () => {
     expect(diffGhostPermissionItems(packed.manifest, packed.manifest).added).toHaveLength(0);
   });
 
-  it('notify.badge 必须声明 panel;未知字段与非布尔值一律拒', () => {
-    // ① 有 badge,但没有面板 → 拒(未读点承诺"点开能看到内容")
+  it('notify.badge 只在能明确识别时生效;识别不了一律静默忽略而不是拒装', () => {
+    // ① 有 badge 但没有面板 → **不拒装**,只是不生效。
+    //    未读点承诺"点开能看到内容",没面板就不该给;但校验器无法把"新声明忘了写
+    //    panel"与"老包的同名自定义字段"区分开,分不清就只能忽略,不能让插件消失。
     const noPanel = validateGhostManifest({
       ...goodManifest(),
       slots: ['tool'],
@@ -2323,14 +2325,19 @@ describe('ghost · network 详单校验', () => {
       tools: [{ name: 'ping', description: 'ping' }],
       notify: { badge: true },
     });
-    expect(noPanel.ok).toBe(false);
-    if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
+    expect(noPanel.ok).toBe(true);
+    if (noPanel.ok) {
+      expect(noPanel.manifest.notify).toBeUndefined();
+      expect(ghostPermissionItems(noPanel.manifest).map((i) => i.key)).not.toContain('badge');
+    }
 
-    // ② `badge` 是本次新增的键,写错类型直接拒(不给作者"写了没生效"的沉默失败)。
-    //    它在本 PR 之前不可能存在于任何已装插件里,严格拒不伤存量。
-    expect(
-      validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: { badge: 'yes' } }).ok,
-    ).toBe(false);
+    // ② `notify` 分支**一条都不会让清单变 invalid** —— 校验器分不清「新声明写错了」
+    //    与「老包拿同名字段当自定义扩展」,分不清就不能拒。写错的代价是静默无效。
+    for (const bad of [{ badge: 'yes' }, { badge: 1 }, { badge: null }]) {
+      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: bad });
+      expect(r.ok, `notify: ${JSON.stringify(bad)} 不该被判 invalid`).toBe(true);
+      if (r.ok) expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
+    }
 
     // ③ badge:false 与空详单都合法,且不落成权限条目(存量兼容:老包无此字段)
     const off = validateGhostManifest({

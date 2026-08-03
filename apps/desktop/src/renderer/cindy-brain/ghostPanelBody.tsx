@@ -13,7 +13,12 @@ import { toast } from '@/lib/toast';
 
 import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
-import { clearGhostUnread, useGhostUnread, useHostWindowForeground } from './ghostUnreadStore';
+import {
+  clearGhostUnread,
+  useElementVisible,
+  useGhostUnread,
+  useHostWindowForeground,
+} from './ghostUnreadStore';
 
 /**
  * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与插件页内面板
@@ -187,17 +192,22 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
    * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
    * 正看着它,不该留一颗清不掉的点。
    *
-   * foreground 也进依赖,而且是**必要条件**:停靠面板与独立面板窗口会长期挂着,
-   * 光看挂载就清,等于窗口最小化 / 失焦期间到来的未读一律被吞掉——常开面板的
-   * 用户从此收不到这个插件的提醒(codex review P1)。切回窗口的那一刻 effect
-   * 重跑并清零,语义正是「他看的时候才算看过」。
+   * 清零的必要条件是**两层可见性同时成立**,缺一层都会把用户没看见的未读吞掉:
+   *   1. `foreground` —— 宿主窗口可见且聚焦。停靠面板与独立面板窗口长期挂着,
+   *      只看挂载的话,窗口最小化 / 失焦期间到来的未读会被一律清掉,常开面板的
+   *      用户从此收不到这个插件的提醒(codex review P1)。
+   *   2. `visible` —— 本面板**自己**占着可见面积。光有第 1 层还不够:同一个前台
+   *      窗口里,另一个停靠面板被最大化时本面板仍然挂载,却被压成零宽/隐藏,
+   *      用户根本没看到内容(codex review)。
+   * 两层都满足的那一刻 effect 重跑并清零,语义正是「他看的时候才算看过」。
    */
   const unread = useGhostUnread(manifest.id);
   const foreground = useHostWindowForeground();
+  const visible = useElementVisible(hostRef);
   useEffect(() => {
-    if (!unread || !foreground) return;
+    if (!unread || !foreground || !visible) return;
     clearGhostUnread(manifest.id);
-  }, [manifest.id, unread, foreground]);
+  }, [manifest.id, unread, foreground, visible]);
 
   const panelHtml = manifest.panel?.html;
   useEffect(() => {

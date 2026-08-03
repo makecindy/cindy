@@ -100,6 +100,7 @@ import { reconcileGhostSkillLinks } from './skillSlot.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import {
   FILO_GOOGLE_GHOST_ID,
@@ -1724,11 +1725,24 @@ export const GHOST_BADGE_CHANNEL = 'ghosts:badge';
  */
 export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
 
-function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summary?: string; at?: number }): void {
+/**
+ * 未读推送的收口:**只发给可信的 Cindy 自有顶层页面**。
+ *
+ * 载荷里的 summary 是插件正文(工单标题、邮件主题、任务名)。无条件
+ * `getAllWindows().send()` 会把它发给所有窗口,包括已经导航到别处的那些——
+ * 出站推送与入站 IPC 是同一道授权边界,不能只守一边(codex review)。
+ * 判据复用 `isTrustedAppRendererWindow`,与 `ghosts:unread` 同步读那道闸同源。
+ */
+function sendToTrustedAppWindows(channel: string, payload: unknown): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_BADGE_CHANNEL, payload);
+    if (!isTrustedAppRendererWindow(window)) return;
+    window.webContents.send(channel, payload);
   });
+}
+
+function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summary?: string; at?: number }): void {
+  sendToTrustedAppWindows(GHOST_BADGE_CHANNEL, payload);
 }
 
 /**
@@ -1739,10 +1753,7 @@ function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summar
  */
 function broadcastGhostUnreadSnapshot(): void {
   const entries = visibleGhostUnread();
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_UNREAD_SNAPSHOT_CHANNEL, { entries });
-  });
+  sendToTrustedAppWindows(GHOST_UNREAD_SNAPSHOT_CHANNEL, { entries });
 }
 
 /**

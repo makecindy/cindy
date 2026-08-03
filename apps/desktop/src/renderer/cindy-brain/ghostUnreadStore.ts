@@ -11,7 +11,7 @@
  * useSyncExternalStore 每次拿到新引用而无限重渲染。
  */
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 interface UnreadEntry {
   summary?: string;
@@ -178,6 +178,34 @@ export function useHostWindowForeground(): boolean {
     () => document.visibilityState === 'visible' && document.hasFocus(),
     () => false,
   );
+}
+
+/**
+ * 这个元素此刻是否真的占着可见面积。
+ *
+ * 「宿主窗口在前台」还不够:同一个前台窗口里,另一个停靠面板被最大化时,本面板
+ * **仍然挂载**但被压成零宽/隐藏——用户根本没看到内容,却会被当成已读清零,
+ * 切回来时那颗点已经没了(codex review)。
+ *
+ * 判据用 IntersectionObserver(能同时覆盖零尺寸与滚出可视区);环境不支持时
+ * fail-open 成 true,退回「窗口前台」那一层,不会比改动前更差。
+ */
+export function useElementVisible(ref: { current: Element | null }): boolean {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setVisible(true); // 不支持就退回上一层判据,不误判成"没看见"而永远不清零
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry) setVisible(entry.isIntersecting && entry.intersectionRatio > 0);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return visible;
 }
 
 /**

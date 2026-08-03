@@ -7,6 +7,7 @@
  */
 
 import { act, render, screen } from '@testing-library/react';
+import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listeners: Array<(p: { ghostId: string; unread: boolean; summary?: string; at?: number }) => void> = [];
@@ -226,6 +227,55 @@ describe('ghostUnreadStore', () => {
     expect(screen.getByTestId('fg').textContent).toBe('fg');
 
     vi.restoreAllMocks();
+  });
+
+  it('元素可见判据:已挂载但被压成零宽/隐藏时为假,切回可见才转真', async () => {
+    // 同一前台窗口里另一个停靠面板被最大化 → 本面板仍挂载但零宽。只看窗口
+    // foreground 会把这段时间到来的未读当成已读吞掉(codex review)。
+    type IoCb = (entries: Array<{ isIntersecting: boolean; intersectionRatio: number }>) => void;
+    let fire: IoCb | null = null;
+    const disconnect = vi.fn();
+    class FakeIO {
+      constructor(cb: IoCb) {
+        fire = cb;
+      }
+      observe() {}
+      disconnect = disconnect;
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIO);
+
+    const { useElementVisible } = await loadStore();
+    function Probe() {
+      const ref = useRef<HTMLDivElement | null>(null);
+      const visible = useElementVisible(ref);
+      return (
+        <div ref={ref} data-testid="vis">
+          {visible ? 'vis' : 'hidden'}
+        </div>
+      );
+    }
+    const { unmount } = render(<Probe />);
+    // 被最大化的邻居压成零宽:不相交、比例 0。
+    act(() => fire?.([{ isIntersecting: false, intersectionRatio: 0 }]));
+    expect(screen.getByTestId('vis').textContent).toBe('hidden');
+    // 用户切回本面板 → 重新占面积,这一刻才算看见。
+    act(() => fire?.([{ isIntersecting: true, intersectionRatio: 1 }]));
+    expect(screen.getByTestId('vis').textContent).toBe('vis');
+    unmount();
+    expect(disconnect).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('环境不支持 IntersectionObserver 时 fail-open —— 不因判据缺失而永远清不掉', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const { useElementVisible } = await loadStore();
+    function Probe() {
+      const ref = useRef<HTMLDivElement | null>(null);
+      return <span data-testid="vis">{useElementVisible(ref) ? 'vis' : 'hidden'}</span>;
+    }
+    render(<Probe />);
+    expect(screen.getByTestId('vis').textContent).toBe('vis');
+    vi.unstubAllGlobals();
   });
 
   it('unreadSync 抛错时按"全无未读"起步,后续推送照常生效(未读是提醒不是内容)', async () => {

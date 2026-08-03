@@ -2801,20 +2801,22 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
      * 校验——那个键在本 PR 之前不可能存在于任何已装插件里,不存在存量面,严格拒能
      * 给作者明确反馈而不伤任何人。
      */
-    // 老形态(`true` / 字符串 / 数组…)与不认识的兄弟键:照旧忽略,不解释也不拒装。
-    // 只有「是对象」时才往下解释,且只解释 `badge` 这一个键。
+    // **识别式解析,不是校验式拒绝**:整个 `notify` 分支一条都不会让清单变 invalid。
+    //
+    // 只有**能明确识别成本次新增声明**的那一种形态才被解释,其余一律当老形态忽略。
+    // 识别判据是两条同时成立:`badge === true` **且**清单声明了 `panel`。
+    //   - 判据不成立的一律零能力(不进权限清单、不进装入确认、运行期资格审也拒),
+    //     所以「误判成老形态」的代价只是不给能力,不会凭空多给。
+    //   - 反过来若按校验式拒绝:老包里 `notify.badge` 写成别的值、或写了 true 却没有
+    //     面板(那时这个字段被完全忽略,作者拿它当自定义扩展完全合法),升级后会被判
+    //     invalid → 插件从列表与运行时整个消失。这正是 §5 红线禁止的。
+    //
+    // 代价说清楚:作者写了 `badge:true` 却忘了 `panel` 时,拿不到报错、只是静默无效。
+    // 这是刻意的取舍——校验器分不清「新声明写漏了」与「老包的同名自定义字段」,
+    // 分不清就不能拒。作者侧的反馈交给 FORGE_GUIDE 与打包工具,不放在这里赌存量。
     if (isPlainObject(raw.notify)) {
       const notifyRaw = raw.notify as Record<string, unknown>;
-      if (notifyRaw.badge !== undefined && typeof notifyRaw.badge !== 'boolean') {
-        return { ok: false, reason: 'notify.badge 必须是布尔值' };
-      }
-      if (notifyRaw.badge === true) {
-        if (!slots.includes('panel')) {
-          return {
-            ok: false,
-            reason: 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
-          };
-        }
+      if (notifyRaw.badge === true && slots.includes('panel')) {
         notify = { badge: true };
       }
     }
