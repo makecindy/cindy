@@ -2328,3 +2328,74 @@ describe('压缩 SSE 不接管(Greptile review)', () => {
     expect(res.text).toContain('"id":"Bash_210_dup2"');
   });
 });
+
+describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 id 时仍拦截重铸)', () => {
+  const MINTED_SSE =
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+
+  function mintingUpstream() {
+    return startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(MINTED_SSE);
+    });
+  }
+
+  // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
+  // 因此 postAs 复用同一个 upstream + proxy。
+  async function setupSingleProxy(): Promise<void> {
+    const upstream = await mintingUpstream();
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+  }
+
+  async function postAs(sessionId: string, body: unknown): Promise<string> {
+    const res = await fetch(`${proxy!.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-claude-code-session-id': sessionId },
+      body: JSON.stringify(body),
+    });
+    return res.text();
+  }
+
+  it('请求1(历史含 Bash_210)改名;请求2(同 session,历史不含 Bash_210)仍拦截重铸', async () => {
+    await setupSingleProxy();
+    // 请求1: 历史带 Bash_210 → 响应铸 Bash_210 → 撞车 → 改名; Bash_210 进线程缓存
+    const r1 = await postAs('sess-1', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(r1).toContain('"id":"Bash_210_dup2"');
+
+    // 请求2: 同 session, 历史**不含** Bash_210(模拟 rewind 后历史缺席)
+    // → 若只从请求体建 usedIds, 该 id 会被当「新 id」放行; per-thread 缓存必须拦截
+    const r2 = await postAs('sess-1', {
+      model: 'kimi-k3',
+      messages: [{ role: 'user', content: '继续分析' }],
+    });
+    // 缓存让 r2 仍设防:响应铸 Bash_210 被改名(后缀可能顺延为 _dup3,因为 r1
+    // 的 onRename 已把 _dup2 写进缓存),绝不能原样放行 Bash_210
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
+  it('不同 session 的缓存互不串扰', async () => {
+    await setupSingleProxy();
+    // 请求1 在 sess-A 铸 Bash_210(缓存入 sess-A)
+    await postAs('sess-A', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    // 请求2 在 sess-B(全新会话, 无缓存)铸 Bash_210 → 请求体不带历史 id → 应放行
+    const r2 = await postAs('sess-B', {
+      model: 'kimi-k3',
+      messages: [{ role: 'user', content: '你好' }],
+    });
+    expect(r2).toContain('"id":"Bash_210"');
+    expect(r2).not.toContain('Bash_210_dup2');
+  });
+});

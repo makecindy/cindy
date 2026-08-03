@@ -729,6 +729,10 @@ function forward(
   // ensureToolResultPairing 整段丢弃(运行中会话的空消息腐蚀,见
   // tool-use-id-stream-rewrite.ts 头注)。null/undefined → 响应字节透传。
   responseToolUseIds?: Set<string> | null,
+  // per-thread 已见 id 缓存:改名产物(_dupN)落缓存,防「请求体缺席历史 id 但
+  // 同底再铸」的自激循环(codex-connector review P1)。由 createAnthropicCompatProxy
+  // 注入,forward 是模块级函数取不到闭包作用域。
+  threadMintedIdCache?: Map<string, Set<string>> | null,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -978,6 +982,7 @@ function forward(
             outboundProxy,
             pathOverride,
             responseToolUseIds,
+            threadMintedIdCache,
           );
           return;
         }
@@ -1138,6 +1143,14 @@ function forward(
           from,
           to,
         });
+        // 改名产物(_dupN)也进线程缓存,防「请求体缺席该 id 但同底再铸」的循环。
+        // threadId 是 POST handler 作用域变量,forward() 内取不到, 从转发 headers 现取。
+        const renameThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
+        if (renameThreadId && threadMintedIdCache) {
+          const cache = threadMintedIdCache.get(renameThreadId) ?? new Set<string>();
+          cache.add(to);
+          threadMintedIdCache.set(renameThreadId, cache);
+        }
       });
       toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
@@ -1411,6 +1424,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const url = req.url ?? '/';
     const headers = flattenRequestHeaders(req.headers);
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
+    const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
 
     // 非 POST / 没 body(GET / HEAD / DELETE 等)→ 不收集 stream,但仍跑一次路由决策:
@@ -1585,7 +1599,32 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         parsedForRewrite = undefined;
       }
     }
-    const responseToolUseIds = collectToolUseIdsForResponseRewrite(parsedForRewrite);
+    const requestedIds = collectToolUseIdsForResponseRewrite(parsedForRewrite);
+
+    // per-thread 已见 id 缓存(跨请求并入 usedIds):rewind / 中断 / CLI 压缩会让
+    // 历史撞车 id 缺席于某个请求体,若只从请求体建 usedIds,该 id 重铸时 proxy
+    // 认作「新 id」放行,转录出现重复 → 下轮 ensureToolResultPairing 丢弃 → 请求
+    // 体更缺 → 自激循环(codex-connector review P1)。缓存让本线程内见过的 minted
+    // 形态 id 持续设防。副作用:rewind 后 kimi 本可安全复用的旧号被改名(无害,
+    // _dupN 后缀不影响语义);缓存随线程会话线性增长(每 id 十几个字节,长会话
+    // 数百 KB),无主动清理,会话结束随 Map 回收。
+    //
+    // 注意:缓存读取**不能**依赖 requestedIds 非空 —— rewind 后请求体恰恰
+    // 可能不含任何铸造 id(历史缺席),而缓存里留有上次见过的撞车 id,这正
+    // 是缓存存在的意义。请求体无铸造 id 但缓存非空时,用缓存建 usedIds 设防。
+    let responseToolUseIds: Set<string> | null = null;
+    if (threadId) {
+      const cache = threadMintedIdCache.get(threadId) ?? new Set<string>();
+      if (requestedIds) {
+        for (const id of requestedIds) cache.add(id);
+        responseToolUseIds = requestedIds;
+      } else if (cache.size > 0) {
+        responseToolUseIds = new Set(cache);
+      }
+      if (cache.size > 0) threadMintedIdCache.set(threadId, cache);
+    } else {
+      responseToolUseIds = requestedIds;
+    }
 
     if (transformed) {
       logger.debug?.('⇄ transformed request body', {
@@ -1616,6 +1655,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       await resolveOutboundForTarget(route.target, reqId),
       route.pathOverride,
       responseToolUseIds,
+      threadMintedIdCache,
     );
   });
 
@@ -1623,6 +1663,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   // 容量控制属于 Codex / 上游职责；proxy 自设上限会凭空制造本地 503,让 Cindy 的
   // at-capacity 体验反而劣于同版本 Codex。刻意不并入 inflight —— WS 是长连接,
   // 计入会让 dispose 的清零等待永不满足。
+  // per-thread 已见 tool_use id 缓存(跨请求),供响应流撞车改名的 usedIds 并入。
+  const threadMintedIdCache = new Map<string, Set<string>>();
+
   let liveWebSockets = 0;
   interface LiveWebSocket {
     readonly threadId: string;
