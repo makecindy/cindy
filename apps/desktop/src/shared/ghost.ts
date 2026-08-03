@@ -114,7 +114,6 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const GHOST_SLOTS = [
   'subscribe',
   'tool',
-  'at-resource',
   'card',
   'panel',
   'cindy',
@@ -2861,29 +2860,22 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     return { ok: false, reason: 'slots 声明了 "tool" 但缺少 tools(注册什么工具要写清楚)' };
   }
 
+  /**
+   * `@` 资源入口复用 `tool` 槽，不另造硬白名单 slot：旧版宿主会接受这类包，
+   * 并像其它未知顶层字段一样忽略 atResourceProvider。这个字段在本版之前也可能被
+   * 存量包当作自定义元数据使用，因此只有形态完整、且确实引用已声明工具时才启用；
+   * 其它历史形态继续忽略，避免客户端升级后让已安装插件消失。
+   */
   let atResourceProvider: GhostAtResourceProviderDecl | undefined;
-  if (slots.includes('at-resource')) {
-    if (raw.atResourceProvider === undefined) {
-      return { ok: false, reason: 'slots 声明了 "at-resource" 但缺少 atResourceProvider' };
-    }
-    if (!isPlainObject(raw.atResourceProvider)) {
-      return { ok: false, reason: 'atResourceProvider 必须是对象' };
-    }
+  if (isPlainObject(raw.atResourceProvider)) {
     const providerRaw = raw.atResourceProvider as Record<string, unknown>;
-    const unknownField = Object.keys(providerRaw).find((key) => key !== 'tool');
-    if (unknownField) {
-      return {
-        ok: false,
-        reason: `atResourceProvider 含不允许的字段 ${JSON.stringify(unknownField)}`,
-      };
+    if (
+      Object.keys(providerRaw).length === 1
+      && typeof providerRaw.tool === 'string'
+      && tools?.some((tool) => tool.name === providerRaw.tool)
+    ) {
+      atResourceProvider = { tool: providerRaw.tool };
     }
-    if (typeof providerRaw.tool !== 'string' || !tools?.some((tool) => tool.name === providerRaw.tool)) {
-      return {
-        ok: false,
-        reason: 'atResourceProvider.tool 必须引用 tools 中已声明的工具',
-      };
-    }
-    atResourceProvider = { tool: providerRaw.tool };
   }
 
   // cindy 槽能力详单:与 slots 含 'cindy' 成对(有详单必有槽;有槽无详单

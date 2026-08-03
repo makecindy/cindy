@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -1015,7 +1016,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
   it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
     const base = {
       ...goodChipManifest(),
-      slots: ['panel', 'tool', 'at-resource'],
+      slots: ['panel', 'tool'],
       tools: [{ name: 'search_issues', description: '只读搜索议题' }],
     };
     const valid = validateGhostManifest({
@@ -1025,18 +1026,21 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(valid.ok).toBe(true);
     expect(valid.ok && valid.manifest.atResourceProvider).toEqual({ tool: 'search_issues' });
 
-    expect(validateGhostManifest({ ...base, atResourceProvider: null }).ok).toBe(false);
-    expect(validateGhostManifest({
+    const missing = validateGhostManifest({
       ...base,
       atResourceProvider: { tool: 'missing' },
-    }).ok).toBe(false);
-    expect(validateGhostManifest({
+    });
+    const extraField = validateGhostManifest({
       ...base,
       atResourceProvider: { tool: 'search_issues', label: 'Issues' },
-    }).ok).toBe(false);
+    });
+    expect(missing.ok).toBe(true);
+    expect(extraField.ok).toBe(true);
+    expect(missing.ok ? missing.manifest.atResourceProvider : null).toBeUndefined();
+    expect(extraField.ok ? extraField.manifest.atResourceProvider : null).toBeUndefined();
   });
 
-  it('未声明 at-resource 槽时忽略旧 manifest 的同名未知字段', () => {
+  it('忽略旧 manifest 中无效的同名未知字段', () => {
     const base = {
       ...goodChipManifest(),
       slots: ['panel', 'tool'],
@@ -1048,7 +1052,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
       'legacy',
       [],
       {},
-      { tool: 'search_issues' },
       { label: 'Issues' },
     ]) {
       const result = validateGhostManifest({
@@ -1060,14 +1063,14 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     }
   });
 
-  it('声明 at-resource 槽时必须提供严格有效的资源入口', () => {
-    const base = {
+  it('@ 资源入口复用 tool 槽，不新增硬白名单 slot', () => {
+    expect(GHOST_SLOTS).not.toContain('at-resource');
+    expect(validateGhostManifest({
       ...goodChipManifest(),
       slots: ['panel', 'tool', 'at-resource'],
       tools: [{ name: 'search_issues', description: '只读搜索议题' }],
-    };
-    expect(validateGhostManifest(base).ok).toBe(false);
-    expect(validateGhostManifest({ ...base, atResourceProvider: true }).ok).toBe(false);
+      atResourceProvider: { tool: 'search_issues' },
+    }).ok).toBe(false);
   });
 
   it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
@@ -1079,7 +1082,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     const before = validateGhostManifest(raw);
     const after = validateGhostManifest({
       ...raw,
-      slots: ['panel', 'tool', 'at-resource'],
       atResourceProvider: { tool: 'search_issues' },
     });
     expect(before.ok && after.ok).toBe(true);
