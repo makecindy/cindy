@@ -3446,7 +3446,7 @@ function MarkdownBody({
         allowIosUITextView={allowIosUITextView}
         key={group.key}
         selectable={runSelectable}
-        selectionColor={colors.surfaceChip}
+        selectionColor={colors.inputCaret}
         style={styles.messageText}
         testID="message.markdownTextRun"
       >
@@ -3538,7 +3538,7 @@ function MarkdownBody({
                   allowIosUITextView={allowIosUITextView}
                   language={block.language}
                   selectable={selectable === true}
-                  selectionColor={colors.surfaceChip}
+                  selectionColor={colors.inputCaret}
                   styles={styles}
                   text={block.text}
                 />
@@ -3557,7 +3557,7 @@ function MarkdownBody({
               allowIosUITextView={allowIosUITextView}
               key={block.key}
               selectable={headingSelectable}
-              selectionColor={colors.surfaceChip}
+              selectionColor={colors.inputCaret}
               style={headingStyle}
               testID="message.markdownHeading"
             >
@@ -3571,7 +3571,7 @@ function MarkdownBody({
               <MarkdownSelectableText
                 allowIosUITextView={allowIosUITextView}
                 selectable={inlinesSelectable(block.inlines)}
-                selectionColor={colors.surfaceChip}
+                selectionColor={colors.inputCaret}
                 style={[styles.messageText, styles.markdownQuoteText]}
               >
                 {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
@@ -3597,7 +3597,7 @@ function MarkdownBody({
               <MarkdownSelectableText
                 allowIosUITextView={allowIosUITextView}
                 selectable={inlinesSelectable(block.inlines)}
-                selectionColor={colors.surfaceChip}
+                selectionColor={colors.inputCaret}
                 style={[styles.messageText, styles.markdownListText]}
               >
                 {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
@@ -3627,7 +3627,7 @@ function MarkdownBody({
                         allowIosUITextView={allowIosUITextView}
                         key={`${block.key}:th:${index}`}
                         selectable={inlinesSelectable(cell)}
-                        selectionColor={colors.surfaceChip}
+                        selectionColor={colors.inputCaret}
                         style={[
                           styles.markdownTableCell,
                           { width: columnWidth },
@@ -3648,7 +3648,7 @@ function MarkdownBody({
                           allowIosUITextView={allowIosUITextView}
                           key={`${row.key}:td:${index}`}
                           selectable={inlinesSelectable(cell)}
-                          selectionColor={colors.surfaceChip}
+                          selectionColor={colors.inputCaret}
                           style={[styles.markdownTableCell, { width: columnWidth }]}
                         >
                           {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
@@ -3666,7 +3666,7 @@ function MarkdownBody({
             allowIosUITextView={allowIosUITextView}
             key={block.key}
             selectable={inlinesSelectable(block.inlines)}
-            selectionColor={colors.surfaceChip}
+            selectionColor={colors.inputCaret}
             style={styles.messageText}
           >
             {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
