@@ -147,6 +147,7 @@ import {
   patchMessageAgentMeta,
   supersedeRetriedUserTurn,
 } from '../localDb/ipc/messages.js';
+import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
@@ -10664,6 +10665,14 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
 }
 
 function broadcastToAllWindows(channel: string, payload: unknown): void {
+  if (
+    channel === MAKER_PUSH.ORCA_WORKER_CHANGED &&
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { leadSessionId?: unknown }).leadSessionId === 'string'
+  ) {
+    invalidateWorkersByLeadSingleFlight((payload as { leadSessionId: string }).leadSessionId);
+  }
   // device-link 被控端旁路:命中转发白名单且存在控制链路时,把事件转发给控制端
   // (无 link 时 O(1) no-op,不进 maker-core 热路径成本)
   // 旁路永远不能反向阻断本机生命周期。owner boundary 切换期间远端链路

@@ -37,6 +37,8 @@ const orcaLifecycleServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'or
 const orcaLifecycleServiceSource = readFileSync(orcaLifecycleServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useWorkersSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useWorkers.ts');
 const useWorkersSource = readFileSync(useWorkersSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const workerProjectionStoreSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'workerProjectionStore.ts');
+const workerProjectionStoreSource = readFileSync(workerProjectionStoreSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const preloadSourcePath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
 const preloadSource = readFileSync(preloadSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerSelection.ts');
@@ -835,9 +837,10 @@ describe('sendToSession ordering', () => {
   });
 
   it('uses active slot occupancy for renderer worker-limit gating', () => {
-    expect(useWorkersSource).toContain('isActiveWorkerStatus');
+    expect(workerProjectionStoreSource).toContain('isActiveWorkerStatus');
     expect(useWorkersSource).not.toContain('isRunningWorkerStatus');
-    expect(useWorkersSource).toContain('const activeWorkerCount = workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
+    expect(useWorkersSource).toContain('const activeWorkerCount = getActiveWorkerCount(workers);');
+    expect(workerProjectionStoreSource).toContain('return workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
   });
 });
 

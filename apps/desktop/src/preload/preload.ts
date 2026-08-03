@@ -4067,6 +4067,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ),
       listWorkersByLead: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-lead', leadSessionId),
+      listWorkersByLeads: (leadSessionIds: string[]): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-leads', leadSessionIds),
       updateWorkerStatus: (workerId: string, status: string): Promise<void> =>
         ipcRenderer.invoke(
           'local-db:orca-workflows:update-worker-status',

@@ -4,7 +4,8 @@
  * (按 ctx session 来源分流本机 / 隧道),不得再直连 `window.electronAPI.localDb.orcaWorkflows`
  * —— 否则远程 lead 的团队会查控制端空库、worker 变更收不到推送(真机实测的「浏览不出来」)。
  *
- * 唯一允许直连的是 makerTransport 自己(路由器本体,含本机分支 + onOrcaWorkerChanged 订阅)。
+ * 唯一允许直连的是 makerTransport 自己(路由器本体,含本机分支 + onOrcaWorkerChanged 订阅),
+ * 以及 workerProjectionStore 的本机批量只读入口；远程 Lead 仍必须经 orcaWorkflowsFor。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -35,9 +36,8 @@ describe('orca 远程路由接线不变式', () => {
 
   it('读 / 管理消费点用 orcaWorkflowsFor(ctx) 路由', () => {
     for (const f of [
-      'features/cc-agent/hooks/useWorkers.ts',
       'features/cc-agent/hooks/useOrcaWorkerSelection.ts',
-      'features/cc-agent/hooks/useOrcaLeadWorkerMap.ts',
+      'features/cc-agent/hooks/workerProjectionStore.ts',
       'features/cc-agent/CCAgentSessionView.tsx',
       'features/cc-agent/CCAgentIndexRedirect.tsx',
       'lib/orcaSessionIdentity.ts',
@@ -47,7 +47,9 @@ describe('orca 远程路由接线不变式', () => {
   });
 
   it('useWorkers worker 变更经 subscribeOrcaWorkerChanged(本机/远程分流),不直订本机 IPC', () => {
-    const src = read('features/cc-agent/hooks/useWorkers.ts');
+    const useWorkers = read('features/cc-agent/hooks/useWorkers.ts');
+    expect(useWorkers).toContain("from './workerProjectionStore'");
+    const src = read('features/cc-agent/hooks/workerProjectionStore.ts');
     expect(src).toContain('subscribeOrcaWorkerChanged(');
     expect(src).not.toContain('onOrcaWorkerChanged');
   });
