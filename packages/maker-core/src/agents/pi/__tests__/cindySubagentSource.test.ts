@@ -96,16 +96,24 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('subagent is unavailable');
   });
 
-  it('drops late child output after the task already settled', () => {
-    // kill() 到 SIGKILL 之间有约 2 秒宽限,子进程仍可能吐 stdout;终态上报后再回调
-    // onProgress 会把 stopped/failed 重新写成 running(review)。解析前就短路。
-    const feedGuard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const feed = createLineReader');
-    const parseAt = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('JSON.parse(line)');
-    const settledGuard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (settled) return;', feedGuard);
-    expect(feedGuard).toBeGreaterThan(-1);
-    expect(settledGuard).toBeGreaterThan(feedGuard);
-    // 守卫必须在 JSON.parse 之前。
-    expect(settledGuard).toBeLessThan(parseAt);
+  it('defers settling to process close so grace-period usage is still counted', () => {
+    // kill() 到 SIGKILL 之间约 2 秒宽限里子进程仍会吐 message_end,那是真实产生的 token/cost。
+    // 原来 abort/timeout 立刻 finish + 在 JSON.parse 之前整条短路,这段用量直接丢掉(review)。
+    // 单纯"解析但不上报"也救不回来:promise 已 resolve,调用方紧接着读走快照,之后改 totals
+    // 没人再看。所以收口必须推迟到进程真的 'close'。
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    // abort 与 timeout 都只置原因 + 杀 + 兜底,不再直接 finish。
+    expect(src).toContain("terminationReason = 'aborted';");
+    expect(src).toContain("terminationReason = 'timeout';");
+    expect(src).toContain('armSettleFallback(');
+    // 真正的收口在 close 分支里,按 terminationReason 决定文案。
+    const closeAt = src.indexOf("child.on('close'");
+    expect(src.indexOf('if (terminationReason !== null) {', closeAt)).toBeGreaterThan(closeAt);
+    // 'close' 万一不来,兜底定时器仍要收口,不能把父 turn 永久挂住。
+    expect(src).toMatch(/settleFallbackTimer = setTimeout\(/);
+    // 守卫仍在(只挡上报),但它现在只对"兜底已强行收口"生效。
+    const feedGuard = src.indexOf('const feed = createLineReader');
+    expect(src.indexOf('if (settled) return;', feedGuard)).toBeGreaterThan(feedGuard);
   });
 
   it('ships as its own extension file rather than being folded into cindy-bridge', () => {

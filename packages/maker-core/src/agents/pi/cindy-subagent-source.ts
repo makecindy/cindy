@@ -390,6 +390,25 @@ function runTask(binary, task, runtime, signal, onProgress) {
     let timer = null;
     // 强杀定时器:存下来才能在子进程真的退出后清掉(见 kill())。
     let killTimer = null;
+    /**
+     * 中止 / 超时的原因。置上它之后**不立刻 finish**,而是等 'close' 再收口 —— 这样 SIGTERM
+     * 到 SIGKILL 之间那 2 秒宽限里子进程仍会吐出的 message_end 用量能被正常归集。
+     *
+     * 原来是"置守卫 + 立刻 finish":守卫连 JSON 解析一起跳过,已经真实产生的 token/cost 就
+     * 丢了(review)。而单纯"解析但不上报"也救不回来 —— promise 已经 resolve,调用方紧接着就
+     * 读走了那份快照,之后再改 totals 没人再看。所以正解是**推迟收口到进程真的关闭**。
+     */
+    let terminationReason = null;
+    /** 收口兜底:'close' 万一不来(进程卡死在 SIGKILL 之外),不能把父 turn 永久挂住。 */
+    let settleFallbackTimer = null;
+    const armSettleFallback = function (result) {
+      if (settleFallbackTimer) return;
+      settleFallbackTimer = setTimeout(function () {
+        settleFallbackTimer = null;
+        finish(result);
+      }, 5000);
+      if (settleFallbackTimer && typeof settleFallbackTimer.unref === 'function') settleFallbackTimer.unref();
+    };
     // 先声明:finish 在闭包里引用它,let 的 TDZ 不容许"定义在后、可能先被读"。
     let removeAbort = null;
 
@@ -425,8 +444,10 @@ function runTask(binary, task, runtime, signal, onProgress) {
     };
 
     const onAbort = function () {
+      // 不立刻 finish:先杀,等 'close' 收口,期间继续归集用量(见 terminationReason 注释)。
+      terminationReason = 'aborted';
       kill();
-      finish({ text: 'subagent aborted by user.', isError: true, toolUses: toolUses, tokens: totals.tokens, usage: totals });
+      armSettleFallback({ text: 'subagent aborted by user.', isError: true, toolUses: toolUses, tokens: totals.tokens, usage: totals });
     };
     if (signal && typeof signal.addEventListener === 'function') {
       if (signal.aborted) {
@@ -451,8 +472,9 @@ function runTask(binary, task, runtime, signal, onProgress) {
     }
 
     timer = setTimeout(function () {
+      terminationReason = 'timeout';
       kill();
-      finish({
+      armSettleFallback({
         text: 'subagent timed out after ' + Math.round(TASK_TIMEOUT_MS / 1000) + 's.',
         isError: true,
         toolUses: toolUses,
@@ -463,9 +485,12 @@ function runTask(binary, task, runtime, signal, onProgress) {
     if (timer && typeof timer.unref === 'function') timer.unref();
 
     const feed = createLineReader(function (line) {
-      // 终态已上报后丢弃迟到输出:kill() 到 SIGKILL 之间有约 2 秒宽限,子进程仍可能吐
-      // stdout;finish() 之后再回调 onProgress 会把已上报的 stopped/failed 重新写成
-      // running(review)。这里在解析之前就短路,连 JSON.parse 都省掉。
+      // 终态已收口后丢弃迟到输出。注意**只跳过上报、不跳过解析**:kill() 到 SIGKILL 之间
+      // 有约 2 秒宽限,子进程仍会吐 message_end,那里面是真实产生的 token/cost。原来在
+      // JSON.parse 之前就整条短路,把这段用量丢了(review)。
+      // 现在 abort / timeout 都推迟到 'close' 才 finish,所以这段窗口里 settled 仍为 false、
+      // 用量照常归集;settled 为 true 只剩"兜底定时器已强行收口"这一种情况,此时上报会把
+      // 已发出的 stopped/failed 改回 running,必须挡住。
       if (settled) return;
       let event;
       try {
@@ -508,6 +533,20 @@ function runTask(binary, task, runtime, signal, onProgress) {
       liveChildren.delete(child);
       // 进程已退出:强杀定时器必须清掉,别对一个可能被复用的 pid 再发 SIGKILL(review)。
       if (killTimer) { clearTimeout(killTimer); killTimer = null; }
+      if (terminationReason !== null) {
+        // 中止/超时的收口点:等到进程真的关闭,此刻 totals 已含宽限期内到达的全部用量。
+        if (settleFallbackTimer) { clearTimeout(settleFallbackTimer); settleFallbackTimer = null; }
+        finish({
+          text: terminationReason === 'timeout'
+            ? 'subagent timed out after ' + Math.round(TASK_TIMEOUT_MS / 1000) + 's.'
+            : 'subagent aborted by user.',
+          isError: true,
+          toolUses: toolUses,
+          tokens: totals.tokens,
+          usage: totals,
+        });
+        return;
+      }
       const ok = code === 0;
       const body = finalText.trim().length > 0
         ? clampText(finalText, MAX_OUTPUT_CHARS)
