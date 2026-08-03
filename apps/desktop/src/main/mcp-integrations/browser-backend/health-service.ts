@@ -119,27 +119,17 @@ export class BrowserBackendHealthService {
       return result;
     }
     const health = await this.probe(true);
-    const ok = health.status === 'ready' && health.active === 'rsb-webview';
-    return {
-      ok,
-      health:
-        ok || (health.status === 'error' && health.active === 'rsb-webview')
-          ? health
-          : this.failure('recovery-failed'),
-    };
+    return this.recoveryResult(health);
   }
 
   private async performRecovery(ensureHost: boolean): Promise<BrowserBackendRecoveryResult> {
     try {
       const restarted = await this.controller.restartEmbedded();
       if (!restarted) {
-        return {
-          ok: false,
-          health: this.failure('recovery-failed'),
-        };
+        return { ok: false, health: await this.probe(ensureHost) };
       }
       if (this.controller.getCurrentBackendKind() !== 'rsb-webview') {
-        return { ok: false, health: this.failure('recovery-failed') };
+        return { ok: false, health: await this.probe(ensureHost) };
       }
       const started = await this.controller.call({ action: 'start' });
       if (!started.ok) {
@@ -153,20 +143,24 @@ export class BrowserBackendHealthService {
         };
       }
       const health = await this.probe(ensureHost);
-      const ok = health.status === 'ready' && health.active === 'rsb-webview';
-      return {
-        ok,
-        health:
-          ok || (health.status === 'error' && health.active === 'rsb-webview')
-            ? health
-            : this.failure('recovery-failed'),
-      };
+      return this.recoveryResult(health);
     } catch (err) {
       const message = errorText(err);
       this.logger.warn('embedded browser backend recovery failed', { err });
       const fallback = classifyFailure(message, 'recovery-failed');
       return { ok: false, health: this.failure(fallback) };
     }
+  }
+
+  private recoveryResult(health: BrowserBackendHealth): BrowserBackendRecoveryResult {
+    return {
+      ok: health.active === 'rsb-webview' && health.status === 'ready',
+      // A concurrent Settings action may legitimately switch to the external
+      // backend while embedded recovery is between serialized transitions.
+      // Preserve that current, ready state instead of relabeling it as an
+      // embedded recovery failure.
+      health,
+    };
   }
 
   private async probe(ensureHost = false): Promise<BrowserBackendHealth> {

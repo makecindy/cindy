@@ -111,6 +111,42 @@ describe('BrowserBackendHealthService', () => {
     expect(ctl.probeActiveControl).toHaveBeenNthCalledWith(3, { ensureHost: true });
   });
 
+  it('preserves a concurrent switch to a ready external backend during strict verification', async () => {
+    const ctl = controller();
+    let finishRestart: ((value: boolean) => void) | undefined;
+    ctl.restartEmbedded.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        finishRestart = resolve;
+      }),
+    );
+    ctl.probeActiveControl
+      .mockRejectedValueOnce(new Error('host renderer not available'))
+      .mockImplementationOnce(async () => {
+        ctl.getCurrentBackendKind.mockReturnValue('external');
+      });
+    const service = new BrowserBackendHealthService(ctl, logger());
+
+    const passive = service.getHealth();
+    await vi.waitFor(() => expect(ctl.restartEmbedded).toHaveBeenCalledOnce());
+    const explicit = service.recover();
+    finishRestart?.(true);
+
+    await expect(passive).resolves.toMatchObject({
+      active: 'rsb-webview',
+      status: 'ready',
+    });
+    await expect(explicit).resolves.toEqual({
+      ok: false,
+      health: {
+        active: 'external',
+        status: 'ready',
+        canRecover: false,
+      },
+    });
+    expect(ctl.restartEmbedded).toHaveBeenCalledOnce();
+    expect(ctl.probeActiveControl).toHaveBeenCalledTimes(2);
+  });
+
   it('returns a fixed start failure reason without exposing raw runtime text', async () => {
     const ctl = controller();
     ctl.call.mockResolvedValueOnce({
@@ -173,9 +209,8 @@ describe('BrowserBackendHealthService', () => {
       ok: false,
       health: {
         active: 'external',
-        status: 'error',
+        status: 'ready',
         canRecover: false,
-        reason: 'recovery-failed',
       },
     });
     expect(ctl.call).not.toHaveBeenCalled();

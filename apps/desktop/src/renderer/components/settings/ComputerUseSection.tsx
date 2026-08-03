@@ -607,7 +607,7 @@ export function ComputerUseSection({
       setBrowserBackendHealth(result.health);
       if (result.ok) {
         toast.success(t('settings.computerUse.browserBackend.health.recovered'));
-      } else {
+      } else if (result.health.status === 'error') {
         toast.error(t('settings.computerUse.browserBackend.health.recoverFailed'));
       }
     } catch (err) {
