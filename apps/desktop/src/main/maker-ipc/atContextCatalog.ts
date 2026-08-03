@@ -1,5 +1,6 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
+import { atContextVisibleSessionIdsFromRendererUrl } from '../../shared/atContextRouteScope.js';
 import type { TabRegistry } from '../rsb-browser-bridge/registry.js';
 
 export interface AtBrowserTabCandidate {
@@ -16,17 +17,18 @@ export interface AtDesktopWindowCandidate {
 }
 
 /**
- * Browser-tab metadata is task-scoped. The renderer-provided session id is
- * only an assertion; Main's active RSB session remains the scope authority.
- * A missing or stale mismatch fails closed instead of exposing another task's
- * tabs to the pending @ request.
+ * Browser-tab metadata is task-scoped. Main reads the sender WebContents URL
+ * and derives the currently visible task from its HashRouter location; the
+ * renderer payload is only an assertion. Missing, stale or mismatched values
+ * fail closed instead of exposing another task's tabs.
  */
 export function resolveAtBrowserTabSessionId(
   requestedSessionId: string | undefined,
-  activeSessionId: string | null,
+  rendererUrl: string,
 ): string | undefined {
-  return activeSessionId && requestedSessionId === activeSessionId
-    ? activeSessionId
+  if (!requestedSessionId) return undefined;
+  return atContextVisibleSessionIdsFromRendererUrl(rendererUrl).has(requestedSessionId)
+    ? requestedSessionId
     : undefined;
 }
 

@@ -110,10 +110,7 @@ import {
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
-import {
-  getActiveRsbSessionId,
-  getRsbBrowserBridge,
-} from '../rsb-browser-bridge/index.js';
+import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
@@ -5039,7 +5036,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     try {
       const browserTabSessionId = resolveAtBrowserTabSessionId(
         request.sessionId,
-        getActiveRsbSessionId(),
+        event.sender.getURL(),
       );
       browserTabs = listAtBrowserTabs(
         getRsbBrowserBridge(),

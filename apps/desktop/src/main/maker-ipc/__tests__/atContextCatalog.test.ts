@@ -8,11 +8,28 @@ import {
 } from '../atContextCatalog.js';
 
 describe('at context catalog', () => {
-  it('only resolves browser tabs when the renderer request matches Main active scope', () => {
-    expect(resolveAtBrowserTabSessionId('session-1', 'session-1')).toBe('session-1');
-    expect(resolveAtBrowserTabSessionId('session-1', 'session-2')).toBeUndefined();
-    expect(resolveAtBrowserTabSessionId('session-1', null)).toBeUndefined();
-    expect(resolveAtBrowserTabSessionId(undefined, 'session-1')).toBeUndefined();
+  it('derives browser-tab scope from the sender WebContents route', () => {
+    const sessionUrl = 'file:///app/index.html#/cc-agent/session-1';
+    expect(resolveAtBrowserTabSessionId('session-1', sessionUrl)).toBe('session-1');
+    expect(resolveAtBrowserTabSessionId('session-2', sessionUrl)).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId(undefined, sessionUrl)).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId('session-1', 'file:///app/index.html#/settings')).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId('session-1', 'not a url')).toBeUndefined();
+  });
+
+  it('accepts the visible Orca worker but rejects non-session routes', () => {
+    const workerUrl = 'https://localhost:5173/#/cc-agent/lead-1?worker=worker-1';
+    expect(resolveAtBrowserTabSessionId('lead-1', workerUrl)).toBe('lead-1');
+    expect(resolveAtBrowserTabSessionId('worker-1', workerUrl)).toBe('worker-1');
+    expect(resolveAtBrowserTabSessionId('other', workerUrl)).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId(
+      'session-1',
+      'file:///app/index.html#/cc-agent/files/session-1',
+    )).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId(
+      'session-1',
+      'file:///app/index.html#/cc-agent/orca/session-1',
+    )).toBe('session-1');
   });
 
   it('reads only live public browser tabs from the requested task', () => {
