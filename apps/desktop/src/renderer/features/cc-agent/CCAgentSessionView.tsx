@@ -44,7 +44,10 @@ import {
 } from '@/lib/chatQuotes';
 import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
 import { isSyntheticTriggerText } from '../../../shared/interruptedTurn';
-import { visibleMarkdownTextForSearch } from '../../../shared/conversationSearch';
+import {
+  visibleMarkdownTextForSearch,
+  visiblePlanReviewTextForSearch,
+} from '../../../shared/conversationSearch';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -671,6 +674,7 @@ export function CCAgentSessionView({
       askUserReply?: string | null;
       planReviewPlan?: string;
       planReviewFeedback?: string;
+      planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
       quotesEncoded?: boolean;
       hookSource?: { userText?: string };
     }): string {
@@ -686,9 +690,11 @@ export function CCAgentSessionView({
         return [message.content, message.askUserReply ?? ''].filter(Boolean).join('\n');
       }
       if (message.role === 'plan_review') {
-        return [message.planReviewPlan, message.planReviewFeedback]
-          .filter((value): value is string => Boolean(value))
-          .join('\n');
+        return visiblePlanReviewTextForSearch({
+          status: message.planReviewStatus,
+          plan: message.planReviewPlan,
+          feedback: message.planReviewFeedback,
+        });
       }
 
       let visibleContent = message.content;
@@ -742,9 +748,11 @@ export function CCAgentSessionView({
         return true;
       })
       .flatMap((message) => {
-        const visibleContent = searchVisibleMessageText(message);
-        if (isSyntheticTriggerText(visibleContent)) return [];
-        const content = visibleMarkdownTextForSearch(visibleContent)
+        const sourceContent = searchVisibleMessageText(message);
+        if (isSyntheticTriggerText(sourceContent)) return [];
+        const content = (message.role === 'plan_review'
+          ? sourceContent
+          : visibleMarkdownTextForSearch(sourceContent))
           .replace(/\s+/g, ' ')
           .trim()
           .toLocaleLowerCase();

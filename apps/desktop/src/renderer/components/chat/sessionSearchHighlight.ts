@@ -57,8 +57,7 @@ export function findSessionSearchRanges(root: Element, query: string): Range[] {
     if (
       !parent ||
       !value ||
-      parent.closest(SKIPPED_TEXT_ANCESTOR) ||
-      parent.closest('[data-session-search-collapsed-body]')
+      parent.closest(SKIPPED_TEXT_ANCESTOR)
     ) continue;
     const block = blockAncestor(textNode);
     if (block && previousBlock && block !== previousBlock && text.length > 0 && !/\s$/.test(text)) {

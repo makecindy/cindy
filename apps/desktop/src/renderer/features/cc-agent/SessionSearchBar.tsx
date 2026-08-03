@@ -38,6 +38,7 @@ export const SessionSearchBar = forwardRef<HTMLInputElement, SessionSearchBarPro
           type="text"
           value={query}
           placeholder={t('findInPage.placeholder')}
+          aria-label={t('findInPage.placeholder')}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {

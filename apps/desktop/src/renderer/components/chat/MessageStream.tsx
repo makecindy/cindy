@@ -3891,6 +3891,9 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          searchFocused={
+                            Boolean(searchQuery) && msg.clientId === focusMessageClientId
+                          }
                         />
                       </div>
                     );
@@ -3983,6 +3986,7 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  searchFocused,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -4028,6 +4032,7 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  searchFocused?: boolean;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -4077,6 +4082,7 @@ const MessageItem = memo(function MessageItem({
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}
+          searchFocused={searchFocused}
         />
       );
     case 'assistant':
@@ -4143,6 +4149,7 @@ const MessageItem = memo(function MessageItem({
           currentSessionId={sessionId}
           currentSessionTitle={sessionTitle}
           localFileRefs={localFileRefs}
+          searchFocused={searchFocused}
         />
       );
     case 'error':

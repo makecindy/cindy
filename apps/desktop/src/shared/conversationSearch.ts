@@ -15,6 +15,13 @@ export type ConversationSearchMessageRole =
   | 'plan_review'
   | 'thinking';
 
+export type PlanReviewSearchStatus =
+  | 'pending'
+  | 'approved'
+  | 'revised'
+  | 'expired'
+  | 'cancelled';
+
 export interface ConversationSearchRequest {
   query: string;
   limit?: number;
@@ -117,6 +124,20 @@ export interface ConversationSearchResponse {
   vectorUsed: boolean;
   vectorSkipReason: string | null;
   poolCapped: boolean;
+}
+
+/** Project only the plan-review fields that its current bubble state renders. */
+export function visiblePlanReviewTextForSearch(input: {
+  status?: PlanReviewSearchStatus | string;
+  plan?: string | null;
+  feedback?: string | null;
+}): string {
+  const status = input.status ?? 'pending';
+  if (status === 'revised') return input.feedback ?? '';
+  if (status === 'approved' || status === 'expired' || status === 'cancelled') {
+    return visibleMarkdownTextForSearch(input.plan ?? '');
+  }
+  return '';
 }
 
 /** Remove Markdown/HTML source details that are not rendered as visible message text. */

@@ -51,6 +51,8 @@ interface PlanReviewBubbleProps {
   currentSessionId?: string;
   currentSessionTitle?: string | null;
   localFileRefs?: readonly KnownLocalFileRef[];
+  /** Temporarily reveal a collapsed plan while its message owns the active search hit. */
+  searchFocused?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,7 @@ export function PlanReviewBubble({
   currentSessionId,
   currentSessionTitle,
   localFileRefs,
+  searchFocused,
 }: PlanReviewBubbleProps) {
   const { t } = useTranslation();
   const status = message.planReviewStatus ?? 'pending';
@@ -158,6 +161,7 @@ export function PlanReviewBubble({
           localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={APPROVED_COLLAPSED_MAX_HEIGHT}
+          searchFocused={searchFocused}
         />
       )}
 
@@ -188,6 +192,7 @@ export function PlanReviewBubble({
           localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={INACTIVE_COLLAPSED_MAX_HEIGHT}
+          searchFocused={searchFocused}
         />
       )}
     </div>
@@ -216,6 +221,7 @@ function PlanMarkdownBody({
   localFileRefs,
   plan,
   collapsedMaxHeight,
+  searchFocused,
 }: {
   workingDir: string;
   currentSessionId?: string;
@@ -223,6 +229,7 @@ function PlanMarkdownBody({
   localFileRefs?: readonly KnownLocalFileRef[];
   plan: string;
   collapsedMaxHeight: number;
+  searchFocused?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -246,7 +253,7 @@ function PlanMarkdownBody({
     return () => observer.disconnect();
   }, [collapsedMaxHeight, plan]);
 
-  const collapsed = !expanded && overflowing;
+  const collapsed = !expanded && overflowing && !searchFocused;
 
   return (
     <div className="flex flex-col gap-[8px]">
@@ -277,7 +284,6 @@ function PlanMarkdownBody({
       >
         <div
           data-session-search-body=""
-          data-session-search-collapsed-body={collapsed ? '' : undefined}
           ref={bodyRef}
           className={cn(
             'min-w-0 text-14 leading-[1.6]',

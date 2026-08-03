@@ -340,12 +340,12 @@ describe('conversationSearch.pure', () => {
     });
   });
 
-  it('normalizes whitespace for complete phrase matching', () => {
+  it('normalizes whitespace in both the visible text and query', () => {
     expect(
       normalizeConversationContentPreview(
         'assistant',
         'error\n\t timeout',
-        'error timeout',
+        'error   \n timeout',
       ),
     ).toMatchObject({
       keywordMatchedVisibleText: true,
@@ -353,14 +353,29 @@ describe('conversationSearch.pure', () => {
     });
   });
 
-  it('extracts visible AskUser and plan review text for conversation search', () => {
+  it('extracts only rendered AskUser and plan review text for conversation search', () => {
     expect(visibleMessageTextForConversationSearch('ask_user', {
       questions: [{ question: 'Which branch should I use?' }],
       answers: { q0: 'Use main' },
     })).toBe('Which branch should I use? Use main');
-    expect(visibleMessageTextForConversationSearch('plan_review', {
+
+    const planReview = {
       plan: 'Update the search index',
       feedback: 'Keep the UI stable',
-    })).toBe('Update the search index Keep the UI stable');
+    };
+    expect(visibleMessageTextForConversationSearch('plan_review', {
+      ...planReview,
+      status: 'pending',
+    })).toBe('');
+    expect(visibleMessageTextForConversationSearch('plan_review', {
+      ...planReview,
+      status: 'revised',
+    })).toBe('Keep the UI stable');
+    for (const status of ['approved', 'expired', 'cancelled']) {
+      expect(visibleMessageTextForConversationSearch('plan_review', {
+        ...planReview,
+        status,
+      })).toBe('Update the search index');
+    }
   });
 });

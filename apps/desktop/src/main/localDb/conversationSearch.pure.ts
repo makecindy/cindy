@@ -1,4 +1,7 @@
-import { visibleMarkdownTextForSearch } from '../../shared/conversationSearch.js';
+import {
+  visibleMarkdownTextForSearch,
+  visiblePlanReviewTextForSearch,
+} from '../../shared/conversationSearch.js';
 import { stripGoalVerdictBlock } from '../../shared/goalVerdict.js';
 import type {
   ConversationSearchContentHit,
@@ -335,9 +338,13 @@ function askUserVisibleText(content: unknown): string {
 }
 
 function planReviewVisibleText(content: unknown): string {
-  if (!content || typeof content !== 'object') return typeof content === 'string' ? content : '';
+  if (!content || typeof content !== 'object') return '';
   const obj = content as Record<string, unknown>;
-  return [obj.plan, obj.feedback].filter((value): value is string => typeof value === 'string').join('\n');
+  return visiblePlanReviewTextForSearch({
+    status: typeof obj.status === 'string' ? obj.status : undefined,
+    plan: typeof obj.plan === 'string' ? obj.plan : undefined,
+    feedback: typeof obj.feedback === 'string' ? obj.feedback : undefined,
+  });
 }
 
 function textBlocksText(content: unknown): string {
@@ -364,7 +371,7 @@ function preferredObjectText(obj: Record<string, unknown>): string {
 }
 
 function keywordRanges(text: string, query: string): Array<{ start: number; end: number }> {
-  const phrase = query.trim();
+  const phrase = query.replace(/\s+/g, ' ').trim();
   if (!phrase || !text) return [];
 
   const lowerText = text.toLocaleLowerCase();

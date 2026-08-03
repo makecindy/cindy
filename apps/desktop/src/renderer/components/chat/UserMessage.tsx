@@ -172,6 +172,8 @@ interface UserMessageProps {
     userText?: string;
     threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
   };
+  /** Temporarily reveal a collapsed body while this message owns the active search hit. */
+  searchFocused?: boolean;
   /** /goal 目标设定/更新标记:在气泡上方渲一个「目标 / 目标已更新」徽标。 */
   goalBadge?: { updated: boolean };
   /** 订阅槽①:本条消息被意识钩子拦下(未发出)。存在时气泡下方渲一条 error
@@ -701,6 +703,7 @@ export function UserMessage({
   isLastUserMessage,
   automationOrigin,
   hookSource,
+  searchFocused,
   goalBadge,
   blockedByGhost,
 }: UserMessageProps) {
@@ -875,7 +878,8 @@ export function UserMessage({
     mayExceedVisualLineThreshold(collapseMeasureBody, collapseThreshold);
   const { mirrorRef: collapseMirrorRef, shouldCollapse: shouldCollapseLongMessage } =
     useUserMessageAutoCollapse(collapseMeasureBody, collapseMeasureEnabled, collapseThreshold);
-  const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
+  const longMessageCollapsed =
+    shouldCollapseLongMessage && !longMessageExpanded && !searchFocused;
 
   // message-actions hover state — raw hover boolean, no debounce here.
   // The bar component owns its own fade lifecycle (250ms trailing debounce
