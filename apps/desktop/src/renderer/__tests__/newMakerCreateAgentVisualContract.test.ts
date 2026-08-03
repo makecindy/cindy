@@ -301,7 +301,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
     expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');
     expect(chatInputSource).toContain(
-      'onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}',
+      'localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined',
     );
     expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(

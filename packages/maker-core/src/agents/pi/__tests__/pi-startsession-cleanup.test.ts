@@ -24,6 +24,7 @@ const knobs = vi.hoisted(() => ({
   closeCount: 0,
   onExit: null as null | ((info: { code: number | null; signal: string | null }) => void),
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
+  spawnedArgs: [] as string[][],
 }));
 
 vi.mock('../rpc-client.js', () => ({
@@ -32,10 +33,11 @@ vi.mock('../rpc-client.js', () => ({
     constructor(opts: unknown) {
       // 捕获 onExit 以便单测模拟进程异常退出(crash);捕获 env 以断言每会话隔离 configHome。
       const o = opts as
-        | { onExit?: typeof knobs.onExit; env?: Record<string, string | undefined> }
+        | { onExit?: typeof knobs.onExit; env?: Record<string, string | undefined>; args?: string[] }
         | undefined;
       knobs.onExit = o?.onExit ?? null;
       knobs.spawnedEnvs.push({ ...(o?.env ?? {}) });
+      knobs.spawnedArgs.push([...(o?.args ?? [])]);
       if (knobs.ctorThrows) throw new Error('spawn failed (mock)');
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
@@ -77,6 +79,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.closeCount = 0;
     knobs.onExit = null;
     knobs.spawnedEnvs = [];
+    knobs.spawnedArgs = [];
     disposed = 0;
     proxyDisposed = 0;
     preparedMcpContext = undefined;
@@ -108,11 +111,24 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       },
       resolvePiAgentHome: () => agentHome,
       registerPiProxySession: () => () => { proxyDisposed++; },
-      // 注册身份并回传 disposeSessionCtx 探针(servers 空,无需真桥)。
+      // 注册身份并回传 disposeSessionCtx 探针；外部 MCP 描述只放 env 引用，真值
+      // 单独放 mcpEnv，供本文件断言 spawn / bash 隔离契约。
       preparePiExtraSpawnConfig: async (_providers, context) => {
         preparedMcpContext = context;
         return {
-          mcpBridge: { token: 'itest', servers: [] },
+          mcpBridge: {
+            token: '',
+            servers: [{
+              name: 'custom_remote',
+              url: 'https://mcp.example.test/',
+              remote: {
+                headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
+                startupTimeoutMs: 10_000,
+                requestTimeoutMs: 600_000,
+              },
+            }],
+          },
+          mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'Bearer spawn-secret-canary' },
           disposeSessionCtx: () => { disposed++; },
         };
       },
@@ -157,6 +173,29 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
     expect(disposed).toBe(1); // close() 才注销
     expect(proxyDisposed).toBe(1);
+  });
+
+  it('injects remote MCP secrets only through env and marks them for bash-child stripping', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    const env = knobs.spawnedEnvs[0]!;
+    const secret = 'Bearer spawn-secret-canary';
+    expect(env.CINDY_PI_REMOTE_MCP_SECRET_0).toBe(secret);
+
+    const descriptorRaw = env.CINDY_PI_MCP_BRIDGE!;
+    expect(descriptorRaw).not.toContain(secret);
+    expect(JSON.parse(descriptorRaw)).toMatchObject({
+      servers: [{
+        name: 'custom_remote',
+        remote: { headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' } },
+      }],
+    });
+    expect(JSON.parse(env.CINDY_PI_SECRET_ENV_NAMES!)).toEqual(expect.arrayContaining([
+      'CINDY_PI_REMOTE_MCP_SECRET_0',
+      'CINDY_PI_MCP_BRIDGE',
+    ]));
+    expect(JSON.stringify(knobs.spawnedArgs[0])).not.toContain(secret);
+    await handle.close();
   });
 
   it('disposes proxy token + MCP ctx when the pi process exits unexpectedly (crash), idempotent with close()', async () => {

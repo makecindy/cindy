@@ -15,6 +15,7 @@ export * from './deviceLinkContract.js';
 export * from './errorRedaction.js';
 export * from './expandedBlockMemory.js';
 export * from './interaction.js';
+export * from './internalCitation.js';
 export * from './mathMarkdown.js';
 export * from './mermaidAutofix.js';
 export * from './messageRender.js';

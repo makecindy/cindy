@@ -28,6 +28,7 @@
     "./fixtures": "./src/fixtures.ts",
     "./history-gap": "./src/historyGap.ts",
     "./interaction": "./src/interaction.ts",
+    "./internal-citation": "./src/internalCitation.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
     "./mention-ref": "./src/mentionRef.ts",
     "./mermaid-autofix": "./src/mermaidAutofix.ts",

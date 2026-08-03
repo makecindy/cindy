@@ -26,6 +26,10 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  stableInternalWebCitationBoundary,
+  stripInternalWebCitations,
+} from '@cindy/maker-shared/internal-citation';
 
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
@@ -744,20 +748,24 @@ function findUnfinishedCitationOpen(text: string): number {
  * 规范形(见 localDb worker 的 canonicalizeCodexCitations)。
  */
 export function finalizeCodexCitationText(text: string): string {
-  const openAt = findUnfinishedCitationOpen(text);
-  return normalizeCodexFileCitations(openAt === -1 ? text : text.slice(0, openAt));
+  const fileOpenAt = findUnfinishedCitationOpen(text);
+  const fileStableEnd = fileOpenAt === -1 ? text.length : fileOpenAt;
+  const stableEnd = Math.min(fileStableEnd, stableInternalWebCitationBoundary(text));
+  return stripInternalWebCitations(normalizeCodexFileCitations(text.slice(0, stableEnd)));
 }
 
 export function stableCitationBoundary(text: string): number {
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return open;
+    return Math.min(open, stableInternalWebCitationBoundary(text));
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
-    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) return text.length - k;
+    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
+      return Math.min(text.length - k, stableInternalWebCitationBoundary(text));
+    }
   }
-  return text.length;
+  return stableInternalWebCitationBoundary(text);
 }
 
 function handleAgentMessage(
@@ -789,7 +797,9 @@ function handleAgentMessage(
     return;
   }
 
-  const emitted = normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText)));
+  const emitted = stripInternalWebCitations(
+    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
+  );
   const delta = emitted.slice(prevLen);
   ctx.rt.itemTextLen.set(item.id, emitted.length);
   if (delta.length === 0) return;

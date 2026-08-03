@@ -11,7 +11,7 @@
  * mock 面与 dispatchSendSafety.test.ts 一致:只 mock electron + settings。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: {
@@ -198,14 +198,25 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('默认 channel = 60s;收紧表 listing = 24s;放宽表 channel ×2 封顶 120s', () => {
-    // listing tier 的等待预算被 INVOKE_TIMEOUT_OVERRIDES_MS 收到 12s,TTL 随之 ×2 = 24s。
-    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(24_000);
+  it('锁「预算 ×2、封顶 120s」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
+    // 联动语义从共享表推导,不再硬编码结果值——此断言曾在 #1418/#1477 并行开发
+    // 时写死 60s(当时表里还没有 listing 条目),两 PR 各自 CI 都绿、先后合入后
+    // main 变红。表值本身(12s/60s)在下面单独锁定:它们是产品决策,变更时红在
+    // 这里提醒显式确认;而「×2 封顶」的联动对表变更免疫。
+    const listingBudget = INVOKE_TIMEOUT_OVERRIDES_MS['local-db:sessions:list'];
+    const worktreeBudget = INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create'];
+    expect(listingBudget).toBe(12_000);
+    expect(worktreeBudget).toBe(60_000);
+    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(
+      Math.min(listingBudget * 2, 120_000),
+    );
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
-    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(120_000);
+    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(
+      Math.min(worktreeBudget * 2, 120_000),
+    );
   });
 
-  it('离线慢扫描按逐条 TTL 出清:默认 channel 61s 被丢,长任务 channel 保留', () => {
+  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到 120s', () => {
     const sendInvokeResult = vi.fn(() => {
       throw notConnected();
     });

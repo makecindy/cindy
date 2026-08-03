@@ -56,6 +56,8 @@ import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { useGhostUnread, useGhostUnreadSummary } from '@/cindy-brain/ghostUnreadStore';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
@@ -586,6 +588,10 @@ export function GhostPluginPage() {
   useEffect(() => {
     if (openPanelId && !openPanelGhost) setOpenPanelId(null);
   }, [openPanelGhost, openPanelId]);
+  // 「打开面板 = 已读」不在这里清:三个 setOpenPanelId 调用点(卡片主动作 /
+  // 详情页「使用」/ ?panel= 深链)只是"想开",而面板还有停靠态与独立窗口两种
+  // 宿主。清零统一收在面板体 GhostChipPanelBody 挂载处——那才是"内容确实在
+  // 用户眼前"的唯一判据,三个宿主自然对称。
   /**
    * 账号 / 本地云模式切换必须关掉在开的面板。
    *
@@ -1759,6 +1765,10 @@ export function GhostPluginCard({
 }) {
   const { t } = useTranslation();
   const enabled = effectiveEnabled ?? item.enabled;
+  // 未读(badge 槽):单条卡片走**呼吸**点(AttentionDot 形态规范——聚合入口
+  // 静态、单条呼吸)。有摘要时顶替静态描述:用户扫一眼就知道新内容是什么。
+  const unread = useGhostUnread(item.id);
+  const unreadSummary = useGhostUnreadSummary(item.id);
   const primary = ghostPrimaryAction(item);
   const cardAction = enabled && primary !== 'manage' ? onPrimary : onManage;
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -1821,8 +1831,13 @@ export function GhostPluginCard({
         onIconLoadError={onIconLoadError}
       />
       <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
-        <span className="truncate text-15 font-medium text-[var(--text-primary)]">
-          {item.name}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-15 font-medium text-[var(--text-primary)]">
+            {item.name}
+          </span>
+          {unread ? (
+            <AttentionDot breathing size={6} className="mt-px" />
+          ) : null}
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
@@ -1835,8 +1850,16 @@ export function GhostPluginCard({
           ) : null}
           {!enabled ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
         </span>
-        <span className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">
-          {item.description || item.id}
+        {/* 未读摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻
+            的信息。摘要文字提到 primary 档以区别于常态描述(不另加色,颜色语义
+            留给那颗点)。 */}
+        <span
+          className={cn(
+            'mt-1.5 line-clamp-2 text-13 leading-5',
+            unreadSummary ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]',
+          )}
+        >
+          {unreadSummary || item.description || item.id}
         </span>
       </span>
       {/* 右列控制区:自行消费点击,不冒泡到整卡主动作(纯冒泡拦截层,无独立语义)。 */}

@@ -97,10 +97,14 @@ import {
   type ModelMemoryAccessors,
 } from './ModelSelector';
 import {
-  createEffortChangeCoordinator,
   enqueueEffortChange,
+  getEffortChangeCoordinator,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
+import {
+  captureComposerSendSnapshot,
+  isComposerSendSnapshotCurrent,
+} from './composerSendSnapshot';
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
@@ -1090,6 +1094,8 @@ export function ChatInput({
     discardFiles,
     clearFiles,
   } = attachmentState;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   // browser-comment-chip:内置浏览器页面评论(结构化,不进草稿文本),渲染为
   // 「N 条注释」胶囊,发送时序列化 + 截图并入 filesToSend。
   const [browserComments, setBrowserComments] = useState<BrowserCommentDraftItem[]>([]);
@@ -1180,7 +1186,6 @@ export function ChatInput({
     () => !!sessionId && hasPendingAgentSendDispatch(sessionId),
     () => false,
   );
-
   useEffect(() => {
     setPendingRemoteSwitch(null);
     setRemoteSwitchInFlight(false);
@@ -1509,6 +1514,13 @@ export function ChatInput({
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
   const setFolderOpen = onFolderPickerOpenChange ?? setInternalFolderOpen;
+  // `dispatchSend` 在取发送快照后可能等待 effort runtime 同步。此窗口内继续编辑会让
+  // 成功发送后的清理误删尚未发送的文字或附件，因此 composer 必须作为一个整体短暂只读。
+  // 正常路径没有等待；只有设置同步中的会话最多锁 5 秒（见 dispatchSend 的 preflight）。
+  const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const composerEditorLocked = disabled || sendDispatchInFlight;
+  const composerMutationLockedRef = useRef(composerEditorLocked);
+  composerMutationLockedRef.current = composerEditorLocked;
 
   useEffect(() => {
     setWorkingDir(initialWorkingDir ?? null);
@@ -1555,7 +1567,7 @@ export function ChatInput({
     // autofocus would otherwise overwrite routed Plugin/Create end-focus.
     // doc 模式下必须关掉,理由见上方 disableAutofocus prop 注释。
     autofocus: !disableAutofocus && !disabled ? 'end' : false,
-    editable: !disabled,
+    editable: !composerEditorLocked,
     extensions: [
       Document,
       Paragraph,
@@ -1652,6 +1664,7 @@ export function ChatInput({
         return false;
       },
       handlePaste(view, event) {
+        if (composerMutationLockedRef.current) return true;
         // Intercept clipboard file/folder/image. Three sources to handle,
         // matching the onDrop logic below:
         //   1. Folder copied from OS file manager  → addFolderPath (@dir chip)
@@ -2222,10 +2235,6 @@ export function ChatInput({
     [editor],
   );
 
-  useEffect(() => {
-    editor?.setEditable(!disabled);
-  }, [disabled, editor]);
-
   // Hold a live ref to the editor for handlers that mount before Tiptap
   // exposes it through React (e.g. the blur handler above).
   const editorRef = useRef<Editor | null>(null);
@@ -2382,6 +2391,11 @@ export function ChatInput({
   );
 
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
+  const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
+  composerMutationLockedRef.current = composerMutationLocked;
+  useEffect(() => {
+    editor?.setEditable(!composerMutationLocked);
+  }, [composerMutationLocked, editor]);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -2431,7 +2445,7 @@ export function ChatInput({
   const voiceInputCanStopAndSendRef = useRef(false);
   const composerCanSubmitRef = useRef(false);
   const handleVoiceInputStartRef = useRef(handleVoiceInputStart);
-  const disabledRef = useRef(disabled);
+  const disabledRef = useRef(composerMutationLocked);
   const disableAutofocusRef = useRef(disableAutofocus);
   const focusOnStorageKeyChangeRef = useRef(focusOnStorageKeyChange);
   const latestStorageKeyRef = useRef<string | undefined>(storageKey);
@@ -2459,11 +2473,11 @@ export function ChatInput({
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
-    disabledRef.current = disabled;
+    disabledRef.current = composerMutationLocked;
     disableAutofocusRef.current = disableAutofocus;
     focusOnStorageKeyChangeRef.current = focusOnStorageKeyChange;
   }, [
-    disabled,
+    composerMutationLocked,
     disableAutofocus,
     focusOnStorageKeyChange,
     handleVoiceInputStart,
@@ -2751,19 +2765,6 @@ export function ChatInput({
         .finally(releaseInFlight);
     });
   }, []);
-
-  useEffect(() => {
-    if (!editor) return;
-    const nextEditable = !voiceInput.isBusy;
-    if (editor.isEditable !== nextEditable) {
-      editor.setEditable(nextEditable, false);
-    }
-    return () => {
-      if (!editor.isDestroyed && !editor.isEditable) {
-        editor.setEditable(true, false);
-      }
-    };
-  }, [editor, voiceInput.isBusy]);
 
   // While dictation holds the editor read-only the native caret disappears;
   // the decoration renders a mic-shaped caret at the insertion point instead
@@ -3553,8 +3554,6 @@ export function ChatInput({
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
-  const [localSendDispatchInFlight, setSendDispatchInFlight] = useState(false);
-  const sendDispatchInFlight = localSendDispatchInFlight || agentSendDispatchInFlight;
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -3573,7 +3572,6 @@ export function ChatInput({
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
       dispatchSendInFlightRef.current = true;
-      setSendDispatchInFlight(true);
       try {
         await resolveSessionMessageReferencesForSend(editor);
         // 引用 chip 水合会跨 device-link await；等待期间若旧客户端 / 其他入口登记了切换，
@@ -3679,6 +3677,11 @@ export function ChatInput({
           ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
           : null;
         const textToSend = expandGhostCommand(text, eligibleGhosts);
+        const sendSnapshot = captureComposerSendSnapshot(
+          editor.getJSON(),
+          attachmentsRef.current,
+          browserCommentsRef.current,
+        );
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked) return;
@@ -3690,14 +3693,48 @@ export function ChatInput({
             );
           });
         };
-        dispatchSendInFlightRef.current = true;
-        setSendDispatchInFlight(true);
         let result: boolean | void;
+        let effortForSend = activeEffort;
         try {
+          if (sessionId) {
+            const coordinator = effortChangeCoordinatorRef.current;
+            let runtimeSettled = false;
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            setSendDispatchInFlight(true);
+            try {
+              await Promise.race([
+                coordinator.awaitRuntimeSettled(sessionId).then(() => {
+                  runtimeSettled = true;
+                }),
+                new Promise<void>((resolve) => {
+                  timeoutId = setTimeout(resolve, 5000);
+                }),
+              ]);
+            } finally {
+              if (timeoutId !== undefined) clearTimeout(timeoutId);
+              setSendDispatchInFlight(false);
+            }
+
+            // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
+            // 会永久阻断后续发送。当前这次发送直接失败；下一次会重新等待真实 settle 结果。
+            if (!runtimeSettled) {
+              toast.error(t('newChat.chatInput.effortRuntimeDirty'));
+              return;
+            }
+            // 路由切换后复用的编辑器不能把 A 会话的内容送进 B，也不能清掉 B 的草稿。
+            if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return;
+            if (coordinator.isRuntimeDirty(sessionId)) {
+              toast.error(t('newChat.chatInput.effortRuntimeDirty'));
+              return;
+            }
+            // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
+            // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
+            effortForSend = coordinator.getCommittedEffort(sessionId) ?? activeEffort;
+          }
           result = await onSend(
             textToSend,
             activeModel,
-            activeEffort,
+            effortForSend,
             activePermissionMode,
             filesToSend,
             mentionsToSend,
@@ -3714,12 +3751,22 @@ export function ChatInput({
         } catch (error) {
           log.warn('send rejected:', error instanceof Error ? error.message : String(error));
           return;
-        } finally {
-          dispatchSendInFlightRef.current = false;
-          setSendDispatchInFlight(false);
         }
         if (result === false) return;
         markRecentPluginUsage();
+        // onSend may wait on auth, commands, a remote device, or attachment work.
+        // Only clear the exact accepted snapshot; if the user changed anything
+        // after dispatch, preserve the whole current draft so no unsent work is lost.
+        if (
+          !isComposerSendSnapshotCurrent(
+            sendSnapshot,
+            editor.getJSON(),
+            attachmentsRef.current,
+            browserCommentsRef.current,
+          )
+        ) {
+          return;
+        }
         // Suppress onUpdate's draft-save during the post-send clearContent so
         // we don't write a transient empty-doc entry that we're about to drop.
         isRestoringRef.current = true;
@@ -3741,7 +3788,6 @@ export function ChatInput({
         }
       } finally {
         dispatchSendInFlightRef.current = false;
-        setSendDispatchInFlight(false);
         finishAgentSendDispatch();
       }
     },
@@ -3768,6 +3814,7 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
+      sessionId,
     ],
   );
   useEffect(() => {
@@ -3835,7 +3882,7 @@ export function ChatInput({
   // 跨实例 / 跨重启的持久化由调用方通过 rememberedEffortByModel + onRememberedEffortChange
   // 注入 (NewMakerDraftRoute 走 newMakerDraft store)。
   const effortByModelRef = useRef<Map<string, Effort>>(new Map());
-  const effortChangeCoordinatorRef = useRef(createEffortChangeCoordinator());
+  const effortChangeCoordinatorRef = useRef(getEffortChangeCoordinator());
   const localRuntimeSwitchSeqBySessionRef = useRef(new Map<string, number>());
 
   useLayoutEffect(() => {
@@ -5222,7 +5269,7 @@ export function ChatInput({
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (
         <div className="-mb-2 w-full">
-          <PlanModeIndicator onExit={() => void onPlanModeChange?.(false)} disabled={disabled} />
+          <PlanModeIndicator onExit={() => void onPlanModeChange?.(false)} disabled={composerMutationLocked} />
         </div>
       )}
       {/* Voice-input error + attachment rejections (oversize / blocked /
@@ -5392,6 +5439,7 @@ export function ChatInput({
               e.stopPropagation();
               dragCounterRef.current = 0;
               setIsDragOver(false);
+              if (composerMutationLocked) return;
               onComposerDropHandled?.();
               // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),
               // 这里只清理拖拽 UI 状态,不当附件消费。
@@ -5558,8 +5606,8 @@ export function ChatInput({
             {hasAttachments && (
               <ThumbnailStrip
                 attachments={attachments}
-                onRemove={removeFile}
-                onUpdate={updateFile}
+                onRemove={composerMutationLocked ? () => undefined : removeFile}
+                onUpdate={composerMutationLocked ? () => undefined : updateFile}
               />
             )}
 
@@ -5575,7 +5623,7 @@ export function ChatInput({
                 className={cn(
                   'w-[calc(100%+11px)] -mr-[11px]',
                   // Disabled gets the same visual cue as the old textarea
-                  disabled && 'cursor-not-allowed opacity-60',
+                  composerMutationLocked && 'cursor-not-allowed opacity-60',
                   voiceInput.isBusy && 'cursor-default',
                 )}
                 data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
@@ -5641,7 +5689,9 @@ export function ChatInput({
                 <ExtraDirsButton
                   extraDirs={extraDirs ?? []}
                   workingDir={workingDir}
-                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
+                  onAddFiles={
+                    localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined
+                  }
                   planMode={planModeEntry}
                   collaboration={collaboration}
                   plugins={pluginsForMenu}
@@ -5664,7 +5714,7 @@ export function ChatInput({
                         }
                       : undefined
                   }
-                  disabled={disabled}
+                  disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
@@ -5673,7 +5723,7 @@ export function ChatInput({
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
                   deviceId={deviceLinkDeviceId}
-                  disabled={disabled}
+                  disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -5780,7 +5830,7 @@ export function ChatInput({
                   )}
                   <VoiceInputButton
                     state={voiceInput.state}
-                    disabled={!!disabled || !editor}
+                    disabled={composerMutationLocked || !editor}
                     shortcutLabel={voiceInputShortcutLabel}
                     onStart={handleVoiceInputStart}
                     onStop={handleVoiceInputPlainStop}

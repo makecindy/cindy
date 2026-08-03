@@ -449,6 +449,10 @@ const fanOutGhostAssistantPending = createIpcFanOut('ghosts:assistant-message-pe
 const fanOutGhostHookFused = createIpcFanOut('ghosts:hook-fused');
 // 意识系统提示(notify 槽:宿主 Toast 渲染,带意识身份头)。
 const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
+// 意识未读角标(badge 槽:插件入口与插件卡上的绿点,持久状态非一次性 toast)。
+const fanOutGhostBadge = createIpcFanOut('ghosts:badge');
+// 未读全量快照(换账号后整表替换;逐条 badge 只表达增量)。
+const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 // 意识确认弹窗(confirm 槽:renderer 用主机同款 ConfirmDialog 弹,答案回 main)。
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
@@ -872,6 +876,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     markUsed: (id: string): Promise<{ ids: string[] }> =>
       ipcRenderer.invoke('ghosts:mark-used', id),
+    /**
+     * 未读角标快照(badge 槽)。同步读:绿点要与插件入口同帧出现,
+     * 先渲染成"无未读"再补一颗点是可见跳变。main 不可用 / 旧版无 channel
+     * 时按"全无未读"降级(未读是提醒不是内容,缺了不影响可用)。
+     */
+    unreadSync: (): { entries: { ghostId: string; summary?: string; at: number }[] } => {
+      try {
+        const result = ipcRenderer.sendSync('ghosts:unread') as { entries?: unknown } | null;
+        if (!Array.isArray(result?.entries)) return { entries: [] };
+        const entries: { ghostId: string; summary?: string; at: number }[] = [];
+        for (const raw of result.entries) {
+          if (typeof raw !== 'object' || raw === null) continue;
+          const { ghostId, summary, at } = raw as Record<string, unknown>;
+          if (typeof ghostId !== 'string' || typeof at !== 'number') continue;
+          entries.push({ ghostId, ...(typeof summary === 'string' ? { summary } : {}), at });
+        }
+        return { entries };
+      } catch {
+        return { entries: [] };
+      }
+    },
+    /**
+     * 用户侧熄灭未读(打开面板 = 明确已读)。
+     * `seenAt` = renderer **当时实际看到的那条**的点亮时刻,必须原样转发:
+     * main 靠它做条件删除,不转发的话 handler 收到 undefined 就退化成无条件
+     * 删除,插件的新点亮先到时会把用户还没看到的新摘要一并抹掉(codex review)。
+     */
+    clearUnread: (id: string, seenAt?: number): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('ghosts:clear-unread', id, seenAt),
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
@@ -970,6 +1003,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAssistantMessagePending: fanOutGhostAssistantPending,
     onHookFused: fanOutGhostHookFused,
     onNotify: fanOutGhostNotify,
+    onBadge: fanOutGhostBadge,
+    onUnreadSnapshot: fanOutGhostUnreadSnapshot,
     onConfirmRequest: fanOutGhostConfirmRequest,
     // 确认弹窗回包(confirm 槽):renderer 把用户的点击送回 main 结算那条挂起的
     // 管子请求。requestId 是 main 铸的,陌生/重复 id 由桥忽略。
