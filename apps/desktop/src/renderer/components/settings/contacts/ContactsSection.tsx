@@ -24,6 +24,24 @@ import { ContactsManagerDialog } from './ContactsManagerDialog';
 import { prefillContactsAiSessionDraft } from './startContactsAiSession';
 
 const log = createLogger('ContactsSection');
+const AI_SESSION_BLOCKED_KEY = 'cindy.contacts.ai-session-blocked';
+
+function isAiSessionBlocked(): boolean {
+  try {
+    return window.sessionStorage.getItem(AI_SESSION_BLOCKED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setAiSessionBlocked(blocked: boolean): void {
+  try {
+    if (blocked) window.sessionStorage.setItem(AI_SESSION_BLOCKED_KEY, '1');
+    else window.sessionStorage.removeItem(AI_SESSION_BLOCKED_KEY);
+  } catch {
+    // sessionStorage 不可用时，当前组件的 aiSessionReady 仍会 fail closed。
+  }
+}
 
 export function ContactsSection() {
   const { t, i18n } = useTranslation();
@@ -50,7 +68,7 @@ export function ContactsSection() {
       .settingsGet()
       .then((s) => {
         setEnabled(s.enabled);
-        setAiSessionReady(s.enabled);
+        setAiSessionReady(s.enabled && !isAiSessionBlocked());
       })
       .catch((err) => log.warn('contacts settingsGet failed', err));
     void reloadStats();
@@ -71,8 +89,10 @@ export function ContactsSection() {
     async (next: boolean) => {
       const prev = enabled;
       const prevAiSessionReady = aiSessionReady;
+      const prevAiSessionBlocked = isAiSessionBlocked();
       setEnabled(next);
-      // 开启请求完成前不能创建缺少 cindy_contacts 工具的新任务。
+      // 开启请求完成前不能创建缺少 cindy_contacts 工具的新任务；跨组件重挂载保留该门。
+      setAiSessionBlocked(true);
       setAiSessionReady(false);
       setTogglePending(true);
       try {
@@ -82,6 +102,7 @@ export function ContactsSection() {
           // 继续沿用已有延迟生效提示，并保持 AI 入口禁用，直到重启或重新切换成功。
           toast.warning(t('settings.contacts.toast.codexRefreshDeferred'));
         } else {
+          setAiSessionBlocked(false);
           setAiSessionReady(next);
           toast.success(
             t(next ? 'settings.contacts.toast.enabled' : 'settings.contacts.toast.disabled'),
@@ -91,6 +112,7 @@ export function ContactsSection() {
         log.warn('contacts settingsSet failed', err);
         toast.error(t(contactsErrorI18nKey(err)));
         setEnabled(prev);
+        setAiSessionBlocked(prevAiSessionBlocked);
         setAiSessionReady(prevAiSessionReady);
       } finally {
         setTogglePending(false);

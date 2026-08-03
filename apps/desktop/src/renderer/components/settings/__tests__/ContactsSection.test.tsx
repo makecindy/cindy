@@ -64,6 +64,7 @@ const syncStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.sessionStorage.clear();
   mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
   mocks.settingsSet.mockResolvedValue({ enabled: true, codexMcpRefreshed: true });
   mocks.syncStatusGet.mockResolvedValue(syncStatus);
@@ -119,7 +120,7 @@ describe('ContactsSection AI 管理入口', () => {
         }),
     );
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
-    render(<ContactsSection />);
+    const view = render(<ContactsSection />);
 
     fireEvent.click(
       await screen.findByRole('switch', { name: 'settings.contacts.enable.toggleAria' }),
@@ -135,5 +136,14 @@ describe('ContactsSection AI 管理入口', () => {
     fireEvent.click(cta);
     expect(mocks.prefill).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+
+    view.unmount();
+    mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
+    render(<ContactsSection />);
+
+    const remountedCta = await screen.findByRole('button', {
+      name: 'settings.contacts.guide.cta',
+    });
+    expect((remountedCta as HTMLButtonElement).disabled).toBe(true);
   });
 });
