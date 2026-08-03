@@ -3,6 +3,7 @@ import {
   describeToolUse,
   humanizeToolToken,
   parseToolName,
+  piEditReplacements,
   truncateToolText,
 } from '../toolUseDescriptor';
 
@@ -181,6 +182,77 @@ describe('describeToolUse — file tools', () => {
   it('falls back from file_path to path, then degrades to generic', () => {
     expect(describeToolUse('Read', { path: '/repo/b.ts' })).toMatchObject({ filePath: '/repo/b.ts' });
     expect(describeToolUse('Read', {})).toEqual({ kind: 'generic', toolName: 'Read' });
+  });
+});
+
+describe('describeToolUse — pi builtin tools (lowercase, path field)', () => {
+  it('maps pi bash to command with local intent (schema has no description field)', () => {
+    expect(describeToolUse('bash', { command: 'git status' })).toEqual({
+      kind: 'command',
+      toolName: 'bash',
+      command: 'git status',
+      intent: { action: 'gitStatus' },
+    });
+    expect(describeToolUse('bash', { command: 'docker ps' })).toEqual({
+      kind: 'command',
+      toolName: 'bash',
+      command: 'docker ps',
+    });
+  });
+
+  it('maps pi read/edit/write/ls to file actions via the path field', () => {
+    expect(describeToolUse('read', { path: '/repo/src/app.ts' })).toEqual({
+      kind: 'file',
+      toolName: 'read',
+      action: 'read',
+      filePath: '/repo/src/app.ts',
+      fileName: 'app.ts',
+    });
+    expect(describeToolUse('edit', {
+      path: '/repo/a.ts',
+      edits: [{ oldText: 'a', newText: 'b' }],
+    })).toMatchObject({ kind: 'file', action: 'edit', fileName: 'a.ts' });
+    expect(describeToolUse('write', { path: '/repo/new.ts', content: 'x' })).toMatchObject({
+      kind: 'file',
+      action: 'create',
+      fileName: 'new.ts',
+    });
+    expect(describeToolUse('ls', { path: '/repo/src' })).toMatchObject({
+      kind: 'file',
+      action: 'read',
+      fileName: 'src',
+    });
+  });
+
+  it('degrades pi ls without path (defaults to cwd) to generic', () => {
+    expect(describeToolUse('ls', {})).toEqual({ kind: 'generic', toolName: 'ls' });
+  });
+
+  it('maps pi read/edit/write/ls to file actions regardless of edit input shape', () => {
+    // legacy 顶层形态也必须仍然是 file/edit 描述符(路径来自 path)。
+    expect(describeToolUse('edit', {
+      path: '/repo/a.ts',
+      oldText: 'x',
+      newText: 'y',
+    })).toMatchObject({ kind: 'file', action: 'edit', fileName: 'a.ts' });
+  });
+
+  it('maps pi grep to grep-mode and pi find (glob pattern) to glob-mode search', () => {
+    expect(describeToolUse('grep', { pattern: 'TODO', path: 'src/', glob: '*.ts' })).toEqual({
+      kind: 'search',
+      toolName: 'grep',
+      mode: 'grep',
+      pattern: 'TODO',
+      path: 'src/',
+      glob: '*.ts',
+    });
+    expect(describeToolUse('find', { pattern: '**/*.spec.ts' })).toEqual({
+      kind: 'search',
+      toolName: 'find',
+      mode: 'glob',
+      pattern: '**/*.spec.ts',
+    });
+    expect(describeToolUse('grep', {})).toEqual({ kind: 'generic', toolName: 'grep' });
   });
 });
 
@@ -377,5 +449,53 @@ describe('helpers', () => {
   it('truncates display text with ellipsis', () => {
     expect(truncateToolText('short', 10)).toBe('short');
     expect(truncateToolText('a'.repeat(12), 10)).toBe(`${'a'.repeat(7)}...`);
+  });
+});
+
+describe('piEditReplacements', () => {
+  it('reads the declared edits[] shape in order', () => {
+    expect(piEditReplacements({
+      path: '/repo/a.ts',
+      edits: [{ oldText: 'a', newText: 'b' }, { oldText: 'c', newText: 'd' }],
+    })).toEqual([
+      { oldText: 'a', newText: 'b' },
+      { oldText: 'c', newText: 'd' },
+    ]);
+  });
+
+  it('reads the legacy top-level { oldText, newText } single replacement', () => {
+    expect(piEditReplacements({ path: '/repo/a.ts', oldText: 'x', newText: 'y' })).toEqual([
+      { oldText: 'x', newText: 'y' },
+    ]);
+  });
+
+  it('appends the top-level pair after edits[], mirroring pi normalizeEditInput', () => {
+    expect(piEditReplacements({
+      path: '/repo/a.ts',
+      edits: [{ oldText: 'a', newText: 'b' }],
+      oldText: 'x',
+      newText: 'y',
+    })).toEqual([
+      { oldText: 'a', newText: 'b' },
+      { oldText: 'x', newText: 'y' },
+    ]);
+  });
+
+  it('keeps pure insert/delete segments and fills the missing side with an empty string', () => {
+    expect(piEditReplacements({ edits: [{ newText: 'added' }, { oldText: 'removed' }] })).toEqual([
+      { oldText: '', newText: 'added' },
+      { oldText: 'removed', newText: '' },
+    ]);
+  });
+
+  it('ignores unusable input instead of throwing', () => {
+    expect(piEditReplacements(null)).toEqual([]);
+    expect(piEditReplacements('oops')).toEqual([]);
+    expect(piEditReplacements({ path: '/repo/a.ts' })).toEqual([]);
+    expect(piEditReplacements({ edits: 'nope' })).toEqual([]);
+    expect(piEditReplacements({ edits: [null, 42, {}] })).toEqual([]);
+    // 顶层只给一半不成段(pi 自己也要求两侧都是字符串才归一化)。
+    expect(piEditReplacements({ oldText: 'x' })).toEqual([]);
+    expect(piEditReplacements({ newText: 'y' })).toEqual([]);
   });
 });

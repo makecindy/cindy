@@ -221,6 +221,110 @@ describe('AgentActionRow — 行主文案', () => {
     expect(document.querySelector('[data-agent-action-file-chip="true"]')).toBeTruthy();
   });
 
+  it('pi bash:小写工具名照样解析出意图动词,不再是「调用 bash」', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'bash', { command: 'git status' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.gitStatus')).toBeTruthy();
+    expect(screen.queryByText('chat.agentActionRow.verb.used')).toBeNull();
+    expect(screen.queryByText('bash')).toBeNull();
+  });
+
+  it('pi bash:无法分类的命令回退为运行动词 + 命令原文', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'bash', { command: 'docker ps' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.ran')).toBeTruthy();
+    expect(screen.getByText('docker ps')).toBeTruthy();
+  });
+
+  it('pi read:path 字段渲染成文件 chip 与读取动词', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'read', { path: '/repo/src/app.ts' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.read')).toBeTruthy();
+    expect(screen.getByText('app.ts')).toBeTruthy();
+    expect(document.querySelector('[data-agent-action-file-chip="true"]')).toBeTruthy();
+  });
+
+  it('pi grep / find:搜索动词 + 搜索目标', () => {
+    const { rerender } = render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'grep', { pattern: 'TODO', path: 'src/' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.searched')).toBeTruthy();
+    expect(screen.getByText('TODO')).toBeTruthy();
+    rerender(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'find', { pattern: '**/*.spec.ts' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.searched')).toBeTruthy();
+    expect(screen.getByText('**/*.spec.ts')).toBeTruthy();
+  });
+
+  it('pi write:创建动词 + 行内 +N 统计,点击进共享 diff lightbox', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'write', { path: '/repo/src/new.ts', content: 'a\nb' }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.created')).toBeTruthy();
+    expect(screen.getByText('new.ts')).toBeTruthy();
+    expect(screen.getByText('+2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).toContain('"kind":"diff"');
+    expect(document.body.textContent).toContain('"filePath":"/repo/src/new.ts"');
+  });
+
+  it('pi edit:edits[].oldText/newText 汇成编辑动词与 diff lightbox', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'edit', {
+          path: '/repo/src/app.ts',
+          edits: [{ oldText: 'old', newText: 'new' }],
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.edited')).toBeTruthy();
+    expect(screen.getByText('app.ts')).toBeTruthy();
+    expect(screen.getByText('+1')).toBeTruthy();
+    expect(screen.getByText('-1')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).toContain('"oldString":"old"');
+    expect(document.body.textContent).toContain('"newString":"new"');
+  });
+
+  // pi 0.83.0 的 edit 同时接受 legacy 顶层单段(LegacyEditToolInput);只认 edits[]
+  // 会让这种事件退化成空 diff 与 +0 -0。
+  it('pi edit:legacy 顶层 oldText/newText 也给出真实统计与非空 diff', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'edit', {
+          path: '/repo/src/app.ts',
+          oldText: 'old A\nold B',
+          newText: 'new A',
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.edited')).toBeTruthy();
+    expect(screen.getByText('app.ts')).toBeTruthy();
+    expect(screen.getByText('+1')).toBeTruthy();
+    expect(screen.getByText('-2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).toContain('"oldString":"old A\\nold B"');
+    expect(document.body.textContent).toContain('"newString":"new A"');
+    // 空 diffs 数组会渲染成 "diffs":[] —— 明确断死它没退化。
+    expect(document.body.textContent).not.toContain('"diffs":[]');
+  });
+
   it('状态图标:running / done 经 aria-label 可达,缺省为 done', () => {
     const { rerender } = render(
       createElement(AgentActionRow, {
