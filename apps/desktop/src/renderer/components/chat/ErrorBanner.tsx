@@ -43,7 +43,10 @@ import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/over
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
-import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
 interface ErrorBannerProps {
@@ -261,6 +264,8 @@ export function ErrorBanner({
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
+  const isClaudeSubscriptionOpusPlanMismatch =
+    errorReason === CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON;
   const hideRetry =
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
@@ -308,6 +313,8 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
   } else if (isClaudeGatewayOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
+  } else if (isClaudeSubscriptionOpusPlanMismatch) {
+    displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
@@ -505,7 +512,8 @@ export function ErrorBanner({
         {(isNetworkishError ||
           isOverloadError ||
           terminalRateLimitRetryProgress ||
-          isClaudeGatewayOpusPlanMismatch) && (
+          isClaudeGatewayOpusPlanMismatch ||
+          isClaudeSubscriptionOpusPlanMismatch) && (
           // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
           // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。

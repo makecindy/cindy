@@ -553,7 +553,7 @@ import {
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
-import { consumeClaudeGatewayOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
+import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
   CredentialModeSwitchBusyError,
@@ -3064,7 +3064,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     let attributedEvent = event;
     if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
       const reason = !session.remoteHostId && session.agentKind === 'claude-code'
-        ? consumeClaudeGatewayOpusPlanMismatch(session.id)
+        ? consumeClaudeOpusPlanMismatch(session.id)
         : null;
       if (reason) {
         const eventData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
@@ -3074,7 +3074,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           ...event,
           data: { ...eventData, reason },
         };
-        log.warn('Claude Opus plan error attributed to XD Gateway route', {
+        log.warn('Claude Opus plan error normalized for renderer', {
           sessionId: session.id,
           model: session.model,
           reason,

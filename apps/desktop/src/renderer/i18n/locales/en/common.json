@@ -5572,6 +5572,7 @@
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway, not your Claude.ai subscription. That gateway route rejected the model. Switch to your Claude.ai subscription and retry, or choose another model.",
+      "claudeSubscriptionOpusPlanMismatch": "Opus isn't available on the connected Claude Pro plan. Switch to a model included in your plan. If you recently upgraded, reconnect Anthropic in Settings, then retry.",
       "switchClaudeSubscription": "Switch to Claude.ai & Retry",
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",

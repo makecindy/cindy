@@ -5570,6 +5570,7 @@
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
+      "claudeSubscriptionOpusPlanMismatch": "接続中の Claude Pro プランでは Opus を利用できません。プランに含まれるモデルに切り替えてください。最近プランを変更した場合は、設定で Anthropic を再接続してから再試行してください。",
       "switchClaudeSubscription": "Claude.ai に切り替えて再試行",
       "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
       "switchingClaudeSubscription": "Claude.ai に切り替え中…",
