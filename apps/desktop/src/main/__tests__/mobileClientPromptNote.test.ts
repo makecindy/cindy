@@ -22,7 +22,11 @@ import {
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
 } from '../maker-ipc/agentHandoff';
-import { buildMobileClientPromptNote } from '../maker-ipc/mobileClientPromptNote';
+import {
+  buildMobileClientPromptNote,
+  stampMobileClientOrigin,
+  stripMainOnlySendOpts,
+} from '../maker-ipc/mobileClientPromptNote';
 
 describe('isMobilePlatform(平台判据)', () => {
   it('手机平台为真', () => {
@@ -226,5 +230,88 @@ describe('注入接线(源码级守卫)', () => {
       'utf8',
     );
     expect(register).toContain('isMobileClientInvoke: () => isMobileControllerInvoke()');
+  });
+});
+
+describe('stampMobileClientOrigin(IPC 边界盖章)', () => {
+  it('手机来源盖上标记,返回新对象不改入参', () => {
+    const item = { clientId: 'a', text: 'hi' };
+    const out = stampMobileClientOrigin(item, true);
+    expect(out).toEqual({ clientId: 'a', text: 'hi', fromMobileClient: true });
+    expect(item).toEqual({ clientId: 'a', text: 'hi' });
+  });
+
+  it('非手机来源:客户端自填的标记必须被剥掉(wire 值一律不生效)', () => {
+    // item 来自 wire,客户端可以自己填 true —— 必须无条件覆盖。
+    const forged = { clientId: 'a', text: 'hi', fromMobileClient: true };
+    expect(stampMobileClientOrigin(forged, false)).toEqual({ clientId: 'a', text: 'hi' });
+    expect(stampMobileClientOrigin(forged, false)).not.toHaveProperty('fromMobileClient');
+  });
+
+  it('手机来源时覆盖为 true(即使 wire 传的是 false)', () => {
+    expect(stampMobileClientOrigin({ fromMobileClient: false }, true))
+      .toEqual({ fromMobileClient: true });
+  });
+});
+
+describe('stripMainOnlySendOpts(直连路径消毒)', () => {
+  it('剥掉客户端自报的 fromMobileClient', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', fromMobileClient: true }))
+      .toEqual({ messageUuid: 'u' });
+  });
+
+  it('其它字段原样保留', () => {
+    const opts = { messageUuid: 'u', userName: 'n', origin: { kind: 'scheduler' } };
+    expect(stripMainOnlySendOpts(opts)).toEqual(opts);
+  });
+
+  it('非对象输入原样返回(事务自己 ?? {} 兜底)', () => {
+    expect(stripMainOnlySendOpts(undefined)).toBeUndefined();
+    expect(stripMainOnlySendOpts(null)).toBeNull();
+    expect(stripMainOnlySendOpts('x')).toBe('x');
+  });
+});
+
+describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
+  const register = readFileSync(resolve(process.cwd(), 'src/main/maker-ipc/register.ts'), 'utf8');
+  const coordinator = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-ipc/agent-input-coordinator.ts'),
+    'utf8',
+  );
+  const transaction = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-ipc/makerSendTransaction.ts'),
+    'utf8',
+  );
+  const sendHandler = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-ipc/sessionSendHandler.ts'),
+    'utf8',
+  );
+
+  it('enqueue 与 steer 两个 IPC 边界都盖章', () => {
+    // 手机会话页所有发送都走这两条,只在 invoke context 里读来源实际读不到(review P1)。
+    const stamps = register.match(/stampMobileClientOrigin\(/g) ?? [];
+    expect(stamps.length).toBe(2);
+    expect(register).toContain('isMobileControllerInvoke(),');
+  });
+
+  it('coordinator 在 drain 与 steer 两处都透传', () => {
+    const passes = coordinator.match(/fromMobileClient: true \} : \{\}\)/g) ?? [];
+    expect(passes.length).toBe(2);
+  });
+
+  it('send 事务认 async context 与透传值两个来源', () => {
+    expect(transaction).toContain(
+      "deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true",
+    );
+  });
+
+  it('steer 投递也注入说明,且只进 wire payload', () => {
+    expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
+    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)');
+    expect(register).toContain('await sess.steer(steerPayload as never');
+  });
+
+  it('直连 maker:send 的 wire sendOpts 必须消毒', () => {
+    expect(sendHandler).toContain('stripMainOnlySendOpts(sendOpts)');
   });
 });

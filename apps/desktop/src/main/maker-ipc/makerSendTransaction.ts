@@ -44,6 +44,14 @@ type MakerSendOptions = {
    * 打到 sess.send 的 origin(本轮 turnOrigin)并合进落库 user 消息 agentMeta.origin。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 手机来源(coordinator 从队列项透传;**main 构造,不是 wire 输入**——直连 maker:send
+   * 的客户端 sendOpts 在 sessionSendHandler 边界被剥掉,见那里的说明)。
+   *
+   * 必须认这一条:手机会话页所有发送都走 input:enqueue / input:steer,drain 派发时
+   * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
@@ -538,18 +546,20 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
+      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
       // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
       // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
-      const mobileClientNote = deps.isMobileClientInvoke?.() === true
+      // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
+      // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
+      const mobileClientNote = deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
         ? buildMobileClientPromptNote()
         : null;
       const outgoing = mobileClientNote
         ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
         : withHandoff;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
-      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       const persistUserMessage = readPersistUserMessageOption(so);
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;

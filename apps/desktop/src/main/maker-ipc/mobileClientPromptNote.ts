@@ -1,5 +1,5 @@
 /**
- * 手机客户端说明 —— 逐轮追加到**发给 agent 的 wire 消息**上的环境说明。
+ * 手机客户端来源 —— 盖章、透传、以及逐轮追加到**发给 agent 的 wire 消息**上的说明。
  *
  * 为什么需要:同一个桌面会话既可能在电脑上用,也可能被手机远程控制。产出 HTML 之类
  * 可预览成品时,自包含单文件在手机上体验明显更好(多文件产物的同目录资源要逐个回取,
@@ -39,4 +39,39 @@ export function buildMobileClientPromptNote(): string {
     + '用户明确要求多文件时照常产出。'
     + '给出文件路径时同时给出结论或内容摘要,不要只回一个路径。'
   );
+}
+
+/**
+ * 在 IPC 边界给队列项盖上手机来源(返回新对象,不原地改入参)。
+ *
+ * **必须无条件覆盖**:`item` 来自 wire,客户端可以自己填 `fromMobileClient: true`。
+ * 由被控端按可信来源判据重写(不是手机就删掉该字段),客户端自报一律不生效。
+ *
+ * 为什么要盖在队列项上:手机会话页的所有发送都走 input:enqueue / input:steer,而
+ * drain 派发与 steer 投递都在原 invoke 的 AsyncLocalStorage 之外发生 —— 只在
+ * invoke context 里读来源的话,真实使用中几乎永远读不到(review P1 实捉)。
+ */
+export function stampMobileClientOrigin<T extends { fromMobileClient?: boolean }>(
+  item: T,
+  fromMobileClient: boolean,
+): T {
+  if (fromMobileClient) return { ...item, fromMobileClient: true };
+  const { fromMobileClient: _ignored, ...rest } = item;
+  return rest as T;
+}
+
+/**
+ * 剥掉 sendOpts 里「只允许 main 写」的字段。
+ *
+ * `fromMobileClient` 是 coordinator 从队列项透传给 send 事务的内部字段;直连
+ * `maker:send` 的 sendOpts 却来自 wire —— 不剥的话客户端自填一个就能让 agent 收到手机
+ * 说明。直连路径的来源判据只能是 async context(invoke-context),不看 sendOpts。
+ *
+ * 非对象输入原样返回(事务自己会按 `?? {}` 兜底)。
+ */
+export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
+  if (!sendOpts || typeof sendOpts !== 'object' || Array.isArray(sendOpts)) return sendOpts;
+  if (!('fromMobileClient' in sendOpts)) return sendOpts;
+  const { fromMobileClient: _ignored, ...rest } = sendOpts as Record<string, unknown>;
+  return rest;
 }

@@ -166,6 +166,12 @@ export interface AgentInputSendOpts {
    * 其它路径(用户输入 / orca)不设,行为不变。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 队列项上盖的手机来源(见 AgentInputQueuedMessage.fromMobileClient)。
+   * drain / steer 都在原 invoke 的 async context 之外派发,只能靠这条透传把来源带到
+   * 最终 wire 消息。**由 main 构造,不是 wire 输入。**
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId: string;
     content: string;
@@ -1385,7 +1391,13 @@ export class AgentInputCoordinator {
       await this.deps.steerToAgent(
         sessionId,
         buildMakerUserMessage(item, referenceContexts),
-        { messageUuid, userName: item.userName, signal: steerAbort.signal },
+        {
+          messageUuid,
+          userName: item.userName,
+          signal: steerAbort.signal,
+          // 同 drain:steer 投递也在入队时的 async context 之外。
+          ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
+        },
       );
     } catch (err) {
       this.clearSteerAbortController(sessionId, item.clientId);
@@ -2611,6 +2623,8 @@ export class AgentInputCoordinator {
           userName: head.userName,
           throwOnStartFailure: true,
           ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
+          // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
+          ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
           persistUserMessage: {
             clientId: head.clientId,
             content: head.persistedContent,

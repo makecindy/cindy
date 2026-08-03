@@ -197,6 +197,19 @@ export interface AgentInputQueuedMessage {
         runId?: string;
       };
   /**
+   * 本条由**手机控制端**入队 / 插入。
+   *
+   * 手机会话页的所有发送都走 input:enqueue / input:steer(没有一处调 maker:send),
+   * 而 drain 派发与 steer 都发生在原 invoke 的 AsyncLocalStorage 之外 —— 来源必须在
+   * 入队/插入的那一刻盖在队列项上,才能一路带到最终 wire 消息(见
+   * maker-ipc/mobileClientPromptNote)。
+   *
+   * **只由被控端在 IPC 边界写入,不采信 wire 传来的值**(客户端可控数据)。语义上仅用于
+   * 体验分流(要不要追加一段手机说明),不是安全 / 鉴权判据 —— 平台值本身也是对端自报的,
+   * 见 device-link/invoke-context 的可信度说明。
+   */
+  fromMobileClient?: boolean;
+  /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
    * "仍要发送"按钮时由它置位(只影响 will- 钩子,did- 旁听照常)。
