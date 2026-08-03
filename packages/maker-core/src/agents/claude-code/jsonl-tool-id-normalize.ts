@@ -349,18 +349,28 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       occPtr.set(val, ptr);
       return ptr < 0 ? undefined : occs[ptr].finalId;
     };
-    // 前瞻解析(content_block_start 专用): 找第一个 line >= index 的 occurrence ——
-    // stream_event 的 content_block_start 预告的是**即将出现**的 tool call, SDK 允许
-    // 它先于 assistant 消息到达(handleStreamEvent 显式支持该顺序), 后顾解析在此
-    // 顺序下找不到 occurrence、id 保持旧值, 与后续归一化的 assistant/tool_result
-    // 指向不一致(codex-connector P2: Handle stream events before assistant rows)。
-    // 无前瞻命中(stream_event 落在所有同名调用之后, 异常顺序)时 fallback 到最近的
-    // 行 < index 的 occurrence。
+    // 前瞻解析(content_block_start 专用): 匹配**即将出现**的 tool call —— SDK 允许
+    // stream_event 先于 assistant 消息到达(handleStreamEvent 显式支持该顺序), 后顾
+    // 解析在此顺序下找不到 occurrence、id 保持旧值, 与后续归一化的 assistant/
+    // tool_result 指向不一致(codex-connector P2: Handle stream events before
+    // assistant rows)。
+    // **按内容顺序 FIFO 消费**: 两个重复的 content_block_start(同 id)先于 assistant
+    // 时, 若都取第一个 future occurrence, 两条 stream start 都指向首个调用, 而
+    // assistant/tool_result 把 duplicate 分配到 Bash_x5 + Bash_5_dup2 —— 第二个
+    // tool card 会以错 id 创建/更新。aheadPtr 按 val 记录前瞻已消费到的下标, 每条
+    // content_block_start 取「上一个已消费之后、line >= index 的第一个」occurrence。
+    // 无前瞻命中(所有同名调用都已过去, 异常顺序)时 fallback 到最近的 line < index,
+    // 不推进 aheadPtr。
+    const aheadPtr = new Map<string, number>();
     const resolveAhead = (val: string, index: number): string | undefined => {
       const occs = occurrenceByOriginal.get(val);
       if (!occs || occs.length === 0) return undefined;
-      for (let i = 0; i < occs.length; i += 1) {
-        if (occs[i].line >= index) return occs[i].finalId;
+      const start = (aheadPtr.get(val) ?? -1) + 1;
+      for (let i = start; i < occs.length; i += 1) {
+        if (occs[i].line >= index) {
+          aheadPtr.set(val, i);
+          return occs[i].finalId;
+        }
       }
       return occs[occs.length - 1].finalId;
     };

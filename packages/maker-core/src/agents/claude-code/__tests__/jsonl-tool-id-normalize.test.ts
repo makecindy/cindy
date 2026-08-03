@@ -476,6 +476,38 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[1])[0].id).toBe('Bash_x210');
   });
 
+  it('两个重复 content_block_start 先于 assistant 时前瞻 FIFO 各匹配各次(P2: Map pre-assistant stream starts by occurrence)', () => {
+    // 两个同 id 的 content_block_start 先于 assistant 行到达。若前瞻都取第一个
+    // future occurrence, 两条 stream start 都指向 Bash_x5, 而 assistant/tool_result
+    // 把 duplicate 分配到 Bash_x5 + Bash_5_dup2 —— 第二个 tool card 以错 id 创建。
+    // 前瞻必须按内容顺序 FIFO: 第一条 start → Bash_x5, 第二条 → Bash_5_dup2。
+    const startEvent = (id: string): string =>
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: `stream-${id}`,
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Bash_5', name: 'Bash', input: {} },
+        },
+      });
+    const text = [
+      startEvent('s1'), // 第一个 start
+      startEvent('s2'), // 第二个 start
+      assistantEntry('a1', [toolUse('Bash_5'), toolUse('Bash_5')]),
+      userEntry('u1', [toolResult('Bash_5'), toolResult('Bash_5')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    const evt1 = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
+    const evt2 = (entries[1] as Record<string, unknown>).event as Record<string, unknown>;
+    // 两条 start 前瞻 FIFO: 第一条挂首个调用, 第二条挂第二个调用
+    expect((evt1.content_block as Record<string, unknown>).id).toBe('Bash_x5');
+    expect((evt2.content_block as Record<string, unknown>).id).toBe('Bash_5_dup2');
+    // assistant 两个调用分别定终
+    expect(contentOf(entries[2]).map((b) => b.id)).toEqual(['Bash_x5', 'Bash_5_dup2']);
+  });
+
   it('task 记录(task_started/progress/notification)按 task_id 复用同一终 id, 不拆散到多卡片(P2: Reuse task_id)', () => {
     // task 系统记录用 task_id + tool_use_id 标识 child, 通常无 uuid。若按条消费
     // occurrence, 同一条 task 的 progress/notification 会被重映射到下一个 occurrence。
