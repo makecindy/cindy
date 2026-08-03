@@ -259,6 +259,52 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('does not commit a turn-scoped fallback when the control request fails, so the same turn retries', async () => {
+    // 标记必须与 SDK 实际档位一致。若先置标记、push 再失败,SDK 留在 auto 继续硬拒绝,
+    // 而同一 turn 后续故障信号会被幂等闸当成 no-op 吞掉,再也没机会切到 Cindy(codex P2)。
+    const { handle, canUseTool, fakeQuery, reviewAutoPermissionAction } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'allow',
+    });
+
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
+    await expect(
+      handle.useCindyAutoReviewFallback?.({ scope: 'turn' }),
+    ).rejects.toThrow('transport not ready');
+
+    // 同一 turn 的下一个故障信号必须还能重试,而不是拿到幂等 false。
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(true);
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+
+    // 重试成功后审批确实落到 Cindy reviewer 上。
+    const decided = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'after-retry' },
+    );
+    expect(decided.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('does not commit a session-scoped fallback when the control request fails', async () => {
+    // 会话级更严重:终态标记一旦提前落地,整个会话余生的信号都会被第一道幂等闸吞掉。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
+    await expect(
+      handle.useCindyAutoReviewFallback?.({ scope: 'session' }),
+    ).rejects.toThrow('transport not ready');
+
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'session' })).resolves.toBe(true);
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    await handle.close();
+  });
+
   it('keeps the tentative flag when a turn cannot probe, and probes on the next eligible turn', async () => {
     // 回探的不变量:标记与 SDK 档位必须一致。推不了档的 turn(底层档已不是 auto、plan 档、
     // rewind/bridge 重建窗口)必须**保留**标记 —— 提前清掉会让判据说"该用原生"而 SDK 停在

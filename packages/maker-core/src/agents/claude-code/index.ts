@@ -4595,17 +4595,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         const scope = fallbackOpts?.scope ?? 'session';
         // 会话级降级是终态(更严):已在该状态下,任何 scope 的重复信号都是幂等 no-op。
         if (nativeAutoReviewUnavailable) return false;
-        if (scope === 'session') {
-          nativeAutoReviewUnavailable = true;
-          // 终态已覆盖 turn 级语义,清掉以免出现两个标记同时置位的冗余状态。
-          nativeAutoReviewTurnFallback = false;
-        } else {
-          // 本 turn 已降级 → 幂等返回。注意:此时 SDK 档可能仍停在 auto(下方 push 被
-          // plan / rewind 窗口挡掉过),观察器会继续记账,最终由会话级升级再推一次。
-          if (nativeAutoReviewTurnFallback) return false;
-          nativeAutoReviewTurnFallback = true;
-        }
-        autoReviewDecisionCache.clear();
+        // 本 turn 已降级 → 幂等返回(下一 turn 起点回探后才会再次真正切档)。
+        if (scope === 'turn' && nativeAutoReviewTurnFallback) return false;
+        // **先推档,成功之后才提交标记** —— 与回探侧同一条不变量:标记必须与 SDK 实际档位
+        // 一致。反过来(先置标记、push 再失败)会让 SDK 留在 auto 继续硬拒绝,而后续故障信号
+        // 全被上面两道幂等闸吞掉、再也进不来,等于把 #1573 的修复整轮吃掉;scope='session'
+        // 更糟 —— 第一道闸是永久的,整个会话余生的信号都被吞。这里刻意不 catch:失败向上抛
+        // 给 coordinator 记 failed,标记未动,同一 turn 的下一个故障信号就能重试(codex P2)。
+        //
+        // 推不了档的窗口不算失败,标记照常提交:plan 档恒在 plan、rewind/bridge 重建期 q
+        // 不可写、底层档已不是 auto —— 这些路径各自会按标记推导档位(plan turn 收尾的
+        // effectiveSdkPermissionMode()、buildQuery 的起档 permissionMode),标记正是它们的输入。
         if (
           mutablePermissionMode === 'auto'
           && !mutablePlanMode
@@ -4613,7 +4613,19 @@ export class ClaudeCodeAgent extends BaseAgent {
           && !controlRequestsBlocked()
         ) {
           await q.setPermissionMode('default');
+          // await 期间更高优先级的降级可能已落地(会话级信号能穿透在飞的 turn 级操作):
+          // 按**当前**状态重判,不用入口快照,避免把已是终态的会话写回冗余的双标记状态。
+          if (nativeAutoReviewUnavailable) return false;
+          if (scope === 'turn' && nativeAutoReviewTurnFallback) return false;
         }
+        if (scope === 'session') {
+          nativeAutoReviewUnavailable = true;
+          // 终态已覆盖 turn 级语义,清掉以免出现两个标记同时置位的冗余状态。
+          nativeAutoReviewTurnFallback = false;
+        } else {
+          nativeAutoReviewTurnFallback = true;
+        }
+        autoReviewDecisionCache.clear();
         // 文案按 scope 分叉:turn 级只作用于当前 turn(下一 turn 回探),用会话级的
         // "keeping Auto with Cindy fallback" 会让按 message 扫日志的人误判已进终态。
         log.warn(
