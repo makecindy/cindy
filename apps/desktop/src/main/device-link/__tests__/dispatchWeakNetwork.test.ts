@@ -198,13 +198,18 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('默认 channel = 60s;放宽表 channel ×2 封顶 120s', () => {
-    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(60_000);
+  it('无 override 的 channel = 60s;listing tier 收窄到 24s;长任务 ×2 封顶 120s', () => {
+    // 缺省预算 30s × 2。INVOKE_TIMEOUT_OVERRIDES_MS 里没有条目的 channel 走这一档。
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
+    expect(__testing.outboxEntryMaxAgeMs('local-db:messages:around-client-id')).toBe(60_000);
+    // listing tier 在 allowlist 侧被显式收紧到 12s(见 INVOKE_TIMEOUT_OVERRIDES_MS 的
+    // 「收紧」段),×2 = 24s —— 这是「逐 channel 收窄」的正例,不是默认档。
+    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(24_000);
+    // 60s 预算 × 2 = 120s,正好压在全局上限 REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS 上。
     expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(120_000);
   });
 
-  it('离线慢扫描按逐条 TTL 出清:默认 channel 61s 被丢,长任务 channel 保留', () => {
+  it('离线慢扫描按逐条 TTL 出清:listing channel 61s 被丢,长任务 channel 保留', () => {
     const sendInvokeResult = vi.fn(() => {
       throw notConnected();
     });
