@@ -44,7 +44,7 @@ import { Transform, type TransformCallback } from 'node:stream';
  * `mcp__cindy_memory__call_tool_5` —— MCP 工具名带下划线,实测 MCP id 当前为
  * `call_<random>` 无撞车风险,此处按威胁面放宽防御,Fable-5 review P1-E)。
  */
-const MINTED_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_]*_\d+$/;
+const MINTED_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*_\d+$/;
 
 /** SSE data 行前缀。 */
 const SSE_DATA_PREFIX = 'data: ';

@@ -41,10 +41,10 @@ type JsonObject = Record<string, unknown>;
  * (`mcp__cindy_memory__call_tool_5`),实测 MCP id 当前为 `call_<random>` 无撞车
  * 风险,此处按威胁面放宽防御(Fable-5 review P1-E)。
  */
-const MINTED_ID_RE = /^[A-Za-z][A-Za-z0-9_]*_(\d+)$/;
+const MINTED_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*_(\d+)$/;
 
 /** 廉价预扫:文件里是否存在疑似铸造 id 的 tool_use / tool_result,无命中则跳过全量解析。 */
-const SUSPECT_ID_RE = /"(?:id|tool_use_id)"\s*:\s*"[A-Za-z][A-Za-z0-9_]*_\d+"/;
+const SUSPECT_ID_RE = /"(?:id|tool_use_id)"\s*:\s*"[A-Za-z][A-Za-z0-9_-]*_\d+"/;
 
 export interface NormalizeClaudeJsonlToolIdsResult {
   /** 归一化后的完整文本(changed=false 时与输入同引用)。 */

@@ -70,6 +70,24 @@ describe('collectToolUseIdsForResponseRewrite', () => {
     });
     expect(ids).toEqual(new Set(['mcp__cindy_memory__call_tool_5']));
   });
+
+  it('带连字符的 MCP 工具名 id 命中(codex-connector P1)', () => {
+    const ids = collectToolUseIdsForResponseRewrite({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'mcp__feishu-delegate__feishu_read_messages_5',
+              name: 'mcp__feishu-delegate__feishu_read_messages',
+            },
+          ],
+        },
+      ],
+    });
+    expect(ids).toEqual(new Set(['mcp__feishu-delegate__feishu_read_messages_5']));
+  });
 });
 
 // ── ToolUseIdDedupeRewriter.resolve ──────────────────────────────────────

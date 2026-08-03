@@ -239,6 +239,21 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[1])[0].tool_use_id).toBe('mcp__cindy_memory__call_tool_x5');
   });
 
+  it('带连字符的 MCP 工具名(id 含 -)同样处理(codex-connector P1)', () => {
+    // Claude MCP 前缀保留连字符(capability-routing.ts): mcp__feishu-delegate__...
+    const text = [
+      assistantEntry('a1', [
+        toolUse('mcp__feishu-delegate__feishu_read_messages_5', 'mcp__feishu-delegate__feishu_read_messages'),
+      ]),
+      userEntry('u1', [toolResult('mcp__feishu-delegate__feishu_read_messages_5')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('mcp__feishu-delegate__feishu_read_messages_x5');
+    expect(contentOf(entries[1])[0].tool_use_id).toBe('mcp__feishu-delegate__feishu_read_messages_x5');
+  });
+
   it('不触碰非 message 条目与 tool input 里的同名字符串', () => {
     const queueOp = JSON.stringify({
       type: 'queue-operation',
