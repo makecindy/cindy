@@ -5751,6 +5751,16 @@ app.on('ready', async () => {
     return;
   }
 
+  // safeStorage 可观测性(#871):这条链路此前在日志里完全不可见,出问题(用户在
+  // 系统钥匙串弹窗点了拒绝 → 加解密静默降级失败)只能靠弹窗反推。这里只落派生
+  // 身份(条目名 = `<app.name> Safe Storage`),**刻意不调 isEncryptionAvailable()**
+  // ——macOS 上探测本身可能触发钥匙串授权弹窗,把 #871 的弹窗时机提前到启动;
+  // 可用性/失败在实际使用点记录(authManager 的 safeStorage helpers)。不含凭证。
+  createLogger('safe-storage').info('safeStorage identity', {
+    appName: app.getName(),
+    isPackaged: app.isPackaged,
+  });
+
   // 客户端端点清单:启动第一步、先于一切更新检查,**阻断式**解析(packaged 走
   // 烘焙 hotfix CDN 基址;dev 默认读仓内 config/endpoint.json,--endpoints-cdn
   // 时同 packaged;失败 → 系统错误框重试/退出,无缓存与烘焙兜底)。

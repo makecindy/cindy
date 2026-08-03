@@ -8,7 +8,6 @@
     "emptyDefault": "No models available",
     "loadingDefault": "Loading models…",
     "subscriptionBadge": "Subscription",
-    "discountBadge": "Special discount",
     "backToModels": "Back to model list",
     "agentSwitchHint": "After you pick a model, the next message switches to {{agent}}",
     "crossAgentEmptyHint": "Connect a {{agent}} model source on the controlled device first",

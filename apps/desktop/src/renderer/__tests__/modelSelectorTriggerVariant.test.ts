@@ -235,10 +235,11 @@ const pricingRef = vi.hoisted(() => {
   return { DEFAULT_PRICING, pricing: DEFAULT_PRICING as unknown, renderCalls: 0 };
 });
 vi.mock('@/hooks/useModelPricing', () => ({
-  useModelPricing: () => {
+  useGatewayModelPricing: () => {
     pricingRef.renderCalls += 1;
     return pricingRef.pricing;
   },
+  useReferenceModelPricing: () => pricingRef.pricing,
 }));
 
 // 可变 providers mock:默认 = anthropic fixture(分段/hover 用例依赖),

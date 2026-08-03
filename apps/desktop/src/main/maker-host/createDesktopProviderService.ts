@@ -100,7 +100,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastEffectiveModelPricing } from '../usage/modelPricing.js';
+import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -468,7 +468,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         syncLocalCatalogOverridesIntoActiveCatalog();
         getActiveCatalog();
         logModelPlaneWarnings();
-        broadcastEffectiveModelPricing();
+        broadcastReferenceModelPricing();
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
         try {
@@ -520,7 +520,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
   setActiveCatalog(BUNDLED_CATALOG);
-  broadcastEffectiveModelPricing();
+  broadcastReferenceModelPricing();
 
   const flight = loadCatalog(source, io)
     .then((catalog) => {
@@ -532,7 +532,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
       }
       activeCatalogSourceKey = sourceKey;
       setActiveCatalog(catalog);
-      broadcastEffectiveModelPricing();
+      broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {
@@ -605,7 +605,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();
       logModelPlaneWarnings();
-      broadcastEffectiveModelPricing();
+      broadcastReferenceModelPricing();
       return activeCatalog;
     })
     .finally(() => {
