@@ -421,8 +421,15 @@ async function previewCodexFileRestorePlan(plan: CodexFileRestorePlan): Promise<
     }
     // 与执行侧同款的安全过滤前置:受影响文件当前若处于过滤范围(敏感/超限/
     // 嵌套仓库),预览直接报不可回退,不把这些字节写进 Git 对象库(下面的
-    // 临时 worktree 树会 hash 受影响路径的当前内容)。
+    // 临时 worktree 树会 hash 受影响路径的当前内容)。null = status 溢出、
+    // 脏文件视图未知,同样失败关闭。
     const unprotected = await listUnprotectedPaths(plan.repoRoot, affectedPaths);
+    if (unprotected === null) {
+      return {
+        canRewind: false,
+        error: '仓库脏文件过多,无法核实回退安全性(git status 输出超限),请先清理或提交部分改动',
+      };
+    }
     if (unprotected.length > 0) {
       return {
         canRewind: false,

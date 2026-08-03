@@ -29,6 +29,8 @@ function savepointResult(
       path,
       sizeBytes: 100 * fingerprintSeed,
       mtimeMs: 1_000 * fingerprintSeed,
+      ctimeMs: 2_000 * fingerprintSeed,
+      ino: 10 * fingerprintSeed,
     })),
   };
 }

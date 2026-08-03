@@ -55,7 +55,8 @@ export type SnapshotBlockedGitStateReason =
   | 'rebase'
   | 'cherry-pick'
   | 'revert'
-  | 'conflict';
+  | 'conflict'
+  | 'status-overflow';
 
 /** Details for a repository state that blocks automatic snapshot commits. */
 export interface SnapshotBlockedGitState {
@@ -406,11 +407,17 @@ export interface CreateShadowSavepointInput {
   fileFilter?: Partial<SnapshotFileFilterOptions>;
 }
 
-/** Content-free lstat fingerprint of a safety-filtered path. */
+/**
+ * Content-free lstat fingerprint of a safety-filtered path. ctime cannot be
+ * set from userland (any write or utimes call bumps it) and the inode changes
+ * on replace-by-rename, so mtime-preserving rewrites are still detected.
+ */
 export interface SkippedFileFingerprint {
   path: string;
   sizeBytes: number;
   mtimeMs: number;
+  ctimeMs: number;
+  ino: number;
 }
 
 /** Result of a shadow savepoint attempt. */
@@ -446,6 +453,12 @@ export async function createShadowSavepoint(
   }
 
   const plan = await buildSnapshotFilePlan(repoPath, input.fileFilter);
+  if (plan.statusTruncated) {
+    // status 溢出时脏文件视图未知:空计划会拍出一个静默漏掉全部脏文件的
+    // 基线/pre-rollback,读侧还会据此把未受保护的路径当成安全。失败关闭
+    // (legacy 分支提交路径保留其历史上的静默降级行为,不受影响)。
+    throw new SnapshotBlockedByGitStateError({ reason: 'status-overflow' });
+  }
   const skippedFiles = plan.skippedFiles;
   const conflictedFiles = skippedFiles.filter((file) => file.reason === 'conflict');
   if (conflictedFiles.length > 0) {
@@ -568,7 +581,13 @@ async function collectSkippedFingerprints(
     if (!abs) continue;
     const stats = await fs.lstat(abs).catch(() => null);
     if (!stats || stats.isDirectory()) continue;
-    out.push({ path: file.path, sizeBytes: stats.size, mtimeMs: stats.mtimeMs });
+    out.push({
+      path: file.path,
+      sizeBytes: stats.size,
+      mtimeMs: stats.mtimeMs,
+      ctimeMs: stats.ctimeMs,
+      ino: stats.ino,
+    });
   }
   return out;
 }
@@ -751,14 +770,17 @@ export async function writeWorktreeTreeForPaths(
  * snapshot safety filter excludes (sensitive / oversized / nested repo) and
  * which still exist as regular files. Readers use this to refuse building
  * worktree trees or restore plans over bytes the savepoint system is not
- * allowed to persist or protect.
+ * allowed to persist or protect. Returns null when the dirty-file view is
+ * unknown (`git status` overflow) — callers must fail closed, not treat the
+ * paths as protected.
  */
 export async function listUnprotectedPaths(
   repoPath: string,
   paths: readonly string[],
-): Promise<string[]> {
+): Promise<string[] | null> {
   if (paths.length === 0) return [];
   const plan = await buildSnapshotFilePlan(repoPath);
+  if (plan.statusTruncated) return null;
   const skipped = new Set(plan.skippedFiles.map((file) => file.path));
   const out: string[] = [];
   for (const rawPath of uniqueRawPaths(paths)) {
