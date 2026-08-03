@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위 과금",
+        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위로 잔액에서 차감",
         "modelLabel": "모든 모델",
-        "billingLabel": "토큰 단위 과금",
+        "billingLabel": "토큰 단위로 잔액에서 차감",
         "disconnectConfirm": {
           "title": "Cindy AI 연결을 해제할까요?",
           "description": "연결을 해제하면 로컬에 저장된 Cindy AI Key가 삭제됩니다. Cindy AI 모델을 계속 사용하려면 다시 연결해야 합니다."
@@ -1280,7 +1280,14 @@
           "confirm": "교체"
         },
         "rotateSuccess": "키를 교체했습니다",
-        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요"
+        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요",
+        "copyKeyAria": "Cindy AI Key 복사",
+        "copyKeySuccess": "Cindy AI Key를 복사했습니다",
+        "copyKeyFailed": "복사에 실패했습니다. 나중에 다시 시도해 주세요",
+        "asset": {
+          "viewUsage": "사용량 보기",
+          "syncFailed": "자격 증명 동기화에 실패해 잔액을 가져올 수 없습니다. 저장된 모델 설정은 영향을 받지 않습니다."
+        }
       },
       "custom": {
         "tag": "사용자 지정",
@@ -1573,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "추천",
-        "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "desc": "공식 서비스. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "grantBadge": "신규 사용자 프로모션 잔액 제공",
         "cta": "Cindy 로그인"
       },
       "menu": {
@@ -5305,7 +5313,7 @@
         "title": "Cindy AI",
         "desc": "공식 서비스 · 전체 모델 · Claude Code / Codex 지원",
         "loginTitle": "Cindy 로그인",
-        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
+        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다. 신규 사용자에게는 프로모션 잔액이 제공됩니다"
       },
       "othersToggle": "기타 제공자 ({{count}})",
       "presetSub": "API 키를 입력하여 연결",
