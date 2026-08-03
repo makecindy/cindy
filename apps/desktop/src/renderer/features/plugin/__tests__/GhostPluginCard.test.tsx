@@ -278,7 +278,7 @@ describe('MarketPluginCard', () => {
     );
 
     // 未安装:右侧按钮直达安装(确认框仍在后续 detail 流程里展示权限清单)。
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.install' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.installAria' }));
     expect(onInstall).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
 
