@@ -68,8 +68,10 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftCronExpr,
   updateDraftIntervalMinutes,
   updateDraftRunMode,
+  updateDraftTimezone,
   updateDraftSessionMode,
   updateDraftWorkspaceKind,
   validateTemplateParamValues,
@@ -1234,7 +1236,7 @@ function ScheduleFormCard({
             <TextInput
               autoCapitalize="none"
               editable={!busy}
-              onChangeText={(value) => setField('cronExpr', value)}
+              onChangeText={(value) => onChange(updateDraftCronExpr(draft, value))}
               placeholder="0 9 * * *"
               placeholderTextColor={colors.textTertiary}
               style={styles.input}
@@ -1368,7 +1370,7 @@ function ScheduleFormCard({
         <TextInput
           autoCapitalize="none"
           editable={!busy}
-          onChangeText={(value) => setField('timezone', value)}
+          onChangeText={(value) => onChange(updateDraftTimezone(draft, value))}
           placeholder="Asia/Shanghai"
           placeholderTextColor={colors.textTertiary}
           style={styles.input}

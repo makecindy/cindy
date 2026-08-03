@@ -380,6 +380,28 @@ export function updateDraftIntervalMinutes(
   return { ...draft, intervalMinutes, intervalMinutesTouched: true };
 }
 
+/**
+ * cron 表达式输入的编辑入口:编辑任何可见 cadence 字段都是显式 cadence 操作,
+ * 一并丢弃表单表达不了的隐藏 interval——否则用户改了看得见的 cron,保存后隐藏
+ * interval 仍是权威,刚改的排期完全不生效(codex review 发现)。不变量:保存后
+ * 的 cadence 语义 = 用户在表单看到并确认的状态;隐藏 interval 只在编辑无关
+ * 字段(prompt / 名称 / 通知等)时保留。
+ */
+export function updateDraftCronExpr(
+  draft: MobileScheduleDraft,
+  cronExpr: string,
+): MobileScheduleDraft {
+  return { ...draft, cronExpr, intervalMinutesTouched: true };
+}
+
+/** 时区输入的编辑入口:与 updateDraftCronExpr 同一 cadence 不变量。 */
+export function updateDraftTimezone(
+  draft: MobileScheduleDraft,
+  timezone: string,
+): MobileScheduleDraft {
+  return { ...draft, timezone, intervalMinutesTouched: true };
+}
+
 export function updateDraftRunMode(
   draft: MobileScheduleDraft,
   runMode: MobileScheduleRunMode,

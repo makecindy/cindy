@@ -10,9 +10,11 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftCronExpr,
   updateDraftIntervalMinutes,
   updateDraftRunMode,
   updateDraftSessionMode,
+  updateDraftTimezone,
   validateTemplateParamValues,
   validateMobileScheduleDraft,
 } from '../scheduleForm.js';
@@ -142,6 +144,15 @@ describe('mobile schedule form model', () => {
     // 切 manual 是显式 cadence 操作:切回 recurring 也不复活旧间隔
     const manualRoundTrip = updateDraftRunMode(updateDraftRunMode(draft, 'manual'), 'recurring');
     expect(buildMobileScheduleInput(manualRoundTrip).intervalMs).toBeNull();
+
+    // 编辑可见 cron / 时区同样是显式 cadence 操作:隐藏 interval 不得继续权威,
+    // 否则用户刚改的排期完全不生效(codex review 发现)。
+    const cronEdited = buildMobileScheduleInput(updateDraftCronExpr(draft, '30 8 * * *'));
+    expect(cronEdited.intervalMs).toBeNull();
+    expect(cronEdited.cronExpr).toBe('30 8 * * *');
+    expect(
+      buildMobileScheduleInput(updateDraftTimezone(draft, 'America/New_York')).intervalMs,
+    ).toBeNull();
   });
 
   it('writes an explicit false when mobile disables WeCom group notifications', () => {
