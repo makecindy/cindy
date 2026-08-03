@@ -33,6 +33,7 @@ vi.mock('../rpc-client.js', () => ({
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps } from '../../base-agent.js';
+import type { ModelDescriptor } from '../../../types/capabilities.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const noopLogger: Logger = {
@@ -323,7 +324,79 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  const byomDeps = (resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders']): AgentDeps => ({
+  it('freezes omitted BYOM reasoning to an empty startup capability snapshot', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        // buildPiNativeProvidersFromConfigs omits reasoning for this model; models.json writes false.
+        models: [{ id: 'local-model' }],
+      }],
+      env: {},
+    })));
+    const handle = await agent.startSession({
+      sessionId: 'frozen-non-reasoning-snapshot',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+
+    await expect(handle.setEffort!('xhigh')).rejects.toThrow(/startup model snapshot/);
+    expect(captured.requests.some((request) => request.type === 'set_thinking_level')).toBe(false);
+    await handle.close();
+  });
+
+  it('accepts the low placeholder after switching to a non-reasoning gateway model', async () => {
+    const availableModels: readonly ModelDescriptor[] = [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+      { id: 'gateway-model', displayName: 'Gateway', contextWindow: 200_000, efforts: [], defaultEffort: null },
+    ];
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        models: [{
+          id: 'local-model',
+          reasoning: true,
+          thinkingLevelMap: {
+            minimal: null,
+            low: 'low',
+            medium: null,
+            high: null,
+            xhigh: null,
+            max: null,
+          },
+        }],
+      }],
+      env: {},
+    }), availableModels));
+    const handle = await agent.startSession({
+      sessionId: 'switch-to-non-reasoning-gateway',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const beforePlaceholder = captured.requests.filter((request) => request.type === 'set_thinking_level').length;
+
+    await handle.setModel!('gateway-model', { providerId: null });
+    await expect(handle.setEffort!('low')).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      beforePlaceholder,
+    );
+    await handle.close();
+  });
+
+  const byomDeps = (
+    resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders'],
+    availableModels: readonly ModelDescriptor[] = [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: [], defaultEffort: null },
+    ],
+  ): AgentDeps => ({
     auth: {
       getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
       triggerLogin: async () => ({ authenticated: true }),
@@ -334,9 +407,7 @@ describe('Pi provider-aware model routing', () => {
     binaryPath: path.join(agentHome, 'pi'),
     logger: noopLogger,
     capabilityAdditions: {
-      availableModels: [
-        { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: [], defaultEffort: null },
-      ],
+      availableModels,
     },
     resolvePiAgentHome: () => agentHome,
     resolvePiNativeProviders,

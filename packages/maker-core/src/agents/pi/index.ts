@@ -184,8 +184,9 @@ function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): read
   if (model.thinkingLevelMap) {
     return PI_NATIVE_THINKING_LEVELS.filter((effort) => model.thinkingLevelMap?.[effort] != null);
   }
-  // 明确声明非 reasoning 也是已知的空能力；缺少声明则保留旧兼容行为。
-  return model.reasoning === false ? [] : undefined;
+  // writeModelsJson 对缺省 reasoning 同样序列化为 false；因此缺省与显式 false
+  // 都必须冻结为空能力，不能把 renderer 后续热刷出的 effort 放行给旧进程。
+  return model.reasoning === true ? undefined : [];
 }
 
 /**
@@ -1370,6 +1371,9 @@ export class PiAgent extends BaseAgent {
       },
 
       async setEffort(effort: Effort): Promise<void> {
+        // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low。仅接受这个占位值并
+        // 跳过 RPC；其它档位仍必须拒绝，避免热刷目录后的新 effort 绕过空快照。
+        if (activeEffortSnapshot?.length === 0 && effort === 'low') return;
         if (activeEffortSnapshot && !activeEffortSnapshot.includes(effort)) {
           throw new Error(
             `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
