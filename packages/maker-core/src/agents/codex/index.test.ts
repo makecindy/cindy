@@ -17023,7 +17023,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
 
       expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(2);
       expect(retireHostKey).toHaveBeenCalledTimes(1);
-      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({ failIfActive: false });
+      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({ failIfActive: true });
 
       pendingStart.resolve({ turn: { id: 'turn-1' } });
       await sendPromise;

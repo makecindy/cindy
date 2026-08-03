@@ -4414,7 +4414,10 @@ export class CodexAgent extends BaseAgent {
      * 干活的会话(review #944 第九轮 P1)。isCurrentHost 同时校验实例身份与
      * hostGeneration,与 skipIfStaleHost 同款判据。
      */
-    const retireUnresponsiveHost = async (reason: string): Promise<void> => {
+    const retireUnresponsiveHost = async (
+      reason: string,
+      opts: { failIfActive?: boolean } = {},
+    ): Promise<void> => {
       if (!isCurrentHost()) {
         log.warn('upstream-idle watchdog: host already replaced, skipping retire', {
           threadId,
@@ -4423,7 +4426,7 @@ export class CodexAgent extends BaseAgent {
         return;
       }
       await this.retireHostKey(currentHostKey, reason, {
-        failIfActive: false,
+        failIfActive: opts.failIfActive ?? false,
         logPrefix: 'codex upstream-idle watchdog',
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
@@ -4646,6 +4649,10 @@ export class CodexAgent extends BaseAgent {
           try {
             await retireUnresponsiveHost(
               `codex app-server unresponsive: reconnecting for ${Math.round(idleMs / 1000)}s before turn/start completed`,
+              // pending turn/start 只证明当前 admission 卡住。两次 ACK 等待期间，
+              // 同一个共享 host 可能已被新 Session 复用；在真正退役点重新检查
+              // active use，避免把新会话一起强杀。
+              { failIfActive: true },
             );
           } catch (error: unknown) {
             log.warn('codex reconnect watchdog pending host retire threw', {
