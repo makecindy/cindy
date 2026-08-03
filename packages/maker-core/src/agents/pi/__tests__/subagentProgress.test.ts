@@ -21,22 +21,24 @@ describe('parsePiSubagentProgress', () => {
         }),
       ),
     ).toEqual({
-      provider: 'pi',
-      taskId: 'sa-1',
-      parentToolUseId: 'sa-1',
-      status: 'running',
-      title: 'scout',
-      description: 'survey the auth flow',
-      model: 'claude-haiku-4-5',
-      usage: { totalTokens: 12_345, toolUses: 7, durationMs: 4_200 },
+      update: {
+        provider: 'pi',
+        taskId: 'sa-1',
+        parentToolUseId: 'sa-1',
+        status: 'running',
+        title: 'scout',
+        description: 'survey the auth flow',
+        model: 'claude-haiku-4-5',
+        usage: { totalTokens: 12_345, toolUses: 7, durationMs: 4_200 },
+      },
     });
   });
 
   it('carries terminal states and the final summary', () => {
     for (const status of ['completed', 'failed', 'stopped'] as const) {
       const update = parsePiSubagentProgress(payload({ status, summary: 'found 3 call sites' }));
-      expect(update?.status).toBe(status);
-      expect(update?.summary).toBe('found 3 call sites');
+      expect(update?.update.status).toBe(status);
+      expect(update?.update.summary).toBe('found 3 call sites');
     }
   });
 
@@ -58,19 +60,19 @@ describe('parsePiSubagentProgress', () => {
 
   it('never invents a terminal state for an unknown status', () => {
     // 不猜:状态不认识时按 running,把跑着的子代理显示成已完成比没状态更糟。
-    expect(parsePiSubagentProgress(payload({ status: 'bogus' }))?.status).toBe('running');
-    expect(parsePiSubagentProgress(payload({ status: undefined }))?.status).toBe('running');
+    expect(parsePiSubagentProgress(payload({ status: 'bogus' }))?.update.status).toBe('running');
+    expect(parsePiSubagentProgress(payload({ status: undefined }))?.update.status).toBe('running');
   });
 
   it('drops malformed usage numbers instead of surfacing them', () => {
     const update = parsePiSubagentProgress(
       payload({ totalTokens: -5, toolUses: Number.NaN, durationMs: 'soon' }),
     );
-    expect(update?.usage).toBeUndefined();
+    expect(update?.update.usage).toBeUndefined();
   });
 
   it('keeps partial usage when only some counters are known', () => {
-    expect(parsePiSubagentProgress(payload({ toolUses: 2 }))?.usage).toEqual({ toolUses: 2 });
+    expect(parsePiSubagentProgress(payload({ toolUses: 2 }))?.update.usage).toEqual({ toolUses: 2 });
   });
 
   it('never rewrites taskId — a truncated id would stop matching the same card', () => {
@@ -78,16 +80,35 @@ describe('parsePiSubagentProgress', () => {
     // 新值,后续 update 命中不到同一张卡(卡片停更或另开一张)。
     const longId = 'sa-' + 'x'.repeat(500);
     const update = parsePiSubagentProgress(payload({ taskId: longId }));
-    expect(update?.taskId).toBe(longId);
-    expect(update?.parentToolUseId).toBe(longId);
-    expect(update?.taskId).not.toContain('…');
+    expect(update?.update.taskId).toBe(longId);
+    expect(update?.update.parentToolUseId).toBe(longId);
+    expect(update?.update.taskId).not.toContain('…');
     // 仅 trim,不改内容。
-    expect(parsePiSubagentProgress(payload({ taskId: '  sa-9  ' }))?.taskId).toBe('sa-9');
+    expect(parsePiSubagentProgress(payload({ taskId: '  sa-9  ' }))?.update.taskId).toBe('sa-9');
+  });
+
+  it('surfaces the delegated usage components so the parent turn can account for them', () => {
+    // 子代理是独立 pi 进程,请求不走父进程的 usage 流。分量必须逐项带出来(含 cost),
+    // 父侧才能并进 turn 记账 → register.ts 持久化的 session token/cost 才含委派花费(review)。
+    const progress = parsePiSubagentProgress(
+      payload({ usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 2, cost: 0.0125 } }),
+    );
+    expect(progress?.delegatedUsage).toEqual({ input: 100, output: 20, cacheRead: 5, cacheWrite: 2, cost: 0.0125 });
+  });
+
+  it('drops an all-zero or malformed delegated usage payload', () => {
+    // 全零帧不该在父侧建立记账条目;坏值按 0 处理而不是把 NaN 灌进 turn 计数。
+    expect(parsePiSubagentProgress(payload({ usage: { input: 0, output: 0 } }))?.delegatedUsage).toBeUndefined();
+    expect(parsePiSubagentProgress(payload({ usage: 'nope' }))?.delegatedUsage).toBeUndefined();
+    expect(parsePiSubagentProgress(payload())?.delegatedUsage).toBeUndefined();
+    expect(
+      parsePiSubagentProgress(payload({ usage: { input: Number.NaN, output: -3, cost: 1 } }))?.delegatedUsage,
+    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1 });
   });
 
   it('truncates long text so a chatty subagent cannot flood the event stream', () => {
     const update = parsePiSubagentProgress(payload({ task: 'x'.repeat(5_000) }));
-    expect(update?.description?.length).toBe(2_000);
-    expect(update?.description?.endsWith('…')).toBe(true);
+    expect(update?.update.description?.length).toBe(2_000);
+    expect(update?.update.description?.endsWith('…')).toBe(true);
   });
 });

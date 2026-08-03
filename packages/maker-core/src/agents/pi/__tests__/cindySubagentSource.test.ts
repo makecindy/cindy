@@ -126,6 +126,29 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("delete childEnv['PI_CODING_AGENT_DIR']");
   });
 
+  it('enforces a call-level output budget, not just a per-task one', () => {
+    // 只限单项没用:8 个任务各 16k 拼起来 ~128k 字符注进父请求,一次委派就吃掉大半父上下文
+    // (review)。成功与全失败两条返回路径都必须过总闸 —— text 在 throw 之前就已经收窄。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('const MAX_TOTAL_OUTPUT_CHARS = 32000;');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function fitSectionsToBudget(sections)');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('fitSectionsToBudget(sections).join');
+    // 全失败路径 throw 的是同一个已收窄的 text,不是未裁剪的原文。
+    const budgeted = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const text = fitSectionsToBudget(sections).join');
+    const thrown = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('throw new Error(text);');
+    expect(budgeted).toBeGreaterThan(-1);
+    expect(thrown).toBeGreaterThan(budgeted);
+  });
+
+  it('reports delegated usage components (with cost) for the parent turn accounting', () => {
+    // 只报一个 totalTokens 的话父侧无从拆分 input/output/cache/cost,turn 记账与
+    // register.ts 的持久化都拿不到委派花费(review)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function emptyUsage()');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('totals.cost += cost');
+    for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cost']) {
+      expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(field + ': totals.usage.' + field + ',');
+    }
+  });
+
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
     // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。

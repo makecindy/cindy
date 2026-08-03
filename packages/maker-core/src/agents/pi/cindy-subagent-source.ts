@@ -131,6 +131,9 @@ const MAX_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 // 回给父模型的单任务输出上限:子代理的价值是"只回结论",别把全文灌回主线程。
 const MAX_OUTPUT_CHARS = 16000;
+// **调用级**总预算。只限单项没用:8 个任务各 16k 拼起来仍是 ~128k 字符注进父请求,
+// 一次委派就能把父上下文吃掉大半(review)。成功与全失败两条返回路径都要过这道闸。
+const MAX_TOTAL_OUTPUT_CHARS = 32000;
 // 兜底超时:卡死的子代理不能把父 turn 永久挂住。
 const TASK_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -219,6 +222,33 @@ function clampText(text, max) {
   return trimmed.slice(0, max - 1) + '…';
 }
 
+/**
+ * 调用级输出预算。单项 16k 之上还需要一道总闸:8 个任务拼起来 ~128k 字符会把父上下文
+ * 吃掉大半(review)。
+ *
+ * 先均分,再把短任务省下的额度让给超额任务 —— 常见形态是一个任务话多、其余很短,直接
+ * 均分会把长任务砍得没必要地狠。截断只切尾部,'## <agent> (failed)' 头部与失败诊断的
+ * 开头一定保留,不会因为超预算就丢掉"哪个任务失败了"这个信息。
+ */
+function fitSectionsToBudget(sections) {
+  let total = 0;
+  for (const section of sections) total += section.length;
+  if (total <= MAX_TOTAL_OUTPUT_CHARS || sections.length === 0) return sections;
+
+  let share = Math.floor(MAX_TOTAL_OUTPUT_CHARS / sections.length);
+  let surplus = 0;
+  let overCount = 0;
+  for (const section of sections) {
+    if (section.length <= share) surplus += share - section.length;
+    else overCount += 1;
+  }
+  if (overCount > 0) share += Math.floor(surplus / overCount);
+
+  return sections.map(function (section) {
+    return section.length <= share ? section : clampText(section, share);
+  });
+}
+
 /** 归一化入参成任务数组;抛出的错误直接回给模型(它能据此改调用)。 */
 function normalizeTasks(params) {
   const input = params && typeof params === 'object' ? params : {};
@@ -269,12 +299,39 @@ function assistantTextOf(message) {
   return parts.join('');
 }
 
+function emptyUsage() {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+}
+
+/**
+ * 累加子代理的一条 message_end.usage。
+ *
+ * 分量必须**逐项**留着,不能只汇总成一个 tokens:父进程要把这些委派用量并进本 turn 的
+ * 记账(input/output/cacheRead/cacheWrite 各自成列,外加 cost.total),register.ts 持久化
+ * 的 session 用量才包含委派请求。只给一个总数的话父侧无从拆分(review)。
+ */
 function addUsage(totals, usage) {
   if (!usage || typeof usage !== 'object') return;
   const keys = ['input', 'output', 'cacheRead', 'cacheWrite'];
   for (const key of keys) {
     const value = usage[key];
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) totals.tokens += value;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      totals[key] += value;
+      totals.tokens += value;
+    }
+  }
+  const cost = usage.cost && typeof usage.cost.total === 'number' && Number.isFinite(usage.cost.total)
+    ? usage.cost.total
+    : 0;
+  if (cost > 0) totals.cost += cost;
+}
+
+function mergeUsage(target, source) {
+  if (!source) return;
+  const keys = ['input', 'output', 'cacheRead', 'cacheWrite', 'cost'];
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) target[key] += value;
   }
 }
 
@@ -310,12 +367,13 @@ function runTask(binary, task, runtime, signal, onProgress) {
     try {
       child = spawn(binary, args, { cwd: process.cwd(), env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
-      resolve({ text: 'subagent failed to start: ' + String(err), isError: true, toolUses: 0, tokens: 0 });
+      resolve({ text: 'subagent failed to start: ' + String(err), isError: true, toolUses: 0, tokens: 0, usage: emptyUsage() });
       return;
     }
     liveChildren.add(child);
 
-    const totals = { tokens: 0 };
+    const totals = emptyUsage();
+    totals.tokens = 0;
     let toolUses = 0;
     let finalText = '';
     let stderr = '';
@@ -350,12 +408,12 @@ function runTask(binary, task, runtime, signal, onProgress) {
 
     const onAbort = function () {
       kill();
-      finish({ text: 'subagent aborted by user.', isError: true, toolUses: toolUses, tokens: totals.tokens });
+      finish({ text: 'subagent aborted by user.', isError: true, toolUses: toolUses, tokens: totals.tokens, usage: totals });
     };
     if (signal && typeof signal.addEventListener === 'function') {
       if (signal.aborted) {
         kill();
-        finish({ text: 'subagent aborted by user.', isError: true, toolUses: 0, tokens: 0 });
+        finish({ text: 'subagent aborted by user.', isError: true, toolUses: 0, tokens: 0, usage: emptyUsage() });
         return;
       }
       signal.addEventListener('abort', onAbort, { once: true });
@@ -375,6 +433,7 @@ function runTask(binary, task, runtime, signal, onProgress) {
         isError: true,
         toolUses: toolUses,
         tokens: totals.tokens,
+        usage: totals,
       });
     }, TASK_TIMEOUT_MS);
     if (timer && typeof timer.unref === 'function') timer.unref();
@@ -393,7 +452,7 @@ function runTask(binary, task, runtime, signal, onProgress) {
       if (!event || typeof event !== 'object') return;
       if (event.type === 'tool_execution_start') {
         toolUses += 1;
-        onProgress({ toolUses: toolUses, tokens: totals.tokens });
+        onProgress({ toolUses: toolUses, tokens: totals.tokens, usage: totals });
         return;
       }
       if (event.type === 'message_end') {
@@ -403,7 +462,7 @@ function runTask(binary, task, runtime, signal, onProgress) {
           const text = assistantTextOf(message);
           // 覆盖为最新一条有文本的 assistant 回复 = 子代理的结论。
           if (text.trim().length > 0) finalText = text;
-          onProgress({ toolUses: toolUses, tokens: totals.tokens });
+          onProgress({ toolUses: toolUses, tokens: totals.tokens, usage: totals });
         }
       }
     });
@@ -416,7 +475,7 @@ function runTask(binary, task, runtime, signal, onProgress) {
     });
     child.on('error', function (err) {
       liveChildren.delete(child);
-      finish({ text: 'subagent process error: ' + String(err), isError: true, toolUses: toolUses, tokens: totals.tokens });
+      finish({ text: 'subagent process error: ' + String(err), isError: true, toolUses: toolUses, tokens: totals.tokens, usage: totals });
     });
     child.on('close', function (code) {
       // 到 'close' 才摘除,不在 finish() 里摘:超时/中止已 finish 但进程还在 SIGKILL 宽限
@@ -426,7 +485,7 @@ function runTask(binary, task, runtime, signal, onProgress) {
       const body = finalText.trim().length > 0
         ? clampText(finalText, MAX_OUTPUT_CHARS)
         : (ok ? '(subagent produced no output)' : clampText(stderr, 2000) || ('subagent exited with code ' + String(code)));
-      finish({ text: body, isError: !ok, toolUses: toolUses, tokens: totals.tokens });
+      finish({ text: body, isError: !ok, toolUses: toolUses, tokens: totals.tokens, usage: totals });
     });
   });
 }
@@ -495,8 +554,8 @@ export default async function cindySubagent(pi: any) {
       const startedAt = Date.now();
       const label = tasks.map(function (t) { return t.agent; }).join(', ');
       const taskId = String(toolCallId || 'subagent');
-      const totals = { toolUses: 0, tokens: 0 };
-      const perTask = tasks.map(function () { return { toolUses: 0, tokens: 0 }; });
+      const totals = { toolUses: 0, tokens: 0, usage: emptyUsage() };
+      const perTask = tasks.map(function () { return { toolUses: 0, tokens: 0, usage: emptyUsage() }; });
 
       const report = function (status: string, summary?: string) {
         if (typeof onUpdate !== 'function') return;
@@ -508,6 +567,16 @@ export default async function cindySubagent(pi: any) {
           toolUses: totals.toolUses,
           totalTokens: totals.tokens,
           durationMs: Date.now() - startedAt,
+          // 委派用量的**累计**分量。父进程按 taskId 记住上次值、只把增量并进本 turn 的记账
+          // (register.ts 持久化的 session token/cost 因此包含子代理请求)。报累计而不是增量:
+          // 进度帧是 best-effort 的,丢一帧不该让那部分用量永久消失(review)。
+          usage: {
+            input: totals.usage.input,
+            output: totals.usage.output,
+            cacheRead: totals.usage.cacheRead,
+            cacheWrite: totals.usage.cacheWrite,
+            cost: totals.usage.cost,
+          },
         };
         details[MARKER] = 1;
         if (summary) details.summary = summary;
@@ -522,12 +591,15 @@ export default async function cindySubagent(pi: any) {
       const recompute = function () {
         let toolUses = 0;
         let tokens = 0;
+        const usage = emptyUsage();
         for (const entry of perTask) {
           toolUses += entry.toolUses;
           tokens += entry.tokens;
+          mergeUsage(usage, entry.usage);
         }
         totals.toolUses = toolUses;
         totals.tokens = tokens;
+        totals.usage = usage;
       };
 
       report('running');
@@ -540,11 +612,15 @@ export default async function cindySubagent(pi: any) {
           next += 1;
           if (index >= tasks.length) return;
           results[index] = await runTask(binary, tasks[index], runtime, signal, function (progress: any) {
-            perTask[index] = { toolUses: progress.toolUses, tokens: progress.tokens };
+            perTask[index] = { toolUses: progress.toolUses, tokens: progress.tokens, usage: progress.usage };
             recompute();
             report('running');
           });
-          perTask[index] = { toolUses: results[index].toolUses, tokens: results[index].tokens };
+          perTask[index] = {
+            toolUses: results[index].toolUses,
+            tokens: results[index].tokens,
+            usage: results[index].usage,
+          };
           recompute();
           report('running');
         }
@@ -560,7 +636,7 @@ export default async function cindySubagent(pi: any) {
         const head = '## ' + tasks[index].agent + (result && result.isError ? ' (failed)' : '');
         return head + '\n' + (result ? result.text : '(no result)');
       });
-      const text = sections.join('\n\n');
+      const text = fitSectionsToBudget(sections).join('\n\n');
       // 任一子任务失败即整卡 failed:部分成功不足以把批次报成完成(greptile P1)。
       report(aborted ? 'stopped' : failed > 0 ? 'failed' : 'completed',
         failed > 0 ? failed + ' of ' + results.length + ' subagents failed' : undefined);

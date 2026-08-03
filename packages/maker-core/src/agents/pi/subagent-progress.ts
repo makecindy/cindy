@@ -29,6 +29,54 @@ const MAX_TEXT = 2_000;
 /** 扩展与本模块共用的载荷标记 —— 扩展源码里逐字使用同一个键名。 */
 export const PI_SUBAGENT_PROGRESS_MARKER = '__cindySubagent';
 
+/**
+ * 子代理的**累计**用量分量(与 pi 自己的 `message_end.usage` 同形)。
+ *
+ * 子代理是独立 pi 进程,它的请求不经过父进程的 usage 流 —— 不显式并进来,父 turn 的记账
+ * 与 register.ts 持久化的 session token/cost 就会漏掉全部委派用量(review)。
+ */
+export interface PiSubagentUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
+
+/**
+ * parse 结果:卡片更新 + 可选的委派用量。
+ *
+ * 字段刻意叫 `delegatedUsage` 而不是 `usage`:`update.usage` 已经是**卡片**要显示的
+ * {totalTokens, toolUses, durationMs},两个都叫 usage 极易读错(我自己在改测试时就先踩了
+ * 一次)。这里是给父 turn 记账用的 token/cost 分量,语义完全不同。
+ */
+export interface PiSubagentProgress {
+  update: AgentTaskUpdateEventData;
+  /** 累计值,不是增量。调用方按 taskId 记住上次值再作差。 */
+  delegatedUsage?: PiSubagentUsage;
+}
+
+function readUsage(value: unknown): PiSubagentUsage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const read = (key: string): number => {
+    const n = raw[key];
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const usage: PiSubagentUsage = {
+    input: read('input'),
+    output: read('output'),
+    cacheRead: read('cacheRead'),
+    cacheWrite: read('cacheWrite'),
+    cost: read('cost'),
+  };
+  // 全零就当没有:避免为无意义的帧在父侧建立 taskId 记账条目。
+  if (!usage.input && !usage.output && !usage.cacheRead && !usage.cacheWrite && !usage.cost) {
+    return undefined;
+  }
+  return usage;
+}
+
 function readString(value: unknown, max = MAX_TEXT): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -50,7 +98,7 @@ function readCount(value: unknown): number | undefined {
  * 刻意不猜:状态不在白名单内一律按 running,而不是编造终态 —— 把仍在跑的子代理显示成
  * 已完成比没有状态更糟。
  */
-export function parsePiSubagentProgress(partialResult: unknown): AgentTaskUpdateEventData | null {
+export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgress | null {
   const raw = readProgressDetails(partialResult);
   if (!raw) return null;
 
@@ -79,16 +127,21 @@ export function parsePiSubagentProgress(partialResult: unknown): AgentTaskUpdate
   const summary = readString(raw.summary);
   const model = readString(raw.model, 200);
 
+  const delegatedUsage = readUsage(raw.usage);
+
   return {
-    provider: 'pi',
-    taskId,
-    parentToolUseId: taskId,
-    status,
-    ...(title ? { title } : {}),
-    ...(description ? { description } : {}),
-    ...(summary ? { summary } : {}),
-    ...(model ? { model } : {}),
-    ...(usage ? { usage } : {}),
+    update: {
+      provider: 'pi',
+      taskId,
+      parentToolUseId: taskId,
+      status,
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
+      ...(summary ? { summary } : {}),
+      ...(model ? { model } : {}),
+      ...(usage ? { usage } : {}),
+    },
+    ...(delegatedUsage ? { delegatedUsage } : {}),
   };
 }
 

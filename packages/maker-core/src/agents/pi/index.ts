@@ -710,8 +710,8 @@ export class PiAgent extends BaseAgent {
     // **返回 Promise 且调用方必须 await**:不能 fire-and-forget。startSession 要在会话对外
     // 暴露(模型能调 subagent)**之前**落盘初始 provider/model,否则 BYOM / 本地 provider 或
     // 非默认模型的会话一开始就调子代理时,文件还不存在 → 扩展不传 --provider/--model → 子进程
-    // 走 pi 默认解析,直接跑错 endpoint(review)。setModel 同理:切完模型立刻派子代理必须already
-    // 看到新值。
+    // 走 pi 默认解析,直接跑错 endpoint(review)。setModel 同理:切完模型立刻派子代理必须
+    // 已经能看到新值。
     //
     // **写失败一律 fail-closed,不许 catch 成功**(review):runtime 目录只读 / 磁盘满时,
     // 若把失败吞成成功,子代理会带着空快照或旧快照继续跑 —— BYOM / 本地 provider 的请求
