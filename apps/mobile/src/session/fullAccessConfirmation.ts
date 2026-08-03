@@ -32,16 +32,22 @@ type ShowAlert = (
   options?: AlertOptions,
 ) => void;
 
+export interface FullAccessConfirmationOptions {
+  /** 仅用于把新建任务默认权限恢复为该 agent 上一次明确选过的档位。 */
+  restoringRememberedChoice?: boolean;
+  showAlert?: ShowAlert;
+}
+
 /**
- * 手机端进入 Full access 的一次性确认。
- * 取消、系统 dismiss 或重复回调都保持原权限；不需要升级时直接放行。
+ * 手机端进入 Full access 的确认。只有新建任务恢复该 agent 上一次明确选择的权限时
+ * 直接沿用；其它从非 Full access 进入 Full access 的操作每次都确认。
  */
 export function confirmFullAccessChange(
   currentMode: unknown,
   nextMode: unknown,
-  showAlert: ShowAlert = Alert.alert,
+  options: FullAccessConfirmationOptions = {},
 ): Promise<boolean> {
-  if (!requiresFullAccessConfirmation(currentMode, nextMode)) {
+  if (options.restoringRememberedChoice || !requiresFullAccessConfirmation(currentMode, nextMode)) {
     return Promise.resolve(true);
   }
 
@@ -54,7 +60,7 @@ export function confirmFullAccessChange(
     };
 
     const copy = getFullAccessConfirmationCopy();
-    showAlert(
+    (options.showAlert ?? Alert.alert)(
       copy.title,
       copy.description,
       [
