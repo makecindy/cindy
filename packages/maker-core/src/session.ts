@@ -1117,10 +1117,12 @@ export class Session {
     if (isTerminal) {
       // 事件迭代器可能早在上一轮就已开始等待，上一轮排队的 done/error 会在新
       // turn dispatch 后才返回。默认按 next() 开始等待时的 generation 归属；唯一
-      // 例外是 provider send 仍 pending、handle 尚未置 running 时先到的 terminal
-      // error（Codex 允许 error 早于 turn/start response），它明确属于当前 reservation。
+      // 例外是 Codex provider send 仍 pending、handle 尚未置 running 时先到的 terminal
+      // error。Codex adapter 已按 turnId 过滤迟到错误，只有它允许 error 早于 turn/start
+      // response；其它 provider 不能靠 Session 的 reservation 瞬时状态推断归属。
       const terminalBeforeProviderStartSettled =
         event.type === 'error' &&
+        event.source === 'codex' &&
         this.sendReservation?.phase === 'dispatching' &&
         !this.isHandleTurnRunning();
       if (observedGeneration === this.turnGeneration || terminalBeforeProviderStartSettled) {

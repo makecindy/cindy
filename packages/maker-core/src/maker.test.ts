@@ -1977,6 +1977,95 @@ describe('Session turn send guard', () => {
     expect(terminalReasons).toEqual(['original_terminal']);
   });
 
+  it('does not attribute a queued prior-turn error to a newer non-Codex dispatch', async () => {
+    let releasePriorError!: () => void;
+    const priorErrorReady = new Promise<void>((resolve) => {
+      releasePriorError = resolve;
+    });
+    let releaseCrash!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      releaseCrash = resolve;
+    });
+    let sendEntered!: () => void;
+    const sendReady = new Promise<void>((resolve) => {
+      sendEntered = resolve;
+    });
+    let running = false;
+    const handle = createHandle({ id: 'thread-queued-prior-error', agentKind: 'claude-code' });
+    handle.isTurnRunning = () => running;
+    handle.send = vi.fn(async (message, opts) => {
+      if (message.content === 'first') {
+        running = false;
+        return;
+      }
+      sendEntered();
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        let first = true;
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            if (first) {
+              first = false;
+              await priorErrorReady;
+              return {
+                done: false,
+                value: {
+                  type: 'error',
+                  data: {
+                    message: 'queued prior-turn terminal error',
+                    reason: 'prior_terminal',
+                    isTerminal: true,
+                  },
+                  source: 'claude-code',
+                },
+              };
+            }
+            await crashReady;
+            throw new Error('events crashed during newer dispatch');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-queued-prior-error',
+      agentKind: 'claude-code',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle, 'claude-code').capabilities,
+      logger: createLogger(),
+    });
+    const terminalReasons: Array<string | undefined> = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalReasons.push((event.data as { reason?: string }).reason);
+      }
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    await session.send('first');
+    const secondSend = session.send('second');
+    await sendReady;
+    releasePriorError();
+    await Promise.resolve();
+    releaseCrash();
+    await closed;
+
+    await expect(secondSend).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(terminalReasons).toEqual(['prior_terminal', 'session_event_loop_crashed']);
+  });
+
   it('reports a crash after a queued prior-turn terminal event when a newer turn is running', async () => {
     let releasePriorDone!: () => void;
     const priorDoneReady = new Promise<void>((resolve) => {
