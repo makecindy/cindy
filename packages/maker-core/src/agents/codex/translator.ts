@@ -47,6 +47,10 @@ import {
 } from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
+import {
+  formatTerminalRateLimitRetryMessage,
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
+} from './terminal-rate-limit-retry.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -137,6 +141,14 @@ export interface CodexTranslateContext {
    * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
    */
   tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
+  /**
+   * daemon 已耗尽内部 retry budget 的终态 429 接管钩子。agent 层负责严格分类、
+   * turn 归属、产出守卫与预算；translator 只编码独立 reason / 进度契约。
+   */
+  tryTakeOverTerminalRateLimit?: () => {
+    attempt: number;
+    maxAttempts: number;
+  } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -363,6 +375,27 @@ export function translateErrorNotification(
           ...safeErrorData,
           ...overloadReason,
           message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
+  if (!params.willRetry && !isCapacityError) {
+    const progress = ctx.tryTakeOverTerminalRateLimit?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          reason: TERMINAL_RATE_LIMIT_RETRY_REASON,
+          message: formatTerminalRateLimitRetryMessage(
+            safeMessage,
+            progress.attempt,
+            progress.maxAttempts,
+          ),
           isTerminal: false,
           willRetry: true,
         },

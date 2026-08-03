@@ -48,6 +48,12 @@ export {
   type OverloadError,
   type OverloadErrorKind,
 } from './shared/overload-error.js';
+// Desktop main 的 IM / hook 渠道与 maker-core 同 bundle，直接复用终态 429 的
+// reason + marker 解析契约，避免渠道侧再维护一份正则。
+export {
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
+  parseTerminalRateLimitRetryProgress,
+} from './codex/terminal-rate-limit-retry.js';
 // 同上理由(同 bundle 直接复用): desktop main 的错误投影 / IM 渠道要认「上下文超限」
 // 这一类 —— 原样重试必败, 恢复动作是压缩上下文或新开会话, 与过载 / 网络类的自动
 // 重试语义相反。详见 shared/context-overflow-error.ts 的模块注释(#1429)。

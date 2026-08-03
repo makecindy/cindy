@@ -252,7 +252,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       return failure('SESSION_UNAVAILABLE', 'errand 会话进程不可用,请稍后再试');
     }
     const observer = observeHookTurn(session, {
-      answerOnlyProgress: true,
+      // 不传 onProgress: errand 只取终态结果, 不向任何渠道发过程快照。
       onSilentStopSettled: deps.onSilentStopSettled,
       log: { warn: (msg) => deps.log.warn(msg) },
     });

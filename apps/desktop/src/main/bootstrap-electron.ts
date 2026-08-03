@@ -21,7 +21,6 @@ import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { machineIdSync } from 'node-machine-id';
@@ -240,6 +239,8 @@ import {
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { handleOpenFileInBrowser } from './openFileInBrowser';
+import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
@@ -4980,56 +4981,52 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // file-chip 右键菜单 "在浏览器中查看":拿绝对路径,校验扩展名在 HTML
-  // 白名单内,然后 shell.openExternal(file:// URL) 走系统默认 file://
+  // file-chip 右键菜单 / 内置浏览器 "在系统浏览器打开":接收绝对路径或
+  // 本机 file:// URL,校验扩展名在 HTML 白名单内,然后走系统默认 file://
   // 处理器(绝大多数 OS 上 .html/.htm 都映射到默认浏览器)。和
   // `shell:open-external` 分开是因为后者只放行 http(s) 防滥用;这里收窄到
   // 受控的扩展名集合后,放行 file:// 是可控的。
+  const openFileInBrowserLog = createLogger('shell:open-file-in-browser');
+  const openFileUrlWithWindowsHandler = createWindowsFileUrlOpener({
+    platform: process.platform,
+    windowsDir: process.env.WINDIR,
+    execFile: (file, args, options, callback) => execFile(file, args, options, callback),
+  });
   ipcMain.handle(
     'shell:open-file-in-browser',
     async (
-      _event: Electron.IpcMainInvokeEvent,
-      filePath: string,
-    ): Promise<{ success: boolean; error?: string }> => {
-      try {
-        if (!filePath || !path.isAbsolute(filePath)) {
-          return { success: false, error: 'Path must be absolute' };
-        }
-        if (!isPathAllowed(filePath)) {
-          return { success: false, error: '不允许访问该路径' };
-        }
-        if (!isBrowserOpenablePath(filePath)) {
-          return { success: false, error: '该文件类型不支持浏览器查看' };
-        }
-        if (!fs.existsSync(filePath)) {
-          return { success: false, error: '文件不存在' };
-        }
-        // 先试 file:// + openExternal —— 保留原行为(按扩展名走默认处理器,
-        // .html / .pdf / .svg 一般落到浏览器)。但 Windows 上 openExternal 对
-        // percent-encode 过的 file:// URL(路径含中文 / 空格时)会报
-        // 0x2 ERROR_FILE_NOT_FOUND;此时兜底走 shell.openPath(原生路径,不做
-        // URL 编码,中文 / 空格都稳)。兜底只在原 file:// URL 本就打不开时触发,
-        // 故不会回归任何原本能正常打开的情况。
-        const fileUrl = pathToFileURL(filePath).toString();
-        try {
-          await shell.openExternal(fileUrl);
-        } catch (e) {
-          // 记录 openExternal 首因再走兜底,否则兜底也失败时只剩 openPath 的
-          // 错误,无法区分"file:// 编码问题"还是"文件 / 权限问题",难排障。
-          createLogger('shell:open-file-in-browser').warn(
-            'openExternal failed, fallback to openPath',
-            {
-              fileUrl,
-              error: String(e),
-            },
-          );
-          const errMsg = await shell.openPath(filePath);
-          if (errMsg) return { success: false, error: errMsg };
-        }
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
-      }
+      event: Electron.IpcMainInvokeEvent,
+      filePathOrUrl: string,
+    ): Promise<{ success: true }> => {
+      assertTrustedAppRendererEvent(event);
+      const result = await handleOpenFileInBrowser(filePathOrUrl, {
+        isPathAllowed,
+        isBrowserOpenablePath,
+        existsSync: fs.existsSync,
+        openExternal: (url) => shell.openExternal(url),
+        openPath: (filePath) => shell.openPath(filePath),
+        openUrlWithWindowsHandler: openFileUrlWithWindowsHandler,
+        onOpenExternalError: ({ filePath, hasUrlState, error }) => {
+          openFileInBrowserLog.warn('openExternal failed', {
+            filePath,
+            hasUrlState,
+            fallback: hasUrlState
+                ? openFileUrlWithWindowsHandler
+                ? 'windows-url-handler'
+                : 'disabled'
+              : 'openPath',
+            error: String(error),
+          });
+        },
+        onWindowsUrlFallbackError: ({ filePath, error }) => {
+          openFileInBrowserLog.warn('Windows file URL fallback failed', {
+            filePath,
+            error: String(error),
+          });
+        },
+      });
+      if (!result.success) throwIpcError(result.errorCode, result.error);
+      return result;
     },
   );
 

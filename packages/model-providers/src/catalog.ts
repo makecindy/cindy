@@ -10,6 +10,7 @@
 
 import { parseModelRegistry } from '@cindy/model-access-protocol';
 
+import { PI_REASONING_EFFORTS } from './types.js';
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
@@ -31,6 +32,24 @@ function isAgentKind(v: unknown): v is AgentKind {
 
 function isEffort(v: unknown): v is Effort {
   return typeof v === 'string' && (EFFORTS as readonly string[]).includes(v);
+}
+
+function hasValidPresetReasoningCapability(
+  agent: AgentKind,
+  model: Record<string, unknown>,
+): boolean {
+  const hasCapability = model.reasoning !== undefined || model.reasoningEfforts !== undefined;
+  if (!hasCapability) return true;
+  if (agent !== 'pi' || typeof model.reasoning !== 'boolean') return false;
+  if (model.reasoning !== true) return model.reasoningEfforts === undefined;
+  if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) return false;
+  const efforts = model.reasoningEfforts;
+  return (
+    efforts.every(
+      (effort) =>
+        typeof effort === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
+    ) && new Set(efforts).size === efforts.length
+  );
 }
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -381,6 +400,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
         return false;
       }
+      if (!hasValidPresetReasoningCapability(agent, mm)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;

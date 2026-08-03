@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
@@ -64,6 +64,117 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
     expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+  });
+
+  it('preserves the explicit effort subset of a Pi BYOM model in remote capabilities', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'explicit-reasoning',
+        name: 'Explicit reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [
+              {
+                id: 'reasoner',
+                name: 'Reasoner',
+                reasoning: true,
+                reasoningEfforts: ['low', 'high'],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'reasoner')).toMatchObject({
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner')).toMatchObject({
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('intersects flat Pi efforts when a later BYOM provider reuses a built-in model id', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'colliding-reasoning',
+        name: 'Colliding reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [
+              {
+                id: 'xai/grok-4.3',
+                name: 'Grok 4.3 through BYOM',
+                reasoning: true,
+                reasoningEfforts: ['low'],
+              },
+              {
+                id: 'xai/grok-4.5',
+                name: 'Grok 4.5 without declared reasoning',
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const flatModels = deriveAvailableModels(catalog, 'pi');
+    const flat = flatModels.filter((m) => m.id === 'xai/grok-4.3');
+    expect(flat).toHaveLength(1);
+    expect(flat[0]).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'xai/grok-4.3'),
+    ).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(flatModels.find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
+  });
+
+  it('resolves the cindy gateway descriptor from built-ins when a non-reasoning BYOM claims the same id first', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.unshift(
+      buildUserProvider({
+        id: 'colliding-non-reasoning',
+        name: 'Colliding non-reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [{ id: 'xai/grok-4.5', name: 'Grok 4.5 without reasoning' }],
+          },
+        },
+      }),
+    );
+
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'xai/grok-4.5'),
+    ).toMatchObject({ efforts: [], defaultEffort: null });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'xai/grok-4.5')).toMatchObject({
+      efforts: ['minimal', 'low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
   });
 
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {

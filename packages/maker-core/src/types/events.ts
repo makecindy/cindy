@@ -121,6 +121,8 @@ export interface AgentEvent {
    * translator 不产生此字段;消费方(IM 转播等)按需读取,默认忽略。
    */
   turnOrigin?: SendOrigin;
+  /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
+  turnAttemptToken?: number;
   /**
    * Vendor-specific 元数据透传 (claude-code 的 SDK uuid / parentUuid / sdkSessionId /
    * model / stopReason / requestId / usage 等)。host 落库时塞进 messages.agent_meta 列,

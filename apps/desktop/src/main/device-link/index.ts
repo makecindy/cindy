@@ -30,6 +30,7 @@ import {
   type LinkClosePayload,
   type Envelope,
   type PushPayload,
+  DeviceLinkError,
   INVOKE_TIMEOUT_OVERRIDES_MS,
 } from '@cindy/device-link';
 import * as authManager from '../authManager';
@@ -106,6 +107,7 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
+  OPEN_LINK_OBSERVATION_CHANNEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
 
@@ -135,7 +137,13 @@ let client: DeviceLinkClient | null = null;
  * 由 presence 闪断路径接管恢复) / 次数耗尽(用户下次打开远程视图惰性重建)。
  */
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
-  reopen: (deviceId) => openRemoteLink(deviceId),
+  reopen: async (deviceId) => {
+    await openRemoteLink(deviceId);
+    // link 重建成功后定向补一次订阅重放:transport-timeout 场景被控端保留了
+    // 订阅状态,重放是幂等 no-op;before-link 死锁场景(link-accept 曾丢失)
+    // 被控端可能从未提交过订阅(幽灵订阅防护),不补就只恢复了链路、缺推送流。
+    replayActiveSubscriptions('link-reopen', deviceId);
+  },
   // 授权边界见 shouldAbortTransportTimeoutReopen 注释:刻意**不看**
   // revokedControllers——那是「对方不再允许控制本机」,与本机主动控制对方
   // 无关;互控且仅反向撤权时重建必须照常。目标侧撤销本机控制权由入站
@@ -418,7 +426,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       arbiter?.isOwner() === true &&
       presenceAvailableByDevice.get(deviceId) === true &&
       !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
-    recoverLink: (deviceId) => openRemoteLink(deviceId),
+    // observed:false 且是唯一豁免熔断快速拒绝的建链入口:recoverLink 是探测
+    // 周期的延伸(业务/探测超时已由 tracker 记账,不重复观测),且 open 期间
+    // 必须真正上线重建 link——否则「探测超时→重开 link→下次探测走新链路」的
+    // 恢复回路会被熔断门禁自己挡死(观测入口 observed:true 在 open 态快速
+    // 拒绝,review P2)。频度由探测退避与 openLinkInFlight 单飞约束。open
+    // 期间 transport-timeout 重建照旧让位(观测入口被快速拒绝,熔断关闭后
+    // 下一次触发生效),恢复统一由探测循环驱动。
+    recoverLink: (deviceId) => openRemoteLink(deviceId, { observed: false }),
     log: {
       info: (...args) => log.info(...args),
       warn: (...args) => log.warn(...args),
@@ -433,14 +448,26 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   client.onStatusChange((status) => {
     if (status !== 'online') {
-      openLinkInFlight.clear();
+      // 不清 openLinkInFlight:登记生命周期的唯一判据是 promise settle(每个
+      // 请求 settle 时自清理,closeRemoteLink 的显式删除有取消代次兜底)。建链
+      // 可能正 park 在上线等待里,状态抖动时提前删登记会让同设备的下一次调用
+      // 开出第二个物理 link-open,破坏单飞(review P2);而已上管道的请求断线
+      // 时由 client 层 reject,settle 清理有界,不会滞留。
       // relay 离线:重开循环全部终止,恢复交给断线重连后的 presence 闪断路径。
       transportTimeoutReopen.dispose();
     }
     // 断线期间 relay 不会为对端补发 offline presence,重连后同一台电脑仍以
     // online 到达,`wasOnline` 还是 true —— 上线握手不会触发,而断线这段时间的
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
-    if (status !== 'online') presenceOnlineByDevice.clear();
+    // availability 同理(presence 是增量广播,verdict 只在连接代内有效,mobile
+    // resetPresenceAvailabilityForConnection 同款):不清的话,断线期间目标离线
+    // → 重连首轮重放吃 DEVICE_OFFLINE、退避循环被 presence 门禁按住 → 目标再
+    // 上线时 wasAvailable 仍是 true,「不可用→可用」翻转永远不发生,推送流一直
+    // 缺到下次无关恢复事件(review P1)。
+    if (status !== 'online') {
+      presenceOnlineByDevice.clear();
+      presenceAvailableByDevice.clear();
+    }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') {
@@ -464,15 +491,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
   // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。只对本机确实在控制
-  // (有活跃订阅)的设备主动重建链路;client 侧已 30s/peer 节流,openRemoteLink
-  // 自带 in-flight 去重。被控端方向(控制端给本机发帧)没有订阅记录,自然忽略。
+  // (有活跃订阅)的设备主动重建;被控端方向(控制端给本机发帧)没有订阅记录,
+  // 自然忽略。重建走 transport-timeout 同一条重开收敛循环,而不是一次性
+  // openRemoteLink:两者语义同为「link 需要重建」,一次失败(对端瞬时繁忙 /
+  // relay 抖动)不该放弃——循环自带退避、per-device 去重与授权边界复验。
   client.onReliableFrameBeforeLink((deviceId) => {
     if (snapshotSubscriptions(deviceId).length === 0) return;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
     log.info(`re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`);
-    openRemoteLink(deviceId).catch((err) => {
-      log.debug(`re-open link for ${deviceId.slice(0, 8)} failed`, err);
-    });
+    transportTimeoutReopen.trigger(deviceId);
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
@@ -482,7 +509,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
-    if (!available && wasAvailable === true) responsivenessTracker?.clearDevice(snap.deviceId);
+    // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
+    // (wasAvailable=undefined)同样必须清——否则断线前已 open 的熔断残留,而
+    // presence 不可用又让探测永久不合格,「无响应」会一直遮蔽真实离线/禁用态
+    // (review P2)。翻转判据统一为「观察到进入某状态(含从未知)即触发一次」。
+    if (!available && wasAvailable !== false) responsivenessTracker?.clearDevice(snap.deviceId);
     setControllerPlatform(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
@@ -490,7 +521,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
     handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
-    if (available && wasAvailable === false) {
+    // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
+    // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
+    // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
+    // 在线时 ws-online 重放已先行,这里多发的一次 subscribe 幂等(重放代次翻代
+    // 收敛)。
+    if (available && wasAvailable !== true) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
     // 词典同步不看「允许被控」开关(push 帧不是控制类帧,这是自己设备之间的数据
@@ -873,46 +909,122 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
 }
 
 /**
- * 重放失败的有限重试(弱网修复,2026-08):重连后的 subscribe 若恰好赶上链路抖动
- * 失败,此前只留一行 warn —— push 流静默缺失,直到下一次重连或用户手动操作。
- * 每设备最多补 2 次(3s / 9s),重试前重新校验前置条件并取当前订阅快照;熔断 open
- * 的设备不重试(恢复时 tracker 自会触发一次定向重放)。
+ * 重放失败的退避收敛循环(mobile rehydrate 同精神):重连后的 subscribe 若赶上
+ * 链路抖动失败,不再「补 2 次后放弃」——push 流静默缺失会一直持续到下次重连或
+ * 用户手动操作。改为 3s×2^n 指数退避、封顶 30s,重试到成功或命中终止条件
+ * (登出 / relay 离线 / presence 不可用 / 订阅快照已空)。与熔断器的分工:超时类
+ * 失败由 subscribe 回包喂熔断,open 后本循环让位(终止条件之一),恢复时 tracker
+ * 触发定向重放接棒;本循环负责熔断覆盖不到的非超时瞬时失败(BACKPRESSURE /
+ * NOT_CONNECTED / 链路重建竞态)的持续收敛。
  */
-const SUBSCRIPTION_REPLAY_RETRY_DELAYS_MS = [3_000, 9_000] as const;
+const SUBSCRIPTION_REPLAY_RETRY_BASE_MS = 3_000;
+const SUBSCRIPTION_REPLAY_RETRY_MAX_MS = 30_000;
 const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * 订阅重放的永久失败判据:这些码代表「重试同一动作不可能改变结果」的终态
+ * (协议不符 / 对端明确拒绝 / 授权被收回 / 本机 fail-closed 门),各自有独立的
+ * 恢复事件,不归退避循环管。DeviceLinkError.code 优先,兜底解析 message 里的
+ * [CODE] 编码(本机门禁抛的是普通 Error)。
+ */
+const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
+  'VERSION_MISMATCH',
+  'REMOTE_DISABLED',
+  'ACCESS_REVOKED',
+  'CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_CONTROL_DISABLED',
+  'DEVICE_LINK_STANDBY',
+  // DEVICE_OFFLINE 刻意不在列(MOBILE-PARITY-CHECKLIST §2 归瞬态):presence
+  // 滞后窗口内 subscribe 可能先吃到 DEVICE_OFFLINE,归永久会在「presence 仍
+  // available」期间放弃收敛;归瞬态则退避循环续跑,presence 补到 offline 时由
+  // 重试前置门(presenceAvailableByDevice !== true)自然终止,设备回归再由
+  // presence 翻转重放接棒——两个终止/恢复信号都已存在,无泄漏风险(review P2)。
+]);
+
+function isPermanentSubscriptionReplayError(err: unknown): boolean {
+  if (err instanceof DeviceLinkError) return PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(err.code);
+  const message = err instanceof Error ? err.message : String(err);
+  const code = /\[([A-Z_]+)\]/.exec(message)?.[1];
+  return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
+}
+
+/**
+ * 每设备的重放代次:只有当前代允许排下一次重试。timer map 只能取消**未触发**的
+ * 排期,取消不了已在途的 remoteSubscribe——并发触发(ws-online / presence 恢复 /
+ * 熔断恢复重叠)会让新旧两轮各自失败后各排各的 timer,旧轮回调还会误删新轮的
+ * 登记,退化成多条并行永久循环(review P2)。代次是在途请求失败回调的身份证:
+ * 外部触发翻代,旧代失败回调见代次不符即终止,任意并发形态下每设备至多一条
+ * 收敛循环存活。
+ */
+const subscriptionReplayGenerations = new Map<string, number>();
+
+/**
+ * 取消某设备的订阅重放收敛循环:翻代作废在途请求的失败回调 + 清已排期定时器。
+ * closeRemoteLink 的取消义务之一——循环无上限收敛后,不取消的话 close 后定时器
+ * 仍会以**新代次**重新 remoteSubscribe,经按需建链把用户刚关的链路建回来。
+ */
+function cancelSubscriptionReplay(deviceId: string): void {
+  subscriptionReplayGenerations.set(
+    deviceId,
+    (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1,
+  );
+  const timer = subscriptionReplayRetryTimers.get(deviceId);
+  if (timer) {
+    clearTimeout(timer);
+    subscriptionReplayRetryTimers.delete(deviceId);
+  }
+}
 
 function replayDeviceSubscription(
   deviceId: string,
   topics: string[],
   reason: string,
   attempt: number,
+  generation?: number,
 ): void {
-  // 新一轮重放顶掉该设备挂起的重试,避免多路触发(ws-online / presence / 熔断恢复)叠加。
+  // 外部触发(无 generation)翻代:顶掉挂起的 timer,同时使旧代在途请求失效。
+  let gen: number;
+  if (generation === undefined) {
+    gen = (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1;
+    subscriptionReplayGenerations.set(deviceId, gen);
+  } else {
+    gen = generation;
+  }
   const prev = subscriptionReplayRetryTimers.get(deviceId);
   if (prev) {
     clearTimeout(prev);
     subscriptionReplayRetryTimers.delete(deviceId);
   }
   void remoteSubscribe(deviceId, topics).catch((err) => {
-    const delay = SUBSCRIPTION_REPLAY_RETRY_DELAYS_MS[attempt];
-    if (delay === undefined) {
+    // 旧代在途请求的迟到失败:已被新一轮取代,不再排重试也不动新代的登记。
+    if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
+    // 永久失败不进收敛循环(review P2):VERSION_MISMATCH 等终态下 presence 可能
+    // 一直 online、熔断也把终态应答记为恢复证据,定时器的终止条件全不命中,
+    // 移除次数上限后会永久每 30s 重发刷 warn。放弃后由对应终态自己的恢复事件
+    // 兜底(presence 翻转 / 版本升级后重连 / 用户显式重开)。
+    if (isPermanentSubscriptionReplayError(err)) {
       log.warn(
-        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, giving up: ${String(err)}`,
+        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, permanent, giving up: ${String(err)}`,
       );
       return;
     }
+    const delay = Math.min(
+      SUBSCRIPTION_REPLAY_RETRY_BASE_MS * 2 ** attempt,
+      SUBSCRIPTION_REPLAY_RETRY_MAX_MS,
+    );
     log.warn(
       `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, retrying in ${delay}ms: ${String(err)}`,
     );
     const timer = setTimeout(() => {
       subscriptionReplayRetryTimers.delete(deviceId);
+      if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
       if (linkTornDown || client?.getStatus() !== 'online') return;
       if (responsivenessTracker?.isUnresponsive(deviceId)) return;
       if (presenceAvailableByDevice.get(deviceId) !== true) return;
       // 快照可能已变(窗口退订 / 新增 topic):按该设备当前的订阅快照重放。
       const current = snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId);
       if (!current || current.topics.length === 0) return;
-      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1);
+      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1, gen);
     }, delay);
     timer.unref?.();
     subscriptionReplayRetryTimers.set(deviceId, timer);
@@ -1148,23 +1260,85 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
   }
 }
 
-/** 控制端:向目标设备发起控制链路(link-open → link-accept) */
-export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayload> {
+/**
+ * 掉线/重连窗口里发起请求时,先有界等待连接就绪(与 mobile 的
+ * ensureOnlineForRequest 同款):online 直接放行;否则 un-park 退避计时器促成
+ * 立即重连并有界等待上线。上限够一次健康重连握手完成(通常 <1s),又短到
+ * 连不上时快速失败(NOT_CONNECTED,瞬态)交上层重试链/熔断——把「单次请求
+ * park 在退避 gap 里干等(最坏 30s)」压成「等一次重连」。
+ */
+const CONNECT_READY_TIMEOUT_MS = 1_500;
+
+async function ensureOnlineForRequest(): Promise<void> {
+  if (!client || client.getStatus() === 'online') return;
+  await client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
+}
+
+/** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
+const openLinkCloseEpochs = new Map<string, number>();
+
+/**
+ * 控制端:向目标设备发起控制链路(link-open → link-accept)。
+ *
+ * observed=true(默认,顶层入口:renderer 显式打开 / reopen 收敛循环)时纳入
+ * 熔断观测(mobile sendOpenLink 同语义):熔断 open 时快速失败不上管道;超时
+ * 计失败;终态 relay 应答(DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)
+ * 是「链路在应答」的恢复证据(见 classifyOpenLinkFailure);成功经
+ * OPEN_LINK_OBSERVATION_CHANNEL(NEUTRAL 集合)记不定论——link-accept 在被控端
+ * dispatch 于 runInvoke 之前特判应答,不作关熔断的恢复证据。
+ *
+ * observed=false 供**已在外层 guardInvoke 观测内**的嵌套路径使用
+ * (remoteSubscribe 的按需建链 / remoteInvoke 的 LINK_NOT_OPEN 恢复):同一次
+ * openLink 超时若内外层各记一次,单次失败消耗两个 strike,三批阈值退化成两批
+ * 就误开熔断(review P2)——嵌套路径的失败由外层统一记账。
+ *
+ * 观测唯一性不变量(收敛检查点,review P2 ×2):**单次物理 openLink 失败恰好
+ * 结算一次**,与谁复用无关。observed 发起的请求失败时打 markBreakerObserved
+ * 标记——in-flight 复用会让同一 promise 的失败冒泡进加入者的业务 guard(跨
+ * 250ms cohort 窗口时不再同批),标记让后续 guard 一律按不定论结算。
+ * 反向(unobserved 发起、observed 加入)复用者在 in-flight 早退处直接返回,
+ * 不新增观测,失败由发起者所在的外层 guard 记账,同样恰好一次。
+ */
+export async function openRemoteLink(
+  deviceId: string,
+  opts?: { observed?: boolean },
+): Promise<LinkAcceptPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   const existing = openLinkInFlight.get(deviceId);
   if (existing) return existing;
 
-  const request = client.openLink(deviceId, {
-    controllerName: deviceName(),
-    protocolVersion: 1,
-    appVersion: app.getVersion(),
-    capabilities: [
-      CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-    ],
-  });
+  // 取消代次:closeRemoteLink 无法 abort 已在等待上线的 promise,只能翻代;
+  // 等待结束后复验代次,把「用户刚关闭的链路被迟到的建链重新建立」挡在发送前
+  // (review P2:close-during-reconnect)。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const doOpen = async (): Promise<LinkAcceptPayload> => {
+    await ensureOnlineForRequest();
+    // fail-closed 边界不得跨 await 失效:1.5s 等待期间用户可能已在设置里关闭
+    // 对该设备的控制(复验授权),或显式 CLOSE_LINK(复验取消代次)(review P1/P2)。
+    assertRemoteControlTargetEnabled(deviceId);
+    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+    }
+    if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    return client.openLink(deviceId, {
+      controllerName: deviceName(),
+      protocolVersion: 1,
+      appVersion: app.getVersion(),
+      capabilities: [
+        CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ],
+    });
+  };
+  // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
+  // 后续 guard 见标不定论):observed 发起、unobserved 发起被多个业务加入者
+  // 复用等全部形态都收敛到同一判据,这里不再自行打标。
+  const observed = opts?.observed !== false;
+  const request = observed && responsivenessTracker
+    ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
+    : doOpen();
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {
     if (openLinkInFlight.get(deviceId) === request) openLinkInFlight.delete(deviceId);
@@ -1175,10 +1349,20 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
-  // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
-  // 链路建回来。
+  // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
+  // 恢复机制,漏一个就是「刚关又被自动建回」。当前全量:
+  //   1. transportTimeoutReopen 重开循环;
+  //   2. pendingPeerLinkReopens 重开队列;
+  //   3. 订阅重放收敛循环(翻代 + 清定时器);
+  //   4. 在途建链(登记删除 + closeEpochs 翻代拦 park 中的等待);
+  //   5. remoteInvoke / remoteSubscribe 在途调用(经 4 的代次在发送/重开前自败)。
+  // 新增任何 per-device 重试/恢复机制时必须同步登记到本清单。
   transportTimeoutReopen.cancel(deviceId);
   cancelPendingPeerLinkReopen(deviceId);
+  cancelSubscriptionReplay(deviceId);
+  // 在途建链可能正 park 在上线等待里(map 删除挡不住它):翻代,让它在等待
+  // 结束后的复验处自我取消。
+  openLinkCloseEpochs.set(deviceId, (openLinkCloseEpochs.get(deviceId) ?? 0) + 1);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }
@@ -1212,14 +1396,36 @@ export async function remoteInvoke(
 ): Promise<InvokeResultPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
-  const invoke = (): Promise<InvokeResultPayload> => {
+  // 取消代次快照(不变量 3 的对称路径,review P1):等待上线期间用户 CLOSE_LINK
+  // 时,上线后的发送会吃到 LINK_NOT_OPEN,而恢复回调若按**关闭后**的新代次重新
+  // 建链,就把用户刚执行的断开又建了回来。代次在进入任何 await 之前快照,发送
+  // 前与自动重开前都复验:跨过 CLOSE_LINK 的在途调用一律失效,不进恢复。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const assertLinkNotClosedSinceStart = (): void => {
+    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+    }
+  };
+  const invoke = async (): Promise<InvokeResultPayload> => {
+    // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
+    await ensureOnlineForRequest();
+    // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(复验
+    // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
+    assertRemoteControlTargetEnabled(deviceId);
+    assertLinkNotClosedSinceStart();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
       invoke,
-      () => openRemoteLink(deviceId),
+      // 已在外层 guardInvoke 观测内:openLink 失败由外层统一记账,不重复观测。
+      // 重开前复验取消代次:openRemoteLink 自身按**调用时**代次快照,对本次
+      // invoke 启动后发生的 CLOSE_LINK 无感知,必须由持有旧代次的这里拒绝。
+      () => {
+        assertLinkNotClosedSinceStart();
+        return openRemoteLink(deviceId, { observed: false });
+      },
       () => assertRemoteControlTargetEnabled(deviceId),
       () => closeRemoteLink(deviceId),
     );
@@ -1240,10 +1446,36 @@ export async function remoteSubscribe(
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+  // 等待期间(上线等待 / 建链等待)窗口可能已退订/销毁(refcount 引用已移除):
+  // 按当前快照过滤,只发仍被引用的 topics——照旧发送会在被控端留下本地已无
+  // 引用、以后也不会退订的幽灵订阅(mobile 等待后 shouldSend 复验同款)。
+  // 与授权复验同一条不变量:过滤必须发生在**最后一个 await 之后**、真正
+  // client.invoke 之前(review P2 ×2:首轮只滤在 openRemoteLink 之前,建链
+  // 最长还能再等一次完整 link-open,快照又过期了)。
+  const liveTopicsNow = (): string[] => {
+    const live = new Set(
+      snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId)?.topics ?? [],
+    );
+    return topics.filter((topic) => live.has(topic));
+  };
+  // 取消代次快照(不变量 3 的对称路径,与 remoteInvoke 同款):等待期间用户
+  // CLOSE_LINK 后,这条在途订阅不得按需把用户刚关的链路重新建起来。只挡跨过
+  // CLOSE_LINK 的在途调用;之后的新调用(重放重试 / 用户重开)按新代次照常。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const run = async (): Promise<InvokeResultPayload> => {
+    await ensureOnlineForRequest();
+    let liveTopics = liveTopicsNow();
+    if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
-      await openRemoteLink(deviceId);
+    if (requiresSessionLink(liveTopics) && !client.isLinkReady(deviceId)) {
+      if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+        throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+      }
+      // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
+      await openRemoteLink(deviceId, { observed: false });
+      // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
+      liveTopics = liveTopicsNow();
+      if (liveTopics.length === 0) return { ok: true, result: null };
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
@@ -1251,7 +1483,7 @@ export async function remoteSubscribe(
       channel: DL_SUBSCRIBE_CHANNEL,
       args: [
         {
-          topics,
+          topics: liveTopics,
           controllerName: deviceName(),
           capabilities: [
             CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,

@@ -2211,9 +2211,10 @@ describe('Session turn send guard', () => {
     await expect(close).resolves.toBe(true);
   });
 
-  it('releases the reservation when handle.send fails before a turn starts', async () => {
+  it('releases the failed send reservation but fences reuse until terminal drain closes', async () => {
     const handle = createHandle({ id: 'thread-1' });
     const firstError = new Error('boom');
+    handle.close = vi.fn(async () => undefined);
     handle.send = vi.fn()
       .mockRejectedValueOnce(firstError)
       .mockResolvedValueOnce(undefined);
@@ -2225,10 +2226,20 @@ describe('Session turn send guard', () => {
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
 
     await expect(session.send('first')).rejects.toBe(firstError);
-    await expect(session.send('second')).resolves.toEqual({ accepted: true });
-    expect(handle.send).toHaveBeenCalledTimes(2);
+    expect(session.isTurnRunning()).toBe(false);
+    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    expect(handle.send).toHaveBeenCalledTimes(1);
+
+    await closed;
+    expect(session.getStatus()).toBe('closed');
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });
 

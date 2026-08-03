@@ -105,6 +105,141 @@ function anthropicStreamBody(text: string): string {
   ]);
 }
 
+/** 最小完整的 OpenAI Responses SSE 流：供 Pi 原生 Responses BYOM 回归使用。 */
+function responsesStreamBody(text: string, model: string): string {
+  const responseId = 'resp_byom_reasoning_1';
+  const item = {
+    id: 'msg_byom_reasoning_1',
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
+  };
+  const completed = {
+    id: responseId,
+    object: 'response',
+    created_at: 1,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
+    model,
+    output: [item],
+    parallel_tool_calls: true,
+    previous_response_id: null,
+    reasoning: { effort: 'xhigh', summary: null },
+    store: false,
+    temperature: 1,
+    text: { format: { type: 'text' } },
+    tool_choice: 'auto',
+    tools: [],
+    top_p: 1,
+    truncation: 'disabled',
+    usage: {
+      input_tokens: 1,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 1,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 2,
+    },
+    metadata: {},
+  };
+  return sse([
+    {
+      event: 'response.created',
+      data: {
+        type: 'response.created',
+        sequence_number: 0,
+        response: {
+          ...completed,
+          status: 'in_progress',
+          output: [],
+          usage: null,
+        },
+      },
+    },
+    {
+      event: 'response.output_item.added',
+      data: {
+        type: 'response.output_item.added',
+        sequence_number: 1,
+        response_id: responseId,
+        output_index: 0,
+        item: { ...item, status: 'in_progress', content: [] },
+      },
+    },
+    {
+      event: 'response.content_part.added',
+      data: {
+        type: 'response.content_part.added',
+        sequence_number: 2,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [], logprobs: [] },
+      },
+    },
+    {
+      event: 'response.output_text.delta',
+      data: {
+        type: 'response.output_text.delta',
+        sequence_number: 3,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        delta: text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.output_text.done',
+      data: {
+        type: 'response.output_text.done',
+        sequence_number: 4,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.content_part.done',
+      data: {
+        type: 'response.content_part.done',
+        sequence_number: 5,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: item.content[0],
+      },
+    },
+    {
+      event: 'response.output_item.done',
+      data: {
+        type: 'response.output_item.done',
+        sequence_number: 6,
+        response_id: responseId,
+        output_index: 0,
+        item,
+      },
+    },
+    {
+      event: 'response.completed',
+      data: {
+        type: 'response.completed',
+        sequence_number: 7,
+        response: completed,
+      },
+    },
+  ]);
+}
+
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
 function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
   return sse([
@@ -776,6 +911,113 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       } finally {
         await handle?.close();
         await new Promise<void>((r) => nativeServer.close(() => r()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'BYOM Responses: an explicit Pi effort reaches the upstream reasoning.effort request field',
+    { timeout: 60_000 },
+    async () => {
+      const nativeSeen: Array<{
+        url: string;
+        auth: string | undefined;
+        body: string;
+      }> = [];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          nativeSeen.push({
+            url: req.url ?? '',
+            auth: req.headers.authorization as string | undefined,
+            body,
+          });
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+          });
+          res.end(responsesStreamBody('pong from Responses', 'byom-reasoner'));
+        });
+      });
+      await new Promise<void>((resolve) => nativeServer.listen(0, '127.0.0.1', resolve));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl =
+        typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) =>
+        options?.providerId === 'localresponses'
+          ? {
+              authenticated: true,
+              identity: 'Local Responses',
+              authSource: 'api-key' as const,
+            }
+          : { authenticated: false };
+      deps.auth.getAuthEnv = async () => ({
+        CINDY_PI_API_KEY: 'gateway-unavailable-placeholder',
+      });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localresponses',
+            name: 'Local Responses',
+            baseUrl: nativeUrl,
+            api: 'openai-responses',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALRESPONSES',
+            models: [
+              {
+                id: 'byom-reasoner',
+                name: 'BYOM Reasoner',
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: null,
+                  low: 'low',
+                  medium: null,
+                  high: 'high',
+                  xhigh: 'xhigh',
+                  max: null,
+                },
+              },
+            ],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALRESPONSES: 'responses-secret-key' },
+      });
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        const gatewayBefore = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'byom-responses-session',
+          workingDir,
+          providerId: 'localresponses',
+          model: 'byom-reasoner',
+          effort: 'xhigh',
+        });
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'reason carefully' });
+        await done;
+
+        expect(nativeSeen).toHaveLength(1);
+        expect(nativeSeen[0]?.url).toMatch(/\/responses(?:\?|$)/);
+        expect(nativeSeen[0]?.auth).toContain('responses-secret-key');
+        expect(JSON.parse(nativeSeen[0]?.body ?? '{}')).toMatchObject({
+          model: 'byom-reasoner',
+          reasoning: { effort: 'xhigh' },
+        });
+        expect(seenRequests.length).toBe(gatewayBefore);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((resolve) => nativeServer.close(() => resolve()));
         rmSync(workingDir, { recursive: true, force: true });
       }
     },

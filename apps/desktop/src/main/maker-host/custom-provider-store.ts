@@ -20,11 +20,14 @@ import type {
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   OAuthProviderDescriptor,
+  PiReasoningEffort,
+  ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  PI_REASONING_EFFORTS,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -47,6 +50,31 @@ export type ValidationResult =
 
 function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
+}
+
+function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
+  return (
+    typeof value === 'string' &&
+    (PI_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
+}
+
+function parseStoredPiReasoningCapability(
+  agent: AgentKind,
+  model: Record<string, unknown>,
+): Partial<ProviderRuntimeModelConfig> {
+  if (agent !== 'pi' || model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
+    return {};
+  }
+  const efforts = model.reasoningEfforts.filter(isPiReasoningEffort);
+  if (
+    efforts.length === 0 ||
+    efforts.length !== model.reasoningEfforts.length ||
+    new Set(efforts).size !== efforts.length
+  ) {
+    return {};
+  }
+  return { reasoning: true, reasoningEfforts: efforts };
 }
 
 function validateNoAuthLoopbackBoundary(
@@ -114,6 +142,26 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
+    }
+    const hasReasoningCapability = mm.reasoning !== undefined || mm.reasoningEfforts !== undefined;
+    if (hasReasoningCapability && agent !== 'pi') {
+      return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
+    }
+    if (mm.reasoning !== undefined && typeof mm.reasoning !== 'boolean') {
+      return invalid(`runtime '${agent}' model.reasoning must be a boolean`);
+    }
+    if (mm.reasoning === true) {
+      if (!Array.isArray(mm.reasoningEfforts) || mm.reasoningEfforts.length === 0) {
+        return invalid(`runtime '${agent}' model.reasoningEfforts must be a non-empty array`);
+      }
+      if (
+        mm.reasoningEfforts.some((effort) => !isPiReasoningEffort(effort)) ||
+        new Set(mm.reasoningEfforts).size !== mm.reasoningEfforts.length
+      ) {
+        return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
+      }
+    } else if (mm.reasoningEfforts !== undefined) {
+      return invalid(`runtime '${agent}' model.reasoningEfforts requires reasoning=true`);
     }
   }
   if (r.wireProtocol !== undefined) {
@@ -319,7 +367,10 @@ export function validateCustomProviderConfig(config: unknown): ValidationResult 
 }
 
 /** 规整单个 runtime（trim baseUrl、去重 models、裁 headers）。 */
-function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntimeConfig {
+function normalizeRuntime(
+  agent: AgentKind,
+  rt: CustomProviderRuntimeConfig,
+): CustomProviderRuntimeConfig {
   const seen = new Set<string>();
   const models = rt.models
     .map((m) => ({
@@ -328,6 +379,9 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
+        ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+        : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -346,7 +400,7 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
   const runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>> = {};
   for (const agent of VALID_AGENTS) {
     const rt = config.runtimes[agent];
-    if (rt) runtimes[agent] = normalizeRuntime(rt);
+    if (rt) runtimes[agent] = normalizeRuntime(agent, rt);
   }
   const out: CustomProviderConfig = { id: config.id, name: config.name.trim(), runtimes };
   // auth 规整：apiKey（默认形态）不落 auth 字段；none / oauth 显式落盘。
@@ -468,6 +522,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+            ...parseStoredPiReasoningCapability(agent, m),
           }))
       : [];
     const entry: CustomProviderRuntimeConfig = {

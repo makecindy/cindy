@@ -286,18 +286,21 @@ export function MainLayout() {
   const [rightSidebarWorkdirInfo, setRightSidebarWorkdirInfo] = useState<{
     workdir: string;
     remoteHostId: string | null;
-  }>({ workdir: '', remoteHostId: null });
+    deviceLinkDeviceId?: string | null;
+  }>({ workdir: '', remoteHostId: null, deviceLinkDeviceId: undefined });
   const setRightSidebarWorkdir = useCallback(
-    (workdir: string, remoteHostId: string | null = null) =>
+    (workdir: string, remoteHostId: string | null = null, deviceLinkDeviceId?: string | null) =>
       // 同值 bailout(返回 prev 引用):恢复"字符串 state 同值不重渲染"的旧语义。
       // Outlet context 对象每次渲染都是新身份,OrcaWorkflowRoute 等消费方的
       // effect 以 outletContext 为 dep——如果同值 declare 也换新对象,会形成
       // declare → 重渲染 → 新 context → effect 重跑 → declare 的死循环
       // (真机实测 Maximum update depth exceeded)。
       setRightSidebarWorkdirInfo((prev) =>
-        prev.workdir === workdir && prev.remoteHostId === remoteHostId
+        prev.workdir === workdir &&
+        prev.remoteHostId === remoteHostId &&
+        prev.deviceLinkDeviceId === deviceLinkDeviceId
           ? prev
-          : { workdir, remoteHostId },
+          : { workdir, remoteHostId, deviceLinkDeviceId },
       ),
     [],
   );
@@ -802,6 +805,7 @@ export function MainLayout() {
       sessionId: rightSidebarSessionId,
       workdir: rightSidebarWorkdirInfo.workdir || null,
       remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
+      deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
       available: rightSidebarAvailable,
     });
   }, [rightSidebarSessionId, rightSidebarWorkdirInfo, rightSidebarAvailable]);
@@ -1277,6 +1281,7 @@ export function MainLayout() {
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}
+                  deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
                   onDetach={isSecondaryWindow() ? undefined : handleDetachRightSidebar}
                   // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
                   // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。

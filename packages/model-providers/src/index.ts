@@ -24,12 +24,15 @@ export type {
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   ProviderRuntimeModelConfig,
+  PiReasoningEffort,
   ProviderPreset,
   ProviderPresetRuntime,
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
 } from './types.js';
+
+export { PI_REASONING_EFFORTS } from './types.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 

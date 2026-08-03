@@ -11,6 +11,7 @@ import {
   pushToolStep,
   renderActivity,
   setActivityNotice,
+  setInteractionNotice,
 } from '../turnActivity';
 
 describe('formatToolStep — shared friendly wording', () => {
@@ -115,12 +116,32 @@ describe('rolling window and replay de-duplication', () => {
     expect(activity.recentSteps.some((step) => step.kind === 'thinking')).toBe(false);
   });
 
+  it('等交互那一行不被正常进展事件清掉(与瞬态 notice 的关键区别)', () => {
+    const activity = createTurnActivity(0);
+    expect(setInteractionNotice(activity, '等待授权 · 需要你确认')).toBe(true);
+    setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…');
+
+    // 挂起期间 agent 的其它子任务照样吐事件: 瞬态 notice 该被清掉, 等待提示必须留着
+    pushThinkingStep(activity, { stage: 'final', blockId: 't1', text: '再查一处引用' });
+    pushToolStep(activity, 'Read', { file_path: '/x/bg.ts' }, 'bg-1');
+    markActivityWriting(activity);
+    expect(activity.notice).toBeNull();
+    expect(activity.interactionNotice).toBe('等待授权 · 需要你确认');
+    expect(renderActivity(activity, 3_000)).toContain('> ⏳ 等待授权 · 需要你确认');
+
+    // 只由交互收口显式摘掉; 重复内容不算变化(同 setActivityNotice 的配额语义)
+    expect(setInteractionNotice(activity, '等待授权 · 需要你确认')).toBe(false);
+    expect(setInteractionNotice(activity, null)).toBe(true);
+    expect(renderActivity(activity, 3_000)).not.toContain('等待授权');
+  });
+
   it('keeps replay bookkeeping out of the serializable card state', () => {
     const activity = createTurnActivity(0);
     pushThinkingStep(activity, { stage: 'final', blockId: 't1', text: '检查状态' });
     pushToolStep(activity, 'Read', { file_path: '/repo/a.ts' }, 'read-a');
 
     expect(Object.keys(activity).sort()).toEqual([
+      'interactionNotice',
       'notice',
       'recentSteps',
       'startedAt',

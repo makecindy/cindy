@@ -73,6 +73,16 @@ describe('computeWorkerAttentionUpdates', () => {
     expect(doneAgain.toMark).toEqual([WORKER_ID]);
   });
 
+  it('keeps unread completion attention when the worker starts new work', () => {
+    const result = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'done']]),
+      [worker(WORKER_ID, 'idle')],
+      undefined,
+    );
+
+    expect(result.toPrune).not.toContain(WORKER_ID);
+  });
+
   it('does not mark when the focused worker finishes in the active lead', () => {
     const result = computeWorkerAttentionUpdates(
       new Map(),

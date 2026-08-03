@@ -130,4 +130,29 @@ describe('subscribeOrcaWorkerChanged 分流', () => {
     handler({ deviceId: 'dev-1', channel: 'maker:orca:worker-changed', payload: { leadSessionId: 'other' } }); // wrong lead
     expect(cb).toHaveBeenCalledTimes(1);
   });
+
+  it('远程 lead 的映射短暂消失时，worker-changed 订阅仍留在被控端', async () => {
+    const { orcaSpies, onRemotePush } = stubElectron();
+    const { subscribeOrcaWorkerChanged } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getStickySessionDeviceId } = await import(
+      '@/features/device-link/stickySessionOrigin'
+    );
+    remoteProjectsStore.setDeviceSessions('dev-sticky', 'Mac', [sess('sticky-lead')]);
+    expect(getStickySessionDeviceId('sticky-lead')).toBe('dev-sticky');
+    remoteProjectsStore.setDeviceSessions('dev-sticky', 'Mac', []);
+
+    const cb = vi.fn();
+    subscribeOrcaWorkerChanged('sticky-lead', cb);
+
+    expect(onRemotePush).toHaveBeenCalled();
+    expect(orcaSpies.onOrcaWorkerChanged).not.toHaveBeenCalled();
+    const handler = onRemotePush.mock.calls[0][0];
+    handler({
+      deviceId: 'dev-sticky',
+      channel: 'maker:orca:worker-changed',
+      payload: { leadSessionId: 'sticky-lead' },
+    });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
 });

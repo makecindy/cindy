@@ -558,7 +558,11 @@ export function NewMakerDraftRoute() {
     rightSidebarSide?: 'left' | 'right';
     setRightSidebarAvailable?: (available: boolean) => void;
     setRightSidebarSessionId?: (sessionId: string | null) => void;
-    setRightSidebarWorkdir?: (workdir: string, remoteHostId?: string | null) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
   const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
@@ -886,12 +890,21 @@ export function NewMakerDraftRoute() {
 
   useLayoutEffect(() => {
     if (draftRightSidebar.workdir) {
-      setRightSidebarWorkdir?.(draftRightSidebar.workdir, draftRightSidebar.remoteHostId);
+      setRightSidebarWorkdir?.(
+        draftRightSidebar.workdir,
+        draftRightSidebar.remoteHostId,
+        draftRightSidebar.deviceLinkDeviceId,
+      );
     } else {
-      setRightSidebarWorkdir?.('');
+      setRightSidebarWorkdir?.('', null, undefined);
     }
-    return () => setRightSidebarWorkdir?.('');
-  }, [draftRightSidebar.workdir, draftRightSidebar.remoteHostId, setRightSidebarWorkdir]);
+    return () => setRightSidebarWorkdir?.('', null, undefined);
+  }, [
+    draftRightSidebar.deviceLinkDeviceId,
+    draftRightSidebar.remoteHostId,
+    draftRightSidebar.workdir,
+    setRightSidebarWorkdir,
+  ]);
 
   // 跨 Agent 工作区迁移弹窗：detect → ask → run → 等关闭 → 才创建会话
   const crossAgentDialog = useCrossAgentMigrationDialog();

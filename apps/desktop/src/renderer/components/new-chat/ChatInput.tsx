@@ -224,7 +224,12 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
-import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
+import {
+  deriveModelsFromProviders,
+  filterChatBridgedCodexProviders,
+  resolveFastSupported,
+  resolveProviderModelEfforts,
+} from '@/lib/providerModels';
 import {
   getProviderModelEffort,
   setProviderModelChoice,
@@ -3913,19 +3918,38 @@ export function ChatInput({
     [onRememberedEffortChange],
   );
 
-  // 解析某模型的 effort 档 / 默认档 —— **本地会话走 provider catalog**(deriveModelsFromProviders,
-  // 含自定义供应商模型),而非 getModelById(只懂 maker-core 内置;自定义模型查不到 → 之前 effort
-  // 被错误压成 'low'、记忆无法恢复)。device-link 远程会话仍按被控端能力(getModelById(id, deviceId)),
-  // 行为字节级不变(自定义供应商不经隧道,被控端能力才是权威)。
+  // 解析某模型的 effort 档 / 默认档 —— **本地显式来源按 (provider, agent, model) 精确查目录**。
+  // picker 用的 deriveModelsFromProviders 是跨来源 first-wins，并不适合运行时能力解析：Pi BYOM
+  // 与内置来源复用 model id 时，二者可有不同的显式 effort 子集。没有来源上下文的旧入口才保留
+  // 拍平回退。device-link 远程会话仍按被控端能力(getModelById(id, deviceId))，行为不变。
   const resolveModelEfforts = useCallback(
-    (modelId: string): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
+    (
+      modelId: string,
+      providerId?: string | null,
+      targetAgentKind?: AgentKind,
+    ): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
       if (deviceLinkDeviceId) {
         const m = getModelById(modelId, deviceLinkDeviceId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
-      const kinds: readonly AgentKind[] = currentModelAgentKind
-        ? [currentModelAgentKind]
-        : ['claude-code', 'codex', 'pi'];
+      const kinds: readonly AgentKind[] = targetAgentKind
+        ? [targetAgentKind]
+        : currentModelAgentKind
+          ? [currentModelAgentKind]
+          : ['claude-code', 'codex', 'pi'];
+      if (providerId) {
+        for (const kind of kinds) {
+          const scoped = resolveProviderModelEfforts({
+            providers,
+            providerId,
+            modelId,
+            agentKind: kind,
+          });
+          if (scoped) return scoped;
+        }
+        // 显式目标来源却找不到对应条目时 fail closed，不能回退到同 id 的另一来源能力。
+        return { efforts: [], defaultEffort: null };
+      }
       for (const kind of kinds) {
         const found = deriveModelsFromProviders(providers, kind).find((x) => x.id === modelId);
         if (found) return { efforts: found.efforts, defaultEffort: found.defaultEffort ?? null };
@@ -4220,15 +4244,13 @@ export function ChatInput({
       const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);
       try {
         await exclusiveTurn.ready;
-        // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
-        // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
+        // effort 档按**目标引擎 + 目标来源**目录解析（同 id 模型跨来源档位可不同）；浏览态
         // 悬浮面板写下的 per-(目标引擎,来源,模型) 预设在此恢复。
-        const targetCatalog = deriveModelsFromProviders(providers, targetAgentKind).find(
-          (x) => x.id === newModelId,
+        const { efforts, defaultEffort } = resolveModelEfforts(
+          newModelId,
+          providerId,
+          targetAgentKind,
         );
-        const { efforts, defaultEffort } = targetCatalog
-          ? { efforts: targetCatalog.efforts, defaultEffort: targetCatalog.defaultEffort ?? null }
-          : resolveModelEfforts(newModelId);
         const providerEffort =
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
@@ -4428,9 +4450,12 @@ export function ChatInput({
         setRememberedEffort(activeModel, committedActiveEffort);
       }
 
-      // effort 档走 catalog(含自定义供应商模型);恢复优先级:
-      // (agent,model) 全局预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId);
+      // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
+      // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -4755,7 +4780,7 @@ export function ChatInput({
   // per-model 记忆 > 沿用当前 > 模型默认。effort 档走 catalog(含自定义供应商模型)。
   const resolveSwitchEffort = useCallback(
     (targetModelId: string, providerId: string | null, preferred?: Effort): Effort => {
-      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId);
+      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId, providerId);
       const providerEffort =
         modelMemory && currentModelAgentKind && providerId
           ? modelMemory.getEffort(currentModelAgentKind, providerId, targetModelId)
@@ -5002,7 +5027,7 @@ export function ChatInput({
         // 同模型只切来源:effort/fast 采用同一份 (agent,model) 全局预设,但仍按新来源 capability
         // 校验;不支持的档位回落模型默认。reconciledEffort(来源切换 hint,当前 picker 不传)
         // 仍受支持时优先。
-        const { efforts, defaultEffort } = resolveModelEfforts(activeModel);
+        const { efforts, defaultEffort } = resolveModelEfforts(activeModel, newProviderId);
         const providerEffort =
           modelMemory && currentModelAgentKind && newProviderId
             ? modelMemory.getEffort(currentModelAgentKind, newProviderId, activeModel)

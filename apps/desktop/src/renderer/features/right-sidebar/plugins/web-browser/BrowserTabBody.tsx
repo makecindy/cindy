@@ -36,12 +36,14 @@ import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import {
   forceKillBrowserTab,
   setForegroundBrowserTab,
 } from '../../lib/rsbBrowserBridge';
+import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../types';
@@ -85,6 +87,9 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // sessionId 跟 tabId 一起喂给 hook,用于 dom-ready 后给 main 端 TabRegistry
   // 上报 (sessionId, tabId, webContentsId) 三元组(Phase 2 browser bridge)。
   const { tabId, sessionId } = ctx;
+  // device-link 归属由 host context 携带三态事实：字符串=远端、null=已确认本机、
+  // undefined=冷启动/bootstrap 尚未解析。系统文件打开对后两者只放行已确认本机。
+  const deviceLinkDeviceId = ctx.deviceLinkDeviceId;
   // 真实可见性:顶层 active tab 且整个侧栏展开。shellVisible 缺省(旧宿主 /
   // 测试)按可见处理,与 active 的既有缺省语义一致。
   const tabVisible = active === true && shellVisible !== false;
@@ -109,7 +114,11 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     workdir: ctx.workdir,
     url: browser.url || state.url,
     reload: browser.reload,
-    enabled: active === true && ctx.remoteHostId === null && !browser.crash,
+    enabled:
+      active === true &&
+      ctx.remoteHostId === null &&
+      deviceLinkDeviceId === null &&
+      !browser.crash,
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
@@ -396,23 +405,42 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const menuUrlRef = useRef(state.url || 'about:blank');
   menuUrlRef.current = state.url || 'about:blank';
 
+  const menuUrl = menuUrlRef.current;
+  const isWebUrl = /^https?:\/\//i.test(menuUrl);
+  const isLocalHtmlUrl =
+    ctx.remoteHostId === null && deviceLinkDeviceId === null && isLocalHtmlFileUrl(menuUrl);
+  const canOpenInSystemBrowser = isWebUrl || isLocalHtmlUrl;
+
   // 「更多」菜单 —— 用系统默认浏览器打开当前页。
-  // 菜单项在无有效链接时已 disabled,这里再兜一层空 / about:blank 保护。
-  // openExternal 在被控端(远程控制场景)本机打开,语义正确(见规则 26)。
+  // HTTP(S) 走 openExternal;本地 HTML 走专用文件 IPC。远程 SSH 会话的 file://
+  // URL 指向远端 workdir,不能误交给控制端本机的文件打开器,因此由菜单禁用。
   const handleOpenInSystemBrowser = useCallback(() => {
     const url = menuUrlRef.current;
     if (!url || url === 'about:blank') return;
-    void window.electronAPI
-      .openExternal(url)
+    const localFileUrl =
+      ctx.remoteHostId === null && deviceLinkDeviceId === null && isLocalHtmlFileUrl(url);
+    const openPromise: Promise<{ success: boolean; error?: string }> | null = localFileUrl
+      ? window.electronAPI.openFileInBrowser(url)
+      : /^https?:\/\//i.test(url)
+        ? window.electronAPI.openExternal(url)
+        : null;
+    if (!openPromise) return;
+    void openPromise
       .then((res) => {
         if (!res?.success) {
-          toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
+          toast.error(res?.error || t('chat.markdownRenderer.openInBrowserFailed'));
         }
       })
-      .catch(() => {
-        toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
+      .catch((error) => {
+        const errorKey = localFileUrl
+          ? mapIpcErrorToI18nKey(error, {
+              namespace: 'chat.markdownRenderer',
+              fallback: 'chat.markdownRenderer.openInBrowserFailed',
+            })
+          : 'chat.markdownRenderer.openInBrowserFailed';
+        toast.error(t(errorKey));
       });
-  }, [t]);
+  }, [ctx.remoteHostId, deviceLinkDeviceId, t]);
 
   // 「更多」菜单 —— 复制当前页链接到剪贴板(renderer clipboard,项目惯例)。
   const handleCopyLink = useCallback(async () => {
@@ -443,6 +471,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         commentActive={comment.mode !== 'off'}
         onToggleComment={comment.toggle}
         commentSupported={commentSupported}
+        canOpenInSystemBrowser={canOpenInSystemBrowser}
         onOpenInSystemBrowser={handleOpenInSystemBrowser}
         onCopyLink={handleCopyLink}
       />

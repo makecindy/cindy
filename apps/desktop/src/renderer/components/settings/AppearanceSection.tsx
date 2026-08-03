@@ -47,6 +47,7 @@ const log = createLogger('settings/AppearanceSection');
 /** IPC 错误码 → 专门文案；未列出的码落到通用 importFailed。 */
 const IMPORT_ERROR_KEYS: Record<string, string> = {
   THEME_UNSUPPORTED_FILE: 'settings.appearance.localThemes.importUnsupported',
+  THEME_CONTRAST_UNSUPPORTED: 'settings.appearance.localThemes.importContrastUnsupported',
   THEME_USES_INCLUDE: 'settings.appearance.localThemes.importUsesInclude',
   THEME_NOT_A_FILE: 'settings.appearance.localThemes.importNotAFile',
   THEME_FILE_TOO_LARGE: 'settings.appearance.localThemes.importTooLarge',
