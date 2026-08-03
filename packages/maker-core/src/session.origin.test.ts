@@ -27,6 +27,7 @@ function createLogger() {
 function createControllableHandle(opts?: { sendError?: Error }) {
   let push: ((e: AgentEvent) => void) | null = null;
   let turnRunning = false;
+  let closeCalls = 0;
   const buffered: AgentEvent[] = [];
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
 
@@ -40,7 +41,10 @@ function createControllableHandle(opts?: { sendError?: Error }) {
     },
     async steer() {},
     async abort() {},
-    async close() {},
+    async close() {
+      closeCalls += 1;
+      turnRunning = false;
+    },
     async *events() {
       for (const e of buffered) yield e;
       buffered.length = 0;
@@ -72,11 +76,18 @@ function createControllableHandle(opts?: { sendError?: Error }) {
      * SDK 处理 /compact 后发 done 但 handle 端 turnInFlight 仍是 true)。
      */
     async emit(e: AgentEvent, opts: { keepRunning?: boolean } = {}) {
-      if ((e.type === 'done' || e.type === 'error') && !opts.keepRunning) turnRunning = false;
+      const terminalError =
+        e.type === 'error' &&
+        (e.data as { isTerminal?: unknown } | null | undefined)?.isTerminal === true;
+      if ((e.type === 'done' || terminalError) && !opts.keepRunning) turnRunning = false;
       if (push) push(e);
       else buffered.push(e);
       await new Promise((r) => setTimeout(r, 0)); // 让事件循环把它 fan-out 出去
     },
+    setTurnRunning(running: boolean) {
+      turnRunning = running;
+    },
+    closeCalls: () => closeCalls,
   };
 }
 
@@ -256,6 +267,64 @@ describe('Session per-turn origin 打标', () => {
     expect(seen[0]?.turnAttemptToken).toBe(1);
     expect(seen[1]?.turnAttemptToken).toBeUndefined();
     expect(seen[2]?.turnAttemptToken).toBe(2);
+  });
+
+  it('terminal error 后的 Codex idle status 会清 drain，不会误关健康 session', async () => {
+    const { handle, emit, closeCalls } = createControllableHandle();
+    const session = makeSession(handle);
+
+    await session.send('first');
+    await emit({ type: 'error', data: { message: 'first failed', isTerminal: true } });
+    await emit({ type: 'status', data: { isRunning: false } });
+
+    await expect(session.send('second', { turnAttemptToken: 2 })).resolves.toEqual({ accepted: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closeCalls()).toBe(0);
+  });
+
+  it('non-terminal error 不启动 terminal drain，也不打开 generation fence', async () => {
+    const { handle, emit, setTurnRunning, closeCalls } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'error', data: { message: 'retryable', isTerminal: false } });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closeCalls()).toBe(0);
+
+    await emit({ type: 'text', data: { text: 'still running', isFinal: false } });
+    setTurnRunning(false);
+    expect(session.isTurnRunning()).toBe(false);
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'done', data: {} }, { keepRunning: true });
+    await emit({ type: 'text', data: { text: 'second turn', isFinal: false } });
+
+    expect(seen.find((event) => event.type === 'text' &&
+      (event.data as { text?: string }).text === 'second turn')?.turnAttemptToken).toBe(2);
+  });
+
+  it('普通事件不能让旧 turn 的迟到 done 冒领下一代 token', async () => {
+    const { handle, emit, setTurnRunning } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    expect(session.isTurnRunning()).toBe(false);
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'done', data: { reason: 'late first tail' } }, { keepRunning: true });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    const lateDone = seen.find((event) => event.type === 'done');
+    const secondText = seen.find(
+      (event) => event.type === 'text' &&
+        (event.data as { text?: string }).text === 'second progress',
+    );
+    expect(lateDone?.turnAttemptToken).toBeUndefined();
+    expect(secondText?.turnAttemptToken).toBe(2);
   });
 
   it('event loop crash emits a terminal error and closes the poisoned session', async () => {

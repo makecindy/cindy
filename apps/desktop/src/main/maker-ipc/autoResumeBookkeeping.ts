@@ -29,10 +29,18 @@ export interface SuppressedTurnError {
   sdkError?: string;
 }
 
+/** Exact coordinator owner for a deferred terminal error. */
+export interface SuppressedTurnErrorOwner {
+  generation: number;
+  clientId: string;
+}
+
 interface SuppressedTurnErrorEntry {
   detail: SuppressedTurnError;
   /** Runtime owner of this suppressed error; null is bound by beginAttempt for deferred paths. */
   attemptToken: number | null;
+  /** Deferred terminal-error owner; null for already-decided auto-resume paths. */
+  deferredOwner: SuppressedTurnErrorOwner | null;
   /** The retry queue item that will replace the failed turn. */
   retryOwnerClientId: string | null;
   /**
@@ -129,6 +137,7 @@ export class AutoResumeBookkeeping {
     sessionId: string,
     data: unknown,
     attemptToken: number | null = null,
+    deferredOwner: SuppressedTurnErrorOwner | null = null,
   ): void {
     const previous = this.suppressedErrors.get(sessionId);
     if (previous?.replacementDispatching) {
@@ -138,13 +147,20 @@ export class AutoResumeBookkeeping {
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
     } else {
-      // A newer error owns the session now. Force-release the previous entry so the
-      // current-attempt stale-cleanup guard cannot hide the old failure.
-      this.flushSuppressedError(sessionId, { force: true });
+      // A newer error owns the session now. Release the previous entry before
+      // installing the replacement, but only release its exact attempt owner
+      // after the new entry is present. This preserves ownership when both
+      // entries happen to belong to the same attempt token.
+      if (previous) {
+        this.suppressedErrors.delete(sessionId);
+        this.suppressedErrorClients.delete(sessionId);
+        this.deps.persistSuppressedError(sessionId, previous.detail);
+      }
     }
     const d = (data ?? {}) as { message?: unknown; reason?: unknown; sdkError?: unknown };
     this.suppressedErrors.set(sessionId, {
       attemptToken,
+      deferredOwner,
       detail: {
         ...(typeof d.message === 'string' ? { message: d.message } : {}),
         ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
@@ -154,6 +170,9 @@ export class AutoResumeBookkeeping {
       islandReplacementPreviewed: false,
       replacementDispatching: false,
     });
+    if (previous?.attemptToken !== null && previous?.attemptToken !== undefined) {
+      this.releaseAttemptIfUnowned(sessionId, previous.attemptToken);
+    }
   }
 
   /** Bind a tokenized automatic queue item to the suppressed error it will replace. */
@@ -243,7 +262,11 @@ export class AutoResumeBookkeeping {
    */
   flushSuppressedError(
     sessionId: string,
-    opts?: { attemptToken?: number; force?: boolean },
+    opts?: {
+      attemptToken?: number;
+      deferredOwner?: SuppressedTurnErrorOwner;
+      force?: boolean;
+    },
   ): boolean {
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
@@ -251,8 +274,14 @@ export class AutoResumeBookkeeping {
       const currentAttemptToken = this.currentAttempts.get(sessionId);
       if (opts?.attemptToken !== undefined) {
         if (entry.attemptToken !== opts.attemptToken) return false;
-      } else if (currentAttemptToken !== undefined) {
+      } else if (opts?.deferredOwner === undefined && currentAttemptToken !== undefined) {
         // Session-only stale cleanup must never flush a newer attempt's error.
+        return false;
+      }
+      if (
+        opts?.deferredOwner !== undefined &&
+        !sameSuppressedTurnErrorOwner(entry.deferredOwner, opts.deferredOwner)
+      ) {
         return false;
       }
     }
@@ -260,17 +289,55 @@ export class AutoResumeBookkeeping {
   }
 
   /** 把压住的错误一次性补落，并通知 host 将它呈现到其它用户可见表面。 */
-  surfaceSuppressedError(sessionId: string): boolean {
+  surfaceSuppressedError(
+    sessionId: string,
+    opts?: {
+      attemptToken?: number;
+      deferredOwner?: SuppressedTurnErrorOwner;
+      force?: boolean;
+    },
+  ): boolean {
+    if (opts && !this.canReleaseSuppressedError(sessionId, opts)) return false;
     return this.releaseSuppressedError(sessionId, true);
+  }
+
+  private canReleaseSuppressedError(
+    sessionId: string,
+    opts: {
+      attemptToken?: number;
+      deferredOwner?: SuppressedTurnErrorOwner;
+      force?: boolean;
+    },
+  ): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry || opts.force) return Boolean(entry);
+    const currentAttemptToken = this.currentAttempts.get(sessionId);
+    if (opts.attemptToken !== undefined && entry.attemptToken !== opts.attemptToken) return false;
+    if (
+      opts.deferredOwner !== undefined &&
+      !sameSuppressedTurnErrorOwner(entry.deferredOwner, opts.deferredOwner)
+    ) {
+      return false;
+    }
+    if (
+      opts.attemptToken === undefined &&
+      opts.deferredOwner === undefined &&
+      currentAttemptToken !== undefined
+    ) {
+      return false;
+    }
+    return true;
   }
 
   private releaseSuppressedError(sessionId: string, surfaceError: boolean): boolean {
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
+    const attemptToken = entry.attemptToken;
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
     this.deps.persistSuppressedError(sessionId, entry.detail);
     if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, entry.detail);
+    if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
     return true;
   }
 
@@ -282,8 +349,10 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     if (entry?.retryOwnerClientId !== clientId) return false;
     if (disposition === 'discard') {
+      const attemptToken = entry.attemptToken;
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
+      if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
       return true;
     }
     return this.releaseSuppressedError(sessionId, disposition === 'surface');
@@ -313,21 +382,24 @@ export class AutoResumeBookkeeping {
   discardReplacementProvenByProviderEvent(sessionId: string): boolean {
     const entry = this.suppressedErrors.get(sessionId);
     if (entry?.replacementDispatching !== true) return false;
+    const attemptToken = entry.attemptToken;
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
+    if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
     return true;
   }
 
   /** 自愈成功 → 压住的错误就此丢弃（用户看到的是「已重新连接」活动行，不该再有错误卡）。 */
   discardSuppressedError(sessionId: string, attemptToken?: number): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
     if (attemptToken !== undefined) {
       if (!this.isCurrentAttempt(sessionId, attemptToken)) return false;
-      const entry = this.suppressedErrors.get(sessionId);
       if (entry && entry.attemptToken !== attemptToken) return false;
     }
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
-    if (attemptToken !== undefined) this.releaseAttemptIfUnowned(sessionId, attemptToken);
+    const ownerToken = entry?.attemptToken ?? attemptToken;
+    if (ownerToken !== undefined) this.releaseAttemptIfUnowned(sessionId, ownerToken);
     return true;
   }
 
@@ -393,6 +465,7 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     const ownsEntry = token === undefined || entry?.attemptToken === token;
     const detail = ownsEntry ? entry?.detail : undefined;
+    const entryAttemptToken = ownsEntry ? entry?.attemptToken ?? null : null;
     if (ownsEntry) {
       this.suppressedErrors.delete(sessionId);
       this.suppressedErrorClients.delete(sessionId);
@@ -407,7 +480,8 @@ export class AutoResumeBookkeeping {
       token,
     );
     this.deps.onAutoResumeFailed?.(sessionId, token);
-    if (token !== undefined) this.currentAttempts.delete(sessionId);
+    if (entryAttemptToken !== null) this.releaseAttemptIfUnowned(sessionId, entryAttemptToken);
+    if (token !== undefined) this.releaseAttemptIfUnowned(sessionId, token);
     return true;
   }
 
@@ -538,7 +612,10 @@ export class AutoResumeBookkeeping {
             this.currentAttempts.get(sessionId) === attemptToken,
         };
         const complete = () => {
-          if (attempt.isCurrent()) this.schedules.delete(sessionId);
+          const stillOwnsSchedule = this.schedules.get(sessionId)?.token === token;
+          if (!stillOwnsSchedule) return;
+          this.schedules.delete(sessionId);
+          if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
         };
         try {
           const result = (run as (attempt: AutoResumeScheduleAttempt) => void | Promise<void>)(
@@ -568,7 +645,8 @@ export class AutoResumeBookkeeping {
         isCurrent: () => this.schedules.get(sessionId)?.token === token,
       };
       const complete = () => {
-        if (attempt.isCurrent()) this.schedules.delete(sessionId);
+        if (this.schedules.get(sessionId)?.token !== token) return;
+        this.schedules.delete(sessionId);
       };
       try {
         const result = run(attempt);
@@ -611,6 +689,9 @@ export class AutoResumeBookkeeping {
     this.schedules.delete(sessionId);
     if (scheduled.attemptToken === null) this.deps.rollbackGuardPendingResume(sessionId);
     else this.deps.rollbackGuardPendingResume(sessionId, scheduled.attemptToken);
+    if (scheduled.attemptToken !== null) {
+      this.releaseAttemptIfUnowned(sessionId, scheduled.attemptToken);
+    }
     this.deps.log?.('interrupted-turn auto-resume attempt cancelled', { sessionId });
     return true;
   }
@@ -650,4 +731,11 @@ export class AutoResumeBookkeeping {
     this.suppressedErrorClients.delete(sessionId);
     this.deps.onAutoResumeFailed?.(sessionId, attemptToken ?? undefined);
   }
+}
+
+function sameSuppressedTurnErrorOwner(
+  left: SuppressedTurnErrorOwner | null,
+  right: SuppressedTurnErrorOwner,
+): boolean {
+  return left?.generation === right.generation && left.clientId === right.clientId;
 }

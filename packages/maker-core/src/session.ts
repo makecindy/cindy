@@ -1156,13 +1156,25 @@ export class Session {
       event.source === 'codex' &&
       this.sendReservation?.phase === 'dispatching' &&
       !this.isHandleTurnRunning();
-    if (isCurrentGeneration || terminalBeforeProviderStartSettled) {
+    const terminalBoundaryObserved =
+      (isCurrentGeneration || terminalBeforeProviderStartSettled) && isTerminal;
+    if (terminalBoundaryObserved) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       if (event.type === 'done') {
         this.clearTerminalErrorDrain();
       } else if (event.type === 'error') {
         this.armTerminalErrorDrain(this.turnGeneration);
       }
+    } else if (
+      isCurrentGeneration &&
+      event.type === 'status' &&
+      (event.data as { isRunning?: unknown } | null | undefined)?.isRunning === false &&
+      this.terminalErrorDrainGeneration === this.turnGeneration
+    ) {
+      // Codex closes a terminal error with an idle status rather than a done
+      // event. That status drains the provider tail, but it is not itself a
+      // generation boundary for ordinary status events.
+      this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
     for (const listener of this.eventListeners) {

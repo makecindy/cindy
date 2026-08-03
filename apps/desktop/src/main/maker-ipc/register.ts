@@ -606,6 +606,7 @@ import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto
 import {
   AutoResumeBookkeeping,
   type SuppressedTurnError,
+  type SuppressedTurnErrorOwner,
 } from './autoResumeBookkeeping.js';
 import {
   InterruptedTurnAutoResumeGuard,
@@ -3467,6 +3468,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           attributedEvent.data,
           agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id) ?? null,
+          agentInputCoordinatorHolder?.getAutoResumeDeferredOwner(session.id) ?? null,
         );
       } else if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
         // replacement 可在 sendToAgent 返回前同步失败并让 coordinator 的 activeTurn
@@ -8398,10 +8400,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     onResumableTurnErrorDiscarded: (
       sessionId: string,
-      options: { surfaceError: boolean },
+      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
     ) => {
-      if (options.surfaceError) autoResumeBookkeeping.surfaceSuppressedError(sessionId);
-      else autoResumeBookkeeping.flushSuppressedError(sessionId);
+      if (options.surfaceError) {
+        autoResumeBookkeeping.surfaceSuppressedError(sessionId, {
+          deferredOwner: options.owner,
+        });
+      } else {
+        autoResumeBookkeeping.flushSuppressedError(sessionId, {
+          deferredOwner: options.owner,
+        });
+      }
     },
     onResumableTurnError: (
       sessionId: string,
@@ -8456,7 +8465,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         decision.attemptToken,
         decision.delayMs,
         (attempt) => {
-          void (async () => {
+          return (async () => {
             try {
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),

@@ -81,6 +81,15 @@ describe('interrupted continuation enqueue contract', () => {
     expect(scheduleEnd).toBeGreaterThan(scheduleStart);
     const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
     expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
+    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+
+    expect(registerSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
+    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
+    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
+    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
+      /deferredOwner:\s*options\.owner/,
+    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);

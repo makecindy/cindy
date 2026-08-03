@@ -30,6 +30,7 @@ import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import type { HostSendFailureCode, HostSendOutcome } from '../maker-host/send-outcome.js';
 import type {
   AgentInputCreateOpts,
@@ -302,7 +303,7 @@ export interface AgentInputCoordinatorDeps {
    */
   onResumableTurnErrorDiscarded?: (
     sessionId: string,
-    options: { surfaceError: boolean },
+    options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
   ) => void;
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
@@ -3796,6 +3797,17 @@ export class AgentInputCoordinator {
     return this.getState(sessionId).autoResumeAttemptToken;
   }
 
+  /** Exact owner for a deferred resumable terminal error, before it is decided. */
+  getAutoResumeDeferredOwner(sessionId: string): SuppressedTurnErrorOwner | null {
+    const active = this.getState(sessionId).activeTurn;
+    if (!active?.item) return null;
+    const pending = active.pendingTerminalEvent;
+    if (pending?.type !== 'error' || pending.resumableCandidate !== true) {
+      return null;
+    }
+    return { generation: active.generation, clientId: active.item.clientId };
+  }
+
   isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean {
     return this.getState(sessionId).autoResumeAttemptToken === attemptToken;
   }
@@ -3866,14 +3878,17 @@ export class AgentInputCoordinator {
   ): void {
     const pending = active.pendingTerminalEvent;
     if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
+    const owner = active.item
+      ? { generation: active.generation, clientId: active.item.clientId }
+      : null;
     active.pendingTerminalEvent = null;
-    this.notifyResumableTurnErrorDiscarded(sessionId, options);
+    if (owner) this.notifyResumableTurnErrorDiscarded(sessionId, { ...options, owner });
   }
 
   /** 被按住的 error 没能走到决策 → 通知 host 补落 error 行（不变量 I2）。 */
   private notifyResumableTurnErrorDiscarded(
     sessionId: string,
-    options: { surfaceError: boolean },
+    options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
   ): void {
     try {
       this.deps.onResumableTurnErrorDiscarded?.(sessionId, options);
@@ -4021,7 +4036,10 @@ export class AgentInputCoordinator {
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
         if (deferredPersistSuppressed) {
-          this.notifyResumableTurnErrorDiscarded(sessionId, { surfaceError: true });
+          this.notifyResumableTurnErrorDiscarded(sessionId, {
+            surfaceError: true,
+            owner: { generation: active.generation, clientId: active.item!.clientId },
+          });
         }
         // 与 onTurnEvent 的 persisted 分支同款处置:没有 recovery 挡住"紧随的 done",
         // 必须用配对标记吃掉它,否则失败呈现会被 done 擦成"已完成"(第二十一轮 P1)。
@@ -4059,6 +4077,7 @@ export class AgentInputCoordinator {
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: terminalEvent.supersededByUser !== true,
+            owner: { generation: active.generation, clientId: active.item!.clientId },
           });
         }
         if (schedulerItem) {
