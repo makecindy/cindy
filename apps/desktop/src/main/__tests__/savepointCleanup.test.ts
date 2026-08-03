@@ -3,7 +3,9 @@
  *
  * 启动期对账是保存点 ref 的**唯一**删除驱动(会话删除不做即时清理:瞬态软删
  * 流程会回滚,status 触发的删除与之竞态,见 savepointCleanup.ts 模块注释):
- *   - 孤儿 ref(owner 行缺失或已删除)删除,存活 / archived owner 保留;
+ *   - 只删当前账号 DB 里 status='deleted' 的 owner 的 ref;存活 / archived
+ *     保留;**行缺失也保留**(localDb 按账号隔离,可能是另一账号的链,无法
+ *     证明是孤儿);
  *   - 非 git 目录、linked worktree 内目录跳过,同一 repoRoot 去重;
  *   - DB 查询失败整体跳过(零删除),单个 repo 失败不阻断其余。
  *
@@ -85,7 +87,7 @@ beforeEach(() => {
 });
 
 describe('reconcileSavepointRefsForDeletedSessions', () => {
-  it('removes orphan refs and keeps refs owned by live sessions', async () => {
+  it('removes only refs provably deleted in this DB; missing rows are kept', async () => {
     selectQueue.push([
       { id: 's-active', status: 'active', workingDir: '/work/dir' },
     ]);
@@ -94,9 +96,10 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
       { sessionId: 's-active', sha: 'a'.repeat(40) },
       { sessionId: 's-archived', sha: 'b'.repeat(40) },
       { sessionId: 's-deleted', sha: 'c'.repeat(40) },
-      { sessionId: 's-vanished', sha: 'd'.repeat(40) },
+      { sessionId: 's-foreign', sha: 'd'.repeat(40) },
     ]);
-    // owners 查询:s-vanished 行已物理缺失。
+    // owners 查询:s-foreign 行缺失——可能是本机另一账号的会话(localDb 按
+    // 账号隔离),不是孤儿证据,必须保留。
     selectQueue.push([
       { id: 's-active', status: 'active' },
       { id: 's-archived', status: 'archived' },
@@ -106,10 +109,8 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
     await reconcileSavepointRefsForDeletedSessions();
 
     expect(listRefsMock).toHaveBeenCalledWith('/repo/root');
-    const deleted = deleteRefMock.mock.calls.map((call) => call[1]).sort();
-    expect(deleted).toEqual(['s-deleted', 's-vanished']);
+    expect(deleteRefMock).toHaveBeenCalledTimes(1);
     expect(deleteRefMock).toHaveBeenCalledWith('/repo/root', 's-deleted');
-    expect(deleteRefMock).toHaveBeenCalledWith('/repo/root', 's-vanished');
   });
 
   it('skips entirely when the session query fails', async () => {
@@ -133,7 +134,7 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
     repoByCwd.set('/plain/dir', 'non-git');
     listRefsMock.mockResolvedValue([{ sessionId: 's1', sha: 'a'.repeat(40) }]);
     // 同一 repoRoot 只对账一次 → 只消费一次 owners 查询。
-    selectQueue.push([]);
+    selectQueue.push([{ id: 's1', status: 'deleted' }]);
 
     await reconcileSavepointRefsForDeletedSessions();
 
@@ -161,7 +162,7 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
     repoByCwd.set('/broken/dir', new Error('detect failed'));
     repoByCwd.set('/ok/dir', { repoRoot: '/ok/repo' });
     listRefsMock.mockResolvedValue([{ sessionId: 's2', sha: 'a'.repeat(40) }]);
-    selectQueue.push([]);
+    selectQueue.push([{ id: 's2', status: 'deleted' }]);
 
     await expect(reconcileSavepointRefsForDeletedSessions()).resolves.toBeUndefined();
 

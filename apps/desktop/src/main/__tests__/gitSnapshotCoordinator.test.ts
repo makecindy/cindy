@@ -395,6 +395,25 @@ describe('GitSnapshotCoordinator', () => {
     expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
+  it('unregisters in-flight turn records when the session is closed mid-turn', async () => {
+    // s1 开了 turn 却在 done/error 前被关闭(运行中切 Agent / 宿主回收):
+    // onSessionClosed 必须注销同仓并发记账,否则悬空 record 会让 s2 之后的
+    // 每一轮都被误判为并发、永久降级为 gap。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    coordinator.onSessionClosed('s1');
+    await coordinator.onTurnStart('s2');
+    await coordinator.onTurnEnd('s2');
+
+    // s1 turn-start + s2 turn-start + s2 after-edit,零 gap 标记。
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(3);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
   it('does not treat concurrent turns on different repos as overlapping', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockImplementation(async (sessionId: string) => ({

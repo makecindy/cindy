@@ -1,8 +1,8 @@
 /**
  * shadow savepoint 链的生命周期清理。
  *
- * 唯一删除驱动是启动期对账:遍历会话工作目录对应的 repo,清掉 owning session
- * 已删除或行已缺失的孤儿 ref。刻意**没有**会话删除时的即时清理——覆盖导入等
+ * 唯一删除驱动是启动期对账:遍历会话工作目录对应的 repo,清掉当前账号 DB 里
+ * status='deleted' 的会话的 ref。刻意**没有**会话删除时的即时清理——覆盖导入等
  * 流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复原状态,任何由 status
  * 变化触发的 ref 删除都与这类回滚竞态(ref 删了即不可逆);启动期不存在进行中
  * 的瞬态软删流程,对账时的 deleted 才是稳定终态。归档会话的 ref 保留:归档可
@@ -56,11 +56,12 @@ async function resolveSavepointRepoRoot(workingDir: string): Promise<string | nu
 }
 
 /**
- * 启动期对账:清掉 owning session 已删除/行已缺失的孤儿保存点 ref。
+ * 启动期对账:清掉 owning session 在当前账号 DB 里已标记 deleted 的保存点 ref。
  *
- * 只扫描当前会话表里仍出现的工作目录;所有会话行都已物理清除的 repo 无从定位,
- * 其残留 ref 留待该目录再次被会话使用时的下一轮对账。DB 查询失败整体跳过,
- * 宁可保留也不误删。
+ * 行缺失的 ref 保留(可能属于本机另一账号的会话,localDb 按账号隔离,无法证明
+ * 是孤儿)。只扫描当前会话表里仍出现的工作目录;所有会话行都已物理清除的 repo
+ * 无从定位,其残留 ref 留待该目录再次被会话使用时的下一轮对账。DB 查询失败
+ * 整体跳过,宁可保留也不误删。
  */
 export async function reconcileSavepointRefsForDeletedSessions(): Promise<void> {
   let rows: Array<{ id: string; status: string | null; workingDir: string | null }>;
@@ -101,12 +102,16 @@ export async function reconcileSavepointRefsForDeletedSessions(): Promise<void> 
         .select({ id: sessions.id, status: sessions.status })
         .from(sessions)
         .where(inArray(sessions.id, refs.map((ref) => ref.sessionId)));
-      const aliveIds = new Set(
-        owners.filter((owner) => owner.status !== 'deleted').map((owner) => owner.id),
+      // 只删当前账号 DB 里能证明 status='deleted' 的 ref。行缺失**不是**孤儿
+      // 证据:localDb 按账号隔离,同一仓库可能挂着另一账号会话的链,误删即
+      // 永久丢那个账号的回退历史。代价是行被物理清除的会话 ref 无人回收——
+      // 与"宁可保留也不误删"的模块口径一致。
+      const deletableIds = new Set(
+        owners.filter((owner) => owner.status === 'deleted').map((owner) => owner.id),
       );
 
       for (const ref of refs) {
-        if (aliveIds.has(ref.sessionId)) continue;
+        if (!deletableIds.has(ref.sessionId)) continue;
         await deleteSavepointRef(repoRoot, ref.sessionId);
         log.info('[savepoint-cleanup] orphan savepoint chain removed', {
           sessionId: ref.sessionId,

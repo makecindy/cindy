@@ -193,6 +193,16 @@ export class GitSnapshotCoordinator {
   /** Clears per-session repo detection when the session is closed. */
   onSessionClosed(sessionId: string): void {
     this.sessionCache.delete(sessionId);
+    // 未被 turn-end/abort 消费的 record(运行中关会话)必须逐条注销同仓并发
+    // 记账,否则悬空 record 会让同仓其它会话的后续每一轮都被误判为并发。
+    const queue = this.turnStartQueues.get(sessionId);
+    if (queue) {
+      for (const record of queue) {
+        if (record.repoRoot) {
+          this.unregisterActiveTurn(record.repoRoot, record);
+        }
+      }
+    }
     this.turnStartQueues.delete(sessionId);
   }
 
