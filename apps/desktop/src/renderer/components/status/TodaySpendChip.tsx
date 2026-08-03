@@ -1642,12 +1642,14 @@ export function TodaySpendChip({
     }
   }
 
-  // Claude 订阅有窗口段时由各段 used% 独立着色，避免一段吃紧把其它段与会话金额一起
-  // 染红；窗口数据缺失时仍保留 rejected / 上游 severity 的整 chip 告警兜底。
+  // Claude 订阅有告警窗口段时由该段独立着色，避免把其它段与会话金额一起染红；
+  // 告警来自未展示窗口或 rejected 时，仍保留整 chip 告警兜底。
   const claudeSubscriptionAlerting = isClaudeSubscription
     && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
+  const hasAlertingClaudeQuotaSegment = usesClaudeQuotaChipSegments
+    && chipWindows.some((window) => quotaSeverity(100 - window.remainingPercent) !== 'normal');
   const showClaudeSubscriptionFallbackAlert = claudeSubscriptionAlerting
-    && windowSegments.length === 0;
+    && !hasAlertingClaudeQuotaSegment;
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
