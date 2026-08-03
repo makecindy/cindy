@@ -51,6 +51,8 @@ vi.mock('@/components/new-chat/AgentSelect', () => ({
     ariaContext?: string;
     reselectEmitsChange?: boolean;
     side?: string;
+    triggerVariant?: string;
+    dense?: boolean;
     onChange: (next: string) => void;
   }) => (
     <div
@@ -60,6 +62,8 @@ vi.mock('@/components/new-chat/AgentSelect', () => ({
       data-aria-context={props.ariaContext}
       data-reselect-emits={props.reselectEmitsChange ? 'true' : 'false'}
       data-side={props.side}
+      data-trigger-variant={props.triggerVariant}
+      data-dense={props.dense ? 'true' : 'false'}
     >
       {['cc', 'codex', 'pi'].map((vendor) => (
         <button
@@ -173,6 +177,9 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     const agent = screen.getByTestId('agent-select');
     expect(agent.getAttribute('data-value')).toBe('cc');
     expect(agent.getAttribute('data-side')).toBe('bottom');
+    // 设置字段形态: 面板宽度绑 trigger(DESIGN.md §4 宽度铁则); dense 与同排 ModelSelector 齐高
+    expect(agent.getAttribute('data-trigger-variant')).toBe('field');
+    expect(agent.getAttribute('data-dense')).toBe('true');
     expect(agent.textContent).not.toContain('claude-code');
 
     const model = screen.getByTestId('model-selector');

@@ -548,6 +548,10 @@ export function WorkspacePrefsEditor({
       <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
         <AgentSelect
           value={vendorKey}
+          // 设置字段形态: trigger 撑满字段、面板绑 trigger 实测宽度
+          // (DESIGN.md §4 Select & Dropdown 宽度铁则); dense 与同排 ModelSelector 齐高。
+          triggerVariant="field"
+          dense
           side="bottom"
           // 可及名带行别名:每行目录都有一个同样的选择器,不带别名时读屏听到的
           // 全部是同一个名字,行与行无法分辨(codex review)。

@@ -74,6 +74,16 @@ interface AgentSelectProps {
    * 引擎时才回调, 不产生空写。
    */
   reselectEmitsChange?: boolean;
+  /**
+   * 触发器形态。'toolbar'(默认) = 工具条胶囊, 宽度 hug 内容、面板 196px;
+   * 'field' = 设置页字段, trigger 撑满字段宽并与单行输入同规格, 面板宽度
+   * **绑定 trigger 实测宽度**(DESIGN.md §4 Select & Dropdown 的宽度铁则:
+   * 面板绝不得比触发控件更宽或更窄 —— 直接把工具条形态放进字段时, 短标签
+   * (Claude / Pi)会让 196px 面板明显宽于 trigger, codex review #1490)。
+   */
+  triggerVariant?: 'toolbar' | 'field';
+  /** field 形态的紧凑高(h-9); 与同排 ModelSelector 的 dense 保持一致。 */
+  dense?: boolean;
 }
 
 export function AgentSelect({
@@ -88,11 +98,14 @@ export function AgentSelect({
   side = 'top',
   ariaContext,
   reselectEmitsChange = false,
+  triggerVariant = 'toolbar',
+  dense = false,
 }: AgentSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const isCreateAgent = visualVariant === 'create-agent';
+  const isField = triggerVariant === 'field';
   const current = agentOptionOf(value);
   // 当前值始终保留 —— 隐藏它会让触发器显示一个列表里不存在的引擎。
   const visibleOptions =
@@ -150,9 +163,18 @@ export function AgentSelect({
       }
       title={current.label}
       className={cn(
-        'flex shrink-0 items-center gap-1.5 rounded-full transition-colors',
-        'h-[30px]',
-        iconOnly ? 'w-[34px] min-w-[34px] justify-center px-0' : 'px-2.5',
+        'flex items-center gap-1.5 rounded-full transition-colors',
+        // 字段形态: 撑满字段、高度与同排选择器对齐, 底色走设置页输入框 token
+        // (与 ModelSelector 的 field trigger 同规格); 工具条形态保持 hug 不变。
+        isField
+          ? cn('w-full min-w-0 px-3', dense ? 'h-9' : 'h-10')
+          : cn(
+              'shrink-0',
+              // 工具条高度是 CREATE AGENT 视觉契约锁定值(见
+              // newMakerCreateAgentVisualContract.test.ts), 保持独立字面量。
+              'h-[30px]',
+              iconOnly ? 'w-[34px] min-w-[34px] justify-center px-0' : 'px-2.5',
+            ),
         isCreateAgent
           ? [
               'border border-[var(--create-agent-control-border)]',
@@ -160,7 +182,10 @@ export function AgentSelect({
             ]
           : [
               'border border-[var(--border-default)]',
-              'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+              // 字段形态用设置页输入框底色; 工具条形态用 composer pill 底色。
+              isField
+                ? 'bg-[var(--settings-input-bg)]'
+                : 'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
               'text-[var(--text-primary)]',
             ],
         // 交互态按变体取:create-agent 有自己的 hover/pressed token(某些主题下
@@ -187,7 +212,12 @@ export function AgentSelect({
           {/* 不用 flex-1:撑满会把 chevron 顶到最右,短引擎名后面拖一片空白。
               文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 mark 光学居中对齐。 */}
           <span
-            className="min-w-0 truncate text-left text-[12px] font-medium leading-none"
+            className={cn(
+              'min-w-0 truncate text-left font-medium leading-none',
+              // 字段形态跟随设置页字号(13px, 同 ModelSelector field trigger);
+              // flex-1 把 chevron 顶到右缘 —— 字段是定宽控件, 不是 hug。
+              isField ? 'flex-1 text-[13px]' : 'text-[12px]',
+            )}
             style={maxLabelWidth ? { maxWidth: maxLabelWidth } : undefined}
           >
             <span className="inline-block translate-y-[0.5px]">{current.label}</span>
@@ -212,7 +242,8 @@ export function AgentSelect({
       onOpenChange={(next) => setOpen(disabled ? false : next)}
       side={side}
       align="start"
-      panelWidth={196}
+      // 字段形态不传定宽, 改用 trigger 实测宽度(DESIGN.md §4 宽度铁则)。
+      {...(isField ? { panelWidthMode: 'trigger' as const } : { panelWidth: 196 })}
       panelClassName="p-2"
       panelAriaLabel={t('newChat.agentSelect.label')}
       startBg={
@@ -221,7 +252,9 @@ export function AgentSelect({
       startBorderColor={
         isCreateAgent ? 'var(--create-agent-control-border)' : 'var(--border-default)'
       }
-      wrapperClassName="shrink-0"
+      // 字段形态: wrapper 也要撑满, 否则 inline-flex + shrink-0 会把 trigger 的
+      // w-full 压回内容宽, 面板跟着缩 —— 字段就不是字段宽了。
+      wrapperClassName={isField ? 'w-full min-w-0' : 'shrink-0'}
       trigger={trigger}
     >
       <div

@@ -11,8 +11,10 @@
  *      3. 打开时初始焦点落在**当前选中行**(不是第一行)——键盘用户上来就站在
  *         「上次用的引擎」上
  *      4. disabled 时点击不展开
- *      5. 设置页/工作目录偏好复用它时新增的三个可选 props:ariaContext 前缀、
+ *      5. 设置页/工作目录偏好复用它时新增的可选 props:ariaContext 前缀、
  *         reselectEmitsChange 重选即回调、side 透传(默认 top)
+ *      6. field 形态(设置字段):trigger 撑满字段、面板宽度绑定 trigger 实测宽度
+ *         (DESIGN.md §4 Select & Dropdown 宽度铁则),工具条形态维持 hug + 196px
  *
  *   B. 选项表单一来源
  *      AGENT_OPTIONS 由 lib/agentVendors 的 SELECTABLE_VENDORS 派生,顺序一致、
@@ -46,11 +48,14 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/morph-popover', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    MorphPopover: ({ open, trigger, children, side }: {
+    MorphPopover: ({ open, trigger, children, side, panelWidth, panelWidthMode, wrapperClassName }: {
       open: boolean;
       trigger: React.ReactNode;
       children: React.ReactNode;
       side?: string;
+      panelWidth?: number;
+      panelWidthMode?: string;
+      wrapperClassName?: string;
     }) => {
       const panelRef = React.useRef<HTMLDivElement>(null);
       React.useEffect(() => {
@@ -65,7 +70,13 @@ vi.mock('@/components/ui/morph-popover', async () => {
         target.focus({ preventScroll: true });
       }, [open]);
       return (
-        <div data-testid="agent-select-popover" data-side={side}>
+        <div
+          data-testid="agent-select-popover"
+          data-side={side}
+          data-panel-width={panelWidth === undefined ? '' : String(panelWidth)}
+          data-panel-width-mode={panelWidthMode ?? ''}
+          data-wrapper-class={wrapperClassName ?? ''}
+        >
           {trigger}
           {open ? (
             <div ref={panelRef} data-testid="agent-select-panel">
@@ -138,6 +149,54 @@ describe('AgentSelect', () => {
 
     render(<AgentSelect value="cc" onChange={() => {}} side="bottom" />);
     expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('bottom');
+  });
+
+  it('field 形态: 面板宽度绑定 trigger 实测宽度, 不再用固定 196px', () => {
+    const { unmount } = render(<AgentSelect value="cc" onChange={() => {}} />);
+    // 工具条形态(默认): hug 内容 + 固定面板宽
+    const toolbar = screen.getByTestId('agent-select-popover');
+    expect(toolbar.getAttribute('data-panel-width')).toBe('196');
+    expect(toolbar.getAttribute('data-panel-width-mode')).toBe('');
+    expect(screen.getByRole('button', { name: '选择引擎：Claude' }).className).toContain('shrink-0');
+    unmount();
+
+    render(<AgentSelect value="cc" onChange={() => {}} triggerVariant="field" />);
+    const field = screen.getByTestId('agent-select-popover');
+    // 面板不再有固定宽度, 改为严格跟随 trigger —— 短标签(Claude / Pi)下
+    // 196px 面板会明显宽于 trigger, 违反设计规范的宽度铁则。
+    expect(field.getAttribute('data-panel-width')).toBe('');
+    expect(field.getAttribute('data-panel-width-mode')).toBe('trigger');
+    const trigger = screen.getByRole('button', { name: '选择引擎：Claude' });
+    expect(trigger.className).toContain('w-full');
+    expect(trigger.className).not.toContain('shrink-0');
+    expect(trigger.className).toContain('h-10');
+    // wrapper 也必须撑满: inline-flex + shrink-0 会把 trigger 的 w-full 压回内容宽,
+    // 面板跟着缩 —— 字段就不是字段宽了。
+    expect(field.getAttribute('data-wrapper-class')).toContain('w-full');
+    expect(toolbarWrapperIsShrink()).toBe(true);
+  });
+
+  function toolbarWrapperIsShrink(): boolean {
+    // 工具条形态的 wrapper 维持 shrink-0(工具条要 hug, 不能抢横向空间)
+    const { unmount } = render(<AgentSelect value="cc" onChange={() => {}} />);
+    const ok = (screen.getAllByTestId('agent-select-popover').at(-1)?.getAttribute('data-wrapper-class') ?? '')
+      .includes('shrink-0');
+    unmount();
+    return ok;
+  }
+
+  it('field 形态 dense 之外的默认: 工具条 wrapper 不受影响', () => {
+    render(<AgentSelect value="cc" onChange={() => {}} />);
+    expect(screen.getByTestId('agent-select-popover').getAttribute('data-wrapper-class')).toBe(
+      'shrink-0',
+    );
+  });
+
+  it('field 形态 dense: 与同排 ModelSelector 齐高(h-9)', () => {
+    render(<AgentSelect value="cc" onChange={() => {}} triggerVariant="field" dense />);
+    const trigger = screen.getByRole('button', { name: '选择引擎：Claude' });
+    expect(trigger.className).toContain('h-9');
+    expect(trigger.className).not.toContain('h-10');
   });
 
   it('打开时初始焦点落在当前选中行,不是第一行(经 data-morph-autofocus)', async () => {

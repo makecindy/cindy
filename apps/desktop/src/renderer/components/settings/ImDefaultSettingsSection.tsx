@@ -292,15 +292,16 @@ export function ImDefaultSettingsSection({
           </span>
           {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
               窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
-          <div className="flex h-10 items-center">
-            <AgentSelect
-              value={vendorKeyFor(settings.agentKind)}
-              side="bottom"
-              disabled={pending}
-              ariaContext={t('settings.imBot.defaults.agentLabel')}
-              onChange={(next) => changeAgent(agentKindOfVendor(next))}
-            />
-          </div>
+          <AgentSelect
+            value={vendorKeyFor(settings.agentKind)}
+            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
+            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
+            triggerVariant="field"
+            side="bottom"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.agentLabel')}
+            onChange={(next) => changeAgent(agentKindOfVendor(next))}
+          />
         </div>
 
         <div className="flex flex-col gap-2">
