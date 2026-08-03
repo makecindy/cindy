@@ -358,6 +358,27 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_x210']);
   });
 
+  it('preceding_tool_use_ids 数组重复 id 独立消费 occurrence, 不缓存复用(P2: Resolve repeated summary IDs independently)', () => {
+    // 同行两个重复 Bash_5 调用 → Bash_x5 + Bash_5_dup2。summary 数组 ['Bash_5','Bash_5']
+    // 若走 entry 缓存会变成 ['Bash_x5','Bash_x5'](第二次复用首次结果), 第二个 summary
+    // 挂到错误的 tool card。数组项必须各自消费 occurrence: 第一项 Bash_x5, 第二项 Bash_5_dup2。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5'), toolUse('Bash_5')]),
+      userEntry('u1', [toolResult('Bash_5'), toolResult('Bash_5')]),
+      JSON.stringify({
+        type: 'tool_use_summary',
+        summary: 'ran commands',
+        preceding_tool_use_ids: ['Bash_5', 'Bash_5'],
+      }),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Bash_x5', 'Bash_5_dup2']);
+    // 数组重复项各自消费: 第一项首个调用, 第二项第二个调用
+    expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_x5', 'Bash_5_dup2']);
+  });
+
   it('同一 assistant 行内同 id 并行调用: 子记录按内容顺序 FIFO 各挂各次(codex-connector P2)', () => {
     // 同一条 assistant 消息含两个 Bash_210(并行) → Bash_x210 + Bash_210_dup2。
     // 两条 subagent 记录引用 Bash_210: 第一条应挂第一个调用(Bash_x210),

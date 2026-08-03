@@ -434,14 +434,19 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           entryChanged = true;
         }
       }
-      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写;
-      // 带 child 身份时同样复用(同一 child 内同 id 不重复消费 occurrence)。
+      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写。
+      // 数组项**绕过 entryRef / childRef 缓存**: 每一项对应一个独立的 tool call,
+      // 同一 id 重复出现是两个重复调用, 需各自消费 occurrence —— 若走 resolveField,
+      // 同 entry 内同 id 的缓存会让 ['Bash_5','Bash_5'] 变成 ['Bash_x5','Bash_x5'],
+      // 而不是消费第二个 occurrence 得 Bash_5_dup2, resume/import 把第二个 summary
+      // 挂到错误的 tool card 上(codex-connector P2: Resolve repeated summary IDs
+      // independently)。用纯行作用域解析(后顾优先 + 前瞻 fallback)。
       const arr = entry.preceding_tool_use_ids;
       if (Array.isArray(arr)) {
         for (let i = 0; i < arr.length; i += 1) {
           const item = arr[i];
           if (typeof item !== 'string') continue;
-          const mapped = resolveField(item);
+          const mapped = resolveOccurrence(item, index) ?? resolveAhead(item, index);
           if (mapped !== undefined && mapped !== item) {
             arr[i] = mapped;
             entryChanged = true;
