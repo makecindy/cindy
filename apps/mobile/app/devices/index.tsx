@@ -199,6 +199,7 @@ export default function HomeScreen() {
   // A timed-out SecureStore read may still complete. Do not persist an empty/rebuilt
   // cache until that read settles and its stored identities have been reapplied.
   const deviceIdentityCachePersistReadyRef = useRef(false);
+  const deviceIdentityCachePersistPendingRef = useRef(false);
   // presence 补丁新鲜度:loadHome 用它判断哪些设备在 REST 快照发起后又收到过 presence-changed,
   // 避免用过期快照把它们改回离线(否则出现「会话都同步出来了、新建对话按钮却灰着」的卡死态)。
   const presenceFreshnessRef = useRef(createPresenceFreshnessTracker());
@@ -271,8 +272,9 @@ export default function HomeScreen() {
   const reconcileDeviceViews = useCallback((nextRawDevices: readonly DeviceView[]) => {
     const result = reconcileDeviceIdentities(nextRawDevices, deviceIdentityCacheRef.current);
     deviceIdentityCacheRef.current = result.cache;
-    if (result.cacheChanged && deviceIdentityCachePersistReadyRef.current) {
-      void saveDeviceIdentityCache(result.cache);
+    if (result.cacheChanged) {
+      if (deviceIdentityCachePersistReadyRef.current) void saveDeviceIdentityCache(result.cache);
+      else deviceIdentityCachePersistPendingRef.current = true;
     }
     return result;
   }, []);
@@ -516,13 +518,19 @@ export default function HomeScreen() {
       getCachedHomeListSnapshot(homeCacheUserId),
       [],
     );
+    const applySnapshot = (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+      if (cancelled || lastSyncedAtRef.current !== null) return;
+      for (const device of snapshot) {
+        remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
+        updateDeviceConnectionState(device.deviceId, 'syncing');
+      }
+    };
     void read.initial
-      .then(({ value: snapshot }) => {
-        if (cancelled || lastSyncedAtRef.current !== null) return;
-        for (const device of snapshot) {
-          remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
-          updateDeviceConnectionState(device.deviceId, 'syncing');
-        }
+      .then((initial) => {
+        applySnapshot(initial.value);
+        if (initial.timedOut) void read.completion.then((late) => {
+          if (late.ok) applySnapshot(late.value);
+        });
       })
       .catch(() => undefined)
       .finally(() => {
@@ -551,16 +559,15 @@ export default function HomeScreen() {
         if (cancelled) return;
         if (late.ok) {
           deviceIdentityCacheRef.current = late.value;
+          deviceIdentityCachePersistReadyRef.current = true;
           const reconciled = reconcileDeviceViews(devicesRef.current);
           devicesRef.current = reconciled.devices;
           if (reconciled.viewsChanged) setDevices(reconciled.devices);
-          deviceIdentityCachePersistReadyRef.current = true;
-          if (reconciled.cacheChanged) void saveDeviceIdentityCache(reconciled.cache);
           return;
         }
 
         deviceIdentityCachePersistReadyRef.current = true;
-        void saveDeviceIdentityCache(deviceIdentityCacheRef.current);
+        if (deviceIdentityCachePersistPendingRef.current) void saveDeviceIdentityCache(deviceIdentityCacheRef.current);
       });
     return () => {
       cancelled = true;

@@ -12,17 +12,11 @@ describe('mobile Home startup reads', () => {
   it('returns the local value when the read settles in time', async () => {
     const read = startBoundedStartupRead(Promise.resolve('cached'), 'fallback', 100);
 
-    await expect(
-      read.initial,
-    ).resolves.toEqual({ timedOut: false, value: 'cached' });
+    await expect(read.initial).resolves.toEqual({ timedOut: false, value: 'cached' });
   });
 
   it('falls back on read failure', async () => {
-    const read = startBoundedStartupRead(
-      Promise.reject(new Error('read failed')),
-      'fallback',
-      100,
-    );
+    const read = startBoundedStartupRead(Promise.reject(new Error('read failed')), 'fallback', 100);
 
     await expect(
       read.initial,
@@ -386,11 +380,10 @@ describe('mobile home desktop-first surface', () => {
 
     expect(source).toContain('void loadHome({ visible: false });');
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
+    expect(source).toContain('if (late.ok) applySnapshot(late.value);');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
-    expect(source).toContain('const deviceIdentityCachePersistReadyRef = useRef(false);');
-    expect(source).toContain('const late = await read.completion;');
-    expect(source).toContain('deviceIdentityCacheRef.current = late.value;');
-    expect(source).toContain('if (result.cacheChanged && deviceIdentityCachePersistReadyRef.current)');
+    expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
+    expect(source).toContain('if (result.cacheChanged)');
     // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
     // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),
