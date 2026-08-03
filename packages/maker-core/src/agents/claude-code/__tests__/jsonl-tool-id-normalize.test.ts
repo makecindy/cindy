@@ -296,6 +296,47 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
   });
 
+  it('同 id 重铸多次时 subagent 顶层字段按**行作用域**配对(codex-connector P2)', () => {
+    // 单一 last mapping 会把所有 subagent 记录挂到最后一个 duplicate; 这里验证
+    // 位置配对: 每个 stream_event 引用「它所在位置之前最近的同名 call」的终 id。
+    const text = [
+      // 首次调用 → Bash_x210
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      // 紧随首次调用的 subagent 记录 → 应挂 Bash_x210
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        parent_tool_use_id: 'Bash_210',
+        tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      }),
+      userEntry('u1', [toolResult('Bash_210')]),
+      // 重铸的第二次调用 → Bash_210_dup2
+      assistantEntry('a2', [toolUse('Bash_210')]),
+      // 紧随重铸调用的 subagent 记录 → 应挂 Bash_210_dup2
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-2',
+        parent_tool_use_id: 'Bash_210',
+        tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      }),
+      userEntry('u2', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // 两次调用分别定终
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x210');
+    expect(contentOf(entries[3])[0].id).toBe('Bash_210_dup2');
+    // 行作用域: 第一次调用后的 subagent 挂首次终 id
+    expect((entries[1] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+    expect((entries[1] as Record<string, unknown>).tool_use_id).toBe('Bash_x210');
+    // 第二次调用后的 subagent 挂重铸终 id —— 不误挂到首个
+    expect((entries[4] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_210_dup2');
+    expect((entries[4] as Record<string, unknown>).tool_use_id).toBe('Bash_210_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);

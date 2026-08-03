@@ -200,9 +200,12 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // 最近一次 assistant 消息的 index —— result 的「同批」= 紧跟的那个 assistant 批。
   let lastAssistantBatch = -1;
   const firstFinalByOriginal = new Map<string, string>();
-  // 每个原始 id 的最终 id(同 id 多次出现取最近一次) —— 用于改写 subagent 记录
-  // 顶层 parent_tool_use_id / tool_use_id 字段(codex-connector review P2)。
-  const lastFinalByOriginal = new Map<string, string>();
+  // 每个原始 id 按文件序出现的 (行号, 终 id) —— 供 subagent 记录顶层字段做
+  // **行作用域配对**(与 tool_result 同语义): 映射到「本记录之前最近的同名 call」的
+  // 终 id。同一原始 id 重铸多次时, 首个 subagent 记录挂首次调用、后续各挂各自
+  // 最近调用, 而不是全部挂最后一个 duplicate —— 单一 last mapping 会把第一个
+  // subagent 的消息错误挂到后面的 Agent/Task 卡片上(codex-connector review P2)。
+  const occurrenceByOriginal = new Map<string, Array<{ line: number; finalId: string }>>();
   entries.forEach((entry, index) => {
     const blocks = messageContentBlocks(entry);
     if (!blocks) return;
@@ -232,7 +235,12 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           lineChanged = true;
         }
         if (!firstFinalByOriginal.has(originalId)) firstFinalByOriginal.set(originalId, finalId);
-        lastFinalByOriginal.set(originalId, finalId);
+        let occ = occurrenceByOriginal.get(originalId);
+        if (!occ) {
+          occ = [];
+          occurrenceByOriginal.set(originalId, occ);
+        }
+        occ.push({ line: index, finalId });
         let stack = openCalls.get(originalId);
         if (!stack) {
           stack = [];
@@ -284,18 +292,31 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // subagent 记录的顶层字段跟随 tool_use 改名: Claude subagent/task-notification
   // 条目在顶层带 parent_tool_use_id / tool_use_id 引用父 agent 的调用 id
   // (translator 用它们作 parentToolUseId 挂载)。归一化改名后必须同步, 否则
-  // subagent 关联断裂(codex-connector review P2)。
-  if (lastFinalByOriginal.size > 0) {
+  // subagent 关联断裂。
+  //
+  // 配对必须**按行作用域**: 每个 subagent 记录引用「它所在位置之前最近的同名 call」
+  // 的终 id —— 同一原始 id 重铸多次时, 第 N 个 subagent 挂第 N 次调用, 而非全部挂
+  // 最后一个 duplicate(单一 last mapping 会把首个 subagent 的消息错误挂到后面的
+  // Agent/Task 卡片上, codex-connector review P2)。
+  if (occurrenceByOriginal.size > 0) {
+    // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标(其 line < 当前 index)。
+    const occPtr = new Map<string, number>();
     entries.forEach((entry, index) => {
       let entryChanged = false;
       for (const field of ['parent_tool_use_id', 'tool_use_id'] as const) {
         const val = entry[field];
-        if (typeof val === 'string') {
-          const mapped = lastFinalByOriginal.get(val);
-          if (mapped !== undefined && mapped !== val) {
-            entry[field] = mapped;
-            entryChanged = true;
-          }
+        if (typeof val !== 'string') continue;
+        const occs = occurrenceByOriginal.get(val);
+        if (!occs || occs.length === 0) continue;
+        // 推进到最后一个 line < index 的 occurrence(行作用域: 取最近的同名 call)。
+        let ptr = occPtr.get(val) ?? -1;
+        while (ptr + 1 < occs.length && occs[ptr + 1].line < index) ptr += 1;
+        occPtr.set(val, ptr);
+        if (ptr < 0) continue; // 该记录之前的转录里还没有同名 call —— 不改写。
+        const mapped = occs[ptr].finalId;
+        if (mapped !== val) {
+          entry[field] = mapped;
+          entryChanged = true;
         }
       }
       if (entryChanged) changedLineIndexes.add(index);
