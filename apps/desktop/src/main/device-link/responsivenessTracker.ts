@@ -58,6 +58,14 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
  * 统一按不定论收尾(与 mobile 同语义;desktop 额外把 subscribe / unsubscribe 也
  * 列入——它们同样是 pre-runInvoke 特判应答的控制帧)。超时分类不受影响。
  */
+/**
+ * openLink 的熔断观测名(本地观测标签,不是 wire channel):link-accept 在被控端
+ * dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常回包——成功必须记不定论,
+ * 不作关熔断的恢复证据(mobile sendOpenLink 同语义,那边的事故形态正是凭
+ * link-accept 关熔断后立刻放进订阅+快照突发,3 次超时再 open,周期性风暴)。
+ */
+export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:open-link';
+
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:media:fetch',
   'device-link:voice:credential-sync',
@@ -65,6 +73,7 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:voice:transcribe',
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  OPEN_LINK_OBSERVATION_CHANNEL,
 ]);
 
 /**
