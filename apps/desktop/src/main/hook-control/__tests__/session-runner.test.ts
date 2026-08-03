@@ -1180,7 +1180,11 @@ describe('进度快照(turn.progress 链路)', () => {
     // 不承担「群里多人共用一个 bot」的权限模型(那套在个人 bot 里另有设计)。
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
-      baseReq({ source: { im: 'telegram', userText: 'hi' }, permissionMode: 'bypassPermissions' }),
+      baseReq({
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+        permissionMode: 'bypassPermissions',
+      }),
     );
 
     expect(outcome.status).toBe('ok');
@@ -1193,14 +1197,56 @@ describe('进度快照(turn.progress 链路)', () => {
     // 正是当初必须降档的原因)
     const sendOptions = session.send.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(sendOptions.turnPermissionPolicy).toBeUndefined();
-    expect(sendOptions.afterTurnReserved).toBeUndefined();
+    // afterTurnReserved 仍在, 但只用来取 turn lease(见另一条用例) —— 权限档一律不碰
+    expect(session.setPermissionMode).not.toHaveBeenCalled();
+    expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
+  });
+
+  it('Telegram 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async () => {
+    // lease 与权限档是两件事: 上一版把它跟临时降档一起删了, 于是「前台 done →
+    // 后台任务续跑」的空窗里 Desktop 轮次会被放进来共享 session 事件流 / origin /
+    // 交互路由(codex review #1490)。这里锁住「取了、且不早放」。
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
+    await flush();
+
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const release = session.acquireTurnLease.mock.results[0]?.value as ReturnType<typeof vi.fn>;
+    expect(session.acquireTurnLease).toHaveBeenCalledTimes(1);
+    // turn 还在跑 —— 不许提前释放
+    expect(release).not.toHaveBeenCalled();
+
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    await p;
+    expect(release).toHaveBeenCalled();
+  });
+
+  it('Telegram DM 轮次不取 turn lease(独占只为群的后台续跑窗口)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'dm' }));
+    await flush();
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.acquireTurnLease).not.toHaveBeenCalled();
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    await p;
   });
 
   it('Telegram 群复用会话不再临时切换权限档', async () => {
     const session = makeFakeSession('sess-old');
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
-      baseReq({ isNew: false, sessionId: 'sess-old', source: { im: 'telegram', userText: 'hi' } }),
+      baseReq({
+        isNew: false,
+        sessionId: 'sess-old',
+        laneKind: 'group',
+        source: { im: 'telegram', userText: 'hi' },
+      }),
     );
 
     expect(outcome.status).toBe('ok');

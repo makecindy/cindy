@@ -484,6 +484,22 @@ export function createMakerHookSessionRunner(deps: {
       // 官方 bot 的群聊定位是引导用户装自己的个人 bot, 不承担「群里多人
       // 共用一个 bot」的权限模型 —— 那套已在个人 bot 里设计过(guest 轮次
       // 强确认), 不在这里重做。
+      /**
+       * 群/topic 轮次在 send 预约后取 session turn lease —— **与权限档无关**。
+       *
+       * 供应商可能在前台 done 与后台任务续跑之间瞬时报 idle, observeHookTurn 刻意
+       * 在那段窗口里保持 pending。不持有 lease 时 Session.send 会在那个空窗里放
+       * Desktop 轮次进来, 两个逻辑轮次共享 session 事件流 / origin / 交互路由 ——
+       * Desktop 的输出会混进 Telegram 结果, 或续跑被路由错(codex review #1490:
+       * 上一版把它跟临时降档一起删了, 而两者本来无关 —— 原注释就写着“即使复用
+       * 会话已是安全档、不需要切档, 也要持住这段独占”)。
+       */
+      const isTelegramGroupTurn = req.source?.im === 'telegram' && req.laneKind === 'group';
+      let releaseTelegramGroupTurnLease: (() => void) | null = null;
+      const releaseTelegramGroupTurn = (): void => {
+        releaseTelegramGroupTurnLease?.();
+        releaseTelegramGroupTurnLease = null;
+      };
 
       /**
        * 授权判定刻意**只在 dispatcher 侧**做(定位时 + 执行前按当前映射重查),
@@ -892,6 +908,13 @@ export function createMakerHookSessionRunner(deps: {
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          afterTurnReserved: () => {
+            // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
+            // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。
+            if (isTelegramGroupTurn) {
+              releaseTelegramGroupTurnLease ??= session.acquireTurnLease();
+            }
+          },
           beforeProviderStart: () => {
             const routeOrigin: RoutedTurnOrigin =
               req.source?.im === 'slack'
@@ -947,11 +970,13 @@ export function createMakerHookSessionRunner(deps: {
         if (!outcome.dispatched) {
           observer.stop();
           finalizeInteractions();
+          releaseTelegramGroupTurn();
           return fail(`send not dispatched: ${outcome.reason}`);
         }
       } catch (err) {
         observer.stop();
         finalizeInteractions();
+        releaseTelegramGroupTurn();
         return fail(err instanceof Error ? err.message : String(err));
       }
 
@@ -965,6 +990,9 @@ export function createMakerHookSessionRunner(deps: {
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
+        // lease 在这里才能放: observer.finished 已把后台任务一并定格
+        // (早放 = 后台续跑期间又回到共享 session 的旧行为)。幂等。
+        releaseTelegramGroupTurn();
       }
 
       // 已知 v1 取舍: 不做 scheduler 4.5.1 的完整 backfillSessionMeta。

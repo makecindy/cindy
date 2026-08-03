@@ -11,6 +11,8 @@
  *      3. 打开时初始焦点落在**当前选中行**(不是第一行)——键盘用户上来就站在
  *         「上次用的引擎」上
  *      4. disabled 时点击不展开
+ *      5. 设置页/工作目录偏好复用它时新增的三个可选 props:ariaContext 前缀、
+ *         reselectEmitsChange 重选即回调、side 透传(默认 top)
  *
  *   B. 选项表单一来源
  *      AGENT_OPTIONS 由 lib/agentVendors 的 SELECTABLE_VENDORS 派生,顺序一致、
@@ -44,10 +46,11 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/morph-popover', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    MorphPopover: ({ open, trigger, children }: {
+    MorphPopover: ({ open, trigger, children, side }: {
       open: boolean;
       trigger: React.ReactNode;
       children: React.ReactNode;
+      side?: string;
     }) => {
       const panelRef = React.useRef<HTMLDivElement>(null);
       React.useEffect(() => {
@@ -62,7 +65,7 @@ vi.mock('@/components/ui/morph-popover', async () => {
         target.focus({ preventScroll: true });
       }, [open]);
       return (
-        <div>
+        <div data-testid="agent-select-popover" data-side={side}>
           {trigger}
           {open ? (
             <div ref={panelRef} data-testid="agent-select-panel">
@@ -105,6 +108,36 @@ describe('AgentSelect', () => {
     fireEvent.click(screen.getByRole('button', { name: '选择引擎：Codex' }));
     fireEvent.click(screen.getByTestId('agent-select-option-codex'));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // 以下三条对应设置页 / 工作目录偏好行的复用需求(#1490)。默认行为不许变:
+  // 新建对话工具条不传这三个 prop。
+  it('ariaContext: 可及名前置上下文,多行同屏可区分;不传时保持原文案', () => {
+    const { unmount } = render(<AgentSelect value="cc" onChange={() => {}} />);
+    expect(screen.getByRole('button', { name: '选择引擎：Claude' })).toBeTruthy();
+    unmount();
+
+    render(<AgentSelect value="cc" onChange={() => {}} ariaContext="Agent · cindy" />);
+    expect(screen.getByRole('button', { name: 'Agent · cindy · 选择引擎：Claude' })).toBeTruthy();
+  });
+
+  it('reselectEmitsChange: 重选当前项也回调(把继承值钉成显式偏好)', () => {
+    const onChange = vi.fn();
+    render(<AgentSelect value="cc" onChange={onChange} reselectEmitsChange />);
+
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    fireEvent.click(screen.getByTestId('agent-select-option-cc'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('cc');
+  });
+
+  it('side: 默认 top(工具条在底部),显式传 bottom 透传给 MorphPopover', () => {
+    const { unmount } = render(<AgentSelect value="cc" onChange={() => {}} />);
+    expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('top');
+    unmount();
+
+    render(<AgentSelect value="cc" onChange={() => {}} side="bottom" />);
+    expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('bottom');
   });
 
   it('打开时初始焦点落在当前选中行,不是第一行(经 data-morph-autofocus)', async () => {
