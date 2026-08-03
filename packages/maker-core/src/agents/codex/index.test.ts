@@ -16983,6 +16983,10 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         model: 'gpt-5.4',
         workingDir: '/repo',
       });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected pending-turn subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
       const seen: AgentEvent[] = [];
       void (async () => {
         for await (const event of handle.events()) seen.push(event);
@@ -17049,6 +17053,10 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         model: 'gpt-5.4',
         workingDir: '/repo',
       });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected pending-turn subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
       void (async () => {
         for await (const event of handle.events()) void event;
       })();

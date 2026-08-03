@@ -3114,36 +3114,44 @@ export class CodexAgent extends BaseAgent {
       cleanupThreadId: string;
       reason: string;
       cleanup: () => Promise<void>;
+      retireHostOnFailure?: boolean;
     }): Promise<boolean> => {
       try {
         await params.cleanup();
         return true;
       } catch (error) {
-        log.warn('Codex thread cleanup failed; retiring captured app-server', {
+        log.warn('Codex thread cleanup failed', {
           threadId: params.cleanupThreadId,
           reason: params.reason,
           error: error instanceof Error ? error.message : String(error),
+          retireHostOnFailure: params.retireHostOnFailure ?? true,
         });
-        try {
-          await retireCapturedHostAfterThreadCleanupFailure(params.reason);
-        } catch (retireError) {
-          log.warn('Codex host retire after thread cleanup failure threw', {
-            threadId: params.cleanupThreadId,
-            reason: params.reason,
-            error: retireError instanceof Error ? retireError.message : String(retireError),
-          });
+        if (params.retireHostOnFailure !== false) {
+          try {
+            await retireCapturedHostAfterThreadCleanupFailure(params.reason);
+          } catch (retireError) {
+            log.warn('Codex host retire after thread cleanup failure threw', {
+              threadId: params.cleanupThreadId,
+              reason: params.reason,
+              error: retireError instanceof Error ? retireError.message : String(retireError),
+            });
+          }
         }
         terminateHandleAfterThreadCleanupFailure(params.reason);
         return false;
       }
     };
-    const releaseCurrentThreadSubscription = async (reason: string): Promise<boolean> => {
+    const releaseCurrentThreadSubscription = async (
+      reason: string,
+      opts: { retireHostOnFailure?: boolean } = {},
+    ): Promise<boolean> => {
       const currentSubscription = subscription;
       if (!currentSubscription) return true;
       const released = await runThreadCleanupOrRetire({
         cleanupThreadId: threadId,
         reason,
         cleanup: () => currentSubscription.release(),
+        retireHostOnFailure: opts.retireHostOnFailure ?? true,
       });
       if (subscription === currentSubscription) subscription = null;
       return released;
@@ -4655,7 +4663,10 @@ export class CodexAgent extends BaseAgent {
             suppressFailureEvent: true,
           });
           try {
-            await handle.close();
+            // thread/unsubscribe 失败不能在 interrupt 结果尚未确认时强退共享 host：
+            // 同 host 上可能还有健康 session。这里只关闭当前 handle，不让 cleanup
+            // 失败提前退役 host；最终 host 退役仍由下面的双 ACK 失败分支决定。
+            await closeSessionHandle({ retireHostOnCleanupFailure: false });
           } catch (error: unknown) {
             log.warn('codex reconnect watchdog pending turn close threw', {
               turnId: pendingTurnId,
@@ -7559,6 +7570,36 @@ export class CodexAgent extends BaseAgent {
       subscriptionInvalidatedByTransport = false;
     }
 
+    async function closeSessionHandle(
+      opts: { retireHostOnCleanupFailure?: boolean } = {},
+    ): Promise<void> {
+      if (closed) return;
+      closed = true;
+      clearReconnectStall();
+      resetUpstreamIdleForTurnEnd();
+      unregisterCodexMcpContext(threadId);
+      unregisterDescendantCodexMcpContexts();
+      // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
+      // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
+      // 永不返回, server 侧请求卡死。
+      abandonBufferedTurns('session closed');
+      abandonPendingCapabilitySteers();
+      // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
+      // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
+      try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
+      try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+      try { clearAllPendingUserInputInteractions(); } catch (e) { log.warn('clear pending user input threw', { error: String(e) }); }
+      try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+      // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
+      // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
+      // setTimeout 回调里，白留一次失败与一条误导日志）。
+      try { discardOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
+      await releaseCurrentThreadSubscription('session close subscription release', {
+        retireHostOnFailure: opts.retireHostOnCleanupFailure ?? true,
+      });
+      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+    }
+
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
@@ -8479,29 +8520,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async close() {
-        if (closed) return;
-        closed = true;
-        clearReconnectStall();
-        resetUpstreamIdleForTurnEnd();
-        unregisterCodexMcpContext(threadId);
-        unregisterDescendantCodexMcpContexts();
-        // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
-        // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
-        // 永不返回, server 侧请求卡死。
-        abandonBufferedTurns('session closed');
-        abandonPendingCapabilitySteers();
-        // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
-        // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
-        try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
-        try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
-        try { clearAllPendingUserInputInteractions(); } catch (e) { log.warn('clear pending user input threw', { error: String(e) }); }
-        try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
-        // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
-        // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
-        // setTimeout 回调里，白留一次失败与一条误导日志）。
-        try { discardOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
-        await releaseCurrentThreadSubscription('session close subscription release');
-        try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+        await closeSessionHandle();
       },
 
       events(): AsyncIterable<AgentEvent> {
