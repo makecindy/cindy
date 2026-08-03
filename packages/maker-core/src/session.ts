@@ -1147,17 +1147,11 @@ export class Session {
       event.turnAttemptToken = this.currentTurnAttemptToken;
     }
     const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
-    // Codex may report a terminal error while its dispatch promise is still
-    // pending (before the handle has advertised the turn as running). That
-    // error is provider-owned even though the iterator was opened for the
-    // previous generation; keep it from being dropped by the generation fence.
-    const terminalBeforeProviderStartSettled =
-      event.type === 'error' &&
-      event.source === 'codex' &&
-      this.sendReservation?.phase === 'dispatching' &&
-      !this.isHandleTurnRunning();
-    const terminalBoundaryObserved =
-      (isCurrentGeneration || terminalBeforeProviderStartSettled) && isTerminal;
+    // A dispatching send is not enough evidence that a terminal event belongs
+    // to it: Codex can enqueue the previous turn's terminal error after flipping
+    // its handle idle. Only runEventLoop's generation adoption may transfer
+    // ownership to the new attempt.
+    const terminalBoundaryObserved = isCurrentGeneration && isTerminal;
     if (terminalBoundaryObserved) {
       this.terminalEventObservedGeneration = this.turnGeneration;
       if (event.type === 'done') {
@@ -1166,6 +1160,7 @@ export class Session {
         this.armTerminalErrorDrain(this.turnGeneration);
       }
     } else if (
+      this.agentKind === 'codex' &&
       isCurrentGeneration &&
       event.type === 'status' &&
       (event.data as { isRunning?: unknown } | null | undefined)?.isRunning === false &&
@@ -1192,7 +1187,7 @@ export class Session {
     // 不应透传到 Session。凡是到达 Session 的 done / 终止型 error 都代表产品层
     // turn 已结束,必须清 origin,避免后续 standalone auto-compact 等后台 turn 继承
     // goal/scheduler origin。
-    if ((isCurrentGeneration || terminalBeforeProviderStartSettled) && isTerminal) {
+    if (isCurrentGeneration && isTerminal) {
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;
       // 终态之后不再计 stall 额度。

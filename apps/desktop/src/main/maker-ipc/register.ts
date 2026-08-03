@@ -8675,14 +8675,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onRejectedUserTurn: (sessionId, item) => {
+      // Auto-resume items have an exact-token cleanup boundary below. Keep
+      // their attempt lease until that boundary can restore recovery and
+      // finalize the suppressed error; releasing it here would make a later
+      // undispatched discard skip finalizeSuppressedError.
+      if (item.autoResume) return;
       autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
+      // Auto-resume cleanup must run before generic claimed-retry release:
+      // settleOutcome may drop the attempt lease, while finalizeSuppressedError
+      // still needs the suppressed entry/current token to complete takeover drain.
+      const autoResume = item.autoResume === true;
+      if (autoResume) settleUndispatchedInterruptedAutoResume(sessionId, item);
       finalizeUndispatchedClaimedRetry(sessionId, item, 'cancelled');
       // 持久化中的项在这里被取消后不会再走 onUndispatchedUserTurn，复用同一结算出口。
-      settleUndispatchedInterruptedAutoResume(sessionId, item);
+      if (!autoResume) settleUndispatchedInterruptedAutoResume(sessionId, item);
       // 排队心跳被丢弃 → 通知 runner 按 aborted 收尾对应 run,不让 fire 永久挂起。
       const watcher = schedulerQueuedPromptDiscardWatchers.get(item.clientId);
       if (watcher) {
@@ -8741,12 +8751,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiTurnUndispatched(sessionId, item.clientId);
       gitSnapshotCoordinator?.onTurnAbort(sessionId);
       autoResumeBookkeeping.rollbackReplacementPreview(sessionId, item.clientId);
+      const autoResume = item.autoResume === true;
+      if (autoResume) settleUndispatchedInterruptedAutoResume(sessionId, item);
       finalizeUndispatchedClaimedRetry(sessionId, item, disposition);
       // 自动续跑那条消息已落库、却最终没派出去 → 这次重连就是失败。**必须在这里钉死**:
       // 它不会产生任何 turn 事件,新加的终态结算路径够不到它,待确认记录于是悬空,被之后
       // 任何一个无关的 text / tool 事件误标成「已重新连接」(codex P1)。
       // 按 clientId 匹配 —— 别的 turn 未派发不该动这条记录。
-      settleUndispatchedInterruptedAutoResume(sessionId, item);
+      if (!autoResume) settleUndispatchedInterruptedAutoResume(sessionId, item);
     },
     // Thread 3 fix: called from drain/dispatchCompact failure paths where the item
     // was removed from the queue but not put back (persisted-failure case). If no

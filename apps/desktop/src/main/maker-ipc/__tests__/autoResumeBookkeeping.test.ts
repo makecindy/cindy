@@ -383,6 +383,21 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
   });
 
+  it('结算 undispatched outcome 时保留 suppressed-error attempt lease 直到 finalize', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'boom' }, 7);
+    h.book.registerPendingOutcome('s1', 7, 'retry-1');
+
+    h.book.settleOutcomeForClient('s1', 7, 'retry-1', 'failed');
+    expect(h.book.isCurrentAttempt('s1', 7), 'suppressed owner 仍在时不能提前删 attempt').toBe(true);
+
+    h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: true });
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(false);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'boom' } }]);
+    expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'retry-1', outcome: 'failed' }]);
+  });
+
   it('deferred owner 精确 flush 不会被 newer attempt 拦截或误删', () => {
     const h = createHarness();
     const oldOwner = { generation: 3, clientId: 'old-turn' };

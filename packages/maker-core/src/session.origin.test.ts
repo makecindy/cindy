@@ -11,6 +11,7 @@ import path from 'node:path';
 import { Session } from './session.js';
 import type { AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
+import type { AgentKind } from './types/common.js';
 
 function createLogger() {
   const logger = {
@@ -24,19 +25,38 @@ function createLogger() {
  * 可控事件流的 fake handle:send 后通过 emit() 往事件流逐条推 AgentEvent。
  * isTurnRunning 跟随 send/terminal 翻转,模拟真实 turn 边界。
  */
-function createControllableHandle(opts?: { sendError?: Error }) {
+function createControllableHandle(opts?: {
+  sendError?: Error;
+  agentKind?: AgentKind;
+  dispatchEvent?: AgentEvent;
+  dispatchOnSend?: number;
+  holdDispatch?: boolean;
+  holdOnSend?: number;
+}) {
   let push: ((e: AgentEvent) => void) | null = null;
   let turnRunning = false;
   let closeCalls = 0;
+  let releaseDispatch: (() => void) | null = null;
+  let sendCount = 0;
   const buffered: AgentEvent[] = [];
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
 
   const handle: AgentSessionHandle = {
     id: 'thread-1',
-    agentKind: 'codex',
+    agentKind: opts?.agentKind ?? 'codex',
     model: 'gpt-5.4',
     async send() {
+      sendCount += 1;
       if (opts?.sendError) throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
+      if (opts?.dispatchEvent && (opts.dispatchOnSend ?? 1) === sendCount) {
+        if (push) push(opts.dispatchEvent);
+        else buffered.push(opts.dispatchEvent);
+      }
+      if (opts?.holdDispatch && (opts.holdOnSend ?? 1) === sendCount) {
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+      }
       turnRunning = true;
     },
     async steer() {},
@@ -87,14 +107,21 @@ function createControllableHandle(opts?: { sendError?: Error }) {
     setTurnRunning(running: boolean) {
       turnRunning = running;
     },
+    releaseDispatch() {
+      releaseDispatch?.();
+    },
+    queue(event: AgentEvent) {
+      if (push) push(event);
+      else buffered.push(event);
+    },
     closeCalls: () => closeCalls,
   };
 }
 
-function makeSession(handle: AgentSessionHandle): Session {
+function makeSession(handle: AgentSessionHandle, agentKind: AgentKind = 'codex'): Session {
   return new Session({
     id: 'session-1',
-    agentKind: 'codex',
+    agentKind,
     workDir: path.join('workspace', 'repo'),
     handle,
     capabilities: {} as never,
@@ -247,6 +274,73 @@ describe('Session per-turn origin 打标', () => {
     expect(seen[2]?.turnAttemptToken).toBeUndefined();
   });
 
+  it('Codex 在 provider 启动前报终态 error → 通过 event-loop generation 归属当前 attempt', async () => {
+    const { handle, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'dispatch failed', isTerminal: true },
+        source: 'codex',
+      },
+      holdDispatch: true,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    const send = session.send('go', {
+      origin: SCHED_ORIGIN,
+      turnAttemptToken: 9,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seen[0]).toEqual(expect.objectContaining({
+      type: 'error',
+      turnOrigin: SCHED_ORIGIN,
+      turnAttemptToken: 9,
+    }));
+    releaseDispatch();
+    await send;
+    await session.close();
+  });
+
+  it('排队中的旧 Codex terminal error 不能冒领随后 dispatch 的 attempt token', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    const second = session.send('second', {
+      origin: SCHED_ORIGIN,
+      turnAttemptToken: 2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(late?.turnAttemptToken).toBeUndefined();
+    expect(late?.turnOrigin).toBeUndefined();
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('terminal error 后先排空尾部，再允许新 attempt', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
@@ -280,6 +374,24 @@ describe('Session per-turn origin 打标', () => {
     await expect(session.send('second', { turnAttemptToken: 2 })).resolves.toEqual({ accepted: true });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(closeCalls()).toBe(0);
+  });
+
+  it('Claude terminal error 后的 idle status 不能越过 queued done 提前解锁', async () => {
+    const { handle, emit } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+
+    await session.send('first');
+    await emit({
+      type: 'error',
+      data: { message: 'first failed', isTerminal: true },
+      source: 'claude-code',
+    });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'claude-code' });
+
+    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    await session.close();
   });
 
   it('non-terminal error 不启动 terminal drain，也不打开 generation fence', async () => {
