@@ -95,7 +95,8 @@ const SCHED_ORIGIN: SendOrigin = { kind: 'scheduler', scheduleId: 's1', schedule
 
 describe('Session interaction fallback', () => {
   /**
-   * `Session` 构造函数**必定**注入 interaction resolver(session.ts:355)。这是 harness
+   * `Session` 构造函数**必定**注入 interaction resolver(构造函数里那次
+   * `this.handle.setInteractionResolver(...)`)。这是 harness
    * 侧 fail-closed 分支的前提:`canUseTool` 里 `interactionResolver === null` 只可能是
    * misconfiguration / 裸 handle 直用,**不是**「这个会话没有界面」。
    *
