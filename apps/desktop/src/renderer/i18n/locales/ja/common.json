@@ -2703,7 +2703,19 @@
           "defaultWorkspaceRadioAria": "「{{name}}」を既定の作業ディレクトリに設定",
           "defaultWorkspaceRowHint": "選択したディレクトリが既定の作業ディレクトリです。Telegram の個別チャット・グループ・トピックのうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/workspace で個別に選んだ会話はそのまま）。選択したディレクトリの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのリポジトリ内でフルアクセスで実行されます。",
           "legacyDefaultsTitle": "旧「新規会話の設定」がまだ有効です",
-          "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値（{{agent}} · {{model}}）が保存されており、個別に設定していないディレクトリのフォールバックとして今も使われます。これらの値は各ディレクトリごとに設定する方式になりました。既定値に戻すと旧設定は無効になります。変更したことがない端末にはこの案内は表示されません。"
+          "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値が保存されており、個別に設定していないディレクトリのフォールバックとして今も使われます（公式 Telegram と X で共通の 1 件）。これらの値は各ディレクトリごとに設定する方式になりました。既定値に戻すと、次のすべてが削除されます:",
+          "legacyDefaultsRow": {
+            "agentKind": "既定 Agent: {{current}} → {{fallback}}",
+            "permissionMode": "権限モード: {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
+          "legacyDefaultsField": {
+            "model": "モデル {{current}} → {{fallback}}",
+            "effort": "思考の強度 {{current}} → {{fallback}}",
+            "source": "モデルの提供元 {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": "、",
+          "legacyDefaultsSourceFollowsGlobal": "グローバル設定に従う"
         },
         "binding": {
           "copyLink": "リンクをコピー",

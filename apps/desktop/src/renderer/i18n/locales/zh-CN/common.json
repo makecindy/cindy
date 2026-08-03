@@ -2703,7 +2703,19 @@
           "defaultWorkspaceRadioAria": "把「{{name}}」设为默认工作目录",
           "defaultWorkspaceRowHint": "选中的目录是默认工作目录：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /workspace 单独选过的，仍按那个走）。请留意所选目录这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个仓库里执行。",
           "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
-          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置（{{agent}} · {{model}}），它仍会作为没有单独配置过的目录的兜底值。现在这些值统一在上方每个目录里设置，恢复默认即可让这份旧设置失效；从未改过的设备不会看到这一条。"
+          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的目录的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个目录里设置。恢复默认会一并清掉以下全部内容：",
+          "legacyDefaultsRow": {
+            "agentKind": "默认 Agent：{{current}} → {{fallback}}",
+            "permissionMode": "权限模式：{{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
+          "legacyDefaultsField": {
+            "model": "模型 {{current}} → {{fallback}}",
+            "effort": "思考档位 {{current}} → {{fallback}}",
+            "source": "模型来源 {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": "，",
+          "legacyDefaultsSourceFollowsGlobal": "跟随全局设置"
         },
         "binding": {
           "copyLink": "复制链接",

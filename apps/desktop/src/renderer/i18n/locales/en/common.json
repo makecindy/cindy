@@ -2704,7 +2704,19 @@
           "defaultWorkspaceRadioAria": "Set \"{{name}}\" as the default working directory",
           "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository.",
           "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
-          "legacyDefaultsDescription": "This device saved older official-bot defaults ({{agent}} · {{model}}) that still act as the fallback for directories without their own settings. These values are now set per directory above; restoring defaults retires the old set. Devices that never changed it will not see this notice."
+          "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for directories without their own settings (official Telegram and X share one copy). These values are now set per directory. Restoring defaults clears all of the following:",
+          "legacyDefaultsRow": {
+            "agentKind": "Default agent: {{current}} → {{fallback}}",
+            "permissionMode": "Permission mode: {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
+          "legacyDefaultsField": {
+            "model": "model {{current}} → {{fallback}}",
+            "effort": "reasoning effort {{current}} → {{fallback}}",
+            "source": "model source {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": ", ",
+          "legacyDefaultsSourceFollowsGlobal": "follows global settings"
         },
         "binding": {
           "copyLink": "Copy link",

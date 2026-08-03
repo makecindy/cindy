@@ -50,7 +50,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
+import type {
+  ImDefaultAgentKind,
+  ImDefaultSettingsState,
+} from '../../../shared/imDefaultSettings';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
 import {
@@ -144,6 +147,65 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
  * 曾设过 override 后关掉 Telegram、只用 X 的升级用户就没有入口, 旧值继续被 X 任务消费,
  * 而他只能猜"要重新打开 Telegram 才能清"(review 指出)。
  */
+/** 「恢复默认」实际会清掉的一条 override(供 UI 逐条列出; 纯数据, 文案在组件里)。 */
+export type LegacyOverrideRow =
+  | { kind: 'agentKind'; current: string; fallback: string }
+  | { kind: 'permissionMode'; current: string; fallback: string }
+  | {
+      kind: 'agent';
+      agent: string;
+      fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }>;
+    };
+
+/**
+ * 把 `customizedKeys` 展开成「这次会清掉什么」的完整清单。
+ *
+ * 为什么不能只显示当前 agentKind 的 model: `imDefaultSettingsReset()` 清的是**整个**
+ * global scope, 包含 `agents` 里其它 agent 的 model / effort / 来源。用户可能曾切到另一个
+ * agent 改过这些再切回来 —— 那些值此刻正被"显式选了该 agent、但模型档位仍跟随默认"的目录
+ * 消费, 只报当前 agent 一行就等于让他在不知道范围的情况下改掉目录路由(review 指出)。
+ */
+export function legacyOverrideRows(state: ImDefaultSettingsState): LegacyOverrideRow[] {
+  const rows: LegacyOverrideRow[] = [];
+  for (const key of state.customizedKeys) {
+    if (key === 'agentKind') {
+      rows.push({ kind: 'agentKind', current: state.agentKind, fallback: state.defaults.agentKind });
+      continue;
+    }
+    if (key === 'permissionMode') {
+      rows.push({
+        kind: 'permissionMode',
+        current: state.permissionMode,
+        fallback: state.defaults.permissionMode,
+      });
+      continue;
+    }
+    if (!key.startsWith('agents.')) continue;
+    const agent = key.slice('agents.'.length) as ImDefaultAgentKind;
+    const current = state.agents[agent];
+    const fallback = state.defaults.agents[agent];
+    if (!current || !fallback) continue;
+    // 只列真的不一样的子字段 —— 把三项全列出来会让人以为都被改过。
+    const fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }> =
+      [];
+    if (current.model !== fallback.model) {
+      fields.push({ field: 'model', current: current.model, fallback: fallback.model });
+    }
+    if (current.effort !== fallback.effort) {
+      fields.push({ field: 'effort', current: current.effort, fallback: fallback.effort });
+    }
+    if (current.providerId !== fallback.providerId) {
+      fields.push({
+        field: 'source',
+        current: current.providerId ?? '',
+        fallback: fallback.providerId ?? '',
+      });
+    }
+    if (fields.length > 0) rows.push({ kind: 'agent', agent, fields });
+  }
+  return rows;
+}
+
 function useLegacyGlobalDefaults(onCleared: () => void): {
   state: ImDefaultSettingsState | null;
   pending: boolean;
@@ -206,11 +268,40 @@ function LegacyGlobalDefaultsNotice({
         {t('settings.remoteControl.hook.form.legacyDefaultsTitle')}
       </span>
       <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-        {t('settings.remoteControl.hook.form.legacyDefaultsDescription', {
-          agent: state.agentKind,
-          model: state.agents[state.agentKind].model,
-        })}
+        {t('settings.remoteControl.hook.form.legacyDefaultsDescription')}
       </span>
+      {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+          只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
+      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+        {legacyOverrideRows(state).map((row) => (
+          <li
+            key={row.kind === 'agent' ? `agent:${row.agent}` : row.kind}
+            data-testid="hook-legacy-global-defaults-row"
+            className="text-11 leading-relaxed text-[var(--text-tertiary)]"
+          >
+            {row.kind === 'agent'
+              ? t('settings.remoteControl.hook.form.legacyDefaultsRowAgent', {
+                  agent: row.agent,
+                  fields: row.fields
+                    .map((f) =>
+                      t(`settings.remoteControl.hook.form.legacyDefaultsField.${f.field}`, {
+                        current:
+                          f.current ||
+                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
+                        fallback:
+                          f.fallback ||
+                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
+                      }),
+                    )
+                    .join(t('settings.remoteControl.hook.form.legacyDefaultsFieldSeparator')),
+                })
+              : t(`settings.remoteControl.hook.form.legacyDefaultsRow.${row.kind}`, {
+                  current: row.current,
+                  fallback: row.fallback,
+                })}
+          </li>
+        ))}
+      </ul>
       <button
         type="button"
         data-testid="hook-legacy-global-defaults-restore"
