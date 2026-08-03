@@ -2381,6 +2381,30 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).toMatch(/Bash_210_dup\d+/);
   });
 
+  it('请求2 仍含部分铸造 id 时,缓存里缺席的旧 id 也并入种子(codex-connector P1)', async () => {
+    await setupSingleProxy();
+    // 请求1: 历史带 Bash_210 → 改名 → 进缓存
+    const r1 = await postAs('sess-partial', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(r1).toContain('"id":"Bash_210_dup2"');
+
+    // 请求2: 同 session, 请求体**仍含另一个**铸造 id(Read_5, 使 requestedIds 非空),
+    // 但 Bash_210 缺席 —— 若只从请求体建种子, Bash_210 会漏; 缓存必须并入。
+    // fake upstream 恒铸 Bash_210 → 必须仍被改名, 不得原样放行。
+    const r2 = await postAs('sess-partial', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Read_5', name: 'Read', input: {} }] },
+      ],
+    });
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
   it('不同 session 的缓存互不串扰', async () => {
     await setupSingleProxy();
     // 请求1 在 sess-A 铸 Bash_210(缓存入 sess-A)

@@ -169,6 +169,7 @@ export class ToolUseIdDedupeRewriter {
     const markerAt = line
       .subarray(jsonStart, Math.min(end, jsonStart + CONTENT_BLOCK_START_SCAN_WINDOW))
       .indexOf('"content_block_start"');
+    if (markerAt === -1) return line; // ← 廉价门:非 start 帧(text delta / input delta)不透
     let parsed: unknown;
     try {
       parsed = JSON.parse(line.toString('utf8', jsonStart, end));

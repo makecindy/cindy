@@ -1616,8 +1616,14 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (threadId) {
       const cache = threadMintedIdCache.get(threadId) ?? new Set<string>();
       if (requestedIds) {
-        for (const id of requestedIds) cache.add(id);
         responseToolUseIds = requestedIds;
+        // 缓存里本线程见过但缺席当前请求体的撞车 id 也必须并入 —— rewind 后
+        // 请求体可能只含部分铸造 id,漏掉这些会让 kimi 重铸同号时被当新 id
+        // 放行(codex-connector review: Merge cached tool IDs into rewrite seeds)。
+        if (cache.size > 0) {
+          for (const id of cache) responseToolUseIds.add(id);
+        }
+        for (const id of requestedIds) cache.add(id);
       } else if (cache.size > 0) {
         responseToolUseIds = new Set(cache);
       }
