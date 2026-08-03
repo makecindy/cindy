@@ -233,20 +233,42 @@ export class GitSnapshotCoordinator {
     // Dirty detection is tree equality against the turn-start baseline: with
     // shadow savepoints the worktree stays dirty relative to HEAD, so a
     // status-based check would create an empty after-edit every turn.
-    const result = await this.deps.createShadowSavepoint(repoRoot, {
-      sessionId,
-      label: (diff) =>
-        createAfterEditLabel(
-          { diff, userPrompt: metadata.userPrompt },
-          { oneShot: (prompt) => this.deps.oneShot(agentKind, prompt) },
-        ),
-      meta: {
-        kind: 'after-edit',
-        baselineCommit: baseline,
-        ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
-      },
-      skipIfTreeEquals: baseline,
-    });
+    let result: ShadowSavepointResult;
+    try {
+      result = await this.deps.createShadowSavepoint(repoRoot, {
+        sessionId,
+        label: (diff) =>
+          createAfterEditLabel(
+            { diff, userPrompt: metadata.userPrompt },
+            { oneShot: (prompt) => this.deps.oneShot(agentKind, prompt) },
+          ),
+        meta: {
+          kind: 'after-edit',
+          baselineCommit: baseline,
+          ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
+        },
+        skipIfTreeEquals: baseline,
+      });
+    } catch (err) {
+      this.deps.logger.warn('[git-snapshot] after-edit savepoint failed', {
+        sessionId,
+        repoRoot,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // This turn's delta is unrecorded; without a gap marker a later rewind
+      // across this turn would restore to a newer baseline and silently keep
+      // the failed turn's file changes while dropping its conversation.
+      if (agentKind === 'codex' || agentKind === 'pi') {
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: after-edit savepoint failed',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
+      return;
+    }
 
     if (result.commit) {
       this.deps.logger.info('[git-snapshot] after-edit savepoint created', {

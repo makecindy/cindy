@@ -219,6 +219,46 @@ describe('GitSnapshotCoordinator', () => {
     });
   });
 
+  it('appends a rewind gap marker when the after-edit savepoint itself fails', async () => {
+    // turn-start 成功、after-edit 失败:该轮增量没有记录,后续轮次的回退会用
+    // 更晚的 baseline 做部分恢复——必须像缺基线一样在链上截断。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockRejectedValueOnce(new Error('index locked')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: after-edit savepoint failed',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      '[git-snapshot] after-edit savepoint failed',
+      expect.objectContaining({ sessionId: 's1', repoRoot: '/repo', error: 'index locked' }),
+    );
+  });
+
+  it('skips the after-edit failure gap marker for agents that do not consume the chain', async () => {
+    const deps = makeDeps({
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockRejectedValueOnce(new Error('index locked')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
   it('marks Codex turns as rewind-blocked when the turn-start baseline is missing', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
@@ -462,8 +502,28 @@ describe('GitSnapshotCoordinator', () => {
     await expect(coordinator.onTurnEnd('s1')).resolves.toBeUndefined();
 
     expect(deps.logger.warn).toHaveBeenCalledWith(
-      '[git-snapshot] onTurnEnd failed (swallowed)',
+      '[git-snapshot] after-edit savepoint failed',
       expect.objectContaining({ sessionId: 's1', error: 'git lock' }),
+    );
+  });
+
+  it('swallows gap marker failures without breaking the turn', async () => {
+    // after-edit 失败 → 补 gap marker,marker 也失败 → 由外层 onTurnEnd 吞掉。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash-t1'))
+        .mockRejectedValueOnce(new Error('git lock')),
+      createShadowMarker: vi.fn().mockRejectedValue(new Error('marker failed')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await expect(coordinator.onTurnEnd('s1')).resolves.toBeUndefined();
+
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      '[git-snapshot] onTurnEnd failed (swallowed)',
+      expect.objectContaining({ sessionId: 's1', error: 'marker failed' }),
     );
   });
 

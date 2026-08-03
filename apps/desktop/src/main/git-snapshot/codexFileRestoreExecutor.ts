@@ -136,11 +136,11 @@ async function executeCodexFileRestorePlanLocked(
 
   await ensureNoActiveGitOperation(plan.repoRoot, d);
 
-  let preRollbackCommit: string | null;
+  let preRollback: ShadowSavepointResult;
   try {
     // Full worktree snapshot first: every byte the restore may overwrite is
     // reachable from the chain before any file changes.
-    ({ commit: preRollbackCommit } = await d.createShadowSavepoint(plan.repoRoot, {
+    preRollback = await d.createShadowSavepoint(plan.repoRoot, {
       sessionId: plan.sessionId,
       label: '回退前的工作区快照',
       meta: {
@@ -148,10 +148,11 @@ async function executeCodexFileRestorePlanLocked(
         rollbackId,
         rollbackTarget: plan.targetMessageClientId,
       },
-    }));
+    });
   } catch (err) {
     throw toRewindGitFailed(err);
   }
+  const preRollbackCommit = preRollback.commit;
   if (!preRollbackCommit) {
     throw new CodexFileRewindExecutionError(
       'REWIND_GIT_FAILED',
@@ -171,6 +172,29 @@ async function executeCodexFileRestorePlanLocked(
   };
   if (affectedPaths.length === 0) {
     return base;
+  }
+
+  // Affected files whose *current* content the safety filter kept out of the
+  // pre-rollback snapshot (sensitive, oversized, nested repo …) would be
+  // overwritten or deleted with no way to compensate — the snapshot simply
+  // does not hold their bytes. Abort before touching anything. Only paths
+  // that still exist as regular files carry bytes at risk: a skipped entry
+  // for an already-deleted path (e.g. the file side of a D/F conversion) has
+  // nothing to protect.
+  const unprotectedSkips = new Set(preRollback.skippedFiles.map((file) => file.path));
+  const unprotected: string[] = [];
+  for (const p of affectedPaths) {
+    if (!unprotectedSkips.has(p)) continue;
+    const abs = resolveSnapshotGitPath(plan.repoRoot, p);
+    if (!abs) continue;
+    const stats = await fs.lstat(abs).catch(() => null);
+    if (stats && !stats.isDirectory()) unprotected.push(p);
+  }
+  if (unprotected.length > 0) {
+    throw new CodexFileRewindExecutionError(
+      'REWIND_GIT_FAILED',
+      `文件回退已中止:${unprotected.slice(0, 5).join('、')}${unprotected.length > 5 ? ' 等' : ''} 当前处于安全过滤范围(敏感路径/超大文件/嵌套仓库),回退前快照无法完整保护其内容,请先手动备份或移出这些文件后重试`,
+    );
   }
 
   let applied: WorktreeApplyResult;
@@ -338,6 +362,36 @@ async function makeWorktreeMatchCommit(
     }
   }
 
+  // realpath 围栏:受影响路径来自 Git diff,词法上都在仓库内,但工作区当前
+  // 状态可能把某个父目录换成了指向仓库外的符号链接;所有 fs 删除都必须先
+  // 确认真实父目录仍在仓库内,否则跳过并告警(内容可从 pre-rollback 恢复)。
+  const repoReal = await fs.realpath(repoRoot);
+
+  // Deletions first: a turn that converted a directory into a file makes the
+  // reverse diff delete the file (`swap`) and restore its former descendants
+  // (`swap/child.txt`); deleting after the restore would wipe what was just
+  // recreated.
+  for (const filePath of toDelete) {
+    const abs = resolveSnapshotGitPath(repoRoot, filePath);
+    if (!abs) continue;
+    const realAbs = await resolveRealPathInsideRepo(repoReal, abs);
+    if (!realAbs) {
+      log.warn('[file-restore] delete skipped: real path escapes the repository', {
+        repoRoot,
+        filePath,
+      });
+      continue;
+    }
+    // recursive: the path may be a directory in the worktree (e.g. a file →
+    // directory conversion the target tree does not have). ENOTDIR means a
+    // parent segment is a file again, so the old nested path is already gone.
+    await fs.rm(realAbs, { recursive: true, force: true }).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') return;
+      throw err;
+    });
+    await pruneEmptyParents(repoReal, realAbs);
+  }
+
   if (toRestore.length > 0) {
     // A turn may have replaced a file with a directory; git restore cannot
     // write a blob over an existing directory, so clear such collisions
@@ -346,9 +400,16 @@ async function makeWorktreeMatchCommit(
       const abs = resolveSnapshotGitPath(repoRoot, filePath);
       if (!abs) continue;
       const stats = await fs.lstat(abs).catch(() => null);
-      if (stats?.isDirectory()) {
-        await fs.rm(abs, { recursive: true, force: true });
+      if (!stats?.isDirectory()) continue;
+      const realAbs = await resolveRealPathInsideRepo(repoReal, abs);
+      if (!realAbs) {
+        log.warn('[file-restore] collision cleanup skipped: real path escapes the repository', {
+          repoRoot,
+          filePath,
+        });
+        continue;
       }
+      await fs.rm(realAbs, { recursive: true, force: true });
     }
     await withPathspecFile(
       toRestore.map((p) => `:(literal)${p}`),
@@ -366,27 +427,31 @@ async function makeWorktreeMatchCommit(
         ),
     );
   }
-  for (const filePath of toDelete) {
-    const abs = resolveSnapshotGitPath(repoRoot, filePath);
-    if (!abs) continue;
-    // recursive: the path may be a directory in the worktree (e.g. a file →
-    // directory conversion the target tree does not have). ENOTDIR means a
-    // parent segment is a file again, so the old nested path is already gone.
-    await fs.rm(abs, { recursive: true, force: true }).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') return;
-      throw err;
-    });
-    await pruneEmptyParents(repoRoot, abs);
-  }
 
   return { restored: toRestore, deleted: toDelete };
 }
 
-/** Removes now-empty parent directories left behind by file deletion. */
-async function pruneEmptyParents(repoRoot: string, absFilePath: string): Promise<void> {
-  const root = path.resolve(repoRoot);
-  let dir = path.dirname(absFilePath);
-  while (dir !== root && dir.startsWith(root + path.sep)) {
+/**
+ * Resolves the deletion target with intermediate symlinks flattened, and
+ * refuses paths whose real parent directory left the repository. The final
+ * component itself is never followed (fs.rm removes a symlink, not its
+ * target), so only the parent needs the realpath check.
+ */
+async function resolveRealPathInsideRepo(
+  repoReal: string,
+  absPath: string,
+): Promise<string | null> {
+  const parentReal = await fs.realpath(path.dirname(absPath)).catch(() => null);
+  // 父目录不存在 → 目标必然不存在,调用方的 force 删除本来就是 no-op。
+  if (!parentReal) return null;
+  if (parentReal !== repoReal && !parentReal.startsWith(repoReal + path.sep)) return null;
+  return path.join(parentReal, path.basename(absPath));
+}
+
+/** Removes now-empty real parent directories left behind by file deletion. */
+async function pruneEmptyParents(repoReal: string, realFilePath: string): Promise<void> {
+  let dir = path.dirname(realFilePath);
+  while (dir !== repoReal && dir.startsWith(repoReal + path.sep)) {
     try {
       await fs.rmdir(dir);
     } catch {

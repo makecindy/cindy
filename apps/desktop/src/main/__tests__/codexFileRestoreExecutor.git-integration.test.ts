@@ -278,6 +278,85 @@ describe('executeCodexFileRestorePlan', () => {
     expect(result?.deletedFiles).toContain('swap/child.txt');
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
+  it('rewinds a turn that replaced a directory with a file (reverse D/F conversion)', async () => {
+    await writeFile('swap/child.txt', 'child base\n');
+    await commitAll('seed dir');
+    const turnStart = await shadowSavepoint('turn-start');
+    // 本轮把目录 swap 替换成同名文件。
+    await fs.rm(path.join(repoPath, 'swap'), { recursive: true });
+    await writeFile('swap', 'now a file\n');
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+
+    const result = await executeCodexFileRestorePlan(plan, {
+      createRollbackId: () => 'rb-swap-back',
+    });
+
+    // 删除必须先于恢复:文件 swap 先删掉,再重建基线目录及后代——
+    // 否则刚恢复的目录会被随后的递归删除整个抹掉。
+    expect(await readFile('swap/child.txt')).toBe('child base\n');
+    expect(result?.deletedFiles).toContain('swap');
+    expect(result?.restoredFiles).toContain('swap/child.txt');
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('never deletes through a symlinked parent that escapes the repository', async () => {
+    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
+    await writeFile('a.txt', 'base\n');
+    await commitAll('seed');
+    const turnStart = await shadowSavepoint('turn-start');
+    // 本轮创建真实目录 evil/target.txt。
+    await writeFile('evil/target.txt', 'turn created\n');
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    // 用户随后把 evil 换成指向仓库外的符号链接,外部目录里有同名文件。
+    const outside = await fs.mkdtemp(path.join(path.dirname(repoPath), 'outside-'));
+    try {
+      await fs.writeFile(path.join(outside, 'target.txt'), 'precious external data\n', 'utf8');
+      await fs.rm(path.join(repoPath, 'evil'), { recursive: true });
+      await fs.symlink(outside, path.join(repoPath, 'evil'));
+
+      const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+      const result = await executeCodexFileRestorePlan(plan, {
+        createRollbackId: () => 'rb-symlink',
+      });
+
+      // 越过符号链接的路径在构建当前工作区树时即按"不存在"处理:不产生
+      // 删除动作,外部数据毫发无损,符号链接本身原样保留。
+      expect(result?.deletedFiles).toEqual([]);
+      expect(result?.restoredFiles).toEqual([]);
+      expect(await fs.readFile(path.join(outside, 'target.txt'), 'utf8')).toBe(
+        'precious external data\n',
+      );
+      const evilStats = await fs.lstat(path.join(repoPath, 'evil'));
+      expect(evilStats.isSymbolicLink()).toBe(true);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('aborts before mutating when an affected file is currently skipped by the safety filter', async () => {
+    await writeFile('grow.txt', 'base\n');
+    await commitAll('seed grow');
+    const turnStart = await shadowSavepoint('turn-start');
+    await writeFile('grow.txt', 'edited by turn\n');
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    // 用户随后把该文件撑大到超过安全过滤上限:pre-rollback 快照保护不了它。
+    const bigContent = 'x'.repeat(128);
+    await writeFile('grow.txt', bigContent);
+    const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+
+    await expect(
+      executeCodexFileRestorePlan(plan, {
+        createRollbackId: () => 'rb-skip',
+        // 注入收紧过滤上限的包装,模拟真实 10MB 上限被超过的情形。
+        createShadowSavepoint: (repo, input) =>
+          createShadowSavepoint(repo, { ...input, fileFilter: { maxFileBytes: 64 } }),
+      }),
+    ).rejects.toMatchObject({ code: 'REWIND_GIT_FAILED' });
+
+    // 中止发生在任何文件改动之前:超限文件原样保留。
+    expect(await readFile('grow.txt')).toBe(bigContent);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('compensates files back to the pre-restore state when thread rollback fails', async () => {
     const { plan } = await seedTurnFixture();
     const headBefore = await head();

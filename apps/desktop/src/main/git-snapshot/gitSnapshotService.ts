@@ -666,6 +666,7 @@ export async function writeWorktreeTreeForPaths(
   paths: readonly string[],
 ): Promise<string> {
   return withTemporaryIndex(repoPath, async (extraEnv) => {
+    const repoReal = await fs.realpath(repoPath);
     const present: string[] = [];
     const absent: string[] = [];
     for (const rawPath of uniqueRawPaths(paths)) {
@@ -676,8 +677,20 @@ export async function writeWorktreeTreeForPaths(
       // on it, and tree-wise the right record is "absent" — the directory's
       // children are their own paths in the affected set.
       const stats = await fs.lstat(abs).catch(() => null);
-      if (stats && !stats.isDirectory()) present.push(rawPath);
-      else absent.push(rawPath);
+      if (!stats || stats.isDirectory()) {
+        absent.push(rawPath);
+        continue;
+      }
+      // A path whose real parent left the repository (a parent segment became
+      // a symlink pointing outside) is also "absent" as a repo file:
+      // update-index refuses paths beyond a symbolic link, and readers must
+      // never act on out-of-repo content.
+      const parentReal = await fs.realpath(path.dirname(abs)).catch(() => null);
+      if (!parentReal || (parentReal !== repoReal && !parentReal.startsWith(repoReal + path.sep))) {
+        absent.push(rawPath);
+        continue;
+      }
+      present.push(rawPath);
     }
     // Removals first: file ↔ directory conversions leave a conflicting stale
     // entry in the HEAD-seeded index (e.g. blob `swap` vs `swap/child.txt`),
