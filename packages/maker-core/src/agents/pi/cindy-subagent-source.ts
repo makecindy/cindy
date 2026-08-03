@@ -379,6 +379,8 @@ function runTask(binary, task, runtime, signal, onProgress) {
     let stderr = '';
     let settled = false;
     let timer = null;
+    // 强杀定时器:存下来才能在子进程真的退出后清掉(见 kill())。
+    let killTimer = null;
     // 先声明:finish 在闭包里引用它,let 的 TDZ 不容许"定义在后、可能先被读"。
     let removeAbort = null;
 
@@ -396,14 +398,21 @@ function runTask(binary, task, runtime, signal, onProgress) {
       } catch (err) {
         /* already gone */
       }
-      // 宽限后强杀,避免僵尸子进程把 turn 挂住。
-      setTimeout(function () {
+      // 宽限后强杀,避免僵尸子进程把 turn 挂住。定时器**存下来**并在 close/error 时清掉:
+      // 留着它不仅让进程在退出后仍多挂 2 秒,更重要的是强杀前必须重新确认子进程还没退 ——
+      // 否则一旦 pid 被系统回收复用,这一发 SIGKILL 就打到了别人身上(review)。
+      // 双重保险:先查 exitCode/signalCode,再走 child.kill(Node 对已退出的 handle 是 no-op)。
+      if (killTimer) return;
+      killTimer = setTimeout(function () {
+        killTimer = null;
+        if (child.exitCode !== null || child.signalCode !== null) return;
         try {
           child.kill('SIGKILL');
         } catch (err) {
           /* already gone */
         }
       }, 2000);
+      if (killTimer && typeof killTimer.unref === 'function') killTimer.unref();
     };
 
     const onAbort = function () {
@@ -475,12 +484,15 @@ function runTask(binary, task, runtime, signal, onProgress) {
     });
     child.on('error', function (err) {
       liveChildren.delete(child);
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       finish({ text: 'subagent process error: ' + String(err), isError: true, toolUses: toolUses, tokens: totals.tokens, usage: totals });
     });
     child.on('close', function (code) {
       // 到 'close' 才摘除,不在 finish() 里摘:超时/中止已 finish 但进程还在 SIGKILL 宽限
       // 期里,这段窗口内父进程退出仍必须把它杀掉。
       liveChildren.delete(child);
+      // 进程已退出:强杀定时器必须清掉,别对一个可能被复用的 pid 再发 SIGKILL(review)。
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
       const ok = code === 0;
       const body = finalText.trim().length > 0
         ? clampText(finalText, MAX_OUTPUT_CHARS)

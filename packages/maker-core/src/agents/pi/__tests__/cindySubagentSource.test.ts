@@ -149,6 +149,27 @@ describe('cindy-subagent extension source', () => {
     }
   });
 
+  it('does not SIGKILL a pid it no longer owns', () => {
+    // SIGTERM 后的 2 秒宽限里子进程通常已经退了。原来那发 SIGKILL 既没存定时器(进程退出后
+    // 仍多挂 2 秒)也不复查存活 —— 一旦 pid 被系统回收复用,这一发就打到无关进程上(review)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('let killTimer = null;');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('killTimer = setTimeout(');
+    // 强杀前必须先确认子进程还没退。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "if (child.exitCode !== null || child.signalCode !== null) return;",
+    );
+    // 存活复查必须在 SIGKILL **之前**。
+    const guard = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (child.exitCode !== null');
+    const sigkill = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf("child.kill('SIGKILL')", guard);
+    expect(guard).toBeGreaterThan(-1);
+    expect(sigkill).toBeGreaterThan(guard);
+    // close / error 两条退出路径都要清定时器。
+    for (const handler of ["child.on('close'", "child.on('error'"]) {
+      const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
+      expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 320)).toContain('clearTimeout(killTimer)');
+    }
+  });
+
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
     // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。

@@ -5,6 +5,7 @@ import {
   findAgentTaskUpdate,
   isAgentTaskToolName,
   mergeAgentTaskUpdate,
+  PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
   normalizeWorkflowProgressEntries,
   type AgentTaskUpdate,
@@ -21,6 +22,19 @@ describe('isAgentTaskToolName', () => {
     expect(isAgentTaskToolName('Read')).toBe(false);
     expect(isAgentTaskToolName('TodoWrite')).toBe(false);
     expect(isAgentTaskToolName('')).toBe(false);
+  });
+
+  it('matches the PI subagent tool so its card renders like Claude / Codex', () => {
+    // 这条判据是三家 harness 唯一的卡片入口:漏了 PI 的工具名,子代理调用会**静默**落进普通
+    // 工具组 —— 不报错、不缺数据,只是卡片不出现,极难从日志发现(review 要求补覆盖)。
+    expect(isAgentTaskToolName(PI_SUBAGENT_TOOL_NAME)).toBe(true);
+    // 用字面量再钉一次:常量与判据一起被改坏时,只断言常量的测试会一起变绿。
+    expect(isAgentTaskToolName('subagent')).toBe(true);
+    expect(PI_SUBAGENT_TOOL_NAME).toBe('subagent');
+    // 大小写与近似名不得误命中(pi 工具名是精确匹配,不是前缀/模糊)。
+    expect(isAgentTaskToolName('Subagent')).toBe(false);
+    expect(isAgentTaskToolName('subagents')).toBe(false);
+    expect(isAgentTaskToolName('sub-agent')).toBe(false);
   });
 });
 
