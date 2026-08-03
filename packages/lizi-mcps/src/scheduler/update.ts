@@ -137,7 +137,10 @@ export function registerScheduleUpdateTool(
             if (rawHook.timeoutMs === null) {
               input = { ...input, preRunHook: { command: rawHook.command } };
             } else if (
-              !Object.prototype.hasOwnProperty.call(rawHook, 'timeoutMs') &&
+              // 「没提供」= 缺 key 或值为 undefined:MCP 走 JSON 表达不出带 key 的
+              // undefined,但进程内调用能;两种形态都视作缺省沿用现有超时,只有
+              // null 是清除(copilot review 指出带 key undefined 会漏进清空分支)。
+              rawHook.timeoutMs === undefined &&
               existing.preRunHook?.timeoutMs !== undefined
             ) {
               input = {

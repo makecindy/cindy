@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyMobileTemplateParams,
+  applyScheduleWireCompat,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -102,6 +103,24 @@ describe('mobile schedule form model', () => {
 
     const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
     expect(kept.intervalMs).toBe(15 * 60_000);
+  });
+
+  it('downgrades the null clear to key omission for hosts without the capability', () => {
+    const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
+    const cleared = buildMobileScheduleInput({ ...edited, intervalMinutes: '' });
+
+    // 旧 desktop:null 会被旧引擎当成已设间隔立即触发;省略 key 让旧引擎的
+    // 隐式清空(带 cronExpr 不带 intervalMs)承担等价语义。
+    const legacy = applyScheduleWireCompat(cleared, { supportsIntervalNullClear: false });
+    expect(hasOwn(legacy, 'intervalMs')).toBe(false);
+    expect(legacy.cronExpr).toBe(cleared.cronExpr);
+
+    // 新 desktop:null 原样过线,由 IPC 入口归一化。
+    expect(applyScheduleWireCompat(cleared, { supportsIntervalNullClear: true })).toBe(cleared);
+
+    // 数值间隔与能力无关,两种 host 都原样透传。
+    const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
+    expect(applyScheduleWireCompat(kept, { supportsIntervalNullClear: false })).toBe(kept);
   });
 
   it('writes an explicit false when mobile disables WeCom group notifications', () => {

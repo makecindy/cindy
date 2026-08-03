@@ -1056,6 +1056,19 @@ describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
     expect(env.ok).toBe(true);
     expect(updated.patch?.preRunHook).toEqual({ command: 'node /abs/old.mjs' });
   });
+
+  it('preRunHook.timeoutMs 带 key 的 undefined → 视作缺省沿用现有超时,不是清除', async () => {
+    // JSON 表达不出这个形态,但进程内调用能;只有 null 才是清除
+    // (copilot review 指出带 key undefined 曾漏进清空分支)。
+    const { updated, registry } = setup({
+      preRunHook: { command: 'node /abs/old.mjs', timeoutMs: 180_000 },
+    });
+    const env = await callUpdate(registry, {
+      preRunHook: { command: 'node /abs/new.mjs', timeoutMs: undefined },
+    });
+    expect(env.ok).toBe(true);
+    expect(updated.patch?.preRunHook).toEqual({ command: 'node /abs/new.mjs', timeoutMs: 180_000 });
+  });
 });
 
 // ── schedule_update: bindToCurrentSession 同 create 语义 ────────────────────────

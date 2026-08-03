@@ -312,6 +312,27 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+/**
+ * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ *
+ * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
+ *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
+ * - 旧 desktop 没有归一化逻辑,null 会被旧引擎当成已设间隔算出 now + null
+ *   立即触发(codex review 发现);对它必须回退旧 wire 形态——**省略 key**,
+ *   旧引擎「带 cronExpr 不带 intervalMs = 隐式清空」恰好承担等价的清空语义。
+ *
+ * 能力探测失败按不支持处理:错发省略 key 到新 desktop 最坏是清空 no-op
+ * (重新保存可纠正),错发 null 到旧 desktop 是立即触发,失败方向必须朝前者。
+ */
+export function applyScheduleWireCompat(
+  input: RemoteScheduleWriteInput,
+  opts: { supportsIntervalNullClear: boolean },
+): RemoteScheduleWriteInput {
+  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
+  const { intervalMs: _legacyDropped, ...legacy } = input;
+  return legacy;
+}
+
 export function updateDraftAgentKind(
   draft: MobileScheduleDraft,
   agentKind: RemoteScheduleAgentKind,

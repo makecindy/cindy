@@ -58,6 +58,7 @@ import { shouldRefreshRunsForSchedule } from '@cindy/maker-shared/schedule-event
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   applyMobileTemplateParams,
+  applyScheduleWireCompat,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -402,19 +403,30 @@ export default function AutomationsScreen() {
         await openLink(deviceId);
         await subscribe(`automations:${deviceId}`, deviceId, ['sessions']);
       });
+      // intervalMs:null 的清空表达只有新 desktop 认识(旧引擎会当成已设间隔立即
+      // 触发),发送前按 host 能力位降级 wire 形态;探测失败按不支持处理
+      // (失败方向的取舍见 applyScheduleWireCompat 注释)。
+      const wireInput = await (async () => {
+        if (input.intervalMs !== null) return input;
+        const caps = await maker.getCapabilities(formDraft.agentKind).catch(() => null);
+        const supportsIntervalNullClear = !!(
+          caps as { supportsScheduleIntervalNullClear?: boolean } | null
+        )?.supportsScheduleIntervalNullClear;
+        return applyScheduleWireCompat(input, { supportsIntervalNullClear });
+      })();
       const saved = await (async () => {
         if (formMode === 'edit' && formScheduleId) {
-          return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, input));
+          return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, wireInput));
         }
         if (selectedTemplate && !templatePromptDirty) {
-          const { prompt: _templatePrompt, ...overrides } = input;
+          const { prompt: _templatePrompt, ...overrides } = wireInput;
           return maker.schedule.createFromTemplate({
             templateId: selectedTemplate.id,
             paramValues: templateParamValues,
             overrides,
           });
         }
-        return maker.schedule.create(input);
+        return maker.schedule.create(wireInput);
       })();
       closeScheduleForm();
       if (saved?.id) {
