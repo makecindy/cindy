@@ -7,6 +7,7 @@ import {
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
+  buildCollapsedPendingInteractionPresentation,
   buildInteractionResolveActionPresentation,
   buildMobilePermissionCardState,
   buildPendingInteractionQueuePresentation,
@@ -16,6 +17,7 @@ import {
   buildPlanReviewDecision,
   buildPlanReviewDecisionSummary,
   buildPlanReviewEvidencePresentation,
+  canCollapsePendingInteraction,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   extractPlanOutline,
@@ -42,7 +44,12 @@ import {
   sortPendingInteractions,
   togglePendingInteractionCollapsed,
 } from '@/session/interactionModel';
+import { clearAskUserDraft, saveAskUserDraft } from '@/session/interactionDraftStore';
 import type { PendingInteraction } from '@/session/types';
+
+/** prune 的权威性开关:全量快照到手 = 权威;离线清空投影 = 非权威。 */
+const AUTHORITATIVE = { authoritative: true } as const;
+const NOT_AUTHORITATIVE = { authoritative: false } as const;
 
 // buildMobilePermissionCardState 已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦
 // (全局 mock 默认 en-US)。共享层(@cindy/maker-shared/interaction)的中文直出不受影响。
@@ -497,34 +504,105 @@ describe('interactionModel', () => {
     expect(togglePendingInteractionCollapsed(collapsed, 'ask-1')).toEqual([]);
 
     // 队列刷新(同一批卡再来一遍)不得清掉收起意图 —— 这正是旧卡内 state 的病根。
-    expect(prunePendingInteractionCollapsed(collapsed, pending)).toBe(collapsed);
+    expect(prunePendingInteractionCollapsed(collapsed, pending, AUTHORITATIVE)).toBe(collapsed);
     // 卡被回答 / 被撤后收起记录要清掉,免得同 requestId 复现时直接以收起态出现。
-    expect(prunePendingInteractionCollapsed(collapsed, [pending[1]!])).toEqual([]);
+    expect(prunePendingInteractionCollapsed(collapsed, [pending[1]!], AUTHORITATIVE)).toEqual([]);
     // 空集合走 identity 返回:effect 里 setState 每帧换引用会无限重入。
     const empty: readonly string[] = [];
-    expect(prunePendingInteractionCollapsed(empty, [])).toBe(empty);
+    expect(prunePendingInteractionCollapsed(empty, [], AUTHORITATIVE)).toBe(empty);
   });
 
-  it('keeps the collapse intent through an offline pending blackout', () => {
-    // markDeviceOffline 按设计删掉 pendingInteractions(它是依赖实时连接的投影),
-    // 于是切网 / 进地铁都会让 pending 瞬时归零。此时若照「不在 alive 里就清」处理,
-    // 收起记录被清掉,重连后同一张卡以展开态灌回来占满屏 —— 本 PR 要治的病换条路径
-    // 复发(#1493 review)。
+  it('prunes the collapse intent only under an authoritative pending snapshot', () => {
     const collapsed = ['ask-1', 'perm-1'];
-    expect(prunePendingInteractionCollapsed(collapsed, [])).toBe(collapsed);
+
+    // 非权威的空(markDeviceOffline 按设计清掉了这份依赖实时连接的投影):不能清,
+    // 否则重连后同一张卡以展开态灌回来占满屏 —— 本 PR 要治的病换条路径复发。
+    expect(prunePendingInteractionCollapsed(collapsed, [], NOT_AUTHORITATIVE)).toBe(collapsed);
+    // 权威的空(被控端确认全都处理完了):要清,否则最后一条收起记录永远留着。
+    expect(prunePendingInteractionCollapsed(collapsed, [], AUTHORITATIVE)).toEqual([]);
 
     const restored = [
       { request: { kind: 'ask_user_question', requestId: 'ask-1', questions: [{ question: '还在等回答' }] } },
     ] as unknown as PendingInteraction[];
-    // 重连拿到权威快照后才按 alive 收敛:ask-1 还在 → 保留收起;perm-1 已终结 → 清掉。
-    expect(prunePendingInteractionCollapsed(collapsed, restored)).toEqual(['ask-1']);
+    // 重连后的权威非空快照:ask-1 还在 → 保留收起;perm-1 已终结 → 清掉。
+    expect(prunePendingInteractionCollapsed(collapsed, restored, AUTHORITATIVE)).toEqual(['ask-1']);
+    // 非权威的非空同样不清:重连后可能先到一条 push 增量、全量快照还没来,那份列表
+    // 只含增量那张卡,按它过滤会把 perm-1 的收起记录误清 —— 与离线空列表同一类误判。
+    expect(prunePendingInteractionCollapsed(collapsed, restored, NOT_AUTHORITATIVE)).toBe(collapsed);
 
-    // 代价是最后一条被答完的 id 会留下(交互请求一次性,不会复现),用上限截断保持有界。
+    // 非权威窗口里不清,集合仍要有界:上限截断最旧的。
     const many = Array.from({ length: 12 }, (_, i) => `req-${i}`);
-    const bounded = prunePendingInteractionCollapsed(many, []);
+    const bounded = prunePendingInteractionCollapsed(many, [], NOT_AUTHORITATIVE);
     expect(bounded).toHaveLength(8);
     expect(bounded[0]).toBe('req-4');
     expect(bounded[7]).toBe('req-11');
+  });
+
+  it('keeps the collapsed bar screen-reader label on the question the user is actually on', () => {
+    const item = {
+      request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-label-1',
+        questions: [{ question: '第一问是什么' }, { question: '第二问是什么' }],
+      },
+    } as unknown as PendingInteraction;
+
+    // 还没翻页:标签用第一问。
+    const first = buildCollapsedPendingInteractionPresentation({
+      item,
+      queueTitle: '等待回答',
+      requestId: 'ask-label-1',
+    });
+    expect(first.summaryText).toBe('第一问是什么');
+    expect(first.accessibilityLabel).toContain('第一问是什么');
+
+    // 进入第二问后,读屏念的必须是第二问 —— 这条钉的就是 label 本身,不是渲染代码文本。
+    saveAskUserDraft('ask-label-1', {
+      answers: {},
+      currentIndex: 1,
+      customInput: '',
+      selectedLabels: [],
+      showCustomInput: false,
+    });
+    const second = buildCollapsedPendingInteractionPresentation({
+      item,
+      queueTitle: '等待回答',
+      requestId: 'ask-label-1',
+    });
+    expect(second.summaryText).toBe('第二问是什么');
+    expect(second.accessibilityLabel).toContain('第二问是什么');
+    expect(second.accessibilityLabel).not.toContain('第一问是什么');
+    clearAskUserDraft('ask-label-1');
+
+    // 没有专属摘要的卡(手机端答不了的那类)退回队列标题,标签不留空。
+    const fallback = buildCollapsedPendingInteractionPresentation({
+      item: { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } } as unknown as PendingInteraction,
+      queueTitle: '电脑端处理',
+      requestId: 'setup-1',
+    });
+    expect(fallback.summaryText).toBeNull();
+    expect(fallback.accessibilityLabel).toContain('电脑端处理');
+  });
+
+  it('offers the collapse affordance only for requests the phone can actually resolve', () => {
+    // 队列混着 plugin_setup 时用户能从队列头切过去,那张卡答不了(只能取消 / 回电脑端),
+    // 给它挂「点开回答」既是错的语义,也绕过了 above-composer 放置点不给收起的保护。
+    expect(canCollapsePendingInteraction({
+      request: { kind: 'ask_user_question', requestId: 'ask-1', questions: [{ question: 'q' }] },
+    } as unknown as PendingInteraction)).toBe(true);
+    expect(canCollapsePendingInteraction({
+      request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash' },
+    } as unknown as PendingInteraction)).toBe(true);
+    expect(canCollapsePendingInteraction({
+      request: { kind: 'plan_review', requestId: 'plan-1', plan: 'x' },
+    } as unknown as PendingInteraction)).toBe(true);
+    expect(canCollapsePendingInteraction({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
+    } as unknown as PendingInteraction)).toBe(false);
+    expect(canCollapsePendingInteraction({
+      request: { kind: 'issue_confirm', requestId: 'issue-1' },
+    } as unknown as PendingInteraction)).toBe(false);
+    expect(canCollapsePendingInteraction(null)).toBe(false);
   });
 
   it('summarizes what each pending kind is waiting on, without shared Chinese defaults', () => {
@@ -606,13 +684,36 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain('const collapsed = canToggleCollapsed && isPendingInteractionCollapsed(');
     expect(interactionPanelSource).not.toContain('collapsedRequestIds?:');
     expect(interactionPanelSource).not.toContain('onToggleCollapsed?(');
-    // 收起条按草稿里的当前进度取问题,不是永远第一问。
-    expect(interactionPanelSource).toContain('readAskUserDraft(activeRequestIdForPresentation)?.currentIndex');
+    // 收起条的摘要与读屏标签都走可断言的 helper(进度从草稿现取)。
+    expect(interactionPanelSource).toContain('buildCollapsedPendingInteractionPresentation({');
+    expect(interactionPanelSource).toContain('accessibilityLabel={collapsedBarLabel}');
+    // 收起入口只给本端能终结的卡,否则队列头切到 plugin_setup 也会冒出「点开回答」。
+    expect(interactionPanelSource).toContain('canCollapsePendingInteraction(activeInteraction)');
 
     expect(sessionScreenSource).toContain('collapse={pendingInteractionCollapse}');
     expect(sessionScreenSource).not.toContain('collapsedRequestIds={');
     expect(sessionScreenSource).toContain('collapsed: activePendingCollapsed');
-    expect(sessionScreenSource).toContain('prunePendingInteractionCollapsed(prev, pending)');
+    // 清理必须挂在权威快照上:离线空列表不算「都处理完了」。
+    expect(sessionScreenSource).toContain('authoritative: pendingInteractionsAuthoritative');
+    expect(sessionScreenSource).toContain('useSessionPendingInteractionsAuthoritative(sessionId)');
+  });
+
+  it('models pending authority in the store instead of inferring it from relay status', () => {
+    const storeSource = readFileSync(resolve(process.cwd(), 'src/session/remoteSessionStore.ts'), 'utf8');
+
+    // 权威性是显式状态:全量快照置位,离线 / 设备移除 / clear 复位。
+    expect(storeSource).toContain('const pendingInteractionsAuthoritative = new Set<string>();');
+    expect(storeSource).toContain('pendingInteractionsAuthoritative.add(sessionId);');
+    expect(storeSource).toContain('hasAuthoritativePendingInteractions(sessionId: string): boolean');
+    expect(storeSource).toContain('export function useSessionPendingInteractionsAuthoritative(');
+    // markDeviceOffline 与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
+    const offlineStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
+    const offlineEnd = storeSource.indexOf('removeDevice(deviceId: string): void {');
+    expect(offlineStart).toBeGreaterThan(0);
+    expect(storeSource.slice(offlineStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
+    expect(storeSource.slice(offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
+    // []→[] 的权威快照必须能通知出去,否则消费方永远等不到清理时机。
+    expect(storeSource).toContain('if (streamingChanged || authorityChanged) emit();');
   });
 
   it('translates the collapse affordances in every locale', async () => {

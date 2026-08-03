@@ -35,6 +35,8 @@ import {
   buildPluginSetupCancelDecision,
   buildPlanReviewDecision,
   buildRemotePluginSetupPresentation,
+  buildCollapsedPendingInteractionPresentation,
+  canCollapsePendingInteraction,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   resolveInteractionResilient,
@@ -42,7 +44,6 @@ import {
   isPlanReviewResolveBusy,
   interactionKind,
   normalizeAskQuestions,
-  pendingInteractionSummaryText,
   planReviewFilePath,
   planReviewPlan,
   readRequestId,
@@ -238,7 +239,11 @@ export function InteractionPanel({
   }
   // 收起 = 「这条我先不答,让我看电脑端的输出」。整块 surface 只留一条 bar:再留着
   // 队列头就还是两层结构,消息流照样看不到几行。
-  const canToggleCollapsed = !!collapse && !!activeRequestIdForPresentation;
+  // 收起入口只给本端能终结的卡:队列里混着 plugin_setup / issue_confirm 时用户能切过去,
+  // 那类卡答不了,挂「点开回答」是错的语义(#1493 review)。
+  const canToggleCollapsed = !!collapse
+    && !!activeRequestIdForPresentation
+    && canCollapsePendingInteraction(activeInteraction);
   const collapsed = canToggleCollapsed && isPendingInteractionCollapsed(
     collapse?.requestIds ?? EMPTY_COLLAPSED_REQUEST_IDS,
     activeRequestIdForPresentation,
@@ -247,21 +252,18 @@ export function InteractionPanel({
     if (!activeRequestIdForPresentation) return;
     collapse?.onToggle(activeRequestIdForPresentation);
   };
-  // 多问提问卡收起后要显示用户翻到的那一问,不是永远第一问:草稿是卡内翻页时同步
-  // 保存的(saveAskUserDraft),收起时卡已卸载、进度不再变,读一次即准。
-  const summaryText = pendingInteractionSummaryText(
-    activeInteraction,
-    activeRequestIdForPresentation
-      ? readAskUserDraft(activeRequestIdForPresentation)?.currentIndex ?? 0
-      : 0,
-  );
+  // 摘要与读屏标签都跟随用户翻到的那一问(进度从 askUserDraft 现取),由纯函数产出
+  // 以便直接断言读屏行为。
+  const { accessibilityLabel: collapsedBarLabel, summaryText } = buildCollapsedPendingInteractionPresentation({
+    item: activeInteraction,
+    queueTitle: activeQueuePresentation.title,
+    requestId: activeRequestIdForPresentation,
+  });
   if (collapsed) {
     return (
       <View style={[styles.root, rootLayoutStyle]} testID="interaction.panel">
         <InteractionTouchButton
-          accessibilityLabel={t('interaction.panel.expandPendingCard', {
-            title: summaryText ?? activeQueuePresentation.title,
-          })}
+          accessibilityLabel={collapsedBarLabel}
           onPress={toggleCollapsed}
           style={[styles.card, styles.collapsedInteractionBar, { paddingHorizontal: touchLayout.cardPadding }]}
           testID="interaction.panel.collapsedBar"

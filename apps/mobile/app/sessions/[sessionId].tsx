@@ -440,6 +440,7 @@ import {
   useSessionInputProjection,
   useSessionMessages,
   useSessionPendingInteractions,
+  useSessionPendingInteractionsAuthoritative,
   useSessionRunStatus,
   useSessionMakerTurnRunning,
   useSessionRunning,
@@ -775,6 +776,8 @@ export default function SessionScreen() {
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
+  // pending 列表是否已被被控端的全量快照确认过(空列表能不能当「都处理完了」用)。
+  const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
@@ -1587,10 +1590,13 @@ export default function SessionScreen() {
     }
   }, [pending, pendingInteractionActiveRequestId]);
   // 卡被回答 / 被撤后清掉它的收起记录,否则同一 requestId 万一复现会直接以收起态出现。
-  // prune 无变化时返回原数组(见 prunePendingInteractionCollapsed),不会自触发。
+  // 只在 pending 列表**权威**时清:短暂离线会按设计清空这份投影(markDeviceOffline),
+  // 那种空列表不代表请求已终结(#1493 review)。prune 无变化时返回原数组,不会自触发。
   useEffect(() => {
-    setCollapsedPendingRequestIds((prev) => prunePendingInteractionCollapsed(prev, pending));
-  }, [pending]);
+    setCollapsedPendingRequestIds((prev) => prunePendingInteractionCollapsed(prev, pending, {
+      authoritative: pendingInteractionsAuthoritative,
+    }));
+  }, [pending, pendingInteractionsAuthoritative]);
   useEffect(() => {
     if (
       sessionOperationLayout.composerSlot !== 'pending-interaction'
