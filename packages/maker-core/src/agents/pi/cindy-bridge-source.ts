@@ -10,7 +10,7 @@
  *     读不到一律按 ask(fail-closed)。
  *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
  *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
- *     对每个 server 走 initialize → tools/list,把工具注册成 pi 工具
+ *     对每个 server 走 initialize → 分页 tools/list,把工具注册成 pi 工具
  *     (mcp__<server>__<tool>),execute 转发 tools/call。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
@@ -400,9 +400,21 @@ function mcpContentToPi(content: unknown): Array<Record<string, unknown>> {
 async function connectServer(pi: any, server: McpServerRef, token: string): Promise<number> {
   const client = new McpHttpClient(server, token);
   await client.initialize();
-  const listed = await client.request('tools/list', {});
+  const tools: any[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
+    if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
+    if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
+    const nextCursor = listed.nextCursor;
+    if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
+      throw new McpBridgeError('invalid tools pagination');
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
   client.finishStartup();
-  const tools: any[] = Array.isArray(listed?.tools) ? listed.tools : [];
   for (const tool of tools) {
     const qualifiedName = 'mcp__' + server.name + '__' + tool.name;
     const parameters =

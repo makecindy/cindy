@@ -145,6 +145,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
   const seenMcpUrls: string[] = [];
   const seenRemoteHeaders: Array<{ authorization?: string; apiKey?: string }> = [];
+  const paginatedListCursors: Array<string | undefined> = [];
+  const timedOutPaginationCursors: Array<string | undefined> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -172,6 +174,93 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           ...(auth ? { authorization: auth } : {}),
           ...(apiKey ? { apiKey } : {}),
         });
+      }
+      if (req.url?.includes('/paginated-timeout')) {
+        if (auth !== `Bearer ${REMOTE_BEARER}`) {
+          res.writeHead(401).end('unauthorized');
+          return;
+        }
+        const body = JSON.parse(await readBody(req)) as {
+          id?: number;
+          method?: string;
+          params?: { cursor?: string };
+        };
+        if (body.id === undefined) {
+          res.writeHead(202).end();
+          return;
+        }
+        let result: unknown;
+        if (body.method === 'initialize') {
+          result = {
+            protocolVersion: '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'paginated-timeout', version: '1.0.0' },
+          };
+        } else if (body.method === 'tools/list') {
+          timedOutPaginationCursors.push(body.params?.cursor);
+          if (body.params?.cursor === 'slow-page') {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          result = body.params?.cursor === undefined
+            ? { tools: [], nextCursor: 'slow-page' }
+            : { tools: [] };
+        } else {
+          result = {};
+        }
+        if (!res.destroyed && !res.writableEnded) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        }
+        return;
+      }
+      if (req.url?.includes('/paginated')) {
+        if (auth !== `Bearer ${REMOTE_BEARER}` || apiKey !== REMOTE_API_KEY) {
+          res.writeHead(401).end('unauthorized');
+          return;
+        }
+        const body = JSON.parse(await readBody(req)) as {
+          id?: number;
+          method?: string;
+          params?: { cursor?: string; arguments?: { text?: unknown } };
+        };
+        if (body.id === undefined) {
+          res.writeHead(202).end();
+          return;
+        }
+        const tool = (name: string) => ({
+          name,
+          description: `Tool from ${name}`,
+          inputSchema: {
+            type: 'object',
+            properties: { text: { type: 'string' } },
+            required: ['text'],
+          },
+        });
+        let result: unknown;
+        if (body.method === 'initialize') {
+          result = {
+            protocolVersion: '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'paginated', version: '1.0.0' },
+          };
+        } else if (body.method === 'tools/list') {
+          const cursor = body.params?.cursor;
+          paginatedListCursors.push(cursor);
+          result = cursor === undefined
+            ? { tools: [tool('page_one')], nextCursor: 'page-2' }
+            : cursor === 'page-2'
+              ? { tools: [tool('page_two')], nextCursor: 'page-3' }
+              : { tools: [tool('echo')] };
+        } else if (body.method === 'tools/call') {
+          const text = body.params?.arguments?.text;
+          echoCalls.push({ text });
+          result = { content: [{ type: 'text', text: `ECHO[${String(text)}]` }] };
+        } else {
+          result = {};
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        return;
       }
       if (req.url?.includes('/persistent-sse')) {
         if (auth !== `Bearer ${REMOTE_BEARER}` || apiKey !== REMOTE_API_KEY) {
@@ -273,7 +362,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   });
 
   function buildDeps(
-    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-failures' = 'local',
+    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -343,6 +432,29 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             },
           };
         }
+        if (bridgeMode === 'remote-paginated') {
+          return {
+            mcpBridge: {
+              token: '',
+              servers: [{
+                name: 'cindy_echo',
+                url: `${mcpUrl}/paginated`,
+                remote: {
+                  headerEnvVars: {
+                    authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
+                    'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
+                  },
+                  startupTimeoutMs: 1_000,
+                  requestTimeoutMs: 1_000,
+                },
+              }],
+            },
+            mcpEnv: {
+              CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}`,
+              CINDY_PI_REMOTE_MCP_SECRET_1: REMOTE_API_KEY,
+            },
+          };
+        }
         if (bridgeMode === 'remote-failures') {
           return {
             mcpBridge: {
@@ -375,6 +487,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                     requestTimeoutMs: 5_000,
                   },
                 },
+                {
+                  name: 'paginated_timeout_remote',
+                  url: `${mcpUrl}/paginated-timeout`,
+                  remote: {
+                    headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
+                    startupTimeoutMs: 200,
+                    requestTimeoutMs: 5_000,
+                  },
+                },
               ],
             },
             mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}` },
@@ -400,7 +521,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   async function runOneTurn(
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
-    bridgeMode: 'local' | 'remote' | 'remote-sse' = 'local',
+    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
   ): Promise<{ events: AgentEvent[]; permissionAsked: boolean }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
@@ -550,11 +671,37 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
+    'paginated tools/list: follows every cursor within startup and registers a tool from the final page',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      paginatedListCursors.length = 0;
+      const { events, permissionAsked } = await runOneTurn(
+        'bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'deny' }),
+        'remote-paginated',
+      );
+
+      expect(permissionAsked).toBe(false);
+      expect(paginatedListCursors).toEqual([undefined, 'page-2', 'page-3']);
+      expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
     'remote startup failures and timeouts are visible without logging URL, response body, or auth secrets',
     { timeout: 30_000 },
     async () => {
       const entries: Array<{ message: string; ctx?: Record<string, unknown> }> = [];
       const logger = recordingLogger(entries);
+      timedOutPaginationCursors.length = 0;
       const agent = new PiAgent(buildDeps('remote-failures', logger));
       const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-failure-cwd-'));
       let handle: AgentSessionHandle | null = null;
@@ -569,12 +716,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           const logs = JSON.stringify(entries);
           return logs.includes('HTTP 401')
             && logs.includes('connect slow_remote failed: request timed out')
-            && logs.includes('connect stalling_body_remote failed: request timed out');
+            && logs.includes('connect stalling_body_remote failed: request timed out')
+            && logs.includes('connect paginated_timeout_remote failed: request timed out');
         });
         const logs = JSON.stringify(entries);
         expect(logs).toContain('connect rejecting_remote failed: HTTP 401');
         expect(logs).toContain('connect slow_remote failed: request timed out');
         expect(logs).toContain('connect stalling_body_remote failed: request timed out');
+        expect(logs).toContain('connect paginated_timeout_remote failed: request timed out');
+        expect(timedOutPaginationCursors).toEqual([undefined, 'slow-page']);
         for (const forbidden of [REMOTE_BEARER, REMOTE_API_KEY, REMOTE_ERROR_CANARY, mcpUrl]) {
           expect(logs).not.toContain(forbidden);
         }
