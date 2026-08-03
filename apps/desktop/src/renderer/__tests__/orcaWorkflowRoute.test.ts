@@ -179,14 +179,8 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('keeps the active collaboration tooltip free of policy-disabled reasons', () => {
-    expect(sessionViewSource).toContain(
-      "disabledReason:\n" +
-        "                            !collabEnabled\n" +
-        "                              ? collabPolicy.loading",
-    );
-    expect(sessionViewSource).toContain(
-      "                                  : undefined\n" +
-        "                              : undefined,",
+    expect(sessionViewSource).toMatch(
+      /disabledReason:\s*!collabEnabled\s*\?\s*collabPolicy\.loading[\s\S]*?:\s*undefined\s*:\s*undefined,/,
     );
   });
 
@@ -320,7 +314,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('routeWorkerHint.hasWorkerParam || !!orcaWorkersReveal || hasWorkerSearchJump');
     expect(sessionViewSource).toContain('const shouldRevealWorkersTab = hasExplicitOrcaWorkersReveal || shouldPassiveRevealWorkersTab;');
     expect(sessionViewSource).toContain('orcaWorkersReveal?.focusWorkerSessionId ??');
-    expect(sessionViewSource).toContain('hasWorkerSearchJump ? searchJump?.sessionId ?? null : null');
+    expect(sessionViewSource).toMatch(
+      /hasWorkerSearchJump\s*\?\s*\(?searchJump\?\.sessionId\s*\?\?\s*null\)?\s*:\s*null/,
+    );
     expect(sessionViewSource).toContain('orcaWorkersReveal: undefined');
     expect(sessionViewSource).toContain("routeResult === 'stale-context' && shouldRevealWorkersTab");
     expect(sessionViewSource).toContain("routeResult !== 'attached' && routeResult !== 'routed'");
@@ -424,7 +420,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('passes Orca lead vendor options when sending from the plain lead route', () => {
     expect(sessionViewSource).toContain('const orcaLeadVendorOptions =');
-    expect(sessionViewSource).toContain('sessionId && isOrcaLeadSession(session)');
+    expect(sessionViewSource).toMatch(
+      /sessionId\s*&&\s*session\s*!==\s*null\s*&&\s*isOrcaLeadSession\(session\)/,
+    );
     expect(sessionViewSource).not.toContain('isOrcaMode && sessionId && isOrcaLeadSession(session)');
     expect(sessionViewSource).toContain("vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: sessionId }");
   });

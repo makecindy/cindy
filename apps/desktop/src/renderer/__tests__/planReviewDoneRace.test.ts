@@ -61,6 +61,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -91,12 +92,14 @@ let onEvent: ((data: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
+let getPendingInteractions: ReturnType<typeof vi.fn>;
 
 function installElectronBridge(): void {
   onEvent = undefined;
   onDbMessageCreated = undefined;
   onInteractionRequest = undefined;
   onInteractionDismissed = undefined;
+  getPendingInteractions = vi.fn(async () => []);
   const w = globalThis as unknown as { window: Record<string, unknown> };
   w.window = {
     electronAPI: {
@@ -121,6 +124,7 @@ function installElectronBridge(): void {
         },
         send: vi.fn(async () => ({ accepted: true })),
         generateTitle: vi.fn(async () => ({ title: 't' })),
+        getPendingInteractions,
         setPlanMode: vi.fn(async () => {}),
         resolveInteraction: vi.fn(async () => {}),
         abortSession: vi.fn(async () => {}),
@@ -307,6 +311,53 @@ describe('plan_review 与 done 的时序', () => {
     const snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingPlanReview?.requestId).toBe('pr-1');
     expect(pendingBubbleStatuses()).toEqual(['pending']);
+  });
+
+  it('codex:done 作废在途旧快照后主动拉新快照重建计划审阅', async () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    let resolveStaleSnapshot!: (items: unknown[]) => void;
+    getPendingInteractions
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStaleSnapshot = resolve;
+          }),
+      )
+      .mockResolvedValueOnce([
+        {
+          request: {
+            kind: 'plan_review',
+            requestId: 'pr-fresh-snapshot',
+            plan: '# 最新计划\n1. do Y',
+          },
+          persistId: 'persist-pr-fresh-snapshot',
+        },
+      ]);
+
+    const staleReconcile = makerChatStore.reconcilePendingInteractions(SESSION_ID);
+    emitDone('codex');
+
+    await vi.waitFor(() => {
+      expect(getPendingInteractions).toHaveBeenCalledTimes(2);
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe(
+        'pr-fresh-snapshot',
+      );
+    });
+
+    resolveStaleSnapshot([
+      {
+        request: {
+          kind: 'plan_review',
+          requestId: 'pr-stale-snapshot',
+          plan: '# 旧计划',
+        },
+        persistId: 'persist-pr-stale-snapshot',
+      },
+    ]);
+    await expect(staleReconcile).resolves.toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe(
+      'pr-fresh-snapshot',
+    );
   });
 
   it('claude:turn 结束仍将 pending 计划审阅标过期(既有语义不变)', () => {

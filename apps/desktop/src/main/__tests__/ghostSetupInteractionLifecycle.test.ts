@@ -67,7 +67,7 @@ describe('host-owned interaction lifecycle contract', () => {
       expect(ownershipHelper).toContain(bridgeName);
     }
     expect(registerSource).toMatch(
-      /assertResolveInteractionOrigin\(\s*decision,\s*isPendingDesktopOnlyConfirmation\(requestId\),\s*\);/,
+      /assertResolveInteractionOrigin\(\s*decision,\s*isPendingDesktopOnlyConfirmation\(requestId\),?\s*\);/,
     );
   });
 

@@ -415,7 +415,7 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
   };
 }
 
-export async function getSessionRowSnapshot(id: string): Promise<{
+export interface SessionRowSnapshot {
   status: string;
   title: string | null;
   userSendAt: number | null;
@@ -428,8 +428,9 @@ export async function getSessionRowSnapshot(id: string): Promise<{
   orcaRole?: 'lead' | 'worker' | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
-} | null> {
-  try {
+}
+
+async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
     const db = getDbClient().drizzle;
     const [row] = await db
       .select({
@@ -449,6 +450,22 @@ export async function getSessionRowSnapshot(id: string): Promise<{
       .where(eq(sessions.id, id))
       .limit(1);
     return row ?? null;
+}
+
+/**
+ * 严格读取发送前的 session 行。
+ *
+ * 远控输入必须区分「明确不存在」和「数据库暂时不可读」：前者是可恢复之外的
+ * 终态拒绝,后者则应让 renderer 保留草稿并稍后重试。普通 scheduler / 展示路径
+ * 继续使用下面的 swallow 版本,避免扩大既有错误语义。
+ */
+export async function getSessionRowSnapshotStrict(id: string): Promise<SessionRowSnapshot | null> {
+  return selectSessionRowSnapshot(id);
+}
+
+export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
+  try {
+    return await selectSessionRowSnapshot(id);
   } catch (err) {
     log.warn('getSessionRowSnapshot failed', {
       sessionId: id,

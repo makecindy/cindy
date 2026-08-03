@@ -27,11 +27,11 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('if (existing?.session === session)');
     expect(wireSessionSource).toContain('for (const dispose of existing.disposers) dispose();');
     expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
-    expect(wireSessionSource).toContain(
-      'registration.disposers.push(session.onEvent((event: AgentEvent) => {',
+    expect(wireSessionSource).toMatch(
+      /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
     );
-    expect(wireSessionSource).toContain(
-      'registration.disposers.push(session.onStatusChange((status) => {',
+    expect(wireSessionSource).toMatch(
+      /registration\.disposers\.push\(\s*session\.onStatusChange\(\(status\) => \{/,
     );
     // #1286:拆线(实例替换 / 会话关闭)必须给插件补 did-turn-end,否则订阅方的
     // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。同一个 disposer 里
@@ -72,7 +72,7 @@ describe('maker:event hot path ordering', () => {
   it('defers remote auth island errors until the renderer reports retry failure', () => {
     const wireSessionSource = extractWireSessionSource();
     const deferredHandler = source.match(
-      /ipcMain\.handle\(MAKER_INVOKE\.PERSIST_TURN_ERROR_DEFERRED,[\s\S]*?\n {2}\}\);/,
+      /ipcMain\.handle\(\s*MAKER_INVOKE\.PERSIST_TURN_ERROR_DEFERRED,[\s\S]*?\n\s*\}\);/,
     )?.[0];
 
     expect(source).toContain('function isRemoteAuthRetryErrorEvent(');
@@ -166,6 +166,20 @@ describe('maker:event hot path ordering', () => {
     expect(terminalContexts.some((context) => context.includes("event.type === 'done'"))).toBe(true);
     expect(terminalContexts.some((context) => context.includes('isTerminalTurnErrorEvent(event)'))).toBe(true);
     expect([...statusContexts, ...terminalContexts].join('\n')).not.toContain("event.type === 'error'");
+    // Keep a direct structural guard too: each terminal idle assignment must
+    // remain inside its corresponding done/error branch.
+    expect(
+      wireSessionSource.lastIndexOf(
+        "if (event.type === 'done') {",
+        terminalIdleAssignments[0],
+      ),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.lastIndexOf(
+        'if (isTerminalTurnErrorEvent(event)) {',
+        terminalIdleAssignments[1],
+      ),
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it('does not persist remote Codex account snapshots into local account usage', () => {
@@ -520,20 +534,24 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();');
     expect(wireSessionSource).toContain('!turnModelPromiseBySession.has(session.id)');
     expect(wireSessionSource).toContain('turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));');
-    expect(codexDoneSource).toContain('const modelPromise = turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);');
+    expect(codexDoneSource).toMatch(
+      /const modelPromise\s*=\s*turnModelPromiseBySession\.get\(session\.id\)\s*\?\?\s*readSessionModelForUsage\(session\.id\);/,
+    );
     expect(codexDoneSource).toContain('turnModelPromiseBySession.delete(session.id);');
     expect(codexDoneSource).not.toContain('hasCodexOAuthLogin()');
     expect(codexDoneSource).toContain('promptTokens + completionTokens + cachedTokens');
     expect(codexDoneSource).not.toContain('promptTokens + completionTokens + reasoningTokens + cachedTokens');
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
-    expect(codexDoneSource).toContain("&& pricingModel.startsWith('codex/');");
-    expect(codexDoneSource).toContain('&& pricingModel.startsWith(XAI_MODEL_PREFIX);');
+    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
+    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\(XAI_MODEL_PREFIX\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
     expect(codexDoneSource).toContain('!isCustomProviderRoute');
     expect(codexDoneSource).toContain('(sessionProvider === \'xd\' && hasGatewayKey)');
-    expect(codexDoneSource).toContain('const isSubscriptionValue = isRemoteCodexSession ||');
+    expect(codexDoneSource).toMatch(
+      /const isSubscriptionValue\s*=\s*isRemoteCodexSession\s*\|\|/,
+    );
     expect(codexDoneSource).toContain('isCodexXaiProviderRoute ||');
     // 用正则而非整串匹配:这段条件已按多行排版,单行字面量会因换行/缩进调整而假失败。
     // 要守的语义是——订阅计价只在「OpenAI 供应商 + oauth-bearer 注入 + 无生效网关路由」时成立。
@@ -581,14 +599,17 @@ describe('maker:event hot path ordering', () => {
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
-    expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute'));
+    expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue'));
     expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
     expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
     expect(codexDoneSource).toContain('money,');
-    expect(codexDoneSource).toContain('if (!isRemoteCodexSession &&');
-    expect(codexDoneSource).toContain('!isCustomProviderRoute &&');
-    expect(codexDoneSource).toContain("!model.startsWith(XAI_MODEL_PREFIX) &&");
-    expect(codexDoneSource).toContain("(codexAuthInjection === 'env-key' || model.startsWith('codex/') || (sessionProvider === 'xd' && hasGatewayKey))");
+    expect(codexDoneSource).toMatch(
+      /const hasEffectiveGatewayRoute\s*=\s*!isRemoteCodexSession\s*&&\s*!isCustomProviderRoute\s*&&/,
+    );
+    expect(codexDoneSource).toContain('const isCodexXaiProviderRoute =');
+    expect(codexDoneSource).toMatch(
+      /codexAuthInjection === 'env-key'\s*\|\|\s*isCodexBudgetRoute\s*\|\|\s*\(sessionProvider === 'xd' && hasGatewayKey\)/,
+    );
     expect(codexDoneSource).not.toContain("sessionProvider !== 'xai'");
     expect(codexDoneSource).not.toContain('isEstimate: true');
   });
@@ -619,8 +640,8 @@ describe('maker:event hot path ordering', () => {
     );
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
-    expect(claudeDoneSource).toContain(
-      'model: isClaudeSubscriptionValueRow ? claudeSubscriptionUsageModelKey(m.model) : m.model,',
+    expect(claudeDoneSource).toMatch(
+      /model:\s*isClaudeSubscriptionValueRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
     );
     expect(claudeDoneSource).toContain(
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",

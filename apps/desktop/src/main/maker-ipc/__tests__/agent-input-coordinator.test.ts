@@ -152,11 +152,11 @@ function sessionRunningError(): Error & { code: string } {
   });
 }
 
-function unsupportedChatBridgeImageError(
-  feature = "input content part 'input_image'",
-): string {
-  return 'unexpected status 400 Bad Request: Responses feature is not supported by the '
-    + `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`;
+function unsupportedChatBridgeImageError(feature = "input content part 'input_image'"): string {
+  return (
+    'unexpected status 400 Bad Request: Responses feature is not supported by the ' +
+    `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`
+  );
 }
 
 function createHarness() {
@@ -166,26 +166,44 @@ function createHarness() {
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
 
-  const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (sessionId, _message, _createOpts, sendOpts) => {
-    await persistQueuedUserMessage(sessionId, sendOpts);
-    running = true;
-    return sendSuccess();
-  });
+  const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(
+    async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      running = true;
+      return sendSuccess();
+    },
+  );
   const steerToAgent = vi.fn<AgentInputCoordinatorDeps['steerToAgent']>(async () => {});
   const abortSession = vi.fn<AgentInputCoordinatorDeps['abortSession']>(async () => {});
-  const getSdkSessionId = vi.fn<AgentInputCoordinatorDeps['getSdkSessionId']>(async () => 'sdk-session');
-  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(() => false);
-  const beforeDispatchUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>>(() => {});
-  const onUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>>(() => {});
-  const onAcceptedQueuedMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>>(() => {});
-  const onDispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>>(() => {});
+  const getSdkSessionId = vi.fn<AgentInputCoordinatorDeps['getSdkSessionId']>(
+    async () => 'sdk-session',
+  );
+  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(
+    () => false,
+  );
+  const beforeDispatchUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>
+  >(() => {});
+  const onUndispatchedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>
+  >(() => {});
+  const onAcceptedQueuedMessage = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
+  >(() => {});
+  const onDispatchedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>
+  >(() => {});
   // host 是否接管自愈。null = 不接管(走常规错误呈现),与「没装自愈」的行为一致;
   // 非 null 时返回的就是要透到 UI 的展示信息(原因 + 本轮次数 + 会话累计)。
-  let resumableTurnErrorTakeover: { error?: string; attempt: number; maxAttempts: number; sessionTotal: number } | null =
-    null;
-  const onResumableTurnError = vi.fn<NonNullable<AgentInputCoordinatorDeps['onResumableTurnError']>>(
-    () => resumableTurnErrorTakeover,
-  );
+  let resumableTurnErrorTakeover: {
+    error?: string;
+    attempt: number;
+    maxAttempts: number;
+    sessionTotal: number;
+  } | null = null;
+  const onResumableTurnError = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onResumableTurnError']>
+  >(() => resumableTurnErrorTakeover);
   // 纯判定(无副作用):这条 error 有没有可能被接管。host 侧接的是 isInterruptedTurnError,
   // 这里默认认所有带 sdkError='server_error' 的,够表达"候选 / 非候选"两种分支。
   let resumableTurnErrorCandidate: (signals: { sdkError?: string }) => boolean = (signals) =>
@@ -196,7 +214,8 @@ function createHarness() {
   const onResumableTurnErrorDiscarded = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onResumableTurnErrorDiscarded']>
   >(() => {});
-  const noteSessionClearBoundary = vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
+  const noteSessionClearBoundary =
+    vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
   const resolveSessionReferences = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['resolveSessionReferences']>
   >(async () => []);
@@ -213,13 +232,12 @@ function createHarness() {
     NonNullable<AgentInputCoordinatorDeps['onUserMessageRewritten']>
   >(() => {});
   let hasAssistantProgressAfter:
-    | ((sessionId: string, userClientId: string) => Promise<boolean>)
-    | null = null;
+    ((sessionId: string, userClientId: string) => Promise<boolean>) | null = null;
   let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
-  let getPersistedClientIds: ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined;
-  const persistQueueSnapshot = vi.fn<
-    NonNullable<AgentInputCoordinatorDeps['persistQueueSnapshot']>
-  >();
+  let getPersistedClientIds:
+    ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined;
+  const persistQueueSnapshot =
+    vi.fn<NonNullable<AgentInputCoordinatorDeps['persistQueueSnapshot']>>();
   const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
   const onAutomaticEnqueue = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAutomaticEnqueue']>
@@ -228,9 +246,9 @@ function createHarness() {
   const onDiscardedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
   >(() => {});
-  const onRejectedUserTurn = vi.fn<
-    NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>
-  >(() => {});
+  const onRejectedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>>(
+    () => {},
+  );
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -273,7 +291,9 @@ function createHarness() {
     loadQueueSnapshot: (sessionId) =>
       loadQueueSnapshot ? loadQueueSnapshot(sessionId) : Promise.resolve([]),
     getPersistedClientIds: (sessionId, clientIds) =>
-      getPersistedClientIds ? getPersistedClientIds(sessionId, clientIds) : Promise.resolve(new Set()),
+      getPersistedClientIds
+        ? getPersistedClientIds(sessionId, clientIds)
+        : Promise.resolve(new Set()),
   });
 
   return {
@@ -317,9 +337,7 @@ function createHarness() {
     },
     onUserMessageBlocked,
     onUserMessageRewritten,
-    setScreenUserMessage(
-      fn: NonNullable<AgentInputCoordinatorDeps['screenUserMessage']> | null,
-    ) {
+    setScreenUserMessage(fn: NonNullable<AgentInputCoordinatorDeps['screenUserMessage']> | null) {
       screenUserMessage = fn;
     },
     setHasAssistantProgressAfter(
@@ -329,9 +347,7 @@ function createHarness() {
     },
     /** 模拟 host 决定接管自愈(判定命中 + 额度允许);传 null = 不接管。 */
     setResumableTurnErrorTakeover(
-      value:
-        | { error?: string; attempt: number; maxAttempts: number; sessionTotal: number }
-        | null,
+      value: { error?: string; attempt: number; maxAttempts: number; sessionTotal: number } | null,
     ) {
       resumableTurnErrorTakeover = value;
     },
@@ -340,9 +356,7 @@ function createHarness() {
       resumableTurnErrorCandidate = fn;
     },
     persistQueueSnapshot,
-    setLoadQueueSnapshot(
-      fn: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null,
-    ) {
+    setLoadQueueSnapshot(fn: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null) {
       loadQueueSnapshot = fn;
     },
     setGetPersistedClientIds(
@@ -407,7 +421,9 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 
     expect(h.resolveSessionReferences).not.toHaveBeenCalled();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).toContain('authoritative remote history');
+    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).toContain(
+      'authoritative remote history',
+    );
     expect(mocks.createMessage.mock.calls[0]?.[1]).toMatchObject({
       content: expect.stringContaining('"sessionReferences"'),
     });
@@ -415,10 +431,13 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 
   it('fails closed instead of interpreting a controller ref against local SQLite', async () => {
     const h = createHarness();
-    h.coordinator.enqueue('target-session', makeItem('quoted-2', 'compare cindy://session/source-session', {
-      sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    h.coordinator.enqueue(
+      'target-session',
+      makeItem('quoted-2', 'compare cindy://session/source-session', {
+        sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
     await flush();
 
     expect(h.resolveSessionReferences).not.toHaveBeenCalled();
@@ -429,11 +448,14 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
   it('does not expose quoted history bodies through renderer projections', () => {
     const h = createHarness();
     h.setRunning(true);
-    const projection = h.coordinator.enqueue('target-session', makeItem('quoted-3', 'queued quote', {
-      sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
-      trustedSessionReferenceContexts: [trustedContext],
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    const projection = h.coordinator.enqueue(
+      'target-session',
+      makeItem('quoted-3', 'queued quote', {
+        sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
+        trustedSessionReferenceContexts: [trustedContext],
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
 
     expect(projection.pendingQueue[0]?.sessionRefs).toHaveLength(1);
     expect(projection.pendingQueue[0]?.trustedSessionReferenceContexts).toBeUndefined();
@@ -445,20 +467,27 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     const h = createHarness();
     const sid = 'target-session';
     h.setRunning(true);
-    const projection = h.coordinator.enqueue(sid, makeItem('quoted-steer', 'queued quote', {
-      sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
-      trustedSessionReferenceContexts: [trustedContext],
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    const projection = h.coordinator.enqueue(
+      sid,
+      makeItem('quoted-steer', 'queued quote', {
+        sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
+        trustedSessionReferenceContexts: [trustedContext],
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
     const projectedItem = projection.pendingQueue[0];
 
     expect(projectedItem?.trustedSessionReferenceContexts).toBeUndefined();
     expect(projectedItem?.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
-    await expect(h.coordinator.steer(sid, projectedItem!, { removeFromQueue: true })).resolves.toBe(true);
+    await expect(h.coordinator.steer(sid, projectedItem!, { removeFromQueue: true })).resolves.toBe(
+      true,
+    );
 
     expect(h.resolveSessionReferences).not.toHaveBeenCalled();
     expect(h.steerToAgent).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain('authoritative remote history');
+    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain(
+      'authoritative remote history',
+    );
     expect(latestProjection(h.projections).pendingQueue).toHaveLength(0);
   });
 
@@ -467,10 +496,13 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     const sid = 'target-session';
     h.setRunning(true);
     const refs = [{ sessionId: 'source-session', deviceId: 'source-device' }];
-    h.coordinator.enqueue(sid, makeItem('quoted-restored', 'queued quote', {
-      sessionRefs: refs,
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    h.coordinator.enqueue(
+      sid,
+      makeItem('quoted-restored', 'queued quote', {
+        sessionRefs: refs,
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
 
     const incoming = makeItem('quoted-restored', 'queued quote', {
       sessionRefs: refs,
@@ -481,7 +513,9 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 
     expect(h.resolveSessionReferences).not.toHaveBeenCalled();
     expect(h.steerToAgent).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain('authoritative remote history');
+    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain(
+      'authoritative remote history',
+    );
   });
 
   it('does not pass trusted reference bodies to crash-recovery persistence', async () => {
@@ -490,11 +524,14 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     await h.coordinator.ensureQueueRestored(sid);
     h.setRunning(true);
 
-    h.coordinator.enqueue(sid, makeItem('quoted-persist', 'queued quote', {
-      sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
-      trustedSessionReferenceContexts: [trustedContext],
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    h.coordinator.enqueue(
+      sid,
+      makeItem('quoted-persist', 'queued quote', {
+        sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
+        trustedSessionReferenceContexts: [trustedContext],
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
     await flush();
 
     const persisted = h.persistQueueSnapshot.mock.calls.at(-1)?.[1][0];
@@ -511,11 +548,14 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
       ghostId: 'ghost-1',
       ghostName: 'rewrite-test',
     }));
-    h.coordinator.enqueue('target-session', makeItem('quoted-4', 'compare cindy://session/source-session', {
-      sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
-      trustedSessionReferenceContexts: [trustedContext],
-      sessionReferencesRequireTrustedSnapshot: true,
-    }));
+    h.coordinator.enqueue(
+      'target-session',
+      makeItem('quoted-4', 'compare cindy://session/source-session', {
+        sessionRefs: [{ sessionId: 'source-session', deviceId: 'source-device' }],
+        trustedSessionReferenceContexts: [trustedContext],
+        sessionReferencesRequireTrustedSnapshot: true,
+      }),
+    );
     await flush();
 
     expect(h.resolveSessionReferences).toHaveBeenCalledTimes(1);
@@ -525,17 +565,20 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 
   it('sends a foreign session link as ordinary Agent text when history enrichment fails', async () => {
     const h = createHarness();
-    h.resolveSessionReferences.mockRejectedValueOnce(new Error('session belongs to another account'));
+    h.resolveSessionReferences.mockRejectedValueOnce(
+      new Error('session belongs to another account'),
+    );
     const text = 'inspect cindy://session/foreign-session';
 
-    h.coordinator.enqueue('target-session', makeItem('quoted-foreign', text, {
-      sessionRefs: [{ sessionId: 'foreign-session' }],
-    }));
+    h.coordinator.enqueue(
+      'target-session',
+      makeItem('quoted-foreign', text, {
+        sessionRefs: [{ sessionId: 'foreign-session' }],
+      }),
+    );
     await flush();
 
-    expect(h.resolveSessionReferences).toHaveBeenCalledWith([
-      { sessionId: 'foreign-session' },
-    ]);
+    expect(h.resolveSessionReferences).toHaveBeenCalledWith([{ sessionId: 'foreign-session' }]);
     expect(h.sendToAgent).toHaveBeenCalledWith(
       'target-session',
       { type: 'user', content: text },
@@ -558,9 +601,13 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     });
     h.coordinator.enqueue('target-session', item);
 
-    h.coordinator.updateContent('target-session', item.clientId, makeItem(item.clientId, 'compare cindy://session/controller', {
-      sessionRefs: [],
-    }));
+    h.coordinator.updateContent(
+      'target-session',
+      item.clientId,
+      makeItem(item.clientId, 'compare cindy://session/controller', {
+        sessionRefs: [],
+      }),
+    );
 
     const updated = latestProjection(h.projections).pendingQueue[0];
     expect(updated?.sessionRefs).toBeUndefined();
@@ -610,7 +657,10 @@ describe('AgentInputCoordinator send transaction', () => {
 
     h.sendToAgent.mockImplementationOnce(async () => {
       h.setRunning(true);
-      return hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] Session is already running a turn');
+      return hostSendFailure(
+        'SESSION_RUNNING',
+        '[SESSION_RUNNING] Session is already running a turn',
+      );
     });
 
     h.coordinator.enqueue(sid, first);
@@ -651,7 +701,8 @@ describe('AgentInputCoordinator send transaction', () => {
         'CREDENTIAL_SWITCH_BUSY',
         'CREDENTIAL_SWITCH_BUSY: Cannot switch Codex credential mode (oauth-bearer -> gateway-key) while local Codex session(s) are busy: other-session',
         { busySessionIds: ['other-session'] },
-      ));
+      ),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -718,7 +769,8 @@ describe('AgentInputCoordinator send transaction', () => {
     h.sendToAgent.mockImplementation(async () =>
       hostSendFailure('CREDENTIAL_SWITCH_BUSY', 'CREDENTIAL_SWITCH_BUSY: busy', {
         busySessionIds: ['other-session'],
-      }));
+      }),
+    );
 
     h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
     await flush();
@@ -762,11 +814,10 @@ describe('AgentInputCoordinator send transaction', () => {
     const first = makeItem('q-1', 'first');
 
     h.sendToAgent.mockImplementationOnce(async () =>
-      hostSendFailure(
-        'CREDENTIAL_SWITCH_BUSY',
-        'CREDENTIAL_SWITCH_BUSY: busy',
-        { busySessionIds: ['other-session'] },
-      ));
+      hostSendFailure('CREDENTIAL_SWITCH_BUSY', 'CREDENTIAL_SWITCH_BUSY: busy', {
+        busySessionIds: ['other-session'],
+      }),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -795,7 +846,8 @@ describe('AgentInputCoordinator send transaction', () => {
     h.sendToAgent.mockImplementation(async () =>
       hostSendFailure('CREDENTIAL_SWITCH_BUSY', 'CREDENTIAL_SWITCH_BUSY: busy', {
         busySessionIds: ['other-session'],
-      }));
+      }),
+    );
 
     h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
     await flush();
@@ -1073,7 +1125,9 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     projection = latestProjection(h.projections);
-    expect(projection.error, 'paired done must NOT wipe the terminal error projection').toBe('claude turn failed');
+    expect(projection.error, 'paired done must NOT wipe the terminal error projection').toBe(
+      'claude turn failed',
+    );
   });
 
   it('falls back and drains after a Codex terminal error when no done follows', async () => {
@@ -1427,10 +1481,13 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'orca-origin';
     h.setRunning(true);
 
-    h.coordinator.enqueue(sid, makeItem('q-orca', '[From Orca Lead]\nhello', {
-      persistedContent: JSON.stringify({ orcaSource: 'lead', content: 'hello' }),
-      origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' },
-    }));
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-orca', '[From Orca Lead]\nhello', {
+        persistedContent: JSON.stringify({ orcaSource: 'lead', content: 'hello' }),
+        origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' },
+      }),
+    );
 
     expect(latestProjection(h.projections).pendingQueue[0]?.origin).toEqual({
       kind: 'orca',
@@ -1496,9 +1553,12 @@ describe('AgentInputCoordinator send transaction', () => {
       return sendSuccess();
     });
 
-    h.coordinator.enqueue(sid, makeItem('q-await', 'hello', {
-      origin: { kind: 'orca', senderLabel: 'Lead' },
-    }));
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-await', 'hello', {
+        origin: { kind: 'orca', senderLabel: 'Lead' },
+      }),
+    );
     await flush();
 
     expect(callbackDoneAtSendResolve).toBe(true);
@@ -1544,20 +1604,20 @@ describe('AgentInputCoordinator send transaction', () => {
     const h = createHarness();
     const sid = 'orca-stop-drop';
     h.setRunning(true);
-    h.coordinator.enqueue(sid, makeItem('q-orca', 'hello', {
-      origin: { kind: 'orca', senderLabel: 'developer', displayText: 'hello' },
-    }));
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-orca', 'hello', {
+        origin: { kind: 'orca', senderLabel: 'developer', displayText: 'hello' },
+      }),
+    );
 
     h.coordinator.stop(sid);
 
-    expect(mocks.logger.warn).toHaveBeenCalledWith(
-      'dropping queued Orca message on stop',
-      {
-        sessionId: sid,
-        clientId: 'q-orca',
-        senderLabel: 'developer',
-      },
-    );
+    expect(mocks.logger.warn).toHaveBeenCalledWith('dropping queued Orca message on stop', {
+      sessionId: sid,
+      clientId: 'q-orca',
+      senderLabel: 'developer',
+    });
   });
 
   it('persists a user bubble only after maker-core accepts the turn', async () => {
@@ -1659,7 +1719,9 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'compact-queued-during-active-turn';
     h.setRunning(true);
 
-    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts, { userName: 'Carol' });
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts, {
+      userName: 'Carol',
+    });
     await flush();
 
     expect(h.sendToAgent).not.toHaveBeenCalled();
@@ -1725,7 +1787,10 @@ describe('AgentInputCoordinator send transaction', () => {
 
     h.sendToAgent.mockImplementationOnce(async () => {
       h.setRunning(true);
-      return hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] Session is already running a turn');
+      return hostSendFailure(
+        'SESSION_RUNNING',
+        '[SESSION_RUNNING] Session is already running a turn',
+      );
     });
 
     await h.coordinator.compact(sid, createOpts, { userName: 'Carol' });
@@ -2091,9 +2156,7 @@ describe('AgentInputCoordinator send transaction', () => {
     const persist = h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage;
     expect(persist?.content).toBe(CONTINUE_AFTER_ERROR_PROMPT);
     expect(h.sendToAgent.mock.calls[1]?.[2]?.planMode).toBe(false);
-    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.originalSyntheticTrigger).toBe(
-      'continue',
-    );
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.originalSyntheticTrigger).toBe('continue');
   });
 
   it('active-turn retry falls back to resending the original text when the turn produced nothing', async () => {
@@ -2157,33 +2220,41 @@ describe('AgentInputCoordinator send transaction', () => {
     ];
     item.persistedContent = JSON.stringify({
       text: item.text,
-      images: [{
-        url: 'data:image/png;base64,aW1hZ2U=',
-        mimeType: 'image/png',
-        originalName: 'image.png',
-      }, {
-        url: 'xdt-image://session/clip.gif',
-        mimeType: 'image/gif',
-        originalName: 'clip.gif',
-      }],
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+        {
+          url: 'xdt-image://session/clip.gif',
+          mimeType: 'image/gif',
+          originalName: 'clip.gif',
+        },
+      ],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     });
     item.chatMessage = {
       ...item.chatMessage,
-      images: [{
-        url: 'data:image/png;base64,aW1hZ2U=',
-        mimeType: 'image/png',
-        originalName: 'image.png',
-      }, {
-        url: 'xdt-image://session/clip.gif',
-        mimeType: 'image/gif',
-        originalName: 'clip.gif',
-      }],
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+        {
+          url: 'xdt-image://session/clip.gif',
+          mimeType: 'image/gif',
+          originalName: 'clip.gif',
+        },
+      ],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     };
-    (item.chatMessage as typeof item.chatMessage & {
-      retryFiles?: AgentInputQueuedMessage['files'];
-    }).retryFiles = item.files;
+    (
+      item.chatMessage as typeof item.chatMessage & {
+        retryFiles?: AgentInputQueuedMessage['files'];
+      }
+    ).retryFiles = item.files;
 
     h.coordinator.enqueue(sid, item);
     await flush();
@@ -2209,25 +2280,33 @@ describe('AgentInputCoordinator send transaction', () => {
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
-    expect(retried?.chatMessage.images).toEqual([{
-      url: 'xdt-image://session/clip.gif',
-      mimeType: 'image/gif',
-      originalName: 'clip.gif',
-    }]);
+    expect(retried?.chatMessage.images).toEqual([
+      {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      },
+    ]);
     expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
-    expect((retried?.chatMessage as typeof retried.chatMessage & {
-      retryFiles?: AgentInputQueuedMessage['files'];
-    }).retryFiles).toEqual([
+    expect(
+      (
+        retried?.chatMessage as typeof retried.chatMessage & {
+          retryFiles?: AgentInputQueuedMessage['files'];
+        }
+      ).retryFiles,
+    ).toEqual([
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
     expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
       text: 'describe this',
-      images: [{
-        url: 'xdt-image://session/clip.gif',
-        mimeType: 'image/gif',
-        originalName: 'clip.gif',
-      }],
+      images: [
+        {
+          url: 'xdt-image://session/clip.gif',
+          mimeType: 'image/gif',
+          originalName: 'clip.gif',
+        },
+      ],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     });
   });
@@ -2237,32 +2316,38 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'retry-unsupported-image-only';
     h.setHasAssistantProgressAfter(async () => false);
     const item = makeItem('q-first', '');
-    item.files = [{
-      id: 'image-1',
-      name: 'image.png',
-      path: 'clipboard://image.png',
-      ext: '.png',
-      size: 4,
-      category: 'image',
-      mimeType: 'image/png',
-      url: 'data:image/png;base64,aW1hZ2U=',
-    }];
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+    ];
     item.persistedContent = JSON.stringify({
       text: '',
-      images: [{
-        url: 'data:image/png;base64,aW1hZ2U=',
-        mimeType: 'image/png',
-        originalName: 'image.png',
-      }],
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
       files: [],
     });
     item.chatMessage = {
       ...item.chatMessage,
-      images: [{
-        url: 'data:image/png;base64,aW1hZ2U=',
-        mimeType: 'image/png',
-        originalName: 'image.png',
-      }],
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
     };
 
     h.coordinator.enqueue(sid, item);
@@ -2290,16 +2375,18 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'retry-unsupported-image-legacy-error';
     h.setHasAssistantProgressAfter(async () => false);
     const item = makeItem('q-first', 'describe this');
-    item.files = [{
-      id: 'image-1',
-      name: 'image.png',
-      path: 'clipboard://image.png',
-      ext: '.png',
-      size: 4,
-      category: 'image',
-      mimeType: 'image/png',
-      url: 'data:image/png;base64,aW1hZ2U=',
-    }];
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+    ];
 
     h.coordinator.enqueue(sid, item);
     await flush();
@@ -2362,9 +2449,7 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
-    expect(
-      h.onDispatchedUserTurn.mock.calls[1]?.[1]?.supersedesUserClientId,
-    ).toBeUndefined();
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.supersedesUserClientId).toBeUndefined();
   });
 
   it('chained zero-progress retries anchor each supersede on the previous clone', async () => {
@@ -2382,8 +2467,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     await h.coordinator.retryLastError(sid);
     await flush();
-    const firstClone =
-      h.supersedeRetriedUserTurn.mock.calls[0]?.[1]?.retryUserClientId;
+    const firstClone = h.supersedeRetriedUserTurn.mock.calls[0]?.[1]?.retryUserClientId;
     expect(firstClone).toEqual(expect.any(String));
 
     h.setRunning(false);
@@ -2444,9 +2528,9 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(
-      h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.clientId,
-    ).toEqual(expect.any(String));
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.clientId).toEqual(
+      expect.any(String),
+    );
     expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
   });
 
@@ -2572,7 +2656,10 @@ describe('AgentInputCoordinator send transaction', () => {
 
     h.coordinator.enqueue(sid, makeItem('q-head', 'never dispatched'));
     await flush();
-    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'queue-head', clientId: 'q-head' });
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'q-head',
+    });
 
     await h.coordinator.retryLastError(sid);
     await flush();
@@ -2605,7 +2692,10 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.pendingQueue).toHaveLength(0);
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'brand new message' });
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'brand new message',
+    });
 
     // 新输入之后再点「重试」:recovery 已被放弃,retryLastError 必须 no-op,不得双发。
     h.setRunning(false);
@@ -2623,7 +2713,10 @@ describe('AgentInputCoordinator send transaction', () => {
 
     h.coordinator.enqueue(sid, makeItem('q-head', 'never dispatched'));
     await flush();
-    expect(latestProjection(h.projections).recovery).toEqual({ kind: 'queue-head', clientId: 'q-head' });
+    expect(latestProjection(h.projections).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'q-head',
+    });
 
     // queue-head recovery 语义不变:失败消息还躺在队首,新消息只排队,
     // 不触发对失败队首的静默重发。
@@ -2793,10 +2886,11 @@ describe('AgentInputCoordinator send transaction', () => {
   it('preserves the Pi image-capability marker for display-side localization', async () => {
     const h = createHarness();
     const sid = 'pi-image-capability';
-    h.sendToAgent.mockRejectedValueOnce(Object.assign(
-      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
-      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
-    ));
+    h.sendToAgent.mockRejectedValueOnce(
+      Object.assign(new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'), {
+        code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+      }),
+    );
 
     h.coordinator.enqueue(sid, makeItem('q-image', 'describe the screenshot'));
     await flush();
@@ -2889,7 +2983,9 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'host-preflight-failure';
     const first = makeItem('q-1', 'first');
 
-    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('WORKDIR_MISSING', 'working directory is missing'));
+    h.sendToAgent.mockResolvedValueOnce(
+      hostSendFailure('WORKDIR_MISSING', 'working directory is missing'),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -2901,11 +2997,13 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('working directory is missing');
     expect(mocks.createMessage).not.toHaveBeenCalled();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestWarnPayload()).toEqual(expect.objectContaining({
-      kind: 'host-send',
-      code: 'WORKDIR_MISSING',
-      clientId: 'q-1',
-    }));
+    expect(latestWarnPayload()).toEqual(
+      expect.objectContaining({
+        kind: 'host-send',
+        code: 'WORKDIR_MISSING',
+        clientId: 'q-1',
+      }),
+    );
   });
 
   it('keeps a maker-core dispatch failure recoverable with session-dispatch reason and no dispatch', async () => {
@@ -2913,7 +3011,9 @@ describe('AgentInputCoordinator send transaction', () => {
     const sid = 'session-dispatch-failure';
     const first = makeItem('q-1', 'first');
 
-    h.sendToAgent.mockResolvedValueOnce(sessionDispatchFailure('SEND/session-dispatch-failure/send'));
+    h.sendToAgent.mockResolvedValueOnce(
+      sessionDispatchFailure('SEND/session-dispatch-failure/send'),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -2925,37 +3025,47 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('SEND/session-dispatch-failure/send');
     expect(mocks.createMessage).not.toHaveBeenCalled();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestWarnPayload()).toEqual(expect.objectContaining({
-      kind: 'session-dispatch',
-      source: 'maker-ipc',
-      reason: 'cancelled-before-dispatch',
-      context: 'SEND/session-dispatch-failure/send',
-      clientId: 'q-1',
-    }));
+    expect(latestWarnPayload()).toEqual(
+      expect.objectContaining({
+        kind: 'session-dispatch',
+        source: 'maker-ipc',
+        reason: 'cancelled-before-dispatch',
+        context: 'SEND/session-dispatch-failure/send',
+        clientId: 'q-1',
+      }),
+    );
   });
 
   it('does not collapse host and maker-core dispatch failures into the same recovery text or log reason', async () => {
     const host = createHarness();
     const dispatch = createHarness();
 
-    host.sendToAgent.mockResolvedValueOnce(hostSendFailure('WORKDIR_MISSING', 'working directory is missing'));
+    host.sendToAgent.mockResolvedValueOnce(
+      hostSendFailure('WORKDIR_MISSING', 'working directory is missing'),
+    );
     host.coordinator.enqueue('host-failure-reason', makeItem('host-q', 'host'));
     await flush();
     const hostProjection = latestProjection(host.projections);
     const hostWarn = latestWarnPayload();
 
-    dispatch.sendToAgent.mockResolvedValueOnce(sessionDispatchFailure('SEND/dispatch-failure-reason/send'));
+    dispatch.sendToAgent.mockResolvedValueOnce(
+      sessionDispatchFailure('SEND/dispatch-failure-reason/send'),
+    );
     dispatch.coordinator.enqueue('dispatch-failure-reason', makeItem('dispatch-q', 'dispatch'));
     await flush();
     const dispatchProjection = latestProjection(dispatch.projections);
     const dispatchWarn = latestWarnPayload();
 
     expect(hostProjection.error).not.toBe(dispatchProjection.error);
-    expect(hostWarn).toEqual(expect.objectContaining({ kind: 'host-send', code: 'WORKDIR_MISSING' }));
-    expect(dispatchWarn).toEqual(expect.objectContaining({
-      kind: 'session-dispatch',
-      reason: 'cancelled-before-dispatch',
-    }));
+    expect(hostWarn).toEqual(
+      expect.objectContaining({ kind: 'host-send', code: 'WORKDIR_MISSING' }),
+    );
+    expect(dispatchWarn).toEqual(
+      expect.objectContaining({
+        kind: 'session-dispatch',
+        reason: 'cancelled-before-dispatch',
+      }),
+    );
   });
 
   it('does not auto-retry a failed queue head from later enqueue or Cancel', async () => {
@@ -3148,6 +3258,18 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.noteSessionClearBoundary).toHaveBeenCalledWith(sid, clearedAt);
     expect(order).toEqual(['boundary', 'projection']);
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+  });
+
+  it('invalidates an IPC preparation generation when clearSession wins', () => {
+    const h = createHarness();
+    const sid = 'clear-invalidates-ipc-preparation';
+    const generation = h.coordinator.getGeneration(sid);
+
+    expect(h.coordinator.isGenerationCurrent(sid, generation)).toBe(true);
+    h.coordinator.clearSession(sid);
+
+    expect(h.coordinator.isGenerationCurrent(sid, generation)).toBe(false);
+    expect(h.coordinator.getGeneration(sid)).toBe(generation + 1);
   });
 
   it('suppresses local-db broadcasts if clearSession wins during accepted persistence', async () => {
@@ -3668,16 +3790,21 @@ describe('AgentInputCoordinator send transaction', () => {
     const h = createHarness();
     const sid = 'file-only-active-retry';
     const fileOnly = makeItem('q-file', '', {
-      persistedContent: JSON.stringify({ text: '', files: [{ name: 'spec.pdf', path: '/repo/spec.pdf' }] }),
-      files: [{
-        id: 'file-1',
-        name: 'spec.pdf',
-        path: '/repo/spec.pdf',
-        ext: '.pdf',
-        size: 123,
-        category: 'pdf',
-        mimeType: 'application/pdf',
-      }],
+      persistedContent: JSON.stringify({
+        text: '',
+        files: [{ name: 'spec.pdf', path: '/repo/spec.pdf' }],
+      }),
+      files: [
+        {
+          id: 'file-1',
+          name: 'spec.pdf',
+          path: '/repo/spec.pdf',
+          ext: '.pdf',
+          size: 123,
+          category: 'pdf',
+          mimeType: 'application/pdf',
+        },
+      ],
       chatMessage: {
         clientId: 'q-file',
         role: 'user',
@@ -3722,7 +3849,10 @@ describe('AgentInputCoordinator send transaction', () => {
     firstAttempt.reject(new Error('workdir missing'));
     await flush();
 
-    expect(latestProjection(h.projections).pendingQueue.map((q) => q.text)).toEqual(['first', 'second']);
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.text)).toEqual([
+      'first',
+      'second',
+    ]);
     h.coordinator.remove(sid, first.clientId);
     await flush();
 
@@ -4009,52 +4139,49 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
     { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
     { agentKind: 'pi' as const, providerId: 'openai', model: 'gpt-5.5' },
-  ])('retries abort reconciliation after $agentKind abort settles before the live turn is idle', async ({
-    agentKind,
-    providerId,
-    model,
-  }) => {
-    vi.useFakeTimers();
-    const h = createHarness();
-    const sid = `stop-delayed-idle-${agentKind}`;
-    const first = makeItem('q-1', 'first', {
-      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
-    });
-    const second = makeItem('q-2', 'second', {
-      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind, providerId, model },
-    });
-    const abort = deferred<void>();
-    h.setAgentKind(agentKind);
-    h.abortSession.mockImplementationOnce(() => abort.promise);
-    h.reconcileTurnIdle
-      .mockReturnValueOnce(false)
-      .mockImplementationOnce(() => {
+  ])(
+    'retries abort reconciliation after $agentKind abort settles before the live turn is idle',
+    async ({ agentKind, providerId, model }) => {
+      vi.useFakeTimers();
+      const h = createHarness();
+      const sid = `stop-delayed-idle-${agentKind}`;
+      const first = makeItem('q-1', 'first', {
+        createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+      });
+      const second = makeItem('q-2', 'second', {
+        createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind, providerId, model },
+      });
+      const abort = deferred<void>();
+      h.setAgentKind(agentKind);
+      h.abortSession.mockImplementationOnce(() => abort.promise);
+      h.reconcileTurnIdle.mockReturnValueOnce(false).mockImplementationOnce(() => {
         h.setRunning(false);
         return true;
       });
 
-    h.coordinator.enqueue(sid, first);
-    await flush();
-    h.coordinator.enqueue(sid, second);
-    await flush();
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      h.coordinator.enqueue(sid, second);
+      await flush();
 
-    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
-    h.coordinator.resume(sid);
-    abort.resolve();
-    await flush();
+      h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+      h.coordinator.resume(sid);
+      abort.resolve();
+      await flush();
 
-    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(1);
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).pendingQueue).toEqual([second]);
+      expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(1);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue).toEqual([second]);
 
-    await vi.advanceTimersByTimeAsync(250);
-    await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
 
-    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
-    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
-  });
+      expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+      expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+    },
+  );
 
   it('retains an abort lock when owner switching hides the agent kind and live idle cannot be confirmed', async () => {
     vi.useFakeTimers();
@@ -4064,9 +4191,7 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
       const first = makeItem('q-1', 'first');
       const second = makeItem('q-2', 'second');
       h.setAgentKind(null);
-      h.reconcileTurnIdle
-        .mockReturnValueOnce(false)
-        .mockImplementationOnce(() => true);
+      h.reconcileTurnIdle.mockReturnValueOnce(false).mockImplementationOnce(() => true);
 
       h.coordinator.enqueue(sid, first);
       await flush();
@@ -4137,49 +4262,48 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
   it.each([
     { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
     { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
-  ])('invalidates an old abort token when $agentKind starts a new turn after a non-preserving stop', async ({
-    agentKind,
-    providerId,
-    model,
-  }) => {
-    const h = createHarness();
-    const sid = `stop-abort-new-turn-${agentKind}`;
-    const first = makeItem('q-1', 'first', {
-      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
-    });
-    const replacement = makeItem('q-new', 'replacement', {
-      createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind, providerId, model },
-    });
-    const abort = deferred<void>();
-    const beforeDispatch = deferred<void>();
-    h.setAgentKind(agentKind);
-    h.abortSession.mockImplementationOnce(() => abort.promise);
-    h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+  ])(
+    'invalidates an old abort token when $agentKind starts a new turn after a non-preserving stop',
+    async ({ agentKind, providerId, model }) => {
+      const h = createHarness();
+      const sid = `stop-abort-new-turn-${agentKind}`;
+      const first = makeItem('q-1', 'first', {
+        createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+      });
+      const replacement = makeItem('q-new', 'replacement', {
+        createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind, providerId, model },
+      });
+      const abort = deferred<void>();
+      const beforeDispatch = deferred<void>();
+      h.setAgentKind(agentKind);
+      h.abortSession.mockImplementationOnce(() => abort.promise);
+      h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
 
-    h.coordinator.enqueue(sid, first);
-    await flush();
-    h.coordinator.stop(sid, { keepQueue: false });
-    h.setRunning(false);
-    beforeDispatch.resolve();
-    await flush();
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      h.coordinator.stop(sid, { keepQueue: false });
+      h.setRunning(false);
+      beforeDispatch.resolve();
+      await flush();
 
-    // A non-preserving stop does not hold queueAbortPending, so a replacement
-    // turn can start while the old vendor abort promise is still unresolved.
-    h.coordinator.enqueue(sid, replacement);
-    await flush();
-    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      // A non-preserving stop does not hold queueAbortPending, so a replacement
+      // turn can start while the old vendor abort promise is still unresolved.
+      h.coordinator.enqueue(sid, replacement);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
 
-    abort.resolve();
-    await flush();
+      abort.resolve();
+      await flush();
 
-    const state = (
-      h.coordinator as unknown as {
-        getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
-      }
-    ).getState(sid);
-    expect(state.activeTurn?.item?.clientId).toBe('q-new');
-    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
-  });
+      const state = (
+        h.coordinator as unknown as {
+          getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
+        }
+      ).getState(sid);
+      expect(state.activeTurn?.item?.clientId).toBe('q-new');
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+    },
+  );
 
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
@@ -4283,7 +4407,10 @@ describe('AgentInputCoordinator steer transaction', () => {
     h.coordinator.enqueue(sid, second);
     await flush();
 
-    const ok = await h.coordinator.steer(sid, second, { removeFromQueue: true, touchUserSend: true });
+    const ok = await h.coordinator.steer(sid, second, {
+      removeFromQueue: true,
+      touchUserSend: true,
+    });
     await flush();
 
     // 同轮注入(2026-07-12 统一):Claude 与 Codex 走同一条 steerToAgent 路径,
@@ -4355,10 +4482,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     const sid = 'steer-pi-image-capability-retry';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'describe the screenshot');
-    h.steerToAgent.mockRejectedValueOnce(Object.assign(
-      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
-      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
-    ));
+    h.steerToAgent.mockRejectedValueOnce(
+      Object.assign(new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'), {
+        code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+      }),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4403,10 +4531,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     const sid = 'steer-pi-image-capability-active-error';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'describe the screenshot');
-    h.steerToAgent.mockRejectedValueOnce(Object.assign(
-      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
-      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
-    ));
+    h.steerToAgent.mockRejectedValueOnce(
+      Object.assign(new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'), {
+        code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+      }),
+    );
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4544,7 +4673,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     h.coordinator.stop(sid);
-    gate.reject(new Error('Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)'));
+    gate.reject(
+      new Error(
+        'Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)',
+      ),
+    );
     await expect(steerPromise).resolves.toBe(false);
     await flush();
 
@@ -4570,7 +4703,11 @@ describe('AgentInputCoordinator steer transaction', () => {
 
     // clearSession 是用户显式重置(generation bump):结果不确定也不塞回去。
     h.coordinator.clearSession(sid);
-    gate.reject(new Error('Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)'));
+    gate.reject(
+      new Error(
+        'Codex steer cancelled before acceptance; delivery uncertain (request already dispatched)',
+      ),
+    );
     await expect(steerPromise).resolves.toBe(false);
     await flush();
 
@@ -4608,7 +4745,9 @@ describe('AgentInputCoordinator steer transaction', () => {
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['composer-1']);
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+      'composer-1',
+    ]);
   });
 
   it('replays the terminal error recovery when a late steer ack lands after the turn failed', async () => {
@@ -4779,9 +4918,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     const sid = 'steer-persist-fails';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'second');
-    mocks.createMessage
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error('db down'));
+    mocks.createMessage.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('db down'));
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4811,9 +4948,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     const sid = 'steer-persist-fails-then-terminal-error';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'second');
-    mocks.createMessage
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error('db down'));
+    mocks.createMessage.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('db down'));
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4839,13 +4974,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     const second = makeItem('q-2', 'second');
     const persistStarted = deferred<void>();
     const persistSucceeded = deferred<void>();
-    mocks.createMessage
-      .mockResolvedValueOnce({})
-      .mockImplementationOnce(async () => {
-        persistStarted.resolve();
-        await persistSucceeded.promise;
-        return {};
-      });
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4923,13 +5056,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     const second = makeItem('q-2', 'second');
     const persistStarted = deferred<void>();
     const persistSucceeded = deferred<void>();
-    mocks.createMessage
-      .mockResolvedValueOnce({})
-      .mockImplementationOnce(async () => {
-        persistStarted.resolve();
-        await persistSucceeded.promise;
-        return {};
-      });
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -4966,13 +5097,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     const second = makeItem('q-2', 'second');
     const persistStarted = deferred<void>();
     const persistFailed = deferred<void>();
-    mocks.createMessage
-      .mockResolvedValueOnce({})
-      .mockImplementationOnce(async () => {
-        persistStarted.resolve();
-        await persistFailed.promise;
-        throw new Error('db down');
-      });
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistFailed.promise;
+      throw new Error('db down');
+    });
 
     h.coordinator.enqueue(sid, first);
     await flush();
@@ -5031,7 +5160,9 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
 
-    h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session steer-zombie has no active turn'));
+    h.steerToAgent.mockRejectedValueOnce(
+      new Error('[NO_ACTIVE_TURN] Session steer-zombie has no active turn'),
+    );
     // host 校准: 复核后清掉 stale busy tracker (镜像 register.ts 的接线行为)。
     h.reconcileTurnIdle.mockImplementationOnce(() => {
       h.setRunning(false);
@@ -5096,7 +5227,9 @@ describe('AgentInputCoordinator steer transaction', () => {
 
     expect(h.resolveSessionReferences).not.toHaveBeenCalled();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(h.sendToAgent.mock.calls[1]?.[1])).toContain('authoritative remote history');
+    expect(JSON.stringify(h.sendToAgent.mock.calls[1]?.[1])).toContain(
+      'authoritative remote history',
+    );
   });
 
   it('serializes steer attempts while a steer request is already in flight', async () => {
@@ -5180,14 +5313,17 @@ describe('AgentInputCoordinator steer transaction', () => {
       createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind: 'codex' },
     });
     h.setAgentKind('codex');
-    h.steerToAgent.mockImplementationOnce((_sessionId, _message, sendOpts) =>
-      new Promise<void>((_resolve, reject) => {
-        if (sendOpts.signal?.aborted) {
-          reject(new Error('cancelled'));
-          return;
-        }
-        sendOpts.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
-      }),
+    h.steerToAgent.mockImplementationOnce(
+      (_sessionId, _message, sendOpts) =>
+        new Promise<void>((_resolve, reject) => {
+          if (sendOpts.signal?.aborted) {
+            reject(new Error('cancelled'));
+            return;
+          }
+          sendOpts.signal?.addEventListener('abort', () => reject(new Error('cancelled')), {
+            once: true,
+          });
+        }),
     );
 
     h.coordinator.enqueue(sid, first);
@@ -5344,10 +5480,17 @@ describe('AgentInputCoordinator queue mutations', () => {
     const sid = 'edit-content';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'old', {
-      files: [{
-        id: 'file-old', name: 'old.png', path: '/tmp/old.png', ext: '.png',
-        size: 10, category: 'image', mimeType: 'image/png',
-      }],
+      files: [
+        {
+          id: 'file-old',
+          name: 'old.png',
+          path: '/tmp/old.png',
+          ext: '.png',
+          size: 10,
+          category: 'image',
+          mimeType: 'image/png',
+        },
+      ],
     });
 
     h.coordinator.enqueue(sid, first);
@@ -5362,22 +5505,39 @@ describe('AgentInputCoordinator queue mutations', () => {
     });
     h.coordinator.enqueue(sid, withMentions);
     await flush();
-    h.coordinator.updateContent(sid, withMentions.clientId, makeItem(withMentions.clientId, 'edited on phone'));
-    const mentionKept = latestProjection(h.projections).pendingQueue
-      .find((entry) => entry.clientId === withMentions.clientId);
+    h.coordinator.updateContent(
+      sid,
+      withMentions.clientId,
+      makeItem(withMentions.clientId, 'edited on phone'),
+    );
+    const mentionKept = latestProjection(h.projections).pendingQueue.find(
+      (entry) => entry.clientId === withMentions.clientId,
+    );
     expect(mentionKept?.mentions).toEqual([{ type: 'file', name: 'README.md', path: 'README.md' }]);
     // 显式数组才是权威替换:空数组 = 清空。
-    h.coordinator.updateContent(sid, withMentions.clientId, makeItem(withMentions.clientId, 'cleared', { mentions: [] }));
-    const mentionCleared = latestProjection(h.projections).pendingQueue
-      .find((entry) => entry.clientId === withMentions.clientId);
+    h.coordinator.updateContent(
+      sid,
+      withMentions.clientId,
+      makeItem(withMentions.clientId, 'cleared', { mentions: [] }),
+    );
+    const mentionCleared = latestProjection(h.projections).pendingQueue.find(
+      (entry) => entry.clientId === withMentions.clientId,
+    );
     expect(mentionCleared?.mentions).toBeUndefined();
 
     const replacement = makeItem(second.clientId, 'edited', {
       persistedContent: JSON.stringify({ text: 'edited', images: [], files: [] }),
-      files: [{
-        id: 'file-new', name: 'new.png', path: '/tmp/new.png', ext: '.png',
-        size: 20, category: 'image', mimeType: 'image/png',
-      }],
+      files: [
+        {
+          id: 'file-new',
+          name: 'new.png',
+          path: '/tmp/new.png',
+          ext: '.png',
+          size: 20,
+          category: 'image',
+          mimeType: 'image/png',
+        },
+      ],
       chatMessage: {
         clientId: second.clientId,
         role: 'user',
@@ -5551,11 +5711,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const h = createHarness();
     const sid = 'continue-in-flight-projection';
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     let projection = latestProjection(h.projections);
@@ -5574,11 +5732,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const h = createHarness();
     const sid = 'continue-owner-survives-steer';
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     let projection = latestProjection(h.projections);
@@ -5604,11 +5760,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const steerGate = deferred<void>();
     h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
@@ -5632,11 +5786,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const steerGate = deferred<void>();
     h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     h.setTurnGeneration(null as never);
@@ -5657,11 +5809,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const steerGate = deferred<void>();
     h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
@@ -5681,11 +5831,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     h.setAgentKind('codex');
     const sid = 'continue-owner-cleared-on-stop';
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
@@ -5710,11 +5858,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
       return sendSuccess();
     });
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await sendStarted.promise;
 
     h.coordinator.stop(sid);
@@ -5736,11 +5882,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     const sid = 'continue-cancelled-while-queued';
     h.setRunning(true);
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     let projection = latestProjection(h.projections);
@@ -5765,11 +5909,9 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
       text: 'Continue with the reviewed constraints.',
     }));
 
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
-      { resumeRestorePausedQueue: true },
-    );
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledWith(
@@ -5890,7 +6032,10 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     await h.coordinator.ensureQueueRestored(sid);
     await flush();
     expect(attempts).toBe(2);
-    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['r-1', 'q-1']);
+    expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual([
+      'r-1',
+      'q-1',
+    ]);
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['r-1', 'q-1']);
   });
 
@@ -5996,15 +6141,17 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
     const raw = `> <!-- cindy-composer-quote -->\n> selected\n\ninspect ${href}`;
     const item = makeItem('semantic-turn', raw, {
       persistedContent: JSON.stringify({ text: raw, quotesEncoded: true }),
-      agentReferences: [{
-        kind: 'message',
-        start: raw.indexOf(href),
-        end: raw.indexOf(href) + href.length,
-        href,
-        sessionId: 'session-a',
-        messageClientId: 'message-a',
-        text: 'Target message body',
-      }],
+      agentReferences: [
+        {
+          kind: 'message',
+          start: raw.indexOf(href),
+          end: raw.indexOf(href) + href.length,
+          href,
+          sessionId: 'session-a',
+          messageClientId: 'message-a',
+          text: 'Target message body',
+        },
+      ],
       chatMessage: {
         clientId: 'semantic-turn',
         role: 'user',
@@ -6077,7 +6224,9 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
 
   it('bypassGhostHooks:强行放行的重发不再询问钩子', async () => {
     const h = createHarness();
-    const screen = vi.fn(async () => ({ action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: 'x' }) as const);
+    const screen = vi.fn(
+      async () => ({ action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: 'x' }) as const,
+    );
     h.setScreenUserMessage(screen);
     h.coordinator.enqueue('s1', makeItem('c1', '剧透话', { bypassGhostHooks: true }));
     await flush();
@@ -6097,12 +6246,15 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
 
   it('rewrite:改写版落库 + 送 agent,回调 onUserMessageRewritten 带原文', async () => {
     const h = createHarness();
-    h.setScreenUserMessage(async () => ({
-      action: 'rewrite',
-      ghostId: 'g1',
-      ghostName: '哨兵',
-      text: '优化后的问题',
-    }) as const);
+    h.setScreenUserMessage(
+      async () =>
+        ({
+          action: 'rewrite',
+          ghostId: 'g1',
+          ghostName: '哨兵',
+          text: '优化后的问题',
+        }) as const,
+    );
     h.coordinator.enqueue('s1', makeItem('c1', '润色 原始问题'));
     await flush();
     // 送 agent 的消息是改写版(buildMakerUserMessage 读 head.text)
@@ -6111,8 +6263,9 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
     // 落库内容也是改写版(persistUserMessage.content = head.persistedContent)
     expect(
       mocks.createMessage.mock.calls.some(
-        (c) => (c[1] as { clientId?: string; content?: string }).clientId === 'c1'
-          && (c[1] as { content?: string }).content === '优化后的问题',
+        (c) =>
+          (c[1] as { clientId?: string; content?: string }).clientId === 'c1' &&
+          (c[1] as { content?: string }).content === '优化后的问题',
       ),
     ).toBe(true);
     // 回调带原文供留痕
@@ -6126,12 +6279,15 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
 
   it('rewrite:persistedContent 是 JSON 信封(带附件/引用)时只换 text 字段,引用不丢', async () => {
     const h = createHarness();
-    h.setScreenUserMessage(async () => ({
-      action: 'rewrite',
-      ghostId: 'g1',
-      ghostName: '哨兵',
-      text: '优化后的问题',
-    }) as const);
+    h.setScreenUserMessage(
+      async () =>
+        ({
+          action: 'rewrite',
+          ghostId: 'g1',
+          ghostName: '哨兵',
+          text: '优化后的问题',
+        }) as const,
+    );
     // stringifyUserContent 形态的信封:text 之外还有图片引用与引用块。
     const envelope = JSON.stringify({
       text: '润色 原始问题',
@@ -6152,23 +6308,29 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
 
   it('rewrite:marker 被移除时同步清除真实 quotesEncoded 标志', async () => {
     const h = createHarness();
-    h.setScreenUserMessage(async () => ({
-      action: 'rewrite',
-      ghostId: 'g1',
-      ghostName: '哨兵',
-      text: '> ordinary markdown after rewrite',
-    }) as const);
+    h.setScreenUserMessage(
+      async () =>
+        ({
+          action: 'rewrite',
+          ghostId: 'g1',
+          ghostName: '哨兵',
+          text: '> ordinary markdown after rewrite',
+        }) as const,
+    );
     const original = '> <!-- cindy-composer-quote -->\n> product quote\n\n润色 原始问题';
     const envelope = JSON.stringify({ text: original, quotesEncoded: true });
-    h.coordinator.enqueue('s1', makeItem('c1', original, {
-      persistedContent: envelope,
-      chatMessage: {
-        clientId: 'c1',
-        role: 'user',
-        content: original,
-        quotesEncoded: true,
-      },
-    }));
+    h.coordinator.enqueue(
+      's1',
+      makeItem('c1', original, {
+        persistedContent: envelope,
+        chatMessage: {
+          clientId: 'c1',
+          role: 'user',
+          content: original,
+          quotesEncoded: true,
+        },
+      }),
+    );
 
     await flush();
 
@@ -6187,12 +6349,15 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
     const h = createHarness();
     const href = 'cindy://session/session-a?message=message-a';
     const original = `inspect ${href}`;
-    h.setScreenUserMessage(async () => ({
-      action: 'rewrite',
-      ghostId: 'g1',
-      ghostName: '哨兵',
-      text: `rewritten ${href}`,
-    }) as const);
+    h.setScreenUserMessage(
+      async () =>
+        ({
+          action: 'rewrite',
+          ghostId: 'g1',
+          ghostName: '哨兵',
+          text: `rewritten ${href}`,
+        }) as const,
+    );
     const reference = {
       kind: 'message' as const,
       start: original.indexOf(href),
@@ -6202,13 +6367,16 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
       messageClientId: 'message-a',
       text: 'Target message body',
     };
-    h.coordinator.enqueue('s1', makeItem('c1', original, {
-      persistedContent: JSON.stringify({
-        text: original,
+    h.coordinator.enqueue(
+      's1',
+      makeItem('c1', original, {
+        persistedContent: JSON.stringify({
+          text: original,
+          agentReferences: [reference],
+        }),
         agentReferences: [reference],
       }),
-      agentReferences: [reference],
-    }));
+    );
 
     await flush();
 
@@ -6323,9 +6491,7 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     // 去重视角也看不到它 → 顺延重试 / 下一轮 cron 能重新入队,不被僵尸挡住
     expect(bySchedule(true)).toBe(false);
     expect(bySchedule(false)).toBe(false);
-    expect(
-      h.coordinator.hasQueuedItemWhere(sid, (item) => item.clientId === 'c1'),
-    ).toBe(false);
+    expect(h.coordinator.hasQueuedItemWhere(sid, (item) => item.clientId === 'c1')).toBe(false);
   });
 
   it('onAccepted 抛错取消 scheduler 项:放掉 activeTurn 并唤醒队列(不把会话钉死)', async () => {
@@ -6349,15 +6515,19 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(latestProjection(h.projections).recovery).toBeNull();
     // activeTurn 是内部态(不进 projection),但它正是 isDispatchBoundaryBusy 的判据
     expect(
-      (h.coordinator as unknown as { getState: (id: string) => { activeTurn: unknown } })
-        .getState(sid).activeTurn,
+      (h.coordinator as unknown as { getState: (id: string) => { activeTurn: unknown } }).getState(
+        sid,
+      ).activeTurn,
     ).toBeNull();
 
     // 派发边界确实放开了:紧接着入队的消息能被真正派发出去
-    h.sendToAgent.mockImplementationOnce(async () => ({
-      kind: 'session-dispatch',
-      dispatched: true,
-    }) as never);
+    h.sendToAgent.mockImplementationOnce(
+      async () =>
+        ({
+          kind: 'session-dispatch',
+          dispatched: true,
+        }) as never,
+    );
     h.coordinator.enqueue(sid, makeItem('c2', 'next one'));
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
@@ -6390,10 +6560,13 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     // 队列真的被唤醒了(recovery 不留就没人点 clearError,必须自己唤)。注意唤醒是
     // **等失败收尾的配对 done 到达之后**:第二十一轮起这条路会打配对标记,标记期间派发
     // 边界算忙 —— 旧 turn 的尾巴还在飞时就起新活,正是那一轮要防的错误归因。
-    h.sendToAgent.mockImplementationOnce(async () => ({
-      kind: 'session-dispatch',
-      dispatched: true,
-    }) as never);
+    h.sendToAgent.mockImplementationOnce(
+      async () =>
+        ({
+          kind: 'session-dispatch',
+          dispatched: true,
+        }) as never,
+    );
     h.coordinator.enqueue(sid, makeItem('c2', 'next one'));
     await flush();
     h.coordinator.onTurnEvent(sid, 'done');
@@ -6460,10 +6633,13 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     h.coordinator.onTurnEvent(sid, 'error', 'upstream went silent');
     await flush();
 
-    h.sendToAgent.mockImplementationOnce(async () => ({
-      kind: 'session-dispatch',
-      dispatched: true,
-    }) as never);
+    h.sendToAgent.mockImplementationOnce(
+      async () =>
+        ({
+          kind: 'session-dispatch',
+          dispatched: true,
+        }) as never,
+    );
     h.coordinator.enqueue(sid, makeItem('c2', 'next one'));
     await flush();
     // 配对标记仍在 → 新消息不该被派发
@@ -6482,9 +6658,10 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     const sid = 'sched-error-during-persist';
     let releasePersist!: () => void;
     mocks.createMessage.mockImplementationOnce(
-      () => new Promise<Record<string, never>>((resolve) => {
-        releasePersist = () => resolve({});
-      }),
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          releasePersist = () => resolve({});
+        }),
     );
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
@@ -6512,9 +6689,10 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     const sid = 'user-error-during-persist';
     let releasePersist!: () => void;
     mocks.createMessage.mockImplementationOnce(
-      () => new Promise<Record<string, never>>((resolve) => {
-        releasePersist = () => resolve({});
-      }),
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          releasePersist = () => resolve({});
+        }),
     );
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
@@ -6539,7 +6717,9 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     let releaseSend!: () => void;
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
-      await new Promise<void>((resolve) => { releaseSend = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
       return { kind: 'session-dispatch', dispatched: true } as never;
     });
     h.coordinator.enqueue(sid, makeItem('c1', 'hb', { origin: schedOrigin }));
@@ -6548,7 +6728,11 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     const state = (
       h.coordinator as unknown as {
         getState: (id: string) => {
-          activeTurn: { persisted: boolean; sendStarted: boolean; dispatchLifecycle?: string } | null;
+          activeTurn: {
+            persisted: boolean;
+            sendStarted: boolean;
+            dispatchLifecycle?: string;
+          } | null;
         };
       }
     ).getState(sid);
@@ -6571,7 +6755,9 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     let releaseSend!: () => void;
     h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
       await persistQueuedUserMessage(sessionId, sendOpts);
-      await new Promise<void>((resolve) => { releaseSend = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
       return { kind: 'session-dispatch', dispatched: true } as never;
     });
     h.coordinator.enqueue(sid, makeItem('c1', 'typed by hand'));
@@ -6705,11 +6891,9 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(projection.queuePaused).toBe(true);
     // 去重视角也看不到被丢弃的 scheduler 项 —— 后续 fire 不会被僵尸挡住。
     expect(
-      h.coordinator.hasQueuedItemWhere(
-        sid,
-        (item) => item.origin?.kind === 'scheduler',
-        { includeRecovery: true },
-      ),
+      h.coordinator.hasQueuedItemWhere(sid, (item) => item.origin?.kind === 'scheduler', {
+        includeRecovery: true,
+      }),
     ).toBe(false);
   });
 
@@ -6759,7 +6943,11 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     h.coordinator.enqueue(sid, makeItem('q-3', 'third'));
     await flush();
 
-    const replaced = h.coordinator.replaceQueuedMessage(sid, 'q-2', makeItem('q-2', 'second-edited'));
+    const replaced = h.coordinator.replaceQueuedMessage(
+      sid,
+      'q-2',
+      makeItem('q-2', 'second-edited'),
+    );
 
     expect(replaced).toBe(true);
     const projection = latestProjection(h.projections);
@@ -6865,11 +7053,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
         runId: 'run-1',
       },
     });
-    await failAfterDispatch(
-      h,
-      sid,
-      item,
-    );
+    await failAfterDispatch(h, sid, item);
 
     expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
     expect(h.onResumableTurnError).toHaveBeenCalledWith(
@@ -7456,7 +7640,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await flush();
 
     expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
-    expect(h.onUserEnqueue, 'host 必须先释放退避簿记与 Agent Island filter').toHaveBeenCalledWith(sid);
+    expect(h.onUserEnqueue, 'host 必须先释放退避簿记与 Agent Island filter').toHaveBeenCalledWith(
+      sid,
+    );
   });
 
   it('recovery 已被用户清掉时 autoRetryLastError 返回 false(调用方据此回滚额度)', async () => {
@@ -7540,10 +7726,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
 
     await expect(retry).resolves.toBe('superseded');
     await flush();
-    expect(
-      h.sendToAgent.mock.calls.length,
-      '不许往已经终止的会话补发续跑',
-    ).toBe(sendCallsBefore);
+    expect(h.sendToAgent.mock.calls.length, '不许往已经终止的会话补发续跑').toBe(sendCallsBefore);
   });
 
   it('延后结算:候选期不发布 error(一帧都不闪),接管后只有活动行', async () => {
@@ -7665,10 +7848,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
     ).resolves.toBe('superseded');
     await flush();
-    expect(
-      h.sendToAgent.mock.calls.length,
-      '不许在用户消息之前插一条自动续跑',
-    ).toBe(sendCallsBefore);
+    expect(h.sendToAgent.mock.calls.length, '不许在用户消息之前插一条自动续跑').toBe(
+      sendCallsBefore,
+    );
   });
 
   it('延后结算:非候选错误照旧立刻呈现(确定性失败不受本机制影响)', async () => {
@@ -7685,7 +7867,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
 
     h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
     await flush();
-    h.coordinator.onTurnEvent(sid, 'error', 'Invalid API key', { sdkError: 'authentication_failed' });
+    h.coordinator.onTurnEvent(sid, 'error', 'Invalid API key', {
+      sdkError: 'authentication_failed',
+    });
     await flush();
     expect(latestProjection(h.projections).error, '认证失效必须立刻报,不许被按住').toBe(
       'Invalid API key',

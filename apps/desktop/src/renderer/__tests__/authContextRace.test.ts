@@ -12,6 +12,7 @@ describe('AuthContext auth-state races', () => {
     resolve(process.cwd(), 'src/renderer/contexts/AuthContext.tsx'),
     'utf8',
   );
+  const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/App.tsx'), 'utf8');
 
   it('applies identity synchronously and resets session snapshot on account switch', () => {
     expect(source).toContain('activeDataOwnerIdRef.current !== state.dataOwnerId');
@@ -19,7 +20,7 @@ describe('AuthContext auth-state races', () => {
     expect(source).toContain('setUser(incoming);');
     // 防复活:renderer 不得再对业务 server 发起 role/资料水合请求。
     expect(source).not.toContain('meService');
-    expect(source).not.toContain("apiRequest<");
+    expect(source).not.toContain('apiRequest<');
     expect(source).not.toContain('getMe(');
   });
 
@@ -34,17 +35,28 @@ describe('AuthContext auth-state races', () => {
   });
 
   it('publishes a data-owner generation at every auth boundary', () => {
+    expect(source).toContain('cancelRemoteOptimisticSendsForDataOwnerBoundary();');
     expect(source).toContain('setDataOwnerGeneration(dataOwnerId);');
     expect(source).toContain('invalidateProvidersSnapshot();');
     expect(source).toContain('publishDataOwnerGeneration(state.dataOwnerId);');
-    expect(source).toContain('// Invalidate in-flight remote sends before the confirmation dialog resolves.');
+    expect(source).toContain(
+      '// Invalidate in-flight remote sends before the confirmation dialog resolves.',
+    );
     expect(source.match(/publishDataOwnerGeneration\(null\);/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source.indexOf('cancelRemoteOptimisticSendsForDataOwnerBoundary();')).toBeLessThan(
+      source.indexOf('setDataOwnerGeneration(dataOwnerId);'),
+    );
     const enterLocal = source.indexOf('const enterLocalMode = useCallback');
     const exitLocal = source.indexOf('const exitLocalMode = useCallback');
-    expect(source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', enterLocal))
-      .toBeLessThan(exitLocal);
-    expect(source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', exitLocal))
-      .toBeGreaterThan(exitLocal);
+    expect(
+      source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', enterLocal),
+    ).toBeLessThan(exitLocal);
+    expect(
+      source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', exitLocal),
+    ).toBeGreaterThan(exitLocal);
+    expect(source).toContain('setDataOwnerRecoveryEpoch((epoch) => epoch + 1);');
+    expect(appSource).toContain("`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`");
+    expect(appSource).toContain('<RouterProvider key={ownerKey} router={router} />');
   });
 
   it('projects browser waiting state before the main-process loopback request settles', () => {

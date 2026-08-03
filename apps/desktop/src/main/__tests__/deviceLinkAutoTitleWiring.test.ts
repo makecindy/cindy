@@ -24,8 +24,12 @@ const sessionsSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 function handlerBody(channel: string, nextChannel: string): string {
-  const start = registerSource.indexOf(`ipcMain.handle(MAKER_INVOKE.${channel}`);
-  const end = registerSource.indexOf(`ipcMain.handle(MAKER_INVOKE.${nextChannel}`, start);
+  const start = registerSource.search(
+    new RegExp(`ipcMain\\.handle\\(\\s*MAKER_INVOKE\\.${channel}`),
+  );
+  const nextPattern = new RegExp(`ipcMain\\.handle\\(\\s*MAKER_INVOKE\\.${nextChannel}`);
+  const nextMatch = nextPattern.exec(registerSource.slice(start + 1));
+  const end = nextMatch ? start + 1 + nextMatch.index : -1;
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
   return registerSource.slice(start, end);
@@ -60,6 +64,130 @@ describe('device-link auto-title wiring', () => {
     expect(body.indexOf('commitAutoTitle()')).toBeGreaterThan(acceptAt);
   });
 
+  it('每个异步阶段都受 clear generation 与终态 session 行双重保护', () => {
+    for (const [channel, nextChannel, acceptToken, generationGuardToken] of [
+      [
+        'INPUT_ENQUEUE',
+        'INPUT_COMPACT',
+        'inputCoordinator.enqueue',
+        'assertCurrentInputGeneration();',
+      ],
+      [
+        'INPUT_STEER',
+        'INPUT_STOP',
+        'await inputCoordinator.steer(',
+        'if (!isCurrentInputGeneration())',
+      ],
+    ] as const) {
+      const body = handlerBody(channel, nextChannel);
+      const deviceLinkAt = body.indexOf('const deviceLinkInvoke = isDeviceLinkInvoke();');
+      const earlySessionGuardAt = body.indexOf(
+        'if (deviceLinkInvoke) await getInputSessionRow(sid);',
+      );
+      const generationAt = body.indexOf(
+        'const inputGeneration = inputCoordinator.getGeneration(sid);',
+      );
+      const stages = [
+        'await inputCoordinator.ensureQueueRestored(sid)',
+        'await materializeQueuedOssAttachments',
+        'await hydrateQueuedAgentReferences',
+        'await prepareDeviceLinkAutoTitle(sid, queued)',
+      ];
+      const acceptAt = body.indexOf(acceptToken);
+
+      expect(deviceLinkAt).toBeGreaterThan(-1);
+      expect(generationAt).toBeGreaterThan(deviceLinkAt);
+      expect(earlySessionGuardAt).toBeGreaterThan(deviceLinkAt);
+      expect(earlySessionGuardAt).toBeGreaterThan(generationAt);
+      const earlyGenerationGuardAt = body.indexOf(generationGuardToken, earlySessionGuardAt);
+      expect(earlyGenerationGuardAt).toBeGreaterThan(earlySessionGuardAt);
+      let cursor = earlyGenerationGuardAt;
+      let finalGuardAt = -1;
+      for (const stage of stages) {
+        const awaitAt = body.indexOf(stage, cursor);
+        const guardAt = body.indexOf(generationGuardToken, awaitAt);
+        expect(awaitAt, `missing ${stage}`).toBeGreaterThan(cursor);
+        expect(guardAt, `missing generation guard after ${stage}`).toBeGreaterThan(awaitAt);
+        cursor = guardAt;
+        finalGuardAt = guardAt;
+      }
+      const finalSessionGuardAt = body.indexOf(
+        'if (deviceLinkInvoke) await getInputSessionRow(sid);',
+        cursor,
+      );
+      expect(finalSessionGuardAt).toBeGreaterThan(cursor);
+      finalGuardAt = body.indexOf(generationGuardToken, finalSessionGuardAt);
+      expect(finalGuardAt).toBeGreaterThan(finalSessionGuardAt);
+      expect(acceptAt).toBeGreaterThan(finalGuardAt);
+      expect(body.match(/if \(deviceLinkInvoke\) await getInputSessionRow\(sid\);/g)).toHaveLength(
+        2,
+      );
+
+      if (channel === 'INPUT_ENQUEUE') {
+        expect(body).toContain('REMOTE_OPTIMISTIC_INPUT_SUPERSEDED');
+        expect(body).not.toContain(
+          'if (!isCurrentInputGeneration()) return inputCoordinator.getProjection(sid);',
+        );
+      } else {
+        expect(body).toContain('if (!isCurrentInputGeneration()) return false;');
+      }
+
+      if (channel === 'INPUT_STEER') {
+        expect(body).toContain(
+          'allowMissingTrustedContexts: deviceLinkInvoke && steerOpts?.removeFromQueue === true',
+        );
+        const steerAt = body.indexOf('await inputCoordinator.steer(', finalGuardAt);
+        const postSteerGuard = body.indexOf('if (!isCurrentInputGeneration())', steerAt);
+        const commitAt = body.indexOf('if (accepted) commitAutoTitle();', postSteerGuard);
+        expect(steerAt).toBeGreaterThan(finalGuardAt);
+        expect(postSteerGuard).toBeGreaterThan(steerAt);
+        expect(commitAt).toBeGreaterThan(postSteerGuard);
+      }
+    }
+    expect(registerSource).toContain("if (!row || row.status === 'deleted')");
+    expect(registerSource).not.toContain("currentSessionRow.status === 'archived'");
+  });
+
+  it('排队编辑的异步物化不会跨 clear 边界提交旧内容', () => {
+    const body = handlerBody('INPUT_UPDATE_CONTENT', 'INPUT_MOVE');
+    expect(body).toContain('const remote = isDeviceLinkInvoke();');
+    expect(body).toContain('if (parsed.clientId !== cid)');
+
+    const generationAt = body.indexOf(
+      'const inputGeneration = inputCoordinator.getGeneration(sid);',
+    );
+    const earlySessionGuardAt = body.indexOf('if (remote) await getInputSessionRow(sid);');
+    const earlyGenerationGuardAt = body.indexOf(
+      'if (!isCurrentInputGeneration())',
+      earlySessionGuardAt,
+    );
+    const materializeAt = body.indexOf('await materializeQueuedOssAttachments');
+    const materializeGuardAt = body.indexOf('if (!isCurrentInputGeneration())', materializeAt);
+    const hydrateAt = body.indexOf('await hydrateQueuedAgentReferences', materializeAt);
+    const hydrateGuardAt = body.indexOf('if (!isCurrentInputGeneration())', hydrateAt);
+    const finalSessionGuardAt = body.indexOf(
+      'if (remote) await getInputSessionRow(sid);',
+      hydrateAt,
+    );
+    const finalGenerationGuardAt = body.indexOf(
+      'if (!isCurrentInputGeneration())',
+      finalSessionGuardAt,
+    );
+    const updateAt = body.indexOf('inputCoordinator.updateContent', finalSessionGuardAt);
+
+    expect(generationAt).toBeGreaterThan(-1);
+    expect(earlySessionGuardAt).toBeGreaterThan(generationAt);
+    expect(earlyGenerationGuardAt).toBeGreaterThan(earlySessionGuardAt);
+    expect(materializeAt).toBeGreaterThan(earlyGenerationGuardAt);
+    expect(materializeGuardAt).toBeGreaterThan(materializeAt);
+    expect(hydrateAt).toBeGreaterThan(materializeGuardAt);
+    expect(hydrateGuardAt).toBeGreaterThan(hydrateAt);
+    expect(finalSessionGuardAt).toBeGreaterThan(hydrateGuardAt);
+    expect(finalGenerationGuardAt).toBeGreaterThan(finalSessionGuardAt);
+    expect(updateAt).toBeGreaterThan(finalGenerationGuardAt);
+    expect(body).toContain('queued.clientId must match clientId');
+  });
+
   it('只对远控调用生效:本机 renderer 走 maker:auto-title,不在这里重复起名', () => {
     const start = registerSource.indexOf('const prepareDeviceLinkAutoTitle =');
     expect(start).toBeGreaterThan(-1);
@@ -76,14 +204,20 @@ describe('user rename notification ordering', () => {
     // 智能标题仍能满足 `WHERE title = 期望值` 把用户刚保存的名字盖掉(review P1)。
     for (const [note, write] of [
       // local-db:sessions:update(本机重命名框)
-      ["if (typeof p.title === 'string') noteUserTitleWritten(sid);",
-       'await db.update(sessions).set(setObj).where(eq(sessions.id, sid));'],
+      [
+        "if (typeof p.title === 'string') noteUserTitleWritten(sid);",
+        'await db.update(sessions).set(setObj).where(eq(sessions.id, sid));',
+      ],
       // patchSessionMetaInDb(device-link 远程改名)
-      ['if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
-       'await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));'],
+      [
+        'if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
+        'await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));',
+      ],
       // renameSessionTitlesInDb(MCP 批量改名)
-      ['for (const change of changes) noteUserTitleWritten(change.sessionId);',
-       "getDbClient()\n    .tx('sessions.renameTitles'"],
+      [
+        'for (const change of changes) noteUserTitleWritten(change.sessionId);',
+        "getDbClient()\n    .tx('sessions.renameTitles'",
+      ],
     ] as const) {
       const noteAt = sessionsSource.indexOf(note);
       expect(noteAt).toBeGreaterThan(-1);
