@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -25,6 +25,7 @@ import { AddMarketplaceDialog } from '../AddMarketplaceDialog';
 const addSource = vi.fn(async () => ({}) as never);
 const pickLocalSource = vi.fn(async () => ({ canceled: false, summary: {} }) as never);
 const resolveDefaultBranch = vi.fn(async () => null as string | null);
+const gitPreflight = vi.fn(async () => ({ ok: true, version: '2.43.0' }));
 
 beforeEach(() => {
   addSource.mockClear();
@@ -32,6 +33,8 @@ beforeEach(() => {
   pickLocalSource.mockClear();
   resolveDefaultBranch.mockReset();
   resolveDefaultBranch.mockResolvedValue(null);
+  gitPreflight.mockReset();
+  gitPreflight.mockResolvedValue({ ok: true, version: '2.43.0' });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     pluginMarket: {
       addSource,
@@ -40,7 +43,7 @@ beforeEach(() => {
       listSources: vi.fn(async () => []),
       removeSource: vi.fn(async () => ({ ok: true })),
       refreshSource: vi.fn(),
-      gitPreflight: vi.fn(async () => ({ ok: true, version: '2.43.0' })),
+      gitPreflight,
     },
   };
 });
@@ -50,10 +53,19 @@ function input(key: string): HTMLElement {
   return screen.getByPlaceholderText(key);
 }
 
+async function waitForGitReady(): Promise<void> {
+  await waitFor(() => expect(gitPreflight).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await gitPreflight.mock.results[0]?.value;
+  });
+}
+
 describe('AddMarketplaceDialog', () => {
   it('prefills the remote default branch after the source loses focus', async () => {
     resolveDefaultBranch.mockResolvedValueOnce('main');
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    await waitForGitReady();
 
     const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
     const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;
@@ -65,9 +77,27 @@ describe('AddMarketplaceDialog', () => {
     expect(screen.getByText('settings.ghosts.market.sources.defaultBranchDetected')).toBeTruthy();
   });
 
+  it('does not probe the remote default branch when Git is unavailable', async () => {
+    gitPreflight.mockResolvedValueOnce({ ok: false, error: 'git unavailable' });
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    await screen.findByText('settings.ghosts.market.sources.gitUnavailable');
+    const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
+    const refField = input('settings.ghosts.market.sources.refPlaceholder');
+    fireEvent.change(sourceField, { target: { value: 'openai/plugins' } });
+    fireEvent.blur(sourceField);
+
+    expect(resolveDefaultBranch).not.toHaveBeenCalled();
+    expect(refField.getAttribute('aria-busy')).toBe('false');
+    expect(
+      screen.queryByText('settings.ghosts.market.sources.defaultBranchResolving'),
+    ).toBeNull();
+  });
+
   it('does not overwrite a user-entered Git ref', async () => {
     resolveDefaultBranch.mockResolvedValueOnce('main');
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+    await waitForGitReady();
 
     const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
     const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;
@@ -87,6 +117,7 @@ describe('AddMarketplaceDialog', () => {
     });
     resolveDefaultBranch.mockReturnValueOnce(pending);
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+    await waitForGitReady();
 
     const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
     const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;

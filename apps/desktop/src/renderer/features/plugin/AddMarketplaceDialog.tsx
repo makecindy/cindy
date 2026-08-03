@@ -156,7 +156,14 @@ export function AddMarketplaceDialog({
 
   const resolveDefaultBranch = useCallback(() => {
     const source = sourceInputRef.current.trim();
-    if (!source || looksLikeLocalPath(source) || refInputRef.current.trim()) return;
+    if (
+      gitReady !== true ||
+      !source ||
+      looksLikeLocalPath(source) ||
+      refInputRef.current.trim()
+    ) {
+      return;
+    }
 
     const requestId = ++defaultBranchRequestRef.current;
     setResolvingDefaultBranch(true);
@@ -180,7 +187,7 @@ export function AddMarketplaceDialog({
       .finally(() => {
         if (requestId === defaultBranchRequestRef.current) setResolvingDefaultBranch(false);
       });
-  }, []);
+  }, [gitReady]);
 
   const addDisabled =
     adding ||
