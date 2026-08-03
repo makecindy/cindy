@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
+  CirclePlus,
   FoldVertical,
   GitFork,
   Play,
@@ -96,9 +97,10 @@ interface ErrorBannerProps {
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
   /** 上下文超限(context-overflow)时的「压缩上下文」入口。父组件只对支持手动
-   *  compact 的会话传(codex 走服务端自动压缩没有该入口,与 Context 环同款门控);
-   *  不传时超限分支只显示文案 + 新建任务引导,不显示按钮。 */
+   *  compact 的会话传(codex 走服务端自动压缩没有该入口,与 Context 环同款门控)。 */
   onCompactContext?: () => void | Promise<void>;
+  /** 无手动 compact 能力的 live 会话使用真正可点击的「新建任务」恢复入口。 */
+  onNewSession?: () => void;
   /** 当前 error 是非终止的 recoverableError(turn 还在跑,agent/daemon 在自动
    *  重试,如 codex 网络 retry-loop 透出)。网络类分支据此区分文案:「正在自动
    *  重试…」vs「服务暂时不可达,可点击重试」。历史尾部行恒为 false。 */
@@ -127,6 +129,7 @@ export function ErrorBanner({
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
   onCompactContext,
+  onNewSession,
   isRecoverable = false,
   style,
   className,
@@ -639,6 +642,23 @@ export function ErrorBanner({
         >
           <FoldVertical size={12} />
           {t('chat.errorBanner.compactContext')}
+        </button>
+      )}
+      {isContextOverflowErr && !onCompactContext && onNewSession && (
+        // Codex 没有手动 compact 协议：live 横幅必须给实际可执行的逃生口，而不是
+        // 只写一句「新建任务」。创建仍交给既有 draft 路由，不在横幅里直接落库。
+        <button
+          type="button"
+          onClick={onNewSession}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.newSessionTitle')}
+        >
+          <CirclePlus size={12} />
+          {t('chat.errorBanner.newSession')}
         </button>
       )}
       {isSilentStopExhausted && onSilentStopContinue && (

@@ -11,9 +11,15 @@ import {
  * 稳定 reason key 优先、文案 pattern 兜底(历史持久化错误行只有原文)。
  */
 describe('isContextOverflowError', () => {
-  it('trusts the stable reason key regardless of message text', () => {
+  it('trusts a stable reason over the message text', () => {
     expect(isContextOverflowError('opaque upstream failure', CONTEXT_OVERFLOW_REASON)).toBe(true);
     expect(isContextOverflowError('opaque upstream failure', 'some-other-reason')).toBe(false);
+    expect(
+      isContextOverflowError(
+        'Your input exceeds the context window of this model.',
+        'upstream-overload',
+      ),
+    ).toBe(false);
   });
 
   it('falls back to message patterns for persisted rows without a reason', () => {
@@ -35,5 +41,15 @@ describe('isContextOverflowError', () => {
     ).toBe(false);
     expect(isContextOverflowError('fetch failed: ECONNREFUSED')).toBe(false);
     expect(isContextOverflowError('401 Unauthorized: Missing bearer')).toBe(false);
+  });
+
+  it('does not confuse rate, output, or tool argument limits with context overflow', () => {
+    expect(isContextOverflowError('Rate limit exceeded: too many tokens per minute')).toBe(false);
+    expect(isContextOverflowError('Maximum output tokens reached: too many tokens')).toBe(false);
+    expect(
+      isContextOverflowError(
+        'Tool argument validation failed: input length exceeds 1000 characters',
+      ),
+    ).toBe(false);
   });
 });

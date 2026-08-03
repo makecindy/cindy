@@ -23,12 +23,12 @@
  */
 export const CONTEXT_OVERFLOW_REASON = 'context-overflow';
 
-/** 措辞集合与 maker-core 侧同源(Anthropic / OpenAI / litellm·Azure / 通用网关)。 */
+/** 措辞集合与 maker-core 侧同源(Anthropic / OpenAI / litellm·Azure)。 */
 const CONTEXT_OVERFLOW_RE =
-  /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
+  /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded/i;
 
 /** 是否是上下文超限类错误。命中 = 隐藏 Retry,给出压缩上下文 / 新建任务入口。 */
 export function isContextOverflowError(message: string, reason?: string | null): boolean {
-  if (reason === CONTEXT_OVERFLOW_REASON) return true;
+  if (reason !== undefined && reason !== null) return reason === CONTEXT_OVERFLOW_REASON;
   return CONTEXT_OVERFLOW_RE.test(message);
 }

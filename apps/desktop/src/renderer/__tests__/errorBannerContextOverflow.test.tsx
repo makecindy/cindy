@@ -82,19 +82,23 @@ describe('ErrorBanner context-overflow guidance (#1429)', () => {
     expect(screen.getByText('chat.errorBanner.contextOverflow')).toBeTruthy();
   });
 
-  it('falls back to new-task guidance without a compact entry (codex sessions)', () => {
+  it('offers a real new-session action without compact support (codex sessions)', () => {
+    const onNewSession = vi.fn();
     render(
       createElement(ErrorBanner, {
         error: OVERFLOW_ERROR,
         retryText: 'retry-token',
         onRetry: vi.fn(),
         agentKind: 'codex',
+        onNewSession,
       }),
     );
 
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.compactContextTitle')).toBeNull();
     expect(screen.getByText('chat.errorBanner.contextOverflowNoCompact')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('chat.errorBanner.newSessionTitle'));
+    expect(onNewSession).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the raw error inspectable behind the collapse toggle', () => {
