@@ -33,6 +33,32 @@ describe('createWindowsFileUrlOpener', () => {
     );
   });
 
+  it.each([
+    ['C:\\CustomWindows', 'C:\\CustomWindows\\System32\\rundll32.exe'],
+    ['C:\\Windows\\System32', 'C:\\Windows\\System32\\rundll32.exe'],
+    ['\\\\server\\share', 'C:\\Windows\\System32\\rundll32.exe'],
+    ['//server/share', 'C:\\Windows\\System32\\rundll32.exe'],
+    ['relative\\windows', 'C:\\Windows\\System32\\rundll32.exe'],
+  ])('resolves %s to a trusted rundll32 path', (windowsDir, expectedPath) => {
+    const execFile = vi.fn((_file, _args, _options, callback) => {
+      callback(null, '', '');
+    });
+    const openUrl = createWindowsFileUrlOpener({
+      platform: 'win32',
+      windowsDir,
+      execFile,
+    });
+
+    void openUrl?.('file:///C:/tmp/preview.html');
+
+    expect(execFile).toHaveBeenCalledWith(
+      expectedPath,
+      ['url.dll,FileProtocolHandler', 'file:///C:/tmp/preview.html'],
+      { windowsHide: true },
+      expect.any(Function),
+    );
+  });
+
   it('returns the Windows handler error without exposing a shell command', async () => {
     const execFile = vi.fn((_file, _args, _options, callback) => {
       callback(new Error('handler failed'), '', 'URL handler unavailable');

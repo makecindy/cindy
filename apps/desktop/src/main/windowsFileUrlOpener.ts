@@ -11,6 +11,25 @@ export interface WindowsFileUrlOpenerOptions {
   ) => unknown;
 }
 
+const DEFAULT_WINDOWS_DIR = 'C:\\Windows';
+
+function resolveRundll32Path(windowsDir: string | undefined): string {
+  const candidate = windowsDir?.trim();
+  const normalized = candidate ? path.win32.normalize(candidate) : '';
+  const isLocalAbsolutePath = /^[A-Za-z]:[\\/]/.test(candidate ?? '');
+  const isUncPath = candidate?.startsWith('\\\\') || candidate?.startsWith('//');
+
+  if (!normalized || !isLocalAbsolutePath || isUncPath) {
+    return path.win32.join(DEFAULT_WINDOWS_DIR, 'System32', 'rundll32.exe');
+  }
+
+  if (path.win32.basename(normalized).toLowerCase() === 'system32') {
+    return path.win32.join(normalized, 'rundll32.exe');
+  }
+
+  return path.win32.join(normalized, 'System32', 'rundll32.exe');
+}
+
 /**
  * Create a Windows-only launcher that passes the complete file URL as an argv
  * value. Direct execFile avoids cmd.exe percent expansion and command parsing.
@@ -22,8 +41,7 @@ export function createWindowsFileUrlOpener(
   // Never fall back to PATH lookup for this privileged URL handoff. WINDIR is
   // normally present, but the fixed default keeps a stripped-down environment
   // from becoming an executable-search-path trust boundary.
-  const windowsRoot = options.windowsDir || 'C:\\Windows';
-  const rundll32 = path.win32.join(windowsRoot, 'System32', 'rundll32.exe');
+  const rundll32 = resolveRundll32Path(options.windowsDir);
 
   return (fileUrl) =>
     new Promise<void>((resolve, reject) => {
