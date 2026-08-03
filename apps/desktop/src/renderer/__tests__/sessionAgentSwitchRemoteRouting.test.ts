@@ -881,6 +881,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain(': makerApiFor(sourceSessionId);');
   });
 
+  it('远程只切模型沿用当前 provider,避免 JSON optional 占位清除来源', () => {
+    const start = source.indexOf('const performModelChange = useCallback(');
+    const end = source.indexOf('const handleModelChange = useCallback(', start);
+    const body = source.slice(start, end);
+    expect(body).toMatch(
+      /remoteMaker\.setModel\(\s*sessionId,\s*newModelId,\s*selectedProviderId,\s*expectedAgentSwitchRevision,/,
+    );
+  });
+
   it('await 返回后做会话作用域校验:旧会话响应不得借最新 ref 写进当前会话', () => {
     expect(source).toContain(
       'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',

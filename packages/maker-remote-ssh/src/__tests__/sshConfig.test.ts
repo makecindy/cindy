@@ -59,6 +59,25 @@ describe('readSshConfig', () => {
     expect(await readSshConfig(scratchFile)).toEqual([]);
   });
 
+  it('recognizes Host directives case-insensitively', async () => {
+    await fs.writeFile(scratchFile, [
+      'host lowercase',
+      '  hostname 10.0.0.1',
+      '  user alice',
+      '',
+      'hOsT mixedcase',
+      '  HoStNaMe 10.0.0.2',
+      '  UsEr bob',
+      '',
+    ].join('\n'));
+
+    const hosts = await readSshConfig(scratchFile);
+    expect(hosts).toMatchObject([
+      { id: 'lowercase', hostname: '10.0.0.1', user: 'alice' },
+      { id: 'mixedcase', hostname: '10.0.0.2', user: 'bob' },
+    ]);
+  });
+
   it('skips wildcard / pattern / negated host entries', async () => {
     await fs.writeFile(scratchFile, [
       'Host *',
@@ -83,6 +102,27 @@ describe('readSshConfig', () => {
 // ── upsertHost + readSshConfig round-trip ────────────────────────────────────
 
 describe('upsertHost round-trip', () => {
+  it('replaces an existing lowercase host block when alias collides', async () => {
+    await fs.writeFile(scratchFile, [
+      'host foo',
+      '  hostname old',
+      '  user me',
+      '  ProxyJump bastion',
+      '',
+    ].join('\n'));
+
+    await upsertHost(host({ id: 'foo', hostname: 'new', user: 'me' }), scratchFile);
+
+    const raw = await fs.readFile(scratchFile, 'utf8');
+    expect(raw).not.toMatch(/hostname old/i);
+    expect(raw).toMatch(/Host foo/);
+    expect(raw).toMatch(/HostName new/);
+    expect(raw).not.toMatch(/ProxyJump bastion/);
+    expect(await readSshConfig(scratchFile)).toMatchObject([
+      { id: 'foo', hostname: 'new' },
+    ]);
+  });
+
   it('round-trips an agent-only host (no IdentityFile)', async () => {
     const h = host({ id: 'foo', hostname: '10.0.0.1', user: 'alice', authMethod: 'agent' });
     await upsertHost(h, scratchFile);
@@ -228,6 +268,36 @@ describe('updateHostFields', () => {
     expect(raw).toMatch(/Port\s+2222/);
   });
 
+  it('updates a lowercase host block without replacing hand-written directives', async () => {
+    await fs.writeFile(scratchFile, [
+      'host foo',
+      '  hostname 10.0.0.1',
+      '  user alice',
+      '  ProxyJump bastion',
+      '',
+    ].join('\n'));
+
+    await updateHostFields(host({
+      id: 'foo',
+      hostname: '10.0.0.2',
+      user: 'bob',
+      port: 2222,
+      authMethod: 'agent',
+    }), scratchFile);
+
+    const raw = await fs.readFile(scratchFile, 'utf8');
+    expect(raw).toMatch(/^host foo/m);
+    expect(raw).toMatch(/HostName\s+10\.0\.0\.2/i);
+    expect(raw).toMatch(/User\s+bob/i);
+    expect(raw).toMatch(/Port\s+2222/i);
+    expect(raw).toMatch(/ProxyJump\s+bastion/);
+
+    const back = await readSshConfig(scratchFile);
+    expect(back).toMatchObject([
+      { id: 'foo', hostname: '10.0.0.2', user: 'bob', port: 2222 },
+    ]);
+  });
+
   it('upserts when the host block does not exist on disk', async () => {
     // Empty file → updateHostFields should fall back to upsertHost rather than throw.
     await fs.writeFile(scratchFile, '');
@@ -265,6 +335,25 @@ describe('updateHostFields', () => {
 // ── removeHost ───────────────────────────────────────────────────────────────
 
 describe('removeHost', () => {
+  it('removes a lowercase host block', async () => {
+    await fs.writeFile(scratchFile, [
+      'hOsT foo',
+      '  HoStNaMe 10.0.0.1',
+      '  User alice',
+      '',
+      'Host bar',
+      '  HostName 10.0.0.2',
+      '  User bob',
+      '',
+    ].join('\n'));
+
+    await removeHost('foo', scratchFile);
+
+    expect(await readSshConfig(scratchFile)).toMatchObject([
+      { id: 'bar', hostname: '10.0.0.2', user: 'bob' },
+    ]);
+  });
+
   it('drops the named host block', async () => {
     await upsertHost(host({ id: 'a' }), scratchFile);
     await upsertHost(host({ id: 'b' }), scratchFile);

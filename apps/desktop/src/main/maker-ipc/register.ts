@@ -30,7 +30,10 @@ import type {
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
-import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
+import {
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+} from '@cindy/device-link';
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -545,6 +548,7 @@ import {
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
+import { normalizeDeviceLinkSetModelWireArgs } from './setModelWireArgs.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -565,7 +569,11 @@ import {
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
-import { isDeviceLinkInvoke, isMobileControllerInvoke } from '../device-link/invoke-context.js';
+import {
+  deviceLinkInvokeControllerSupports,
+  isDeviceLinkInvoke,
+  isMobileControllerInvoke,
+} from '../device-link/invoke-context.js';
 import {
   buildMobileClientPromptNote,
   stampMobileClientOrigin,
@@ -9415,6 +9423,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const normalizedWireArgs = normalizeDeviceLinkSetModelWireArgs(
+      isDeviceLinkInvoke(),
+      deviceLinkInvokeControllerSupports(
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ),
+      providerId,
+      expectedAgentSwitchRevision,
+      selection,
+    );
+    providerId = normalizedWireArgs.providerId;
+    expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;
+    selection = normalizedWireArgs.selection;
     if (
       providerId !== undefined &&
       providerId !== null &&

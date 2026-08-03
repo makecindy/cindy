@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -1318,7 +1319,10 @@ export async function openRemoteLink(
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      capabilities: [
+        CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ],
     });
   };
   // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
@@ -1474,7 +1478,10 @@ export async function remoteSubscribe(
         {
           topics: liveTopics,
           controllerName: deviceName(),
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+          capabilities: [
+            CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+            CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+          ],
         },
       ],
     });
