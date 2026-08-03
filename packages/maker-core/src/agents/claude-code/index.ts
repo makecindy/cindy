@@ -3715,17 +3715,21 @@ export class ClaudeCodeAgent extends BaseAgent {
        *  - **Query 已重建**:结果属于被丢弃的旧 `q`,新 Query 的起档由当前状态算出,同样
        *    不能拿旧结果去写状态。
        *  - 其余情况**必须调和**,即使早已超时:SDK 的真实档位只有这个结果知道。
+       *
+       * 返回是否真的写入了状态 —— 被丢弃时调用方不能再打"已确认/仍在兜底"这类日志,
+       * 否则运维按 message 扫日志会读到与实际状态相反的结论。
        */
-      const settleProbe = (next: TurnAutoReviewState, reason: string, fields: Record<string, unknown> = {}): void => {
+      const settleProbe = (next: TurnAutoReviewState, reason: string, fields: Record<string, unknown> = {}): boolean => {
         if (probeGeneration !== turnAutoReviewGeneration) {
           log.debug(`native Auto classifier probe ${reason} ignored: superseded by a newer decision`, fields);
-          return;
+          return false;
         }
         if (q !== probedQuery) {
           log.debug(`native Auto classifier probe ${reason} ignored: query was rebuilt`, fields);
-          return;
+          return false;
         }
         turnAutoReviewState = next;
+        return true;
       };
       /**
        * 看门狗只把状态挪到 `'cindy-unconfirmed'`:档位未知,后续故障信号因此可以重推
@@ -3746,16 +3750,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           clearTimeout(probeWatchdog);
           // 成功 = SDK 确认在 auto。即使 watchdog 已把状态挪成 unconfirmed,这里也要调和
           // 回 'native',否则状态说 Cindy 而 SDK 在 auto,本 turn 后续信号会被幂等闸吞掉。
-          settleProbe('native', 'success');
-          log.debug('native Auto classifier probe: SDK confirmed back on auto');
+          if (settleProbe('native', 'success')) {
+            log.debug('native Auto classifier probe: SDK confirmed back on auto');
+          }
         },
         (e: unknown) => {
           clearTimeout(probeWatchdog);
           // 失败 = SDK 仍在 default,状态确认为已降级(下一 turn 会再回探一次)。
-          settleProbe('cindy', 'failure', { error: String(e) });
-          log.warn('native Auto classifier probe failed — keeping Cindy fallback for this turn', {
-            error: String(e),
-          });
+          if (settleProbe('cindy', 'failure', { error: String(e) })) {
+            log.warn('native Auto classifier probe failed — keeping Cindy fallback for this turn', {
+              error: String(e),
+            });
+          }
         },
       );
     };
@@ -4691,14 +4697,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (nativeAutoReviewUnavailable) return false;
           if (fallbackGeneration !== turnAutoReviewGeneration) return false;
         }
-        if (scope === 'session') {
-          nativeAutoReviewUnavailable = true;
-          // 终态已覆盖 turn 级语义,归位以免留下"终态 + unconfirmed"这类冗余组合。
-          turnAutoReviewState = 'cindy';
-        } else {
-          // SDK 档位刚被这次 push 确认(或处在"由其它路径按状态起档"的窗口)→ confirmed。
-          turnAutoReviewState = 'cindy';
-        }
+        if (scope === 'session') nativeAutoReviewUnavailable = true;
+        // 两个 scope 都归到「已确认降级」:SDK 档位刚被这次 push 确认(或处在"推不了档、
+        // 由其它路径按状态起档"的窗口)。会话级顺带借此归位,不留"终态 + unconfirmed"的冗余组合。
+        turnAutoReviewState = 'cindy';
         autoReviewDecisionCache.clear();
         // 文案按 scope 分叉:turn 级只作用于当前 turn(下一 turn 回探),用会话级的
         // "keeping Auto with Cindy fallback" 会让按 message 扫日志的人误判已进终态。
