@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   normalizeClaudeJsonlToolIdsText,
@@ -541,5 +541,70 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
     expect(afterMode).toBe(beforeMode);
     const bakMode = (await fsPromises.stat(result.backupPath!)).mode & 0o777;
     expect(bakMode).toBe(beforeMode);
+  });
+
+  it('Windows rename 覆盖目标抛 EEXIST 时降级为删除+rename 重试(copilot review)', async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'jsonl-normalize-'));
+    const filePath = path.join(tmpDir, 'session.jsonl');
+    const original = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    await writeFile(filePath, original, 'utf8');
+
+    const fsMod = await import('node:fs');
+    const realRename = fsMod.promises.rename.bind(fsMod.promises);
+    // 第一次 rename 模拟 Windows/exFAT 拒绝覆盖已存在目标; 第二次(删除后)成功。
+    const renameSpy = vi
+      .spyOn(fsMod.promises, 'rename')
+      .mockImplementation(async (oldPath: any, newPath: any) => {
+        if (renameSpy.mock.calls.length === 1) {
+          const err = new Error('EEXIST: file already exists') as NodeJS.ErrnoException;
+          err.code = 'EEXIST';
+          throw err;
+        }
+        return realRename(oldPath, newPath);
+      });
+
+    try {
+      const result = await normalizeClaudeSessionJsonlToolIds(filePath);
+      expect(result.changed).toBe(true);
+      // 降级成功: rename 被调用两次(首次失败 + 删除后重试)
+      expect(renameSpy).toHaveBeenCalledTimes(2);
+      // 归一化已生效,无 tmp 残留
+      const rewritten = await readFile(filePath, 'utf8');
+      expect(rewritten).toContain('Bash_x210');
+      expect((await readdir(tmpDir)).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
+  it('rename 降级也失败时抛错(tmp 被清理,调用方 best-effort 兜底)', async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'jsonl-normalize-'));
+    const filePath = path.join(tmpDir, 'session.jsonl');
+    const original = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    await writeFile(filePath, original, 'utf8');
+
+    const fsMod = await import('node:fs');
+    const renameSpy = vi
+      .spyOn(fsMod.promises, 'rename')
+      .mockImplementation(async () => {
+        const err = new Error('EPERM: operation not permitted') as NodeJS.ErrnoException;
+        err.code = 'EPERM';
+        throw err;
+      });
+
+    try {
+      await expect(normalizeClaudeSessionJsonlToolIds(filePath)).rejects.toThrow('EPERM');
+      // tmp 被清理,原文件未被破坏
+      expect((await readdir(tmpDir)).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+      expect(await readFile(filePath, 'utf8')).toBe(original);
+    } finally {
+      renameSpy.mockRestore();
+    }
   });
 });

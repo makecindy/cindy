@@ -435,14 +435,37 @@ export async function normalizeClaudeSessionJsonlToolIds(
     const originalMode = (await fs.stat(filePath)).mode & 0o777;
     backupPath = await createClaudeJsonlBackup(filePath, original, originalMode);
     // tmp+rename 原子替换:写一半崩溃不会留下半截转录(备份仍在,tmp 残留无害)。
+    // Windows 上 rename 覆盖已存在目标的行为依文件系统而异(exFAT 等个别系统抛
+    // EEXIST/EPERM,仓内 blobStore.ts:130 有同源注释);若 rename 失败,降级为
+    // 「删除旧文件再 rename」——.bak 备份已就位,失败也可回滚,尽量让归一化生效
+    // (copilot review)。降级也失败才抛错,由调用方 best-effort 兜底继续 resume。
     const tmpPath = `${filePath}.normalize-${process.pid}-${Math.random().toString(36).slice(2, 10)}.tmp`;
     await fs.writeFile(tmpPath, normalized.text, { encoding: 'utf8', mode: originalMode });
     await fs.chmod(tmpPath, originalMode).catch(() => undefined);
     try {
       await fs.rename(tmpPath, filePath);
-    } catch (err) {
-      await fs.rm(tmpPath, { force: true }).catch(() => undefined);
-      throw err;
+    } catch (renameErr) {
+      // 目标已存在且 rename 拒绝覆盖:先删除目标再重试(有 .bak 兜底)。降级再失败
+      // 时,先把原内容写回 file(删除目标可能已让原文件消失 —— 绝不能让归一化
+      // 把 resume 需要的转录弄丢,宁可不生效也要保持原文件可用),tmp 清理后抛错
+      // 由调用方 best-effort 兜底继续(copilot review)。
+      const code = (renameErr as NodeJS.ErrnoException)?.code;
+      if (code === 'EEXIST' || code === 'EPERM' || code === 'EACCES') {
+        try {
+          await fs.rm(filePath, { force: true });
+          await fs.rename(tmpPath, filePath);
+        } catch (fallbackErr) {
+          await fs
+            .writeFile(filePath, original, { encoding: 'utf8', mode: originalMode })
+            .catch(() => undefined);
+          await fs.chmod(filePath, originalMode).catch(() => undefined);
+          await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+          throw fallbackErr;
+        }
+      } else {
+        await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+        throw renameErr;
+      }
     }
   }
   const { text: _, ...rest } = normalized;
