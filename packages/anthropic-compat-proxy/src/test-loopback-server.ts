@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 
-const LOOPBACK_LISTEN_MAX_ATTEMPTS = 32;
+const LISTEN_MAX_ATTEMPTS = 32;
 
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
@@ -8,7 +8,7 @@ function isRetryableListenError(error: unknown): boolean {
   return code === 'EADDRINUSE' || code === 'EACCES';
 }
 
-function listenOnce(server: Server): Promise<number> {
+function listenOnce(server: Server, host: string): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const cleanup = (): void => {
       server.removeListener('error', onError);
@@ -32,7 +32,7 @@ function listenOnce(server: Server): Promise<number> {
     server.once('error', onError);
     server.once('listening', onListening);
     try {
-      server.listen(0, '127.0.0.1');
+      server.listen(0, host);
     } catch (error) {
       cleanup();
       reject(error);
@@ -41,16 +41,16 @@ function listenOnce(server: Server): Promise<number> {
 }
 
 /**
- * Starts a test-only HTTP server while tolerating Windows excluded-port races.
- * Windows can occasionally assign an unavailable excluded port for listen(0),
- * surfacing EACCES even though another ephemeral port is available.
+ * Starts a test-only HTTP server on the requested host while tolerating Windows
+ * excluded-port races. Windows can occasionally assign an unavailable excluded
+ * port for listen(0), surfacing EACCES even though another ephemeral port is available.
  */
-export async function listenOnAvailableLoopbackPort(server: Server): Promise<number> {
+export async function listenOnAvailablePort(server: Server, host: string): Promise<number> {
   let lastRetryableError: Error | null = null;
 
-  for (let attempt = 1; attempt <= LOOPBACK_LISTEN_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= LISTEN_MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await listenOnce(server);
+      return await listenOnce(server, host);
     } catch (error) {
       if (!isRetryableListenError(error)) throw error;
       lastRetryableError = error instanceof Error ? error : new Error(String(error));
@@ -58,7 +58,11 @@ export async function listenOnAvailableLoopbackPort(server: Server): Promise<num
   }
 
   throw new Error(
-    `test loopback server failed to bind after ${LOOPBACK_LISTEN_MAX_ATTEMPTS} attempts` +
+    `test loopback server failed to bind after ${LISTEN_MAX_ATTEMPTS} attempts` +
       (lastRetryableError === null ? '' : `; last error ${lastRetryableError.message}`),
   );
+}
+
+export async function listenOnAvailableLoopbackPort(server: Server): Promise<number> {
+  return listenOnAvailablePort(server, '127.0.0.1');
 }

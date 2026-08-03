@@ -33,6 +33,7 @@ import {
 } from './model-plane/modelPlanePolicy.js';
 import {
   checkModelRoute,
+  implicitUserProviderIdForResume,
   resolveLenientRoute,
   type ModelRouteGuardOptions,
   type ModelRouteVerdict,
@@ -43,9 +44,7 @@ import {
  * projections intentionally hide. Otherwise an old controller can name a
  * hidden media model and make checkModelRoute treat it as catalog-unknown.
  */
-async function listRouteGuardProviders(
-  catalog = getActiveCatalog(),
-): Promise<ProviderView[]> {
+async function listRouteGuardProviders(catalog = getActiveCatalog()): Promise<ProviderView[]> {
   return getDesktopProviderService().listProviders({ catalog });
 }
 
@@ -78,7 +77,8 @@ export async function resolveDefaultScheduleRoute(
     : connected;
   for (const provider of candidates) {
     for (const model of provider.models[agent] ?? []) {
-      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) continue;
+      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }))
+        continue;
       return { model: model.id, providerId: provider.id };
     }
   }
@@ -146,6 +146,22 @@ export async function verdictForModelRoute(
     return overrideOnlyVerdict(agent, model, providerId);
   }
   return checkModelRoute(views, agent, model, providerId, guardOptions);
+}
+
+/**
+ * 恢复 provider_id=NULL 的历史会话时，补回其隐式命中的用户来源。目录读取失败保持
+ * null，沿用既有恢复行为；本 helper 不执行新路由停用裁决，避免打断运行中会话。
+ */
+export async function resolveImplicitUserProviderForResume(
+  agent: AgentKind,
+  model: string,
+): Promise<string | null> {
+  try {
+    const views = await listRouteGuardProviders();
+    return implicitUserProviderIdForResume(views, agent, model);
+  } catch {
+    return null;
+  }
 }
 
 /**

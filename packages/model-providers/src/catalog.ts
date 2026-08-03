@@ -381,6 +381,13 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
         return false;
       }
+      if (
+        mm.codexCompatibilityWireProtocol !== undefined
+        && (
+          agent !== 'codex'
+          || mm.codexCompatibilityWireProtocol !== 'openai-chat'
+        )
+      ) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;

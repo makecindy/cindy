@@ -77,6 +77,30 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it('preserves a model-level Codex compatibility bridge override', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          wireProtocol: 'openai-responses',
+          models: [
+            { id: 'native', name: 'Native' },
+            {
+              id: 'chat-only',
+              name: 'Chat only',
+              codexCompatibilityWireProtocol: 'openai-chat',
+            },
+          ],
+        },
+      },
+    });
+    expect(p.models.codex?.find((model) => model.id === 'native')
+      ?.codexCompatibilityWireProtocol).toBeUndefined();
+    expect(p.models.codex?.find((model) => model.id === 'chat-only')
+      ?.codexCompatibilityWireProtocol).toBe('openai-chat');
+  });
+
   it('preserves a non-standard inference request path in routing', () => {
     const p = buildUserProvider({
       ...codexOnly,

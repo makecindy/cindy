@@ -442,6 +442,7 @@ import {
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
+import { createVerifiedResumeSession } from './resumeSessionProvider.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
@@ -527,6 +528,7 @@ import {
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
+  resolveImplicitUserProviderForResume,
   resolveLenientSessionRoute,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
@@ -5147,8 +5149,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 隐式来源的原生默认落点被停用而有启用替代拷贝时,把会话显式改路由过去(下方
     // persistAndHydrateSessionProvider 会把它落库):实际路由层对隐式来源走原生
     // 默认、不查停用标志,仅放行等于继续用停用拷贝付费。
+    let verifiedResume = false;
     if (typeof o.model === 'string' && o.model) {
-      let verifiedResume = false;
       if (o.resumeSessionId && typeof o.id === 'string' && o.id) {
         try {
           const [row] = await getDbClient()
@@ -5169,7 +5171,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (reroute && !o.providerId) o.providerId = reroute;
       }
     }
-    const session = await maker.createSession(o);
+    const session = await createVerifiedResumeSession(o, verifiedResume, {
+      resolveImplicitUserProvider: resolveImplicitUserProviderForResume,
+      createSession: (opts) => maker.createSession(opts),
+    });
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);

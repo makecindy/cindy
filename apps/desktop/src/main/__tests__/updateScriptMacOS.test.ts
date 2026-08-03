@@ -35,6 +35,19 @@ import { MACOS_UPDATE_RELAUNCH_ARG } from '../updateRelaunchSafety';
 
 const isDarwin = process.platform === 'darwin';
 
+function canInspectProcessesWithPgrep(): boolean {
+  if (!isDarwin) return false;
+  try {
+    execFileSync('/usr/bin/pgrep', ['-f', `cindy-pgrep-capability-${process.pid}`], { stdio: 'ignore' });
+    return true;
+  } catch (err) {
+    // status 1 = pgrep 正常工作、只是没有匹配；status 3 = 当前沙箱/系统无法读取进程表。
+    return (err as { status?: number }).status === 1;
+  }
+}
+
+const canRunMacProcessBehavior = canInspectProcessesWithPgrep();
+
 function makeParams(overrides: Partial<MacUpdateScriptParams> = {}): MacUpdateScriptParams {
   return {
     pid: 12345,
@@ -147,14 +160,23 @@ function shellScript(body: string): string {
  *   'noop'    — stub open does nothing (verification-failure path)
  */
 function makeSandbox(openBehavior: 'launch' | 'noop'): Sandbox {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-upd-test-'));
+  // macOS 把 /var 规范化成 /private/var 后写进进程命令行；生成脚本的 pgrep
+  // 使用字面路径匹配，因此 fixture 也必须先取真实路径，避免测试误判 helper 不存在。
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-upd-test-')));
   const appPath = path.join(root, 'Installed', 'fake (2).app');
   const helperDir = path.join(appPath, 'Contents', 'Frameworks', 'fake Helper (Renderer).app', 'Contents', 'MacOS');
   const mainDir = path.join(appPath, 'Contents', 'MacOS');
   fs.mkdirSync(helperDir, { recursive: true });
   fs.mkdirSync(mainDir, { recursive: true });
-  fs.writeFileSync(path.join(mainDir, 'fakemain'), shellScript('sleep 300'), { mode: 0o755 });
-  fs.writeFileSync(path.join(helperDir, 'fakehelper'), shellScript('sleep 300'), { mode: 0o755 });
+  // 保持解释器进程的 argv 中带 bundle 路径；单条 `sleep 300` 会被 bash 尾调用
+  // 优化成 sleep，pgrep -f 无法再识别它来自哪个 .app。
+  const persistentProcess = 'while true; do sleep 1; done';
+  fs.writeFileSync(path.join(mainDir, 'fakemain'), shellScript(persistentProcess), { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(helperDir, 'fakehelper'),
+    shellScript(`trap '' TERM\n${persistentProcess}`),
+    { mode: 0o755 },
+  );
   fs.writeFileSync(path.join(appPath, 'Contents', 'version.txt'), 'old');
 
   // New bundle → zip (ditto -c -k, same tool the real flow unpacks with).
@@ -163,7 +185,7 @@ function makeSandbox(openBehavior: 'launch' | 'noop'): Sandbox {
   fs.mkdirSync(path.join(newApp, 'Contents', 'MacOS'), { recursive: true });
   fs.writeFileSync(
     path.join(newApp, 'Contents', 'MacOS', 'fakemain'),
-    shellScript('sleep 300'),
+    shellScript(persistentProcess),
     { mode: 0o755 },
   );
   fs.writeFileSync(path.join(newApp, 'Contents', 'version.txt'), 'new');
@@ -219,7 +241,7 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-describe.runIf(isDarwin)('generated script behavior (darwin)', () => {
+describe.runIf(canRunMacProcessBehavior)('generated script behavior (darwin)', () => {
   it('SIGKILLs a hung app PID, clears a surviving Frameworks helper, swaps and verifies', async () => {
     const sb = makeSandbox('launch');
     try {

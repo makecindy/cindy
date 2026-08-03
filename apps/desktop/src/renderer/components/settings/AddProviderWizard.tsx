@@ -782,6 +782,12 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(presetModel?.codexCompatibilityWireProtocol
+                ? {
+                    codexCompatibilityWireProtocol:
+                      presetModel.codexCompatibilityWireProtocol,
+                  }
+                : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
             };
           });

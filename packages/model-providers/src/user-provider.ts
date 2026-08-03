@@ -68,6 +68,9 @@ function toCatalogModel(
     defaultEffort: efforts.length > 0 ? DEFAULT_CUSTOM_EFFORT : null,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
     group: `custom:${providerId}`,
+    ...(agent === 'codex' && m.codexCompatibilityWireProtocol
+      ? { codexCompatibilityWireProtocol: m.codexCompatibilityWireProtocol }
+      : {}),
     // 手填模型保持历史默认可见；刷新发现的模型可显式声明默认隐藏。
     defaultEnabled: m.defaultEnabled ?? true,
     // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。

@@ -59,6 +59,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'name'
     | 'contextWindow'
     | 'contextWindowExplicit'
+    | 'codexCompatibilityWireProtocol'
     | 'defaultEnabled'
     | 'supportsImageInput'
   >,
@@ -68,6 +69,9 @@ export function customProviderModelConfigFromCatalogModel(
     name: model.name,
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
+      : {}),
+    ...(model.codexCompatibilityWireProtocol === 'openai-chat'
+      ? { codexCompatibilityWireProtocol: 'openai-chat' as const }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),

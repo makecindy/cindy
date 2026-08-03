@@ -190,6 +190,24 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       }).ok,
     ).toBe(false);
   });
+
+  it('rejects Anthropic Messages as a user model-level Codex compatibility override', () => {
+    const config = {
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          wireProtocol: 'openai-responses',
+          models: [{
+            id: 'm',
+            name: 'M',
+            codexCompatibilityWireProtocol: 'anthropic-messages',
+          }],
+        },
+      },
+    } as unknown as CustomProviderConfig;
+    expect(validateCustomProviderConfig(config).ok).toBe(false);
+  });
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {
@@ -336,6 +354,35 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       },
     });
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('anthropic-messages');
+  });
+
+  it('round-trips a model-level Codex compatibility bridge override', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          wireProtocol: 'openai-responses',
+          models: [
+            { id: 'native', name: 'Native' },
+            {
+              id: 'chat-only',
+              name: 'Chat only',
+              codexCompatibilityWireProtocol: 'openai-chat',
+            },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models).toEqual([
+      { id: 'native', name: 'Native' },
+      {
+        id: 'chat-only',
+        name: 'Chat only',
+        codexCompatibilityWireProtocol: 'openai-chat',
+      },
+    ]);
   });
 
   it('preserves legacy remote auth:none records for repair without deleting them', async () => {

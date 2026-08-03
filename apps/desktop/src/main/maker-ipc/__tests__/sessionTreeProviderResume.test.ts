@@ -50,4 +50,17 @@ describe('Pi session-tree lazy resume provider route', () => {
     expect(registerSource).not.toContain('providerId: row?.providerId ?? undefined,');
     expect(registerSource).not.toContain('providerId: inherited.providerId ?? undefined,');
   });
+
+  it('materializes an implicit user provider before resuming a persisted null route', () => {
+    const bootstrap = sourceBetween(
+      'async function bootstrapSession',
+      'async function resumeOrcaWorkerSessionIfMissing',
+    );
+
+    expect(bootstrap).toContain('createVerifiedResumeSession(o, verifiedResume, {');
+    expect(bootstrap).toContain(
+      'resolveImplicitUserProvider: resolveImplicitUserProviderForResume,',
+    );
+    expect(bootstrap).toContain('createSession: (opts) => maker.createSession(opts),');
+  });
 });

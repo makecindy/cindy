@@ -20,6 +20,7 @@ describe('replaceCustomProviderModelId', () => {
       id: 'MiniMax-M3',
       name: 'MiniMax M3',
       contextWindow: 1_000_000,
+      codexCompatibilityWireProtocol: 'openai-chat',
       supportsImageInput: true,
     }, 'another-model')).toEqual({
       id: 'another-model',
@@ -99,6 +100,20 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       id: 'discovered',
       name: 'Discovered',
       defaultEnabled: false,
+    });
+  });
+
+  it('preserves a model-level Codex compatibility bridge through the edit round trip', () => {
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'chat-only',
+      name: 'Chat only',
+      contextWindow: 1_000_000,
+      codexCompatibilityWireProtocol: 'openai-chat',
+    })).toEqual({
+      id: 'chat-only',
+      name: 'Chat only',
+      contextWindow: 1_000_000,
+      codexCompatibilityWireProtocol: 'openai-chat',
     });
   });
 
