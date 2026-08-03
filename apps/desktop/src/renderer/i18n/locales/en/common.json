@@ -2966,7 +2966,8 @@
         "saveFailed": "Failed to save new conversation configuration",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },

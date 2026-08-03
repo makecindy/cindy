@@ -58,6 +58,22 @@ interface AgentSelectProps {
    * 否则触发器会显示一个列表里不存在的引擎。
    */
   hiddenVendors?: readonly MakerVendor[];
+  /**
+   * 面板弹出方向。工具条在底部所以默认 'top'; 设置面板里的字段在
+   * 页面中部, 往下弹才不遮住自己(与 ModelSelector 的 popoverSide 同口径)。
+   */
+  side?: 'top' | 'bottom';
+  /**
+   * 追加到可及名前的上下文(如「字段名 · 目录别名」)。同屏多行各自一个
+   * 选择器时, 读屏听到的不能全是同一个名字(与 ModelSelector.ariaContext 同规则)。
+   */
+  ariaContext?: string;
+  /**
+   * true = 重选当前项也触发 onChange。给「当前值可能是**继承值**, 重选
+   * 等于把它钉成显式偏好」的场景用(工作目录偏好行); 默认只在真的换了
+   * 引擎时才回调, 不产生空写。
+   */
+  reselectEmitsChange?: boolean;
 }
 
 export function AgentSelect({
@@ -69,6 +85,9 @@ export function AgentSelect({
   iconOnly = false,
   visualVariant = 'default',
   hiddenVendors,
+  side = 'top',
+  ariaContext,
+  reselectEmitsChange = false,
 }: AgentSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -90,7 +109,7 @@ export function AgentSelect({
 
   const select = (next: MakerVendor) => {
     setOpen(false);
-    if (next !== value) onChange(next);
+    if (next !== value || reselectEmitsChange) onChange(next);
   };
 
   // ↑↓ 在选项间移动(菜单语义);Home/End 跳首尾。Esc / 外部点击由 MorphPopover 兜。
@@ -124,7 +143,11 @@ export function AgentSelect({
       onClick={() => setOpen((prev) => (disabled ? false : !prev))}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
-      aria-label={t('newChat.agentSelect.trigger.aria', { agent: current.label })}
+      aria-label={
+        ariaContext
+          ? `${ariaContext} · ${t('newChat.agentSelect.trigger.aria', { agent: current.label })}`
+          : t('newChat.agentSelect.trigger.aria', { agent: current.label })
+      }
       title={current.label}
       className={cn(
         'flex shrink-0 items-center gap-1.5 rounded-full transition-colors',
@@ -187,7 +210,7 @@ export function AgentSelect({
     <MorphPopover
       open={open && !disabled}
       onOpenChange={(next) => setOpen(disabled ? false : next)}
-      side="top"
+      side={side}
       align="start"
       panelWidth={196}
       panelClassName="p-2"

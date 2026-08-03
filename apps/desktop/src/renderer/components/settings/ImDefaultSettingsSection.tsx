@@ -14,9 +14,7 @@ import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ClaudeMark } from '@/components/icons/ClaudeMark';
-import { CodexMark } from '@/components/icons/CodexMark';
-import { PiMark } from '@/components/icons/PiMark';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
@@ -41,17 +39,13 @@ import {
   resolveAgentSwitchSettings,
 } from './imDefaultSettingsLogic';
 
-const AGENT_OPTIONS: Array<{
-  kind: ImDefaultAgentKind;
-  Mark: typeof ClaudeMark;
-}> = [
-  { kind: 'claude-code', Mark: ClaudeMark },
-  { kind: 'codex', Mark: CodexMark },
-  { kind: 'pi', Mark: PiMark },
-];
-
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
+}
+
+/** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
+function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
+  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 export interface ImDefaultSettingsSummary {
@@ -296,35 +290,16 @@ export function ImDefaultSettingsSection({
           <span className="text-[12px] font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.agentLabel')}
           </span>
-          <div
-            className="flex h-10 items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
-            role="tablist"
-            aria-label={t('settings.imBot.defaults.agentLabel')}
-          >
-            {AGENT_OPTIONS.map(({ kind, Mark }) => {
-              const active = kind === settings.agentKind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  disabled={pending}
-                  onClick={() => changeAgent(kind)}
-                  className={cn(
-                    'flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-3',
-                    'border text-[13px] leading-none transition-colors',
-                    active
-                      ? 'border-[var(--border-default)] bg-[var(--surface-elevated)] font-medium text-[var(--settings-section-title)]'
-                      : 'border-transparent font-normal text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-                    pending && 'cursor-not-allowed opacity-55',
-                  )}
-                >
-                  <Mark size={14} className="shrink-0" />
-                  <span className="truncate">{t(`settings.imBot.defaults.agents.${kind}`)}</span>
-                </button>
-              );
-            })}
+          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
+              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
+          <div className="flex h-10 items-center">
+            <AgentSelect
+              value={vendorKeyFor(settings.agentKind)}
+              side="bottom"
+              disabled={pending}
+              ariaContext={t('settings.imBot.defaults.agentLabel')}
+              onChange={(next) => changeAgent(agentKindOfVendor(next))}
+            />
           </div>
         </div>
 
