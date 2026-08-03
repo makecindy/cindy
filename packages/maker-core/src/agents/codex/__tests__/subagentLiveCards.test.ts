@@ -591,6 +591,31 @@ describe('createSubagentLiveCardTracker', () => {
     }
   });
 
+
+  it('counts a child tool whose first visible phase is item/updated', () => {
+    // 长跑工具的首个可见阶段可能就是 updated(与主线程 spawn 路径同因:started 可能缺失)。
+    // 原来聚合器只认 started / completed,且 CONSUMED_METHODS 也不缓冲 updated —— 于是长跑工具
+    // 在 completed 到达前不计数,会话若先中断则永久漏计(review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    expect(
+      tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-1')),
+    ).toMatchObject({ toolUses: 1 });
+    // 同一 item 后续的 updated / completed 不得重复计数(去重靠 item id)。
+    expect(tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-1'))).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('long-1'))).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-2')),
+    ).toMatchObject({ toolUses: 2 });
+  });
+
+  it('buffers a pre-registration item/updated instead of dropping it', () => {
+    // spawn 尚未登记时 updated 必须进缓冲,否则登记后重放不出来 —— 同上一条的另一半。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('early-1'))).toBeNull();
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({ toolUses: 1 });
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

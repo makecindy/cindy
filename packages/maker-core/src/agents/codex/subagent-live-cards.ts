@@ -112,6 +112,10 @@ const TOOL_ITEM_TYPES = new Set([
 /** 我们会消费的 method —— 只有这些值得在 spawn 登记前缓冲。 */
 const CONSUMED_METHODS = new Set([
   'item/started',
+  // updated 也必须消费:长跑工具的首个可见阶段可能就是 updated(与主线程 spawn 路径同因),
+  // 不收就会在 completed 到达前不计数,会话若先中断则永久漏计。去重靠 countedItemIds 的
+  // item id,同一 item 的 started/updated/completed 只会计一次。
+  'item/updated',
   'item/completed',
   'thread/tokenUsage/updated',
   'turn/started',
@@ -289,6 +293,7 @@ export function createSubagentLiveCardTracker(opts: {
   ): boolean => {
     switch (method) {
       case 'item/started':
+      case 'item/updated':
       case 'item/completed': {
         const item = (params as { item?: { type?: unknown; id?: unknown } } | null)?.item;
         const itemType = typeof item?.type === 'string' ? item.type : '';
