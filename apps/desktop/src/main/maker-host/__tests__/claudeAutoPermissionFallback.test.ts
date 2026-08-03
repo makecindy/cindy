@@ -486,6 +486,61 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
   });
 
+  it('lets a session-scoped escalation pass through a turn-scoped operation in flight', async () => {
+    // 观察器在发出会话级信号**之前**就清掉了 episode 记账,所以这一条被当成重复重试丢掉
+    // 就是永久丢失:会话只完成试探性降级,下一 turn 又回探、又让用户撞一次故障。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    useCindyAutoReviewFallback.mockImplementationOnce(async () => {
+      await gate;
+      return true;
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    const turnOp = fallback({ sessionId: 'session-1', status: 429, scope: 'turn' });
+    await vi.waitFor(() => expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1));
+
+    // turn 级操作仍卡在 handle 调用里,会话级升级必须能穿透。
+    await expect(
+      fallback({ sessionId: 'session-1', status: 429, scope: 'session' }),
+    ).resolves.toBe(true);
+    expect(useCindyAutoReviewFallback).toHaveBeenLastCalledWith({ scope: 'session' });
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+      expect.objectContaining({
+        scope: 'session',
+        counters: expect.objectContaining({ escalatedInFlight: 1 }),
+      }),
+    );
+
+    release();
+    await expect(turnOp).resolves.toBe(true);
+  });
+
+  it('still dedupes same-scope retry storms while an operation is in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    useCindyAutoReviewFallback.mockImplementationOnce(async () => {
+      await gate;
+      return true;
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    const turnOp = fallback({ sessionId: 'session-1', status: 429, scope: 'turn' });
+    await vi.waitFor(() => expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1));
+
+    // 同级信号(turn 级 retry storm)不得因为放开升级而一并穿透。
+    await expect(
+      fallback({ sessionId: 'session-1', status: 503, scope: 'turn' }),
+    ).resolves.toBe(false);
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
+
+    release();
+    await expect(turnOp).resolves.toBe(true);
+  });
+
   it('skips non-auto, mismatched-agent, and unsupported sessions', async () => {
     const notAuto = createDeps({
       getSessionMeta: vi.fn(async () => ({ permissionMode: 'ask' as const })),

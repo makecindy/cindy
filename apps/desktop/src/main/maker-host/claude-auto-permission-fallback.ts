@@ -287,12 +287,15 @@ export function createClaudeAutoClassifierFailureObserver(
  * 二者之差即会话级终态降级次数。两个数一起看才能区分"上游偶发抖动"与"持续故障"。
  * skippedAlreadyFallback 计会话已在该降级状态、本次是幂等 no-op 的信号 —— turn 级信号
  * 刻意不在观察器侧按 episode 去重(见上),重复量落在这里,不许混进 switched 把它冲虚。
+ * escalatedInFlight 计会话级信号穿透在飞 turn 级操作的次数(见下方 in-flight 说明);
+ * 它恒 ≤ switched - switchedTentative,不为 0 说明确实发生过"升级追上试探性降级"。
  */
 interface FallbackCounters {
   detected: number;
   switched: number;
   switchedTentative: number;
   dedupedRetries: number;
+  escalatedInFlight: number;
   skippedAlreadyFallback: number;
   skippedNotAuto: number;
   skippedNonClaude: number;
@@ -301,18 +304,26 @@ interface FallbackCounters {
 }
 
 /**
- * 创建 per-session fallback coordinator。in-flight 集合只防同一轮 429 retry storm；
+ * 创建 per-session fallback coordinator。in-flight 记账只防同一轮 429 retry storm；
  * 完成后即释放；session handle 自身保证重复切换幂等。
+ *
+ * **两种 scope 不是等价重试。** in-flight 记的是「该会话在飞操作的 scope」,会话级信号
+ * 允许穿透正在处理的 turn 级操作:turn 级操作在等 `getSessionMeta` 或
+ * `setPermissionMode('default')` 时,若第三个故障段或确定性 4xx 的会话级信号到达,只按
+ * sessionId 去重就会把更高优先级的终态信号丢掉 —— 而观察器在发出会话级信号**之前已经
+ * 清掉了 episode 记账**,这一条一丢就永久丢失:会话只完成试探性降级,下一 turn 又回探、
+ * 又让用户撞一次原生分类器故障,#758 的自救通道形同失效。
  */
 export function createClaudeAutoPermissionFallbackCoordinator(
   deps: ClaudeAutoPermissionFallbackDeps,
 ): (signal: ClaudeAutoClassifierUnavailableSignal) => Promise<boolean> {
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, AutoReviewFallbackScope>();
   const counters: FallbackCounters = {
     detected: 0,
     switched: 0,
     switchedTentative: 0,
     dedupedRetries: 0,
+    escalatedInFlight: 0,
     skippedAlreadyFallback: 0,
     skippedNotAuto: 0,
     skippedNonClaude: 0,
@@ -325,11 +336,17 @@ export function createClaudeAutoPermissionFallbackCoordinator(
     // legacy proxy signal 不带 scope → 按会话级处理(旧行为不变)。
     const scope: AutoReviewFallbackScope = signal.scope ?? 'session';
     counters.detected += 1;
-    if (inFlight.has(signal.sessionId)) {
-      counters.dedupedRetries += 1;
-      return false;
+    const inFlightScope = inFlight.get(signal.sessionId);
+    if (inFlightScope !== undefined) {
+      // 唯一放行的情况:会话级升级穿透在飞的 turn 级操作。同级(含两条会话级 —— 终态本身
+      // 幂等)仍按 retry storm 去重。
+      if (!(scope === 'session' && inFlightScope === 'turn')) {
+        counters.dedupedRetries += 1;
+        return false;
+      }
+      counters.escalatedInFlight += 1;
     }
-    inFlight.add(signal.sessionId);
+    inFlight.set(signal.sessionId, scope);
     try {
       const before = await deps.getSessionMeta(signal.sessionId);
       if (before?.permissionMode !== 'auto') {
@@ -379,7 +396,10 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       });
       return false;
     } finally {
-      inFlight.delete(signal.sessionId);
+      // 只有当前记账仍是自己的 scope 时才清:穿透进来的会话级操作可能比它遮住的 turn 级
+      // 操作更晚完成,先完成的 turn 级不能把会话级的在飞记账抹掉(否则紧随其后的信号会
+      // 误判"无人在飞"而重复进入协调流程)。
+      if (inFlight.get(signal.sessionId) === scope) inFlight.delete(signal.sessionId);
     }
   };
 }
