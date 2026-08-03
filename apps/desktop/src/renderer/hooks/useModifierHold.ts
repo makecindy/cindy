@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { getAppShortcutPlatform } from '../lib/appShortcutStore';
-import { subscribeEarlyKeyDownCapture } from '../lib/earlyKeyDownCapture';
+import {
+  isEarlyKeyDownCaptureInstalled,
+  subscribeEarlyKeyDownCapture,
+} from '../lib/earlyKeyDownCapture';
 
 export interface UseModifierHoldOptions {
   /** false 时不挂监听且状态归零。默认 true。 */
@@ -45,28 +48,47 @@ export function useModifierHold(options: UseModifierHoldOptions = {}): boolean {
     const isDarwin = getAppShortcutPlatform() === 'darwin';
     const primaryModifierKey = isDarwin ? 'Meta' : 'Control';
     let timer: number | null = null;
-    let active = false;
-    let chorded = false;
+    let qualified = false;
+    let visible = false;
+    let blocked = false;
+    let modifierPrefix = false;
+    let preservingShortcut = false;
 
-    const sync = (modifierDown: boolean) => {
-      if (modifierDown) {
-        if (active || timer != null) return;
-        timer = window.setTimeout(() => {
-          timer = null;
-          active = true;
-          setHeld(true);
-        }, delayMs);
-        return;
-      }
-      if (timer != null) {
-        window.clearTimeout(timer);
-        timer = null;
-      }
-      if (active) {
-        active = false;
-        setHeld(false);
-      }
+    const setVisible = (nextVisible: boolean) => {
+      if (visible === nextVisible) return;
+      visible = nextVisible;
+      setHeld(nextVisible);
     };
+    const cancelTimer = () => {
+      if (timer == null) return;
+      window.clearTimeout(timer);
+      timer = null;
+    };
+    const resetGesture = () => {
+      cancelTimer();
+      qualified = false;
+      blocked = false;
+      modifierPrefix = false;
+      preservingShortcut = false;
+      setVisible(false);
+    };
+    const startHoldTimer = () => {
+      if (qualified || blocked || timer != null) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        qualified = true;
+        if (!blocked && (!modifierPrefix || preservingShortcut)) setVisible(true);
+      }, delayMs);
+    };
+    const blockGesture = () => {
+      blocked = true;
+      modifierPrefix = false;
+      preservingShortcut = false;
+      cancelTimer();
+      setVisible(false);
+    };
+    const isModifierKey = (key: string) =>
+      key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift';
 
     const isPrimaryModifierDown = (event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>) =>
       isDarwin ? event.metaKey : event.ctrlKey;
@@ -76,65 +98,105 @@ export function useModifierHold(options: UseModifierHoldOptions = {}): boolean {
       isDarwin
         ? event.ctrlKey || event.altKey || event.shiftKey
         : event.metaKey || event.altKey || event.shiftKey;
-    const reset = () => {
-      chorded = false;
-      sync(false);
-    };
     const probeKey = (event: KeyboardEvent) => {
       if (document.body.dataset.appShortcutRecording === '1') {
-        sync(false);
+        resetGesture();
         return;
       }
       // 主修饰键自身的 keyup 是最权威的释放信号。macOS 系统快捷键
       // (如 ⌘⇧⌃4 截图)可能让事件 flags 短暂滞后,不能因 metaKey / ctrlKey
       // 仍为 true 就把提示留在界面上。
       if (event.type === 'keyup' && event.key === primaryModifierKey) {
-        reset();
+        resetGesture();
         return;
       }
       if (!isPrimaryModifierDown(event)) {
-        reset();
+        resetGesture();
         return;
       }
-      const preservesHold =
-        event.type === 'keydown' && preserveOnKeyDownRef.current?.(event) === true;
-      if (
-        event.type === 'keydown' &&
-        !preservesHold &&
-        (event.key !== primaryModifierKey || hasOtherModifier(event))
-      ) {
-        chorded = true;
+
+      // 系统可能吞掉上一轮组合键的全部 keyup。新的非 repeat 主修饰键
+      // keydown 是可靠的新手势边界;repeat 仍属于旧手势,不能借此解除 blocked。
+      if (event.type === 'keydown' && event.key === primaryModifierKey && !event.repeat) {
+        resetGesture();
+        if (hasOtherModifier(event)) {
+          modifierPrefix = true;
+        } else {
+          startHoldTimer();
+        }
+        return;
       }
-      sync(!chorded && !hasOtherModifier(event));
+      if (event.type === 'keydown' && event.key === primaryModifierKey) {
+        return;
+      }
+
+      if (event.type === 'keyup') {
+        if (isModifierKey(event.key) && modifierPrefix) blockGesture();
+        else if (preservingShortcut && !hasOtherModifier(event)) preservingShortcut = false;
+        return;
+      }
+
+      const preservesHold = preserveOnKeyDownRef.current?.(event) === true;
+      if (preservesHold && !blocked) {
+        modifierPrefix = false;
+        preservingShortcut = hasOtherModifier(event);
+        if (qualified) setVisible(true);
+        return;
+      }
+      if (isModifierKey(event.key)) {
+        modifierPrefix = true;
+        preservingShortcut = false;
+        setVisible(false);
+        return;
+      }
+      blockGesture();
     };
     const probePointer = (event: PointerEvent) => {
       if (document.body.dataset.appShortcutRecording === '1') {
-        sync(false);
+        resetGesture();
         return;
       }
       if (!isPrimaryModifierDown(event)) {
-        reset();
+        resetGesture();
         return;
       }
-      if (hasOtherModifier(event)) chorded = true;
-      sync(!chorded);
+      if (blocked) {
+        setVisible(false);
+        return;
+      }
+      if (hasOtherModifier(event)) {
+        if (!preservingShortcut) {
+          modifierPrefix = true;
+          setVisible(false);
+        }
+        return;
+      }
+      if (modifierPrefix) {
+        blockGesture();
+        return;
+      }
+      preservingShortcut = false;
+      if (qualified) setVisible(true);
     };
 
-    const unsubscribeEarlyKeyDown = subscribeEarlyKeyDownCapture(probeKey);
+    const useEarlyCapture = isEarlyKeyDownCaptureInstalled();
+    const unsubscribeEarlyKeyDown = useEarlyCapture
+      ? subscribeEarlyKeyDownCapture(probeKey)
+      : (): void => {};
     // 直接监听保留给未经过 renderer index bootstrap 的独立测试/预览环境。
     // 正式窗口优先由 earlyKeyDownCapture 投递,避免被其它快捷键的
     // stopImmediatePropagation 按注册顺序截断。
-    window.addEventListener('keydown', probeKey, true);
+    if (!useEarlyCapture) window.addEventListener('keydown', probeKey, true);
     window.addEventListener('keyup', probeKey, true);
     window.addEventListener('pointermove', probePointer, true);
-    window.addEventListener('blur', reset);
+    window.addEventListener('blur', resetGesture);
     return () => {
       unsubscribeEarlyKeyDown();
-      window.removeEventListener('keydown', probeKey, true);
+      if (!useEarlyCapture) window.removeEventListener('keydown', probeKey, true);
       window.removeEventListener('keyup', probeKey, true);
       window.removeEventListener('pointermove', probePointer, true);
-      window.removeEventListener('blur', reset);
-      if (timer != null) window.clearTimeout(timer);
+      window.removeEventListener('blur', resetGesture);
+      cancelTimer();
       setHeld(false);
     };
   }, [enabled, delayMs]);

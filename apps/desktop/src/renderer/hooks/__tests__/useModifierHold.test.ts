@@ -90,8 +90,9 @@ describe('useModifierHold', () => {
     const disposeCapture = installEarlyKeyDownCapture();
     const blocker = (event: KeyboardEvent) => event.stopImmediatePropagation();
     window.addEventListener('keydown', blocker, true);
+    const preserveOnKeyDown = vi.fn(() => false);
 
-    const { result, unmount } = renderHook(() => useModifierHold());
+    const { result, unmount } = renderHook(() => useModifierHold({ preserveOnKeyDown }));
     try {
       dispatchKey('keydown', { key: 'Meta', metaKey: true });
       act(() => vi.advanceTimersByTime(500));
@@ -99,6 +100,7 @@ describe('useModifierHold', () => {
 
       dispatchKey('keydown', { key: 'f', metaKey: true });
       expect(result.current).toBe(false);
+      expect(preserveOnKeyDown).toHaveBeenCalledTimes(1);
     } finally {
       unmount();
       window.removeEventListener('keydown', blocker, true);
@@ -131,6 +133,73 @@ describe('useModifierHold', () => {
     expect(result.current).toBe(false);
   });
 
+  it('restores a qualified hold for an explicitly permitted shortcut with extra modifiers', () => {
+    const { result } = renderHook(() =>
+      useModifierHold({
+        preserveOnKeyDown: (event) =>
+          event.code === 'Digit1' &&
+          event.metaKey &&
+          event.shiftKey &&
+          !event.ctrlKey &&
+          !event.altKey,
+      }),
+    );
+    dispatchKey('keydown', { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    act(() => vi.advanceTimersByTime(500));
+    expect(result.current).toBe(true);
+
+    dispatchKey('keydown', { key: 'Shift', metaKey: true, shiftKey: true });
+    expect(result.current).toBe(false);
+    dispatchKey('keydown', { key: '1', code: 'Digit1', metaKey: true, shiftKey: true });
+    expect(result.current).toBe(true);
+    dispatchKey('keyup', { key: '1', code: 'Digit1', metaKey: true, shiftKey: true });
+    dispatchKey('keyup', { key: 'Shift', metaKey: true, shiftKey: false });
+    expect(result.current).toBe(true);
+
+    dispatchKey('keydown', { key: 'x', code: 'KeyX', metaKey: true });
+    expect(result.current).toBe(false);
+  });
+
+  it('does not let a permitted extra-modifier shortcut bypass the hold delay', () => {
+    const { result } = renderHook(() =>
+      useModifierHold({
+        preserveOnKeyDown: (event) =>
+          event.code === 'Digit1' &&
+          event.metaKey &&
+          event.shiftKey &&
+          !event.ctrlKey &&
+          !event.altKey,
+      }),
+    );
+    dispatchKey('keydown', { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    act(() => vi.advanceTimersByTime(250));
+    dispatchKey('keydown', { key: 'Shift', metaKey: true, shiftKey: true });
+    dispatchKey('keydown', { key: '1', code: 'Digit1', metaKey: true, shiftKey: true });
+    expect(result.current).toBe(false);
+    act(() => vi.advanceTimersByTime(249));
+    expect(result.current).toBe(false);
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
+  });
+
+  it('does not start the hold delay when the primary modifier was pressed into an existing chord', () => {
+    const { result } = renderHook(() =>
+      useModifierHold({
+        preserveOnKeyDown: (event) =>
+          event.code === 'Digit1' &&
+          event.metaKey &&
+          event.shiftKey &&
+          !event.ctrlKey &&
+          !event.altKey,
+      }),
+    );
+    dispatchKey('keydown', { key: 'Shift', shiftKey: true });
+    dispatchKey('keydown', { key: 'Meta', metaKey: true, shiftKey: true });
+    dispatchKey('keydown', { key: '1', code: 'Digit1', metaKey: true, shiftKey: true });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(result.current).toBe(false);
+  });
+
   it('keeps the macOS screenshot chord hidden when the OS swallows its keyup sequence', () => {
     const { result } = renderHook(() => useModifierHold());
     dispatchKey('keydown', { key: 'Meta', metaKey: true });
@@ -154,11 +223,15 @@ describe('useModifierHold', () => {
 
     act(() => vi.advanceTimersByTime(1000));
     expect(result.current).toBe(false);
-    act(() => {
-      window.dispatchEvent(new MouseEvent('pointermove'));
-    });
-    dispatchKey('keydown', { key: 'Meta', metaKey: true });
-    act(() => vi.advanceTimersByTime(500));
+
+    dispatchKey('keydown', { key: 'Meta', metaKey: true, repeat: true });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(result.current).toBe(false);
+
+    dispatchKey('keydown', { key: 'Meta', metaKey: true, repeat: false });
+    act(() => vi.advanceTimersByTime(499));
+    expect(result.current).toBe(false);
+    act(() => vi.advanceTimersByTime(1));
     expect(result.current).toBe(true);
   });
 
@@ -211,9 +284,9 @@ describe('useModifierHold', () => {
         preserveOnKeyDown: (event) =>
           event.code === 'Digit1' &&
           event.ctrlKey &&
+          event.shiftKey &&
           !event.metaKey &&
-          !event.altKey &&
-          !event.shiftKey,
+          !event.altKey,
       }),
     );
     dispatchKey('keydown', { key: 'Meta', metaKey: true });
@@ -224,13 +297,16 @@ describe('useModifierHold', () => {
     act(() => vi.advanceTimersByTime(500));
     expect(result.current).toBe(true);
 
-    dispatchKey('keydown', { key: '1', code: 'Digit1', ctrlKey: true });
-    dispatchKey('keyup', { key: '1', code: 'Digit1', ctrlKey: true });
-    expect(result.current).toBe(true);
-
     dispatchKey('keydown', { key: 'Shift', ctrlKey: true, shiftKey: true });
     expect(result.current).toBe(false);
-    dispatchKey('keyup', { key: 'Shift', ctrlKey: true });
+    dispatchKey('keydown', { key: '1', code: 'Digit1', ctrlKey: true, shiftKey: true });
+    dispatchKey('keyup', { key: '1', code: 'Digit1', ctrlKey: true, shiftKey: true });
+    dispatchKey('keyup', { key: 'Shift', ctrlKey: true, shiftKey: false });
+    expect(result.current).toBe(true);
+
+    dispatchKey('keydown', { key: 'Alt', ctrlKey: true, altKey: true });
+    expect(result.current).toBe(false);
+    dispatchKey('keyup', { key: 'Alt', ctrlKey: true });
     act(() => vi.advanceTimersByTime(1000));
     expect(result.current).toBe(false);
   });

@@ -21,6 +21,10 @@ export function installEarlyKeyDownCapture(): () => void {
   return disposeInstalledCapture;
 }
 
+export function isEarlyKeyDownCaptureInstalled(): boolean {
+  return disposeInstalledCapture != null;
+}
+
 export function subscribeEarlyKeyDownCapture(listener: KeyDownListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
