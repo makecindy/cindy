@@ -153,17 +153,21 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 /**
- * notify 槽的能力详单(2026-08-03)。不声明本字段 = 只有基础的一次性 toast。
+ * 提示类能力详单(2026-08-03)。字段名沿用 `notify`,但**每一档各自有门槛,
+ * 不捆绑 `notify` 卡槽**。
  *
- * `badge` 是加档:除了弹提示,还能点亮插件入口与插件卡上的**未读绿点**,
- * 并把最新一条摘要显示在卡片简介位。它比 toast 更持久(用户没看就一直亮着),
- * 所以在装入确认框里**单列一项**权限,不并进 notify。
+ * 为什么 `badge` 不依赖 notify 槽(2026-08-03 Chris 裁决):toast 是打断式的
+ * (占屏幕顶部、每条都要用户分神),绿点是克制的(一个 6px 的点,想看再看)。
+ * 把 badge 挂在 notify 槽下,等于逼一个"只想安静点个绿点"的意识连"能弹全屏
+ * 顶部提示"一起申请——按最小必要权限,这是过度授权。两者现在是并列的两档:
+ * 要 toast 声明 `notify` 槽,要绿点声明 `notify.badge`,谁也不是谁的前置。
  */
 export interface GhostNotifyNeeds {
   /**
    * 申请未读角标。**只有同时声明了 `panel` 的意识可用**
    * (validateGhostManifest 强制):未读点承诺「点开能看到内容」,
    * 没有可打开界面的意识给了就是骗点击。
+   * 不需要 `notify` 卡槽——绿点与 toast 是两档独立权限。
    */
   badge?: boolean;
 }
@@ -1196,7 +1200,7 @@ export interface GhostManifest {
   launch?: GhostLaunchMode;
   /** Agent 新回合能力详单；须与 slots 中的 `agent` 成对。 */
   agent?: GhostAgentNeeds;
-  /** 系统提示能力详单；须与 slots 中的 `notify` 成对。 */
+  /** 提示类能力详单(badge 未读角标);与 slots 中的 `notify` **不**成对,各自独立。 */
   notify?: GhostNotifyNeeds;
   /** 随包本地 Node 工作进程详单；须与 slots 中的 `node` 成对。 */
   node?: GhostNodeNeeds;
@@ -1787,21 +1791,17 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     else if (slot === 'notify') {
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
-      // badge **单列一项**,不并进上面的 notify(同 subscribe 的 activity topic
-      // 判例):diffGhostPermissionItems 按 key + detail 比对,若并进固定的
-      // notify key,已装插件从「只有 notify」更新到「notify + badge」时 added
-      // 为空,plugin-market 的扩权确认就不会拦——用户会在毫不知情的情况下
-      // 多给出一个常驻的注意力入口。旧 key 保持原样,只声明 notify 的存量
-      // 插件权限清单逐字不变(批准状态不 churn)。
-      if (manifest.notify?.badge === true) {
-        items.push({
-          key: 'notify:badge',
-          kind: 'notify',
-          labelKey: 'notifyBadge',
-          detailKey: 'notifyBadgeDetail',
-        });
-      }
     }
+  }
+  // 未读角标:与 notify 槽**并列**的独立一档(不是它的子项)——绿点比 toast 克制,
+  // 只想安静点个绿点的意识不该被迫连"能弹全屏顶部提示"一起申请。
+  // key 独立还有一层必要性(同 subscribe 的 activity topic 判例):
+  // diffGhostPermissionItems 按 key + detail 比对,若并进某个固定 key,已装插件
+  // 新增这一档时 added 为空,plugin-market 的扩权确认就不会拦——用户会在毫不
+  // 知情的情况下多给出一个常驻的注意力入口。存量插件不声明本字段,权限清单
+  // 逐字不变(批准状态不 churn)。
+  if (manifest.notify?.badge === true) {
+    items.push({ key: 'badge', kind: 'notify', labelKey: 'badge', detailKey: 'badgeDetail' });
   }
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
   // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
@@ -2778,18 +2778,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
   }
 
-  // notify 槽能力详单:有详单必有槽;有槽无详单 = 只有基础的一次性 toast
-  // (存量插件的既有形态,必须继续可装)。badge 是加档,额外钉两条:
-  // ① 必须成对声明 notify 槽 —— 角标走的就是 notify 那条上行通道;
-  // ② 必须声明 panel —— 未读点承诺「点开能看到内容」,纯工具型 / 对话型
-  //    意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
+  // 提示类能力详单。与其它详单不同:**不与 notify 卡槽成对**——绿点(badge)
+  // 和 toast(notify 槽)是两档并列权限,谁也不是谁的前置(见 GhostNotifyNeeds
+  // 注释里的裁决理由)。有 notify 槽无详单 = 只有基础的一次性 toast(存量插件的
+  // 既有形态,必须继续可装)。
+  // badge 自己的门槛只有一条:必须声明 panel —— 未读点承诺「点开能看到内容」,
+  // 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
   let notify: GhostNotifyNeeds | undefined;
   if (raw.notify !== undefined) {
     if (!isPlainObject(raw.notify)) {
       return { ok: false, reason: 'notify 能力详单必须是对象(如 { "badge": true })' };
-    }
-    if (!slots.includes('notify')) {
-      return { ok: false, reason: '声明了 notify 能力详单但 slots 未包含 "notify"' };
     }
     const notifyRaw = raw.notify as Record<string, unknown>;
     const unknownNotifyField = Object.keys(notifyRaw).find((key) => key !== 'badge');
@@ -4896,7 +4894,9 @@ export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string 
  * 主机在插件入口与插件卡上点一颗**绿点**,并把 summary 显示在卡片简介位。
  *
  * 与 notify 的分工:notify 是"弹一条即走"的一次性 toast(错过就没了);本消息
- * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。
+ * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。两者是**并列的两档
+ * 权限**,不是加档关系:要 toast 声明 `notify` 槽,要绿点声明 `notify.badge`,
+ * 谁也不是谁的前置(绿点比 toast 克制,不该被 toast 权限捆绑)。
  *
  * 门槛(validateGhostManifest 强制):只有声明了 `panel` 的意识能申请。理由是
  * 未读点承诺"点开能看到内容",纯工具型/对话型意识没有可打开的界面,给了就是

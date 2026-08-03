@@ -62,17 +62,18 @@ describe('GhostBadgeSlot', () => {
     });
   });
 
-  it('资格审两道:未声明 notify 槽拒;声明了槽但没声明 notify.badge 也拒', () => {
-    const noSlot = makeSlot(fakeGhost({ slots: ['panel'] }));
-    expect(noSlot.slot.handleBadge('inbox', { unread: true })).toMatchObject({ ok: false });
-    expect(noSlot.mark).not.toHaveBeenCalled();
-
-    // 存量兼容的关键面:老包只有 notify 槽、没有 badge 字段,不该白捡这档能力。
+  it('资格只看 notify.badge:没声明就拒(存量只有 notify 槽的老包不白捡这档能力)', () => {
     const noDecl = makeSlot(fakeGhost({ badge: false }));
     const r = noDecl.slot.handleBadge('inbox', { unread: true });
     expect(r).toMatchObject({ ok: false });
     if (!r.ok) expect(r.message).toContain('notify.badge');
     expect(noDecl.mark).not.toHaveBeenCalled();
+  });
+
+  it('不要求 notify 槽:只声明 panel + badge 的意识照样能点亮(两档权限并列)', () => {
+    const { slot, mark } = makeSlot(fakeGhost({ slots: ['panel'] }), { now: () => 1 });
+    expect(slot.handleBadge('inbox', { unread: true, summary: '新内容' })).toEqual({ ok: true });
+    expect(mark).toHaveBeenCalledWith('inbox', '新内容', 1);
   });
 
   it('沉睡 / 不在装:拒,不落盘不广播', () => {

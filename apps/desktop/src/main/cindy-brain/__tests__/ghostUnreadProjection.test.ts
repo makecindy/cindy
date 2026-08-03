@@ -35,11 +35,12 @@ function ghost(
 }
 
 describe('ghostUnreadProjection', () => {
-  it('资格 = notify 槽 + badge 声明,与启用与否无关', () => {
+  it('资格只看 badge 声明:与 notify 槽无关,也与启用与否无关', () => {
     expect(ghostDeclaresBadge(ghost('a'))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { enabled: false }))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { badge: false }))).toBe(false);
-    expect(ghostDeclaresBadge(ghost('a', { slots: ['panel'] }))).toBe(false);
+    // 没有 notify 槽照样算数——绿点与 toast 是并列的两档权限。
+    expect(ghostDeclaresBadge(ghost('a', { slots: ['panel'] }))).toBe(true);
     expect(ghostDeclaresBadge(null)).toBe(false);
   });
 
@@ -55,14 +56,15 @@ describe('ghostUnreadProjection', () => {
     expect(selectRevokedGhostUnreadIds(entries, [ghost('a', { enabled: false })])).toEqual([]);
   });
 
-  it('能力撤销进撤销名单:更新后不再声明 badge / 整个 notify 槽没了 / 包已卸载', () => {
+  it('能力撤销进撤销名单:更新后不再声明 badge / 包已卸载', () => {
     const entries = [{ ghostId: 'revoked' }, { ghostId: 'noslot' }, { ghostId: 'gone' }, { ghostId: 'ok' }];
     const ids = selectRevokedGhostUnreadIds(entries, [
       ghost('revoked', { badge: false }),
+      // 只丢了 notify 槽但 badge 还在 → **不算**撤销(两档权限彼此独立)。
       ghost('noslot', { slots: ['panel'] }),
       ghost('ok'),
     ]);
-    expect(ids.sort()).toEqual(['gone', 'noslot', 'revoked']);
+    expect(ids.sort()).toEqual(['gone', 'revoked']);
   });
 
   it('空清单不当成"全都撤销了" —— 启动早期 / 账号切换窗口的 manager 空表不许误清', () => {

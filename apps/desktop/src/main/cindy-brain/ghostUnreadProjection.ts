@@ -8,16 +8,18 @@
  * 两条规则:
  *   - **停用只停投影、不删记录** —— 沉睡是"先别烦我",不是"这条我读过了";
  *     唤醒后那颗点要回来。
- *   - **能力撤了就清记录** —— 更新后身份卡不再声明 notify.badge(或整个 notify
- *     槽没了),既有未读必须清除;权限收回了还留一颗点 = 继续兑现已撤销的能力。
+ *   - **能力撤了就清记录** —— 更新后身份卡不再声明 `notify.badge`,既有未读必须
+ *     清除;权限收回了还留一颗点 = 继续兑现已撤销的能力。
  */
 
 import type { InstalledGhost } from '../../shared/ghost.js';
 
-/** 该意识当前是否还持有未读角标能力(资格,与启用与否无关)。 */
+/**
+ * 该意识当前是否还持有未读角标能力(资格,与启用与否无关)。
+ * 只看 `notify.badge`:它与 `notify` 卡槽是并列的两档权限,不互为前置。
+ */
 export function ghostDeclaresBadge(ghost: InstalledGhost | null | undefined): boolean {
-  if (!ghost) return false;
-  return ghost.manifest.slots?.includes('notify') === true && ghost.manifest.notify?.badge === true;
+  return ghost?.manifest.notify?.badge === true;
 }
 
 /** 该意识的未读现在该不该出现在界面上(资格 + 已启用)。 */
