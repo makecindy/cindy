@@ -177,6 +177,38 @@ describe('ghostUnreadStore', () => {
     expect(screen.getByTestId('mail').textContent).toBe('off:-');
   });
 
+  it('前台判据:窗口最小化 / 失焦时为假 —— 常开面板不许把用户没看见的未读吞掉', async () => {
+    const { useHostWindowForeground } = await loadStore();
+    let visibility: DocumentVisibilityState = 'visible';
+    let focused = true;
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+
+    function Probe() {
+      return <span data-testid="fg">{useHostWindowForeground() ? 'fg' : 'bg'}</span>;
+    }
+    render(<Probe />);
+    expect(screen.getByTestId('fg').textContent).toBe('fg');
+
+    // 最小化 / 切到后台 → visibilityState 变 hidden。
+    visibility = 'hidden';
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(screen.getByTestId('fg').textContent).toBe('bg');
+
+    // 恢复可见但没聚焦(被别的窗口盖住 / 用户在别的 app)→ 仍然不算看见。
+    visibility = 'visible';
+    focused = false;
+    act(() => window.dispatchEvent(new Event('blur')));
+    expect(screen.getByTestId('fg').textContent).toBe('bg');
+
+    // 用户切回来 → 这一刻才算看见。
+    focused = true;
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(screen.getByTestId('fg').textContent).toBe('fg');
+
+    vi.restoreAllMocks();
+  });
+
   it('unreadSync 抛错时按"全无未读"起步,后续推送照常生效(未读是提醒不是内容)', async () => {
     unreadSync.mockImplementationOnce(() => {
       throw new Error('store broken');

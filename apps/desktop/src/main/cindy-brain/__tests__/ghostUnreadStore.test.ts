@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { normalizeGhostUnreadEntries } from '../ghostUnreadStore';
+import { applyGhostUnreadMark, normalizeGhostUnreadEntries } from '../ghostUnreadStore';
 import { GHOST_BADGE_SUMMARY_MAX_CHARS } from '../../../shared/ghost';
 
 describe('ghostUnreadStore · normalizeGhostUnreadEntries', () => {
@@ -44,6 +44,29 @@ describe('ghostUnreadStore · normalizeGhostUnreadEntries', () => {
     expect(normalizeGhostUnreadEntries(['a'])).toEqual([]);
     expect(normalizeGhostUnreadEntries('nope')).toEqual([]);
     expect(normalizeGhostUnreadEntries({ 'a-plugin': 'nope' })).toEqual([]);
+  });
+
+  it('applyGhostUnreadMark:同 id 覆盖不堆叠,最新在前', () => {
+    const r = applyGhostUnreadMark(
+      [
+        { ghostId: 'a', summary: '旧', at: 10 },
+        { ghostId: 'b', at: 20 },
+      ],
+      { ghostId: 'a', summary: '新', at: 30 },
+    );
+    expect(r.entries).toEqual([
+      { ghostId: 'a', summary: '新', at: 30 },
+      { ghostId: 'b', at: 20 },
+    ]);
+    expect(r.evicted).toEqual([]);
+  });
+
+  it('applyGhostUnreadMark:触到上限时**如实报出被挤掉的 id** —— 不报的话 renderer 会留着一颗账本里已经没有的点', () => {
+    const current = Array.from({ length: 3 }, (_, i) => ({ ghostId: `p-${i}`, at: i + 1 }));
+    const r = applyGhostUnreadMark(current, { ghostId: 'newcomer', at: 99 }, 3);
+    expect(r.entries.map((e) => e.ghostId)).toEqual(['newcomer', 'p-2', 'p-1']);
+    // 最老的那条被挤出账本,调用方必须据此补一条 unread:false 广播。
+    expect(r.evicted).toEqual(['p-0']);
   });
 
   it('截断到上限(未读是"当前还亮着的",不是历史流水)', () => {

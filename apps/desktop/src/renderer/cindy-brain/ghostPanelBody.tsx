@@ -13,7 +13,7 @@ import { toast } from '@/lib/toast';
 
 import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
-import { clearGhostUnread, useGhostUnread } from './ghostUnreadStore';
+import { clearGhostUnread, useGhostUnread, useHostWindowForeground } from './ghostUnreadStore';
 
 /**
  * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与插件页内面板
@@ -186,12 +186,18 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
    * 挂载到本组件才是"内容确实在用户眼前"的唯一判据,三处天然对称。
    * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
    * 正看着它,不该留一颗清不掉的点。
+   *
+   * foreground 也进依赖,而且是**必要条件**:停靠面板与独立面板窗口会长期挂着,
+   * 光看挂载就清,等于窗口最小化 / 失焦期间到来的未读一律被吞掉——常开面板的
+   * 用户从此收不到这个插件的提醒(codex review P1)。切回窗口的那一刻 effect
+   * 重跑并清零,语义正是「他看的时候才算看过」。
    */
   const unread = useGhostUnread(manifest.id);
+  const foreground = useHostWindowForeground();
   useEffect(() => {
-    if (!unread) return;
+    if (!unread || !foreground) return;
     clearGhostUnread(manifest.id);
-  }, [manifest.id, unread]);
+  }, [manifest.id, unread, foreground]);
 
   const panelHtml = manifest.panel?.html;
   useEffect(() => {

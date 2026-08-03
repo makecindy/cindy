@@ -388,6 +388,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
       },
     );
     expect(snapshot.items[0]).toMatchObject({
@@ -418,10 +419,35 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
       },
     );
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
     expect(ghost.enabled).toBe(true);
+  });
+
+  // 装入确认框渲染的是**服务端给的** manifest,真正落地的是 .cindy 包里的
+  // ghost.json。服务端投影层与客户端清单契约漂移时(cindy-protocol 那份平行
+  // 校验器已经缺了 confirm 槽,新字段按「忽略未知字段」被静默丢掉),包会带着
+  // 用户没审过的权限装进来。出口处需要这份 reviewedManifest 才能逐项比对拦下。
+  it('passes the reviewed server manifest to the install entry so unreviewed package permissions can be blocked', async () => {
+    const item = summary();
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    const h = harness([item]);
+
+    await h.service.install(item.id, { expectedReleaseId: item.currentRelease.id });
+
+    const passed = runtime.install.mock.calls[0]?.[1] as { reviewedManifest?: unknown };
+    expect(passed.reviewedManifest).toBeDefined();
+    // 必须是服务端那一份原文(确认框渲染的就是它),不是包里的或已装的。
+    expect(passed.reviewedManifest).toMatchObject({
+      id: item.ghostId,
+      version: item.currentRelease.version,
+    });
   });
 
   it('installs and enables a public defaultInstall package in local mode', async () => {
@@ -449,6 +475,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: item.ghostId,
         version: item.currentRelease.version,
+        reviewedManifest: expect.objectContaining({ id: item.ghostId }),
       },
     );
     expect(snapshot.items[0]).toMatchObject({

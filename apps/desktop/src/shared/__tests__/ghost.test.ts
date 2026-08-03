@@ -2266,6 +2266,24 @@ describe('ghost · network 详单校验', () => {
     expect(keys).not.toContain('notify');
   });
 
+  it('来源投影丢掉 notify 时,包里的 badge 必须被识别成「未审权限」', () => {
+    // 场景:服务端市场那份平行校验器不认识 `notify` 顶层字段,按「宽进严出,
+    // 忽略未知字段」把它丢了 → 确认框渲染的 manifest 没有 badge;而下载的 .cindy
+    // 包里 ghost.json 原样带着。装入出口就是拿这个 diff 拦下的(codex review P1)。
+    const reviewed = validateGhostManifest({ ...goodManifest(), slots: ['panel'] });
+    const packed = validateGhostManifest({
+      ...goodManifest(),
+      slots: ['panel'],
+      notify: { badge: true },
+    });
+    expect(reviewed.ok && packed.ok).toBe(true);
+    if (!reviewed.ok || !packed.ok) return;
+    const unreviewed = diffGhostPermissionItems(reviewed.manifest, packed.manifest).added;
+    expect(unreviewed.map((i) => i.key)).toEqual(['badge']);
+    // 反向:两份一致时不得误报,否则正常安装会被闸门全拦死。
+    expect(diffGhostPermissionItems(packed.manifest, packed.manifest).added).toHaveLength(0);
+  });
+
   it('notify.badge 必须声明 panel;未知字段与非布尔值一律拒', () => {
     // ① 有 badge,但没有面板 → 拒(未读点承诺"点开能看到内容")
     const noPanel = validateGhostManifest({

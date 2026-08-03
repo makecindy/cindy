@@ -13,6 +13,7 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  diffGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -96,7 +97,10 @@ import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
 import { reconcileGhostSkillLinks } from './skillSlot.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererEvent,
+} from '../security/trustedAppRenderer.js';
 import {
   FILO_GOOGLE_GHOST_ID,
   FILO_GOOGLE_SECRET_KEY,
@@ -1751,9 +1755,15 @@ function broadcastGhostUnreadSnapshot(): void {
  */
 function visibleGhostUnread(): GhostUnreadEntry[] {
   try {
-    return loadGhostUnread().filter((entry) =>
-      isGhostUnreadProjectable(findAvailableGhost(entry.ghostId)),
-    );
+    const entries = loadGhostUnread();
+    if (entries.length === 0) return [];
+    // **一次快照建索引**,不要逐条 findAvailableGhost():那个函数每次都调
+    // GhostManager.list(),而 list() 会同步重扫插件目录、重读每份 manifest /
+    // locale / 图标 / 信任文件。账本允许 200 条,逐条查就是 O(未读 × 已装) 次
+    // 磁盘扫描,而本函数服务的是**同步** ghosts:unread(首屏渲染路径),
+    // 足以卡住启动(codex review)。
+    const available = new Map(availableGhosts().map((ghost) => [ghost.manifest.id, ghost]));
+    return entries.filter((entry) => isGhostUnreadProjectable(available.get(entry.ghostId) ?? null));
   } catch (error) {
     log.warn('ghost unread 读取失败', {
       error: error instanceof Error ? error.message : String(error),
@@ -1773,7 +1783,11 @@ export function getGhostBadgeSlot(): GhostBadgeSlot {
       getGhost: findAvailableGhost,
       mark: (ghostId, summary, at) => {
         try {
-          markGhostUnread(ghostId, summary, at);
+          // 触到上限被挤掉的条目要补一条熄灭广播,否则 renderer 表里留着账本
+          // 已经删掉的点(卡片与聚合入口一直亮到重启)。
+          for (const evictedId of markGhostUnread(ghostId, summary, at).evicted) {
+            broadcastGhostBadge({ ghostId: evictedId, unread: false });
+          }
         } catch (error) {
           log.warn('ghost unread 落盘失败', {
             ghostId,
@@ -3124,6 +3138,12 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
+    /**
+     * 装入确认框实际展示给用户的那份 manifest(来源方给的)。给了就逐项比对:
+     * 包里多出来的权限一律拒装(见 Locked 版里的说明)。两条市场路径都必须给;
+     * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
+     */
+    reviewedManifest?: GhostManifest;
   },
 ): Promise<InstalledGhost> {
   // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
@@ -3139,6 +3159,7 @@ async function installOrUpdateMarketGhostPackageLocked(
   expected: {
     ghostId: string;
     version: string;
+    reviewedManifest?: GhostManifest;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -3157,6 +3178,36 @@ async function installOrUpdateMarketGhostPackageLocked(
       );
     }
     requireGhostAvailableForActiveSession(expected.ghostId);
+    /**
+     * 「审阅过的」与「真要装的」权限必须一致(2026-08-03,codex review P1)。
+     *
+     * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
+     * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
+     * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
+     * 那份平行校验器就已经缺了 `confirm` 槽,新字段(如 `notify.badge`)按「宽进
+     * 严出,忽略未知字段」被静默丢掉。结果:确认框漏列该项权限,包却原样带着它装
+     * 进来,用户**从没审过就多出一个常驻能力面**。
+     *
+     * 这里按权限项逐项比对,包里多出来的一律拒装——不是只挡 badge,是把这一整类
+     * 「来源投影漏字段」的洞一次封死。落在 inspect 之后、任何落地动作之前,所以
+     * 拒绝时磁盘上什么都没动,不需要回滚。
+     */
+    if (expected.reviewedManifest) {
+      const unreviewed = diffGhostPermissionItems(
+        expected.reviewedManifest,
+        inspected.manifest,
+      ).added;
+      if (unreviewed.length > 0) {
+        log.warn('market package declares unreviewed permissions', {
+          ghostId: expected.ghostId,
+          keys: unreviewed.map((item) => item.key),
+        });
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          '下载包申请的权限多于安装确认框展示的内容,已阻止安装(请向插件来源反馈)',
+        );
+      }
+    }
     rejectUnauthorizedTokenBroker(inspected.manifest);
 
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
@@ -4055,13 +4106,20 @@ export function registerGhostIpc(): void {
   // 未读角标快照(notify.badge)。同步读的理由与 recent-usage 同款:插件入口
   // 与插件卡的绿点必须**首帧就对**,先渲染成"全无未读"再跳出一颗点是可见跳变。
   // 账本损坏 / 权限异常一律降级成空,不阻断首屏。
+  // 来源闸:未读 summary 是**插件正文**(工单标题、邮件主题、任务名),
+  // 泄给导航到别处的 renderer / WebView / 插件页就是内容泄漏。
+  // 这里用非抛出的判据而不是 assert:sendSync 里抛错会在 renderer 侧变成同步
+  // 异常炸掉调用点,而未读只是提醒——不可信来源降级成空表即可(codex review)。
   ipcMain.on('ghosts:unread', (event) => {
-    event.returnValue = { entries: visibleGhostUnread() };
+    event.returnValue = { entries: isTrustedAppRendererEvent(event) ? visibleGhostUnread() : [] };
   });
 
   // 用户侧熄灭未读(打开面板 = 明确已读)。不要求意识仍在装:卸载残留的
   // 陈旧条目也该能被清掉,否则界面上会留一颗永远点不掉的点。
-  ipcMain.handle('ghosts:clear-unread', (_event, id: unknown) => {
+  // 来源闸同上:它会改写 owner 作用域的账本,不能让非可信 frame 拿任意合法
+  // 插件 id 把别人的未读清掉(codex review)。
+  ipcMain.handle('ghosts:clear-unread', (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id)) {
       throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
     }
@@ -4504,9 +4562,6 @@ export function registerGhostIpc(): void {
       runtime.stop(id); // 沉睡立即熄灯
       getGhostNodeRuntimeBroker().stop(id); // 随包 Node 也立即关闭
       getGhostSubscriptionGateway().dropGhost(id); // 订阅态清零(缓冲/熔断/seq)
-      // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,
-      // 留一颗点只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
-      suspendGhostUnreadProjection(id);
     }
     const result = await manager.setEnabled(id, enabled);
     if ('rejection' in result) throwUninstallError(result.rejection);
@@ -4515,6 +4570,15 @@ export function registerGhostIpc(): void {
       const ghost = findAvailableGhost(id);
       if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
       resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来
+    } else {
+      // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
+      // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
+      //
+      // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
+      // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
+      // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
+      // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
+      suspendGhostUnreadProjection(id);
     }
     return { ok: true };
   });

@@ -96,14 +96,41 @@ export function readGhostUnread(ghostId: string): GhostUnreadEntry | null {
 /**
  * 点亮一条未读(同一意识重复点亮 = 覆盖摘要并刷新时刻,不堆叠——角标是
  * 幂等的"有/无",不是消息队列)。
+ *
+ * 返回 `evicted` = 因触到上限而被挤掉的 ghostId。调用方**必须**为它们补一条
+ * `unread:false` 广播:只推新点亮那一条的话,renderer 的表里会留着已被账本
+ * 删掉的条目,那颗点和聚合入口点会一直亮到重启或下一次全量快照(codex review)。
  */
-export function markGhostUnread(ghostId: string, summary: string | undefined, at: number): GhostUnreadEntry[] {
-  const entry: GhostUnreadEntry = { ghostId, ...(summary ? { summary } : {}), at };
-  const next = [entry, ...loadGhostUnread().filter((candidate) => candidate.ghostId !== ghostId)]
-    .sort((a, b) => b.at - a.at)
-    .slice(0, MAX_UNREAD_ENTRIES);
-  persist(next);
-  return next;
+export function markGhostUnread(
+  ghostId: string,
+  summary: string | undefined,
+  at: number,
+): { entries: GhostUnreadEntry[]; evicted: string[] } {
+  const result = applyGhostUnreadMark(loadGhostUnread(), {
+    ghostId,
+    ...(summary ? { summary } : {}),
+    at,
+  });
+  persist(result.entries);
+  return result;
+}
+
+/**
+ * markGhostUnread 的纯函数内核(抽出来只为可测:落盘那层要 electron-store)。
+ * 同 id 覆盖而不堆叠,按时刻倒序,超出上限的挤出去并如实报给调用方。
+ */
+export function applyGhostUnreadMark(
+  current: GhostUnreadEntry[],
+  entry: GhostUnreadEntry,
+  max = MAX_UNREAD_ENTRIES,
+): { entries: GhostUnreadEntry[]; evicted: string[] } {
+  const sorted = [entry, ...current.filter((candidate) => candidate.ghostId !== entry.ghostId)].sort(
+    (a, b) => b.at - a.at,
+  );
+  return {
+    entries: sorted.slice(0, max),
+    evicted: sorted.slice(max).map((candidate) => candidate.ghostId),
+  };
 }
 
 /**

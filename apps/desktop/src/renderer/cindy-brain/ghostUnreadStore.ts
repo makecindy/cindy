@@ -124,6 +124,36 @@ export function useAnyGhostUnread(): boolean {
 }
 
 /**
+ * 宿主窗口此刻是否真的在用户眼前(可见 **且** 聚焦)。
+ *
+ * 「面板挂载」不等于「用户看见了」:停靠面板与独立面板窗口会一直挂着,窗口最小化、
+ * 被别的窗口盖住、或者用户切到别的 app 时,插件新点亮的未读会被立刻当成已读清掉
+ * ——常开面板的用户从此**再也收不到这个插件的提醒**(codex review P1)。
+ *
+ * 判据取两条的交集:`visibilityState` 可靠覆盖最小化 / 后台;`hasFocus` 覆盖失焦,
+ * 并顺带兜住「被别的窗口盖住」——遮挡在 Chromium 里不可靠上报,拿聚焦当代理是
+ * 目前唯一站得住的近似。代价是用户切回窗口那一刻才清零,这恰恰是对的语义:
+ * **他看的时候才算看过**。
+ */
+export function useHostWindowForeground(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const events = ['visibilitychange', 'focus', 'blur'] as const;
+      for (const name of events) {
+        (name === 'visibilitychange' ? document : window).addEventListener(name, cb);
+      }
+      return () => {
+        for (const name of events) {
+          (name === 'visibilitychange' ? document : window).removeEventListener(name, cb);
+        }
+      };
+    },
+    () => document.visibilityState === 'visible' && document.hasFocus(),
+    () => false,
+  );
+}
+
+/**
  * 用户明确已读(打开面板)。本地先熄灭再报主机:面板已经在眼前展开了,
  * 点还亮着半秒是可见的错;主机那边失败也只是下次重启又亮起来,不丢内容。
  */
