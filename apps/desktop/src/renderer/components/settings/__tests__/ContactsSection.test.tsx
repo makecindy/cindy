@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   prefill: vi.fn(),
+  pluginGetState: vi.fn(),
   pluginSetEnabled: vi.fn(),
   toastError: vi.fn(),
   settingsGet: vi.fn(),
@@ -79,10 +80,18 @@ beforeEach(() => {
     value: {
       maker: {
         plugins: {
+          getState: mocks.pluginGetState,
           setEnabled: mocks.pluginSetEnabled,
         },
       },
     },
+  });
+  mocks.pluginGetState.mockResolvedValue({
+    effectiveEnabled: false,
+    productDefaultEnabled: true,
+    projectOverride: null,
+    userOverride: { enabled: false },
+    globalOverride: null,
   });
   mocks.pluginSetEnabled.mockResolvedValue({ codexMcpRefreshed: true });
   mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
@@ -117,12 +126,31 @@ describe('ContactsSection AI 管理入口', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
-    await waitFor(() => expect(mocks.pluginSetEnabled).toHaveBeenCalledWith('contacts', true));
+    await waitFor(() => expect(mocks.pluginGetState).toHaveBeenCalledWith('contacts'));
+    expect(mocks.pluginSetEnabled).toHaveBeenCalledWith('contacts', true);
     expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
     expect(mocks.pluginSetEnabled.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.prefill.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('contacts 已随默认值启用时不固化 true override', async () => {
+    mocks.pluginGetState.mockResolvedValue({
+      effectiveEnabled: true,
+      productDefaultEnabled: true,
+      projectOverride: null,
+      userOverride: null,
+      globalOverride: null,
+    });
+    mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
+    render(<ContactsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
+
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
+    expect(mocks.pluginSetEnabled).not.toHaveBeenCalled();
+    expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
   });
 
   it('contacts 插件打开失败时留在设置页', async () => {

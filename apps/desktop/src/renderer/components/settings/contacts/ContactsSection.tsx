@@ -96,7 +96,10 @@ export function ContactsSection() {
     if (togglePending || aiSessionPending) return;
     setAiSessionPending(true);
     try {
-      await window.electronAPI.maker.plugins.setEnabled('contacts', true);
+      const pluginState = await window.electronAPI.maker.plugins.getState('contacts');
+      if (!pluginState.effectiveEnabled) {
+        await window.electronAPI.maker.plugins.setEnabled('contacts', true);
+      }
       prefillContactsAiSessionDraft(t('settings.contacts.guide.managementPrompt'));
       setManagerOpen(false);
       navigate('/cc-agent/new');
