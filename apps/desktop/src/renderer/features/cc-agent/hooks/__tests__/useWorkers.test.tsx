@@ -411,6 +411,73 @@ describe('useWorkers / worker projection store', () => {
     expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
   });
 
+  it('applies a legal empty batch entry but keeps old workers and attention when a lead entry is missing', async () => {
+    vi.useFakeTimers();
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    const hook = renderHook(() => {
+      useOrcaWorkerAttentionWatcher([leadSession('lead-1')], undefined);
+      return useWorkers('lead-1');
+    });
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({ 'lead-1': [] });
+    let emptyResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      emptyResult = await refresh;
+    });
+    expect(emptyResult).toMatchObject({ status: 'applied', workers: [] });
+    expect(hook.result.current.workers).toEqual([]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(false);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      await refresh;
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({});
+    let missingResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      missingResult = await refresh;
+    });
+    expect(missingResult).toMatchObject({ status: 'failed' });
+    expect(missingResult?.workers.map((worker) => worker.sessionId)).toEqual(['session-done']);
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({ 'lead-1': null });
+    let malformedResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      malformedResult = await refresh;
+    });
+    expect(malformedResult).toMatchObject({ status: 'failed' });
+    expect(malformedResult?.workers.map((worker) => worker.sessionId)).toEqual(['session-done']);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+  });
+
   it('lets a detached renderer derive attention from its owned lead projection', async () => {
     mocks.listWorkersByLeads.mockResolvedValueOnce({
       'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],

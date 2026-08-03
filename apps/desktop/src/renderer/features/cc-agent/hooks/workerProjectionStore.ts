@@ -232,6 +232,10 @@ function normalizeBatchResponse(
   return response as Record<string, Array<Record<string, unknown>>>;
 }
 
+function hasOwnKey(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function projectionWorkflowsFor(leadSessionId: string) {
   const deviceId = getStickySessionDeviceId(leadSessionId);
   return deviceId ? orcaWorkflowsForDevice(deviceId) : orcaWorkflowsFor(leadSessionId);
@@ -283,7 +287,21 @@ function flushLocalBatch(): void {
             workers: item.entry.snapshot.workers,
           });
         } else {
-          const workers = (grouped[item.leadSessionId] ?? []).map(mapWorkerRecord);
+          const records = grouped[item.leadSessionId];
+          if (!hasOwnKey(grouped, item.leadSessionId) || !Array.isArray(records)) {
+            log.warn('listWorkersByLeads returned invalid lead entry', {
+              leadSessionId: item.leadSessionId,
+            });
+            item.resolve(writeWorkersSnapshot(
+              item.leadSessionId,
+              item.entry,
+              item.requestId,
+              'failed',
+              item.entry.snapshot.workers,
+            ));
+            continue;
+          }
+          const workers = records.map(mapWorkerRecord);
           item.resolve(writeWorkersSnapshot(
             item.leadSessionId,
             item.entry,
