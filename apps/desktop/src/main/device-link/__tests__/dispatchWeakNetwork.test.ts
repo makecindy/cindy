@@ -198,8 +198,9 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('默认 channel = 60s;放宽表 channel ×2 封顶 120s', () => {
-    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(60_000);
+  it('默认 channel = 60s;收紧表 listing = 24s;放宽表 channel ×2 封顶 120s', () => {
+    // listing tier 的等待预算被 INVOKE_TIMEOUT_OVERRIDES_MS 收到 12s,TTL 随之 ×2 = 24s。
+    expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(24_000);
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
     expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(120_000);
   });
