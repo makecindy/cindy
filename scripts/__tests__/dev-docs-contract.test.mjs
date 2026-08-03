@@ -82,7 +82,17 @@ function assertPnpmCommandExists(line, rootPackage) {
  * 变成 [](./foo.md),目标仍在括号里,正则照常命中。
  */
 function stripCodeSpans(text) {
-	return text.replace(/^```[\s\S]*?^```/gm, "").replace(/`[^`\n]*`/g, "");
+	return (
+		text
+			// 围栏允许带缩进 —— 列表项里的围栏本就是缩进的(docs/design-rules/DESIGN.md
+			// 与 docs/dev-rules/pi-remaining-work.md 各有一处)。只认行首 ``` 会漏掉它们,
+			// 块内的示例链接就会被当成真链接。
+			.replace(/^[ \t]*```[\s\S]*?^[ \t]*```/gm, "")
+			// inline code 用「等长反引号串」配对,这样内容本身含反引号的写法也能整段剥掉
+			// (docs/product-rules/task-and-conversation-naming.md 有 `` `${n} 个会话` ``)。
+			// 刻意不跨行:落单的反引号不应该让后面整篇文档漏检。
+			.replace(/(`+)(?:(?!\1)[^\n])*?\1/g, "")
+	);
 }
 
 function localMarkdownLinks(relativePath) {
