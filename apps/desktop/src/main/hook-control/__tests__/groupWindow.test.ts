@@ -72,18 +72,52 @@ afterEach(() => {
 });
 
 describe('groupLaneOf', () => {
-  it('解析 group / topic lane, DM 与其它 provider 返回 null', () => {
+  // 生产形态(2026-08-03 实测): 主群流 6 段、topic 7 段。旧解析器硬要求 7 段
+  // 且从 parts[5] 取 principal, 于是主群流全部返回 null —— 群消息入了库却从
+  // 不拼上下文。这组用真实 wire 值钉死形态, 不再只按文档写。
+  it('主群流(6 段, 生产形态): chatId 在 parts[3], principal 紧邻 g<n> 左侧', () => {
+    expect(groupLaneOf('telegram:group:8950734557:-1003778432310:435427284:g1')).toEqual({
+      chatId: '-1003778432310',
+      threadId: '',
+      principalId: '435427284',
+    });
+  });
+
+  it('topic(7 段, 生产形态): threadId 在 parts[4]', () => {
+    expect(groupLaneOf('telegram:topic:8950734557:-1003778432310:77:435427284:g2')).toEqual({
+      chatId: '-1003778432310',
+      threadId: '77',
+      principalId: '435427284',
+    });
+  });
+
+  it('带 rootMessageId 的旧文档形态(group 7 段)仍然兼容', () => {
     expect(groupLaneOf('telegram:group:1:-900:42:9:g1')).toEqual({
       chatId: '-900',
       threadId: '',
       principalId: '9',
     });
-    expect(groupLaneOf('telegram:topic:1:-900:77:9:g2')).toEqual({
+  });
+
+  it('无换代后缀的旧 server 形态: 末段即 principal', () => {
+    expect(groupLaneOf('telegram:group:1:-900:9')).toEqual({
       chatId: '-900',
-      threadId: '77',
+      threadId: '',
       principalId: '9',
     });
-    expect(groupLaneOf('telegram:dm:1:9:g1')).toBeNull();
+  });
+
+  it('形状对不上时 fail-closed: 换代后缀/threadId 绝不当成 principal', () => {
+    // 段数不够的 topic(末段前只到 threadId 位)—— 宁可不拼, 不能拿 threadId
+    // 当 principal 写进存储命名空间。
+    expect(groupLaneOf('telegram:topic:1:-900:77:g1')).toBeNull();
+    // 段数不够的 group(principal 位与 chatId 撞位)
+    expect(groupLaneOf('telegram:group:1:-900:g1')).toBeNull();
+    expect(groupLaneOf('telegram:group:1:-900')).toBeNull();
+  });
+
+  it('DM 与其它 provider 返回 null', () => {
+    expect(groupLaneOf('telegram:dm:8950734557:435427284:g1')).toBeNull();
     expect(groupLaneOf('slack:C123:171234.5678')).toBeNull();
   });
 });

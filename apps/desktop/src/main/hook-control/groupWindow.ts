@@ -36,10 +36,22 @@ const CONTEXT_MAX_CHARS = 4_000;
 const ENTRY_TEXT_MAX_CHARS = 500;
 
 /**
- * 从 externalKey 解析 Telegram 群/topic lane。server 侧格式(见
- * telegram-hook-server 文档):
- *   telegram:group:<botId>:<chatId>:<rootMessageId>:<principal>:g<n>
- *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n>
+ * 从 externalKey 解析 Telegram 群/topic lane。
+ *
+ * 实测的 server 下发形态(2026-08-03 生产库 hook-bindings.json):
+ *   telegram:group:<botId>:<chatId>:<principal>:g<n>            ← 6 段
+ *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n> ← 7 段
+ * 文档曾写 group 形态带 <rootMessageId>(7 段), 实现里没有 —— 旧解析器
+ * 硬要求 `length >= 7` 且从 parts[5] 取 principal, 于是主群流(6 段)一律
+ * 返回 null: 群消息正常入库却从不拼上下文(用户实踩“读不到群历史”),
+ * 同时 task.dispatch 的群账号边界检查也被跳过。
+ *
+ * externalKey 在协议里是**不透明字符串**, 段数会随 provider 版本变 ——
+ * 所以只靠两侧锚点定位, 不数中间段: chatId 固定在左侧 parts[3]
+ * (topic 的 threadId 在 parts[4]), principal 紧邻末尾的换代后缀 g<n> 左侧。
+ * 这样 6 段主群流、7 段 topic、以及将来真的加回 rootMessageId 的 7/8 段
+ * 形态都能对;形状对不上时 fail-closed 返回 null(宁可不拼上下文,
+ * 不得把换代后缀或 threadId 当成 principal 写进存储命名空间)。
  * DM lane 与其它 provider 返回 null(无群窗口)。
  */
 export function groupLaneOf(
@@ -47,13 +59,19 @@ export function groupLaneOf(
 ): { chatId: string; threadId: string; principalId: string } | null {
   const parts = externalKey.split(':');
   if (parts[0] !== 'telegram') return null;
-  if (parts[1] === 'group' && parts.length >= 7 && parts[3] && parts[5]) {
-    return { chatId: parts[3], threadId: '', principalId: parts[5] };
-  }
-  if (parts[1] === 'topic' && parts.length >= 7 && parts[3] && parts[4] && parts[5]) {
-    return { chatId: parts[3], threadId: parts[4], principalId: parts[5] };
-  }
-  return null;
+  const kind = parts[1];
+  if (kind !== 'group' && kind !== 'topic') return null;
+  const lastIndex = parts.length - 1;
+  // 换代后缀可选(旧 server 不带): 带则 principal 在它左侧, 不带则就是末段。
+  const principalIndex = /^g\d+$/.test(parts[lastIndex] ?? '') ? lastIndex - 1 : lastIndex;
+  const chatId = parts[3] ?? '';
+  const threadId = kind === 'topic' ? (parts[4] ?? '') : '';
+  const principalId = parts[principalIndex] ?? '';
+  if (!chatId || !principalId) return null;
+  if (kind === 'topic' && !threadId) return null;
+  // principal 不得与 chatId / threadId 撞位 —— 撞上说明段数不够、形状未知。
+  if (principalIndex <= (kind === 'topic' ? 4 : 3)) return null;
+  return { chatId, threadId, principalId };
 }
 
 /** 同一设备先后绑定不同 Telegram 主账号时，群历史绝不共用命名空间。 */
