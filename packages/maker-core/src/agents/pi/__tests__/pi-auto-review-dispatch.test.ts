@@ -6,7 +6,8 @@
  *      NO_PROXY 含 loopback 且吞并小写 no_proxy;
  *   3. auto 档:区内写静默 confirmed:true;灰区交当前模型 reviewer,仅 reviewer 明确
  *      ask / 本地红线才弹 resolver;reviewer 缺失时 fail-closed deny;
- *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效)。
+ *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效);
+ *   5. 送审阅器的 model 与 spawn 的 `--model` 同源(都是用户选中的目录 id)。
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -317,6 +318,26 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r3', confirmed: true });
+  });
+
+  /**
+   * 送审阅器的 model 必须与送给 pi 进程的 `--model` 是同一个目录 id。
+   *
+   * host reviewer 按 (providerId, model) 精确查目录条目定路由,查不到即 fail closed
+   * (oneShotCandidates 的 no_candidate),灰区动作退化成没有 UI 提示的永久 block。
+   * pi 当前不做 wire 改写(不同于 Claude 的 [1m] 后缀、Codex 的 app-server 回带别名),
+   * 这条用例把「两者同源」钉成不变量:将来若给 pi 引入 wire 派生,必须像 Claude 那样
+   * 单独派生、不回写运行期 model。见 issue #1575。
+   */
+  it('reviews through the same catalog model id it spawned pi with', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    await handle.send({ type: 'user', content: 'Touch a scratch file outside the workspace.' });
+    firePermissionRequest('r8', 'write', { path: '/tmp/catalog-model.txt' });
+    await flush();
+    const spawnedModel = captured.args[captured.args.indexOf('--model') + 1];
+    expect(spawnedModel).toBe('m');
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ model: spawnedModel }));
   });
 
   it('auto mode prompts only when the current-model reviewer explicitly asks', async () => {
