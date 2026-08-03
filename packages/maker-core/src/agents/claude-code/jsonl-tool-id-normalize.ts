@@ -391,11 +391,13 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
     // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
     // 重映射到下一个 occurrence 拆散。
-    // 解析顺序: 后顾优先(引用「之前最近的同名 call」); 后顾 miss 时 fallback 前瞻
-    // (stream_event / task 行可先于 assistant 行到达, 引用的父调用在后面 —— 否则顶层
-    // parent_tool_use_id / tool_use_id 保持旧 id, 与已前瞻改名的 content_block.id
-    // 不一致, child 流挂到旧 id 下, codex-connector P1: Forward-map pre-assistant
-    // top-level tool refs)。
+    // 解析顺序: **后顾优先**(引用「之前最近的同名 call」)。标量 parent_tool_use_id /
+    // tool_use_id 引用**已启动的父 Agent/Task 调用** —— subagent/task 记录出现在其父
+    // 调用之后, 后顾语义正确(如两个并行 Agent/Task 调用, subagent-1 挂首次、subagent-2
+    // 挂重铸)。前瞻优先会把这些「引用已完成调用」的记录错配到未来的重铸调用。
+    // content_block_start 的 id 才是「预告未来 tool card」, 独立走 resolveAhead(前瞻)。
+    // 后顾 miss(记录先于一切同名调用)时 fallback 前瞻, 覆盖重铸新 child 先于其
+    // assistant 的场景。
     const resolveForEntry = (entry: JsonObject, val: string, index: number): string | undefined => {
       const key = childKeyOf(entry);
       if (key !== undefined) {
