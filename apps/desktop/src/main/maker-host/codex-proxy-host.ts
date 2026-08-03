@@ -87,6 +87,8 @@ const httpRecoveryReasonByThread = new Map<string, string>();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
+const CODEX_COLLAB_SPAWN_SUBAGENT = 'collab_spawn';
+const CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE = 'cindy_codex_parent_route_unavailable';
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
@@ -242,12 +244,53 @@ function guardianParentThreadIdFromHeaders(
   return headerValue(headers, 'x-codex-parent-thread-id');
 }
 
+function isCollabSpawnRequest(headers: Readonly<Record<string, string>>): boolean {
+  return headerValue(headers, 'x-openai-subagent').toLowerCase() === CODEX_COLLAB_SPAWN_SUBAGENT;
+}
+
 function sessionIdFromHeaders(
   headers: Readonly<Record<string, string>>,
 ): string | undefined {
   const parentThreadId = guardianParentThreadIdFromHeaders(headers);
   if (parentThreadId) return threadToSession.get(parentThreadId);
-  return threadToSession.get(selectedThreadIdFromHeaders(headers));
+
+  const collabSpawn = isCollabSpawnRequest(headers);
+  const selectedThreadId = collabSpawn
+    ? headerValue(headers, 'thread-id')
+    : selectedThreadIdFromHeaders(headers);
+  const existingSessionId = threadToSession.get(selectedThreadId);
+  if (existingSessionId) return existingSessionId;
+
+  // Codex can send a spawned child's first request before thread/started reaches
+  // the host. Only that explicit spawn request may lazily inherit its parent;
+  // request ids and unrelated parent headers are not stable thread identities.
+  if (!collabSpawn) {
+    return undefined;
+  }
+  const childThreadId = selectedThreadId;
+  const collabParentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  if (!childThreadId || !collabParentThreadId) return undefined;
+
+  registerChildThread(collabParentThreadId, childThreadId);
+  return threadToSession.get(childThreadId);
+}
+
+function unresolvedCollabSpawnRouteDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'server_error',
+          code: CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE,
+          message: 'Cindy could not resolve the parent Provider route for this spawned Codex agent.',
+        },
+      }));
+    },
+  };
 }
 
 function safeDumpName(threadId: string): string {
@@ -2102,6 +2145,9 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
+    if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
+      return unresolvedCollabSpawnRouteDecision();
+    }
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const selectedRouting = sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
@@ -2569,7 +2615,8 @@ export function registerReviewerRouteContext(
 
 /**
  * 让 Codex 子 Agent thread 继承父 thread 的业务 session、桥接路由和产品 prompt。
- * app-server 的 thread/started 通知在子 thread 首个请求前同步调用这里。
+ * app-server 的 thread/started 通知和子 thread 首个 collab_spawn 请求都可以
+ * 幂等地调用这里，避免两者乱序时丢失路由。
  */
 export function registerChildThread(parentThreadId: string, childThreadId: string): boolean {
   if (!parentThreadId || !childThreadId || parentThreadId === childThreadId) return false;
