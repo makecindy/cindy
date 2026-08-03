@@ -3497,6 +3497,11 @@ interface ElectronAPI {
   sidebarSettingsLoadPinnedOrderSync: () => string[];
   sidebarSettingsSavePinnedOrder: (order: readonly string[]) => Promise<void>;
   sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void) => () => void;
+  sidebarSettings: {
+    loadHiddenProjectKeys: () => string[];
+    setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
+    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void) => () => void;
+  };
 
   remotePrecreatedWorktreeLedger: {
     list: () => Promise<RemotePrecreatedWorktreeLedgerSnapshot>;

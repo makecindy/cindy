@@ -341,8 +341,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
-const fanOutSidebarPinnedOrderChanged = createIpcFanOut(
-  'sidebar-settings:pinned-order-changed',
+const fanOutSidebarPinnedOrderChanged = createIpcFanOut('sidebar-settings:pinned-order-changed');
+const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
+  'sidebar-settings:hidden-project-keys-changed',
 );
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
@@ -3858,6 +3859,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
         cb(payload);
       }
     }),
+  sidebarSettings: {
+    loadHiddenProjectKeys: (): string[] => {
+      const value = ipcRenderer.sendSync('sidebar-settings:load-hidden-project-keys-sync');
+      return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+        ? Array.from(value)
+        : [];
+    },
+    setProjectHidden: (projectKey: string, hidden: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('sidebar-settings:set-project-hidden', projectKey, hidden),
+    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void): (() => void) =>
+      fanOutSidebarHiddenProjectKeysChanged((payload) => {
+        if (
+          Array.isArray(payload) &&
+          payload.every((entry): entry is string => typeof entry === 'string')
+        ) {
+          cb(Array.from(payload));
+        }
+      }),
+  },
 
   remotePrecreatedWorktreeLedger: {
     list: (): Promise<RemotePrecreatedWorktreeLedgerSnapshot> =>
