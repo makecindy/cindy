@@ -114,6 +114,7 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const GHOST_SLOTS = [
   'subscribe',
   'tool',
+  'at-resource',
   'card',
   'panel',
   'cindy',
@@ -2861,7 +2862,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
 
   let atResourceProvider: GhostAtResourceProviderDecl | undefined;
-  if (raw.atResourceProvider !== undefined) {
+  if (slots.includes('at-resource')) {
+    if (raw.atResourceProvider === undefined) {
+      return { ok: false, reason: 'slots 声明了 "at-resource" 但缺少 atResourceProvider' };
+    }
     if (!isPlainObject(raw.atResourceProvider)) {
       return { ok: false, reason: 'atResourceProvider 必须是对象' };
     }

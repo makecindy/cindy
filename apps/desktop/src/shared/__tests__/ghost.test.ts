@@ -1015,7 +1015,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
   it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
     const base = {
       ...goodChipManifest(),
-      slots: ['panel', 'tool'],
+      slots: ['panel', 'tool', 'at-resource'],
       tools: [{ name: 'search_issues', description: '只读搜索议题' }],
     };
     const valid = validateGhostManifest({
@@ -1036,6 +1036,40 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     }).ok).toBe(false);
   });
 
+  it('未声明 at-resource 槽时忽略旧 manifest 的同名未知字段', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    for (const legacyValue of [
+      null,
+      true,
+      'legacy',
+      [],
+      {},
+      { tool: 'search_issues' },
+      { label: 'Issues' },
+    ]) {
+      const result = validateGhostManifest({
+        ...base,
+        atResourceProvider: legacyValue,
+      });
+      expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
+      expect(result.ok && result.manifest.atResourceProvider).toBeUndefined();
+    }
+  });
+
+  it('声明 at-resource 槽时必须提供严格有效的资源入口', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool', 'at-resource'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    expect(validateGhostManifest(base).ok).toBe(false);
+    expect(validateGhostManifest({ ...base, atResourceProvider: true }).ok).toBe(false);
+  });
+
   it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
     const raw = {
       ...goodChipManifest(),
@@ -1045,6 +1079,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     const before = validateGhostManifest(raw);
     const after = validateGhostManifest({
       ...raw,
+      slots: ['panel', 'tool', 'at-resource'],
       atResourceProvider: { tool: 'search_issues' },
     });
     expect(before.ok && after.ok).toBe(true);

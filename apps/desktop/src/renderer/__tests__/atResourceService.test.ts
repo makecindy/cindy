@@ -18,7 +18,10 @@ function stubApi(options: {
   workspace?: unknown;
   context?: unknown;
   tasks?: unknown;
+  taskSearch?: unknown;
   deviceTasks?: unknown;
+  deviceTaskSearch?: unknown;
+  deviceTaskSearchError?: Error;
   workspaceError?: Error;
   contextError?: Error;
   taskError?: Error;
@@ -36,17 +39,25 @@ function stubApi(options: {
           : vi.fn().mockResolvedValue(options.context),
       },
       deviceLink: {
-        invoke: vi.fn((_deviceId: string, channel: string) => (
-          channel === 'local-db:sessions:list'
-            ? Promise.resolve(options.deviceTasks)
-            : Promise.resolve(options.workspace)
-        )),
+        invoke: vi.fn((_deviceId: string, channel: string) => {
+          if (channel === 'local-db:sessions:list') return Promise.resolve(options.deviceTasks);
+          if (channel === 'local-db:conversations:search') {
+            if (options.deviceTaskSearchError) return Promise.reject(options.deviceTaskSearchError);
+            return Promise.resolve(options.deviceTaskSearch);
+          }
+          return Promise.resolve(options.workspace);
+        }),
       },
       localDb: {
         sessions: {
           list: options.taskError
             ? vi.fn().mockRejectedValue(options.taskError)
             : vi.fn().mockResolvedValue(options.tasks),
+        },
+        conversations: {
+          search: options.taskError
+            ? vi.fn().mockRejectedValue(options.taskError)
+            : vi.fn().mockResolvedValue(options.taskSearch),
         },
       },
       ghosts: {
@@ -442,6 +453,111 @@ describe('scanAtResources context providers', () => {
       },
     ]);
     expect(window.electronAPI.deviceLink.invoke).toHaveBeenCalledWith(
+      'device-1',
+      'local-db:sessions:list',
+      [100, 'active'],
+    );
+  });
+
+  it('searches all active task history through the indexed conversation search', async () => {
+    stubApi({
+      taskSearch: {
+        query: 'legacy',
+        results: [{
+          session: {
+            id: 'older-than-sidebar-cap',
+            title: 'Legacy release task',
+            status: 'active',
+            workingDir: 'D:\\repo',
+          },
+          contentHit: null,
+        }],
+        vectorUsed: false,
+        vectorSkipReason: null,
+        poolCapped: false,
+      },
+    });
+
+    const result = await scanAtResources('', 'codex', 2000, 'legacy', undefined, {
+      includeTaskHistory: true,
+    });
+
+    expect(result.items).toMatchObject([{
+      type: 'session',
+      name: 'Legacy release task',
+      relPath: 'cindy://session/older-than-sidebar-cap',
+    }]);
+    expect(window.electronAPI.localDb.conversations.search).toHaveBeenCalledWith({
+      query: 'legacy',
+      limit: 20,
+      sortBy: 'relevance',
+      semanticMode: 'keyword',
+      filters: { status: 'active' },
+    });
+    expect(window.electronAPI.localDb.sessions.list).not.toHaveBeenCalled();
+  });
+
+  it('uses indexed task search on the controlled device', async () => {
+    stubApi({
+      deviceTaskSearch: {
+        query: 'remote',
+        results: [{
+          session: {
+            id: 'remote-history',
+            title: 'Remote task',
+            status: 'active',
+            workingDir: '/repo',
+          },
+          contentHit: null,
+        }],
+        vectorUsed: false,
+        vectorSkipReason: null,
+        poolCapped: false,
+      },
+    });
+
+    const result = await scanAtResources('', 'codex', 2000, 'remote', 'device-1', {
+      includeTaskHistory: true,
+    });
+
+    expect(result.items).toMatchObject([{
+      type: 'session',
+      relPath: 'cindy://session/remote-history?device=device-1',
+    }]);
+    expect(window.electronAPI.deviceLink.invoke).toHaveBeenCalledWith(
+      'device-1',
+      'local-db:conversations:search',
+      [{
+        query: 'remote',
+        limit: 20,
+        sortBy: 'relevance',
+        semanticMode: 'keyword',
+        filters: { status: 'active' },
+      }],
+    );
+  });
+
+  it('falls back to the bounded task list for an older controlled device', async () => {
+    stubApi({
+      deviceTaskSearchError: new Error('CHANNEL_NOT_ALLOWED'),
+      deviceTasks: [{
+        id: 'legacy-remote-history',
+        title: 'Legacy remote task',
+        status: 'active',
+        userSendAt: '2026-08-03T00:00:00.000Z',
+      }],
+    });
+
+    const result = await scanAtResources('', 'codex', 2000, 'legacy', 'device-1', {
+      includeTaskHistory: true,
+    });
+
+    expect(result.items).toMatchObject([{
+      type: 'session',
+      relPath: 'cindy://session/legacy-remote-history?device=device-1',
+    }]);
+    expect(window.electronAPI.deviceLink.invoke).toHaveBeenNthCalledWith(
+      2,
       'device-1',
       'local-db:sessions:list',
       [100, 'active'],

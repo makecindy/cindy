@@ -3470,6 +3470,7 @@ export function ChatInput({
     if (atPluginScope) return;
     const normalizedQuery = atQuery.trim();
     if (normalizedQuery === atLastScanQueryRef.current) return;
+    atLastScanQueryRef.current = normalizedQuery;
     const seq = ++atScanSeqRef.current;
     setAtState((prev) => prev.kind === 'ready'
       ? { ...prev, searching: true }
