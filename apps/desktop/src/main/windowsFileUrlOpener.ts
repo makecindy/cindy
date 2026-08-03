@@ -19,9 +19,11 @@ export function createWindowsFileUrlOpener(
   options: WindowsFileUrlOpenerOptions,
 ): ((fileUrl: string) => Promise<void>) | undefined {
   if ((options.platform ?? process.platform) !== 'win32') return undefined;
-  const rundll32 = options.windowsDir
-    ? path.win32.join(options.windowsDir, 'System32', 'rundll32.exe')
-    : 'rundll32.exe';
+  // Never fall back to PATH lookup for this privileged URL handoff. WINDIR is
+  // normally present, but the fixed default keeps a stripped-down environment
+  // from becoming an executable-search-path trust boundary.
+  const windowsRoot = options.windowsDir || 'C:\\Windows';
+  const rundll32 = path.win32.join(windowsRoot, 'System32', 'rundll32.exe');
 
   return (fileUrl) =>
     new Promise<void>((resolve, reject) => {

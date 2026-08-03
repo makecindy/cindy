@@ -45,5 +45,12 @@ describe('createWindowsFileUrlOpener', () => {
     await expect(openUrl?.('file:///C:/tmp/preview.html')).rejects.toThrow(
       'URL handler unavailable',
     );
+
+    expect(execFile).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\rundll32.exe',
+      ['url.dll,FileProtocolHandler', 'file:///C:/tmp/preview.html'],
+      { windowsHide: true },
+      expect.any(Function),
+    );
   });
 });
