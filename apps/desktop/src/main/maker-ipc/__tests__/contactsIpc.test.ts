@@ -115,30 +115,7 @@ describe('contacts-ipc handlers', () => {
     });
   });
 
-  it('设置读取把目标 workingDir 交给有效插件 gate', async () => {
-    enabled = true;
-    const readCodexMcpReady = vi.fn((workingDir?: string) => workingDir !== '/blocked');
-    handlers = createContactsIpcHandlers({
-      getManager: () => manager,
-      readSettingsState: () => ({ value: { enabled }, isCustomized: true }),
-      writeEnabled: (value) => {
-        enabled = value;
-      },
-      broadcastChanged: () => {},
-      readCodexMcpReady,
-    });
-
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/blocked')).resolves.toMatchObject({
-      codexMcpReady: false,
-    });
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/allowed')).resolves.toMatchObject({
-      codexMcpReady: true,
-    });
-    expect(readCodexMcpReady).toHaveBeenNthCalledWith(1, '/blocked');
-    expect(readCodexMcpReady).toHaveBeenNthCalledWith(2, '/allowed');
-  });
-
-  it('Codex contacts 就绪判断服从设置、有效插件、owner scope 和 applied 快照', () => {
+  it('Codex contacts 就绪判断服从本机对话态的有效插件、owner scope 和 applied 快照', () => {
     const base = {
       contactsEnabled: true,
       pluginEnabled: true,
@@ -147,9 +124,11 @@ describe('contacts-ipc handlers', () => {
       appliedEnabled: null,
     };
 
+    // 最近项目即使单独禁用，reset 后的新任务仍应服从本机对话态的全局 enabled。
     expect(resolveCodexContactsMcpReady(base)).toBe(true);
     expect(resolveCodexContactsMcpReady({ ...base, contactsEnabled: false })).toBe(false);
-    // 存量全局或项目 override 禁用 contacts 时，即使没有 applied 快照也 fail closed。
+    // 新任务会 reset 项目目录；本机对话态的全局 override 关闭时，即使最近项目单独开启、
+    // 且当前 owner 还没有 applied 快照，也必须 fail closed。
     expect(resolveCodexContactsMcpReady({ ...base, pluginEnabled: false })).toBe(false);
     // 其他 owner 的失败快照不能污染当前 owner；当前 owner 的 applied=false 必须保留阻塞。
     expect(

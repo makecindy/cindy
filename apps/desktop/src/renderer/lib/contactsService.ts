@@ -71,7 +71,7 @@ export interface ContactsDeviceSyncStatus {
 }
 
 export const contactsService = {
-  settingsGet: (workingDir?: string) => api().settingsGet(workingDir),
+  settingsGet: () => api().settingsGet(),
   settingsSet: (enabled: boolean) => api().settingsSet(enabled),
   syncStatusGet: () => api().syncStatusGet() as Promise<ContactsDeviceSyncStatus>,
   syncEnabledSet: (enabled: boolean) =>

@@ -379,10 +379,7 @@ export function SettingsView() {
                   className="pb-[18px]"
                   aria-label={t('settings.contacts.title')}
                 >
-                  <ContactsSection
-                    key={`contacts:${dataOwnerId ?? 'none'}`}
-                    workingDir={workingDir ?? undefined}
-                  />
+                  <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
                   <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />

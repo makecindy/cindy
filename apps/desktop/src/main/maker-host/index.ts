@@ -149,11 +149,12 @@ function clearCodexAppliedContactsSnapshot(): void {
  * 没有当前 owner 的 applied 快照时，下次 lazy spawn 会读取 live 设置，视为就绪；
  * 同 owner 有快照时必须服从实际应用值，避免开关已落盘但旧 app-server 仍无工具。
  */
-export function isCodexContactsMcpReady(workingDir?: string): boolean {
+export function isCodexContactsMcpReady(): boolean {
   return resolveCodexContactsMcpReady({
     contactsEnabled: readContactsSettings().enabled,
-    // 与 provider / prompt gate 使用同一份有效插件策略，含当前项目 override。
-    pluginEnabled: getPluginRegistry().isEnabled('contacts', workingDir),
+    // CTA 会把草稿工作区重置成本机对话态；按同一全局作用域读取有效插件开关，
+    // 不得让最近项目的 override 影响一个实际不会继承该项目的新任务。
+    pluginEnabled: getPluginRegistry().isEnabled('contacts'),
     activeOwnerScope: activeOwnerScopeKey(),
     appliedOwnerScope: codexAppliedContactsOwnerScope,
     appliedEnabled: codexAppliedContactsEnabled,

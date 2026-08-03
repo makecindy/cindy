@@ -94,16 +94,16 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByText('settings.contacts.guide.sources.import')).toBeNull();
   });
 
-  it('点击后按目标工作目录检查有效插件开关，再写入统一管理意图并进入新任务页', async () => {
+  it('点击后按重置后的本机对话态检查，再写入统一管理意图并进入新任务页', async () => {
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
-    render(<ContactsSection workingDir="/project-a" />);
+    render(<ContactsSection />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
     await waitFor(() =>
       expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt'),
     );
-    expect(mocks.settingsGet).toHaveBeenCalledWith('/project-a');
+    expect(mocks.settingsGet).toHaveBeenLastCalledWith();
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
   });
 
@@ -120,7 +120,8 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByRole('button', { name: 'settings.contacts.guide.cta' })).toBeNull();
   });
 
-  it('main 报告工具未就绪时不启动任务，其他路径刷新成功后可直接恢复', async () => {
+  it('忽略最近项目的相反 override，只服从 reset 后本机对话态的有效开关', async () => {
+    // 最近项目可单独启用，但新任务会 reset 该项目；全局关闭必须阻止启动。
     mocks.settingsGet.mockResolvedValue({
       enabled: true,
       isCustomized: true,
@@ -135,6 +136,7 @@ describe('ContactsSection AI 管理入口', () => {
     expect(mocks.prefill).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
 
+    // 反向场景：最近项目单独禁用，但 reset 后全局开启，应允许启动。
     mocks.settingsGet.mockResolvedValue({
       enabled: true,
       isCustomized: true,
@@ -143,6 +145,7 @@ describe('ContactsSection AI 管理入口', () => {
     fireEvent.click(cta);
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
+    expect(mocks.settingsGet).toHaveBeenLastCalledWith();
   });
 
   it('切换数据所有者并重挂载后只服从 main 返回的当前 owner 就绪状态', async () => {
