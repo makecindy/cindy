@@ -15,6 +15,21 @@ export interface AtDesktopWindowCandidate {
   title: string;
 }
 
+/**
+ * Browser-tab metadata is task-scoped. The renderer-provided session id is
+ * only an assertion; Main's active RSB session remains the scope authority.
+ * A missing or stale mismatch fails closed instead of exposing another task's
+ * tabs to the pending @ request.
+ */
+export function resolveAtBrowserTabSessionId(
+  requestedSessionId: string | undefined,
+  activeSessionId: string | null,
+): string | undefined {
+  return activeSessionId && requestedSessionId === activeSessionId
+    ? activeSessionId
+    : undefined;
+}
+
 function oneLine(value: unknown, maxLength: number): string {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);

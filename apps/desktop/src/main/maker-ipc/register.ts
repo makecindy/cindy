@@ -110,7 +110,10 @@ import {
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
-import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
+import {
+  getActiveRsbSessionId,
+  getRsbBrowserBridge,
+} from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
@@ -128,6 +131,7 @@ import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
   readAtDesktopWindows,
+  resolveAtBrowserTabSessionId,
 } from './atContextCatalog.js';
 import {
   finalizeAtProjectAgentResources,
@@ -5033,9 +5037,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let browserTabs: ReturnType<typeof listAtBrowserTabs> = [];
     let desktopWindows: ReturnType<typeof readAtDesktopWindows> = [];
     try {
+      const browserTabSessionId = resolveAtBrowserTabSessionId(
+        request.sessionId,
+        getActiveRsbSessionId(),
+      );
       browserTabs = listAtBrowserTabs(
         getRsbBrowserBridge(),
-        request.sessionId,
+        browserTabSessionId,
         request.query,
         request.limit,
       );

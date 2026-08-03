@@ -4,9 +4,17 @@ import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
   readAtDesktopWindows,
+  resolveAtBrowserTabSessionId,
 } from '../atContextCatalog.js';
 
 describe('at context catalog', () => {
+  it('only resolves browser tabs when the renderer request matches Main active scope', () => {
+    expect(resolveAtBrowserTabSessionId('session-1', 'session-1')).toBe('session-1');
+    expect(resolveAtBrowserTabSessionId('session-1', 'session-2')).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId('session-1', null)).toBeUndefined();
+    expect(resolveAtBrowserTabSessionId(undefined, 'session-1')).toBeUndefined();
+  });
+
   it('reads only live public browser tabs from the requested task', () => {
     const registry = {
       listBySession: vi.fn(() => [
