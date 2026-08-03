@@ -2374,6 +2374,22 @@
         "defaultTag": "Default",
         "resetToDefault": "Reset to default",
         "toggleFailed": "Failed to switch browser target",
+        "health": {
+          "ready": "Embedded browser control is connected.",
+          "error": "Embedded browser connection failed: {{reason}}. Choose “Recover Browser” to rebuild the control connection.",
+          "reasons": {
+            "disposing": "the previous shutdown has not completed",
+            "hostUnavailable": "the embedded browser interface is not ready or its connection was lost",
+            "startFailed": "the replacement controller could not start",
+            "statusFailed": "the controller status check failed",
+            "recoveryFailed": "the control connection could not be rebuilt"
+          },
+          "reconnect": "Reconnect Browser",
+          "recover": "Recover Browser",
+          "recovering": "Recovering Browser…",
+          "recovered": "Embedded browser reconnected",
+          "recoverFailed": "Failed to recover the embedded browser. Review the reason and try again."
+        },
         "rsbWebview": {
           "title": "Sidebar embedded browser",
           "description": "Agent operates inside the right-sidebar webview tabs. No popup window; sign-ins are kept separately."
@@ -6537,6 +6553,11 @@
         "rename": "Rename project",
         "pin": "Pin project",
         "unpin": "Unpin project",
+        "removeFromSidebar": "Remove Project from Sidebar",
+        "removeFromSidebarConfirmTitle": "Remove {{name}}?",
+        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions will move to the Chat section and remain available.",
+        "removeFromSidebarConfirmAction": "Remove Project",
+        "removeFromSidebarFailed": "Couldn’t remove the project from the sidebar — try again.",
         "showFiles": "Show Files",
         "archivedAll": "Archive all",
         "unarchiveAll": "Restore all",

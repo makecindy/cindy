@@ -41,6 +41,44 @@ function automation(): RsbWebviewAutomation {
   return new RsbWebviewAutomation({ warn: vi.fn() });
 }
 
+describe('RsbWebviewAutomation lifecycle', () => {
+  it('fences a delayed debugger command without detaching its replacement generation', async () => {
+    let finishOld: ((value: unknown) => void) | undefined;
+    let finishReplacement: ((value: unknown) => void) | undefined;
+    let commandCount = 0;
+    const harness = debuggerHarness(() => {
+      commandCount += 1;
+      return new Promise((resolve) => {
+        if (commandCount === 1) finishOld = resolve;
+        else finishReplacement = resolve;
+      });
+    });
+    const oldGeneration = automation();
+    const replacement = automation();
+
+    const oldCall = oldGeneration.evaluate('tab-1', harness.wc, {
+      fn: '() => 1',
+    });
+    await vi.waitFor(() => expect(harness.sendCommand).toHaveBeenCalledTimes(1));
+    oldGeneration.dispose();
+
+    const replacementCall = replacement.evaluate('tab-1', harness.wc, {
+      fn: '() => 2',
+    });
+    await vi.waitFor(() => expect(harness.sendCommand).toHaveBeenCalledTimes(2));
+
+    finishOld?.({ result: { value: 1 } });
+    await expect(oldCall).rejects.toThrow(/generation was replaced/);
+    // Only dispose detached. The old call's late finally must not detach the
+    // replacement generation that has since attached to the same transport.
+    expect(harness.detach).toHaveBeenCalledTimes(1);
+
+    finishReplacement?.({ result: { value: 2 } });
+    await expect(replacementCall).resolves.toBe(2);
+    expect(harness.detach).toHaveBeenCalledTimes(2);
+  });
+});
+
 const AX_TREE = {
   nodes: [
     {

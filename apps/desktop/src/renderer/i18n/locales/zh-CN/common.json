@@ -2373,6 +2373,22 @@
         "defaultTag": "默认",
         "resetToDefault": "恢复默认",
         "toggleFailed": "切换浏览器目标失败",
+        "health": {
+          "ready": "内置浏览器控制端已连接。",
+          "error": "内置浏览器连接异常：{{reason}}。点击「恢复浏览器」重建控制连接。",
+          "reasons": {
+            "disposing": "上一次关闭尚未完成",
+            "hostUnavailable": "内置浏览器界面尚未就绪或连接已中断",
+            "startFailed": "新的控制端未能启动",
+            "statusFailed": "控制端状态检查失败",
+            "recoveryFailed": "控制连接未能重建"
+          },
+          "reconnect": "重新连接浏览器",
+          "recover": "恢复浏览器",
+          "recovering": "正在恢复浏览器…",
+          "recovered": "内置浏览器已重新连接",
+          "recoverFailed": "恢复内置浏览器失败，请根据错误原因重试"
+        },
         "rsbWebview": {
           "title": "侧边栏内置浏览器",
           "description": "Agent 在右侧栏内嵌的 webview tab 里操作。无弹窗、登录态独立保留。"
@@ -6526,6 +6542,11 @@
         "rename": "重命名项目",
         "pin": "置顶项目",
         "unpin": "取消置顶项目",
+        "removeFromSidebar": "从侧栏移除项目",
+        "removeFromSidebarConfirmTitle": "移除“{{name}}”？",
+        "removeFromSidebarConfirmDescription": "这会从侧栏移除该项目。电脑上的文件不会被删除。现有任务会移到“对话”分组，仍可正常使用。",
+        "removeFromSidebarConfirmAction": "移除项目",
+        "removeFromSidebarFailed": "无法从侧栏移除项目，请重试",
         "showFiles": "查看文件",
         "archivedAll": "全部归档",
         "unarchiveAll": "全部取消归档",

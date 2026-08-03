@@ -205,6 +205,62 @@ describe('dispatchTabOp — failure paths', () => {
 });
 
 describe('dispatchTabOp — ensureHost(detached 侧边栏子窗口)', () => {
+  it('skips ensureHost for a side-effect-free health probe', async () => {
+    const wc = fakeWc();
+    const ensureHost = vi.fn(async () => undefined);
+    const opts: RendererBridgeOptions = {
+      getHostWebContents: () => wc as unknown as Electron.WebContents,
+      ensureHost,
+      logger: logger(),
+    };
+    registerTabOpResultHandler(opts);
+
+    const pending = dispatchTabOp(
+      { op: 'probe' },
+      opts,
+      undefined,
+      { ensureHost: false },
+    );
+    const sent = wc.send.mock.calls[0][1] as { reqId: string };
+    getRegisteredHandler('rsb-browser-bridge:tab-op-result')?.(
+      null,
+      { reqId: sent.reqId, ok: true },
+    );
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(ensureHost).not.toHaveBeenCalled();
+  });
+
+  it('does not send after a lifecycle guard invalidates during ensureHost', async () => {
+    let finishEnsure: (() => void) | undefined;
+    let active = true;
+    const ensureHost = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finishEnsure = resolve;
+      }),
+    );
+    const wc = fakeWc();
+    const opts: RendererBridgeOptions = {
+      getHostWebContents: () => wc as unknown as Electron.WebContents,
+      ensureHost,
+      logger: logger(),
+    };
+    const pending = dispatchTabOp(
+      { op: 'probe' },
+      opts,
+      () => {
+        if (!active) throw new Error('generation was replaced');
+      },
+    );
+
+    await Promise.resolve();
+    active = false;
+    finishEnsure?.();
+
+    await expect(pending).rejects.toThrow(/generation was replaced/);
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
   it('先 await ensureHost 再取 host / send(窗口拉起后 op 才发出)', async () => {
     const wc = fakeWc();
     let hostReady = false;
