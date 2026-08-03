@@ -88,9 +88,11 @@ import {
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
   pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
+  resetAtMentionWindowCacheForTests,
   resetComputerDriverUpdateStateForTests,
   runProcessWithActivityTimeout,
   sampleInstallProcessTree,
@@ -298,6 +300,7 @@ describe('computer mcp integration', () => {
     setPlatform(originalPlatform);
     await cleanupAllComputerDriverSessions();
     resetComputerDriverPermissionProbeCacheForTests();
+    resetAtMentionWindowCacheForTests();
     existsSyncMock.mockReset().mockReturnValue(false);
     spawnMock.mockReset();
     driverStdinWrites.length = 0;
@@ -526,6 +529,7 @@ describe('computer mcp integration', () => {
     const scriptArgs = spawnMock.mock.calls.find(isWin32FallbackSpawnCall)?.[1] as unknown[] | undefined;
     const script = scriptArgs
       ?.find((part): part is string => typeof part === 'string' && part.includes('XdtWin32WindowSnapshot'));
+    expect(script).toContain('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)');
     expect(script).toContain('$procId');
     expect(script).not.toMatch(/\$pid\b/i);
   });
@@ -2538,6 +2542,58 @@ describe('computer mcp integration', () => {
       ['permissions', 'status', '--json'],
       expect.objectContaining({ windowsHide: true }),
     );
+  });
+
+  it('bootstraps macOS @ windows from the passive permission status after restart', async () => {
+    setPlatform('darwin');
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.2\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n  pid: 4242\n' });
+    mockDriverSpawn({
+      stdout:
+        '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
+    });
+    mockDriverSpawn({ stdout: '{"ok":true,"windows":[{"window_id":7,"pid":70}]}\n' });
+
+    await expect(listComputerWindowsForAtMention()).resolves.toEqual({
+      ok: true,
+      windows: [{ window_id: 7, pid: 70 }],
+    });
+    expect(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+      ['--version'],
+      ['status'],
+      ['permissions', 'status', '--json'],
+      ['call', 'list_windows'],
+    ]);
+  });
+
+  it('keeps macOS @ windows hidden without probing on older drivers', async () => {
+    setPlatform('darwin');
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.1\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n  pid: 4242\n' });
+
+    await expect(listComputerWindowsForAtMention()).resolves.toEqual({
+      ok: true,
+      windows: [],
+    });
+    expect(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+      ['--version'],
+      ['status'],
+    ]);
+  });
+
+  it('does not autostart the macOS permission daemon from the @ palette', async () => {
+    setPlatform('darwin');
+    mockDriverSpawn({ stdout: 'cua-driver 0.12.2\n' });
+    mockDriverSpawn({ stderr: 'Cua Driver daemon is not running\n', exitCode: 1 });
+
+    await expect(listComputerWindowsForAtMention()).resolves.toEqual({
+      ok: true,
+      windows: [],
+    });
+    expect(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+      ['--version'],
+      ['status'],
+    ]);
   });
 
   it('can force a macOS permission probe even when the daemon status is stopped', async () => {

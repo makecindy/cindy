@@ -92,6 +92,7 @@ vi.mock('electron', () => ({
 vi.mock('@cindy/maker-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-core')>();
   return {
+    isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,

@@ -106,9 +106,11 @@ import {
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
+import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
@@ -122,6 +124,17 @@ import {
 } from '../computer-permission-guide/window.js';
 import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
+import {
+  listAtBrowserTabs,
+  parseAtContextCatalogRequest,
+  readAtDesktopWindows,
+  resolveAtBrowserTabSessionId,
+} from './atContextCatalog.js';
+import {
+  finalizeAtProjectAgentResources,
+  listAtProjectAgentResources,
+  supportsAtProjectAgentResources,
+} from './atAgentCatalog.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -4967,8 +4980,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     try {
       const resourceParams = params as { workingDir: string; cap?: number; query?: string };
       await prepareProjectSkillLinksFailSoft(resourceParams?.workingDir);
-      const result = await maker.scanAtResources(requireAgentKind(agentKind), resourceParams);
-      return { success: true, ...result };
+      const kind = requireAgentKind(agentKind);
+      const includeProjectAgents = supportsAtProjectAgentResources(kind);
+      const [result, customizationResult] = await Promise.all([
+        maker.scanAtResources(kind, resourceParams),
+        includeProjectAgents
+          ? maker.listCustomizations({
+              agentKind: 'claude-code',
+              workingDirs: [resourceParams.workingDir],
+              kinds: ['agent'],
+            }).catch((err: unknown) => {
+              log.warn('Project Agent @ catalog failed; keeping workspace resources available', err);
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+      const projectAgents = customizationResult
+        ? listAtProjectAgentResources(
+            customizationResult.items,
+            resourceParams.workingDir,
+            resourceParams.query,
+          )
+        : [];
+      const merged = finalizeAtProjectAgentResources(
+        kind,
+        result.items,
+        projectAgents,
+        resourceParams.cap,
+      );
+      return {
+        success: true,
+        items: merged.items,
+        truncated: result.truncated || merged.capped,
+      };
     } catch (err) {
       return {
         success: false,
@@ -4977,6 +5021,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         truncated: false,
       };
     }
+  });
+
+  ipcMain.handle(MAKER_INVOKE.AT_CONTEXT_LIST, async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const request = parseAtContextCatalogRequest(payload);
+    if (!request) {
+      throwIpcError('INVALID_PARAMS', 'Invalid @ context catalog request');
+    }
+
+    const unavailable: Array<'browser-tabs' | 'desktop-windows'> = [];
+    let browserTabs: ReturnType<typeof listAtBrowserTabs> = [];
+    let desktopWindows: ReturnType<typeof readAtDesktopWindows> = [];
+    try {
+      const browserTabSessionId = resolveAtBrowserTabSessionId(
+        request.sessionId,
+        event.sender.getURL(),
+      );
+      browserTabs = listAtBrowserTabs(
+        getRsbBrowserBridge(),
+        browserTabSessionId,
+        request.query,
+        request.limit,
+      );
+    } catch (err) {
+      unavailable.push('browser-tabs');
+      log.warn('@ context browser-tab catalog failed', err);
+    }
+
+    // Computer Use is machine-scoped. Do not let renderer-provided project
+    // metadata appear to participate in its enablement decision.
+    if (request.query && getPluginRegistry().isEnabled('computer')) {
+      try {
+        desktopWindows = readAtDesktopWindows(
+          await listComputerWindowsForAtMention(),
+          request.query,
+          request.limit,
+        );
+      } catch (err) {
+        unavailable.push('desktop-windows');
+        log.warn('@ context desktop-window catalog failed', err);
+      }
+    }
+
+    return { success: true, browserTabs, desktopWindows, unavailable };
   });
 
   ipcMain.handle(MAKER_INVOKE.LIST_CUSTOMIZATIONS, async (_e, params: unknown) => {

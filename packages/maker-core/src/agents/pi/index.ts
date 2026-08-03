@@ -42,6 +42,7 @@ import {
 } from './cindy-bridge-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -891,7 +892,21 @@ export class PiAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
+    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
+    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
+    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
+    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+      autoReviewUnavailableNotice.reset();
     };
+    // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
+    // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      queue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'pi',
+      });
+    });
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
       const request = {
         sessionId: opts.sessionId,
@@ -995,6 +1010,7 @@ export class PiAgent extends BaseAgent {
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
+              notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
             }));
             return;
           }
@@ -1380,6 +1396,8 @@ export class PiAgent extends BaseAgent {
         activeEffortSnapshot = nextEffortSnapshot;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
+        // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
+        autoReviewUnavailableNotice.reset();
         const data = (resp.data ?? {}) as { contextWindow?: number };
         if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
           ctx.contextWindow = data.contextWindow;
@@ -1399,9 +1417,19 @@ export class PiAgent extends BaseAgent {
       async setPermissionMode(mode): Promise<void> {
         // ask/auto/bypass 三档;extension 每次 tool_call 现读,写完即生效。
         // auto 的差异在 Cindy 侧 dispatcher(handleExtensionUiRequest),bridge 无感知。
+        const nextMode = normalizePermissionMode(mode);
+        // 用户自己动过权限档 → 一次性提示重新武装(与 Claude / Codex 同口径)。
+        // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
+        // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
+        // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
+        // 值得再提醒一次。
+        if (nextMode !== requestedPermissionSnapshot.mode) {
+          autoReviewDecisionCache.clear();
+          autoReviewUnavailableNotice.reset();
+        }
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
-          mode: normalizePermissionMode(mode),
+          mode: nextMode,
         });
       },
 
@@ -1837,6 +1865,8 @@ export class PiAgent extends BaseAgent {
       workspaceRoots: string[];
       readRoots: string[];
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+      /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
+      notifyAutoReviewUnavailable: () => void;
     },
   ): void {
     const method = typeof event.method === 'string' ? event.method : '';
@@ -1862,6 +1892,7 @@ export class PiAgent extends BaseAgent {
         workspaceRoots,
         readRoots,
         reviewAutoAction,
+        notifyAutoReviewUnavailable,
       } = getPermissionCtx();
       const requestUserConfirmation = async (): Promise<boolean> => {
         if (!resolver) {
@@ -1929,9 +1960,13 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'block') {
+            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
+            // 后者按 Auto 本意保持静默。动作两种都仍然 confirmed:false。
+            if (decision.unavailable) notifyAutoReviewUnavailable();
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
+              unavailable: decision.unavailable === true,
             });
           }
           proc.send({

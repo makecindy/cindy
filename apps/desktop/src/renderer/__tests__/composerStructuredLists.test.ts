@@ -37,6 +37,8 @@ const TestMentionChip = Node.create({
       titled: { default: false },
       agentText: { default: undefined },
       agentTextTruncated: { default: undefined },
+      sourceLabel: { default: undefined },
+      sourceDescription: { default: undefined },
     };
   },
   renderHTML({ HTMLAttributes }) {
@@ -1703,5 +1705,90 @@ describe('composer structured list serialization', () => {
         display: 'Pasted text (1 line)',
       },
     ]);
+  });
+
+  it('serializes browser-tab and desktop-window chips as structured non-file references', () => {
+    const tabHref = 'cindy://browser-tab/tab-1?url=https%3A%2F%2Fexample.com%2Fdocs';
+    const windowHref = 'cindy://desktop-window/11/22?app=Code.exe';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'mentionChip',
+              attrs: { kind: 'browser-tab', label: 'Docs', path: tabHref },
+            },
+            { type: 'text', text: ' and ' },
+            {
+              type: 'mentionChip',
+              attrs: { kind: 'desktop-window', label: 'Editor', path: windowHref },
+            },
+          ],
+        },
+      ],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    expect(serialized.text).toBe(`[Docs](${tabHref}) and [Editor](${windowHref})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([
+      {
+        kind: 'browser-tab',
+        start: 0,
+        end: `[Docs](${tabHref})`.length,
+        href: tabHref,
+        tabId: 'tab-1',
+        url: 'https://example.com/docs',
+        title: 'Docs',
+      },
+      {
+        kind: 'desktop-window',
+        start: `[Docs](${tabHref}) and `.length,
+        end: serialized.text.length,
+        href: windowHref,
+        windowId: 22,
+        pid: 11,
+        appName: 'Code.exe',
+        title: 'Editor',
+      },
+    ]);
+  });
+
+  it('serializes Plugin business resources as opaque structured references', () => {
+    const href = 'cindy://plugin-resource/issues/search_issues/ISSUE-1';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'mentionChip',
+          attrs: {
+            kind: 'plugin-resource',
+            label: 'Fix login',
+            path: href,
+            sourceLabel: 'Issue Tracker',
+            sourceDescription: 'Open issue',
+          },
+        }],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    expect(serialized.text).toBe(`[Fix login](${href})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'plugin-resource',
+      start: 0,
+      end: serialized.text.length,
+      href,
+      ghostId: 'issues',
+      tool: 'search_issues',
+      resourceId: 'ISSUE-1',
+      pluginName: 'Issue Tracker',
+      label: 'Fix login',
+      description: 'Open issue',
+    }]);
   });
 });

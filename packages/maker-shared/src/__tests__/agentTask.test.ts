@@ -312,6 +312,30 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.provider).toBe('codex');
   });
 
+  it('drops the spawn receipt once live subagent state exists (card parity with claude)', () => {
+    // 子线程送来 tokens / 工具数后,title + 运行状态已表达同样信息;再显示
+    // 「Subagent X 已启动」会让 codex 卡比 Claude 子代理卡多一行冗余文案。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+      update: {
+        provider: 'codex',
+        taskId: 'spawn-1',
+        status: 'running',
+        title: '/root/survey_startup',
+        usage: { totalTokens: 1200, toolUses: 3, durationMs: 4200 },
+      },
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    // 裸 agentPath 同样不许漏进 summary。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('running');
+    expect(model.totalTokens).toBe(1200);
+    expect(model.toolUses).toBe(3);
+    expect(model.durationMs).toBe(4200);
+  });
+
   it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
     const model = buildAgentTaskCardModel({
       toolName: 'collab:spawn',

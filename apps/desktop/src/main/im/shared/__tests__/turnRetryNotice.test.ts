@@ -198,6 +198,32 @@ describe('terminalErrorText', () => {
     expect(terminalErrorText({})).toBe('[object Object]');
   });
 
+  /**
+   * Auto 档审阅器故障同样走非终止 error。渠道侧原来对这类一律静默 —— Slack /
+   * Telegram 上的用户只看到工具接连被拒、没有原因(codex P1 of #1574)。
+   */
+  it('Auto 档审阅器不可用 → 渠道侧说明 + 可执行动作', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review is temporarily unavailable, so actions '
+        + 'that need review are being denied. Switch this task to Default permissions if you '
+        + 'want to approve them yourself.',
+      isTerminal: false,
+    });
+    expect(notice).toContain('自动审批暂时不可用');
+    // 必须给出用户能做的事,否则等于只说"又失败了"。
+    expect(notice).toContain('默认权限');
+    // 不得把 [CODE] 前缀或英文原文推给渠道用户。
+    expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
+    expect(notice).not.toContain('Auto-review is temporarily');
+  });
+
+  it('其它带 bracket code 的非终止 error 仍保持静默', () => {
+    // 只放开有明确渠道文案的那一条,不是所有 [CODE] 都外发。
+    expect(turnRetryNotice({
+      message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local attachments are not accessible.',
+    })).toBeNull();
+  });
+
   it('message 为 undefined / null 时不得把字面量 "undefined" 给用户看', () => {
     // 判 key 是否存在('message' in record)会让 message: undefined 也走进去, String() 出
     // 字面量 "undefined"; 过载文案映射也会跟着取决于这个意外字符串(copilot 低置信提示)。

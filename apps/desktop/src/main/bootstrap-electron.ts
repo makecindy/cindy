@@ -667,7 +667,8 @@ import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { setMainLocale, t } from './i18n.js';
-import { throwIpcError } from './utils/ipcValidate.js';
+import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
 // splash check-environment / user login (触发 ensureReady) 谁先到不固定。
 // 通过 attemptStartScheduler 在两个就绪事件源各调一次幂等 startScheduler，最后到的
@@ -4642,6 +4643,45 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       return { success: true, path: result.filePaths[0] };
+    },
+  );
+
+  // ── Dialog: @ 资源入口的系统选择器 ──
+  ipcMain.handle(
+    'dialog:show-open-resource',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      payload: unknown = {},
+    ): Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
+    }> => {
+      assertTrustedAppRendererEvent(event);
+      const params = requireObject(payload);
+      const defaultPathValue = params.defaultPath;
+      if (
+        defaultPathValue !== undefined
+        && (
+          typeof defaultPathValue !== 'string'
+          || defaultPathValue.length > 4096
+          || !path.isAbsolute(defaultPathValue)
+        )
+      ) {
+        throwIpcError('INVALID_PARAMS', 'defaultPath must be an absolute path');
+      }
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner) return { success: true, path: null, kind: null };
+      try {
+        const picked = await pickNativeAtResource({
+          platform: process.platform,
+          showOpenDialog: (options) => dialog.showOpenDialog(owner, options),
+          isDirectory: (selectedPath) => fs.statSync(selectedPath).isDirectory(),
+        }, defaultPathValue);
+        return { success: true, ...picked };
+      } catch {
+        throwIpcError('INTERNAL', 'unable to open resource picker');
+      }
     },
   );
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -10,6 +11,7 @@ import {
   ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
+  ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
   ghostPartition,
@@ -1009,6 +1011,91 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
     ).toBe(false);
+  });
+
+  it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const valid = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(valid.ok).toBe(true);
+    expect(valid.ok && valid.manifest.atResourceProvider).toEqual({ tool: 'search_issues' });
+
+    const missing = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'missing' },
+    });
+    const extraField = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues', label: 'Issues' },
+    });
+    expect(missing.ok).toBe(true);
+    expect(extraField.ok).toBe(true);
+    expect(missing.ok ? missing.manifest.atResourceProvider : null).toBeUndefined();
+    expect(extraField.ok ? extraField.manifest.atResourceProvider : null).toBeUndefined();
+  });
+
+  it('忽略旧 manifest 中无效的同名未知字段', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    for (const legacyValue of [
+      null,
+      true,
+      'legacy',
+      [],
+      {},
+      { label: 'Issues' },
+    ]) {
+      const result = validateGhostManifest({
+        ...base,
+        atResourceProvider: legacyValue,
+      });
+      expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
+      expect(result.ok && result.manifest.atResourceProvider).toBeUndefined();
+    }
+  });
+
+  it('@ 资源入口复用 tool 槽，不新增硬白名单 slot', () => {
+    expect(GHOST_SLOTS).not.toContain('at-resource');
+    expect(validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'tool', 'at-resource'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+      atResourceProvider: { tool: 'search_issues' },
+    }).ok).toBe(false);
+  });
+
+  it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
+    const raw = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const before = validateGhostManifest(raw);
+    const after = validateGhostManifest({
+      ...raw,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionBaselineKey(after.manifest)).not.toBe(
+      ghostPermissionBaselineKey(before.manifest),
+    );
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([
+      expect.objectContaining({
+        key: 'at-resource:search_issues',
+        kind: 'at-resource',
+        labelKey: 'atResourceProvider',
+      }),
+    ]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {

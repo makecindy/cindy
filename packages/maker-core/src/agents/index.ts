@@ -65,7 +65,9 @@ export {
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
 export { isNetworkishErrorMessage } from './shared/network-error.js';
 export {
+  AUTO_REVIEW_UNAVAILABLE_CODE,
   getAutoReviewActionTextLength,
+  isAutoReviewUnavailableNotice,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDecision,
   type AutoReviewDelegate,

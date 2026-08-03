@@ -135,6 +135,34 @@ function makeSession(handle: AgentSessionHandle, agentKind: AgentKind = 'codex')
 const SCHED_ORIGIN: SendOrigin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'PR 跟进' };
 
 describe('Session interaction fallback', () => {
+  /**
+   * `Session` 构造函数**必定**注入 interaction resolver(构造函数里那次
+   * `this.handle.setInteractionResolver(...)`)。这是 harness
+   * 侧 fail-closed 分支的前提:`canUseTool` 里 `interactionResolver === null` 只可能是
+   * misconfiguration / 裸 handle 直用,**不是**「这个会话没有界面」。
+   *
+   * Telegram / 飞书 bot、scheduler 定时任务、Orca headless worker 都经 Session 创建,
+   * 所以都**有** resolver;它们缺的是 interactionListener,安全默认由这一层给出 deny。
+   * 两件事分清楚,才不会把 harness 的裸 handle 边界误当成 headless 缺陷去改
+   * (见 issue #1577)。
+   */
+  it('injects a resolver at construction and denies listenerless permission requests', async () => {
+    const { handle, resolveInteraction } = createControllableHandle();
+    makeSession(handle);
+
+    // 这里没抛 'missing interaction resolver' 本身就是断言:构造时已经注入。
+    await expect(resolveInteraction({
+      kind: 'permission',
+      requestId: 'perm-1',
+      toolName: 'mcp__cindy_memory__call_tool',
+      input: {},
+    })).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'no_listener_attached',
+    });
+  });
+
   it('marks listenerless plan review denial as dismissed', async () => {
     const { handle, resolveInteraction } = createControllableHandle();
     makeSession(handle);

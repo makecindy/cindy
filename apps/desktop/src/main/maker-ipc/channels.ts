@@ -596,6 +596,8 @@ export const MAKER_INVOKE = {
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
+  // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
+  AT_CONTEXT_LIST: 'maker:at-context:list',
   // cua-driver installer for direct computer control.
   COMPUTER_INSTALL_DRIVER: 'maker:computer:install-driver',
   // Quiet cua-driver update check (Settings-open triggered only, never polls).

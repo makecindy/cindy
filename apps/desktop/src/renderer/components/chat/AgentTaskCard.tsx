@@ -209,8 +209,12 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 原文),用户可见句子在这里按 locale 组装。判据与 mobile 卡模型共用
   // maker-shared 的 subagentSpawnReceiptName,不在端上内联复制。
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
+  // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
+  // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
   const summary = spawnReceiptName
-    ? t('chat.agentTask.subagentStarted', { name: spawnReceiptName })
+    ? (update
+        ? detailText(update.summary)
+        : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
     : detailText(result, update?.summary);
   const duration = formatDuration(update?.usage?.durationMs);
   const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');

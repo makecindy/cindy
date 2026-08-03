@@ -19,7 +19,10 @@ describe('filePreview', () => {
 
   it('only treats desktop text-like files as remote text preview candidates', () => {
     expect(remoteFilePreviewKind('/repo/notes.md')).toBe('text');
-    expect(remoteFilePreviewKind('/repo/package.json?from=mobile')).toBe('text');
+    // `?` / `#` 按真实文件名字符处理,不再当 URL 语法截断(review P1;详见共享层用例)。
+    // 原实现把 `report#draft.html` 截成 `report` → unknown → 连文本预览都不给。
+    expect(remoteFilePreviewKind('/repo/report#draft.html')).toBe('text');
+    expect(remoteFilePreviewKind('/repo/report?v=1.html')).toBe('text');
     expect(remoteFilePreviewKind('/repo/Makefile')).toBe('text');
     expect(remoteFilePreviewKind('/repo/spec.pdf')).toBe('pdf');
     expect(remoteFilePreviewKind('/repo/workflow.drawio')).toBe('drawio');

@@ -3379,6 +3379,8 @@
         "nodeResident": "Node 프로그램을 백그라운드에서 계속 실행할 수 있음",
         "nodeResidentDetail": "플러그인이 활성화된 동안 실행되며 비활성화, 업데이트, 제거 또는 Cindy 종료 시 중지됩니다.",
         "tool": "도구 \"{{name}}\"",
+        "atResourceProvider": "@에서 \"{{name}}\"으로 플러그인 리소스를 검색할 수 있음",
+        "atResourceProviderDetail": "@에서 이 플러그인을 명시적으로 선택한 뒤에만 도구가 실행됩니다. 플러그인 작성자는 검색에 부작용이 없도록 해야 합니다.",
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
         "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
@@ -5276,10 +5278,18 @@
       }
     },
     "atMention": {
-      "scanFailed": "작업 디렉터리 스캔 실패",
+      "filesAndFolders": "파일 및 폴더",
+      "browserTab": "브라우저 탭",
+      "desktopWindow": "앱 창",
+      "task": "작업",
+      "pluginResources": "플러그인 리소스",
+      "pluginResource": "플러그인 리소스",
+      "backToAll": "모든 @ 콘텐츠로 돌아가기",
+      "scanFailed": "@ 콘텐츠를 불러오지 못했습니다",
       "retry": "재시도",
       "searching": "검색 중…",
-      "noMatch": "일치하는 파일 없음",
+      "noMatch": "일치하는 항목 없음",
+      "typeToSearchFiles": "키워드를 입력해 파일과 세션 검색",
       "keepTyping": "계속 입력하여 범위 좁히기…"
     },
     "planReview": {
@@ -6044,6 +6054,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",

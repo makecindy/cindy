@@ -13,11 +13,23 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { File as FileIcon, Folder as FolderIcon, Sparkles } from 'lucide-react';
+import {
+  ArrowLeft,
+  File as FileIcon,
+  Folder as FolderIcon,
+  Globe2,
+  History,
+  Monitor,
+  Paperclip,
+  Plug,
+  Sparkles,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import {
+  AT_FILE_PICKER_RESOURCE,
+  AT_MENTION_SEARCH_RESULT_LIMIT,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
@@ -45,6 +57,11 @@ interface AtMentionPanelProps {
   onSelect: (item: AtResourceItem) => void;
   onClose: () => void;
   onRetry: () => void;
+  /** Selected Plugin provider; its query is scoped and never broadcast. */
+  scopedProviderName?: string;
+  /** Whether the local task can launch the native file picker. */
+  filePickerEnabled?: boolean;
+  onBack?: () => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
@@ -57,6 +74,9 @@ export function AtMentionPanel({
   onSelect,
   onClose,
   onRetry,
+  scopedProviderName,
+  filePickerEnabled = false,
+  onBack,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
@@ -73,8 +93,14 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    return filterAtResources(state.items, query);
-  }, [state, query]);
+    if (scopedProviderName) return state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
+    const items = filePickerEnabled
+      ? [AT_FILE_PICKER_RESOURCE, ...state.items]
+      : state.items;
+    return filterAtResources(items, query);
+  }, [state, query, scopedProviderName, filePickerEnabled]);
+  const hasScope = !!scopedProviderName;
+  const isEmptyRootQuery = !hasScope && !query.trim();
 
   useEffect(() => {
     if (filtered.length === 0) return;
@@ -99,8 +125,7 @@ export function AtMentionPanel({
   }, [onClose]);
 
   const focusedItem = filtered[focusedIndex];
-  // Show tooltip only for agent items with a description
-  const showTooltip = focusedItem?.type === 'agent' && !!focusedItem.description;
+  const showTooltip = !!focusedItem?.description;
   const tooltipKey = showTooltip
     ? `${focusedItem.type}:${focusedItem.relPath}:${focusedItem.name}:${focusedItem.description ?? ''}`
     : null;
@@ -121,7 +146,7 @@ export function AtMentionPanel({
     const bottomBoundary = Math.min(panelRect.bottom, window.innerHeight - VIEWPORT_PAD);
     const maxTooltipHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - VIEWPORT_PAD));
     const measuredHeight = Math.min(tooltipHeight, maxTooltipHeight);
-    const rawTop = 6 + focusedIndex * 44 - panelScroll; // 44px row height
+    const rawTop = (hasScope ? 46 : 6) + focusedIndex * 44 - panelScroll;
     const minTop = VIEWPORT_PAD - rootRect.top;
     const bottomBoundaryInRoot = bottomBoundary - rootRect.top;
     const top = Math.max(minTop, Math.min(rawTop, bottomBoundaryInRoot - measuredHeight));
@@ -129,7 +154,7 @@ export function AtMentionPanel({
       top: Math.round(top),
       maxHeight: Math.round(maxTooltipHeight),
     });
-  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight]);
+  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight, hasScope]);
 
   const tooltipVisible = showTooltip && !!tooltipPos;
   useLayoutEffect(() => {
@@ -153,14 +178,44 @@ export function AtMentionPanel({
   const renderItemRow = (item: AtResourceItem, idx: number) => {
     const focused = idx === focusedIndex;
     let meta: string;
-    if (item.type === 'agent') {
+    if (item.type === 'file-picker') {
+      meta = '';
+    } else if (item.type === 'agent') {
       meta = 'Agent';
+    } else if (item.type === 'browser-tab') {
+      meta = t('newChat.atMention.browserTab');
+    } else if (item.type === 'desktop-window') {
+      meta = item.description || t('newChat.atMention.desktopWindow');
+    } else if (item.type === 'session') {
+      meta = t('newChat.atMention.task');
+    } else if (item.type === 'plugin-provider') {
+      meta = t('newChat.atMention.pluginResources');
+    } else if (item.type === 'plugin-resource') {
+      meta = item.sourceLabel || t('newChat.atMention.pluginResource');
     } else {
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
     }
-    const displayName = item.type === 'dir' ? `${item.name}/` : item.name;
-    const Icon = item.type === 'agent' ? Sparkles : item.type === 'dir' ? FolderIcon : FileIcon;
+    const displayName = item.type === 'file-picker'
+      ? t('newChat.atMention.filesAndFolders')
+      : item.type === 'dir'
+        ? `${item.name}/`
+        : item.name;
+    const Icon = item.type === 'file-picker'
+      ? Paperclip
+      : item.type === 'agent'
+      ? Sparkles
+      : item.type === 'dir'
+        ? FolderIcon
+        : item.type === 'browser-tab'
+          ? Globe2
+          : item.type === 'desktop-window'
+            ? Monitor
+            : item.type === 'session'
+              ? History
+              : item.type === 'plugin-provider' || item.type === 'plugin-resource'
+                ? Plug
+              : FileIcon;
 
     return (
       <button
@@ -221,6 +276,32 @@ export function AtMentionPanel({
         )}
         style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
       >
+        {hasScope && (
+          <div className="sticky top-0 z-10 flex h-[40px] items-center gap-2 bg-[var(--cmd-palette-bg)] px-[4px]">
+            <button
+              type="button"
+              aria-label={t('newChat.atMention.backToAll')}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onBack?.();
+              }}
+              className={cn(
+                'flex size-[32px] shrink-0 items-center justify-center rounded-[6px]',
+                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)]',
+              )}
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <span className="min-w-0 truncate text-[13px] font-medium text-[var(--cmd-palette-item-text)]">
+              {scopedProviderName}
+            </span>
+            {scopedProviderName && (
+              <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">
+                {t('newChat.atMention.pluginResources')}
+              </span>
+            )}
+          </div>
+        )}
         {state.kind === 'loading' && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (
@@ -258,20 +339,34 @@ export function AtMentionPanel({
           <div
             className={cn(
               'flex items-center justify-center',
-              'h-[40px] text-[13px]',
+              'select-none h-[40px] text-[13px]',
               'text-[var(--cmd-palette-empty)]',
             )}
           >
-            {state.searching ? t('newChat.atMention.searching') : t('newChat.atMention.noMatch')}
+            {state.searching
+              ? t('newChat.atMention.searching')
+              : isEmptyRootQuery
+                ? t('newChat.atMention.typeToSearchFiles')
+                : t('newChat.atMention.noMatch')}
           </div>
         )}
         {state.kind === 'ready' && filtered.length > 0 && (
           <>
             {filtered.map((item, idx) => renderItemRow(item, idx))}
-            {state.truncated && (
+            {isEmptyRootQuery && (
               <div
                 className={cn(
-                  'px-[10px] py-[8px] text-[12px]',
+                  'select-none px-[10px] py-[8px] text-[12px]',
+                  'text-[var(--cmd-palette-item-meta)]',
+                )}
+              >
+                {t('newChat.atMention.typeToSearchFiles')}
+              </div>
+            )}
+            {!isEmptyRootQuery && state.truncated && (
+              <div
+                className={cn(
+                  'select-none px-[10px] py-[8px] text-[12px]',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
