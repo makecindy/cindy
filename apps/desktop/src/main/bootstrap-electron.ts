@@ -656,7 +656,10 @@ import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
-import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
+import {
+  registerPluginMarketIpc,
+  syncDefaultMarketPlugins,
+} from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
@@ -2574,6 +2577,20 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
+let disposePluginMarketAuthListener: (() => void) | null = null;
+let defaultPluginSyncInFlightScope: string | null = null;
+
+/** Run the existing market reconciliation once for each stable app owner. */
+function syncDefaultPluginsForActiveOwner(): void {
+  const session = getActiveAppSession();
+  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
+  const scope = activeOwnerScopeKey();
+  if (scope === defaultPluginSyncInFlightScope) return;
+  defaultPluginSyncInFlightScope = scope;
+  void syncDefaultMarketPlugins().finally(() => {
+    if (defaultPluginSyncInFlightScope === scope) defaultPluginSyncInFlightScope = null;
+  });
+}
 
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -4572,6 +4589,13 @@ const registerIpcHandlers = () => {
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
   });
+  // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
+  // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
+  // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
+  disposePluginMarketAuthListener = authManager.onAuthStateChange(() => {
+    queueMicrotask(syncDefaultPluginsForActiveOwner);
+  });
+  syncDefaultPluginsForActiveOwner();
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
@@ -5751,6 +5775,16 @@ app.on('ready', async () => {
     return;
   }
 
+  // safeStorage 可观测性(#871):这条链路此前在日志里完全不可见,出问题(用户在
+  // 系统钥匙串弹窗点了拒绝 → 加解密静默降级失败)只能靠弹窗反推。这里只落派生
+  // 身份(条目名 = `<app.name> Safe Storage`),**刻意不调 isEncryptionAvailable()**
+  // ——macOS 上探测本身可能触发钥匙串授权弹窗,把 #871 的弹窗时机提前到启动;
+  // 可用性/失败在实际使用点记录(authManager 的 safeStorage helpers)。不含凭证。
+  createLogger('safe-storage').info('safeStorage identity', {
+    appName: app.getName(),
+    isPackaged: app.isPackaged,
+  });
+
   // 客户端端点清单:启动第一步、先于一切更新检查,**阻断式**解析(packaged 走
   // 烘焙 hotfix CDN 基址;dev 默认读仓内 config/endpoint.json,--endpoints-cdn
   // 时同 packaged;失败 → 系统错误框重试/退出,无缓存与烘焙兜底)。
@@ -6348,6 +6382,14 @@ onQuit(
   () => {
     disposeProviderAccessAuthListener?.();
     disposeProviderAccessAuthListener = null;
+  },
+  'sync',
+);
+onQuit(
+  'plugin-market-auth-listener',
+  () => {
+    disposePluginMarketAuthListener?.();
+    disposePluginMarketAuthListener = null;
   },
   'sync',
 );

@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createResumeUpdateChecker, markForcedPrompted, resetForcedPromptedForTest, type ResumeUpdateCheckDeps } from './resumeUpdateCheck';
+import { describe, expect, it, vi } from 'vitest';
+import { createResumeUpdateChecker, type ResumeUpdateCheckDeps } from './resumeUpdateCheck';
 
 /** 有效的 /latest 记录(runtimeVersion 与当前 '1' 不同 → 有整包更新)。 */
 function latestRecord(overrides: Record<string, unknown> = {}) {
@@ -23,10 +23,8 @@ function makeDeps(overrides: Partial<ResumeUpdateCheckDeps> = {}) {
     fetchLatest: vi.fn(async () => null),
     getCurrentRuntimeVersion: () => '1',
     getCurrentVersion: () => '1.0.0',
-    // 模拟真实 callback(promptBundleUpdate)的契约:实际展示后标记去重。
-    onForcedUpdate: vi.fn((e: Parameters<ResumeUpdateCheckDeps['onForcedUpdate']>[0]) => {
-      if (e.target) markForcedPrompted(e.target.runtimeVersion);
-    }),
+    // 真实 callback 是 promptBundleUpdate → enterForcedUpdate(幂等,不需要去重)。
+    onForcedUpdate: vi.fn(),
     now: () => nowMs,
     advance: (ms: number) => { nowMs += ms; },
     ...overrides,
@@ -39,10 +37,6 @@ function resume(checker: ReturnType<typeof createResumeUpdateChecker>) {
   checker.handleAppStateChange('background');
   return checker.handleAppStateChange('active');
 }
-
-afterEach(() => {
-  resetForcedPromptedForTest();
-});
 
 describe('createResumeUpdateChecker 触发条件', () => {
   it('创建后立刻 resume:间隔不足 → 不检查(冷启动刚查过)', () => {
@@ -184,30 +178,27 @@ describe('createResumeUpdateChecker 整包路径', () => {
     expect(deps.onForcedUpdate).toHaveBeenCalledOnce();
   });
 
-  it('同一强更目标多次 resume → 只提示一次(去重)', async () => {
+  it('同一强更目标多次 resume → 每次都上报(阻断态幂等,本层不去重)', async () => {
+    // 去重曾是必需的(强更是一次性 Alert);改成阻断态后 enterForcedUpdate 幂等,
+    // 本层不再持有"已提示过"状态 —— 也就不会因为一次未展示而让强更永久失声。
     const deps = makeDeps({ fetchLatest: vi.fn(async () => latestRecord({ minVersion: '2.0.0' })) });
     const checker = createResumeUpdateChecker(deps, { minIntervalMs: 0 });
     deps.advance(1);
     await resume(checker);
     deps.advance(1);
     await resume(checker);
-    expect(deps.onForcedUpdate).toHaveBeenCalledOnce();
+    expect(deps.onForcedUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it('onForcedUpdate 未标记(模拟无 URL 静默失败)→ 下次 resume 重试,不永久失声', async () => {
-    // callback 不调 markForcedPrompted,模拟 promptBundleUpdate 因无安装 URL 提前 return。
-    const onForcedUpdate = vi.fn();
+  it('同 runtimeVersion 但低于 minVersion → 依旧上报强更', async () => {
+    // 服务端事后给某个已发布版本下发门槛时,装机 runtimeVersion 与 /latest 相同,
+    // 但 version 低于门槛 —— 不能因为"指纹没变"就放过。
     const deps = makeDeps({
-      fetchLatest: vi.fn(async () => latestRecord({ minVersion: '2.0.0' })),
-      onForcedUpdate,
+      fetchLatest: vi.fn(async () => latestRecord({ runtimeVersion: '1', minVersion: '2.0.0' })),
     });
-    const checker = createResumeUpdateChecker(deps, { minIntervalMs: 0 });
-    deps.advance(1);
-    await resume(checker);
-    deps.advance(1);
-    await resume(checker);
-    // 未标记 → guard 每次都放行,强更不会因一次未展示而永久失声。
-    expect(onForcedUpdate).toHaveBeenCalledTimes(2);
+    const { bundle } = await runOnce(deps);
+    expect(bundle).toBe('forced');
+    expect(deps.onForcedUpdate).toHaveBeenCalledOnce();
   });
 
   it('/latest 拉取失败 → error(fail-open),不影响 OTA 结果', async () => {
@@ -215,15 +206,6 @@ describe('createResumeUpdateChecker 整包路径', () => {
     const { ota, bundle } = await runOnce(deps);
     expect(bundle).toBe('error');
     expect(ota).toBe('up-to-date');
-  });
-
-  it('启动路径已标记强更 → resume 不再弹(跨路径去重)', async () => {
-    // 模拟启动路径弹过强更:直接调用模块级 markForcedPrompted
-    markForcedPrompted('2');
-    const deps = makeDeps({ fetchLatest: vi.fn(async () => latestRecord({ minVersion: '2.0.0' })) });
-    const { bundle } = await runOnce(deps);
-    expect(bundle).toBe('forced');
-    expect(deps.onForcedUpdate).not.toHaveBeenCalled(); // 已标记过,不再回调
   });
 
   it('/latest 挂起 → withTimeout backstop 触发 error(fail-open),不影响 OTA', async () => {

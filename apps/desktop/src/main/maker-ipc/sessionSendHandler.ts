@@ -1,6 +1,7 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import { stripMainOnlySendOpts } from './mobileClientPromptNote.js';
 
 /**
  * SEND adapter 只校验 IPC 入口并委托事务；lazy-create / rehydrate / accepted
@@ -31,7 +32,14 @@ export function registerMakerSessionSendHandler<TResult>(
       if (typeof sessionId !== 'string') {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
-      return await deps.sendToAgentAccepted(sessionId, message, createOpts, sendOpts);
+      // sendOpts 来自 wire:剥掉只允许 main 写的字段(fromMobileClient 由 coordinator
+      // 从队列项透传,客户端不得自报 —— 直连路径的来源判据只能是 async context)。
+      return await deps.sendToAgentAccepted(
+        sessionId,
+        message,
+        createOpts,
+        stripMainOnlySendOpts(sendOpts),
+      );
     },
   );
 }

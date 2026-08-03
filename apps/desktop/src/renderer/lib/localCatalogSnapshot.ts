@@ -1,8 +1,9 @@
 /**
  * 本地 provider catalog 的 renderer 原子刷新协调器。
  *
- * providers 与两份 agent capabilities 必须来自同一轮 main 快照：三次 IPC 全部成功、
- * 且期间没有更新一代目录时才同步提交。失败或乱序结果一律保留上一份有效快照。
+ * providers 与核心 agent capabilities 必须来自同一轮 main 快照：核心 IPC 全部成功、
+ * 且期间没有更新一代目录时才同步提交。可选 Pi 的能力读取失败时提交核心能力；其它失败
+ * 或乱序结果一律保留上一份有效快照。
  * device-link 的远端 capabilities 不经过这里，继续按 deviceId 独立缓存。
  */
 import { createLogger } from '@/lib/logger';
@@ -22,7 +23,7 @@ import {
 const log = createLogger('localCatalogSnapshot');
 let refreshGeneration = 0;
 
-/** 联合刷新 providers + Claude/Codex capabilities，并只提交最新的完整结果。 */
+/** 联合刷新 providers + 可用 agent capabilities，并只提交最新的完整结果。 */
 export async function refreshLocalCatalogSnapshot(): Promise<boolean> {
   const generation = ++refreshGeneration;
   const providersGeneration = beginProvidersRefresh();
@@ -34,9 +35,9 @@ export async function refreshLocalCatalogSnapshot(): Promise<boolean> {
       loadLocalCapabilitiesSnapshot(),
     ]);
     if (
-      refreshGeneration !== generation
-      || !isProvidersRefreshCurrent(providersGeneration, providers)
-      || !isLocalCapabilitiesRefreshCurrent(capabilitiesGeneration)
+      refreshGeneration !== generation ||
+      !isProvidersRefreshCurrent(providersGeneration, providers) ||
+      !isLocalCapabilitiesRefreshCurrent(capabilitiesGeneration)
     ) {
       return false;
     }
@@ -53,7 +54,7 @@ export async function refreshLocalCatalogSnapshot(): Promise<boolean> {
   }
 }
 
-/** 启动预热保留原有三次瞬时 IPC 重试语义；每次仍按完整快照原子提交。 */
+/** 启动预热保留原有三次瞬时 IPC 重试语义；每次仍按可用快照原子提交。 */
 export async function preloadLocalCatalogSnapshot(): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await refreshLocalCatalogSnapshot()) return;

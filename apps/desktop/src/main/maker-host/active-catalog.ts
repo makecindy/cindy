@@ -123,12 +123,8 @@ export interface XdGatewayModelInfo {
  * AIGateway /model-groups 投影 + 服务端内置常量表富化;2026-07-17 定案:XD 模型
  * 列表完全以网关为准,不再由 OSS 产品目录决定)。未登录 / 拉取失败 / 空响应时
  * 保持空数组,绝不把产品目录里的静态模型冒充成网关实时可用模型。有值时 xd
- * 供应商的模型列表整体重建,每个条目:
- *  - tab 归属:服务端 `agents` > 目录同 id 条目的归属 > 仅 claude-code 兜底
- *    (网关 /v1/messages 跨供应商翻译覆盖面最广;Responses 协议不猜);
- *  - 展示元数据逐字段:服务端条目 > 目录同 id 条目 > 合成默认(id 当展示名,
- *    口径同自定义 OAuth 模型发现,见 maker-ipc/register.ts oauthLogin);
- *  - 目录里有、网关没有 → 不展示。
+ * 供应商的模型列表整体重建。模型、tab 归属、展示元数据和价格都只读服务端条目；
+ * 字段缺失时使用确定性客户端默认值，不读取公共 Catalog 补充。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
 /**
@@ -494,7 +490,13 @@ function computeMerged(): Catalog {
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
   lastPlanWarnings = plan.warnings;
-  let providers: Provider[] = b.providers.map((provider): Provider => {
+  // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
+  // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
+  const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+  const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
+  const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
+  if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
+  let providers: Provider[] = providerSources.map((provider): Provider => {
     if (provider.id !== 'xai') return provider;
     const claudeRoute = provider.routing['claude-code'];
     const claudeModels = provider.models['claude-code'] ?? [];

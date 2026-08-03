@@ -26,7 +26,7 @@
     "gen:help-kb": "node scripts/gen-help-kb.mjs",
     "gen:help-kb:check": "node scripts/help-kb-guard.mjs",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.json",
     "format": "prettier --write src/",
     "ensure-deps": "node ../../scripts/ensure-deps.mjs",
     "ensure-dev-runtime-assets": "node ../../scripts/ensure-dev-runtime-assets.mjs",

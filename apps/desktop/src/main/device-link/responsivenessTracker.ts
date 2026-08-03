@@ -68,6 +68,17 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Renderer 启动时会在同一轮并发预取这些只读信息。一次链路抖动导致整批超时只应
+ * 贡献一次 strike；其它通道仍按独立请求计数，避免把无关的重叠故障吞成一批。
+ */
+const BOOTSTRAP_FAN_OUT_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:get-capabilities',
+  'maker:provider:list',
+  'maker:git-safety:get',
+]);
+const BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS = 250;
+
+/**
  * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;NOT_CONNECTED /
  * relay 层错误 / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
  */
@@ -103,6 +114,8 @@ export interface ResponsivenessTrackerDeps {
   onUnresponsiveChanged(deviceId: string, unresponsive: boolean): void;
   /** 探测前置条件:本实例持有 relay、链路 online、目标设备 presence 可用。 */
   isProbeEligible(deviceId: string): boolean;
+  /** 首次业务超时后的 peer 级恢复；由 Desktop 接入 openRemoteLink 去重。 */
+  recoverLink?: (deviceId: string) => Promise<unknown>;
   /** 时钟注入(测试用;默认 Date.now)。 */
   now?: () => number;
   log?: TrackerLogger;
@@ -114,7 +127,12 @@ export interface DeviceResponsivenessTracker {
    * 熔断 open 且无探测窗口 → 立即抛 DEVICE_UNRESPONSIVE(不占管道、不等超时);
    * 否则执行 run 并按结果 settle(超时计失败,真实回包按通道分类)。
    */
-  guardInvoke<T>(deviceId: string, channel: string, run: () => Promise<T>): Promise<T>;
+  guardInvoke<T>(
+    deviceId: string,
+    channel: string,
+    run: () => Promise<T>,
+    cohort?: number,
+  ): Promise<T>;
   /** 周期探测 tick:对每个熔断 open、探测窗口已到且前置条件满足的设备发一发单飞探测。 */
   probeTick(): void;
   isUnresponsive(deviceId: string): boolean;
@@ -131,8 +149,10 @@ export function createResponsivenessTracker(
   const log = deps.log ?? { info: () => {}, warn: () => {}, debug: () => {} };
   const now = deps.now ?? Date.now;
   const unresponsive = new Set<string>();
+  const linkRecoveryInFlight = new Map<string, Promise<unknown>>();
+  const bootstrapFanOutCohorts = new Map<string, { cohort: number; expiresAt: number }>();
   const breaker = createDeviceResponsivenessBreaker({
-    now: deps.now,
+    now,
     onOpenChanged: (deviceId, open) => {
       if (open) unresponsive.add(deviceId);
       else unresponsive.delete(deviceId);
@@ -147,31 +167,50 @@ export function createResponsivenessTracker(
     breaker.settle(deviceId, slot, outcome);
   };
 
-  // 同一设备短时间窗内的并发请求共享一个熔断批次(cohort):renderer 的 fan-out
-  // 预取(capabilities / providers / git-safety 同 tick 并发)在一次短暂链路中断里
-  // 会同时超时,逐请求独立记账会让单轮并发直接凑满 3 次阈值误开熔断(review P2)。
-  // 窗口取 250ms:真实 fan-out 在同一事件循环 tick 或几十 ms 内发出,250ms 足够
-  // 覆盖;而用户手动发起的独立操作极少落进同一 250ms,不至于把独立超时误并
-  // (review P1 权衡)。更根本地,窗口内"独立"操作若同时超时,反映的也是同一
-  // 时刻的链路状态,证据价值与一次 fan-out 等同——阈值语义要的是时间上分离的
-  // 多次观察。窗口从批首请求起算,不滑动。
-  const COHORT_WINDOW_MS = 250;
-  const activeCohorts = new Map<string, { id: number; startedAt: number }>();
-  const cohortFor = (deviceId: string): number => {
-    const nowMs = now();
-    const entry = activeCohorts.get(deviceId);
-    if (entry && nowMs - entry.startedAt < COHORT_WINDOW_MS) return entry.id;
-    const id = breaker.createCohort(deviceId);
-    activeCohorts.set(deviceId, { id, startedAt: nowMs });
-    return id;
+  const triggerLinkRecovery = (deviceId: string): void => {
+    if (!deps.recoverLink || linkRecoveryInFlight.has(deviceId)) return;
+    let recovery: Promise<unknown>;
+    try {
+      recovery = Promise.resolve(deps.recoverLink(deviceId));
+    } catch (recoveryErr) {
+      recovery = Promise.reject(recoveryErr);
+    }
+    linkRecoveryInFlight.set(deviceId, recovery);
+    void recovery.then(
+      () => {
+        if (linkRecoveryInFlight.get(deviceId) === recovery) linkRecoveryInFlight.delete(deviceId);
+      },
+      (recoveryErr) => {
+        if (linkRecoveryInFlight.get(deviceId) === recovery) linkRecoveryInFlight.delete(deviceId);
+        log.debug(`peer link recovery failed for ${deviceId.slice(0, 8)}`, recoveryErr);
+      },
+    );
+  };
+
+  const selectCohort = (deviceId: string, channel: string, cohortOverride?: number): number => {
+    if (cohortOverride !== undefined) return cohortOverride;
+    if (!BOOTSTRAP_FAN_OUT_CHANNELS.has(channel)) return breaker.createCohort(deviceId);
+
+    const at = now();
+    const current = bootstrapFanOutCohorts.get(deviceId);
+    if (current && at < current.expiresAt) return current.cohort;
+
+    const cohort = breaker.createCohort(deviceId);
+    bootstrapFanOutCohorts.set(deviceId, {
+      cohort,
+      expiresAt: at + BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS,
+    });
+    return cohort;
   };
 
   const guardInvoke = async <T>(
     deviceId: string,
     channel: string,
     run: () => Promise<T>,
+    cohortOverride?: number,
   ): Promise<T> => {
-    const slot = breaker.acquire(deviceId, cohortFor(deviceId));
+    const cohort = selectCohort(deviceId, channel, cohortOverride);
+    const slot = breaker.acquire(deviceId, cohort, { allowProbe: false });
     if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
     const wasProbe = slot.decision === 'probe';
     try {
@@ -179,7 +218,12 @@ export function createResponsivenessTracker(
       settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
       return result;
     } catch (err) {
-      settle(deviceId, slot, classifyDeviceSendFailure(err));
+      const outcome =
+        wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL
+          ? 'inconclusive'
+          : classifyDeviceSendFailure(err);
+      settle(deviceId, slot, outcome);
+      if (outcome === 'timeout') triggerLinkRecovery(deviceId);
       throw err;
     }
   };
@@ -189,15 +233,42 @@ export function createResponsivenessTracker(
       if (!breaker.probeDue(deviceId)) continue;
       if (!deps.isProbeEligible(deviceId)) continue;
       log.debug(`probing unresponsive device ${deviceId.slice(0, 8)}`);
-      void guardInvoke(deviceId, DEVICE_RESPONSIVENESS_PROBE_CHANNEL, () =>
-        deps.probeInvoke(
+      const slot = breaker.acquire(deviceId, breaker.createCohort(deviceId), {
+        allowProbe: true,
+      });
+      if (slot.decision !== 'probe') continue;
+      let probePromise: Promise<unknown>;
+      try {
+        probePromise = deps.probeInvoke(
           deviceId,
           DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
           buildDeviceResponsivenessProbeArgs(),
-        ),
-      ).catch((err) => {
-        log.debug(`responsiveness probe failed for ${deviceId.slice(0, 8)}`, err);
-      });
+        );
+      } catch (err) {
+        probePromise = Promise.reject(err);
+      }
+      void Promise.resolve(probePromise)
+        .then(
+          () =>
+            breaker.settle(
+              deviceId,
+              slot,
+              classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true),
+            ),
+          (err) => {
+            const outcome = classifyDeviceSendFailure(err);
+            breaker.settle(deviceId, slot, outcome);
+            // 探测是 open 后唯一会真正穿过 peer link 的流量。若它仍等满超时，
+            // 继续按单-peer 半径重开 link；clear/reset 已翻代时 breaker 会先关闭。
+            if (outcome === 'timeout' && breaker.isOpen(deviceId)) {
+              triggerLinkRecovery(deviceId);
+            }
+            throw err;
+          },
+        )
+        .catch((err) => {
+          log.debug(`responsiveness probe failed for ${deviceId.slice(0, 8)}`, err);
+        });
     }
   };
 
@@ -207,11 +278,13 @@ export function createResponsivenessTracker(
     isUnresponsive: (deviceId) => unresponsive.has(deviceId),
     getUnresponsiveDeviceIds: () => [...unresponsive],
     clearDevice: (deviceId) => {
-      activeCohorts.delete(deviceId);
+      linkRecoveryInFlight.delete(deviceId);
+      bootstrapFanOutCohorts.delete(deviceId);
       breaker.clear(deviceId);
     },
     resetAll: () => {
-      activeCohorts.clear();
+      linkRecoveryInFlight.clear();
+      bootstrapFanOutCohorts.clear();
       breaker.resetAll();
     },
   };

@@ -283,13 +283,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
 
-  const sendOpenLinkOnce = useCallback((client: DeviceLinkClient, deviceId: string) => {
+  const sendOpenLinkOnce = useCallback((
+    client: DeviceLinkClient,
+    deviceId: string,
+    allowProbe = false,
+  ) => {
     return getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
       deviceId,
-      () => sendOpenLinkWithAccessHandling(client, deviceId),
+      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe),
       { retainSuccessful: true },
     );
   }, []);
@@ -327,12 +331,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const probeUnresponsiveDevice = useCallback(
     async (client: DeviceLinkClient, deviceId: string): Promise<void> => {
       try {
-        await sendOpenLinkOnce(client, deviceId).request;
+        await sendOpenLinkOnce(client, deviceId, true).request;
         await sendInvokeWithAccessHandling(
           client,
           deviceId,
           DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
           buildDeviceResponsivenessProbeArgs(),
+          { allowProbe: true },
         );
       } catch {
         // swallow — settle 已在 sendOpenLink / sendInvoke 内完成。
@@ -1204,16 +1209,18 @@ function ensureOnlineForRequest(client: DeviceLinkClient): Promise<void> {
 function sendOpenLinkWithAccessHandling(
   client: DeviceLinkClient,
   deviceId: string,
+  allowProbe = false,
 ): Promise<LinkAcceptPayload> {
-  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId));
+  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe));
 }
 
 async function sendOpenLink(
   client: DeviceLinkClient,
   deviceId: string,
+  allowProbe = false,
 ): Promise<LinkAcceptPayload> {
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
-  const slot = acquireDeviceSendSlot(deviceId);
+  const slot = acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
@@ -1251,6 +1258,8 @@ interface SendInvokeOptions {
   preSend?: () => void;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
   responsivenessCohort?: number;
+  /** 仅主动的代表性 half-open 探测允许领取 probe 席位。 */
+  allowProbe?: boolean;
 }
 
 function sendInvokeWithAccessHandling<T>(
@@ -1272,7 +1281,9 @@ async function sendInvoke<T>(
 ): Promise<T> {
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
   // 同一轮显式 fan-out 复用 cohort;普通调用省略时每次 acquire 都是独立观测。
-  const slot = acquireDeviceSendSlot(deviceId, opts?.responsivenessCohort);
+  const slot = acquireDeviceSendSlot(deviceId, opts?.responsivenessCohort, {
+    allowProbe: opts?.allowProbe,
+  });
   try {
     await ensureOnlineForRequest(client);
     // 连接就绪后、真正发送前的最后检查点:重连等待期间调用方状态可能已失效

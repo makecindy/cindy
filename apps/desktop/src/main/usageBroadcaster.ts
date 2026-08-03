@@ -23,7 +23,7 @@
 import { BrowserWindow } from 'electron';
 
 import { incrementDailySpend, getTodaySpend, localDayKey } from './localDb/dailySpend';
-import { getModelPricing } from './usage/modelPricing';
+import { getGatewayModelPricing } from './usage/modelPricing';
 import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
 import { getDbClient } from './localDb/client/current';
@@ -136,9 +136,9 @@ export async function recordTurnSpend(
 /** Claude 今日 USD 累计 (供 IPC handler / 内部消费)。 */
 export async function readTodaySpend(): Promise<TodaySpendPayload> {
   // getTodaySpend 要按账本币种从多币种日账里挑行，而账本币种由报价快照恢复。
-  // getModelPricing 只读内存或磁盘快照、不发网络请求，等它一下就能避免冷启动首帧
+  // getGatewayModelPricing 只读内存或磁盘快照、不发网络请求，等它一下就能避免冷启动首帧
   // 按兜底币种折叠掉本账号真正的那一行（与 usageHistory 里同一个理由）。
-  await getModelPricing().catch(() => null);
+  await getGatewayModelPricing().catch(() => null);
   const money = await getTodaySpend();
   return {
     day: localDayKey(),

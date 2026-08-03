@@ -28,6 +28,7 @@
 import { useEffect, useState } from 'react';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
+import { useAuth } from '../contexts/AuthContext';
 
 export interface ClaudeAccountUsageSnapshot {
   /** 月度周期跨客户端累计，保持 Gateway 部署区域的原生金额。 */
@@ -48,7 +49,12 @@ export interface ClaudeAccountUsageSnapshot {
   fetchedAt: number;
 }
 
-let lastSnapshot: ClaudeAccountUsageSnapshot | null = null;
+interface OwnerBoundSnapshot {
+  ownerKey: string;
+  usage: ClaudeAccountUsageSnapshot;
+}
+
+let lastSnapshot: OwnerBoundSnapshot | null = null;
 
 function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
   if (!v || typeof v !== 'object') return false;
@@ -65,40 +71,46 @@ function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
 export function useClaudeAccountUsage(
   enabled: boolean,
 ): ClaudeAccountUsageSnapshot | null {
-  const [snapshot, setSnapshot] = useState<ClaudeAccountUsageSnapshot | null>(() =>
-    enabled ? lastSnapshot : null,
+  const { dataOwnerId, mode, user } = useAuth();
+  const ownerKey =
+    enabled &&
+    dataOwnerId &&
+    (mode === 'local' || (mode === 'cloud' && user?.membershipKind === 'org'))
+      ? `${mode}:${dataOwnerId}`
+      : null;
+  const [snapshot, setSnapshot] = useState<OwnerBoundSnapshot | null>(() =>
+    ownerKey && lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : null,
   );
-
-  useEffect(() => {
-    setSnapshot(enabled ? lastSnapshot : null);
-  }, [enabled]);
 
   // mount 拉一次 (warm-start: main 若无 snapshot 会 force 刷新, 那一次的结果走 push 通道补帧)
   useEffect(() => {
-    if (!enabled) return;
+    if (!ownerKey) return;
     let cancelled = false;
-    void window.electronAPI.maker.usage.getAccount('claude-code').then((res) => {
-      if (cancelled) return;
-      if (!isSnapshot(res)) return;
-      lastSnapshot = res;
-      setSnapshot(res);
-    }).catch(() => {
-      /* best-effort warm-start */
-    });
+    void window.electronAPI.maker.usage
+      .getAccount('claude-code')
+      .then((res) => {
+        if (cancelled) return;
+        if (!isSnapshot(res)) return;
+        lastSnapshot = { ownerKey, usage: res };
+        setSnapshot(lastSnapshot);
+      })
+      .catch(() => {
+        /* best-effort warm-start */
+      });
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [ownerKey]);
 
   // 订阅 push (cc / codex-api turn done 后 main 推 — 都是同一把 XD key 的 spend)
   useEffect(() => {
-    if (!enabled) return;
+    if (!ownerKey) return;
     return window.electronAPI.maker.usage.onClaudeAccountChanged((p) => {
       if (!isSnapshot(p)) return;
-      lastSnapshot = p;
-      setSnapshot(p);
+      lastSnapshot = { ownerKey, usage: p };
+      setSnapshot(lastSnapshot);
     });
-  }, [enabled]);
+  }, [ownerKey]);
 
-  return snapshot;
+  return ownerKey && snapshot?.ownerKey === ownerKey ? snapshot.usage : null;
 }

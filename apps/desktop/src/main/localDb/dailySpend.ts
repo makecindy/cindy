@@ -64,7 +64,7 @@ function dayMonies(rows: readonly SpendRow[]): RegionalMoney[] {
  *
  * **币种参数必须由调用方显式传入**：折叠是一个依赖账本币种的决定，而账本币种在冷启动
  * 期间要等报价快照恢复才确定。此前这里直接读 currentLedgerCurrency()，于是
- * getAllSpendDays() 与 getModelPricing() 并发时会先按兜底币种把 CNY 行全丢掉，
+ * getAllSpendDays() 与 getGatewayModelPricing() 并发时会先按兜底币种把 CNY 行全丢掉，
  * 调用方拿到的已经是折叠过的错值，首页整段历史短暂显示为 0。
  */
 export function collapseDayMonies(

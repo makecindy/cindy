@@ -4929,7 +4929,7 @@ interface ElectronAPI {
       getCodexRateLimits: () => Promise<
         import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
       >;
-      /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
+      /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: () => Promise<
         import('../shared/regionalMoney').ModelPricingCatalog | null
       >;
@@ -4937,6 +4937,13 @@ interface ElectronAPI {
         cb: (
           pricing: import('../shared/regionalMoney').ModelPricingCatalog | null,
         ) => void,
+      ) => () => void;
+      /** 非 XD Provider 的 Catalog 参考价与用户覆盖。 */
+      getReferenceModelPricing: () => Promise<
+        import('../shared/regionalMoney').ModelPricingCatalog
+      >;
+      onReferenceModelPricingChanged: (
+        cb: (pricing: import('../shared/regionalMoney').ModelPricingCatalog) => void,
       ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
       getHistory: (

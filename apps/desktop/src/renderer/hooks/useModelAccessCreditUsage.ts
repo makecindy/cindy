@@ -79,7 +79,8 @@ function isCreditUsage(v: unknown): v is ModelAccessCreditUsage {
 export function useModelAccessCreditUsage(
   enabled: boolean,
 ): ModelAccessCreditUsage | null {
-  const { dataOwnerId } = useAuth();
+  const { dataOwnerId, mode, user } = useAuth();
+  const creditEnabled = enabled && mode === 'cloud' && user?.membershipKind === 'personal';
   // state 连账号 id 一起存，隔离在**渲染期**完成而不是 effect 里:effect 要等本轮渲染
   // 提交后才执行，靠它清空会让切号后的首帧仍把上一个账号的额度渲染出去。
   const [snapshot, setSnapshot] = useState<CreditUsageSnapshot | null>(() =>
@@ -87,7 +88,7 @@ export function useModelAccessCreditUsage(
   );
 
   useEffect(() => {
-    if (!enabled || !dataOwnerId) return;
+    if (!creditEnabled || !dataOwnerId) return;
     let cancelled = false;
 
     const load = () => {
@@ -110,9 +111,9 @@ export function useModelAccessCreditUsage(
       cancelled = true;
       clearInterval(timer);
     };
-  }, [enabled, dataOwnerId]);
+  }, [creditEnabled, dataOwnerId]);
 
   // 账号不匹配 / 未启用 → 当作没有数据。切号当帧即生效。
-  if (!enabled || !dataOwnerId || snapshot?.accountId !== dataOwnerId) return null;
+  if (!creditEnabled || !dataOwnerId || snapshot?.accountId !== dataOwnerId) return null;
   return snapshot.usage;
 }

@@ -34,12 +34,18 @@ describe('subscriptions topic lifecycle listeners', () => {
     expect(subscribed).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps negotiated controller capabilities until the controller is cleared', () => {
+  it('keeps negotiated controller capabilities across disconnect, then clears on revocation', () => {
     subscriptions.subscribe('c1', ['sessions'], 'Phone', ['provider-logo-kinds-v2']);
     expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(true);
     subscriptions.subscribe('c1', ['session:s1'], 'Phone');
     expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(true);
     subscriptions.clearController('c1');
+    expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(true);
+    subscriptions.updateControllerMetadata('c1', 'Phone', []);
+    expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(false);
+    subscriptions.subscribe('c1', ['sessions'], 'Phone', ['provider-logo-kinds-v2']);
+    subscriptions.clearController('c1');
+    subscriptions.forgetKnownController('c1');
     expect(subscriptions.controllerSupports('c1', 'provider-logo-kinds-v2')).toBe(false);
   });
 

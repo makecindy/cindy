@@ -21,6 +21,12 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './local
 /** 清单文件名(zip 根部)。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
+/**
+ * 安装器读取包内 ghost.json 的硬上限。源码目录的发现/预读取可以使用更宽的
+ * 安全预算，但最终写进 .cindy 的清单必须落在这个上限内。
+ */
+export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
+
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
 
@@ -1874,6 +1880,12 @@ const GHOST_ICON_MIME_BY_EXT: Record<string, string> = {
   '.webp': 'image/webp',
   '.gif': 'image/gif',
 };
+
+/**
+ * icon 字节上限。icon 会以 data URL 形态同步下发给 Renderer，因此安装、
+ * 本地读取与 Forge overlay 必须共用同一硬顶，避免“能打包但不能安装”。
+ */
+export const GHOST_ICON_MAX_BYTES = 512 * 1024;
 
 /** icon 路径 → mime;扩展名不在白名单返回 null(即校验不通过)。 */
 export function ghostIconMimeType(p: string): string | null {

@@ -71,6 +71,7 @@ vi.mock('../../serverApiClient', () => ({
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
   getDeviceLinkConnectionIssue: () => null,
+  clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   setKeepAwakeEnabled: vi.fn(),
   openRemoteLink: vi.fn(),

@@ -1349,6 +1349,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/mcp-integrations/forgeIconConversionProcess.ts',
+          config: 'vite.forge-icon-conversion-process.config.ts',
+          // Sharp/libvips 转换在一次性 utility process 中执行；超时可 kill，
+          // 不把不可取消的 native 任务留在 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/watcher-host/watcherHostProcess.ts',
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron
