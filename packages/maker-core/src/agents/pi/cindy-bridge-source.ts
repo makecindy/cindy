@@ -151,6 +151,7 @@ interface McpServerRef {
   url: string;
   remote?: {
     headerEnvVars: Record<string, string>;
+    startupTimeoutMs: number;
     requestTimeoutMs: number;
   };
 }
@@ -164,8 +165,8 @@ function safeMcpFailure(error: unknown): string {
 function isLoopbackMcpHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return normalized === 'localhost'
-    || normalized.endsWith('.localhost')
-    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
     || normalized === '[::1]';
 }
 
@@ -180,6 +181,7 @@ class McpHttpClient {
   private sessionId: string | null = null;
   private readonly requestUrl: string;
   private readonly requestTimeoutMs: number;
+  private startupDeadlineAt: number | null;
 
   constructor(
     private readonly server: McpServerRef,
@@ -204,6 +206,24 @@ class McpHttpClient {
       && configuredTimeout! <= 600_000
       ? configuredTimeout!
       : 600_000;
+    const configuredStartupTimeout = server.remote?.startupTimeoutMs;
+    const startupTimeoutMs = Number.isInteger(configuredStartupTimeout)
+      && configuredStartupTimeout! > 0
+      && configuredStartupTimeout! < 30_000
+      ? configuredStartupTimeout!
+      : 10_000;
+    this.startupDeadlineAt = Date.now() + startupTimeoutMs;
+  }
+
+  private nextRequestTimeoutMs(): number {
+    if (this.startupDeadlineAt === null) return this.requestTimeoutMs;
+    const remaining = this.startupDeadlineAt - Date.now();
+    if (remaining <= 0) throw new McpBridgeError('startup timed out');
+    return Math.max(1, Math.min(this.requestTimeoutMs, remaining));
+  }
+
+  finishStartup(): void {
+    this.startupDeadlineAt = null;
   }
 
   private headers(): Headers {
@@ -235,8 +255,9 @@ class McpHttpClient {
   }
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>): Promise<T> {
+    const requestTimeoutMs = this.nextRequestTimeoutMs();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       const res = await fetch(this.requestUrl, {
         method: 'POST',
@@ -260,6 +281,60 @@ class McpHttpClient {
     }
   }
 
+  /** 按 SSE event 增量取当前 JSON-RPC response；server 保持流打开也不阻塞。 */
+  private async readSseResponse(res: Response, id: number): Promise<any> {
+    const reader = res.body?.getReader();
+    if (!reader) throw new McpBridgeError('invalid SSE response');
+    const decoder = new TextDecoder();
+    let buffered = '';
+    const parseEvent = (eventText: string): any | null => {
+      const data = eventText
+        .split(/\r\n|\r|\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => {
+          const value = line.slice(5);
+          return value.startsWith(' ') ? value.slice(1) : value;
+        })
+        .join('\n');
+      if (!data) return null;
+      try {
+        const msg = JSON.parse(data);
+        if (msg && msg.id === id && ('result' in msg || 'error' in msg)) return msg;
+      } catch {
+        // 其它 event / 非 JSON data 不属于当前 response，继续读流。
+      }
+      return null;
+    };
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (value) buffered += decoder.decode(value, { stream: true });
+        if (done) buffered += decoder.decode();
+
+        for (;;) {
+          const boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffered);
+          if (!boundary) break;
+          const eventText = buffered.slice(0, boundary.index);
+          buffered = buffered.slice(boundary.index + boundary[0].length);
+          const msg = parseEvent(eventText);
+          if (msg) return msg;
+        }
+        if (buffered.length > 1_048_576) {
+          throw new McpBridgeError('invalid SSE response');
+        }
+        if (done) {
+          const msg = parseEvent(buffered);
+          if (msg) return msg;
+          throw new McpBridgeError('invalid SSE response');
+        }
+      }
+    } finally {
+      // 找到当前 response 后不等待 server 关闭持续流，立即释放连接。
+      void reader.cancel().catch(() => {});
+    }
+  }
+
   /** 解析 application/json 或 SSE 响应体里 id 匹配的 JSON-RPC response。 */
   private async readResponse(res: Response, id: number): Promise<any> {
     const contentType = res.headers.get('content-type') ?? '';
@@ -269,19 +344,7 @@ class McpHttpClient {
       throw new McpBridgeError('HTTP ' + res.status);
     }
     if (contentType.includes('text/event-stream')) {
-      const text = await res.text();
-      for (const chunk of text.split('\n\n')) {
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          try {
-            const msg = JSON.parse(line.slice(5).trim());
-            if (msg && msg.id === id && ('result' in msg || 'error' in msg)) return msg;
-          } catch {
-            /* keep scanning */
-          }
-        }
-      }
-      throw new McpBridgeError('invalid SSE response');
+      return this.readSseResponse(res, id);
     }
     return res.json();
   }
@@ -338,6 +401,7 @@ async function connectServer(pi: any, server: McpServerRef, token: string): Prom
   const client = new McpHttpClient(server, token);
   await client.initialize();
   const listed = await client.request('tools/list', {});
+  client.finishStartup();
   const tools: any[] = Array.isArray(listed?.tools) ? listed.tools : [];
   for (const tool of tools) {
     const qualifiedName = 'mcp__' + server.name + '__' + tool.name;
@@ -486,13 +550,15 @@ export default async function cindyBridge(pi: any) {
     return;
   }
   const token = cfg.token ?? '';
-  for (const server of cfg.servers ?? []) {
+  // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
+  // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
+  await Promise.all((cfg.servers ?? []).map(async (server) => {
     try {
       const count = await connectServer(pi, server, token);
       console.error('[cindy-bridge] connected ' + server.name + ' (' + count + ' tools)');
     } catch (err) {
       console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + safeMcpFailure(err));
     }
-  }
+  }));
 }
 `;

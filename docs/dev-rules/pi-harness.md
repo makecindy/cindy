@@ -39,12 +39,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
   instance，使 Full Access 自动交接保持 fail closed。
 - **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP，
-  并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；SSE
-  不在此链支持。外部 URL 要求 HTTPS，只有明确 loopback endpoint 可用 HTTP；认证 header
+  并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；旧式
+  SSE transport 不在此链支持（但 Streamable HTTP 的 SSE response framing 受支持）。外部 URL
+  要求 HTTPS，只有明确 loopback endpoint 可用 HTTP；认证 header
   真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
-  都会在 bash spawn 边界剥离。bridge 用极简 client `tools/list` + `registerTool` 成
-  `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动会话
-  保留启动时 generation 快照至 close。
+  都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
+  `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
+  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。工具注册
+  为 `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动
+  会话保留启动时 generation 快照至 close。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 

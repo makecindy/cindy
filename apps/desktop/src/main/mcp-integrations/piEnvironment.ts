@@ -65,6 +65,8 @@ let activeGeneration: StartedPiBridge | null = null;
 let environmentEpoch = 0;
 let nextGeneration = 0;
 const generations = new Set<StartedPiBridge>();
+const REMOTE_MCP_STARTUP_TIMEOUT_MS = 10_000;
+const REMOTE_MCP_REQUEST_TIMEOUT_MS = 600_000;
 
 function cloneRemoteServers(
   servers: StartedPiBridge['remoteServers'],
@@ -80,8 +82,8 @@ function cloneRemoteServers(
 function isLoopbackMcpHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return normalized === 'localhost'
-    || normalized.endsWith('.localhost')
-    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
     || normalized === '[::1]';
 }
 
@@ -363,7 +365,9 @@ async function doStart(
       }
       // 自定义 MCP 的 host allowlist 是用户显式保存的 endpoint；不复用 SSH 入站 bridge
       // 的 server-name allowlist。公网/局域网必须 HTTPS，HTTP 仅放行明确 loopback，避免
-      // bearer / API-key 与 MCP 内容在链路上明文；同时拒绝 URL 内嵌凭证和非 web 协议。
+      // bearer / API-key 与 MCP 内容在链路上明文。明文 allowlist 与 Pi spawn 的
+      // mergeLoopbackNoProxy 完全一致，避免 127/8 中其它地址经 HTTP_PROXY 泄密；同时
+      // 拒绝 URL 内嵌凭证和非 web 协议。
       if (!isAllowedRemoteMcpUrl(parsedUrl)) {
         logger.warn('pi bridge: skipping remote HTTP MCP provider outside the URL security boundary', {
           providerName: provider.name,
@@ -413,7 +417,10 @@ async function doStart(
         url: parsedUrl.href,
         remote: {
           headerEnvVars,
-          requestTimeoutMs: 600_000,
+          // Pi RPC 的 ready 请求预算是 30s；extension 会并行探测全部 server，故任一
+          // 黑洞 provider 最多占 10s。探测成功后工具调用仍保留长请求预算。
+          startupTimeoutMs: REMOTE_MCP_STARTUP_TIMEOUT_MS,
+          requestTimeoutMs: REMOTE_MCP_REQUEST_TIMEOUT_MS,
         },
       });
       continue;

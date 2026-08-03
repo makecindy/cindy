@@ -120,6 +120,9 @@ export interface PiMcpServerRef {
   remote?: {
     /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
     headerEnvVars: Record<string, string>;
+    /** extension 启动时 initialize + tools/list 的总预算；必须短于 Pi RPC ready 超时。 */
+    startupTimeoutMs: number;
+    /** 完成启动探测后的单次工具调用预算。 */
     requestTimeoutMs: number;
   };
 }

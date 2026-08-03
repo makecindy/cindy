@@ -336,7 +336,7 @@ describe('piEnvironment per-session identity', () => {
     expect(server).toMatchObject({
       name: 'custom_exa',
       url: 'https://mcp.example.test/v1?source=pi',
-      remote: { requestTimeoutMs: 600_000 },
+      remote: { startupTimeoutMs: 10_000, requestTimeoutMs: 600_000 },
     });
     // 外部 endpoint 不能被误加 localhost bridge 的 session identity。
     expect(new URL(server.url).searchParams.has('session')).toBe(false);
@@ -369,7 +369,11 @@ describe('piEnvironment per-session identity', () => {
     };
     const validLoopback: McpProvider = {
       name: 'valid_loopback',
-      toCodexMcpConfig: () => ({ type: 'http', url: 'http://127.0.0.2:4321/mcp' }),
+      toCodexMcpConfig: () => ({ type: 'http', url: 'http://127.0.0.1:4321/mcp' }),
+    };
+    const validIpv6Loopback: McpProvider = {
+      name: 'valid_ipv6_loopback',
+      toCodexMcpConfig: () => ({ type: 'http', url: 'http://[::1]:4321/mcp' }),
     };
     const providers: McpProvider[] = [
       {
@@ -396,6 +400,12 @@ describe('piEnvironment per-session identity', () => {
         toCodexMcpConfig: () => ({ type: 'http', url: 'http://public.example.test/mcp' }),
       },
       {
+        // 127/8 都由 OS 视为 loopback，但 Pi 的 NO_PROXY 只保证 127.0.0.1；其余地址
+        // 不得明文携带认证 header，以免被全局 HTTP_PROXY 接走。
+        name: 'loopback_outside_no_proxy',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'http://127.0.0.2:4321/mcp' }),
+      },
+      {
         name: 'embedded_credentials',
         toCodexMcpConfig: () => ({ type: 'http', url: 'https://user:secret@example.test/mcp' }),
       },
@@ -419,12 +429,14 @@ describe('piEnvironment per-session identity', () => {
       },
       valid,
       validLoopback,
+      validIpv6Loopback,
     ];
 
     const config = await getPiExtraSpawnConfig(providers, logger);
     expect(config!.mcpBridge!.servers.map((server) => server.name)).toEqual([
       'valid_remote',
       'valid_loopback',
+      'valid_ipv6_loopback',
     ]);
     const logs = JSON.stringify(entries);
     expect(logs).not.toContain(logCanary);

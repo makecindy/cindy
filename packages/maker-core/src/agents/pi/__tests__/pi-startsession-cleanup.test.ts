@@ -123,6 +123,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
               url: 'https://mcp.example.test/',
               remote: {
                 headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
+                startupTimeoutMs: 10_000,
                 requestTimeoutMs: 600_000,
               },
             }],

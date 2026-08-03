@@ -173,6 +173,56 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           ...(apiKey ? { apiKey } : {}),
         });
       }
+      if (req.url?.includes('/persistent-sse')) {
+        if (auth !== `Bearer ${REMOTE_BEARER}` || apiKey !== REMOTE_API_KEY) {
+          res.writeHead(401).end('unauthorized');
+          return;
+        }
+        const body = JSON.parse(await readBody(req)) as {
+          id?: number;
+          method?: string;
+          params?: { arguments?: { text?: unknown } };
+        };
+        if (body.id === undefined) {
+          res.writeHead(202).end();
+          return;
+        }
+        let result: unknown;
+        if (body.method === 'initialize') {
+          result = {
+            protocolVersion: '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'persistent-sse', version: '1.0.0' },
+          };
+        } else if (body.method === 'tools/list') {
+          result = {
+            tools: [{
+              name: 'echo',
+              description: 'Echo text back',
+              inputSchema: {
+                type: 'object',
+                properties: { text: { type: 'string' } },
+                required: ['text'],
+              },
+            }],
+          };
+        } else if (body.method === 'tools/call') {
+          // 超过 50ms startup budget 后才回工具结果，证明探测完成后切回长 request budget。
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          const text = body.params?.arguments?.text;
+          echoCalls.push({ text });
+          result = { content: [{ type: 'text', text: `ECHO[${String(text)}]` }] };
+        } else {
+          result = {};
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        res.write(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\r\n\r\n`);
+        // 合法 Streamable HTTP server 可在返回当前 response 后继续保持 SSE 流；client
+        // 必须在 event 到达时返回并取消流，而不是等待这里结束。
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        if (!res.destroyed && !res.writableEnded) res.end();
+        return;
+      }
       if (req.url?.includes('/reject')) {
         res.writeHead(401, { 'content-type': 'text/plain' });
         res.end(REMOTE_ERROR_CANARY);
@@ -223,7 +273,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   });
 
   function buildDeps(
-    bridgeMode: 'local' | 'remote' | 'remote-failures' = 'local',
+    bridgeMode: 'local' | 'remote' | 'remote-sse' | 'remote-failures' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -259,7 +309,31 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                     authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
                     'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
                   },
+                  startupTimeoutMs: 1_000,
                   requestTimeoutMs: 5_000,
+                },
+              }],
+            },
+            mcpEnv: {
+              CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}`,
+              CINDY_PI_REMOTE_MCP_SECRET_1: REMOTE_API_KEY,
+            },
+          };
+        }
+        if (bridgeMode === 'remote-sse') {
+          return {
+            mcpBridge: {
+              token: '',
+              servers: [{
+                name: 'cindy_echo',
+                url: `${mcpUrl}/persistent-sse`,
+                remote: {
+                  headerEnvVars: {
+                    authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
+                    'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
+                  },
+                  startupTimeoutMs: 50,
+                  requestTimeoutMs: 1_000,
                 },
               }],
             },
@@ -279,6 +353,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                   url: `${mcpUrl}/reject`,
                   remote: {
                     headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
+                    startupTimeoutMs: 1_000,
                     requestTimeoutMs: 1_000,
                   },
                 },
@@ -287,7 +362,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                   url: `${mcpUrl}/slow`,
                   remote: {
                     headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
-                    requestTimeoutMs: 50,
+                    startupTimeoutMs: 50,
+                    requestTimeoutMs: 5_000,
                   },
                 },
                 {
@@ -295,7 +371,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                   url: `${mcpUrl}/stall-body`,
                   remote: {
                     headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
-                    requestTimeoutMs: 50,
+                    startupTimeoutMs: 50,
+                    requestTimeoutMs: 5_000,
                   },
                 },
               ],
@@ -323,7 +400,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   async function runOneTurn(
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
-    bridgeMode: 'local' | 'remote' = 'local',
+    bridgeMode: 'local' | 'remote' | 'remote-sse' = 'local',
   ): Promise<{ events: AgentEvent[]; permissionAsked: boolean }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
@@ -396,12 +473,42 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       echoCalls.length = 0;
       seenMcpUrls.length = 0;
       seenRemoteHeaders.length = 0;
-      const { events, permissionAsked } = await runOneTurn(
-        'bypassPermissions',
-        async () => ({ kind: 'permission', behavior: 'deny' }),
-        'remote',
-      );
+      let proxyHits = 0;
+      const proxy = createServer((_req, res) => {
+        proxyHits += 1;
+        res.writeHead(502).end('loopback traffic must not reach HTTP_PROXY');
+      });
+      await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+      const proxyAddress = proxy.address();
+      if (typeof proxyAddress !== 'object' || !proxyAddress) throw new Error('proxy did not listen');
+      const previous = {
+        HTTP_PROXY: process.env.HTTP_PROXY,
+        http_proxy: process.env.http_proxy,
+        NO_PROXY: process.env.NO_PROXY,
+        no_proxy: process.env.no_proxy,
+      };
+      process.env.HTTP_PROXY = `http://127.0.0.1:${proxyAddress.port}`;
+      delete process.env.http_proxy;
+      process.env.NO_PROXY = '';
+      delete process.env.no_proxy;
+      let turn: Awaited<ReturnType<typeof runOneTurn>> | undefined;
+      try {
+        turn = await runOneTurn(
+          'bypassPermissions',
+          async () => ({ kind: 'permission', behavior: 'deny' }),
+          'remote',
+        );
+      } finally {
+        for (const name of Object.keys(previous)) delete process.env[name];
+        for (const [name, value] of Object.entries(previous)) {
+          if (value !== undefined) process.env[name] = value;
+        }
+        await new Promise<void>((resolve) => proxy.close(() => resolve()));
+      }
 
+      expect(turn).toBeDefined();
+      const { events, permissionAsked } = turn!;
+      expect(proxyHits).toBe(0);
       expect(permissionAsked).toBe(false);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
       expect(seenRemoteHeaders.length).toBeGreaterThan(0);
@@ -409,6 +516,29 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         headers.authorization === `Bearer ${REMOTE_BEARER}` && headers.apiKey === REMOTE_API_KEY
       )).toBe(true);
       expect(seenMcpUrls.every((url) => !url.includes('session='))).toBe(true);
+      const finalText = events
+        .filter((event) => event.type === 'text')
+        .map((event) => event.data as { text: string; isFinal?: boolean })
+        .filter((data) => data.isFinal)
+        .map((data) => data.text)
+        .join('');
+      expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it(
+    'persistent SSE: registers on the matching event without waiting for stream close, then uses the long tool timeout',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      const { events, permissionAsked } = await runOneTurn(
+        'bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'deny' }),
+        'remote-sse',
+      );
+
+      expect(permissionAsked).toBe(false);
+      expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
       const finalText = events
         .filter((event) => event.type === 'text')
         .map((event) => event.data as { text: string; isFinal?: boolean })

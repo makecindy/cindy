@@ -160,7 +160,13 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
+  env.NO_PROXY = Array.from(new Set([
+    ...existing,
+    '127.0.0.1',
+    'localhost',
+    '::1',
+    '[::1]',
+  ])).join(',');
   delete env.no_proxy;
 }
 
