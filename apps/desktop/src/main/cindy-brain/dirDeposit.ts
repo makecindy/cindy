@@ -425,8 +425,10 @@ async function writeNewSaveFile(
       return null;
     }
 
+    let openedStat: fs.Stats | null = null;
+    let committed = false;
     try {
-      const openedStat = await handle.stat();
+      openedStat = await handle.stat();
       const rootAfter = fs.realpathSync.native(dirRealPath);
       const targetAfter = fs.realpathSync.native(target);
       const pathStat = fs.statSync(target);
@@ -440,11 +442,49 @@ async function writeNewSaveFile(
         return null;
       }
       await handle.writeFile(bytes);
+      committed = true;
       return candidate;
     } catch {
       return null;
     } finally {
-      await handle.close();
+      // 校验或写入失败时，先通过仍持有的句柄清空可能已经写入的字节。
+      // 这样即使路径随后被替换，也不会把半成品字节留在原 inode 上。
+      if (!committed && openedStat?.isFile()) {
+        try {
+          await handle.truncate(0);
+        } catch {
+          // 清理失败不能覆盖原始失败结果。
+        }
+      }
+
+      if (committed) {
+        // 保留成功路径原有的 close 语义；close 失败仍视为写盘失败。
+        await handle.close();
+      } else {
+        // Windows 下先关闭句柄再 unlink；失败路径的 close 只做 best effort，
+        // 不能把原始 null 结果升级成异常。
+        try {
+          await handle.close();
+        } catch {
+          // 清理失败不能覆盖原始失败结果。
+        }
+
+        // 仅当路径仍指向本次 O_EXCL 打开的同一 dev/ino 时删除，避免目标在
+        // 校验窗口内被替换成 symlink/其它文件后误删替代目标。
+        if (openedStat?.isFile()) {
+          try {
+            const currentStat = await fs.promises.lstat(target);
+            if (
+              currentStat.dev === openedStat.dev &&
+              currentStat.ino === openedStat.ino
+            ) {
+              await fs.promises.unlink(target);
+            }
+          } catch {
+            // 清理失败不能覆盖原始失败结果。
+          }
+        }
+      }
     }
   }
   return null;

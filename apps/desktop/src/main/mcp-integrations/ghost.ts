@@ -584,11 +584,9 @@ async function prepareManagedToolGrantSources(params: {
         originKind: 'user',
       });
       if (userGranted) continue;
-      toolGranted = await ledger.hasRef({
+      toolGranted = await ledger.hasGhostToolGrant({
         hash: resolved.blobHash,
-        refKind: 'ghost-tool-grant',
-        refId: params.ghostId,
-        originKind: 'tool',
+        ghostId: params.ghostId,
       });
     } catch {
       return { ok: false, message: '附件授权状态读取失败，请重试' };
@@ -750,11 +748,9 @@ async function grantAttachmentUrls(params: {
           if (userGranted) {
             return { absPath: r.absPath, mimeType: r.mimeType, originKind: 'user' };
           }
-          const toolGranted = await ledger.hasRef({
+          const toolGranted = await ledger.hasGhostToolGrant({
             hash: r.blobHash,
-            refKind: 'ghost-tool-grant',
-            refId: ghostId,
-            originKind: 'tool',
+            ghostId,
           });
           if (toolGranted) {
             // The batch preflight above must have covered every tool grant.

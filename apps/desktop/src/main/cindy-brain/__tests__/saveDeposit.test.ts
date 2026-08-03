@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SaveDepositVault, sanitizeSaveFileName } from '../dirDeposit.js';
 import { GHOST_SAVE_DEPOSIT_MAX_USES, GHOST_SAVE_DEPOSIT_TTL_MS } from '../../../shared/ghost.js';
@@ -80,6 +80,107 @@ describe('SaveDepositVault', () => {
 
     expect(await vault.write('g2', token, 'a.txt', new Uint8Array([1]))).toBeNull();
     expect(await vault.write('g1', '00000000-0000-4000-8000-000000000000', 'a.txt', new Uint8Array([1]))).toBeNull();
+  });
+
+  it('写入前完整性校验失败会清掉本次创建的空文件，重试仍可使用原文件名', async () => {
+    const vault = new SaveDepositVault();
+    const deposited = vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: workdir });
+    if (!deposited.ok) throw new Error('deposit failed');
+
+    const originalStatSync = fs.statSync.bind(fs);
+    const statSpy = vi.spyOn(fs, 'statSync').mockImplementationOnce((filePath) => {
+      const stat = originalStatSync(filePath);
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: stat.ino + 1,
+      }) as fs.Stats;
+    });
+    try {
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'integrity.txt', new Uint8Array([1, 2, 3])),
+      ).resolves.toBeNull();
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    const target = path.join(saveDir, 'integrity.txt');
+    expect(fs.existsSync(target)).toBe(false);
+    await expect(
+      vault.write('g1', deposited.receipt.token, 'integrity.txt', new Uint8Array([4])),
+    ).resolves.toEqual({ fileName: 'integrity.txt' });
+    expect(fs.readFileSync(target)).toEqual(Buffer.from([4]));
+  });
+
+  it('部分写入失败会清掉残留字节，重试不会被迫改名', async () => {
+    const vault = new SaveDepositVault();
+    const deposited = vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: workdir });
+    if (!deposited.ok) throw new Error('deposit failed');
+
+    const target = path.join(saveDir, 'partial.bin');
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalWriteFile = handle.writeFile.bind(handle);
+      return {
+        stat: handle.stat.bind(handle),
+        writeFile: async (data: Uint8Array) => {
+          await originalWriteFile(data.subarray(0, 1));
+          throw new Error('simulated EIO');
+        },
+        truncate: handle.truncate.bind(handle),
+        close: handle.close.bind(handle),
+      } as unknown as fs.promises.FileHandle;
+    });
+    try {
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'partial.bin', new Uint8Array([1, 2, 3])),
+      ).resolves.toBeNull();
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(fs.existsSync(target)).toBe(false);
+    await expect(
+      vault.write('g1', deposited.receipt.token, 'partial.bin', new Uint8Array([4, 5])),
+    ).resolves.toEqual({ fileName: 'partial.bin' });
+    expect(fs.readFileSync(target)).toEqual(Buffer.from([4, 5]));
+  });
+
+  it('写入失败期间目标被替换时不误删替代文件', async () => {
+    if (process.platform === 'win32') return;
+
+    const vault = new SaveDepositVault();
+    const deposited = vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: workdir });
+    if (!deposited.ok) throw new Error('deposit failed');
+
+    const target = path.join(saveDir, 'replacement.bin');
+    const moved = `${target}.moved`;
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalWriteFile = handle.writeFile.bind(handle);
+      return {
+        stat: handle.stat.bind(handle),
+        writeFile: async (data: Uint8Array) => {
+          await originalWriteFile(data.subarray(0, 1));
+          await fs.promises.rename(target, moved);
+          await fs.promises.writeFile(target, Buffer.from('replacement'));
+          throw new Error('simulated EIO');
+        },
+        truncate: handle.truncate.bind(handle),
+        close: handle.close.bind(handle),
+      } as unknown as fs.promises.FileHandle;
+    });
+    try {
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'replacement.bin', new Uint8Array([1, 2, 3])),
+      ).resolves.toBeNull();
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(fs.readFileSync(target, 'utf8')).toBe('replacement');
+    expect(fs.existsSync(moved)).toBe(true);
+    expect(fs.readFileSync(moved)).toHaveLength(0);
   });
 
   it('TTL 过期 / 次数写满自动作废', async () => {

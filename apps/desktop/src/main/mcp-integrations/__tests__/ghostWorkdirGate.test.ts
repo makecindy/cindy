@@ -47,6 +47,16 @@ const ledgerHasRefMock = vi.fn(async (params: TestLedgerRef) =>
       (params.originKind === undefined || ref.originKind === params.originKind),
   ),
 );
+const ledgerHasGhostToolGrantMock = vi.fn(
+  async (params: { hash: string; ghostId: string }) =>
+    ledgerRefs.some(
+      (ref) =>
+        ref.hash === params.hash &&
+        ref.refId === params.ghostId &&
+        ref.originKind === 'tool' &&
+        (ref.refKind === 'ghost-tool-grant' || ref.refKind === 'ghost-grant'),
+    ),
+);
 const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   ledgerRefs.push({ ...params });
   return `ref-${ledgerRefs.length}`;
@@ -136,6 +146,7 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
 vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: () => 'image/png' }));
 vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
+  hasGhostToolGrant: ledgerHasGhostToolGrantMock,
   addRef: ledgerAddRefMock,
 }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
@@ -263,6 +274,17 @@ beforeEach(() => {
         ref.refId === params.refId &&
         (params.originKind === undefined || ref.originKind === params.originKind),
     ),
+  );
+  ledgerHasGhostToolGrantMock.mockReset();
+  ledgerHasGhostToolGrantMock.mockImplementation(
+    async (params: { hash: string; ghostId: string }) =>
+      ledgerRefs.some(
+        (ref) =>
+          ref.hash === params.hash &&
+          ref.refId === params.ghostId &&
+          ref.originKind === 'tool' &&
+          (ref.refKind === 'ghost-tool-grant' || ref.refKind === 'ghost-grant'),
+      ),
   );
   ledgerAddRefMock.mockReset();
   ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
@@ -743,6 +765,61 @@ describe('Full Access 插件文件交接', () => {
       { hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
       { hash, refKind: 'ghost-grant', refId: 'art', originKind: 'user' },
     ]);
+
+    await deps.callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [blobUrl],
+    });
+    expect(confirmRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('旧版 ghost-grant/tool 在 Full Access 下兼容交接，降档后仍只走用户确认', async () => {
+    const file = path.join(outsideDir, 'legacy-managed-tool.png');
+    const bytes = Buffer.from('legacy-managed-tool');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({
+      absPath: file,
+      mimeType: 'image/png',
+      blobHash: hash,
+    });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null });
+    const deps = makeDeps('pi', 'legacy-managed-tool');
+    const blobUrl = `xdt-media://blob/${hash}`;
+
+    const fullAccessResult = await deps.callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [blobUrl],
+    });
+
+    expect(fullAccessResult).toMatchObject({ ok: true, result: 'done' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(resolvedAttachmentOrigins).toEqual(['tool']);
+    expect(ledgerRefs).toEqual(
+      expect.arrayContaining([
+        { hash, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' },
+        { hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
+      ]),
+    );
+    expect(ledgerRefs).not.toContainEqual({ hash, refKind: 'ghost-grant', refId: 'art', originKind: 'user' });
+
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null });
+    const downgradedResult = await deps.callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [blobUrl],
+    });
+
+    expect(downgradedResult).toMatchObject({ ok: true, result: 'done' });
+    expect(confirmRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolvedAttachmentOrigins).toEqual(['tool', 'user']);
+    expect(ledgerRefs).toContainEqual({ hash, refKind: 'ghost-grant', refId: 'art', originKind: 'user' });
 
     await deps.callGhostTool({
       ghostId: 'art',

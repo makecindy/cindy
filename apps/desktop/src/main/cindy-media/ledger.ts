@@ -212,6 +212,36 @@ export async function hasRef(
 }
 
 /**
+ * 某意识是否已有 Host 工具代办的附件交接记录。
+ *
+ * 新版使用独立的 ghost-tool-grant/tool；旧版曾把同一语义写成
+ * ghost-grant/tool。两者都只能作为工具 provenance 使用，不能被当成
+ * ghost-grant/user 的人工永久授权。集中兼容旧行，避免各调用点漏判或扩权。
+ */
+export async function hasGhostToolGrant(
+  params: { hash: string; ghostId: string },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.hash, params.hash),
+        eq(mediaRefs.refId, params.ghostId),
+        eq(mediaRefs.originKind, 'tool'),
+        or(
+          eq(mediaRefs.refKind, 'ghost-tool-grant'),
+          eq(mediaRefs.refKind, 'ghost-grant'),
+        ),
+      ),
+    )
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
+/**
  * 删会话的引用清理(会话删除钩子唯一入口):
  *   - session-attachment / import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——

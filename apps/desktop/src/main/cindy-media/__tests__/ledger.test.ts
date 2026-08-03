@@ -135,6 +135,38 @@ describe('addRef / removeRefs(引用增删)', () => {
     ).resolves.toBe(true);
   });
 
+  it('hasGhostToolGrant 兼容旧 ghost-grant/tool，但不把 user provenance 当工具交接', async () => {
+    await seedBlob(HASH_A);
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(false);
+
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'user' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(false);
+
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(true);
+
+    await seedBlob(HASH_B);
+    await ledger.addRef(
+      { hash: HASH_B, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_B, ghostId: 'art' }, db),
+    ).resolves.toBe(true);
+  });
+
   it('新版工具交接可取件，但旧版 ghost-grant shortcut 看不到它(回退 fail closed)', async () => {
     await seedBlob(HASH_A);
     await ledger.addRef(
