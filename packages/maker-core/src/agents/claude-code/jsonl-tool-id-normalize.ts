@@ -349,6 +349,21 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       occPtr.set(val, ptr);
       return ptr < 0 ? undefined : occs[ptr].finalId;
     };
+    // 前瞻解析(content_block_start 专用): 找第一个 line >= index 的 occurrence ——
+    // stream_event 的 content_block_start 预告的是**即将出现**的 tool call, SDK 允许
+    // 它先于 assistant 消息到达(handleStreamEvent 显式支持该顺序), 后顾解析在此
+    // 顺序下找不到 occurrence、id 保持旧值, 与后续归一化的 assistant/tool_result
+    // 指向不一致(codex-connector P2: Handle stream events before assistant rows)。
+    // 无前瞻命中(stream_event 落在所有同名调用之后, 异常顺序)时 fallback 到最近的
+    // 行 < index 的 occurrence。
+    const resolveAhead = (val: string, index: number): string | undefined => {
+      const occs = occurrenceByOriginal.get(val);
+      if (!occs || occs.length === 0) return undefined;
+      for (let i = 0; i < occs.length; i += 1) {
+        if (occs[i].line >= index) return occs[i].finalId;
+      }
+      return occs[occs.length - 1].finalId;
+    };
     // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
     // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
     // 重映射到下一个 occurrence 拆散。
@@ -401,11 +416,13 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // 改写: handleStreamEvent 用它驱动 tool-use start / tool-name 状态, replay/import
       // 会以旧 id 发 tool card, 与归一化后的 tool_result / summary 指向不一致
       // (codex-connector P2: Rewrite stream-event tool IDs too)。
+      // 用前瞻解析(不走 child 缓存): content_block_start 是独立调用, 且可先于
+      // assistant 行到达, 需匹配「即将出现」的 occurrence(见 resolveAhead)。
       const evt = entry.event;
       if (isRecord(evt) && evt.type === 'content_block_start') {
         const cb = evt.content_block;
         if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-          const mapped = resolveForEntry(entry, cb.id, index);
+          const mapped = resolveAhead(cb.id, index);
           if (mapped !== undefined && mapped !== cb.id) {
             cb.id = mapped;
             entryChanged = true;

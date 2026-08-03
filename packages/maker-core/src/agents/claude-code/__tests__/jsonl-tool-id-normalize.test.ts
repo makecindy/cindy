@@ -448,6 +448,34 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((evt.content_block as Record<string, unknown>).id).toBe('Bash_x210');
   });
 
+  it('stream_event 先于 assistant 行到达时 content_block.id 前瞻匹配(P2: Handle stream events before assistant rows)', () => {
+    // SDK 允许 stream_event 的 content_block_start 先于同 tool call 的 assistant 消息
+    // 到达。后顾解析(只看 line < index)在此顺序下找不到 occurrence, content_block.id
+    // 会保持旧值 Bash_210, 与后续归一化的 assistant/tool_result(Bash_x210)不一致。
+    // 前瞻解析必须匹配「即将出现」的 occurrence。
+    const text = [
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        parent_tool_use_id: 'Bash_210',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} },
+        },
+      }),
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // stream_event 在 line 0, assistant 在 line 1: content_block.id 前瞻匹配到 Bash_x210
+    const evt = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
+    expect((evt.content_block as Record<string, unknown>).id).toBe('Bash_x210');
+    // 后续 assistant / tool_result 也一致
+    expect(contentOf(entries[1])[0].id).toBe('Bash_x210');
+  });
+
   it('task 记录(task_started/progress/notification)按 task_id 复用同一终 id, 不拆散到多卡片(P2: Reuse task_id)', () => {
     // task 系统记录用 task_id + tool_use_id 标识 child, 通常无 uuid。若按条消费
     // occurrence, 同一条 task 的 progress/notification 会被重映射到下一个 occurrence。
