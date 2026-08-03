@@ -463,6 +463,19 @@ const CC_UPSTREAM_IDLE_SLICE_MS = 60_000;
 /** 分片实际耗时超出片长这么多 → 判为进程被系统挂起过,该片不计入额度。 */
 const CC_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
 
+/**
+ * 原生 Auto 分类器回探(SDK 切回 `auto`)的看门狗时限 —— 见
+ * restoreNativeAutoReviewForNewTurn。回探是 fire-and-forget 的控制请求,既不能串行
+ * 阻塞 send(dev-rules §3.2),又不能只依赖 reject 兜底:控制请求**悬挂**时既不 resolve
+ * 也不 reject,而标记此刻已乐观清零,于是 SDK 永远停在 `default`、后续 send 也不再回探,
+ * 一次试探性降级会永久变成 Cindy fallback(codex P2)。
+ *
+ * 取值宽松:正常控制请求是毫秒级,10s 只用来兜"永不返回"。误判(慢响应被判超时)的代价
+ * 只是把标记恢复成 true、下一 turn 多做一次幂等的回探 push,所以宁可给足余量,也不要
+ * 把正常的慢响应打成失败。
+ */
+const CC_AUTO_REVIEW_PROBE_TIMEOUT_MS = 10_000;
+
 
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
@@ -3671,11 +3684,35 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 没入队,也没有超时兜底)。与 stale plan turn cleanup 同款 fire-and-forget;失败则
       // 恢复标记,下一 turn 再试,期间继续由 Cindy reviewer 兜住,不影响正确性。
       const probedQuery = q;
+      let probeSettled = false;
+      /**
+       * 只处理 resolve/reject 是不够的:控制请求**悬挂**时两个回调都不会来,而标记已经
+       * 乐观清零 —— SDK 永远停在 default、后续 send 也不再回探,一次试探性降级就永久变成
+       * Cindy fallback。看门狗只做「恢复标记」这一件事(非阻塞、不重试、不碰档位),把重试
+       * 交回给下一 turn 的正常回探路径。
+       */
+      const probeWatchdog = setTimeout(() => {
+        if (probeSettled) return;
+        probeSettled = true;
+        if (q !== probedQuery) return;
+        nativeAutoReviewTurnFallback = true;
+        log.warn('native Auto classifier probe timed out — keeping Cindy fallback for this turn', {
+          timeoutMs: CC_AUTO_REVIEW_PROBE_TIMEOUT_MS,
+        });
+      }, CC_AUTO_REVIEW_PROBE_TIMEOUT_MS);
+      // 纯兜底计时器,不该拖住进程退出(会话可能在 10s 内就 close)。
+      probeWatchdog.unref?.();
       void q.setPermissionMode('auto').then(
         () => {
+          if (probeSettled) return;
+          probeSettled = true;
+          clearTimeout(probeWatchdog);
           log.debug('native Auto classifier probe: switched SDK back to auto for the new turn');
         },
         (e: unknown) => {
+          if (probeSettled) return;
+          probeSettled = true;
+          clearTimeout(probeWatchdog);
           if (q !== probedQuery) {
             // 本 turn 中途换了 Query(bridge rewind 重建等):失败属于那个已被丢弃的 q,
             // 新 Query 的起档已按清零后的标记算成 'auto'。此时恢复标记只会制造

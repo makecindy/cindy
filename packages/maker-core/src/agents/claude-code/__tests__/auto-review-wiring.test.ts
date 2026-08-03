@@ -334,6 +334,35 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('restores the tentative flag when the probe control request hangs, so the next turn retries', async () => {
+    // 悬挂的控制请求既不 resolve 也不 reject,只挂 resolve/reject 回调兜不住:标记此刻
+    // 已乐观清零,SDK 却永远停在 default,后续 send 也不再回探 —— 一次试探性降级会永久
+    // 变成 Cindy fallback(codex P2)。有界看门狗负责把标记恢复,重试交回下一 turn。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+
+    // 看门狗的计时器必须在 fake timers 生效**期间**注册,否则推进的是另一套时钟。
+    vi.useFakeTimers();
+    try {
+      // 永不 settle 的控制请求。
+      fakeQuery.setPermissionMode.mockReturnValueOnce(new Promise<void>(() => {}));
+      await handle.send({ type: 'user', content: 'probe hangs here' });
+      await vi.advanceTimersByTimeAsync(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 看门狗已恢复标记 → 下一 turn 重新回探(而不是永久留在 Cindy fallback)。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'retry after watchdog' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
   it('restores the tentative flag when the probe control request fails', async () => {
     const { handle, fakeQuery } = await startSession('auto', {
       providerId: 'anthropic',
