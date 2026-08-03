@@ -163,7 +163,7 @@ describe('AppServerHost.request startup timeout', () => {
   });
 
   it('treats timeoutMs as an overall deadline across startup + request (copilot R9)', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     // timeoutMs 不是「startup 一次 + request 再一次」的双重施加: startup 用掉
     // 的预算要从 request 里扣, 最坏等待仍是 1× timeoutMs — 否则 60s 关键 RPC
     // 在冷启动路径上最坏拖到 ~120s, UI 长时间卡 generating。
