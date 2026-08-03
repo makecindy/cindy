@@ -54,6 +54,14 @@ export interface SnapshotStatusEntry {
 export interface SnapshotFilePlan {
   includedFiles: SnapshotIncludedFile[];
   skippedFiles: SnapshotSkippedFile[];
+  /**
+   * `git status` output overflowed the exec buffer: the dirty-file view is
+   * unknown, not empty. Legacy branch-commit snapshots keep their historical
+   * "degrade to no-op" behavior, but shadow savepoint consumers must fail
+   * closed — an empty plan here would record a baseline that silently misses
+   * every dirty file and let readers treat unprotected paths as safe.
+   */
+  statusTruncated?: true;
 }
 
 function withDefaults(opts?: Partial<SnapshotFileFilterOptions>): SnapshotFileFilterOptions {
@@ -145,15 +153,17 @@ export function parseStatusPorcelainZ(output: string): SnapshotStatusEntry[] {
   return entries;
 }
 
-async function readStatusEntries(repoPath: string): Promise<SnapshotStatusEntry[]> {
+async function readStatusEntries(
+  repoPath: string,
+): Promise<{ entries: SnapshotStatusEntry[]; truncated: boolean }> {
   try {
     const { stdout } = await gitExec(
       ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
       repoPath,
     );
-    return parseStatusPorcelainZ(stdout);
+    return { entries: parseStatusPorcelainZ(stdout), truncated: false };
   } catch (err) {
-    if (isGitStatusOutputTooLargeError(err)) return [];
+    if (isGitStatusOutputTooLargeError(err)) return { entries: [], truncated: true };
     throw err;
   }
 }
@@ -284,6 +294,7 @@ export async function buildSnapshotFilePlan(
   repoPath: string,
   opts?: Partial<SnapshotFileFilterOptions>,
 ): Promise<SnapshotFilePlan> {
-  const entries = await readStatusEntries(repoPath);
-  return buildSnapshotFilePlanFromEntries(repoPath, entries, opts);
+  const { entries, truncated } = await readStatusEntries(repoPath);
+  const plan = await buildSnapshotFilePlanFromEntries(repoPath, entries, opts);
+  return truncated ? { ...plan, statusTruncated: true } : plan;
 }

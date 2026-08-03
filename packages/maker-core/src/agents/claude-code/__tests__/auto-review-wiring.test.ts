@@ -6,6 +6,7 @@
  *   - auto + 安全内置(只读 / 区内写 / 只读 shell)→ 静默 allow,不惊动 resolver
  *   - auto + 灰区 → lightweight reviewer 的 allow/block 静默处理，只有 ask 才弹窗
  *   - auto + 确定危险命令 → 弹窗且 suggestion 被剥(不可持久化授权)
+ *   - 送审阅器的 model 恒为目录 id(不是 [1m] wire 串),切模后仍然如此
  *   - default 档 → 内置工具不走 auto-review 策略(照旧弹窗),证明只作用于 auto
  */
 import { promises as fs } from 'node:fs';
@@ -15,6 +16,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
+import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -93,6 +95,7 @@ async function startSession(
     reviewVerdict?: 'allow' | 'block' | 'ask';
     reviewer?: AgentDeps['reviewAutoPermissionAction'];
     attachResolver?: boolean;
+    model?: string;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -111,13 +114,13 @@ async function startSession(
   }));
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
     providerId: options.providerId ?? 'xd',
     workingDir,
     permissionMode,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
-    | { canUseTool?: CanUseToolFn; permissionMode?: string }
+    | { canUseTool?: CanUseToolFn; permissionMode?: string; model?: string }
     | undefined;
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
 
@@ -135,10 +138,21 @@ async function startSession(
     canUseTool: queryOptions.canUseTool,
     fakeQuery,
     queryPermissionMode: queryOptions.permissionMode,
+    querySdkModel: queryOptions.model,
     reviewAutoPermissionAction,
     seen,
     workingDir,
   };
+}
+
+/** 取 reviewer 第 n 次调用收到的 AutoReviewRequest。 */
+function reviewedRequest(
+  reviewer: NonNullable<AgentDeps['reviewAutoPermissionAction']>,
+  callIndex = 0,
+): AutoReviewRequest {
+  const request = vi.mocked(reviewer).mock.calls[callIndex]?.[0];
+  if (!request) throw new Error(`expected reviewer call #${callIndex}`);
+  return request;
 }
 
 function permissionRequests(seen: InteractionRequest[]) {
@@ -323,6 +337,55 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     expect(reqs).toHaveLength(1);
     expect(reqs[0]?.suggestions).toBeUndefined();
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    await handle.close();
+  });
+});
+
+/**
+ * 送审阅器的是**用户选中的目录模型 id**,不是送 SDK 的 wire 串。
+ *
+ * host 侧 reviewer 按 (providerId, model) 精确查目录条目定路由,查不到就 fail closed
+ * (oneShotCandidates 的 no_candidate)—— 灰区动作会退化成没有 UI 提示的永久 block。
+ * Claude 的 wire 串带 [1m] beta 通道后缀(toSdkModelString),而目录条目不带,所以这两个
+ * 值必须始终分离:`mutableModel` 只跟随用户选择,wire 串在送 SDK 前单独派生、不回写。
+ *
+ * Codex 侧的同一约束靠 mutableCatalogModel 兜(它的 app-server 会把规范化后的 wire id
+ * **回带**覆盖运行期 model);Claude 没有那条回带路径,不变量由下面两个用例守住 —— 任何
+ * 把 wire 串写回 mutableModel 的改动都会让它们变红。见 issue #1575。
+ */
+describe('Auto-review wiring: the reviewer routes through the catalog model id', () => {
+  it('reviews through the catalog id while the SDK receives the [1m] wire id', async () => {
+    const { handle, canUseTool, querySdkModel, reviewAutoPermissionAction } = await startSession('auto', {
+      model: 'claude-opus-4-6',
+      reviewVerdict: 'allow',
+    });
+    expect(querySdkModel).toBe('claude-opus-4-6[1m]');
+
+    const r = await canUseTool(
+      'Write',
+      { file_path: '/tmp/catalog-model.conf' },
+      { toolUseID: 'catalog-model' },
+    );
+    expect(r.behavior).toBe('allow');
+    expect(reviewedRequest(reviewAutoPermissionAction).model).toBe('claude-opus-4-6');
+    await handle.close();
+  });
+
+  it('keeps reviewing through the catalog id after setModel switches the route', async () => {
+    const { handle, canUseTool, fakeQuery, reviewAutoPermissionAction } = await startSession('auto', {
+      model: 'claude-opus-4-6',
+      reviewVerdict: 'allow',
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5[1m]');
+
+    await canUseTool(
+      'Write',
+      { file_path: '/tmp/catalog-model-switched.conf' },
+      { toolUseID: 'catalog-model-switched' },
+    );
+    expect(reviewedRequest(reviewAutoPermissionAction).model).toBe('claude-sonnet-5');
     await handle.close();
   });
 });

@@ -113,6 +113,10 @@ import {
   type CodexRuntimeState,
 } from './translator.js';
 import {
+  createSubagentLiveCardTracker,
+  type SubagentLiveCardUpdate,
+} from './subagent-live-cards.js';
+import {
   TurnRetryTracker,
   RETRY_ESCALATION_MAX_ELAPSED_MS,
   buildBackendUnreachableMessage,
@@ -3105,12 +3109,87 @@ export class CodexAgent extends BaseAgent {
       }
       descendantMcpThreadIds.clear();
     };
+
+    // ── 子代理卡实时状态(V1 / V2 双轨) ──────────────────────────────────────
+    // 子代理跑在自己的 thread 里,app-server 把子线程的 item / tokenUsage / turn 通知
+    // 一并推给本连接;host 按 lineage 归到 root 后经 descendantNotification 投到这里
+    // (刻意不进主线程 dispatch,否则子代理的 exec 会被渲染成主会话自己的工具调用)。
+    // 聚合逻辑在 subagent-live-cards.ts(纯函数、可单测),这里只负责把快照按 spawn 卡
+    // 的同一 taskId 发成 agent_task_update —— 卡片本体与 Claude 子代理共用
+    // AgentTaskCard,本改动只补 Codex 侧缺失的数据源,不新建 UI。
+    /**
+     * 正在发子代理卡帧 —— eventQueue.push 的探针据此跳过主 turn 存活判定。
+     * 只在同步的 emitSubagentCardUpdate 内为 true(见那里的注释)。
+     */
+    let emittingDescendantUpdate = false;
+    const subagentLiveCards = createSubagentLiveCardTracker();
+
+    const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
+      // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
+      // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
+      // 而 `agent_task_update` 正在 isReconnectRecoveryEvent 的白名单里(那对 Claude 的主线程
+      // Task 更新是对的,不能从白名单里删)。于是子线程一有进展就会重置主线程的静默计时、
+      // 清掉 reconnect deadline:主 turn 其实已经哑火,却因为子代理还在跑而永远检测不出来
+      // (review)。子线程有进展 ≠ 主 turn 已恢复。
+      //
+      // push 是同步的,所以这个标志在 set 与 clear 之间不会被别的事件穿插。
+      emittingDescendantUpdate = true;
+      try {
+        eventQueue.push({
+        type: 'agent_task_update',
+        data: {
+          provider: 'codex',
+          taskId: update.taskId,
+          parentToolUseId: update.taskId,
+          status: update.status,
+          ...(update.agentPath ? { title: update.agentPath } : {}),
+          usage: {
+            ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
+            ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
+            durationMs: update.durationMs,
+          },
+        },
+          source: 'codex',
+        });
+      } finally {
+        emittingDescendantUpdate = false;
+      }
+    };
+
+    const handleDescendantNotification = (
+      childThreadId: string,
+      method: string,
+      params: unknown,
+    ): void => {
+      const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
+      if (update) emitSubagentCardUpdate(update);
+    };
+
+    /**
+     * 登记 spawn 映射,并回传"在 translator 之后重新声明真实聚合状态"的补发闭包。
+     *
+     * 发帧点必须在 translateItemNotification **之后**,两个理由:
+     *  - V2:translator 对 spawn 推一帧 status=running(无 usage),而重放出的状态可能
+     *    已是终态 —— 先发会被那帧 running 盖回去(store 字段级 merge,usage 不丢但 status 丢);
+     *  - V1:spawn 是 collabAgentToolCall,translator 在 completed phase 会无条件推一帧
+     *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
+     *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
+     */
+    const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
+      const replayed = subagentLiveCards.noteSpawnItem(item);
+      if (!replayed) return null;
+      return () => emitSubagentCardUpdate(replayed);
+    };
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
+      // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
+      for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+      subagentLiveCards.clear();
       abandonBufferedTurns(reason);
       abandonPendingCapabilitySteers();
       try { dismissAllPending(reason, 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
@@ -4840,10 +4919,14 @@ export class CodexAgent extends BaseAgent {
     // 装探针:此处仍远早于 handlers 注册(事件开始流动),不会漏掉任何一条。
     const rawEventQueuePush = eventQueue.push;
     eventQueue.push = (ev: AgentEvent): boolean => {
-      upstreamIdleLastEventType = ev.type;
-      upstreamIdleLastEventAt = Date.now();
-      armUpstreamIdle();
-      observeReconnectStallEvent(ev);
+      // 子代理卡帧只是"子线程有进展",不代表主 turn 还活着 —— 不参与静默计时与
+      // reconnect 恢复判定,否则主 turn 哑火时会被子代理的心跳一直掩盖(review)。
+      if (!emittingDescendantUpdate) {
+        upstreamIdleLastEventType = ev.type;
+        upstreamIdleLastEventAt = Date.now();
+        armUpstreamIdle();
+        observeReconnectStallEvent(ev);
+      }
       return rawEventQueuePush(ev);
     };
 
@@ -7084,7 +7167,13 @@ export class CodexAgent extends BaseAgent {
           parentThreadId,
           childThreadId,
         });
+        // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
+        // itemStarted 看不到,所以只能靠血缘把它并进父线程所属的那张卡 —— 否则孙线程的
+        // 工具调用与 token 全部进 pending 且再也没有登记路径可以重放(greptile P1)。
+        const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId);
+        if (replayed) emitSubagentCardUpdate(replayed);
       },
+      descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
@@ -7263,6 +7352,8 @@ export class CodexAgent extends BaseAgent {
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
+        // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
+        const emitReplayedSubagentUpdate = noteSubagentSpawnItem(params.item);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -7271,6 +7362,8 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
+        emitReplayedSubagentUpdate?.();
       },
       itemUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
@@ -7280,6 +7373,12 @@ export class CodexAgent extends BaseAgent {
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
+        // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
+        // V1 的 spawn 是长跑 item(started → updated* → completed):started 那帧若没到我们手里
+        // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
+        // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
+        // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
+        const emitReplayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -7287,6 +7386,7 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        emitReplayedSubagentUpdateOnUpdated?.();
       },
       itemCompleted: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
@@ -7297,6 +7397,8 @@ export class CodexAgent extends BaseAgent {
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
+        // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
+        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(params.item);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -7304,6 +7406,7 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        emitReplayedSubagentUpdateOnCompleted?.();
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         if (isTurnInFlight) pushStatus('Generating...');
@@ -7405,6 +7508,12 @@ export class CodexAgent extends BaseAgent {
         const isTransportError = params.scope === 'transport';
         if (isTransportError) {
           subscriptionInvalidatedByTransport = true;
+          // 订阅已作废(app-server 崩了 / IO 断开)→ 后代通知**永远不会再到**,而 tracker 只靠
+          // 后代 turn/completed 写终态。不在这里收口,渲染端会一直留着最后一帧 running:进程
+          // 早就死了,子代理卡还在原地转圈(review)。这条路径与 close() / cleanup-failure 是
+          // 同一类,只是入口不同 —— 复用同一套终态快照 + 清 tracker。
+          for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+          subagentLiveCards.clear();
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
           submittedUserInputByTurn.clear();
@@ -7688,6 +7797,11 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
+      // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
+      // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片
+      // 永久转圈(review)。
+      for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+      subagentLiveCards.clear();
       // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
       // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
       // 永不返回, server 侧请求卡死。

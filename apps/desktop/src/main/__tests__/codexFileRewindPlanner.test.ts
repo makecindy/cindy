@@ -15,10 +15,10 @@ const USER_MESSAGES: CodexRewindUserMessage[] = [
 ];
 
 function savepoint(
-  input: Omit<CodexRewindSavepoint, 'branch' | 'parentCount'> &
-    Partial<Pick<CodexRewindSavepoint, 'branch' | 'parentCount'>>,
+  input: Omit<CodexRewindSavepoint, 'branch' | 'parentCount' | 'source'> &
+    Partial<Pick<CodexRewindSavepoint, 'branch' | 'parentCount' | 'source'>>,
 ): CodexRewindSavepoint {
-  return { branch: 'main', parentCount: 1, ...input };
+  return { branch: 'main', parentCount: 1, source: 'legacy', ...input };
 }
 
 const SAVEPOINTS: CodexRewindSavepoint[] = [
@@ -326,7 +326,7 @@ describe('buildCodexFileRewindPlan', () => {
         currentHead: 'head',
         currentBranch: 'main',
         savepointsNewestFirst: [
-          { commit: 'unknown-parent', sessionId: 's1', kind: 'after-edit', branch: 'main', anchor: 'm2' } as CodexRewindSavepoint,
+          { commit: 'unknown-parent', sessionId: 's1', kind: 'after-edit', source: 'legacy', branch: 'main', anchor: 'm2' } as CodexRewindSavepoint,
         ],
       },
     }, 'MALFORMED_SAVEPOINT');
@@ -334,5 +334,187 @@ describe('buildCodexFileRewindPlan', () => {
 
   it('rejects missing target messages', () => {
     expectPlanError({ targetMessageClientId: 'missing' }, 'MESSAGE_NOT_FOUND');
+  });
+
+  describe('shadow savepoints (refs/cindy 链)', () => {
+    it('builds a file-restore plan from selected shadow after-edit savepoints', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc3', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'ts3', label: 'third' }),
+            savepoint({ commit: 'foreign', sessionId: 's2', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'tsx' }),
+            savepoint({ commit: 'sc2', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm2', baselineCommit: 'ts2', label: 'second' }),
+            savepoint({ commit: 'sc1', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm1', baselineCommit: 'ts1' }),
+          ],
+        },
+      });
+
+      expect(result.mode).toBe('file-restore');
+      if (result.mode !== 'file-restore') throw new Error('expected file-restore plan');
+      expect(result.repoRoot).toBe('/repo');
+      expect(result.currentHead).toBe('head');
+      // 文件回到区间内最老一轮 (m2) 的 turn-start 基线。
+      expect(result.baselineCommit).toBe('ts2');
+      expect(result.restoreCommitsNewestFirst).toEqual([
+        { commit: 'sc3', baselineCommit: 'ts3', anchor: 'm3', label: 'third' },
+        { commit: 'sc2', baselineCommit: 'ts2', anchor: 'm2', label: 'second' },
+      ]);
+      expect(result.tailTurnsToDrop).toBe(2);
+    });
+
+    it('falls back to conversation-only when the shadow chain read was truncated', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          shadowSavepointsTruncated: true,
+          // 窗口内仍有可入选的 after-edit,但窗口外的历史未知 → 不得部分回退。
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc2', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm2', baselineCommit: 'ts2' }),
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        mode: 'conversation-only',
+        fallbackReason: 'savepoint-history-truncated',
+      });
+    });
+
+    it('selects shadow savepoints regardless of branch (no branch filter)', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sb', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm2', baselineCommit: 'tsb', branch: 'feature' }),
+          ],
+        },
+      });
+
+      expect(result.mode).toBe('file-restore');
+      if (result.mode !== 'file-restore') throw new Error('expected file-restore plan');
+      expect(result.baselineCommit).toBe('tsb');
+      expect(result.restoreCommitsNewestFirst).toEqual([
+        { commit: 'sb', baselineCommit: 'tsb', anchor: 'm2' },
+      ]);
+    });
+
+    it('falls back with savepoint-gap when a shadow blocking marker lands in the target range', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc3', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'ts3' }),
+            savepoint({ commit: 'gap', sessionId: 's1', kind: 'rewind-blocked', source: 'shadow', anchor: 'm2' }),
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        mode: 'conversation-only',
+        fallbackReason: 'savepoint-gap',
+        tailTurnsToDrop: 2,
+      });
+    });
+
+    it('allows file restore when the shadow blocking marker is before the target range', () => {
+      const result = plan({
+        targetMessageClientId: 'm3',
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc3', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'ts3' }),
+            savepoint({ commit: 'gap', sessionId: 's1', kind: 'rewind-blocked', source: 'shadow', anchor: 'm2' }),
+          ],
+        },
+      });
+
+      expect(result.mode).toBe('file-restore');
+      if (result.mode !== 'file-restore') throw new Error('expected file-restore plan');
+      expect(result.baselineCommit).toBe('ts3');
+      expect(result.restoreCommitsNewestFirst).toEqual([
+        { commit: 'sc3', baselineCommit: 'ts3', anchor: 'm3' },
+      ]);
+    });
+
+    it('falls back with mixed-savepoint-formats when both generations select (upgrade window)', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc3', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'ts3' }),
+            savepoint({ commit: 'c2', sessionId: 's1', kind: 'after-edit', anchor: 'm2' }),
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        mode: 'conversation-only',
+        fallbackReason: 'mixed-savepoint-formats',
+        tailTurnsToDrop: 2,
+      });
+    });
+
+    it('falls back when a selected shadow after-edit lacks its turn-start baseline', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc3', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm3', baselineCommit: 'ts3' }),
+            savepoint({ commit: 'sc2', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm2' }),
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        mode: 'conversation-only',
+        fallbackReason: 'missing-turn-start-baseline',
+        tailTurnsToDrop: 2,
+      });
+    });
+
+    it('keeps the legacy file-rewind plan when only legacy savepoints select (regression)', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          savepointsNewestFirst: [
+            // 区间外的 shadow 保存点不入选, 不该触发 mixed-savepoint-formats。
+            savepoint({ commit: 'sc1', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm1', baselineCommit: 'ts1' }),
+            savepoint({ commit: 'c3', sessionId: 's1', kind: 'after-edit', anchor: 'm3' }),
+            savepoint({ commit: 'c2', sessionId: 's1', kind: 'after-edit', anchor: 'm2' }),
+          ],
+        },
+      });
+
+      expect(result.mode).toBe('file-rewind');
+      if (result.mode !== 'file-rewind') throw new Error('expected file-rewind plan');
+      expect(result.revertCommitsNewestFirst).toEqual(['c3', 'c2']);
+      // legacy commits 快照只覆盖 legacy 桶, shadow 保存点不混入。
+      expect(result.commits.map((commit) => commit.commit)).toEqual(['c3', 'c2']);
+    });
   });
 });

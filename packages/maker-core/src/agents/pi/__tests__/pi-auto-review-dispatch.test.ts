@@ -6,7 +6,9 @@
  *      NO_PROXY 含 loopback 且吞并小写 no_proxy;
  *   3. auto 档:区内写静默 confirmed:true;灰区交当前模型 reviewer,仅 reviewer 明确
  *      ask / 本地红线才弹 resolver;reviewer 缺失时 fail-closed deny;
- *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效)。
+ *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效);
+ *   5. 送审阅器的 model 与 Pi 当前运行模型同源:启动取 `--model`,热切换取成功的
+ *      `set_model` id(都是用户选中的目录 id)。
  */
 
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,9 +20,9 @@ const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   onEvent: null as ((event: unknown) => void) | null,
+  requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
   proxyRegistration: null as { sessionId: string; token: string } | null,
-  requests: [] as string[],
   failSetModel: false,
   rejectSetModel: false,
   onAfterSetModel: null as null | (() => void),
@@ -39,8 +41,10 @@ vi.mock('../rpc-client.js', () => ({
       captured.env = opts.env;
       captured.onEvent = opts.onEvent;
     }
-    async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
-      captured.requests.push(cmd.type);
+    async request(
+      cmd: Record<string, unknown> & { type: string },
+    ): Promise<{ success: boolean; data?: unknown }> {
+      captured.requests.push(cmd);
       if (cmd.type === 'set_model' && captured.rejectSetModel) {
         throw new Error('pi rpc timeout after 30000ms: set_model');
       }
@@ -84,9 +88,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.args = [];
     captured.env = {};
     captured.onEvent = null;
+    captured.requests = [];
     captured.sent = [];
     captured.proxyRegistration = null;
-    captured.requests = [];
     captured.failSetModel = false;
     captured.rejectSetModel = false;
     captured.onAfterSetModel = null;
@@ -106,6 +110,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   function buildDeps(
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
+    includeNextModel = false,
   ): AgentDeps {
     return {
       auth: {
@@ -128,6 +133,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
             cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
             maxOutputTokens: 64_000,
           },
+          ...(includeNextModel ? [{
+            id: 'm-next',
+            displayName: 'M Next',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+            maxOutputTokens: 64_000,
+          }] : []),
         ],
       },
       resolvePiAgentHome: () => agentHome,
@@ -141,8 +155,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   async function start(
     permissionMode?: string,
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
+    includeNextModel = false,
   ): Promise<AgentSessionHandle> {
-    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction));
+    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
@@ -221,7 +236,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
     await expect(handle.setModel('m')).rejects.toThrow(/子代理路由快照/);
     // 关键:pi 侧的 set_model **根本没发出去** —— 父子路由不会出现"父已切、子没切"的中间态。
-    expect(captured.requests).not.toContain('set_model');
+    expect(captured.requests.map((r) => r.type)).not.toContain('set_model');
 
     // 收尾:恢复成文件,别把目录留给 close()。
     rmSync(snapshotPath, { recursive: true, force: true });
@@ -436,6 +451,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
     }));
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r3', confirmed: true });
+  });
+
+  /**
+   * 送审阅器的 model 必须与 Pi 当前运行模型是同一个目录 id:启动时来自 `--model`,
+   * 热切换后来自成功的 `set_model` 请求。
+   *
+   * host reviewer 按 (providerId, model) 精确查目录条目定路由,查不到即 fail closed
+   * (oneShotCandidates 的 no_candidate),灰区动作退化成没有 UI 提示的永久 block。
+   * pi 当前不做 wire 改写(不同于 Claude 的 [1m] 后缀、Codex 的 app-server 回带别名),
+   * 这条用例把「两者同源」钉成不变量:将来若给 pi 引入 wire 派生,必须像 Claude 那样
+   * 单独派生、不回写运行期 model。见 issue #1575。
+   */
+  it('keeps review routing aligned with the initial and hot-switched catalog model ids', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review, true);
+    await handle.send({ type: 'user', content: 'Touch a scratch file outside the workspace.' });
+    firePermissionRequest('r8', 'write', { path: '/tmp/catalog-model.txt' });
+    await flush();
+    const modelArgIndex = captured.args.indexOf('--model');
+    expect(modelArgIndex).toBeGreaterThan(-1);
+    const spawnedModel = captured.args[modelArgIndex + 1];
+    expect(spawnedModel).toBe('m');
+    expect(review).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: spawnedModel }));
+
+    await handle.setModel?.('m-next');
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'm-next',
+    });
+    await handle.send({ type: 'user', content: 'Touch another scratch file after switching models.' });
+    firePermissionRequest('r9', 'write', { path: '/tmp/catalog-model-switched.txt' });
+    await flush();
+    expect(review).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'm-next' }));
+    await handle.close();
   });
 
   it('auto mode prompts only when the current-model reviewer explicitly asks', async () => {
