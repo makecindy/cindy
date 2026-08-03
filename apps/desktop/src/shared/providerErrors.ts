@@ -103,8 +103,7 @@ const HTTP_402_MESSAGE_RE =
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
-const AUTH_RE =
-  /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
+const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
 
 /**
  * 消息级「余额 / 配额耗尽」判定:给只有错误文本、拿不到 HTTP status 的消费方用
@@ -132,8 +131,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   const detail = body ? redactSensitiveText(body.slice(0, 500)) : undefined;
 
   if (networkErrorCode) {
-    if (TIMEOUT_CODES.has(networkErrorCode))
-      return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
+    if (TIMEOUT_CODES.has(networkErrorCode)) return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
     if (UNREACHABLE_CODES.has(networkErrorCode)) {
       return { code: 'UPSTREAM_UNREACHABLE', retryable: true, detail: networkErrorCode };
     }
@@ -162,8 +160,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   }
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    if (CONTEXT_TOO_LONG_RE.test(body))
-      return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
+    if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };

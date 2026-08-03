@@ -13,17 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import {
-  AlertCircle,
-  Check,
-  CreditCard,
-  GitFork,
-  Play,
-  RotateCcw,
-  RefreshCw,
-  Timer,
-  X,
-} from 'lucide-react';
+import { AlertCircle, Check, CreditCard, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -140,9 +130,10 @@ export function ErrorBanner({
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
   // 本会话 codex app-server 的 spawn 鉴权注入(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
   // 默认 'env-key'(保守):真值未回来前不会误命中 OAuth 引导分支而短暂 hide Retry。
-  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } = useCodexRuntimeRoute({
-    enabled: agentKind === 'codex' && !isAnyRemoteSession,
-  });
+  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } =
+    useCodexRuntimeRoute({
+      enabled: agentKind === 'codex' && !isAnyRemoteSession,
+    });
   const [syncing, setSyncing] = useState(false);
   // 已同步标志:点击同步成功后置 true, 让 displayError 切换成"已同步,请重试"提示,
   // 同时把 Retry 按钮显出来。
@@ -306,27 +297,27 @@ export function ErrorBanner({
       !isSubscriptionBridgeModel &&
       ccRouteStateReady &&
       !ccBridgeFailureVeto) ||
-      // codex/ 骨折模型子句同样吃 bridge 失败否决:cc 会话顶层是 codex/ 模型时,
-      // 子代理照样可以覆写 bridge 请求,失败归因优先于顶层模型判断(PR review P1)。
-      (!persistedError &&
-        (billingProviderId === null || billingProviderId === 'xd') &&
-        !!billingModelId?.startsWith('codex/') &&
-        (agentKind !== 'cc' || (ccRouteStateResolved && !ccBridgeFailureVeto))) ||
-      // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
-      // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
-      // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,
-      // codex 没有 per-session 路由记录可回溯(PR review P1)。
-      (!persistedError &&
-        billingProviderId === null &&
-        agentKind === 'codex' &&
-        !isSubscriptionBridgeModel &&
-        codexRouteResolved &&
-        codexAuthInjection === 'env-key') ||
-      (billingProviderId === null &&
-        agentKind === 'cc' &&
-        !isSubscriptionBridgeModel &&
-        !ccBridgeFailureVeto &&
-        ccEffectiveBillingRoute === 'gateway'));
+    // codex/ 骨折模型子句同样吃 bridge 失败否决:cc 会话顶层是 codex/ 模型时,
+    // 子代理照样可以覆写 bridge 请求,失败归因优先于顶层模型判断(PR review P1)。
+    (!persistedError &&
+      (billingProviderId === null || billingProviderId === 'xd') &&
+      !!billingModelId?.startsWith('codex/') &&
+      (agentKind !== 'cc' || (ccRouteStateResolved && !ccBridgeFailureVeto))) ||
+    // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
+    // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
+    // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,
+    // codex 没有 per-session 路由记录可回溯(PR review P1)。
+    (!persistedError &&
+      billingProviderId === null &&
+      agentKind === 'codex' &&
+      !isSubscriptionBridgeModel &&
+      codexRouteResolved &&
+      codexAuthInjection === 'env-key') ||
+    (billingProviderId === null &&
+      agentKind === 'cc' &&
+      !isSubscriptionBridgeModel &&
+      !ccBridgeFailureVeto &&
+      ccEffectiveBillingRoute === 'gateway'));
   const showGatewayQuotaRecovery =
     isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;
   const navigate = useNavigate();

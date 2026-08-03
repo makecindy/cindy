@@ -83,7 +83,10 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { clearCachedMessages, readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import {
+  clearCachedMessages,
+  readCachedMessages,
+} from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -96,7 +99,11 @@ import {
 import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
-import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import {
+  emitAutoTitlePreview,
+  emitAutoTitlePreviewCleared,
+  emitPatch,
+} from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -1256,7 +1263,10 @@ function flushPendingMessageCreatedPatch(sessionId: string): void {
 function flushDeferredStateNotifications(): void {
   deferredStateNotificationTimer = null;
   const sessionIds = [
-    ...new Set([...pendingDeferredStateNotifications, ...pendingMessageCreatedPatches.keys()]),
+    ...new Set([
+      ...pendingDeferredStateNotifications,
+      ...pendingMessageCreatedPatches.keys(),
+    ]),
   ].slice(0, HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK);
   let stateChanged = false;
   for (const sessionId of sessionIds) {
@@ -1552,7 +1562,9 @@ function leaveView(sessionId: string): void {
     setState(sessionId, (s) => ({
       ...s,
       ...(s.historyLoaded ? { historyLoaded: false } : {}),
-      ...(s.error ? { error: null, usageLimitRecovery: null, errorRetryText: null } : {}),
+      ...(s.error
+        ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+        : {}),
     }));
   }
   _trimMessagesIfNeeded(sessionId);
@@ -1728,10 +1740,10 @@ function applyInputProjection(
       : null;
     const withPendingCard = autoResumePending
       ? hasPendingCard
-        ? // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
-          // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
-          // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
-          dedupedMessages.map((m) =>
+        // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
+        // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
+        // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
+        ? dedupedMessages.map((m) =>
             m.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
             pendingCardData &&
             !shallowEqualRecord(m.systemCardData, pendingCardData)
@@ -2084,7 +2096,7 @@ function normalizeAgentTaskUpdate(
         ? 'codex'
         : source === 'pi'
           ? 'pi'
-          : 'claude-code';
+        : 'claude-code';
   const usageRaw =
     raw.usage && typeof raw.usage === 'object' ? (raw.usage as Record<string, unknown>) : null;
   const usage = usageRaw
@@ -2602,7 +2614,8 @@ export function handleStreamEvent(
       const existingUpdatableToolIdx =
         toolName === 'update_plan' || toolName === 'web_search'
           ? finalized.messages.findIndex(
-              (m) => m.role === 'tool_use' && m.toolName === toolName && m.toolUseId === toolUseId,
+              (m) =>
+                m.role === 'tool_use' && m.toolName === toolName && m.toolUseId === toolUseId,
             )
           : -1;
       if (existingUpdatableToolIdx >= 0) {
@@ -2721,21 +2734,20 @@ export function handleStreamEvent(
         return next;
       });
 
-      const terminalData = event.data as
-        { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined;
+      const terminalData =
+        event.data as { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
-      const doneMessages =
-        event.source === 'codex'
-          ? applyCodexPlanSnapshotOnDone(
-              cleanedMessages,
-              terminalData?.plan,
-              terminalTurnId,
-              terminalTurnStatus,
-              Date.now(),
-            ).messages
-          : cleanedMessages;
+      const doneMessages = event.source === 'codex'
+        ? applyCodexPlanSnapshotOnDone(
+            cleanedMessages,
+            terminalData?.plan,
+            terminalTurnId,
+            terminalTurnStatus,
+            Date.now(),
+           ).messages
+         : cleanedMessages;
 
       // F1-a Option C: tool-result-image 孤儿 flush(turn 末残留 pendingFullText)已收口
       // main(messagePersistBroadcaster.flushOrphanToolResults),落库后经 onCreated append
@@ -3480,7 +3492,9 @@ function isTextDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boole
   return data?.isFinal === false && typeof data.text === 'string';
 }
 
-function isHighFrequencyStreamEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
+function isHighFrequencyStreamEvent(
+  event: NonNullable<MakerEventPayload>['event'],
+): boolean {
   return (
     !!event &&
     (event.type === 'tool_use' ||
@@ -4001,7 +4015,13 @@ function initGlobalListeners(): void {
       }
     }
 
-    dispatchStreamEventPayload(sessionId, event, persistId, resolvedContent, deferNotification);
+    dispatchStreamEventPayload(
+      sessionId,
+      event,
+      persistId,
+      resolvedContent,
+      deferNotification,
+    );
 
     // done / error 副作用 (从老 stream listener 搬过来)
     if (event.type === 'done') {
@@ -4209,7 +4229,8 @@ function initGlobalListeners(): void {
       // (`CindyRegion & unknown` 仍是 `CindyRegion`),那样写会让 TS 以为 IPC 传来的
       // region 已经是合法值,下面的白名单校验看着像在校验、实际没有类型层面的约束。
       const rawEnv = request.env as
-        (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown }) | undefined;
+        | (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown })
+        | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
       const suggestedPublicName =
@@ -4334,7 +4355,11 @@ function initGlobalListeners(): void {
           // 回声都对不断增长的整段消息重新遍历并排序，1,500+ 行时拖死 Renderer。
           // 仅限 tool 行：thinking 的 persisted createdAt 会回填块开始时间，必须让
           // mergeMessages 重排；assistant 等其它角色也保留原有权威时间线语义。
-          const hydrated = hydratePersistedMessage(existing, mapped, hydrateOptions);
+          const hydrated = hydratePersistedMessage(
+            existing,
+            mapped,
+            hydrateOptions,
+          );
           if (hydrated === existing) return s;
           const nextMessages = s.messages.slice();
           nextMessages[existingIdx] = hydrated;
@@ -4397,11 +4422,17 @@ function initGlobalListeners(): void {
     const normalizedTurnMoney = normalizeRegionalMoney(p.turnMoney);
     const legacyTurnCostUsd =
       typeof p.turnCostUsd === 'number' && p.turnCostUsd > 0
-        ? resolveEstimatedTurnCostUsd(p.turnCostUsd, turnCostIsEstimate, turnUsageDetails)
+        ? resolveEstimatedTurnCostUsd(
+            p.turnCostUsd,
+            turnCostIsEstimate,
+            turnUsageDetails,
+          )
         : undefined;
     const turnMoney =
       normalizedTurnMoney ??
-      (legacyTurnCostUsd !== undefined ? legacyUsdMoney(legacyTurnCostUsd) : undefined);
+      (legacyTurnCostUsd !== undefined
+        ? legacyUsdMoney(legacyTurnCostUsd)
+        : undefined);
     const { sessionId, clientId } = p;
     // 用户轮累计与当前 segment 金额是**两个独立事实**,必须各自判定 —— 一次用户请求
     // 含多个 SDK segment 时,前面的 segment 有真实费用、收尾 segment 缺报价,payload
@@ -4441,7 +4472,10 @@ function initGlobalListeners(): void {
       });
       return;
     }
-    const resolvedTurnCostUsd = turnMoney.currency === 'USD' ? turnMoney.amount : undefined;
+    const resolvedTurnCostUsd =
+      turnMoney.currency === 'USD'
+        ? turnMoney.amount
+        : undefined;
     setState(sessionId, (s) => {
       const idx = s.messages.findIndex((m) => m.clientId === clientId);
       if (idx < 0) return s;
@@ -4449,7 +4483,9 @@ function initGlobalListeners(): void {
       msgs[idx] = {
         ...msgs[idx],
         turnMoney,
-        ...(resolvedTurnCostUsd !== undefined ? { turnCostUsd: resolvedTurnCostUsd } : {}),
+        ...(resolvedTurnCostUsd !== undefined
+          ? { turnCostUsd: resolvedTurnCostUsd }
+          : {}),
         turnCostIsEstimate,
         ...userTurnCostPatch,
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
@@ -4552,7 +4588,9 @@ function initGlobalListeners(): void {
           if (push.deviceId && p?.sessionId && totalMoney) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalMoney,
-              ...(typeof p.totalCostUsd === 'number' ? { totalCostUsd: p.totalCostUsd } : {}),
+              ...(typeof p.totalCostUsd === 'number'
+                ? { totalCostUsd: p.totalCostUsd }
+                : {}),
             });
           }
           break;
@@ -4707,7 +4745,9 @@ function initGlobalListeners(): void {
       setState(p.sessionId, (s) => ({
         ...s,
         ...(s.historyLoaded ? { historyLoaded: false } : {}),
-        ...(s.error ? { error: null, usageLimitRecovery: null, errorRetryText: null } : {}),
+        ...(s.error
+          ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+          : {}),
       }));
     },
     'local-db-session-error-persisted',
@@ -5008,8 +5048,10 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
     a.continuationTurnClientId === b.continuationTurnClientId &&
-    a.continuationInFlightProjectionCapability === b.continuationInFlightProjectionCapability &&
+    a.continuationInFlightProjectionCapability ===
+      b.continuationInFlightProjectionCapability &&
     a.isLoadingMore === b.isLoadingMore &&
+
     a.hasMoreMessages === b.hasMoreMessages &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
@@ -5416,7 +5458,9 @@ function reconcilePendingInteractions(sessionId: string): Promise<number> {
           const currentChanged = nextCurrent !== state.pendingPluginSetup;
           const queueChanged =
             survivingQueue.length !== state.pendingPluginSetupQueue.length ||
-            survivingQueue.some((setup, index) => setup !== state.pendingPluginSetupQueue[index]);
+            survivingQueue.some(
+              (setup, index) => setup !== state.pendingPluginSetupQueue[index],
+            );
           const nextCommand =
             state.pluginSetupCommandInFlight &&
             authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
@@ -5540,7 +5584,10 @@ function noteInputProjectionOrigin(
   return { epoch: _inputProjectionEpoch.get(sessionId)!, changed: false };
 }
 
-function isCurrentInputProjectionOrigin(sessionId: string, origin: string | undefined): boolean {
+function isCurrentInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): boolean {
   return remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
 }
 
@@ -5721,7 +5768,10 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
       ...message,
       cacheHydrated: true as const,
     }));
-    if (rows.every(isNonAnchorHistoryRow) && getLatestMessageTodoState(mapped).insertion === null) {
+    if (
+      rows.every(isNonAnchorHistoryRow) &&
+      getLatestMessageTodoState(mapped).insertion === null
+    ) {
       return;
     }
     if (mapped.length === 0) return;
@@ -7044,7 +7094,8 @@ function commitAroundWindow(
       // 既有回归「hands the cursor back to the latest page when initial history resolves after
       // a jump」与「keeps search result windows in chronological order across jumps」守着这条。
       oldestMessageId:
-        s.oldestMessageId ?? oldestServerMessageIdForWindow(rows, s.messages, null, 'oldest-first'),
+        s.oldestMessageId ??
+        oldestServerMessageIdForWindow(rows, s.messages, null, 'oldest-first'),
       // hasMoreMessages:**merge 真的加进了行**时置 true,否则保持原值。
       //
       // 置 true 的理由:那些新行比旧游标更早(否则早就 covered 了),窗口最老边界因此前移,
@@ -7087,6 +7138,7 @@ async function loadAroundMessage(
     ? getOrCreateState(sessionId).messages.find((message) => message.clientId === targetClientId)
     : undefined;
 
+
   // 优先把窗口从最新连续补齐到目标,不留历史空洞(见 backfillHistoryUntil)。
   // 补不到(超上限 / 翻完 / 让位并发分页)则退回 around 窗口 merge:此时窗口仍不
   // 连续,由渲染层的 HISTORY_GAP_SPLIT_MS 守卫兜底,不至于把两段折成一个工作组。
@@ -7115,7 +7167,11 @@ async function loadAroundMessage(
   // 干净,但会反转十几处既有测试的 mock 前提(它们用 around 播种窗口而 list 默认返回空页),
   // 故留作独立改动;陈旧行的生命周期止于会话重建(reload / clear / demote / trim),
   // 不持久化、不跨会话(#676 review)。
-  if (outcome === 'cancelled' || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return null;
+  if (
+    outcome === 'cancelled' ||
+    (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart
+  )
+    return null;
 
   commitAroundWindow(
     sessionId,
@@ -7128,8 +7184,9 @@ async function loadAroundMessage(
 
   if (!targetClientId) return null;
   return (
-    getOrCreateState(sessionId).messages.find((message) => message.clientId === targetClientId) ??
-    null
+    getOrCreateState(sessionId).messages.find(
+      (message) => message.clientId === targetClientId,
+    ) ?? null
   );
 }
 
@@ -7151,14 +7208,22 @@ async function loadAroundMessageClientId(
     (message) => message.clientId === clientId,
   );
 
-  const { outcome, ownsPagingLock } = await backfillHistoryUntil(sessionId, clientId, epochAtStart);
+  const { outcome, ownsPagingLock } = await backfillHistoryUntil(
+    sessionId,
+    clientId,
+    epochAtStart,
+  );
 
   // 切片被重置 → 跳转作废,不 merge 旧的 around 行。merge 前再校验一次 epoch:outcome
   // 只反映 backfill 返回那一刻的代际,它 return 之后到这里恢复之间还有一个 microtask
   // 间隙(见 loadAroundMessage 同款注释)。
   //
   // exhausted 不作废,取舍见 loadAroundMessage 的同款注释。
-  if (outcome === 'cancelled' || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return null;
+  if (
+    outcome === 'cancelled' ||
+    (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart
+  )
+    return null;
 
   commitAroundWindow(
     sessionId,
@@ -7328,16 +7393,15 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
  */
 function setQueueExpanded(sessionId: string, expanded: boolean): void {
   if (!sessionId) return;
-  runInputProjectionOperation(sessionId, (input) => input.setExpanded(sessionId, expanded)).catch(
-    (err) => log.warn('setQueueExpanded failed:', err),
-  );
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setExpanded(sessionId, expanded),
+  ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  runAgentDispatchProjectionOperation(sessionId, (input) => input.resume(sessionId)).catch((err) =>
-    log.warn('resumeQueue failed:', err),
-  );
+  runAgentDispatchProjectionOperation(sessionId, (input) => input.resume(sessionId))
+    .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
@@ -7370,9 +7434,8 @@ function moveQueueItem(sessionId: string, clientId: string, targetIndex: number)
  */
 function removeFromQueue(sessionId: string, clientId: string): void {
   if (!sessionId || !clientId) return;
-  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId)).catch(
-    (err) => log.warn('removeFromQueue failed:', err),
-  );
+  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId))
+    .catch((err) => log.warn('removeFromQueue failed:', err));
 }
 
 /**
@@ -7808,24 +7871,22 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
-  return (
-    runAgentDispatchProjectionOperation(sessionId, (input) =>
-      input.compact(sessionId, createOpts, { userName: currentUserName }),
-    )
-      // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
-      .then(({ projection }) => projection.error === null)
-      .catch((err) => {
-        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
-        setState(sessionId, (s) => ({
-          ...s,
-          error: message,
-          usageLimitRecovery: null,
-          recoverableError: null,
-          errorRetryText: null,
-        }));
-        return false;
-      })
-  );
+  return runAgentDispatchProjectionOperation(sessionId, (input) =>
+    input.compact(sessionId, createOpts, { userName: currentUserName }),
+  )
+    // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
+    .then(({ projection }) => projection.error === null)
+    .catch((err) => {
+      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+      setState(sessionId, (s) => ({
+        ...s,
+        error: message,
+        usageLimitRecovery: null,
+        recoverableError: null,
+        errorRetryText: null,
+      }));
+      return false;
+    });
 }
 
 function steerMessage(
@@ -8091,28 +8152,25 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
   return withAgentSendDispatch(
     sessionId,
     () => Promise.resolve(false),
-    () =>
-      makerApiFor(sessionId)
-        .input.steer(sessionId, queued, { removeFromQueue: true })
-        .then((ok) => {
-          requestInputProjection(sessionId);
-          return ok;
-        })
-        .catch((err) => {
-          // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-          // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-          const message = decodeRemoteErrorMessage(
-            err instanceof Error ? err.message : String(err),
-          );
-          setState(sessionId, (s) => ({
-            ...s,
-            error: message,
-            usageLimitRecovery: null,
-            recoverableError: null,
-            errorRetryText: null,
-          }));
-          return false;
-        }),
+    () => makerApiFor(sessionId)
+      .input.steer(sessionId, queued, { removeFromQueue: true })
+      .then((ok) => {
+        requestInputProjection(sessionId);
+        return ok;
+      })
+      .catch((err) => {
+        // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
+        // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
+        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+        setState(sessionId, (s) => ({
+          ...s,
+          error: message,
+          usageLimitRecovery: null,
+          recoverableError: null,
+          errorRetryText: null,
+        }));
+        return false;
+      }),
   );
 }
 
@@ -8252,9 +8310,8 @@ function popQueueTail(sessionId: string): boolean {
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
-  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId)).catch((err) =>
-    log.warn('clearError failed:', err),
-  );
+  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId))
+    .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
     if (
       s.error == null &&
@@ -8282,8 +8339,9 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
-  return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    input.retryLastError(sessionId),
+  return runAgentDispatchProjectionOperation(
+    sessionId,
+    (input) => input.retryLastError(sessionId),
   ).then(() => undefined);
 }
 
@@ -8383,10 +8441,11 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
   const clearOperation = beginInputProjectionOperation(sessionId);
   try {
     guardResult = await Promise.race([
-      clearOperation.api.input.clearSession(sessionId, clearedAt).then(
-        (projection) => ({ kind: 'projection' as const, projection }),
-        (err) => ({ kind: 'error' as const, err }),
-      ),
+      clearOperation.api.input.clearSession(sessionId, clearedAt)
+        .then(
+          (projection) => ({ kind: 'projection' as const, projection }),
+          (err) => ({ kind: 'error' as const, err }),
+        ),
       new Promise<{ kind: 'timeout' }>((resolve) => {
         guardTimeoutId = setTimeout(
           () => resolve({ kind: 'timeout' }),
@@ -9576,11 +9635,7 @@ function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
 
 function setSessionRuntime(
   sessionId: string,
-  opts: {
-    agentKind?: 'claude-code' | 'codex' | 'pi';
-    fastMode?: boolean;
-    planModeEnabled?: boolean;
-  },
+  opts: { agentKind?: 'claude-code' | 'codex' | 'pi'; fastMode?: boolean; planModeEnabled?: boolean },
 ): void {
   if (!sessionId) return;
   setState(sessionId, (s) => {
@@ -10566,7 +10621,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           // 「已自动继续」分隔条(见 hasInterruptionContext)。
           systemCardData: {
             ...(m.agentMeta.autoResumeInfo ?? {}),
-            ...(m.agentMeta.autoResumeOutcome ? { outcome: m.agentMeta.autoResumeOutcome } : {}),
+            ...(m.agentMeta.autoResumeOutcome
+              ? { outcome: m.agentMeta.autoResumeOutcome }
+              : {}),
           },
         };
       }
@@ -10630,9 +10687,13 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     }
     const agentMeta = m.agentMeta;
     const turnUsageDetails =
-      m.role === 'assistant' ? normalizeTurnUsageDetails(agentMeta?.turnUsageDetails) : undefined;
+      m.role === 'assistant'
+        ? normalizeTurnUsageDetails(agentMeta?.turnUsageDetails)
+        : undefined;
     const normalizedTurnMoney =
-      m.role === 'assistant' ? normalizeRegionalMoney(agentMeta?.turnCost) : undefined;
+      m.role === 'assistant'
+        ? normalizeRegionalMoney(agentMeta?.turnCost)
+        : undefined;
     const legacyTurnCostUsd =
       m.role === 'assistant' &&
       typeof agentMeta?.turnCostUsd === 'number' &&
@@ -10646,18 +10707,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         : undefined;
     const persistedTurnMoney =
       m.role === 'assistant'
-        ? (normalizedTurnMoney ??
-          (legacyTurnCostUsd !== undefined ? legacyUsdMoney(legacyTurnCostUsd) : undefined))
+        ? normalizedTurnMoney ??
+          (legacyTurnCostUsd !== undefined
+            ? legacyUsdMoney(legacyTurnCostUsd)
+            : undefined)
         : undefined;
     // 用户轮累计与当前 segment 费用各自独立读(不变量正本见 shared/turnCostPayload.ts):
     // 收尾 segment 缺报价的轮次只落了 userTurnCost + turnUsageDetails,若把它嵌在
     // persistedTurnMoney > 0 的分支里,重开会话后整轮已花的钱会被 token 顶掉。
     const persistedUserTurnMoney =
       m.role === 'assistant' && agentMeta
-        ? (normalizeRegionalMoney(agentMeta.userTurnCost) ??
+        ? normalizeRegionalMoney(agentMeta.userTurnCost) ??
           (typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
             ? legacyUsdMoney(agentMeta.userTurnCostUsd)
-            : undefined))
+            : undefined)
         : undefined;
     const persistedUserTurnCostPatch =
       agentMeta && persistedUserTurnMoney
@@ -10681,10 +10744,11 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
       // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
       // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
-      ...(m.role === 'assistant' &&
-      (agentMeta?.turnCompleted === true ||
+      ...(m.role === 'assistant' && (
+        agentMeta?.turnCompleted === true ||
         (persistedTurnMoney?.amount ?? 0) > 0 ||
-        turnUsageDetails !== undefined)
+        turnUsageDetails !== undefined
+      )
         ? { turnCompleted: true }
         : {}),
       // 本轮 token 明细独立于金额挂载:Pi/新模型算不出报价的轮次只有它，
@@ -10693,10 +10757,15 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // 整轮累计费用同样独立挂载:无价收尾轮只有它,没有 turnCost。
       ...persistedUserTurnCostPatch,
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
-      ...(m.role === 'assistant' && agentMeta && persistedTurnMoney && persistedTurnMoney.amount > 0
+      ...(m.role === 'assistant' &&
+      agentMeta &&
+      persistedTurnMoney &&
+      persistedTurnMoney.amount > 0
         ? (() => {
             const turnCostUsd =
-              persistedTurnMoney.currency === 'USD' ? persistedTurnMoney.amount : undefined;
+              persistedTurnMoney.currency === 'USD'
+                ? persistedTurnMoney.amount
+                : undefined;
             return {
               turnMoney: persistedTurnMoney,
               ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
@@ -10760,10 +10829,19 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
  */
 function projectLegacyUserTurnCosts(
   serverMsgs: Message[],
-): Map<string, Pick<ChatMessage, 'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'>> {
+): Map<
+  string,
+  Pick<
+    ChatMessage,
+    'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+  >
+> {
   const projected = new Map<
     string,
-    Pick<ChatMessage, 'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'>
+    Pick<
+      ChatMessage,
+      'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+    >
   >();
   let hasRealUserBoundary = false;
   let costUsd = 0;

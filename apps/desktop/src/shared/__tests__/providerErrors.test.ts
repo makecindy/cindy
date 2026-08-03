@@ -137,7 +137,8 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     expect(
       classifyProviderError({
         status: 429,
-        bodyText: 'litellm.RateLimitError: litellm.BudgetExceededError: Budget has been exceeded!',
+        bodyText:
+          'litellm.RateLimitError: litellm.BudgetExceededError: Budget has been exceeded!',
       }),
     ).toMatchObject({ code: 'QUOTA_EXCEEDED', retryable: false });
   });

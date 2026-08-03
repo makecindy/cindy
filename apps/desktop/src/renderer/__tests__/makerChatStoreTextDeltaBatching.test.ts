@@ -6,7 +6,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GHOST_SETUP_MAX_INTERACTION_STEPS, GHOST_SETUP_MAX_STEPS } from '../../shared/ghost';
+import {
+  GHOST_SETUP_MAX_INTERACTION_STEPS,
+  GHOST_SETUP_MAX_STEPS,
+} from '../../shared/ghost';
 import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
@@ -1548,25 +1551,22 @@ describe('makerChatStore text delta batching', () => {
     ],
     // 已有规范标记时不重复追加。
     ['Payment Required (HTTP 402)', 'Payment Required (HTTP 402)'],
-  ])(
-    'keeps structured payment-required status visible to the error banner: %s',
-    (message, expected) => {
-      onEvent?.({
-        sessionId: SESSION_ID,
-        event: {
-          type: 'error',
-          source: 'codex',
-          data: {
-            errorStatus: 402,
-            message,
-            isTerminal: true,
-          },
+  ])('keeps structured payment-required status visible to the error banner: %s', (message, expected) => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: {
+          errorStatus: 402,
+          message,
+          isTerminal: true,
         },
-      });
+      },
+    });
 
-      expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(expected);
-    },
-  );
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(expected);
+  });
 
   it('does not run the legacy remote auth retry path for Codex auth errors', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
