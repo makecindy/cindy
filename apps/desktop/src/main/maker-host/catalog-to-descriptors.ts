@@ -33,13 +33,27 @@ interface ModelCapabilitiesTarget {
   getCapabilities(agent: AgentKind): { availableModels: ModelDescriptor[] };
 }
 
+interface DescriptorProjectionOptions {
+  preserveExplicitPiEfforts?: boolean;
+}
+
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
-function toDescriptor(m: CatalogModel, agent: AgentKind): ModelDescriptor {
+function toDescriptor(
+  m: CatalogModel,
+  agent: AgentKind,
+  options: DescriptorProjectionOptions = {},
+): ModelDescriptor {
   // Pi runtime 原生接受 minimal thinking level。目录里的同一模型常从 CC/Codex
   // 投影而来而未声明该档；只要模型有 reasoning 档，就把 Pi 的最小档补在最前。
-  const efforts = agent === 'pi' && m.efforts.length > 0 && !m.efforts.includes('minimal')
-    ? (['minimal', ...m.efforts] as const)
-    : m.efforts;
+  // BYOM 的 efforts 则是用户显式声明的协议能力，必须原样保留，不能对外宣称一个
+  // models.json 会禁用的档位。
+  const efforts =
+    agent === 'pi' &&
+    options.preserveExplicitPiEfforts !== true &&
+    m.efforts.length > 0 &&
+    !m.efforts.includes('minimal')
+      ? (['minimal', ...m.efforts] as const)
+      : m.efforts;
   const d: ModelDescriptor = {
     id: m.id,
     displayName: m.name,
@@ -80,7 +94,11 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
       if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })) continue;
       seen.add(m.id);
-      out.push(toDescriptor(m, agent));
+      out.push(
+        toDescriptor(m, agent, {
+          preserveExplicitPiEfforts: provider.source === 'user',
+        }),
+      );
     }
   }
   return out;
@@ -102,7 +120,9 @@ export function resolvePiRuntimeModelDescriptor(
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
-      return toDescriptor(model, 'pi');
+      return toDescriptor(model, 'pi', {
+        preserveExplicitPiEfforts: provider.source === 'user',
+      });
     }
   }
 

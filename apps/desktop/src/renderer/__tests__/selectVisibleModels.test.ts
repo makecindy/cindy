@@ -128,6 +128,25 @@ describe('selectVisibleModels — device-link「以被控端为准」', () => {
     expect(ids(out)).toEqual(['pi-model']);
   });
 
+  it('device-link Pi picker 不给 BYOM 显式 effort 子集补档', () => {
+    const explicit = {
+      ...devModel('reasoner'),
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    };
+    const out = selectVisibleModels({
+      agentKind: 'pi',
+      deviceId: 'dev-1',
+      providers: [],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      devicePiModels: [explicit],
+    });
+
+    expect(out).toEqual([explicit]);
+    expect(out[0]?.efforts).toEqual(['low', 'high']);
+  });
+
   it('agentKind 为 null:device-link 下 cc + codex 按 id 首见去重并集(cc 优先)', () => {
     const out = selectVisibleModels({
       agentKind: null,

@@ -1315,7 +1315,7 @@
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
           "modelSupportsReasoning": "추론 지원",
-          "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 새 Pi 작업부터 적용됩니다.",
+          "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
           "modelReasoningEfforts": "지원되는 추론 강도",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",

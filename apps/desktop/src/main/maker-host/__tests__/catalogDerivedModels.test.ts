@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
@@ -64,6 +64,40 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
     expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+  });
+
+  it('preserves the explicit effort subset of a Pi BYOM model in remote capabilities', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'explicit-reasoning',
+        name: 'Explicit reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [
+              {
+                id: 'reasoner',
+                name: 'Reasoner',
+                reasoning: true,
+                reasoningEfforts: ['low', 'high'],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'reasoner')).toMatchObject({
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner')).toMatchObject({
+      efforts: ['low', 'high'],
+      defaultEffort: 'high',
+    });
   });
 
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {

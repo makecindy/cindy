@@ -138,6 +138,18 @@ describe('rowEffortOf(桌面同口径:选中 live / 非选中记忆→默认)', 
       }),
     ).toBeNull();
   });
+
+  it('Pi BYOM 不支持 minimal 时只在显式档位内回落', () => {
+    expect(
+      rowEffortOf({
+        model: { id: 'reasoner', efforts: ['low', 'high'], defaultEffort: 'high' },
+        providerId: null,
+        selected: true,
+        liveEffort: 'minimal',
+        agentKind: 'pi',
+      }),
+    ).toBe('high');
+  });
 });
 
 function providerWith(id: string, modelId: string, supportsFastMode: boolean): ProviderView {

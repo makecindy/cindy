@@ -1315,7 +1315,7 @@
           "modelSupportsImageInput": "支持图片输入",
           "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
           "modelSupportsReasoning": "支持推理",
-          "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后新建 Pi 任务生效。",
+          "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",
           "addModel": "添加模型",
           "headers": "请求头(可选)",

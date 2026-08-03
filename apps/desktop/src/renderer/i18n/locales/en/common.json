@@ -1315,7 +1315,7 @@
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
           "modelSupportsReasoning": "Supports reasoning",
-          "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Start a new Pi task after saving.",
+          "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",
           "addModel": "Add model",
           "headers": "Headers (optional)",
