@@ -129,6 +129,10 @@ import {
   parseAtContextCatalogRequest,
   readAtDesktopWindows,
 } from './atContextCatalog.js';
+import {
+  listAtProjectAgentResources,
+  mergeAtProjectAgentResources,
+} from './atAgentCatalog.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -4974,8 +4978,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     try {
       const resourceParams = params as { workingDir: string; cap?: number; query?: string };
       await prepareProjectSkillLinksFailSoft(resourceParams?.workingDir);
-      const result = await maker.scanAtResources(requireAgentKind(agentKind), resourceParams);
-      return { success: true, ...result };
+      const kind = requireAgentKind(agentKind);
+      const [result, customizationResult] = await Promise.all([
+        maker.scanAtResources(kind, resourceParams),
+        maker.listCustomizations({
+          agentKind: 'claude-code',
+          workingDirs: [resourceParams.workingDir],
+          kinds: ['agent'],
+        }).catch((err: unknown) => {
+          log.warn('Project Agent @ catalog failed; keeping workspace resources available', err);
+          return null;
+        }),
+      ]);
+      const projectAgents = customizationResult
+        ? listAtProjectAgentResources(
+            customizationResult.items,
+            resourceParams.workingDir,
+            resourceParams.query,
+          )
+        : [];
+      const merged = mergeAtProjectAgentResources(result.items, projectAgents, resourceParams.cap);
+      return {
+        success: true,
+        items: merged.items,
+        truncated: result.truncated || merged.capped,
+      };
     } catch (err) {
       return {
         success: false,
