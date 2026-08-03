@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { checkContactsAiSessionBeforeSend } from '../contacts/contactsAiSessionGuard';
+import {
+  checkContactsAiSessionBeforeSend,
+  contactsAiSessionBlockMessageKey,
+} from '../contacts/contactsAiSessionGuard';
 
 const ready = {
   enabled: true,
@@ -9,6 +12,15 @@ const ready = {
 };
 
 describe('contacts AI session send guard', () => {
+  it('统一映射发送与新建目标的阻断提示', () => {
+    expect(contactsAiSessionBlockMessageKey('unavailable')).toBe(
+      'settings.contacts.toast.aiUnavailable',
+    );
+    expect(contactsAiSessionBlockMessageKey('codex-deferred')).toBe(
+      'settings.contacts.toast.codexRefreshDeferred',
+    );
+  });
+
   it('普通新任务不读取通讯录状态', async () => {
     const readReadiness = vi.fn(async () => ready);
 

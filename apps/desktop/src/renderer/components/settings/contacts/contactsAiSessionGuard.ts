@@ -8,6 +8,14 @@ export interface ContactsAiSessionReadiness {
 
 export type ContactsAiSessionBlockReason = 'unavailable' | 'codex-deferred';
 
+export function contactsAiSessionBlockMessageKey(
+  reason: ContactsAiSessionBlockReason,
+): 'settings.contacts.toast.aiUnavailable' | 'settings.contacts.toast.codexRefreshDeferred' {
+  return reason === 'codex-deferred'
+    ? 'settings.contacts.toast.codexRefreshDeferred'
+    : 'settings.contacts.toast.aiUnavailable';
+}
+
 /**
  * 在真正创建任务前按最终 vendor / workingDir 重读通讯录工具面。
  * 普通新任务不触发；Claude / Pi 不受 Codex 长活 runtime 的 applied 快照影响。
