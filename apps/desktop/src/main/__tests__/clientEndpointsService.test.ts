@@ -164,6 +164,30 @@ describe('启动失败系统提示框', () => {
     expect(clipboardWriteText.mock.calls[0]?.[0]).toContain('/Users/example');
     expect(showMessageBoxSync.mock.calls[1]?.[0].detail).toContain('诊断信息已复制');
   });
+
+  it('复制诊断失败时在弹框内明确提示,不误报为已复制', () => {
+    showMessageBoxSync.mockReturnValueOnce(1).mockReturnValueOnce(0);
+    clipboardWriteText.mockImplementationOnce(() => {
+      throw new Error('clipboard unavailable');
+    });
+
+    const choice = promptRetryDialog(
+      {
+        reason: 'fetch-failed:ERR_CONNECTION_RESET',
+        kind: 'network',
+        diagnosis: 'proxy=DIRECT dns=ok(43.146.61.38) tcp=ok(12ms)',
+        logPath: '/Users/example/Library/Logs/Cindy/endpoint-netlog/capture.json',
+        offlineSavedAt: null,
+      },
+      'https://hotfix.cindy.app/cindy/endpoint.json',
+      'zh-CN',
+    );
+
+    expect(choice).toBe('retry');
+    expect(showMessageBoxSync).toHaveBeenCalledTimes(2);
+    expect(showMessageBoxSync.mock.calls[1]?.[0].detail).toContain('诊断信息未能复制');
+    expect(showMessageBoxSync.mock.calls[1]?.[0].detail).not.toContain('诊断信息已复制');
+  });
 });
 
 describe('resolveEndpointSource(清单来源三选一)', () => {

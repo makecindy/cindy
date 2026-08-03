@@ -143,4 +143,17 @@ describe('端点清单弹框文案', () => {
     expect(text).toContain('reason=invalid-json');
     expect(text).toContain('source=n/a');
   });
+
+  it('复制失败时展示可见失败反馈,不误报为已复制', () => {
+    const content = buildEndpointManifestDialogContent({
+      locale: 'zh-CN',
+      kind: 'network',
+      reason: 'fetch-failed:ERR_CONNECTION_RESET',
+      copyStatus: 'failed',
+      offlineSavedAt: null,
+    });
+
+    expect(content.detail).toContain(ENDPOINT_MANIFEST_DIALOG_COPY['zh-CN'].copyFailedHint);
+    expect(content.detail).not.toContain(ENDPOINT_MANIFEST_DIALOG_COPY['zh-CN'].copiedHint);
+  });
 });

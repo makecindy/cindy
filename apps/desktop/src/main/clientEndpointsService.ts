@@ -76,6 +76,7 @@ import {
 } from './endpointManifestCache';
 import {
   buildEndpointManifestDialogContent,
+  type EndpointManifestDialogCopyStatus,
   type EndpointManifestDialogAction,
   type EndpointManifestDialogChoice,
   type EndpointManifestDialogLocale,
@@ -554,7 +555,7 @@ export function promptRetryDialog(
   sourceLabel: string,
   locale: EndpointManifestDialogLocale,
 ): EndpointManifestDialogChoice {
-  let copyStatus = false;
+  let copyStatus: EndpointManifestDialogCopyStatus = 'idle';
   for (;;) {
     const content = buildEndpointManifestDialogContent({
       locale,
@@ -581,9 +582,10 @@ export function promptRetryDialog(
     if (action !== 'copy-diagnostics') return action;
     try {
       clipboard.writeText(content.diagnosticsText);
-      copyStatus = true;
+      copyStatus = 'success';
       log.info('copied endpoint manifest diagnostics (reason=%s)', context.reason);
     } catch (err) {
+      copyStatus = 'failed';
       log.warn(
         'failed to copy endpoint manifest diagnostics (reason=%s): %s',
         context.reason,

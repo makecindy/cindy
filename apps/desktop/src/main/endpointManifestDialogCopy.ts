@@ -36,6 +36,8 @@ export type EndpointManifestFailureKind = 'network' | 'config';
 export type EndpointManifestDialogChoice = 'retry' | 'offline' | 'exit';
 /** 弹框内部动作;复制诊断后仍停留在当前弹框,不会进入阻断循环。 */
 export type EndpointManifestDialogAction = EndpointManifestDialogChoice | 'copy-diagnostics';
+/** 复制诊断的结果,用于在同一个弹框里明确反馈成功或失败。 */
+export type EndpointManifestDialogCopyStatus = 'idle' | 'success' | 'failed';
 
 export interface EndpointManifestDialogCopy {
   networkTitle: string;
@@ -46,6 +48,7 @@ export interface EndpointManifestDialogCopy {
   diagnosticsHint: string;
   copyDiagnosticsButton: string;
   copiedHint: string;
+  copyFailedHint: string;
   noSavedConfigurationHint: string;
   offlineHint: string;
   retryButton: string;
@@ -67,6 +70,7 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     diagnosticsHint: '需要反馈时，可以复制诊断信息后粘贴给我们。',
     copyDiagnosticsButton: '复制诊断信息',
     copiedHint: '诊断信息已复制。请粘贴到反馈消息中。',
+    copyFailedHint: '诊断信息未能复制，请重试。',
     noSavedConfigurationHint: '这台设备没有可用的历史配置，需要恢复连接后才能继续启动。',
     offlineHint:
       '也可以用上次成功获取的配置离线启动（获取于 {{savedAt}}），需要联网的功能会不可用。',
@@ -85,6 +89,7 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     diagnosticsHint: 'If you need help, copy the diagnostics into your support message.',
     copyDiagnosticsButton: 'Copy Diagnostics',
     copiedHint: 'Diagnostics copied. Paste them into your support message.',
+    copyFailedHint: "Diagnostics couldn't be copied. Try again.",
     noSavedConfigurationHint:
       'This device has no saved configuration yet, so Cindy needs to reconnect before it can start.',
     offlineHint:
@@ -104,6 +109,7 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     diagnosticsHint: 'サポートが必要な場合は、診断情報をコピーしてメッセージに貼り付けてください。',
     copyDiagnosticsButton: '診断情報をコピー',
     copiedHint: '診断情報をコピーしました。サポートへのメッセージに貼り付けてください。',
+    copyFailedHint: '診断情報をコピーできませんでした。もう一度お試しください。',
     noSavedConfigurationHint:
       'このデバイスには利用できる保存済み設定がないため、接続が回復してから起動を続ける必要があります。',
     offlineHint:
@@ -123,6 +129,7 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     diagnosticsHint: '도움이 필요하면 진단 정보를 복사해 지원 메시지에 붙여 넣어 주세요.',
     copyDiagnosticsButton: '진단 정보 복사',
     copiedHint: '진단 정보를 복사했습니다. 지원 메시지에 붙여 넣어 주세요.',
+    copyFailedHint: '진단 정보를 복사하지 못했습니다. 다시 시도해 주세요.',
     noSavedConfigurationHint:
       '이 기기에는 사용할 수 있는 저장된 설정이 없어 연결이 복구된 후에 시작할 수 있습니다.',
     offlineHint:
@@ -141,8 +148,8 @@ export interface EndpointManifestDialogInput {
   source?: string;
   diagnosis?: string | null;
   logPath?: string | null;
-  /** 复制成功后在同一个弹框中显示确认。 */
-  copyStatus?: boolean;
+  /** 复制后在同一个弹框中显示成功或失败反馈。 */
+  copyStatus?: EndpointManifestDialogCopyStatus;
   /** 上次成功配置的获取时间(已格式化);有值即提供离线启动按钮。 */
   offlineSavedAt?: string | null;
 }
@@ -204,8 +211,10 @@ export function buildEndpointManifestDialogContent(
     fill(copy.errorLine, { error: formatEndpointManifestVisibleError(input.reason) }),
     copy.diagnosticsHint,
   );
-  if (input.copyStatus) {
+  if (input.copyStatus === 'success') {
     lines.push('', copy.copiedHint);
+  } else if (input.copyStatus === 'failed') {
+    lines.push('', copy.copyFailedHint);
   }
   if (offlineAvailable) {
     lines.push('', fill(copy.offlineHint, { savedAt: input.offlineSavedAt ?? '' }));
