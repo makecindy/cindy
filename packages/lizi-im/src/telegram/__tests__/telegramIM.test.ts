@@ -1365,6 +1365,60 @@ describe('TelegramIM', () => {
     }
   });
 
+  it("群 'all' 档: A 流式期间 B 排队发提示, A 剩下的答案不能改挂到 B", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    // A 触发(msg 70) → 开流(回合持有目标 70)
+    api.pushUpdates([groupMessage({ text: 'A 问', fromId: 222, messageId: 70, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+    const handle = await im.startStreamingText(lane);
+    handle.replace('A 的第一段');
+    await vi.waitFor(
+      () => {
+        expect(
+          api.calls.some(
+            (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+
+    // B 在 A 流式期间到达并入队 → 排队提示走独立出站(sendMarkdownText)
+    api.pushUpdates([groupMessage({ text: 'B 问', fromId: 333, messageId: 71, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await im.sendMarkdownText(lane, '你排在第 1 位');
+
+    // A 继续输出并定稿 —— 仍须挂回 70, 不得变 71
+    await handle.finalize('A 的最终答案');
+    const quoted = api.calls
+      .filter((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200')
+      .map((c) => (c.params.reply_parameters as { message_id: number } | undefined)?.message_id);
+    expect(quoted.length).toBeGreaterThanOrEqual(2);
+    expect(quoted.every((id) => id === 70)).toBe(true);
+
+    // B 的目标没被那条提示偷走: B 自己的回合能领到 71
+    const beforeB = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    ).length;
+    const bHandle = await im.startStreamingText(lane);
+    await bHandle.finalize('B 的答案');
+    const bSends = api.calls
+      .filter((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200')
+      .slice(beforeB);
+    expect((bSends[0].params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(71);
+  });
+
   it('全响应·自主判断: always 群未召唤消息进 ambient turn, 表情静默, NO_REPLY 删占位', async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {

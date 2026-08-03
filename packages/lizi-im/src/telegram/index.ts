@@ -255,6 +255,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
   /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
   private readonly turnReplyTargets = new Map<string, string>();
+  /**
+   * 活动流式回合计数(userId → 未收口的 handle 数) —— 回挂目标槽位的**归属权**。
+   *
+   * 为何必需: A 回合正在流式输出时, B 消息到达会入队并立即发一条排队提示
+   * (turnRunner 的 notifyQueuedPosition → sendMarkdownText)。若让那条独立出站按「队列
+   * 里有更新的 id」接管槽位, A 剩下的 sendRenderedChunk 会改挂到 B 上 —— 群 'all'
+   * 档要求目标整轮不变, 而「队列里有更新的消息」并不证明 A 已被放弃。
+   * 所以领取要看归属: 回合活着就由它持有, 收口(finalize/close)后才允许替换。
+   */
+  private readonly activeStreamRounds = new Map<string, number>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -664,8 +674,32 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 私聊曾走 sendMessageDraft 草稿通道 —— 草稿只能承载一行纯文本, 工具调用
     // 在私聊里因此整体不可见, 与群聊形成两套体验(Chris 2026-08 点名);
     // 呈现规则不再按 DM / 群分叉。
-    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
+    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget), 并占住
+    // 槽位归属直到本回合收口 —— 期间的排队提示等独立出站不得把它改向新消息。
     this.claimTurnReplyTarget(userId);
+    this.beginStreamRound(userId);
+    return this.startTrackedStreaming(userId, initial);
+  }
+
+  private async startTrackedStreaming(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
+    try {
+      const handle = await this.createStreamingHandle(userId, initial);
+      return this.trackStreamRound(userId, handle);
+    } catch (err) {
+      // 建 handle 就失败 → 本回合没有 finalize/close 可依靠, 当场退归属, 否则槽位
+      // 会被一个不存在的回合永久锁住。
+      this.endStreamRound(userId);
+      throw err;
+    }
+  }
+
+  private createStreamingHandle(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
     return startTelegramStreaming(
       {
         send: async (markdown) => {
@@ -1311,8 +1345,68 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const queue = this.pendingReplyTargets.get(userId);
     if (!queue || queue.length === 0) return;
     const current = this.turnReplyTargets.get(userId);
-    if (current !== undefined && !hasNewerTrigger(queue, current)) return;
+    if (current !== undefined) {
+      // 流式回合持有期间一律不接管: 排队提示这类独立出站不得把正在输出的
+      // 回合改向新消息(群 'all' 档会把 A 剩下的答案挂到 B 上)。代价是该提示本身
+      // 沿用回合目标或不挂回 —— 但 B 的目标因此留在队列里, B 自己的回合能领到。
+      if (this.hasActiveStreamRound(userId)) return;
+      // 无活动回合 = 槽位是上一轮残留; 队列里有更新的 id 即证明它过时。
+      if (!hasNewerTrigger(queue, current)) return;
+    }
     this.claimTurnReplyTarget(userId);
+  }
+
+  private hasActiveStreamRound(userId: string): boolean {
+    return (this.activeStreamRounds.get(userId) ?? 0) > 0;
+  }
+
+  private beginStreamRound(userId: string): void {
+    this.activeStreamRounds.set(userId, (this.activeStreamRounds.get(userId) ?? 0) + 1);
+  }
+
+  private endStreamRound(userId: string): void {
+    const next = (this.activeStreamRounds.get(userId) ?? 0) - 1;
+    if (next > 0) this.activeStreamRounds.set(userId, next);
+    else this.activeStreamRounds.delete(userId);
+  }
+
+  /**
+   * 给流式 handle 包上回合归属的生命周期: finalize / close 任一到达即收口(只计
+   * 一次)。收口后槽位失去保护, 残留目标可被下一条入站消息覆盖领取(自愈)。
+   */
+  private trackStreamRound(userId: string, inner: StreamingTextHandle): StreamingTextHandle {
+    let ended = false;
+    const end = (): void => {
+      if (ended) return;
+      ended = true;
+      this.endStreamRound(userId);
+    };
+    const wrapped: StreamingTextHandle = {
+      get messageId() {
+        return inner.messageId;
+      },
+      append: (delta) => inner.append(delta),
+      replace: (fullText) => inner.replace(fullText),
+      finalize: async (finalText) => {
+        try {
+          await inner.finalize(finalText);
+        } finally {
+          end();
+        }
+      },
+      close: () => {
+        try {
+          inner.close();
+        } finally {
+          end();
+        }
+      },
+      // 只在底层真的支持时暴露 —— turnRunner 靠它是否存在判断能不能投图。
+      ...(inner.addExtraImageAbsPath
+        ? { addExtraImageAbsPath: (absPath: string) => inner.addExtraImageAbsPath?.(absPath) }
+        : {}),
+    };
+    return wrapped;
   }
 
   /**
