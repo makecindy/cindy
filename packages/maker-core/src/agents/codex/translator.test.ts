@@ -1167,7 +1167,7 @@ describe('translateItemNotification subAgentActivity', () => {
     };
   }
 
-  it('renders a self-closing spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
+  it('renders a running spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
@@ -1179,6 +1179,7 @@ describe('translateItemNotification subAgentActivity', () => {
       'tool_use',
       'tool_result_full',
       'tool_result',
+      'agent_task_update',
     ]);
     expect(events[0].data).toMatchObject({
       toolUseId: 'spawn-1',
@@ -1190,6 +1191,15 @@ describe('translateItemNotification subAgentActivity', () => {
       toolUseId: 'spawn-1',
       fullText: '/root/survey_startup',
       isError: false,
+    });
+    // tool_result 就地收口(不留悬空工具调用),卡片状态由 update 主导 → 仍显示运行中,
+    // 后续 tokens / 工具数 / 终态由子线程通知按同一 taskId 增量刷新。
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'spawn-1',
+      parentToolUseId: 'spawn-1',
+      status: 'running',
+      title: '/root/survey_startup',
     });
   });
 
