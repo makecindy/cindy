@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "All models · Claude Code / Codex · billed per token",
+        "subtitle": "All models · Claude Code / Codex · billed from your balance per token",
         "modelLabel": "All models",
-        "billingLabel": "billed per token",
+        "billingLabel": "billed from your balance per token",
         "disconnectConfirm": {
           "title": "Disconnect Cindy AI?",
           "description": "Disconnecting clears the Cindy AI key saved locally. You will need to reconnect to keep using models provided by Cindy AI."
@@ -1280,7 +1280,14 @@
           "confirm": "Rotate"
         },
         "rotateSuccess": "Key rotated",
-        "rotateFailed": "Rotation failed, please try again later"
+        "rotateFailed": "Rotation failed, please try again later",
+        "copyKeyAria": "Copy Cindy AI key",
+        "copyKeySuccess": "Cindy AI key copied",
+        "copyKeyFailed": "Copy failed, please try again later",
+        "asset": {
+          "viewUsage": "View usage",
+          "syncFailed": "Credential sync failed, so the balance is unavailable right now. Your saved model settings are unaffected."
+        }
       },
       "custom": {
         "tag": "Custom",
@@ -1574,7 +1581,8 @@
       },
       "xdSignin": {
         "badge": "Recommended",
-        "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
+        "desc": "The official service — all models work out of the box, no keys to manage.",
+        "grantBadge": "Promotional balance for new users",
         "cta": "Sign in to Cindy"
       },
       "menu": {
@@ -3368,6 +3376,8 @@
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
         "notify": "Can show system tips (light banner at the top of the screen)",
         "notifyDetail": "Tip text is provided by this plugin and labeled with its name; tips fade automatically and never block your work.",
+        "badge": "Can light an unread mark on the Plugins entry",
+        "badgeDetail": "When it has something new, it can show a green dot on the sidebar Plugins entry and on its own card, with a one-line summary. Opening its panel clears the dot. The dot makes no sound, does not vibrate, never reaches your system notification center, and is a permission separate from system tips.",
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can write files (create / modify)",
@@ -3505,6 +3515,7 @@
         "slotCard": "Message cards",
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
+        "slotBadge": "Unread badge",
         "slotFs": "File writing",
         "slotSkill": "Agent skills",
         "slotWorkspace": "Workspace sessions"
@@ -5223,6 +5234,7 @@
         "dismiss": "Dismiss"
       },
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
+      "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "modelSwitchContextGuard": {
         "title": "Target model has a smaller context window",
@@ -5308,7 +5320,7 @@
         "title": "Cindy AI",
         "desc": "Official service · all models · works with Claude Code and Codex",
         "loginTitle": "Sign in to Cindy",
-        "loginDesc": "Sign in to enable the official Cindy AI service with access to all models"
+        "loginDesc": "Sign in to enable the official Cindy AI service with access to all models — new users get a promotional balance"
       },
       "othersToggle": "Other providers ({{count}})",
       "presetSub": "Paste an API key to connect",
@@ -5513,6 +5525,9 @@
       "retry": "Retry",
       "continueAfterReset": "Continue After Reset",
       "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
+      "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
+      "viewBalance": "View balance",
+      "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway, not your Claude.ai subscription. That gateway route rejected the model. Switch to your Claude.ai subscription and retry, or choose another model.",

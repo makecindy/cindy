@@ -253,7 +253,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(chatInputSource).toContain(
       "autofocus: !disableAutofocus && !disabled ? 'end' : false",
     );
-    expect(chatInputSource).toContain('editor?.setEditable(!disabled)');
+    // The composer is also temporarily read-only during the bounded effort-runtime
+    // preflight, so a pending send cannot clear text entered after its snapshot.
+    expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked)');
   });
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {

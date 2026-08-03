@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 计费",
+        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
-        "billingLabel": "按 token 计费",
+        "billingLabel": "按 token 从余额扣费",
         "disconnectConfirm": {
           "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"
@@ -1280,7 +1280,14 @@
           "confirm": "轮换"
         },
         "rotateSuccess": "密钥已轮换",
-        "rotateFailed": "轮换失败，请稍后重试"
+        "rotateFailed": "轮换失败，请稍后重试",
+        "copyKeyAria": "复制 Cindy AI Key",
+        "copyKeySuccess": "已复制 Cindy AI Key",
+        "copyKeyFailed": "复制失败，请稍后重试",
+        "asset": {
+          "viewUsage": "查看用量",
+          "syncFailed": "凭据同步失败，暂时无法获取余额。已保存的模型配置不受影响。"
+        }
       },
       "custom": {
         "tag": "自定义",
@@ -1573,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "推荐",
-        "desc": "登录 Cindy 即可开通官方 Cindy AI 服务，全部模型开箱即用，无需管理任何 Key。",
+        "desc": "官方服务，全部模型开箱即用，无需管理任何 Key。",
+        "grantBadge": "新用户含赠送余额",
         "cta": "登录 Cindy"
       },
       "menu": {
@@ -3367,6 +3375,8 @@
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
         "notify": "可弹出系统提示(屏幕顶部的轻提示)",
         "notifyDetail": "提示内容由这个插件提供，提示上会标注它的名字；自动消失，不会打断你的操作。",
+        "badge": "可在插件入口点亮未读提醒",
+        "badgeDetail": "有新内容时，它可以在侧栏插件入口和自己的卡片上点亮一个绿点，并附一句话摘要；你打开它的面板即清零。绿点不出声、不震动，也不会进入系统通知中心，和上面的系统提示是两项独立权限。",
         "confirm": "可弹出确认框征求你同意",
         "confirmDetail": "它动手前可以弹一个和 Cindy 同款的确认框来问你，问句由它提供、框上会标注它的名字；同意还是取消都由你亲手点，它自己点不了。同时最多一个确认框，弹得太频会被拦下。",
         "fsWrite": "可写入文件(创建/修改)",
@@ -3504,6 +3514,7 @@
         "slotCard": "消息卡片",
         "slotNetwork": "网络访问",
         "slotNotify": "系统提示",
+        "slotBadge": "未读角标",
         "slotFs": "写文件",
         "slotSkill": "Agent 技能",
         "slotWorkspace": "工作区任务"
@@ -5221,6 +5232,7 @@
         "dismiss": "关闭"
       },
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
+      "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "modelSwitchContextGuard": {
         "title": "目标模型的上下文窗口较小",
@@ -5306,7 +5318,7 @@
         "title": "Cindy AI",
         "desc": "官方服务 · 全部模型 · Claude Code / Codex 通用",
         "loginTitle": "登录 Cindy",
-        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型"
+        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型，新用户含赠送余额"
       },
       "othersToggle": "其他供应商({{count}})",
       "presetSub": "填入 API Key 即可连接",
@@ -5511,6 +5523,9 @@
       "retry": "重试",
       "continueAfterReset": "恢复后继续",
       "continueAfterResetTitle": "创建一次性自动化，在用量恢复后继续当前任务",
+      "gatewayQuotaExhausted": "Cindy AI 余额不足，请充值后继续",
+      "viewBalance": "查看余额",
+      "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
       "credentialSwitchBusy": "Codex 正在其它任务中运行，暂时无法按本任务选择的模型来源切换（需要重启共享的 Codex 后台进程）。等它结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",

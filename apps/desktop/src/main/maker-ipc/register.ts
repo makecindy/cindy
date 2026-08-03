@@ -543,6 +543,7 @@ import {
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -4384,6 +4385,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // v2 因果能力：同引擎 no-op 返回 revision，后续 SET_MODEL 在 session 锁内 CAS。
       // 新 desktop 控制端据此与只有基础切换能力的旧 host 做安全兼容门控。
       supportsSessionAgentSwitchCas: true,
+      // 调度更新支持 intervalMs:null 的显式清空表达(IPC 入口归一化成引擎的
+      // 「带 key 的 undefined」)。旧 desktop 缺省为 false——旧引擎会把 null 当
+      // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
+      // key,由旧引擎的隐式清空承担等价语义)。
+      supportsScheduleIntervalNullClear: true,
     };
   });
 
@@ -9573,7 +9579,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
       return;
     }
-    await sess.setEffort(effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra');
+    try {
+      const result = await applyRuntimeEffortWithRecovery({
+        applyRuntime: () =>
+          sess.setEffort(
+            effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
+          ),
+        terminateSession: () => maker.closeSession(sessionId),
+      });
+      if (result === 'session-terminated') {
+        log.warn('set-effort: timed-out runtime session terminated for lazy rebuild', {
+          sessionId,
+        });
+      }
+    } catch (error) {
+      log.warn('set-effort runtime update failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', 'Runtime effort update failed');
+    }
   });
 
   ipcMain.handle(MAKER_INVOKE.SET_PERMISSION_MODE, async (_e, sessionId: unknown, mode: unknown) => {

@@ -160,7 +160,13 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
+  env.NO_PROXY = Array.from(new Set([
+    ...existing,
+    '127.0.0.1',
+    'localhost',
+    '::1',
+    '[::1]',
+  ])).join(',');
   delete env.no_proxy;
 }
 
@@ -684,11 +690,13 @@ export class PiAgent extends BaseAgent {
     };
     await writePermissionFile(requestedPermissionSnapshot);
 
-    // MCP 桥:host 把 in-process MCP providers 暴露成 localhost streamable-HTTP。
+    // MCP:host 把 in-process providers 暴露成 localhost streamable-HTTP，也可给出
+    // 外部 HTTP server 描述（header 真值另走 mcpEnv，不进入描述符）。
     // 传 session 身份(sessionId/workingDir/vendorOptions)让 host 在 bridge 上注册
     // 身份 ctx + 给 server URL 打 `?session=` 路由 —— orca/会话身份类工具据此绑定
     // 当前 pi 会话。disposeSessionCtx 在 close() 注销该注册(幂等)。
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
+    let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
     if (this.deps.preparePiExtraSpawnConfig) {
       try {
@@ -699,6 +707,7 @@ export class PiAgent extends BaseAgent {
           vendorOptions: opts.vendorOptions,
         });
         mcpBridge = extra?.mcpBridge ?? null;
+        mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
       } catch (err) {
         this.deps.logger.error('pi MCP bridge prep failed, continuing without cindy tools', {
@@ -850,6 +859,7 @@ export class PiAgent extends BaseAgent {
         PI_SESSION_TOKEN_ENV,
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
+        ...Object.keys(mcpEnv),
         ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
       ]));
       const spawnEnv: NodeJS.ProcessEnv = {
@@ -857,6 +867,9 @@ export class PiAgent extends BaseAgent {
         ...authEnv,
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
         ...nativeEnv,
+        // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
+        // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
+        ...mcpEnv,
         [PI_SESSION_ID_ENV]: opts.sessionId ?? '',
         [PI_SESSION_TOKEN_ENV]: proxySessionToken,
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),

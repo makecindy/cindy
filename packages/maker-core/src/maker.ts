@@ -289,8 +289,15 @@ export class Maker {
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
+    // close() 失败的 Session 不能继续收消息，但也不能立刻从 activeSessions
+    // 摘掉并与可能仍存活的底层 transport 并存。先重试同一个 close；只有真实
+    // 关闭成功、status listener 将其移除后，才允许创建新的 handle。
     const existing = this.activeSessions.get(opts.id);
-    if (existing) return existing;
+    if (existing?.getStatus() === 'error') {
+      await existing.close();
+    }
+    const reusable = this.activeSessions.get(opts.id);
+    if (reusable) return reusable;
 
     const inFlight = this.inFlightSessionCreations.get(opts.id);
     if (inFlight) return inFlight.promise;

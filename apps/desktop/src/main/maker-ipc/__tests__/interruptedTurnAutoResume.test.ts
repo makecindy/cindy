@@ -56,6 +56,15 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  it('accepts the classified Codex reconnect-stalled reason', () => {
+    expect(
+      isInterruptedTurnError({
+        reason: 'codex_reconnect_stalled',
+        message: 'Codex app-server stopped making progress while reconnecting.',
+      }),
+    ).toBe(true);
+  });
+
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
     for (const reason of ['empty-response', 'turn-failed', 'silent-stop-exhausted']) {
       expect(

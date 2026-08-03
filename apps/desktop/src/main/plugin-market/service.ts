@@ -1188,6 +1188,10 @@ export class PluginMarketService {
           const installed = await installOrUpdateMarketGhostPackage(tempPath, {
             ghostId: plugin.ghostId,
             version: plugin.currentRelease.version,
+            // 确认框渲染的就是这份服务端 manifest;包里若多出权限项,出口处拒装
+            // ——服务端投影层与客户端清单契约漂移时,用户会在没审过的情况下多拿
+            // 一个能力面(codex review P1)。
+            reviewedManifest: compatible.manifest,
           });
           // Once the package directory is committed, finish provenance against
           // the owner captured at operation start even if the active session

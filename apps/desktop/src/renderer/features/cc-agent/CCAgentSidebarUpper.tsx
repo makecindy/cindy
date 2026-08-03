@@ -84,6 +84,7 @@ import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -3062,6 +3063,8 @@ function CollapsedView({
   // 主视图切换(Plugin / Skill 管理)——与展开态 SidebarTopNav 的管理入口同源:
   // 命中 Plugin 或 Skill 视图时高亮。折叠 rail 之前漏了这颗按钮,现保持两态一致。
   const { activeKey, navigateToView } = useActiveMainView();
+  // 插件未读聚合(badge 槽)——与展开态同源同语义。
+  const hasGhostUnread = useAnyGhostUnread();
 
   // 接管中的会话(/ctr)——面板行沿用 SessionStatusIcon 的 RadioTower 表达。
   const attachedSessionIds = useAttachedSessionIds();
@@ -3113,12 +3116,15 @@ function CollapsedView({
         onClick={handleNavScheduled}
         onContextMenu={onAutomationsContextMenu}
       />
+      {/* 插件 rail 入口 —— 未读绿点与展开态 SidebarTopNav 对称(同一聚合语义:
+          任一插件有未读就点亮,静态不呼吸)。 */}
       <SidebarIconButton
         icon={Plug}
         label={t('sidebar.tabs.plugins')}
         variant="rail"
         active={activeKey === 'plugins'}
         aria-current={activeKey === 'plugins' ? 'page' : undefined}
+        showDot={hasGhostUnread}
         onClick={() => navigateToView('plugins')}
       />
       <ConversationSearchBox

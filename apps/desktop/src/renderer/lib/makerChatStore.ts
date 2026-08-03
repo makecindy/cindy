@@ -381,6 +381,14 @@ export interface ChatMessage {
    */
   errorReason?: string;
   /**
+   * 产生这条 error 行的 provider(错误发生时刻的快照,main 侧 onTurnErrorEvent
+   * 从 session-provider-store 同步取值落进 content.providerId)。错误分类必须绑
+   * 这个来源,不能用可中途切换的 session.providerId —— 否则恢复历史错误时会把
+   * 别家 provider 的额度错误误判成 Cindy AI 余额不足(或反向丢失充值入口)。
+   * undefined = 来源不明(老行 / 未显式选择 provider),读侧不启用余额分类。
+   */
+  errorProviderId?: string;
+  /**
    * interrupted-turn-resume:app 退出中断行(errorReason='app-exit-interrupted')
    * 被用户点「忽略」后置 true(content.dismissed 持久化)。banner 与红点判定
    * 都排除 dismissed 的行。其它 error 行恒为 undefined。
@@ -1049,6 +1057,7 @@ export type SessionChatLightState = Pick<
   | 'continuationInFlightProjectionCapability'
   | 'isLoadingMore'
   | 'hasMoreMessages'
+  | 'historyWindowHasIsland'
   | 'isFirstMessage'
   | 'historyLoaded'
   | 'pendingPermission'
@@ -5006,6 +5015,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
+    historyWindowHasIsland: state.historyWindowHasIsland,
     isFirstMessage: state.isFirstMessage,
     historyLoaded: state.historyLoaded,
     pendingPermission: state.pendingPermission,
@@ -5048,6 +5058,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.isLoadingMore === b.isLoadingMore &&
 
     a.hasMoreMessages === b.hasMoreMessages &&
+    a.historyWindowHasIsland === b.historyWindowHasIsland &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
     a.pendingPermission === b.pendingPermission &&
@@ -5957,7 +5968,7 @@ function ensureInitialMessages(sessionId: string): void {
       while (hasMore) {
         const needsAnchorBackfill =
           merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
-        const planState = historyRowsPlanBackfillState(merged);
+        const planState = historyRowsPlanBackfillState(merged, hasMore);
         const needsPlanResolution =
           planState.hasPlanEvent &&
           !planState.isResolved &&
@@ -10202,11 +10213,13 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
 }
 
-function historyRowsPlanBackfillState(rows: Message[]): {
+function historyRowsPlanBackfillState(rows: Message[], taskHistoryMayBeIncomplete: boolean): {
   hasPlanEvent: boolean;
   isResolved: boolean;
 } {
-  const state = getLatestMessageTodoState(mapServerMessages(rows));
+  const state = getLatestMessageTodoState(mapServerMessages(rows), {
+    taskHistoryMayBeIncomplete,
+  });
   return {
     hasPlanEvent: state.hasPlanEvent,
     isResolved: state.isResolved,
@@ -10535,12 +10548,15 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       >;
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
+      const errorProviderId = typeof c.providerId === 'string' && c.providerId ? c.providerId : undefined;
       return {
         clientId: m.clientId,
         role: m.role,
         content: message,
         isStreaming: false,
         ...(reason ? { errorReason: reason } : {}),
+        // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。
+        ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。
         ...(c.dismissed === true ? { errorDismissed: true } : {}),
       };

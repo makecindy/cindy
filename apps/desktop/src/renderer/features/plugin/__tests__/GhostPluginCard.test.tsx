@@ -7,7 +7,7 @@
  */
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -24,6 +24,10 @@ import {
   MarketPluginCard,
   LegacyGhostRecoveryNotice,
 } from '../GhostPluginPage';
+import {
+  __ingestGhostBadgeForTest,
+  __resetGhostUnreadForTest,
+} from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
@@ -71,6 +75,9 @@ const marketPlugin: PluginMarketItem = {
 };
 
 describe('GhostPluginCard', () => {
+  // 未读是模块级 store,用例间必须互不串味。
+  afterEach(() => __resetGhostUnreadForTest());
+
   it('fires the primary action from the whole card for a command plugin', () => {
     const onPrimary = vi.fn();
     const onManage = vi.fn();
@@ -219,6 +226,47 @@ describe('GhostPluginCard', () => {
     const fallbackIcon = container.querySelector('.lucide-workflow');
     expect(fallbackIcon).toBeTruthy();
     expect(fallbackIcon?.parentElement?.className).toContain('var(--surface-elevated)');
+  });
+
+  // ── 未读角标(badge 槽)────────────────────────────────────────────
+  it('无未读时不画点,描述位仍是静态描述', () => {
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(screen.getByText('Google services')).toBeTruthy();
+  });
+
+  it('有未读时:呼吸绿点 + 摘要顶替静态描述', () => {
+    __ingestGhostBadgeForTest('filo-google', { unread: true, summary: '2 封新邮件', at: 1 });
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    // 单条卡片走呼吸形态(session-card-dot 带呼吸关键帧),绿色走 done token。
+    const dot = container.querySelector('.session-card-dot');
+    expect(dot).toBeTruthy();
+    expect(dot?.className).toContain('var(--card-status-done)');
+    // 摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻的信息。
+    expect(screen.getByText('2 封新邮件')).toBeTruthy();
+    expect(screen.queryByText('Google services')).toBeNull();
+  });
+
+  it('有未读但插件没给摘要:只点亮,静态描述保留(不留空白)', () => {
+    __ingestGhostBadgeForTest('filo-google', { unread: true, at: 1 });
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    expect(container.querySelector('.session-card-dot')).toBeTruthy();
+    expect(screen.getByText('Google services')).toBeTruthy();
+  });
+
+  it('未读只认本插件的 id:别的插件亮着不影响本卡', () => {
+    __ingestGhostBadgeForTest('signoff-board', { unread: true, summary: '别人的', at: 1 });
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(screen.getByText('Google services')).toBeTruthy();
   });
 });
 
