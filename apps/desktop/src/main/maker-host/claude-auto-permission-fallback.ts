@@ -44,6 +44,8 @@ export interface ClaudeAutoPermissionFallbackDeps {
    * 恢复试探的调度器。缺省用 setTimeout + unref（不阻止进程退出）；测试注入假实现。
    */
   scheduleRestore?(run: () => void, delayMs: number): FallbackRestoreTimer;
+  /** 退避归零判据用的时钟；缺省 Date.now，测试注入假时钟。 */
+  now?(): number;
 }
 
 type UnavailableListener = (signal: ClaudeAutoClassifierUnavailableSignal) => void;
@@ -284,13 +286,32 @@ const RESTORE_COOLDOWN_MAX_MS = 60 * 60_000;
 /** per-session 恢复状态表上限(防长生命周期泄漏);超限时先剔没有在飞定时器的项。 */
 const RESTORE_STATE_MAX_SESSIONS = 256;
 
+/**
+ * 退避归零阈值 —— 距上一次降级超过它才认为分类器真的稳住了。
+ *
+ * `restored` 只说明 `setPermissionMode('auto')` 调用成功,**不**代表上游分类器已恢复:
+ * 若它仍在故障,切回原生后会再次降级。所以恢复成功不能清掉 `switches`,否则下一轮永远
+ * 从 5 分钟重新起算,用户在持续故障期间每 5 分钟重复经历一次硬拒绝窗口(codex P1)。
+ * 取冷却上限的 2 倍:这么久没再降级,说明确实好了。
+ */
+const BACKOFF_RESET_AFTER_MS = 2 * RESTORE_COOLDOWN_MAX_MS;
+
 interface SessionRestoreState {
   /**
    * 该会话累计的「排期次数」,决定下一次冷却时长。降级与重排(控制通道被占用 / 抛错)
    * 都会 +1 —— 两者都说明「上一次试探没起作用」,退避语义一致,不必分开计。
+   * 恢复成功**不**清零(见 BACKOFF_RESET_AFTER_MS)。
    */
   switches: number;
   timer: FallbackRestoreTimer | null;
+  /**
+   * 本次在飞试探的身份。恢复是异步的,期间新一轮 fallback 可能已在同一个 state 上排了
+   * 新定时器;旧试探回来后若无条件删 map 条目,就会丢掉新定时器的记账却不取消它 ——
+   * 留下一个无法被 cancel 的孤儿定时器(codex P1)。所以清理前先核对 token 仍是自己。
+   */
+  attemptToken: number;
+  /** 最后一次**降级**的时刻(重排不更新),用于判断退避是否该归零。 */
+  lastSwitchedAt: number;
 }
 
 function defaultScheduleRestore(run: () => void, delayMs: number): FallbackRestoreTimer {
@@ -312,6 +333,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
 ): (signal: ClaudeAutoClassifierUnavailableSignal) => Promise<boolean> {
   const inFlight = new Set<string>();
   const scheduleRestore = deps.scheduleRestore ?? defaultScheduleRestore;
+  const now = deps.now ?? Date.now;
   const restoreStates = new Map<string, SessionRestoreState>();
   const counters: FallbackCounters = {
     detected: 0,
@@ -327,9 +349,20 @@ export function createClaudeAutoPermissionFallbackCoordinator(
     restoreRescheduled: 0,
   };
 
-  const runRestore = async (sessionId: string): Promise<void> => {
+  /**
+   * 只在 map 仍指向本次试探时清掉状态。恢复是异步的,期间新一轮 fallback 可能已经排了
+   * 新定时器 —— 无条件 delete 会丢掉它的记账却不取消它(孤儿定时器,codex P1)。
+   */
+  const releaseAttemptState = (sessionId: string, attemptToken: number): void => {
+    if (restoreStates.get(sessionId)?.attemptToken === attemptToken) {
+      restoreStates.delete(sessionId);
+    }
+  };
+
+  const runRestore = async (sessionId: string, attemptToken: number): Promise<void> => {
     const state = restoreStates.get(sessionId);
-    if (state) state.timer = null;
+    // 只清自己那次的 timer 引用;若 map 已被新一轮接管则不碰。
+    if (state?.attemptToken === attemptToken) state.timer = null;
     try {
       // 冷却期内用户可能已经关掉会话、切走权限档,或换到不支持原生审阅的路由。
       // 逐项复核当前真相,不用冷却开始时的快照。
@@ -342,7 +375,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
         || !session.restoreNativeAutoReview
       ) {
         counters.restoreSkipped += 1;
-        restoreStates.delete(sessionId);
+        releaseAttemptState(sessionId, attemptToken);
         deps.logger.debug('skip native Auto reviewer restore attempt', {
           sessionId,
           permissionMode: meta?.permissionMode ?? null,
@@ -371,7 +404,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       // 'unsupported' / 'already-native' 是终态,重排不会变好。
       if (outcome !== 'restored') {
         counters.restoreSkipped += 1;
-        restoreStates.delete(sessionId);
+        releaseAttemptState(sessionId, attemptToken);
         deps.logger.debug('native Auto reviewer restore did not apply', {
           sessionId,
           outcome,
@@ -380,7 +413,9 @@ export function createClaudeAutoPermissionFallbackCoordinator(
         return;
       }
       counters.restored += 1;
-      restoreStates.delete(sessionId);
+      // **刻意不删 state**:`restored` 只说明切档调用成功,不代表上游分类器已恢复。留住
+      // `switches`,下一轮降级才会按 10/20/40/60 分钟继续退避,而不是每次都从 5 分钟重来
+      // (codex P1)。真正稳住了由 BACKOFF_RESET_AFTER_MS 归零,见 scheduleRestoreAttempt。
       deps.logger.info('restored native Auto reviewer after cooldown', {
         sessionId,
         switches: state?.switches ?? 0,
@@ -417,18 +452,27 @@ export function createClaudeAutoPermissionFallbackCoordinator(
           }
         }
       }
-      state = { switches: 0, timer: null };
+      state = { switches: 0, timer: null, attemptToken: 0, lastSwitchedAt: now() };
       restoreStates.set(sessionId, state);
     }
+    const ts = now();
+    // 距上一次**降级**足够久 → 分类器确实稳住过,退避归零重新起算。没有这条,
+    // `restored` 之后保留的 switches 会让几小时后的一次偶发抖动直接吃满 1 小时冷却。
+    if (opts.reason === 'switched' && ts - state.lastSwitchedAt > BACKOFF_RESET_AFTER_MS) {
+      state.switches = 0;
+    }
+    if (opts.reason === 'switched') state.lastSwitchedAt = ts;
     // 同一会话重新切到 fallback → 上一轮试探作废,退避加倍后重排。
     state.timer?.cancel();
     state.switches += 1;
+    state.attemptToken += 1;
+    const attemptToken = state.attemptToken;
     const delayMs = Math.min(
       RESTORE_COOLDOWN_BASE_MS * 2 ** (state.switches - 1),
       RESTORE_COOLDOWN_MAX_MS,
     );
     state.timer = scheduleRestore(() => {
-      void runRestore(sessionId);
+      void runRestore(sessionId, attemptToken);
     }, delayMs);
     deps.logger.debug('scheduled native Auto reviewer restore attempt', {
       sessionId,

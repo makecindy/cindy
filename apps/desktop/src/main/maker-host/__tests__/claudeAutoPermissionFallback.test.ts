@@ -611,7 +611,7 @@ describe('native Auto reviewer restore attempts', () => {
    * `blocked`，coordinator 按退避重排。
    */
   describe('outcome drives whether another attempt is scheduled', () => {
-    function createDepsWithOutcomes(outcomes: readonly string[]) {
+    function createDepsWithOutcomes(outcomes: readonly string[], clock?: () => number) {
       const restoreNativeAutoReview = vi.fn(async () => outcomes[
         Math.min(restoreNativeAutoReview.mock.calls.length - 1, outcomes.length - 1)
       ] as never);
@@ -623,6 +623,7 @@ describe('native Auto reviewer restore attempts', () => {
           restoreNativeAutoReview,
         })),
         scheduleRestore,
+        ...(clock ? { now: clock } : {}),
       });
       return { deps, restoreNativeAutoReview, scheduled };
     }
@@ -670,6 +671,74 @@ describe('native Auto reviewer restore attempts', () => {
         'native Auto reviewer restore did not apply',
         expect.objectContaining({ outcome: 'superseded' }),
       );
+    });
+
+    /**
+     * `restored` 只说明切档调用成功,不代表上游分类器已恢复。删掉退避代次会让持续故障
+     * 期间每轮都从 5 分钟重来,用户每 5 分钟重复经历一次硬拒绝窗口(codex P1)。
+     */
+    it('keeps the backoff generation across an optimistic restore', async () => {
+      let t = 0;
+      const { deps, scheduled } = createDepsWithOutcomes(['restored'], () => t);
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      await runScheduled(scheduled[0]);         // restored(但分类器其实还坏着)
+      t += 60_000;
+      await fallback({ sessionId: 'session-1', status: 429 }); // 果然又降级了
+
+      // 第二轮必须是 10 分钟,不是重新从 5 分钟起算。
+      expect(scheduled.map((entry) => entry.delayMs)).toEqual([5 * 60_000, 10 * 60_000]);
+    });
+
+    it('resets the backoff once the classifier has been quiet long enough', async () => {
+      let t = 0;
+      const { deps, scheduled } = createDepsWithOutcomes(['restored'], () => t);
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      await runScheduled(scheduled[0]);
+      // 距上次降级超过归零阈值(2 × 冷却上限 = 2 小时)→ 视为真的稳住过。
+      t += 2 * 60 * 60_000 + 1;
+      await fallback({ sessionId: 'session-1', status: 429 });
+
+      // 几小时后的偶发抖动不该直接吃满 1 小时冷却。
+      expect(scheduled.map((entry) => entry.delayMs)).toEqual([5 * 60_000, 5 * 60_000]);
+    });
+
+    it('a superseded attempt does not orphan the newer timer', async () => {
+      // 恢复期间又降级:新一轮已在同一个 state 上排了定时器。旧试探回来后若无条件删
+      // map 条目,就会丢掉新定时器的记账却不取消它 —— 留下无法 cancel 的孤儿(codex P1)。
+      let releaseRestore: (() => void) | undefined;
+      const restoreNativeAutoReview = vi.fn(
+        () => new Promise<never>((resolve) => {
+          releaseRestore = () => resolve('superseded' as never);
+        }),
+      );
+      const { scheduled, scheduleRestore } = createManualRestoreScheduler();
+      const { deps } = createDeps({
+        getSession: vi.fn(() => ({
+          agentKind: 'claude-code',
+          useCindyAutoReviewFallback: vi.fn(async () => {}),
+          restoreNativeAutoReview,
+        })),
+        scheduleRestore,
+      });
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      scheduled[0].run();                                   // 旧试探开跑并挂住
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await fallback({ sessionId: 'session-1', status: 429 }); // 新一轮排了 scheduled[1]
+      expect(scheduled).toHaveLength(2);
+
+      releaseRestore!();                                    // 旧试探返回 superseded
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // 新定时器仍然被记账着 → 第三轮降级能取消它,不会留孤儿。
+      await fallback({ sessionId: 'session-1', status: 429 });
+      expect(scheduled[1].cancelled).toBe(true);
+      expect(scheduled).toHaveLength(3);
     });
 
     it('does not reschedule when the route cannot serve the native reviewer', async () => {
