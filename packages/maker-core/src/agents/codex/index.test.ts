@@ -319,6 +319,7 @@ function installFakeHost(
     remoteCompactionProviderId?: string;
     userAgent?: string;
     codexHome?: string;
+    buildSessionMcpConfig?: (sessionInstanceId?: string) => Record<string, unknown>;
   } = {},
 ) {
   const ensureStarted = vi.fn(async () => ({
@@ -366,6 +367,9 @@ function installFakeHost(
   const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
+  const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
+    opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
+  );
   const host = {
     ensureStarted,
     // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
@@ -376,6 +380,7 @@ function installFakeHost(
     unsubscribeThread,
     isCodexProxyActive,
     getRemoteCompactionProviderId,
+    getSessionMcpConfig,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
   };
@@ -5167,6 +5172,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const handle = await agent.startSession({
       sessionId: 'session-codex-mcp-context',
+      sessionInstanceId: 'instance-codex-mcp-context',
       model: 'gpt-5.4',
       workingDir: '/repo',
       vendorOptions: { orcaRole: 'lead' },
@@ -5176,13 +5182,60 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(registerCodexMcpThreadContext).toHaveBeenCalledWith({
       threadId: 'start-thread-id',
       sessionId: 'session-codex-mcp-context',
+      sessionInstanceId: 'instance-codex-mcp-context',
       workingDir: '/repo',
       vendorOptions: { orcaRole: 'lead' },
     });
 
     await handle.close();
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledTimes(1);
-    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith(
+      'start-thread-id',
+      'instance-codex-mcp-context',
+    );
+  });
+
+  it('applies instance-bound MCP URLs to both thread/start and thread/resume', async () => {
+    const buildConfig = (sessionInstanceId?: string) => ({
+      'mcp_servers.cindy_ghosts.url': `http://127.0.0.1:47100/mcp/cindy_ghosts?instance=${sessionInstanceId}`,
+    });
+
+    const startAgent = new CodexAgent(createDeps());
+    const startHost = installFakeHost(startAgent, undefined, {
+      buildSessionMcpConfig: buildConfig,
+    });
+    const startHandle = await startAgent.startSession({
+      sessionId: 'session-instance-start',
+      sessionInstanceId: 'instance-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const startParams = startHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(startHost.getSessionMcpConfig).toHaveBeenCalledWith('instance-start');
+    expect(startParams.config).toMatchObject(buildConfig('instance-start'));
+
+    const resumeAgent = new CodexAgent(createDeps());
+    const resumeHost = installFakeHost(resumeAgent, undefined, {
+      buildSessionMcpConfig: buildConfig,
+    });
+    const resumeHandle = await resumeAgent.startSession({
+      sessionId: 'session-instance-resume',
+      sessionInstanceId: 'instance-resume',
+      resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const resumeParams = resumeHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(resumeHost.getSessionMcpConfig).toHaveBeenCalledWith('instance-resume');
+    expect(resumeParams.config).toMatchObject(buildConfig('instance-resume'));
+    expect(resumeParams.config).not.toEqual(startParams.config);
+
+    await startHandle.close();
+    await resumeHandle.close();
   });
 
   it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
@@ -5209,7 +5262,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(transport!.closed).toBe(false);
   });
 
-  it('finishes closing when the app-server stays connected without answering thread/unsubscribe', async () => {
+  it('retires the shared app-server when thread/unsubscribe stays unanswered', async () => {
     vi.useFakeTimers();
     try {
       MockCodexTransport.dropThreadUnsubscribe = true;
@@ -5225,10 +5278,59 @@ describe('CodexAgent MCP thread context hooks', () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(closePromise).resolves.toBeUndefined();
-      expect(createdTransports[0]?.closed).toBe(false);
+      // A timed-out thread/unsubscribe means the daemon may still keep the
+      // thread loaded. Retiring the shared host prevents a later Cindy task
+      // from resuming that loaded thread with a stale MCP identity/config.
+      expect(createdTransports[0]?.closed).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retires the captured host and rejects an unused-thread replacement when release fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: `replacement-thread-${++threadStartSeq}` },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    });
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-unused-replacement-release-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    await expect(
+      handle.send(
+        { type: 'user', content: 'use the reference on the first turn' },
+        { throwOnStartFailure: true },
+      ),
+    ).rejects.toThrow(/session expired|reference profile replacement cleanup/i);
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'unused profile replacement release',
+      expect.objectContaining({ failIfActive: false }),
+    );
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
   });
 
   describe('websocket body recovery auto-retry', () => {
@@ -12080,6 +12182,9 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'fork-thread-id',
       numTurns: 2,
     });
+    expect(host.unsubscribeThread).toHaveBeenNthCalledWith(1, 'fork-thread-id');
+    expect(host.unsubscribeThread).toHaveBeenNthCalledWith(2, 'rollback-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
     expect(result.newSdkSessionId).toBe('rollback-thread-id');
     expect(result.uuidMap.size).toBe(0);
   });
@@ -12100,8 +12205,58 @@ describe('CodexAgent.forkSdkSession', () => {
       threadId: 'source-thread-id',
       persistExtendedHistory: true,
     });
+    expect(host.unsubscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
     expect(result.newSdkSessionId).toBe('fork-thread-id');
     expect(result.uuidMap.size).toBe(0);
+  });
+
+  it('unloads the forked child when rollback fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) throw new Error('rollback failed');
+      return undefined;
+    });
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 1,
+    })).rejects.toThrow('rollback failed');
+
+    expect(host.unsubscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
+  it('retires the captured host and rejects when a forked child cannot be unloaded', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+
+    await expect(agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    })).rejects.toThrow('unsubscribe failed');
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'Codex fork child fork-thread-id could not be unloaded safely',
+      expect.objectContaining({
+        failIfActive: false,
+        logPrefix: 'codex fork child cleanup',
+        expectedGeneration: 0,
+      }),
+    );
+    expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
   });
 
   it('forks from a temporary rollout copy without unsafe payload lines', async () => {
@@ -12257,6 +12412,45 @@ describe('CodexAgent rewind', () => {
       text: registeredText,
     });
     await handle.close();
+  });
+
+  it('retires the captured host and terminates the handle when rollback subscription release fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-release-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+
+    await expect(
+      commitRewindFiles('', '', { tailTurnsToDrop: 1 }),
+    ).rejects.toThrow(/session expired|thread\/rollback subscription cleanup/i);
+
+    expect(retireHostKey).toHaveBeenCalledWith(
+      'local',
+      'thread/rollback subscription release',
+      expect.objectContaining({ failIfActive: false }),
+    );
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    await expect(
+      handle.send(
+        { type: 'user', content: 'must stay closed after cleanup failure' },
+        { throwOnStartFailure: true },
+      ),
+    ).rejects.toThrow(/closed/i);
   });
 
   it('discards the replacement thread when close races with rollback cleanup', async () => {
@@ -16496,6 +16690,529 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
             (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
         ),
       ).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CodexAgent reconnect-stall watchdog', () => {
+  const RECONNECT_STALL_MS = 120_000;
+
+  beforeEach(() => {
+    // 本组只验证显式 `Reconnecting... N/M` deadline，不让 30min upstream-idle
+    // 看门狗参与计时与收口。
+    vi.stubEnv('XDT_CODEX_IDLE_TIMEOUT_MS', '0');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function installReconnectHost(
+    agent: CodexAgent,
+    interruptHangs = false,
+    interruptAck?: Promise<unknown>,
+  ) {
+    let turnSeq = 0;
+    return installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) {
+        if (interruptAck) return interruptAck;
+        return interruptHangs ? new Promise<never>(() => {}) : {};
+      }
+      return undefined;
+    });
+  }
+
+  async function startReconnectTurn(
+    agent: CodexAgent,
+    sessionId: string,
+    interruptAck?: Promise<unknown>,
+  ) {
+    const host = installReconnectHost(agent, false, interruptAck);
+    const handle = await agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
+    const seen: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) seen.push(event);
+    })();
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    return { host, handle, handlers, seen };
+  }
+
+  function emitReconnect(
+    handlers: ThreadEventHandlers,
+    attempt: number,
+    maxAttempts = 5,
+  ): void {
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      error: { message: `Reconnecting... ${attempt}/${maxAttempts}` },
+      willRetry: true,
+    } as never);
+  }
+
+  it('首次重连提示后 120s 无进展 → 收口为 codex_reconnect_stalled', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { host, handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-stalled',
+      );
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(host.request.mock.calls).toContainEqual([
+        Method.TurnInterrupt,
+        expect.objectContaining({ turnId: 'turn-1' }),
+      ]);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('后续 2/5、3/5 只更新进度，不延长首次提示建立的总 deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-deadline',
+      );
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      emitReconnect(handlers, 2);
+      await vi.advanceTimersByTimeAsync(30_000);
+      emitReconnect(handlers, 3);
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('系统休眠期间不消耗重连额度，醒来后只等待剩余清醒时间', async () => {
+    vi.useFakeTimers();
+    try {
+      const startAt = Date.now();
+      vi.setSystemTime(startAt);
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-suspend',
+      );
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.setSystemTime(startAt + 8 * 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('deadline 内重新收到 thinking 或工具产出后不再触发', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-recovered',
+      );
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      handlers.reasoningTextDelta?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        delta: 'recovered',
+      } as never);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS * 2);
+
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(false);
+      expect(handle.isTurnRunning?.()).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重连停滞的 interrupt ACK 未到前保持 busy，迟到 completed 不得提前放行续跑', async () => {
+    vi.useFakeTimers();
+    try {
+      const interruptAck = deferred<Record<string, never>>();
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-deferred-ack',
+        interruptAck.promise,
+      );
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      // Codex may report the old turn's terminal notification before the
+      // interrupt RPC response. It must not release the admission guard.
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      interruptAck.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('迟到 completed 证明旧 turn 已结束时，即使两次 interrupt 都 reject 也不退役共享 host', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstInterrupt = deferred<never>();
+      const secondInterrupt = deferred<never>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      let interruptCall = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        if (method === Method.TurnInterrupt) {
+          interruptCall += 1;
+          return interruptCall === 1 ? firstInterrupt.promise : secondInterrupt.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-completed-before-interrupt-rejects',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      let eventsEnded = false;
+      void (async () => {
+        for await (const event of handle.events()) void event;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      firstInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      secondInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(eventsEnded).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handle close 的 subscription release 失败时，等待期间到达的 completed 仍会阻止退役共享 host', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstInterrupt = deferred<never>();
+      const secondInterrupt = deferred<never>();
+      const closeRelease = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      let interruptCall = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        if (method === Method.TurnInterrupt) {
+          interruptCall += 1;
+          return interruptCall === 1 ? firstInterrupt.promise : secondInterrupt.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-completed-during-close',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected reconnect-stall subscription');
+      const closeReleasePromise = closeRelease.promise;
+      release.mockImplementationOnce(() => closeReleasePromise);
+      let eventsEnded = false;
+      void (async () => {
+        for await (const event of handle.events()) void event;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      firstInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      secondInterrupt.reject(new Error('turn already completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(release).toHaveBeenCalledOnce();
+
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      closeRelease.reject(new Error('thread/unsubscribe failed'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(eventsEnded).toBe(true);
+      expect(retireHostKey).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('interrupt 不响应时关闭 handle 并退役坏 host，下一次发送可重建', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installReconnectHost(agent, true);
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-retire',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected reconnect-stall subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+      let eventsEnded = false;
+      void (async () => {
+        for await (const event of handle.events()) void event;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 20_010);
+
+      expect(eventsEnded).toBe(true);
+      expect(retireHostKey).toHaveBeenCalledTimes(1);
+      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({
+        failIfActive: false,
+        logPrefix: 'codex upstream-idle watchdog',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重连提示早于 turnStarted 且 turn/start 仍 pending 时也会收口并隔离迟到 turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingStart = deferred<{ turn: { id: string } }>();
+      const startEntered = deferred<void>();
+      const interruptEntered = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          startEntered.resolve();
+          return pendingStart.promise;
+        }
+        if (method === Method.TurnInterrupt) {
+          interruptEntered.resolve();
+          return {};
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-before-started',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected pending-turn subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+      const seen: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) seen.push(event);
+      })();
+      const sendPromise = handle.send({ type: 'user', content: 'go' });
+      await startEntered.promise;
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error) throw new Error('expected thread handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      await interruptEntered.promise;
+
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      expect(host.request.mock.calls).toContainEqual([
+        Method.TurnInterrupt,
+        expect.objectContaining({ turnId: 'turn-1' }),
+      ]);
+
+      pendingStart.resolve({ turn: { id: 'turn-1' } });
+      await sendPromise;
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pending turn/start 的中断两次都不响应时才退役共享 host', async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingStart = deferred<{ turn: { id: string } }>();
+      const startEntered = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          startEntered.resolve();
+          return pendingStart.promise;
+        }
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-reconnect-before-started-retire',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected pending-turn subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
+      void (async () => {
+        for await (const event of handle.events()) void event;
+      })();
+      const sendPromise = handle.send({ type: 'user', content: 'go' });
+      await startEntered.promise;
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error) throw new Error('expected thread handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      // handle.close() 立即释放本 thread；共享 host 只有在两次 interrupt ack 都超时后
+      // 才允许退役。
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(2);
+      expect(retireHostKey).toHaveBeenCalledTimes(1);
+      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({ failIfActive: true });
+
+      pendingStart.resolve({ turn: { id: 'turn-1' } });
+      await sendPromise;
       await handle.close();
     } finally {
       vi.useRealTimers();

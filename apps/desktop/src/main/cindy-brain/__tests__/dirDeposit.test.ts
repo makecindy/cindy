@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { collectDirFiles, DirDepositVault } from '../dirDeposit';
 import { GHOST_DIR_DEPOSIT_TTL_MS } from '../../../shared/ghost';
@@ -168,7 +168,14 @@ describe('DirDepositVault userGranted 旁路(workdir 外确认卡通过后)', ()
       await fs.promises.writeFile(path.join(outside, 'a.txt'), 'hello');
       const vault = new DirDepositVault();
       expect(vault.deposit({ ghostId: 'g1', dirAbs: outside, workdirAbs: workdir }).ok).toBe(false);
-      const r = vault.deposit({ ghostId: 'g1', dirAbs: outside, workdirAbs: workdir, userGranted: true });
+      const expectedRealPath = await fs.promises.realpath(outside);
+      const r = vault.deposit({
+        ghostId: 'g1',
+        dirAbs: expectedRealPath,
+        workdirAbs: workdir,
+        userGranted: true,
+        expectedRealPath,
+      });
       expect(r.ok).toBe(true);
       if (r.ok) {
         const taken = vault.take('g1', r.receipt.token);
@@ -201,5 +208,112 @@ describe('DirDepositVault userGranted 旁路(workdir 外确认卡通过后)', ()
       userGranted: true,
     });
     expect(r.ok).toBe(false);
+  });
+
+  it('授权后的 canonical 路径被换成 symlink 时拒绝出票', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-approved-dir-'));
+    try {
+      const approved = path.join(root, 'approved');
+      const replacement = path.join(root, 'replacement');
+      await fs.promises.mkdir(approved);
+      await fs.promises.mkdir(replacement);
+      await fs.promises.writeFile(path.join(approved, 'approved.txt'), 'approved');
+      await fs.promises.writeFile(path.join(replacement, 'replacement.txt'), 'replacement');
+      const expectedRealPath = await fs.promises.realpath(approved);
+      const replacementRealPath = await fs.promises.realpath(replacement);
+      const moved = path.join(path.dirname(expectedRealPath), 'approved-moved');
+      await fs.promises.rename(expectedRealPath, moved);
+      try {
+        await fs.promises.symlink(
+          replacementRealPath,
+          expectedRealPath,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch {
+        return;
+      }
+
+      const result = new DirDepositVault().deposit({
+        ghostId: 'g1',
+        dirAbs: expectedRealPath,
+        workdirAbs: workdir,
+        userGranted: true,
+        expectedRealPath,
+      });
+
+      expect(result).toEqual({ ok: false, message: '路径在授权后发生变化，请重新确认' });
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('出票后、take 前根目录被换成外部 symlink:取票成功但实际 read 拒绝', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-dir-ticket-swap-'));
+    try {
+      const approved = path.join(root, 'approved');
+      const outside = path.join(root, 'outside');
+      await fs.promises.mkdir(approved);
+      await fs.promises.mkdir(outside);
+      await fs.promises.writeFile(path.join(approved, 'file.txt'), 'approved');
+      await fs.promises.writeFile(path.join(outside, 'file.txt'), 'outside');
+      const vault = new DirDepositVault();
+      const deposited = vault.deposit({
+        ghostId: 'g1',
+        dirAbs: approved,
+        workdirAbs: workdir,
+        userGranted: true,
+      });
+      if (!deposited.ok) throw new Error('deposit failed');
+
+      await fs.promises.rename(approved, `${approved}-moved`);
+      try {
+        await fs.promises.symlink(
+          outside,
+          approved,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch {
+        return;
+      }
+
+      const taken = vault.take('g1', deposited.receipt.token);
+      expect(taken).not.toBeNull();
+      await expect(taken!.files[0].read()).rejects.toThrow(/出票后发生变化/);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('take 后单个文件被换成外部 symlink:read 仍拒绝', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-dir-file-swap-'));
+    try {
+      const approved = path.join(root, 'approved');
+      const outside = path.join(root, 'outside.txt');
+      await fs.promises.mkdir(approved);
+      const target = path.join(approved, 'file.txt');
+      await fs.promises.writeFile(target, 'approved');
+      await fs.promises.writeFile(outside, 'outside');
+      const vault = new DirDepositVault();
+      const deposited = vault.deposit({
+        ghostId: 'g1',
+        dirAbs: approved,
+        workdirAbs: workdir,
+        userGranted: true,
+      });
+      if (!deposited.ok) throw new Error('deposit failed');
+      const taken = vault.take('g1', deposited.receipt.token);
+      expect(taken).not.toBeNull();
+
+      await fs.promises.rename(target, `${target}.moved`);
+      try {
+        await fs.promises.symlink(outside, target, 'file');
+      } catch {
+        return;
+      }
+
+      await expect(taken!.files[0].read()).rejects.toThrow();
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   });
 });

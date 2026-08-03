@@ -39,11 +39,36 @@ function noopLogger(): Logger {
   return logger;
 }
 
+function recordingLogger(): { logger: Logger; entries: Array<{ message: string; ctx?: Record<string, unknown> }> } {
+  const entries: Array<{ message: string; ctx?: Record<string, unknown> }> = [];
+  const record = (message: string, ctx?: Record<string, unknown>): void => {
+    entries.push({ message, ...(ctx ? { ctx } : {}) });
+  };
+  const logger: Logger = {
+    trace: record,
+    debug: record,
+    info: record,
+    warn: record,
+    error: record,
+    fatal: record,
+    child() {
+      return logger;
+    },
+  };
+  return { logger, entries };
+}
+
 /** 暴露一个回报当前 lizi MCP session ctx 的 sessionId 的工具,用于断言 ctx 是否流通。 */
 function createTestServer(name: string): McpServer {
   const server = new McpServer({ name, version: '1.0.0' });
   server.tool('current_session', 'Return the active lizi MCP session id.', {}, async () => ({
     content: [{ type: 'text' as const, text: getLiziMcpSessionContext()?.sessionId ?? 'no-session' }],
+  }));
+  server.tool('current_instance', 'Return the active runtime session instance id.', {}, async () => ({
+    content: [{
+      type: 'text' as const,
+      text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
+    }],
   }));
   return server;
 }
@@ -86,17 +111,19 @@ describe('piEnvironment per-session identity', () => {
     await shutdownPiEnvironment();
   });
 
-  it('registers a pi session ctx and routes it through ?session= so tools see the sessionId', async () => {
+  it('registers a pi session ctx and routes it through session + instance identity', async () => {
     const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
       sessionId: 'pi-lead-1',
+      sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
       vendorOptions: {},
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
     const token = config!.mcpBridge!.token;
-    // URL 必须带上本会话的 ?session= 路由。
-    expect(server.url).toContain('?session=pi-lead-1');
+    const routeUrl = new URL(server.url);
+    expect(routeUrl.searchParams.get('session')).toBe('pi-lead-1');
+    expect(routeUrl.searchParams.get('instance')).toBe('pi-instance-1');
 
     const headers = {
       authorization: `Bearer ${token}`,
@@ -125,12 +152,79 @@ describe('piEnvironment per-session identity', () => {
       result: { content: [{ type: 'text', text: 'pi-lead-1' }] },
     });
 
+    const instanceResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'current_instance', arguments: {} },
+      }),
+    });
+    expect(instanceResp.status).toBe(200);
+    expect(await readRpcText(instanceResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'pi-instance-1' }] },
+    });
+
     // close 语义:注销后 ?session=pi-lead-1 未命中 → 401 fail-closed。
     expect(config!.disposeSessionCtx).toBeTypeOf('function');
     config!.disposeSessionCtx!();
-    const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(3) });
+    const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
+  });
+
+  it('rejects a stale pi instance route after the same business session is rebound', async () => {
+    const oldConfig = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'pi-rebound',
+      sessionInstanceId: 'pi-instance-old',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    const newConfig = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'pi-rebound',
+      sessionInstanceId: 'pi-instance-new',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    const oldServer = oldConfig!.mcpBridge!.servers[0]!;
+    const newServer = newConfig!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${newConfig!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+
+    expect(new URL(oldServer.url).searchParams.get('instance')).toBe('pi-instance-old');
+    expect(new URL(newServer.url).searchParams.get('instance')).toBe('pi-instance-new');
+
+    const stale = await fetch(oldServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(11),
+    });
+    expect(stale.status).toBe(401);
+    await stale.text();
+
+    const active = await fetch(newServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(12),
+    });
+    expect(active.status).toBe(200);
+    await active.text();
+
+    // 旧进程迟到 close 只释放自己的 lease，不得注销新实例的 ctx。
+    oldConfig!.disposeSessionCtx!();
+    const afterOldClose = await fetch(newServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(13),
+    });
+    expect(afterOldClose.status).toBe(200);
+    await afterOldClose.text();
+    newConfig!.disposeSessionCtx!();
   });
 
   it('omits ?session= and registers nothing for an anonymous session (no sessionId)', async () => {
@@ -213,6 +307,189 @@ describe('piEnvironment per-session identity', () => {
 
     oldConfig!.disposeSessionCtx!();
     newConfig!.disposeSessionCtx!();
+  });
+
+  it('assembles authenticated remote HTTP MCPs with env references and no secret values in the descriptor or logs', async () => {
+    const bearerSecret = 'bearer-secret-must-not-leak';
+    const headerSecret = 'header-secret-must-not-leak';
+    const { logger, entries } = recordingLogger();
+    const provider: McpProvider = {
+      name: 'custom_exa',
+      toCodexMcpConfig: () => ({
+        type: 'http',
+        url: 'https://mcp.example.test/v1?source=pi',
+        bearerTokenEnvVar: 'UPSTREAM_BEARER',
+        envHttpHeaders: { 'X-Api-Key': 'UPSTREAM_API_KEY' },
+      }),
+      getExtraEnv: () => ({
+        UPSTREAM_BEARER: bearerSecret,
+        UPSTREAM_API_KEY: headerSecret,
+      }),
+    };
+
+    const config = await getPiExtraSpawnConfig([provider], logger, {
+      sessionId: 'pi-remote-1',
+      workingDir: '/repo',
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    expect(config!.mcpBridge!.token).toBe('');
+    expect(server).toMatchObject({
+      name: 'custom_exa',
+      url: 'https://mcp.example.test/v1?source=pi',
+      remote: { startupTimeoutMs: 10_000, requestTimeoutMs: 600_000 },
+    });
+    // 外部 endpoint 不能被误加 localhost bridge 的 session identity。
+    expect(new URL(server.url).searchParams.has('session')).toBe(false);
+
+    const authorizationEnv = server.remote!.headerEnvVars.authorization!;
+    const apiKeyEnv = server.remote!.headerEnvVars['x-api-key']!;
+    expect(authorizationEnv).toMatch(/^CINDY_PI_REMOTE_MCP_SECRET_\d+$/);
+    expect(apiKeyEnv).toMatch(/^CINDY_PI_REMOTE_MCP_SECRET_\d+$/);
+    expect(authorizationEnv).not.toBe(apiKeyEnv);
+    expect(config!.mcpEnv).toMatchObject({
+      [authorizationEnv]: `Bearer ${bearerSecret}`,
+      [apiKeyEnv]: headerSecret,
+    });
+
+    const descriptor = JSON.stringify(config!.mcpBridge);
+    const logs = JSON.stringify(entries);
+    for (const secret of [bearerSecret, headerSecret]) {
+      expect(descriptor).not.toContain(secret);
+      expect(logs).not.toContain(secret);
+    }
+    config!.disposeSessionCtx!();
+  });
+
+  it('fail-closes malformed or incomplete remote HTTP providers without hiding a valid provider', async () => {
+    const logCanary = 'remote-secret-log-canary';
+    const { logger, entries } = recordingLogger();
+    const valid: McpProvider = {
+      name: 'valid_remote',
+      toCodexMcpConfig: () => ({ type: 'http', url: 'https://valid.example.test/mcp' }),
+    };
+    const validLoopback: McpProvider = {
+      name: 'valid_loopback',
+      toCodexMcpConfig: () => ({ type: 'http', url: 'http://127.0.0.1:4321/mcp' }),
+    };
+    const validIpv6Loopback: McpProvider = {
+      name: 'valid_ipv6_loopback',
+      toCodexMcpConfig: () => ({ type: 'http', url: 'http://[::1]:4321/mcp' }),
+    };
+    const providers: McpProvider[] = [
+      {
+        name: 'missing_bearer',
+        toCodexMcpConfig: () => ({
+          type: 'http', url: 'https://missing.example.test/mcp', bearerTokenEnvVar: 'MISSING',
+        }),
+        getExtraEnv: () => ({ UNUSED: logCanary }),
+      },
+      {
+        name: 'missing_header',
+        toCodexMcpConfig: () => ({
+          type: 'http',
+          url: 'https://missing-header.example.test/mcp',
+          envHttpHeaders: { 'X-Api-Key': 'MISSING_HEADER' },
+        }),
+      },
+      {
+        name: 'invalid_scheme',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'file:///tmp/not-an-http-mcp' }),
+      },
+      {
+        name: 'insecure_non_loopback',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'http://public.example.test/mcp' }),
+      },
+      {
+        // 127/8 都由 OS 视为 loopback，但 Pi 的 NO_PROXY 只保证 127.0.0.1；其余地址
+        // 不得明文携带认证 header，以免被全局 HTTP_PROXY 接走。
+        name: 'loopback_outside_no_proxy',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'http://127.0.0.2:4321/mcp' }),
+      },
+      {
+        name: 'embedded_credentials',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'https://user:secret@example.test/mcp' }),
+      },
+      {
+        name: 'invalid_header',
+        toCodexMcpConfig: () => ({
+          type: 'http',
+          url: 'https://bad-header.example.test/mcp',
+          envHttpHeaders: { 'bad\nname': 'BAD_HEADER' },
+        }),
+        getExtraEnv: () => ({ BAD_HEADER: logCanary }),
+      },
+      {
+        name: 'throwing_environment',
+        toCodexMcpConfig: () => ({ type: 'http', url: 'https://throw-env.example.test/mcp' }),
+        getExtraEnv: () => { throw new Error(logCanary); },
+      },
+      {
+        name: 'throwing_config',
+        toCodexMcpConfig: () => { throw new Error(logCanary); },
+      },
+      valid,
+      validLoopback,
+      validIpv6Loopback,
+    ];
+
+    const config = await getPiExtraSpawnConfig(providers, logger);
+    expect(config!.mcpBridge!.servers.map((server) => server.name)).toEqual([
+      'valid_remote',
+      'valid_loopback',
+      'valid_ipv6_loopback',
+    ]);
+    const logs = JSON.stringify(entries);
+    expect(logs).not.toContain(logCanary);
+    expect(logs).not.toContain('user:secret');
+    config!.disposeSessionCtx!();
+  });
+
+  it('snapshots remote MCP lifecycle changes for new sessions while old leases keep their startup config', async () => {
+    let enabled = true;
+    let url = 'https://old.example.test/mcp';
+    let secret = 'old-generation-secret';
+    const provider: McpProvider = {
+      name: 'mutable_remote',
+      isEnabled: () => enabled,
+      toCodexMcpConfig: () => ({
+        type: 'http',
+        url,
+        envHttpHeaders: { 'X-Api-Key': 'MUTABLE_SECRET' },
+      }),
+      getExtraEnv: () => ({ MUTABLE_SECRET: secret }),
+    };
+
+    // 启动前已配置：首个 Pi session 直接拿到 remote server 快照。
+    const oldConfig = await getPiExtraSpawnConfig([provider], noopLogger());
+    expect(oldConfig!.mcpBridge!.servers[0]!.url).toBe(url);
+    expect(Object.values(oldConfig!.mcpEnv!)).toContain('old-generation-secret');
+
+    // 运行中修改 + 重复触发 invalidation：下一新会话/重启使用新值，旧 lease 不漂移。
+    url = 'https://new.example.test/mcp';
+    secret = 'new-generation-secret';
+    invalidatePiEnvironment();
+    invalidatePiEnvironment();
+    const newConfig = await getPiExtraSpawnConfig([provider], noopLogger());
+    expect(newConfig!.mcpBridge!.servers[0]!.url).toBe(url);
+    expect(Object.values(newConfig!.mcpEnv!)).toContain('new-generation-secret');
+    expect(oldConfig!.mcpBridge!.servers[0]!.url).toBe('https://old.example.test/mcp');
+    expect(Object.values(oldConfig!.mcpEnv!)).toContain('old-generation-secret');
+
+    // 禁用和删除都在下一 generation 撤销；再次新增后可恢复，无需重启应用。
+    enabled = false;
+    invalidatePiEnvironment();
+    expect(await getPiExtraSpawnConfig([provider], noopLogger())).toBeNull();
+    invalidatePiEnvironment();
+    expect(await getPiExtraSpawnConfig([], noopLogger())).toBeNull();
+    enabled = true;
+    secret = 'readded-secret';
+    invalidatePiEnvironment();
+    const readded = await getPiExtraSpawnConfig([provider], noopLogger());
+    expect(Object.values(readded!.mcpEnv!)).toContain('readded-secret');
+
+    oldConfig!.disposeSessionCtx!();
+    newConfig!.disposeSessionCtx!();
+    readded!.disposeSessionCtx!();
   });
 
   it('fail-closes policy-controlled builtins for an anonymous session (no workdir-bound policy)', async () => {

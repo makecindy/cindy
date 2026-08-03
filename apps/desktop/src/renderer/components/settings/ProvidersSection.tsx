@@ -18,15 +18,28 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, GripVertical, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Gift,
+  GripVertical,
+  KeyRound,
+  LogOut,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
+import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
@@ -51,8 +64,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
+import { canAccessBillingSettings } from './billingVisibility';
+import { resolveXdAssetModuleState } from './providerAssetModule';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -186,6 +203,44 @@ function PillButton({
   );
 }
 
+/**
+ * 黑 CTA pill（DESIGN §4 button/cta）—— 一屏最多一颗，用于「在 Cindy 内花钱」这类
+ * 主动作。`lg` 是 brand-scale 表面（登录引导空态）用的尺码，`md` 与 PillButton 同高，
+ * 用于卡片内与次级动作并排的场合。
+ */
+function CtaPillButton({
+  label,
+  onClick,
+  size = 'md',
+  className,
+}: {
+  label: string;
+  onClick: () => void;
+  size?: 'md' | 'lg';
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90',
+        size === 'lg' ? 'h-9' : 'h-8',
+        className,
+      )}
+      style={{
+        // Black Pill(最高强调档)按 DESIGN.md §4 用 pure 对:--accent-cta-bg-pure
+        // (Light 纯黑 / Dark 纯白反转)配 --accent-pure-cta-fg。--accent-cta-bg 在
+        // 默认 Light 下是 #262626,与规范的 #000000 差一档,不能混用。
+        backgroundColor: 'var(--accent-cta-bg-pure)',
+        color: 'var(--accent-pure-cta-fg)',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function CustomTag({ label }: { label: string }) {
   return (
     <span
@@ -235,6 +290,9 @@ function DetailHeader({
   provider,
   detail,
   badge,
+  menuItems,
+  menuFooter,
+  assetModule,
 }: {
   icon: ReactNode;
   title: string;
@@ -243,6 +301,15 @@ function DetailHeader({
   provider?: ProviderView;
   detail?: ReactNode;
   badge?: ReactNode;
+  /** 供应商专属的低频动作，置于共用「···」菜单顶部（不另开第二个溢出菜单）。 */
+  menuItems?: ReactNode;
+  /** 菜单末尾的只读信息行（如脱敏 key），自带一条分隔线。 */
+  menuFooter?: ReactNode;
+  /**
+   * 账户资产模块 —— 标题行下方的固定槽位，用一条 1px 发丝线分隔（不做框中框，
+   * 见 DESIGN §2 layer rule）。判定见 providerAssetModule.ts。
+   */
+  assetModule?: ReactNode;
 }) {
   const { t } = useTranslation();
   const hasModels = !!provider && providerHasModels(provider);
@@ -266,86 +333,91 @@ function DetailHeader({
       : null;
 
   return (
-    <div className={cn('flex flex-col px-5 py-4', detail && 'gap-3')}>
-      {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
-          不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
-      <div className="flex flex-wrap items-center gap-3 gap-y-2">
-        <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-          style={{
-            backgroundColor: 'var(--settings-integration-avatar-bg)',
-            border: '1px solid var(--settings-integration-avatar-border)',
-            color: 'var(--settings-integration-avatar-icon)',
-          }}
-        >
-          {icon}
-        </div>
-
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex items-center gap-2">
-            <span
-              className="min-w-0 truncate text-14 font-medium leading-tight"
-              style={{ color: 'var(--settings-section-title)' }}
-            >
-              {title}
-            </span>
-            {modelCount !== null && <ModelCountChip count={modelCount} />}
-            {subscriptionProduct && (
-              <CustomTag
-                label={t('settings.providers.models.subscriptionProduct', {
-                  product: subscriptionProduct,
-                })}
-              />
-            )}
-            {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
-            {badge}
-          </div>
-          <span
-            className="truncate text-13 leading-tight"
-            style={{ color: 'var(--settings-integration-subtitle)' }}
+    <div className="flex shrink-0 flex-col">
+      <div className={cn('flex flex-col px-5 py-4', detail && 'gap-3')}>
+        {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
+            不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
+        <div className="flex flex-wrap items-center gap-3 gap-y-2">
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+            style={{
+              backgroundColor: 'var(--settings-integration-avatar-bg)',
+              border: '1px solid var(--settings-integration-avatar-border)',
+              color: 'var(--settings-integration-avatar-icon)',
+            }}
           >
-            {subtitle}
-            {singleAgentNote ? ` · ${singleAgentNote}` : ''}
-          </span>
+            {icon}
+          </div>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span
+                className="min-w-0 truncate text-14 font-medium leading-tight"
+                style={{ color: 'var(--settings-section-title)' }}
+              >
+                {title}
+              </span>
+              {modelCount !== null && <ModelCountChip count={modelCount} />}
+              {subscriptionProduct && (
+                <CustomTag
+                  label={t('settings.providers.models.subscriptionProduct', {
+                    product: subscriptionProduct,
+                  })}
+                />
+              )}
+              {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
+              {badge}
+            </div>
+            <span
+              className="truncate text-13 leading-tight"
+              style={{ color: 'var(--settings-integration-subtitle)' }}
+            >
+              {subtitle}
+              {singleAgentNote ? ` · ${singleAgentNote}` : ''}
+            </span>
+          </div>
+
+          {trailing}
+          {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
+              整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
+          {provider && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={t('settings.providers.detail.moreActionsAria')}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {menuItems}
+                <DropdownMenuItem
+                  onClick={() =>
+                    writeProviderDisabled(
+                      provider.id,
+                      !provider.suspended,
+                      t('settings.providers.models.accessWriteFailed'),
+                    )
+                  }
+                >
+                  {t(
+                    provider.suspended
+                      ? 'settings.providers.menu.enableProvider'
+                      : 'settings.providers.menu.disableProvider',
+                  )}
+                </DropdownMenuItem>
+                {menuFooter}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
-        {trailing}
-        {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
-            整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
-        {provider && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('settings.providers.detail.moreActionsAria')}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
-                style={{ color: 'var(--text-tertiary)' }}
-              >
-                <MoreHorizontal size={15} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() =>
-                  writeProviderDisabled(
-                    provider.id,
-                    !provider.suspended,
-                    t('settings.providers.models.accessWriteFailed'),
-                  )
-                }
-              >
-                {t(
-                  provider.suspended
-                    ? 'settings.providers.menu.enableProvider'
-                    : 'settings.providers.menu.disableProvider',
-                )}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        {detail}
       </div>
-
-      {detail}
+      {assetModule}
     </div>
   );
 }
@@ -1022,7 +1094,14 @@ function BuiltinApiKeyHeader({
 
 // ---------------------------------------------------------------------------
 // XD 网关(Cindy AI)—— managed gateway key(useApiKey)。
-// 套餐引导 / 计费展示待服务端接口就绪后单独实现(2026-07-20 决策:本次剥离)。
+//
+// 版面口径(2026-08 计费引导 P0-1):xd 的 key 是登录后由服务端自动下发的**托管
+// 凭证**,个人用户从不手动管理它(2026-07-17「无手填入口」定案)。所以主位不给
+// 脱敏 key / 轮换 / 重新获取这三件用户几乎不碰的事,而给「我还剩多少钱、去哪充」:
+//   - 标题行右端只留一个「···」溢出菜单(与所有供应商共用 DetailHeader 那一个),
+//     凭证管理三项 + 只读脱敏 key 收在里面,各自保留原有的二次确认;
+//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量 + 余额充值;
+//   - 故障恢复(重试)只在凭据同步失败时浮现,正常态版面上没有重试按钮。
 // ---------------------------------------------------------------------------
 
 function maskKey(key: string): string {
@@ -1037,12 +1116,30 @@ function XdGatewayHeader({
   provider?: ProviderView;
   onChanged: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
+  const { mode, user } = useAuth();
   const { key, hasSavedKey, clearKey } = useApiKey();
   const syncStatus = useModelAccessStatus();
   const connected = provider?.connected ?? false;
   const [rotating, setRotating] = useState(false);
+
+  // 余额 / 充值 / 用量入口一律走同一判据:cloud + personal。org 账号是**不渲染**
+  // (不是灰置),与设置页「用量和计费」分区的可见性判定同源。
+  const billingAccessible = canAccessBillingSettings({
+    mode,
+    membershipKind: user?.membershipKind ?? null,
+  });
+  // 余额取三池账本的 available —— 与计费页余额卡、状态栏用量 chip 同一口径同一币种
+  // (见 TodaySpendChip 的「同一笔钱、必须同口径」注释)。该 hook 的防闪烁缓存按
+  // accountId 绑定,切号当帧失效,不会把上一个账号的余额显示给新账号。
+  const creditUsage = useModelAccessCreditUsage(billingAccessible);
+  const assetState = resolveXdAssetModuleState({
+    billingAccessible,
+    syncState: syncStatus.state,
+    available: creditUsage?.available ?? null,
+  });
 
   // 凭据一律由服务端自动下发(个人 / 已接入企业),**无手填入口**(2026-07-17 定案)。
   const serverManaged = syncStatus.state === 'ok' && syncStatus.source === 'server';
@@ -1093,6 +1190,30 @@ function XdGatewayHeader({
     }
   }, [confirm, onChanged, t]);
 
+  const maskedKey = useMemo(() => maskKey(hasSavedKey ? key : ''), [hasSavedKey, key]);
+
+  /**
+   * 只读脱敏 key 的「点击复制」复制的是**明文 key**：脱敏串本身复制出去没有用途。
+   * 这不构成新的凭证下放 —— gateway key 本来就在 renderer 侧可读（useApiKey，与
+   * 掩码展示同一份数据），这里只是把用户已经能看到的东西按他的明确点击交给剪贴板。
+   */
+  const handleCopyKey = useCallback(() => {
+    if (!hasSavedKey || !key) return;
+    void navigator.clipboard
+      .writeText(key)
+      .then(() => toast.success(t('settings.providers.xd.copyKeySuccess')))
+      .catch(() => toast.error(t('settings.providers.xd.copyKeyFailed')));
+  }, [hasSavedKey, key, t]);
+
+  const goToBilling = useCallback(
+    (intent?: 'topup') => {
+      navigate(intent ? '/settings?tab=billing&intent=topup' : '/settings?tab=billing');
+    },
+    [navigate],
+  );
+
+  // 标题行右端只剩状态位:「已连接」pill,或未连接/同步中的一句状态说明。凭证动作
+  // 全部退进「···」菜单;故障态刻意**不显示**「已连接」—— 凭据没同步上,说已连接是假的。
   const trailing = (() => {
     switch (syncStatus.state) {
       case 'unsupported':
@@ -1103,48 +1224,17 @@ function XdGatewayHeader({
         );
       case 'syncing':
         return (
-          <PillButton
-            label={t('settings.providers.xd.sync.syncing')}
-            onClick={() => undefined}
-            disabled
-          />
+          <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
+            {t('settings.providers.xd.sync.syncing')}
+          </span>
         );
-      case 'ok':
-        if (serverManaged) {
-          return (
-            <div className="flex shrink-0 items-center gap-2.5">
-              <ConnectedPill />
-              <PillButton
-                label={
-                  rotating
-                    ? t('settings.providers.xd.sync.rotating')
-                    : t('settings.providers.xd.sync.rotate')
-                }
-                onClick={() => void handleRotate()}
-                disabled={rotating}
-              />
-            </div>
-          );
-        }
-        break;
       case 'failed':
-        return (
-          <div className="flex shrink-0 items-center gap-2.5">
-            {connected && <ConnectedPill />}
-            <PillButton label={t('settings.providers.xd.sync.retry')} onClick={handleRetry} />
-          </div>
-        );
+        return null;
       default:
         break;
     }
     return connected ? (
-      <div className="flex shrink-0 items-center gap-2.5">
-        <ConnectedPill />
-        <PillButton
-          label={t('settings.providers.button.disconnect')}
-          onClick={() => void handleDisconnect()}
-        />
-      </div>
+      <ConnectedPill />
     ) : (
       <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
         {syncStatus.state === 'disabled'
@@ -1154,34 +1244,106 @@ function XdGatewayHeader({
     );
   })();
 
-  const maskedKey = useMemo(() => maskKey(hasSavedKey ? key : ''), [hasSavedKey, key]);
+  // 凭证管理三项:各自保留原有的二次确认弹窗(重新获取凭据本身无确认,与改造前一致)。
+  const menuItems = (
+    <>
+      {serverManaged && (
+        <DropdownMenuItem onClick={handleRetry}>
+          <RefreshCw size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+          {t('settings.providers.xd.sync.refresh')}
+        </DropdownMenuItem>
+      )}
+      {serverManaged && (
+        <DropdownMenuItem disabled={rotating} onClick={() => void handleRotate()}>
+          <KeyRound size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+          {rotating
+            ? t('settings.providers.xd.sync.rotating')
+            : t('settings.providers.xd.sync.rotate')}
+        </DropdownMenuItem>
+      )}
+      {connected && (
+        <DropdownMenuItem onClick={() => void handleDisconnect()}>
+          <LogOut size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+          {t('settings.providers.button.disconnect')}
+        </DropdownMenuItem>
+      )}
+    </>
+  );
 
-  const detail =
-    connected && syncStatus.state !== 'unsupported' ? (
-      <div className="flex items-center gap-2.5 pl-12">
-        <span
-          className="flex shrink-0 items-center rounded-lg px-2 py-1 text-12"
-          style={{
-            backgroundColor: 'var(--surface-chip)',
-            border: '1px solid var(--settings-integration-avatar-border)',
-            color: 'var(--settings-section-desc)',
-          }}
-        >
-          {maskedKey}
-        </span>
-        <div className="flex-1" />
-        {serverManaged && (
-          <button
-            type="button"
-            onClick={handleRetry}
-            className="shrink-0 text-12 transition-colors"
-            style={{ color: 'var(--settings-integration-subtitle)' }}
-          >
-            {t('settings.providers.xd.sync.refresh')}
-          </button>
+  // 菜单末行:只读脱敏 key(点击复制)。它从主位退到这里 —— 对个人用户是纯噪音,
+  // 但排障时仍需要能拿到。
+  const menuFooter = hasSavedKey ? (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        onClick={handleCopyKey}
+        className="font-mono text-[var(--text-secondary)]"
+        aria-label={t('settings.providers.xd.copyKeyAria')}
+      >
+        <Copy size={14} className="mr-2.5 shrink-0 text-[var(--text-tertiary)]" />
+        {maskedKey}
+      </DropdownMenuItem>
+    </>
+  ) : null;
+
+  const assetModule =
+    assetState.kind === 'hidden' ? undefined : (
+      <div
+        className={cn(
+          'flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5',
+          assetState.kind === 'fault' ? 'items-center gap-y-3' : 'items-start',
+        )}
+        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+      >
+        {assetState.kind === 'fault' ? (
+          <>
+            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口
+                (DESIGN「Errors = what happened + what to do」)。 */}
+            <p
+              className="max-w-[400px] text-13 leading-relaxed"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              {t('settings.providers.xd.asset.syncFailed')}
+            </p>
+            <PillButton label={t('settings.providers.xd.sync.retry')} onClick={handleRetry} />
+          </>
+        ) : (
+          <>
+            <div className="min-w-0">
+              <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
+                {t('billing.balance.title')}
+              </p>
+              {/* 与计费页余额卡完全同口径:20px / 500 / tabular-nums / tracking-tight。 */}
+              <p
+                className="mt-1.5 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {formatBillingAmount(
+                  assetState.available,
+                  BILLING_CURRENCY,
+                  i18n.resolvedLanguage ?? i18n.language,
+                )}
+              </p>
+            </div>
+            {/* pt 与金额基线光学对齐(标签 12px + 6px 间距的一半)。 */}
+            <div className="flex shrink-0 items-center gap-4 pt-3.5">
+              <button
+                type="button"
+                onClick={() => goToBilling()}
+                className="text-13 transition-colors hover:text-[var(--text-primary)]"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {t('settings.providers.xd.asset.viewUsage')}
+              </button>
+              <CtaPillButton
+                label={t('billing.settings.topupCard.action')}
+                onClick={() => goToBilling('topup')}
+              />
+            </div>
+          </>
         )}
       </div>
-    ) : undefined;
+    );
 
   return (
     <DetailHeader
@@ -1193,7 +1355,9 @@ function XdGatewayHeader({
       })}
       trailing={trailing}
       provider={provider}
-      detail={detail}
+      menuItems={menuItems}
+      menuFooter={menuFooter}
+      assetModule={assetModule}
     />
   );
 }
@@ -2098,9 +2262,12 @@ export function ProvidersSection() {
               长清单滚动时供应商名称、连接状态与工具行不随之滚走(2026-07 定稿)。 */}
           <div className="flex min-w-0 flex-1 flex-col">
             {cindySigninActive ? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+              /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
+                 一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比
+                 顶部多,视觉重心才落在上三分之一。 */
+              <div className="flex flex-1 flex-col items-center justify-center px-10 pb-14 pt-8 text-center">
                 <div
-                  className="flex h-12 w-12 items-center justify-center rounded-xl"
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"
                   style={{
                     backgroundColor: 'var(--settings-integration-avatar-bg)',
                     border: '1px solid var(--settings-integration-avatar-border)',
@@ -2110,28 +2277,35 @@ export function ProvidersSection() {
                   <XDIncMark size={24} />
                 </div>
                 <span
-                  className="text-15 font-medium"
+                  className="mt-4 text-24 font-medium leading-[1.2]"
                   style={{ color: 'var(--settings-section-title)' }}
                 >
                   {t('settings.providers.xd.title')}
                 </span>
                 <span
-                  className="max-w-[360px] text-13 leading-relaxed"
+                  className="mt-3 max-w-[380px] text-14 leading-[1.5]"
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   {t('settings.providers.xdSignin.desc')}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void signInToCindy()}
-                  className="mt-1 flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90"
+                {/* 赠送余额是一个安静的事实标签,不是促销文案:灰阶 chip、不写金额
+                    (CN / Global 金额不同且服务端可调,数字只在计费页出现)。 */}
+                <span
+                  className="mt-4 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-12 font-medium"
                   style={{
-                    backgroundColor: 'var(--accent-cta-bg)',
-                    color: 'var(--accent-pure-cta-fg)',
+                    backgroundColor: 'var(--surface-chip)',
+                    color: 'var(--text-secondary)',
                   }}
                 >
-                  {t('settings.providers.xdSignin.cta')}
-                </button>
+                  <Gift size={13} />
+                  {t('settings.providers.xdSignin.grantBadge')}
+                </span>
+                <CtaPillButton
+                  size="lg"
+                  className="mt-6"
+                  label={t('settings.providers.xdSignin.cta')}
+                  onClick={() => void signInToCindy()}
+                />
               </div>
             ) : effectiveSelected ? (
               <>

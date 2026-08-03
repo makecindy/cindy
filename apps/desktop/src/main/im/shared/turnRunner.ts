@@ -34,6 +34,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { eq } from 'drizzle-orm';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { isCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
@@ -1734,7 +1735,10 @@ export function createTurnRunner(
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
   function composeStreamingView(turn: TurnState): string {
-    const body = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
+    const rawBody = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
+    // External-channel safeguard: maker-core normally strips these tokens,
+    // while this boundary also protects old continuations and future adapters.
+    const body = stripInternalWebCitations(rawBody);
     if (turn.done) return body;
     const act = renderActivity(turn.activity, Date.now());
     if (!act) return body;

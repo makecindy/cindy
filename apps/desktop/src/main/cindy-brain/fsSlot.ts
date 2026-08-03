@@ -26,9 +26,9 @@
  *
  * 权限对齐哲学:意识写 workdir 的"吵闹程度"必须和主 agent 自己 Edit 文件
  * 完全一致——agent 免批的模式意识也免批,agent 逐条批的模式意识也逐条批。
- * claude / codex 共用 sessions.permission_mode 这一列(codex 的 approval/
- * sandbox 由它映射派生,见 maker-core mapPermissionToCodex),所以一张映射
- * 表覆盖两种 agent(规则 9:映射写死在代码,不靠 prompt 判断)。
+ * claude / codex / pi 共用 sessions.permission_mode 这一列(codex 的 approval/
+ * sandbox 由它映射派生,pi bridge 每次 tool_call 现读自己的运行时权限文件),
+ * 所以一张映射表覆盖三种 agent(规则 9:映射写死在代码,不靠 prompt 判断)。
  *
  * 依赖注入(规则 14):fs 之外的能力(意识清单/票据库/session 快照/确认桥)
  * 全部经 deps,单测拿 tmpdir 直测零 Electron。

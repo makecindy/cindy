@@ -68,6 +68,7 @@ import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capabi
 import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
@@ -215,6 +216,46 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
   }
 }
 
+/**
+ * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
+ * (`JSON.stringify` 会丢掉值为 undefined 的 key,见 maker-shared
+ * scheduleTypes.RemoteScheduleWriteInput.intervalMs),而引擎契约是「带 key 的
+ * undefined = 显式清空;省略 key = 不修改」。在 IPC 入口把 null 归一化成带 key
+ * 的 undefined,与 MCP schedule_update 对 intervalMs:null 的翻译同一约定。
+ * 桌面 renderer 走 structured clone,undefined key 不会丢,不受影响。
+ * (export 仅供单测直接验证翻译语义。)
+ */
+export function normalizeNullableIntervalMs<T extends { intervalMs?: number | null }>(
+  input: T,
+): Omit<T, 'intervalMs'> & { intervalMs?: number } {
+  if (input.intervalMs !== null) {
+    return input as Omit<T, 'intervalMs'> & { intervalMs?: number };
+  }
+  return { ...input, intervalMs: undefined };
+}
+
+/**
+ * 版本错位兼容的另一半:**旧版 mobile** 清空间隔靠「全量表单不带 intervalMs key +
+ * 引擎隐式清空」表达;真 partial 语义下省略 key 变成「不修改」,旧 mobile 的清空
+ * 就静默失效(codex review 发现)。这里在 update 入口把「device-link 来源 + 旧版
+ * 全量表单形态(带 cronExpr / manual / notify 却没有 intervalMs key)」翻译回
+ * 显式清空。新版 mobile 全量表单恒带 intervalMs key(数值或 null),永远不会命中
+ * 这条;MCP 与桌面 renderer 不走 device-link,partial patch 不受影响。来源判定用
+ * AsyncLocalStorage 的可信标记(isDeviceLinkInvoke),不信任 payload 自述。
+ */
+export function normalizeLegacyDeviceLinkIntervalClear<
+  T extends { intervalMs?: number; cronExpr?: string },
+>(patch: T, isRemoteInvoke: boolean): T & { intervalMs?: number } {
+  if (!isRemoteInvoke) return patch;
+  if (Object.prototype.hasOwnProperty.call(patch, 'intervalMs')) return patch;
+  const legacyFullForm =
+    typeof patch.cronExpr === 'string' &&
+    Object.prototype.hasOwnProperty.call(patch, 'manual') &&
+    Object.prototype.hasOwnProperty.call(patch, 'notify');
+  if (!legacyFullForm) return patch;
+  return { ...patch, intervalMs: undefined };
+}
+
 function listAllTemplates(): ScheduleTemplate[] {
   const projectTemplates: ScheduleTemplate[] = [];
   return [...BUILTIN_TEMPLATES, ...projectTemplates];
@@ -294,7 +335,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     requireObject(input, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        input as CreateScheduleInput,
+        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -308,7 +349,12 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       scheduler.updateFromCurrent(scheduleId, (existing) =>
         stabilizePreRunHookForUpdate(
           existing,
-          patch as UpdateScheduleInput,
+          normalizeLegacyDeviceLinkIntervalClear(
+            normalizeNullableIntervalMs(
+              patch as UpdateScheduleInput & { intervalMs?: number | null },
+            ),
+            isDeviceLinkInvoke(),
+          ),
           hookPathDeps,
         ),
       ),
@@ -581,7 +627,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         : {};
     const overrides =
       body.overrides && typeof body.overrides === 'object'
-        ? (body.overrides as Partial<CreateScheduleInput>)
+        ? normalizeNullableIntervalMs(
+            body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
+          )
         : {};
     return withScheduler(({ scheduler }) => {
       const template = findTemplate(templateId);

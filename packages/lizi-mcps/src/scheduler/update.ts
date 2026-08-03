@@ -33,8 +33,9 @@ export function registerScheduleUpdateTool(
         .number()
         .int()
         .positive()
+        .nullable()
         .optional()
-        .describe('相对间隔毫秒。设置后优先于 cronExpr；显式传 null/undefined 不支持，清空请只改 cronExpr 让调度回到 cron 槽位语义。'),
+        .describe('相对间隔毫秒。设置后优先于 cronExpr。省略 = 不修改（真 partial：只改 prompt / cronExpr 不会动它）；传 null = 清空，调度回到 cronExpr 壁钟槽位语义。'),
       timezone: z.string().min(1).optional(),
       recurring: z.boolean().optional(),
       agentKind: z.enum(AGENT_KIND).optional(),
@@ -75,7 +76,13 @@ export function registerScheduleUpdateTool(
       preRunHook: z
         .object({
           command: z.string().min(1),
-          timeoutMs: z.number().int().positive().optional(),
+          timeoutMs: z
+            .number()
+            .int()
+            .positive()
+            .nullable()
+            .optional()
+            .describe('省略 = 沿用任务现有 timeoutMs(只改 command 不用重传超时);传 null = 显式清除超时(不限时)。'),
         })
         .nullable()
         .optional()
@@ -98,11 +105,18 @@ export function registerScheduleUpdateTool(
           // (schema 只收 string 或缺省,而缺省 = 不修改)。
           input = { ...input, targetSessionId: undefined };
         }
-        if (input.intervalMs !== undefined) {
-          // patch 带 intervalMs 时引擎按 now + intervalMs 重排、不解析 patch 里的
-          // cronExpr / timezone,工具层补回校验(只校验本次 patch 显式带的字段)。
-          assertCronAndTimezoneValid(input.cronExpr, input.timezone);
+        if ((patch as { intervalMs?: number | null }).intervalMs === null) {
+          // 同 targetSessionId:null → 带 key 的 undefined = 显式清空,调度回到
+          // cronExpr 壁钟槽位语义。引擎遵循真 partial 契约(没带 key 就不动),
+          // 这是 JSON 边界唯一的清空表达。
+          input = { ...input, intervalMs: undefined };
         }
+        // 无条件校验本次 patch 显式带的 cronExpr / timezone(函数对缺省字段是
+        // no-op)。不能只在 patch 带 intervalMs 数值时校验:任务已有 intervalMs、
+        // patch 只改 cronExpr 时,真 partial 语义保留原 interval,引擎按
+        // now + intervalMs 重排、全程不解析 cron——无效表达式会被静默写入,等
+        // 切回 cron 模式才爆(codex review 发现)。
+        assertCronAndTimezoneValid(input.cronExpr, input.timezone);
         if (bindToCurrentSession) {
           // 与 schedule_create 对称:把"改绑当前对话"翻成 targetSessionId,杜绝 agent
           // 复用上下文里过期的 session id。识别不到当前会话时报 INVALID_PARAMS,不静默绑错。
@@ -115,6 +129,27 @@ export function registerScheduleUpdateTool(
           input = { ...input, targetSessionId: sessionId };
         }
         return scheduler.updateFromCurrent(id, async (existing) => {
+          // preRunHook.timeoutMs 的真 partial 表达:只改 command 时沿用任务现有超时
+          // (此前整对象替换会把省略的 timeoutMs 静默清成"不限时");传 null 才显式清除。
+          // null 在进入引擎前剥掉 —— 引擎/storage 只认 number | undefined。
+          const rawHook = (patch as { preRunHook?: { command: string; timeoutMs?: number | null } | null })
+            .preRunHook;
+          if (rawHook && typeof rawHook === 'object') {
+            if (rawHook.timeoutMs === null) {
+              input = { ...input, preRunHook: { command: rawHook.command } };
+            } else if (
+              // 「没提供」= 缺 key 或值为 undefined:MCP 走 JSON 表达不出带 key 的
+              // undefined,但进程内调用能;两种形态都视作缺省沿用现有超时,只有
+              // null 是清除(copilot review 指出带 key undefined 会漏进清空分支)。
+              rawHook.timeoutMs === undefined &&
+              existing.preRunHook?.timeoutMs !== undefined
+            ) {
+              input = {
+                ...input,
+                preRunHook: { command: rawHook.command, timeoutMs: existing.preRunHook.timeoutMs },
+              };
+            }
+          }
           const nextHook = Object.prototype.hasOwnProperty.call(input, 'preRunHook')
             ? input.preRunHook
             : existing.preRunHook;

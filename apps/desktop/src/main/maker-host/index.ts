@@ -602,6 +602,20 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
+      // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
+      // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
+      getLiveSessionGrantState: (sessionId: string, sessionInstanceId: string) => {
+        if (!sessionInstanceId) return null;
+        const session = _maker?.getSession(sessionId);
+        if (!session || session.instanceId !== sessionInstanceId) return null;
+        const permission = session.stablePermissionModeState;
+        if (!permission) return null;
+        return {
+          permissionMode: permission.mode,
+          remoteHostId: session.remoteHostId,
+        };
+      },
     };
     const orcaTeamStoreAdapter = createDesktopOrcaTeamStoreAdapter({
       getWorkerLink,
@@ -781,7 +795,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, sessionInstanceId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -810,6 +824,7 @@ export function getMaker(): Maker {
             {
               host,
               sessionId,
+              sessionInstanceId,
               workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
               vendorOptions,
               // per-session Maker Memory 开关 (maker-core 归一后透传)。
@@ -1028,6 +1043,9 @@ export function getMaker(): Maker {
         }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
+        let buildSessionMcpConfig:
+          | ((sessionInstanceId: string) => Record<string, unknown>)
+          | undefined;
         try {
           const cfg = await getCodexExtraSpawnConfig({
             mcpProviders: providers,
@@ -1035,6 +1053,7 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
+          buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
           // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
           // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
@@ -1107,6 +1126,7 @@ export function getMaker(): Maker {
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
+          ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
           // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
@@ -1115,7 +1135,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, sessionInstanceId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -1123,6 +1143,7 @@ export function getMaker(): Maker {
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
+          ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(remoteHostId ? { remoteHostId } : {}),

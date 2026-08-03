@@ -44,6 +44,7 @@ import {
   removeRemoteSessionActivityForDevice,
 } from './remoteSessionActivityStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
+import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
@@ -67,25 +68,106 @@ const RESEED_DEBOUNCE_MS = 300;
 /** best-effort push 的窗口内 anti-entropy 周期。窗口外终态按有界轮询分批收敛。 */
 const RECONCILE_INTERVAL_MS = 10_000;
 
+/** 连续失败退避封顶:失败设备最低仍保持约 2 分钟一次的对账,恢复靠 push / 熔断探测先行。 */
+const RECONCILE_BACKOFF_MAX_MS = 120_000;
+
 type RemoteSessionsRefresh = (deviceId: string, name?: string) => Promise<unknown>;
 
 /**
+ * per-device 对账退避账本(纯逻辑,可单测)。
+ *
+ * 弱网教训(2026-08):固定 10s 无退避的对账循环在链路劣化时永不放慢,叠加超时重试
+ * 变成请求风暴。这里按设备记连续失败:失败后下一次尝试推迟 base×2^(n-1)(封顶 maxMs,
+ * ±15% 抖动打散多设备齐步),成功即复位;'superseded' / 'revoked' 不计失败——前者是
+ * 并发合并的正常路径,后者有自己的终态处理。
+ */
+export function createReconcileBackoff(opts?: {
+  baseMs?: number;
+  maxMs?: number;
+  /** 抖动注入(测试用;默认 ±15% 随机)。 */
+  jitter?: (delayMs: number) => number;
+  now?: () => number;
+}) {
+  const baseMs = opts?.baseMs ?? RECONCILE_INTERVAL_MS;
+  const maxMs = opts?.maxMs ?? RECONCILE_BACKOFF_MAX_MS;
+  const jitter =
+    opts?.jitter ?? ((delay: number) => Math.round(delay * (0.85 + Math.random() * 0.3)));
+  const now = opts?.now ?? Date.now;
+  const state = new Map<string, { failures: number; nextEligibleAt: number }>();
+  return {
+    /** 本 tick 是否应该对该设备发起对账。 */
+    shouldAttempt(deviceId: string): boolean {
+      const entry = state.get(deviceId);
+      return !entry || now() >= entry.nextEligibleAt;
+    },
+    /** 上报一次对账结果。failure 加深退避,success 复位,neutral 不动。 */
+    report(deviceId: string, outcome: 'success' | 'failure' | 'neutral'): void {
+      if (outcome === 'neutral') return;
+      if (outcome === 'success') {
+        state.delete(deviceId);
+        return;
+      }
+      const failures = (state.get(deviceId)?.failures ?? 0) + 1;
+      const delay = Math.min(baseMs * 2 ** (failures - 1), maxMs);
+      // 抖动后再 clamp:maxMs 是硬封顶(review:+15% 抖动曾把封顶档放大到 138s),
+      // 负值防御性归零。
+      const jittered = Math.min(Math.max(0, jitter(delay)), maxMs);
+      state.set(deviceId, { failures, nextEligibleAt: now() + jittered });
+    },
+    /** 只保留仍合格的设备,防止退避账本随设备增删无界增长。 */
+    retainOnly(deviceIds: ReadonlySet<string>): void {
+      for (const deviceId of state.keys()) {
+        if (!deviceIds.has(deviceId)) state.delete(deviceId);
+      }
+    },
+  };
+}
+
+export type ReconcileBackoff = ReturnType<typeof createReconcileBackoff>;
+
+/**
  * 启动 listing tier 的低频有界对账。setInterval 只负责触发；每设备的并发合并与乱序保护
- * 继续由 refreshRemoteDeviceSessions 负责。返回清理函数，避免窗口卸载后残留 timer。
+ * 继续由 refreshRemoteDeviceSessions 负责；连续失败的设备按 createReconcileBackoff 放慢
+ * (refresh resolve 出的 RefreshResult 用于记账:'gave-up' = 失败,'ok' = 成功,其余中性;
+ * reject 一律计失败)。返回清理函数，避免窗口卸载后残留 timer。
  */
 export function startRemoteSessionsReconciler(
   getEligibleDevices: () => Iterable<readonly [string, string]>,
   refresh: RemoteSessionsRefresh = refreshRemoteDeviceSessions,
   intervalMs = RECONCILE_INTERVAL_MS,
+  backoff: ReconcileBackoff = createReconcileBackoff({ baseMs: intervalMs }),
 ): () => void {
+  // 单次刷新可能横跨多个 tick(弱网下超时链 >10s);weak coalescing 会让后续 tick 拿到
+  // 同一个在途 Promise,若每个 tick 都挂 then,一次 gave-up 会被重复记账、退避直接跳档
+  // (review P2)。per-device 在途标记保证一次合并请求只记一次。
+  const inFlight = new Set<string>();
   const timer = setInterval(() => {
+    const seen = new Set<string>();
     for (const [deviceId, name] of getEligibleDevices()) {
-      void refresh(deviceId, name).catch((err) => {
-        log.debug(`periodic sessions reconcile failed for ${deviceId.slice(0, 8)}`, err);
-      });
+      seen.add(deviceId);
+      if (inFlight.has(deviceId) || !backoff.shouldAttempt(deviceId)) continue;
+      inFlight.add(deviceId);
+      void refresh(deviceId, name)
+        .then((result) => {
+          backoff.report(
+            deviceId,
+            result === 'gave-up' ? 'failure' : result === 'ok' ? 'success' : 'neutral',
+          );
+        })
+        .catch((err) => {
+          backoff.report(deviceId, 'failure');
+          log.debug(`periodic sessions reconcile failed for ${deviceId.slice(0, 8)}`, err);
+        })
+        .finally(() => {
+          inFlight.delete(deviceId);
+        });
     }
+    backoff.retainOnly(seen);
   }, intervalMs);
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    inFlight.clear();
+  };
 }
 
 type IneligibleRemoteProjectAction = 'disconnect' | 'remove' | 'ignore';
@@ -188,6 +270,10 @@ export function useDeviceLinkRemoteProjects(): void {
         // 即使还有旧 shard 也必须标明本轮读取失败，不能把缓存伪装成刚返回的结果。
         // superseded 表示断连 / 清理使请求失效，必须等重连，不能误记成终态失败。
         remoteProjectsStore.markBootstrapFailed(deviceId);
+      } else if (result === 'superseded') {
+        // 断连或另一轮 refresh 会使本次快照失效；不要让本轮遗留的 loading
+        // 永久遮住侧边栏。连接恢复时 presence/status 会再次触发 bootstrap。
+        remoteProjectsStore.clearBootstrapLoading(deviceId);
       }
       // 预取被控端能力(model/effort/fast/permission/fork/rewind),使首次打开远程会话时
       // 模型下拉等不为空、modelDefinitions 同步层已热。fire-and-forget,失败不阻断。
@@ -368,8 +454,26 @@ export function useDeviceLinkRemoteProjects(): void {
           coalescingMode: 'weak',
         });
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+        // 回传结果供 reconciler 的失败退避记账('gave-up' 加深退避,'ok' 复位)。
+        return result;
       },
     );
+
+    // 目标设备「无响应」熔断翻转(main 权威):镜像给 UI;恢复时重跑 subscribe+bootstrap
+    // ——熔断 open 期间的订阅 / 首拉都被快速失败挡掉了,恢复必须主动补,不能等用户手点。
+    // push 一旦到达即权威,但只对**它自己那台设备**权威:迟到的 getState 快照按设备合并,
+    // 未被 push 覆盖的设备仍取快照值 —— 整份丢弃会让「A 设备先来一条 push」掩盖掉
+    // 快照里 B 设备的 unresponsive 初值,B 在下一次熔断翻转前一直假装 connected(review P1)。
+    const responsivenessPushedDeviceIds = new Set<string>();
+    const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
+      if (disposed) return;
+      responsivenessPushedDeviceIds.add(p.deviceId);
+      unresponsiveDevicesStore.apply(p.deviceId, p.unresponsive);
+      if (!p.unresponsive) {
+        const name = eligible.get(p.deviceId);
+        if (name) void subscribeAndBootstrap(p.deviceId, name);
+      }
+    });
 
     void window.electronAPI.deviceLink
       .getState()
@@ -377,6 +481,13 @@ export function useDeviceLinkRemoteProjects(): void {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
         disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
+        // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
+        // (store 初始为空,快照只需补写 unresponsive 的未覆盖设备)。
+        for (const deviceId of state.unresponsiveDeviceIds ?? []) {
+          if (!responsivenessPushedDeviceIds.has(deviceId)) {
+            unresponsiveDevicesStore.apply(deviceId, true);
+          }
+        }
         reseed();
       })
       .catch((err) => {
@@ -497,6 +608,8 @@ export function useDeviceLinkRemoteProjects(): void {
       offControlTarget();
       offRename();
       offShardChange();
+      offResponsiveness();
+      unresponsiveDevicesStore.clearAll();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。
       for (const deviceId of eligible.keys()) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});

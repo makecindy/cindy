@@ -1184,6 +1184,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
       // null-prototype: server 名来自用户可控的自定义 MCP id, 而 id 正则允许下划线,
@@ -2350,6 +2351,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const remoteQuery = await this.deps.remoteCcQueryFactory({
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
+          ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           startParams,
           // 协同身份以 session 自己的 vendorOptions 为准 (worker 首次创建时
           // DB 标记尚未写入, host 现场查库会拿到空角色)。见 base-agent.ts

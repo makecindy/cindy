@@ -10,7 +10,8 @@
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "対象のモデルまたはソースは別のリモートルートが必要です。リモートセッションを閉じて再作成してください。",
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
-    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください"
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -1256,9 +1257,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン課金",
+        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン単位で残高から引き落とし",
         "modelLabel": "すべてのモデル",
-        "billingLabel": "トークン課金",
+        "billingLabel": "トークン単位で残高から引き落とし",
         "disconnectConfirm": {
           "title": "Cindy AI を切断しますか?",
           "description": "切断するとローカルに保存された Cindy AI Key が削除されます。Cindy AI のモデルを引き続き使うには再接続が必要です。"
@@ -1280,7 +1281,14 @@
           "confirm": "ローテーション"
         },
         "rotateSuccess": "キーをローテーションしました",
-        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください"
+        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください",
+        "copyKeyAria": "Cindy AI Key をコピー",
+        "copyKeySuccess": "Cindy AI Key をコピーしました",
+        "copyKeyFailed": "コピーに失敗しました。後でもう一度お試しください",
+        "asset": {
+          "viewUsage": "使用量を見る",
+          "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。"
+        }
       },
       "custom": {
         "tag": "カスタム",
@@ -1576,7 +1584,8 @@
       },
       "xdSignin": {
         "badge": "おすすめ",
-        "desc": "Cindy にサインインすると公式 Cindy AI サービスが有効になります。全モデルがすぐ使え、キー管理は不要です。",
+        "desc": "公式サービス。全モデルがすぐ使え、キー管理は不要です。",
+        "grantBadge": "新規ユーザーには特典残高付き",
         "cta": "Cindy にサインイン"
       },
       "menu": {
@@ -2368,6 +2377,22 @@
         "defaultTag": "デフォルト",
         "resetToDefault": "デフォルトに戻す",
         "toggleFailed": "ブラウザ対象の切り替えに失敗しました",
+        "health": {
+          "ready": "内蔵ブラウザの制御接続は正常です。",
+          "error": "内蔵ブラウザの接続に失敗しました：{{reason}}。「内蔵ブラウザを復旧」で制御接続を再構築してください。",
+          "reasons": {
+            "disposing": "前回の終了処理が完了していません",
+            "hostUnavailable": "内蔵ブラウザー画面の準備ができていないか、接続が切れています",
+            "startFailed": "新しい制御プロセスを起動できませんでした",
+            "statusFailed": "制御プロセスの状態確認に失敗しました",
+            "recoveryFailed": "制御接続を再構築できませんでした"
+          },
+          "reconnect": "内蔵ブラウザを再接続",
+          "recover": "内蔵ブラウザを復旧",
+          "recovering": "内蔵ブラウザを復旧中…",
+          "recovered": "内蔵ブラウザを再接続しました",
+          "recoverFailed": "内蔵ブラウザの復旧に失敗しました。理由を確認して再試行してください。"
+        },
         "rsbWebview": {
           "title": "サイドバー内蔵ブラウザ",
           "description": "エージェントは右サイドバーの webview タブ内で操作します。ポップアップなし、ログイン状態は独立保持。"
@@ -2967,7 +2992,8 @@
         "saveFailed": "新規会話設定を保存できませんでした",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },
@@ -3369,6 +3395,8 @@
         "cardExternalLinkDetail": "カード内のリンクをクリックすると確認ダイアログが表示され、承認後にシステムブラウザで開きます。http/https アドレスのみ許可されます。",
         "notify": "システム通知を表示可能(画面上部のライトな通知)",
         "notifyDetail": "通知の内容はこのプラグインが提供し、通知にはその名前が表示されます。自動的に消え、操作を妨げることはありません。",
+        "badge": "プラグイン入口に未読マークを点灯できます",
+        "badgeDetail": "新しい内容があるとき、サイドバーのプラグイン入口と自身のカードに緑の点を点灯し、一行の要約を添えられます。パネルを開くと消えます。音は鳴らず、振動もせず、システムの通知センターにも入らず、システム通知とは別個の権限です。",
         "confirm": "確認ダイアログで同意を求められます",
         "confirmDetail": "実行前に Cindy 自身と同じ確認ダイアログを開いて尋ねることができます。文面はプラグインが提供し、ダイアログにはその名前が表示されます。確認するかキャンセルするかはあなたがクリックして決め、プラグイン自身はクリックできません。同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
         "fsWrite": "ファイルを書き込めます(作成/変更)",
@@ -3506,6 +3534,7 @@
         "slotCard": "メッセージカード",
         "slotNetwork": "ネットワークアクセス",
         "slotNotify": "システム通知",
+        "slotBadge": "未読バッジ",
         "slotFs": "ファイル書き込み",
         "slotSkill": "エージェントスキル",
         "slotWorkspace": "ワークスペースセッション"
@@ -5223,6 +5252,7 @@
         "dismiss": "閉じる"
       },
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
+      "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "modelSwitchContextGuard": {
         "title": "切替先モデルのコンテキストウィンドウが小さいです",
@@ -5308,7 +5338,7 @@
         "title": "Cindy AI",
         "desc": "公式サービス · 全モデル · Claude Code / Codex 対応",
         "loginTitle": "Cindy にサインイン",
-        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
+        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます。新規ユーザーには特典残高が付きます"
       },
       "othersToggle": "その他のプロバイダー({{count}})",
       "presetSub": "API キーを入力して接続",
@@ -5329,6 +5359,12 @@
       "openProviders": "モデルプロバイダーを開く",
       "acknowledge": "了解",
       "separator": "、"
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI の利用を開始しました",
+      "desc": "特典残高 {{amount}} を付与しました。有効期限は {{date}} です。使い切った後や期限切れの後も、いつでもチャージできます。",
+      "openBilling": "使用量を見る",
+      "acknowledge": "了解"
     }
   },
   "voiceInputOverlay": {
@@ -5507,6 +5543,9 @@
       "retry": "再試行",
       "continueAfterReset": "リセット後に続行",
       "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
+      "gatewayQuotaExhausted": "Cindy AI の残高が不足しています。チャージすると続行できます。",
+      "viewBalance": "残高を見る",
+      "viewBalanceTitle": "「使用量と請求」を開いて残高を確認・チャージ",
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
@@ -6100,6 +6139,7 @@
     "remoteSession": {
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
+      "degraded": "被制御デバイスとの接続が不安定です。自動的に再試行中…",
       "actionsUnavailable": "被制御デバイスを利用できません。再接続してからこのセッションを変更してください。",
       "resync": "再同期",
       "loading": "リモートデバイスからセッションを読み込み中…",
@@ -6233,9 +6273,8 @@
         "localMachine": "このデバイス",
         "connecting": "接続中…",
         "tasksLoading": "{{device}} のセッションを読み込み中…",
-        "tasksLoadFailed": "{{device}} のセッションを読み込めませんでした。接続を確認して再試行してください。",
-        "tasksPartiallyFailed": "{{device}} のセッションを読み込めませんでした。読み込み済みの内容のみ表示しています。",
-        "retryTasks": "セッションを再読み込み",
+        "tasksLoadFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中…",
+        "tasksPartiallyFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中のため、読み込み済みの内容のみ表示しています",
         "devicesLoading": "リモートデバイスを読み込み中…",
         "devicesLoadFailed": "リモートデバイスの一覧を読み込めませんでした。接続を確認して再試行してください。",
         "devicesPartiallyFailed": "リモートデバイスの一覧を更新できませんでした。読み込み済みの内容のみ表示しています。",
@@ -6507,6 +6546,11 @@
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
+        "removeFromSidebar": "サイドバーからプロジェクトを削除",
+        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebarConfirmAction": "プロジェクトを削除",
+        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
         "syncCodex": "このプロジェクトの Codex セッションを同期",
         "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
         "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",
@@ -8591,6 +8635,20 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
+      }
+    },
+    "orders": {
+      "title": "注文履歴",
+      "description": "Cindy 内で開始した残高チャージとサブスクリプションの注文のみを表示します。支払い待ちの注文は、期限を過ぎると自動的にキャンセルされます。",
+      "count": "{{count}}件",
+      "incomplete": "注文履歴が多いため、最新の{{count}}件のみ表示しています。",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "完了",
+        "awaitingPayment": "支払い待ち",
+        "canceled": "キャンセル済み",
+        "expired": "期限切れ",
+        "failed": "支払い失敗"
       }
     },
     "dialogs": {

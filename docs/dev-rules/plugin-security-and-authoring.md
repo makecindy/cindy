@@ -30,7 +30,7 @@
 | 身份卡字段与校验、管子协议类型 | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型） |
 | 打包限制 | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
 | 运行时、沙箱进程与生命周期 | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`） |
+| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`（未读角标，落盘账本 `ghostUnreadStore.ts`）、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`） |
 | 面板供片、注入主题 token 与协议 | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
 | 权限注入／更新确认 UI | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx` |
 | 远程／手机版能力准入白名单 | `packages/device-link/src/allowlist.ts` |
@@ -104,6 +104,25 @@
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
+  `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
+  仍沿用现有确认与授权记忆策略；仅当 Host 能现读到**本地活跃会话**的运行时权限恰为
+  `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
+  也不得回退可能滞后的 DB `permission_mode`。business `sessionId` 不足以证明仍是同一内存
+  Session，必须同时匹配由 Maker 铸造、调用方不可覆盖的 instance identity；权限切换在途、
+  close／detach 已开始、会话缺失、实例不匹配、查询失败、远程会话均 fail closed。
+  对 Codex、Pi 与远端 Claude Code 这类进程外 harness，instance 只作为 opaque MCP route
+  identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
+  严格比对，不匹配直接 401。兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
+  但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
+  自动批准须在日志标明来源为 Full Access，不得伪装为用户点击，也不得写入人工目录授权
+  记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
+  边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
+  授权。热切回其它档位后新请求必须恢复确认。此旁路**不适用于** workspace 创建、插件
+  Setup／安装／更新、OAuth、Secret／凭证或其它确认边界。
+  `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
+  并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
+  再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
+  TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 
 ## 5. 存量插件兼容：升级必须无感（红线）

@@ -5,7 +5,7 @@ import {
   BREAKER_PROBE_BACKOFF_MAX_MS,
   createDeviceResponsivenessBreaker,
   type BreakerSendSlot,
-} from '@/device-link/deviceResponsivenessBreaker';
+} from '../deviceResponsiveness';
 
 const DEV = 'dev-1';
 
@@ -45,7 +45,7 @@ function openBreaker(h: ReturnType<typeof harness>): void {
 
 /** 到点探测:acquire 必须拿到 probe 席位,返回票据供 settle。 */
 function acquireProbe(h: ReturnType<typeof harness>, deviceId = DEV): BreakerSendSlot {
-  const slot = h.breaker.acquire(deviceId);
+  const slot = h.breaker.acquire(deviceId, undefined, { allowProbe: true });
   expect(slot.decision).toBe('probe');
   return slot;
 }
@@ -366,5 +366,13 @@ describe('probeDue(只读探测窗口判定,给 rehydrate 主动探测用)', () 
     h.breaker.settle(DEV, probe, 'responded');
     expect(h.breaker.probeDue(DEV)).toBe(false);
     expect(h.breaker.isOpen(DEV)).toBe(false);
+  });
+
+  it('half-open 时普通请求不能占用 probe 席位', () => {
+    const h = harness();
+    openBreaker(h);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    expect(h.breaker.acquire(DEV, h.breaker.createCohort(DEV)).decision).toBe('reject');
+    expect(h.breaker.acquire(DEV, undefined, { allowProbe: true }).decision).toBe('probe');
   });
 });

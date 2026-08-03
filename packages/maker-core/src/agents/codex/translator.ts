@@ -26,6 +26,10 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  stableInternalWebCitationBoundary,
+  stripInternalWebCitations,
+} from '@cindy/maker-shared/internal-citation';
 
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
@@ -37,6 +41,10 @@ import {
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
@@ -337,6 +345,15 @@ export function translateErrorNotification(
   // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
   // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
+  // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
+  // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
+  // 退避重投接管，语义更具体。
+  const contextOverflowReason =
+    !isCapacityError &&
+    (errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(safeMessage))
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : {};
   if (!params.willRetry && isCapacityError) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {
@@ -360,6 +377,7 @@ export function translateErrorNotification(
     data: {
       ...safeErrorData,
       ...overloadReason,
+      ...contextOverflowReason,
       isTerminal: !params.willRetry,
       willRetry: params.willRetry,
     },
@@ -744,20 +762,24 @@ function findUnfinishedCitationOpen(text: string): number {
  * 规范形(见 localDb worker 的 canonicalizeCodexCitations)。
  */
 export function finalizeCodexCitationText(text: string): string {
-  const openAt = findUnfinishedCitationOpen(text);
-  return normalizeCodexFileCitations(openAt === -1 ? text : text.slice(0, openAt));
+  const fileOpenAt = findUnfinishedCitationOpen(text);
+  const fileStableEnd = fileOpenAt === -1 ? text.length : fileOpenAt;
+  const stableEnd = Math.min(fileStableEnd, stableInternalWebCitationBoundary(text));
+  return stripInternalWebCitations(normalizeCodexFileCitations(text.slice(0, stableEnd)));
 }
 
 export function stableCitationBoundary(text: string): number {
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return open;
+    return Math.min(open, stableInternalWebCitationBoundary(text));
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
-    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) return text.length - k;
+    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
+      return Math.min(text.length - k, stableInternalWebCitationBoundary(text));
+    }
   }
-  return text.length;
+  return stableInternalWebCitationBoundary(text);
 }
 
 function handleAgentMessage(
@@ -789,7 +811,9 @@ function handleAgentMessage(
     return;
   }
 
-  const emitted = normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText)));
+  const emitted = stripInternalWebCitations(
+    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
+  );
   const delta = emitted.slice(prevLen);
   ctx.rt.itemTextLen.set(item.id, emitted.length);
   if (delta.length === 0) return;

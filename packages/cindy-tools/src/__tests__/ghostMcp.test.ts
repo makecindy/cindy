@@ -1130,6 +1130,11 @@ describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
     expect(callDesc).not.toContain("id: art");
     // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
     expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
+    // 权限契约必须进入模型可见描述:本地 Full Access 自动交接,远程/降档
+    // 仍 fail closed，且自动交接不伪装成人工永久授权。
+    expect(callDesc).toContain("Full Access(bypassPermissions)");
+    expect(callDesc).toContain("远程会话仍向用户弹确认卡");
+    expect(callDesc).toContain("不写人工永久授权");
   });
 });
 

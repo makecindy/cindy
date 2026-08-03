@@ -241,6 +241,60 @@ describe('ModelSelector provider groups', () => {
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
   });
 
+  it('reselects the connected fallback source when the stored source is disconnected', async () => {
+    const modelId = 'claude-fable-5';
+    const model = {
+      id: modelId,
+      name: 'Fable 5',
+      contextWindow: 200000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    };
+    providersRef.providers = [
+      {
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: { 'claude-code': {} },
+        connected: false,
+        models: { 'claude-code': [model] },
+      },
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'api-key' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: { 'claude-code': [model] },
+      },
+    ] as unknown[];
+    const onProviderChange = vi.fn();
+
+    renderSelector({
+      modelId,
+      effort: 'high',
+      currentProviderId: 'anthropic',
+      sourceDisconnected: true,
+      reselectEmitsChange: true,
+      onProviderChange,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /已断开/ }));
+    });
+
+    const popover = screen.getByTestId('model-options-popover');
+    const xdGroup = within(popover).getByRole('group', { name: 'Cindy AI' });
+    const fallbackRow = within(xdGroup).getByRole('option', { name: /Fable 5/ });
+    expect(fallbackRow.getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(fallbackRow);
+    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId);
+  });
+
   it('does not render group headings in flat mode (no onProviderChange)', async () => {
     renderSelector({ currentProviderId: undefined, onProviderChange: undefined });
     await openDropdown();

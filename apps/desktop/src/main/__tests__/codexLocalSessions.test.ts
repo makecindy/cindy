@@ -1025,7 +1025,7 @@ describe('importExternalCodexMessagesForSession', () => {
     expect(rows.map((r) => JSON.parse(r.content))).toEqual(['first', 'third']);
   });
 
-  it('normalizes codex file citations in imported assistant messages (#785)', async () => {
+  it('normalizes codex file and Web citations in imported assistant messages (#785)', async () => {
     const dbPath = createStateDb(externalHome);
     const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
     fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
@@ -1036,7 +1036,7 @@ describe('importExternalCodexMessagesForSession', () => {
         rolloutLine(
           'm2',
           'assistant',
-          '已保存::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。',
+          '已保存::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。\uE200cite\uE202turn17search1\uE201',
           '2026-05-13T00:00:02.000Z',
         ),
         '',

@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -31,11 +32,11 @@ import type {
   BillingCatalogOffer,
   BillingCatalogOfferUnavailableReason,
   BillingCatalogProduct,
+  BillingPaymentOrder,
   BillingPendingPlanChange,
   BillingPurchaseOption,
   BillingSubscription,
 } from '../../../shared/billing';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import type {
   ModelAccessBalance,
   ModelAccessCreditPoolUsage,
@@ -45,13 +46,13 @@ import type {
 import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
-import { formatBillingAmount as formatMoney } from './money';
+import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { useBillingCheckout } from './useBillingCheckout';
+import { phaseForOrder, useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 
 type CatalogOfferEntry = {
@@ -98,6 +99,46 @@ const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] =
 const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
+
+/**
+ * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
+ * 不是账目导出 —— 更早的记录没有分页器可翻,服务端还有下一页时只用一条提示条说明。
+ */
+const ORDER_HISTORY_LIMIT = 10;
+
+/**
+ * 订单状态 chip 的文案 key。刻意复用 checkout 的 `phaseForOrder` 而不是自己再写一套
+ * status→文案映射:同一个 `CREATED`,支付弹窗说「等待支付」、列表说别的,是用户直接
+ * 可见的不一致。两处必须由同一个判据推导。
+ */
+function orderStatusLabelKey(order: BillingPaymentOrder): string {
+  switch (phaseForOrder(order)) {
+    case 'COMPLETED':
+      return 'billing.orders.states.completed';
+    case 'CANCELED':
+      return 'billing.orders.states.canceled';
+    case 'EXPIRED':
+      return 'billing.orders.states.expired';
+    case 'FAILED':
+      return 'billing.orders.states.failed';
+    default:
+      // phaseForOrder 对未终态一律返 AWAITING_PAYMENT(CREATED / PENDING)。
+      return 'billing.orders.states.awaitingPayment';
+  }
+}
+
+/** 「待支付」是这组里唯一可能还需要用户处理的状态,给它主文本色;其余保持二级色。 */
+function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
+  return phaseForOrder(order) === 'AWAITING_PAYMENT';
+}
+
+/**
+ * 订单号在界面上只做「认得出是哪一单」用,全长展示会把左列挤没 —— 截断展示、完整值
+ * 挂 title。截断取头部:服务端订单号带随机前缀,头 8 位已足够区分。
+ */
+function shortOrderId(orderId: string): string {
+  return orderId.length > 8 ? orderId.slice(0, 8) : orderId;
+}
 
 function decimalParts(value: string): { value: bigint; scale: number } | null {
   const match = /^(0|[1-9]\d{0,14})(?:\.(\d{1,9}))?$/.exec(value.trim());
@@ -248,6 +289,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [usageDetailsUnavailable, setUsageDetailsUnavailable] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(true);
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
+  // 订单记录按账号天然隔离:BillingPage 用 `billing:<dataOwnerId>` 做 key,换账号会整段
+  // 重挂,这份 state 连同缓存一起重建,不会把上一个账号的订单渲染给新账号。
+  const [orders, setOrders] = useState<BillingPaymentOrder[]>([]);
+  const [moreOrdersAvailable, setMoreOrdersAvailable] = useState(false);
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
@@ -282,6 +327,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setCustomAmount('');
   }, []);
 
+  /**
+   * 深链 `?tab=billing&intent=topup` —— 别处（供应商设置页的账户资产模块）想触发
+   * 充值时唯一的入口。充值弹窗依赖本 section 的目录 / 选项 / checkout 会话状态，
+   * 跨 feature 直接复用会把这一大摊状态拉到调用方，所以外部只投递意图、由这里
+   * 打开弹窗。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与
+   * ProvidersSection 的 `?connect` 同款契约。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'topup') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    resetSelection();
+    setTopupDialogOpen(true);
+  }, [resetSelection, searchParams, setSearchParams]);
+
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
     setBalanceError(null);
@@ -301,6 +363,20 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }
     } finally {
       setLoadingBalance(false);
+    }
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    try {
+      const list = await billingApi.listOrders(ORDER_HISTORY_LIMIT);
+      setOrders(list.orders);
+      // nextCursor 是「服务端还有更早的记录」的唯一实证;这一组不做分页器,只据此出提示条。
+      setMoreOrdersAvailable(list.nextCursor !== null);
+    } catch {
+      // 订单记录是补充叙事(钱是怎么来的),拿不到就整组不渲染 —— 余额 / 用量 / 赠送
+      // 三组都不受影响,也不为它加一个空错误壳占版面。
+      setOrders([]);
+      setMoreOrdersAvailable(false);
     }
   }, []);
 
@@ -339,8 +415,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         .finally(() => setLoadingCatalog(false)),
       loadSubscription(),
       loadBalance(),
+      // 进页面拉一次,「刷新」也跟着重拉;不加轮询 —— 订单只在用户自己发起支付时变化,
+      // 而那条路径由 checkout 弹窗自己轮询。
+      loadOrders(),
     ]);
-  }, [loadBalance, loadSubscription]);
+  }, [loadBalance, loadOrders, loadSubscription]);
 
   useEffect(() => {
     void loadBillingState();
@@ -370,11 +449,27 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setCurrentSubscription(null);
       void loadSubscription();
     }
-  }, [checkout, loadSubscription]);
+    // 关弹窗也刷一次订单:用户可能在 AWAITING_PAYMENT 中途放弃 —— 那笔「待支付」
+    // 此刻就该出现在订单记录里,而不是等他手动点「刷新」才知道它还挂着。
+    void loadOrders();
+  }, [checkout, loadOrders, loadSubscription]);
 
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
+    if (previousPhase === checkout.state.phase) return;
+    // 订单记录跟着订单生命周期的每一次落位刷新,不只 COMPLETED:订单一创建(进入
+    // AWAITING_PAYMENT)就已经是一条「待支付」记录;轮询落到 FAILED / EXPIRED /
+    // CANCELED 时列表里那行的状态也变了。只刷 COMPLETED 会让其余终态全靠手动刷新。
+    if (
+      checkout.state.phase === 'AWAITING_PAYMENT' ||
+      checkout.state.phase === 'COMPLETED' ||
+      checkout.state.phase === 'FAILED' ||
+      checkout.state.phase === 'EXPIRED' ||
+      checkout.state.phase === 'CANCELED'
+    ) {
+      void loadOrders();
+    }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
       if (checkout.state.kind === 'SUBSCRIPTION') {
@@ -386,6 +481,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     checkout.state.phase,
     checkout.state.subscription,
     loadBalance,
+    loadOrders,
     loadSubscription,
   ]);
 
@@ -873,6 +969,22 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               <PromotionalGrantsCard usage={creditUsage} />
             </BillingGroup>
           )}
+
+          {/* 空态(没有任何订单 / 拉不到)整组不渲染:页面保持现状,不加空壳 —— 从没在
+              Cindy 内付过钱的用户不需要一个写着「暂无订单」的框告诉他这件事。 */}
+          {orders.length > 0 && (
+            <BillingGroup
+              title={t('billing.orders.title')}
+              description={t('billing.orders.description')}
+              badge={
+                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                  {t('billing.orders.count', { count: orders.length })}
+                </span>
+              }
+            >
+              <OrderHistoryCard orders={orders} hasMore={moreOrdersAvailable} />
+            </BillingGroup>
+          )}
         </div>
       </div>
 
@@ -1176,8 +1288,6 @@ function PendingPlanChangeBanner({
   );
 }
 
-const BILLING_CURRENCY = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
-
 function BillingGroup({
   title,
   titleId,
@@ -1454,6 +1564,93 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
     <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
       {t(`billing.usage.promotionalDetails.states.${state}`)}
     </span>
+  );
+}
+
+/**
+ * 订单记录卡。行结构与 PromotionalGrantsCard 同一套(12px 容器 + 1px 分隔行 + 左列双行
+ * 加右侧数列),因为它们在同一页里是同一类东西:一条条只读流水。
+ */
+function OrderHistoryCard({
+  orders,
+  hasMore,
+}: {
+  orders: readonly BillingPaymentOrder[];
+  hasMore: boolean;
+}) {
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  /**
+   * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
+   * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
+   * 拿不到时**整列不出**,免得留下一列破折号;有一单拿得到就保留该列并给缺的那些占位。
+   */
+  const showPaymentMethod = orders.some((order) => order.paymentAction !== null);
+  return (
+    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      {hasMore && (
+        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+          {t('billing.orders.incomplete', { count: orders.length })}
+        </p>
+      )}
+      {/* 不像赠送明细那样封高 + 内滚:那边的行数由服务端历史决定(可达上百条),这边行数
+          由 ORDER_HISTORY_LIMIT 封死在 10,再套一层内滚只会凭空造出嵌套滚动区。 */}
+      <div className="divide-y divide-[var(--border-default)]" role="list">
+        {orders.map((order) => (
+          <div
+            key={order.orderId}
+            role="listitem"
+            className={cn(
+              'grid gap-x-3 gap-y-2 px-5 py-3.5 lg:items-center',
+              showPaymentMethod
+                ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_minmax(76px,0.6fr)]'
+                : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(76px,0.6fr)]',
+            )}
+          >
+            <div
+              className={cn(
+                'min-w-0 lg:col-span-1',
+                showPaymentMethod ? 'col-span-3' : 'col-span-2',
+              )}
+            >
+              <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                {formatLedgerTimestamp(order.createdAt, billingLocale)}
+              </p>
+              {/* 订单号只用来对单,截断展示、完整值挂 title(客服场景要能复制全长)。 */}
+              <p
+                title={order.orderId}
+                className="mt-1 truncate font-mono text-10 text-[var(--text-tertiary)]"
+              >
+                {t('billing.orders.orderId', { id: shortOrderId(order.orderId) })}
+              </p>
+            </div>
+            <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
+              {formatMoney(order.amount, order.currency, billingLocale)}
+            </p>
+            {showPaymentMethod && (
+              <p className="min-w-0 truncate text-11 text-[var(--text-secondary)]">
+                {order.paymentAction
+                  ? t(`billing.paymentActions.${order.paymentAction.type}`)
+                  : '—'}
+              </p>
+            )}
+            <div className="flex min-w-0 justify-end">
+              <span
+                className={cn(
+                  'shrink-0 whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2.5 py-1',
+                  'text-10 font-medium leading-[1.2]',
+                  isAwaitingPaymentOrder(order)
+                    ? 'text-[var(--text-primary)]'
+                    : 'text-[var(--text-secondary)]',
+                )}
+              >
+                {t(orderStatusLabelKey(order))}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

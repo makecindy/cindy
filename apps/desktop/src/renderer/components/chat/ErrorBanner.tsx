@@ -13,7 +13,17 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  GitFork,
+  Play,
+  RotateCcw,
+  RefreshCw,
+  Timer,
+  Wallet,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -30,6 +40,8 @@ import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
@@ -64,6 +76,21 @@ interface ErrorBannerProps {
   /** XD Gateway 返回了误导性的 Claude Pro/Opus 套餐错误时，切到已连接的
    * Claude.ai 订阅来源并重试本轮。未连接 Anthropic 时不提供此操作。 */
   onSwitchToClaudeSubscription?: () => Promise<void>;
+  /**
+   * 打开「用量和计费」查看余额并充值。**只有在计费面对当前账号可见时**（cloud +
+   * personal，判据 `canAccessBillingSettings`）父组件才传它 —— 判定留在有 Auth
+   * 上下文的父组件里，横幅只负责「有出口就给出口」。为空即视为没有可跳的地方：
+   * 此时余额不足的错误保持原样文案、不加按钮（加一个点不出结果的按钮比不加更糟）。
+   */
+  onViewBalance?: () => void;
+  /**
+   * **产生这条错误的** provider(错误发生时刻的快照)。余额分类只认它,不认上面的
+   * `providerId` —— providerId 是会话当前值,任务中途可切换并持久化:历史错误恢复
+   * 或报错后切换 provider 时,用当前值会把别家的 insufficient_quota 误判成 Cindy AI
+   * 余额不足(或反向丢失充值入口)。null/undefined = 来源不明,不启用余额分类。
+   * live 路径由父组件在错误出现时刻快照;持久化路径读 error 行自带的 errorProviderId。
+   */
+  errorSourceProviderId?: string | null;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -89,6 +116,8 @@ export function ErrorBanner({
   modelId,
   providerId,
   onSwitchToClaudeSubscription,
+  onViewBalance,
+  errorSourceProviderId,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -150,6 +179,15 @@ export function ErrorBanner({
   // 不能因为错误文案碰巧含 token_revoked 就引导用户去修 ChatGPT 登录态。历史无来源
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
+  // Cindy AI 网关的余额耗尽:钱花完那一刻是用户最需要计费页的时刻,给一条能就地
+  // 跳过去的出口。判定绑定**错误来源** provider(errorSourceProviderId,错误发生
+  // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
+  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 的错误一个字都不改
+  // (保持原始上游文案与既有交互):没有可跳的余额页时,给按钮点不出结果比不给更糟。
+  const isGatewayQuotaExhausted =
+    (errorSourceProviderId?.trim() || null) === 'xd' &&
+    Boolean(onViewBalance) &&
+    isQuotaExhaustedErrorMessage(error);
   const hasExplicitOpenAiProvider = normalizedProviderId === 'openai';
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&
@@ -215,6 +253,7 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
+  const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -267,6 +306,10 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
   } else if (isClaudeGatewayOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
+  } else if (isGatewayQuotaExhausted) {
+    // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
+    // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
+    displayError = t('chat.errorBanner.gatewayQuotaExhausted');
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -300,7 +343,11 @@ export function ErrorBanner({
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
   } else {
-    displayError = error;
+    // Keep the raw message available to every specialized gate above. Only
+    // the final fallback uses the stable reason map, so auth/network/overload
+    // recovery behavior keeps its existing priority while generic maker-core
+    // English fallbacks are localized in both the live and tail banner.
+    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : error;
     hasSpecialGuidance = false;
   }
 
@@ -520,6 +567,22 @@ export function ErrorBanner({
           {switchingClaudeSubscription
             ? t('chat.errorBanner.switchingClaudeSubscription')
             : t('chat.errorBanner.switchClaudeSubscription')}
+        </button>
+      )}
+      {isGatewayQuotaExhausted && onViewBalance && (
+        // 与「切换到 Claude.ai 并重试」同一档低打扰内联恢复动作:不弹窗、不抢焦点。
+        <button
+          type="button"
+          onClick={onViewBalance}
+          className={cn(
+            'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg-strong)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.viewBalanceTitle')}
+        >
+          <Wallet size={12} />
+          {t('chat.errorBanner.viewBalance')}
         </button>
       )}
       {isCodexRemoteAuthMissing && !syncedSinceError && (

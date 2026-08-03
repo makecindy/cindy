@@ -104,11 +104,17 @@ import {
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
   interactionKind,
+  isPendingInteractionCollapsed,
   pendingInteractionsBlockRemoteComposer,
   readRequestId,
   selectPendingInteractionByRequestId,
   shouldUseFullHeightPendingInteractionSurface,
 } from '@/session/interactionModel';
+import {
+  prunePendingInteractionCollapse,
+  togglePendingInteractionCollapse,
+  useCollapsedPendingRequestIds,
+} from '@/session/pendingInteractionCollapseStore';
 import {
   buildSessionRuntimeOptions,
   normalizeMobileAgentCapabilities,
@@ -437,6 +443,7 @@ import {
   useSessionInputProjection,
   useSessionMessages,
   useSessionPendingInteractions,
+  useSessionPendingInteractionsAuthoritative,
   useSessionRunStatus,
   useSessionMakerTurnRunning,
   useSessionRunning,
@@ -772,6 +779,8 @@ export default function SessionScreen() {
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
+  // pending 列表是否已被被控端的全量快照确认过(空列表能不能当「都处理完了」用)。
+  const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
@@ -1048,6 +1057,14 @@ export default function SessionScreen() {
   const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds] = useState<ReadonlySet<string>>(new Set());
   const [pendingHistoryExpanded, setPendingHistoryExpanded] = useState(false);
   const [pendingInteractionActiveRequestId, setPendingInteractionActiveRequestId] = useState<string | null>(null);
+  /**
+   * 用户主动收起的待处理请求(按 requestId),来自模块级 store。
+   *
+   * 不能是本组件的 state:契约是「只有该请求被回答 / 撤销才失效」,而离开任务会卸载本页,
+   * 组件 state 随之丢失——再进来同一条仍在 pending 的请求又会展开占满屏(#1493 review)。
+   * store 按 sessionId 隔离,切换会话不串状态。
+   */
+  const collapsedPendingRequestIds = useCollapsedPendingRequestIds(sessionId);
   const [pendingPlanViewerState, setPendingPlanViewerState] = useState<MobilePlanViewerState>('half');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
@@ -1507,10 +1524,24 @@ export default function SessionScreen() {
   const activePendingKind = activePendingInteraction
     ? interactionKind(activePendingInteraction)
     : null;
+  const activePendingCollapsed = isPendingInteractionCollapsed(
+    collapsedPendingRequestIds,
+    activePendingRequestId,
+  );
   const pendingInteractionFullHeight = shouldUseFullHeightPendingInteractionSurface({
     activeKind: activePendingKind,
+    collapsed: activePendingCollapsed,
     planViewerState: pendingPlanViewerState,
   });
+  const toggleCollapsedPendingRequest = useCallback((requestId: string) => {
+    togglePendingInteractionCollapse(sessionId, requestId);
+  }, [sessionId]);
+  // 状态与回调成对下发:Panel 的 collapse prop 是整组给或整组不给,只给一半会得到
+  // 「显示为收起但点不开」的死界面(#1493 review)。
+  const pendingInteractionCollapse = useMemo(
+    () => ({ requestIds: collapsedPendingRequestIds, onToggle: toggleCollapsedPendingRequest }),
+    [collapsedPendingRequestIds, toggleCollapsedPendingRequest],
+  );
   const hasActivePendingInteraction = activePendingInteraction !== null;
   // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
   // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
@@ -1562,6 +1593,14 @@ export default function SessionScreen() {
       setPendingInteractionActiveRequestId(null);
     }
   }, [pending, pendingInteractionActiveRequestId]);
+  // 卡被回答 / 被撤后清掉它的收起记录,否则同一 requestId 万一复现会直接以收起态出现。
+  // 只在 pending 列表**权威**时清:短暂离线会按设计清空这份投影(markDeviceOffline),
+  // 那种空列表不代表请求已终结(#1493 review)。prune 无变化时返回原数组,不会自触发。
+  useEffect(() => {
+    prunePendingInteractionCollapse(sessionId, pending, {
+      authoritative: pendingInteractionsAuthoritative,
+    });
+  }, [pending, pendingInteractionsAuthoritative, sessionId]);
   useEffect(() => {
     if (
       sessionOperationLayout.composerSlot !== 'pending-interaction'
@@ -8197,6 +8236,9 @@ export default function SessionScreen() {
                 nestedScrollEnabled
                 testID="interaction.aboveComposerScroll"
               >
+                {/* 这张卡本来就只占 palette 量级高度、且手机上答不了(只能取消 / 回电脑端),
+                    不给收起入口:收起态的文案与 a11y 都是「先不答、稍后回答」,套在它身上是
+                    错的语义。 */}
                 <InteractionPanel
                   deviceId={deviceId}
                   sessionId={sessionId}
@@ -8233,6 +8275,7 @@ export default function SessionScreen() {
                 >
                   <InteractionPanel
                     safeAreaBottomInset={insets.bottom}
+                    collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
                     fillAvailableHeight
                     sessionId={sessionId}
@@ -8253,6 +8296,7 @@ export default function SessionScreen() {
                 >
                 <InteractionPanel
                   safeAreaBottomInset={insets.bottom}
+                  collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}

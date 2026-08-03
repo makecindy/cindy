@@ -1,9 +1,13 @@
 /**
- * deviceResponsivenessBreaker.ts — per-device「目标设备无响应」熔断器(纯逻辑,node 可单测)。
+ * deviceResponsiveness.ts — per-device「目标设备无响应」熔断器(纯逻辑,node 可单测)。
  * ---------------------------------------------------------------------------
+ * desktop / mobile 控制端共享(原 apps/mobile/src/device-link/deviceResponsivenessBreaker.ts,
+ * 2026-08 提炼到 maker-shared 供桌面控制端复用;两端各自持有 UI 镜像 store 与接线)。
+ *
  * 事故链背景(2026-07 生产):桌面端进程活着(relay 心跳 / presence 全正常)但内部
  * 卡死(DB gate 失败),invoke 永不回包。手机端每个请求都等满超时,重试链 + 多触发源
  * 重放把请求堆成风暴,JS 线程停摆(实测最长 114s),期间连超时 timer 都被冻结。
+ * 弱网场景同理:请求到不了对端或响应回不来,同样表现为连续 INVOKE_TIMEOUT。
  * 本熔断器把「对同一台无响应设备的持续请求」收敛为周期性单飞探测:
  *
  *   - 失败信号:**仅** INVOKE_TIMEOUT(等满超时无回包)计入连续失败;
@@ -67,9 +71,10 @@ export interface DeviceResponsivenessBreaker {
   createCohort(deviceId: string): number;
   /**
    * 发送前门禁:closed → 'allow';同一 fan-out 可传共享 cohort,省略则每次调用
-   * 创建独立 cohort。open 且探测窗口已到、无在途探测 → 'probe';其余 → 'reject'。
+   * 创建独立 cohort。open 且探测窗口已到、无在途探测,且调用方显式 allowProbe:true
+   * → 'probe';其余 → 'reject'。
    */
-  acquire(deviceId: string, cohort?: number): BreakerSendSlot;
+  acquire(deviceId: string, cohort?: number, options?: { allowProbe?: boolean }): BreakerSendSlot;
   /** 请求收尾上报。slot 必须是 acquire 返回的票据;代数不匹配的旧请求被忽略。 */
   settle(deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
@@ -125,7 +130,11 @@ export function createDeviceResponsivenessBreaker(
     return next;
   };
 
-  const acquire = (deviceId: string, cohort?: number): BreakerSendSlot => {
+  const acquire = (
+    deviceId: string,
+    cohort?: number,
+    options?: { allowProbe?: boolean },
+  ): BreakerSendSlot => {
     // 首次发放即登记(review):仅 acquire 过、还没有任何 settle/state 的设备也
     // 必须被 resetAll 的全量翻篇覆盖,否则登出前的在途请求会在切号后按当前代
     // 被采信,把旧账号的超时累进新账号的计数。
@@ -135,6 +144,11 @@ export function createDeviceResponsivenessBreaker(
     if (!state?.open) return { decision: 'allow', generation, cohort: cohort ?? newCohort(deviceId) };
     if (state.probeInFlight) return { decision: 'reject', generation, cohort: 0 };
     if (now() - state.openedAt < state.probeBackoffMs) {
+      return { decision: 'reject', generation, cohort: 0 };
+    }
+    // half-open 的唯一席位只能由代表性探测路径显式领取;普通业务请求即使
+    // 窗口到点也必须保持 reject,避免抢占探测并错误推进退避。
+    if (options?.allowProbe !== true) {
       return { decision: 'reject', generation, cohort: 0 };
     }
     state.probeInFlight = true;

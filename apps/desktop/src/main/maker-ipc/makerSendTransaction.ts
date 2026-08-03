@@ -66,6 +66,8 @@ export interface MakerSendTransactionSession {
   agentKind: AgentKind;
   workDir: string;
   remoteHostId: string | null;
+  /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   isTurnRunning(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
@@ -152,7 +154,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -437,6 +439,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
       let sess = deps.getSession(sessionId);
+      // Maker keeps a failed Session registered until its real handle cleanup
+      // succeeds. It is not a reusable send target: route it through the
+      // existing lazy bootstrap path so Maker.createSession() can retry close
+      // and rebuild the handle before dispatching the message.
+      if (sess?.getStatus?.() === 'error') {
+        deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
       if (sess?.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
@@ -626,7 +636,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           onDispatching: () => {
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });

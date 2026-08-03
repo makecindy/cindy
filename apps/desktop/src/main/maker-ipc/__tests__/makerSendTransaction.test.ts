@@ -150,7 +150,7 @@ describe('maker SEND transaction', () => {
       { shouldBroadcast },
     );
     expect(onPersisted).toHaveBeenCalled();
-    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1');
+    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
@@ -646,6 +646,37 @@ describe('maker SEND transaction', () => {
 
     expect(deps.checkWorkDirExists).toHaveBeenCalledWith('session-1', 'C:\\repo', 'codex', null);
     expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
+    const failedSession = createSession({
+      getStatus: vi.fn(() => 'error' as const),
+    });
+    const recoveredSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => failedSession),
+      bootstrapSession: vi.fn(async () => ({
+        session: recoveredSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(failedSession.send).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(recoveredSession.send).toHaveBeenCalled();
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {
