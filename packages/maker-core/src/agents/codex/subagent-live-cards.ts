@@ -115,6 +115,11 @@ const MAX_PENDING_PER_THREAD = 64;
 /** 未归属血缘边的缓冲上限(父线程数 × 每父线程子线程数),同样防无界堆积。 */
 const MAX_PENDING_LINEAGE_PARENTS = 32;
 const MAX_PENDING_LINEAGE_CHILDREN = 32;
+/**
+ * 单卡工具 item 去重登记的条数上限。去重登记必须活到卡片淘汰(turn/completed 可能早于
+ * 后台 item/completed,提前清会让迟到的 completed 重复计数),所以只能按条数封顶。
+ */
+const MAX_COUNTED_ITEM_IDS = 4096;
 
 interface ThreadState {
   status: SubagentLiveCardStatus;
@@ -185,8 +190,10 @@ export function createSubagentLiveCardTracker(opts: {
     let totalTokens = 0;
     for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
     const status = aggregateStatus(card);
-    // 全部收口后释放本卡的 item 登记(计数值保留),长跑子代理不把 id 攒到会话结束。
-    if (isTerminal(status)) card.countedItemIds.clear();
+    // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
+    // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉
+    // 之后那条迟到的 completed 会被当成一个新工具再加一次,卡片最终工具数虚高(review)。
+    // 去重登记改为跟卡同生命周期(dropCard 时随卡一起释放),只按条数封顶防长跑子代理无界增长。
     return {
       taskId: card.taskId,
       status,
@@ -278,6 +285,12 @@ export function createSubagentLiveCardTracker(opts: {
         const itemId = typeof item?.id === 'string' ? item.id : '';
         if (!itemId || !TOOL_ITEM_TYPES.has(itemType)) return false;
         if (card.countedItemIds.has(itemId)) return false;
+        // 按插入序淘汰最老的 id(Set 保序)。上限远大于任何真实迟到窗口 —— 被淘汰的 id 只在
+        // "几千个工具调用之前那一条的 completed 现在才到"时才会重复计数,现实中不发生。
+        if (card.countedItemIds.size >= MAX_COUNTED_ITEM_IDS) {
+          const oldest = card.countedItemIds.values().next();
+          if (!oldest.done) card.countedItemIds.delete(oldest.value);
+        }
         card.countedItemIds.add(itemId);
         card.toolUses += 1;
         return true;
@@ -380,12 +393,17 @@ export function createSubagentLiveCardTracker(opts: {
       if (registration.failed) {
         card.spawnFailed = true;
         const visited = new Set<string>();
+        let replayedOnFailure = false;
         for (const childThreadId of registration.childThreadIds) {
-          attachThread(card, childThreadId, visited);
+          if (attachThread(card, childThreadId, visited)) replayedOnFailure = true;
           const thread = card.threads.get(childThreadId);
           if (thread) thread.status = 'failed';
         }
-        return null;
+        // started phase 缺失或晚到时,子线程的工具/token 通知会先进缓冲、由上面的 attachThread
+        // 重放出来;若此后再无通知,无条件返回 null 就意味着这些用量永远不显示 —— 而 translator
+        // 的 failed 帧本身不带 usage(review)。有了 spawnFailed 闩,snapshot() 恒为 failed,
+        // 补发这一帧不会重现"把失败盖回运行中"的老问题。
+        return replayedOnFailure ? snapshot(card) : null;
       }
 
       const visited = new Set<string>();

@@ -269,6 +269,8 @@ export class AppServerHost {
   private readonly lineageRoots = new Map<string, string>();
   /** 找不到 subscriber 时按 threadId 暂存的 notification, drain on subscribe。 */
   private readonly buffered = new Map<string, BufferedNotification[]>();
+  /** 血缘迭代重建的重入闸(routeDescendantThreadStarted 与重建互相调用)。 */
+  private replayingDescendantLineage = false;
   /**
    * 账号配额最近一次 snapshot, 给新 subscribeThread 立即重放 — 用户打开新 codex
    * session 时不必等下次 turn 完成才看到 chip 数据。整个 host 生命周期共享一份 (账号级)。
@@ -857,6 +859,11 @@ export class AppServerHost {
     // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
     // running(codex review)。这里按到达顺序补投进 descendant 通道。
     this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
+    // 本次血缘建立可能解锁**孙**线程:孙的 thread/started 缓存在它自己的 id 下,上面的 drain
+    // 只排空 childThreadId 的队列,而且它按契约会跳过 thread/started —— 不再扫一遍,孙线程的
+    // 血缘永远建不起来,它的 tool / token / 终态通知会一直烂在缓冲区直到过期(卡片漏计,并
+    // 可能一直显示运行中或提前完成)(review)。复用 root 订阅时那套迭代重建。
+    this.replayBufferedDescendantThreadStarts(rootThreadId);
   }
 
   /**
@@ -890,6 +897,19 @@ export class AppServerHost {
   }
 
   private replayBufferedDescendantThreadStarts(rootThreadId: string): void {
+    // 重入保护:本方法会调用 routeDescendantThreadStarted,而后者现在又会回调本方法。
+    // 嵌套再扫一遍是纯重复劳动(外层的 for(;;) 本来就会继续迭代直到没有新发现),
+    // 深血缘下还会退化成 O(深度²)。让嵌套调用直接返回,由最外层那次跑完。
+    if (this.replayingDescendantLineage) return;
+    this.replayingDescendantLineage = true;
+    try {
+      this.replayBufferedDescendantThreadStartsInner(rootThreadId);
+    } finally {
+      this.replayingDescendantLineage = false;
+    }
+  }
+
+  private replayBufferedDescendantThreadStartsInner(rootThreadId: string): void {
     // thread/started is buffered under the child id. A root subscription therefore
     // cannot drain those entries directly; rebuild the lineage iteratively so an
     // already-buffered child can unlock an already-buffered grandchild as well.

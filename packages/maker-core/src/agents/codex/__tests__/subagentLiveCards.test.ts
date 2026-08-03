@@ -522,6 +522,51 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.size).toBe(0);
   });
 
+  it('keeps tool item dedup ids after the card settles (turn/completed may precede item/completed)', () => {
+    // app-server 允许 turn/completed 先发、后台收尾的 item/completed 随后才到。原来 snapshot()
+    // 一收口就清 countedItemIds,那条迟到的 completed 会被当成新工具再加一次 → 工具数虚高(review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    expect(
+      tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-1')),
+    ).toMatchObject({ toolUses: 1 });
+
+    // 先收口(此时会产生一次终态快照)。
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('completed');
+
+    // 同一个 item 的迟到 completed:必须被去重掉,工具数保持 1。
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toBeNull();
+    // 用一条真正的新 item 确认计数基线没有被污染(应为 2,而不是把 x-1 重复算成 3)。
+    expect(
+      tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-2')),
+    ).toMatchObject({ toolUses: 2 });
+  });
+
+  it('re-emits replayed usage when the spawn itself failed', () => {
+    // V1 spawn 的 started phase 缺失/晚到:子线程的工具与 token 先进缓冲,随后只收到
+    // status:'failed' 的 completed item。原来失败分支无条件 return null,而 translator 的
+    // failed 帧不带 usage —— 这些已重放的计数永远不会显示(review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'));
+    tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+      tokenUsage: { total: { totalTokens: 1234 } },
+    });
+
+    const failed = tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a']), status: 'failed' });
+    // 有重放内容 → 补发快照,且状态由终态闩锁定为 failed(不会把失败盖回运行中)。
+    expect(failed).toMatchObject({ taskId: 'card-v1', status: 'failed', toolUses: 1, totalTokens: 1234 });
+  });
+
+  it('still emits nothing when a failed spawn had no buffered usage to replay', () => {
+    // 没有可重放的内容就别多发一帧 —— translator 的 failed 帧已经到位。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a']), status: 'failed' })).toBeNull();
+    tracker.noteSpawnItem(v1SpawnItem('card-v2', ['t-b']));
+    expect(tracker.noteSpawnItem({ ...v1SpawnItem('card-v2', ['t-b']), status: 'failed' })).toBeNull();
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

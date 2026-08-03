@@ -662,4 +662,120 @@ describe('AppServerHost buffered descendant notification replay', () => {
     await subscription.release();
     await host.shutdown();
   });
+
+  it('rescans buffered lineage when a live thread/started unlocks an already-buffered grandchild', async () => {
+    // 与上一例的区别:root **已经订阅**,而孙线程的 thread/started 先于父线程到达。此时孙的
+    // 血缘无从判断 → 连同它的业务通知一起缓存在孙自己的 id 下。父线程随后建立血缘时,原实现
+    // 只排空父线程那一条队列(而且按契约跳过 thread/started),不再扫待解析的后代血缘 →
+    // 孙线程的 tool / token / 终态通知一直烂在缓冲区,卡片漏计并可能持续显示运行中(review)。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const itemStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+      itemStarted,
+    });
+
+    // 逆序:孙先到(父线程此刻还没有血缘),连它的业务通知一起被缓冲。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    const grandchildItem = {
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+    };
+    const grandchildTurnEnd = {
+      method: 'turn/completed',
+      params: { threadId: 'grandchild-thread', turn: { id: 't2', status: 'completed' } },
+    };
+    transport.emit(grandchildItem);
+    transport.emit(grandchildTurnEnd);
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    // 父线程血缘到达:必须顺带把孙线程解锁并补投它的缓冲通知。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
+    expect(descendantNotification.mock.calls).toEqual([
+      ['grandchild-thread', 'item/started', grandchildItem.params],
+      ['grandchild-thread', 'turn/completed', grandchildTurnEnd.params],
+    ]);
+    // 后代通知不得漏进主线程通道(否则子代理的工具会被渲染成主会话自己的调用)。
+    expect(itemStarted).not.toHaveBeenCalled();
+
+    // 孙线程血缘已建立:它之后的通知直接走 descendant 通道,不再进缓冲。
+    descendantNotification.mockClear();
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't3', item: { id: 'i-3', type: 'webSearch' } },
+    });
+    expect(descendantNotification).toHaveBeenCalledTimes(1);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('resolves a deep buffered lineage chain from a single live thread/started', async () => {
+    // 三代逆序:曾孙 → 孙 全部先到,最后才到子线程对 root 的血缘。一次重建要沿链解开。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+    });
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'great-grandchild', parentThreadId: 'grandchild-thread' } },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'great-grandchild', turnId: 't9', item: { id: 'i-9', type: 'commandExecution' } },
+    });
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    // child + grandchild + great-grandchild 三代血缘全部建立,曾孙的工具通知补投到位。
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(3);
+    expect(descendantNotification.mock.calls).toEqual([
+      [
+        'great-grandchild',
+        'item/started',
+        { threadId: 'great-grandchild', turnId: 't9', item: { id: 'i-9', type: 'commandExecution' } },
+      ],
+    ]);
+
+    await subscription.release();
+    await host.shutdown();
+  });
 });
