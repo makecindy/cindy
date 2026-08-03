@@ -3461,6 +3461,12 @@ export class AgentInputCoordinator {
     });
     this.emit(sessionId);
     this.deps.onQueueEmptied?.(sessionId);
+    // Exhausting the hidden auto-resume must not strand work queued behind it.
+    // The retry timer has been consumed at this boundary, so wake any FIFO
+    // tail explicitly once the auto item is removed.
+    if (state.pendingQueue.length > 0 || state.pendingCompacts.length > 0) {
+      this.scheduleDrain(sessionId, 'auto-resume-budget-exhausted');
+    }
     return true;
   }
 

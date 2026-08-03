@@ -7106,6 +7106,70 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(4);
   });
 
+  it('自动续跑耗尽后唤醒其后的 scheduler 队列尾部', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-budget-drains-scheduler-tail';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    let busyAttempts = 0;
+    h.sendToAgent.mockImplementation(async (_sessionId, message) => {
+      const isContinuePrompt =
+        message === CONTINUE_AFTER_ERROR_PROMPT ||
+        (typeof message !== 'string' && message.content === CONTINUE_AFTER_ERROR_PROMPT);
+      if (isContinuePrompt) {
+        busyAttempts += 1;
+        return hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] Session is already running a turn');
+      }
+      return sendSuccess('scheduler-tail');
+    });
+
+    // Keep the auto-resume at the head while the provider is busy, then queue
+    // a scheduler message behind it. Once the provider reports idle, the host
+    // still returns SESSION_RUNNING for three dispatch races; the third busy
+    // result removes only the auto item, so the remaining scheduler item must
+    // still be dispatched.
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('q-scheduler-tail', 'next heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-tail',
+        scheduleName: 'Tail',
+        runId: 'run-tail',
+      },
+    }));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(busyAttempts).toBe(1);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(busyAttempts).toBe(2);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+
+    expect(busyAttempts).toBe(3);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(5);
+    expect(h.sendToAgent.mock.calls[4]?.[1]).toEqual({
+      type: 'user',
+      content: 'next heartbeat',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+  });
+
   it('live busy 挡住自动续跑时使用 10s fallback，terminal 边界仍立即唤醒', async () => {
     vi.useFakeTimers();
     const h = createHarness();
