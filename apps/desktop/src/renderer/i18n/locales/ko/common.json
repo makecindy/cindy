@@ -10,7 +10,8 @@
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "대상 모델 또는 소스에 다른 원격 라우트가 필요합니다. 원격 세션을 닫고 다시 생성하세요.",
     "REMOTE_PROVIDER_UPDATING": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
     "REMOTE_PROVIDER_UNSUPPORTED": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
-    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요"
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "대상 장치가 응답하지 않습니다. 원격 장치를 확인한 후 다시 시도하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -2373,6 +2374,22 @@
         "defaultTag": "기본",
         "resetToDefault": "기본값으로 재설정",
         "toggleFailed": "브라우저 대상 전환에 실패했습니다",
+        "health": {
+          "ready": "내장 브라우저 제어 연결이 준비되었습니다.",
+          "error": "내장 브라우저 연결 오류: {{reason}}. ‘내장 브라우저 복구’를 눌러 제어 연결을 다시 만드세요.",
+          "reasons": {
+            "disposing": "이전 종료 작업이 완료되지 않았습니다",
+            "hostUnavailable": "내장 브라우저 화면이 준비되지 않았거나 연결이 끊어졌습니다",
+            "startFailed": "새 제어 프로세스를 시작하지 못했습니다",
+            "statusFailed": "제어 프로세스 상태 확인에 실패했습니다",
+            "recoveryFailed": "제어 연결을 다시 구성하지 못했습니다"
+          },
+          "reconnect": "내장 브라우저 다시 연결",
+          "recover": "내장 브라우저 복구",
+          "recovering": "내장 브라우저 복구 중…",
+          "recovered": "내장 브라우저가 다시 연결되었습니다",
+          "recoverFailed": "내장 브라우저 복구에 실패했습니다. 오류 원인을 확인하고 다시 시도하세요."
+        },
         "rsbWebview": {
           "title": "사이드바 내장 브라우저",
           "description": "에이전트가 오른쪽 사이드바의 webview 탭에서 작동합니다. 팝업 없음, 로그인 상태는 별도 유지됩니다."
@@ -6526,6 +6543,11 @@
         "rename": "프로젝트 이름 변경",
         "pin": "프로젝트 고정",
         "unpin": "프로젝트 고정 해제",
+        "removeFromSidebar": "사이드바에서 프로젝트 제거",
+        "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
+        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
+        "removeFromSidebarConfirmAction": "프로젝트 제거",
+        "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",
         "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
         "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",

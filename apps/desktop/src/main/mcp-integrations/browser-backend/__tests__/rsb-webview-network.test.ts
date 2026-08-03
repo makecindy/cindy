@@ -199,4 +199,36 @@ describe('RsbWebviewNetwork', () => {
     harness.emit('message', 'Network.loadingFinished', { requestId: 'request-idle' });
     await expect(pending).resolves.toBeUndefined();
   });
+
+  it('stops pending body and idle waits without debugger commands after dispose', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = networkHarness();
+      const network = new RsbWebviewNetwork({ warn: vi.fn() });
+      await network.observe(harness.wc);
+
+      const pendingBody = network.readResponseBody(harness.wc, {
+        url: '/api/items',
+        timeoutMs: 1_000,
+      });
+      const pendingIdle = network.waitForIdle(harness.wc, {
+        timeoutMs: 1_000,
+        idleMs: 500,
+      });
+      const bodyRejected = expect(pendingBody).rejects.toThrow('network monitor is disposed');
+      const idleRejected = expect(pendingIdle).rejects.toThrow('network monitor is disposed');
+      await Promise.resolve();
+      network.dispose();
+      await vi.advanceTimersByTimeAsync(100);
+
+      await bodyRejected;
+      await idleRejected;
+      expect(harness.sendCommand).not.toHaveBeenCalledWith(
+        'Network.getResponseBody',
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -3004,6 +3004,37 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('connectNow:force 丢弃半开 socket 并复位所有 peer 的旧 link 状态', async () => {
+    const h = makeHarness();
+    h.client.start();
+    await tick();
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+    await establishInboundReliableLink(h, 'force-stream-a', 1, 'ctrl-force-a');
+    await establishInboundReliableLink(h, 'force-stream-b', 1, 'ctrl-force-b');
+    expect(h.client.isLinkReady('ctrl-force-a')).toBe(true);
+    expect(h.client.isLinkReady('ctrl-force-b')).toBe(true);
+
+    h.client.connectNow('system-resume', { force: true });
+    expect(h.client.isLinkReady('ctrl-force-a')).toBe(false);
+    expect(h.client.isLinkReady('ctrl-force-b')).toBe(false);
+    await tick();
+    expect(h.sockets.length).toBe(2);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+
+    h.client.sendInvokeResult('ctrl-force-a', 'req-force-a', { ok: true, result: 'a' });
+    h.client.sendInvokeResult('ctrl-force-b', 'req-force-b', { ok: true, result: 'b' });
+    const resent = h.current().sent.filter((env) => env.kind === 'invoke-result');
+    expect(resent).toHaveLength(2);
+    expect(resent.map((env) => env.id)).toEqual(['req-force-a', 'req-force-b']);
+    expect(resent.map((env) => env.payload)).toEqual([
+      { ok: true, result: 'a' },
+      { ok: true, result: 'b' },
+    ]);
+    h.client.stop();
+  });
+
   it('connectNow:stopped 后也能拉起连接(等价 start)', async () => {
     const h = makeHarness();
     h.client.start();

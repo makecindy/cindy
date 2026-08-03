@@ -119,8 +119,12 @@ export function createDeviceSendCohort(deviceId: string): number {
   return breaker.createCohort(deviceId);
 }
 
-export function acquireDeviceSendSlot(deviceId: string, cohort?: number): BreakerSendSlot {
-  const slot = breaker.acquire(deviceId, cohort);
+export function acquireDeviceSendSlot(
+  deviceId: string,
+  cohort?: number,
+  options?: { allowProbe?: boolean },
+): BreakerSendSlot {
+  const slot = breaker.acquire(deviceId, cohort, options);
   if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
   return slot;
 }

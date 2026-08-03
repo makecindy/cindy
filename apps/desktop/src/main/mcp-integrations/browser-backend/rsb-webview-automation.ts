@@ -169,24 +169,6 @@ function getDebugger(wc: WebContents): DebuggerTransport {
   return candidate;
 }
 
-async function withDebugger<T>(
-  wc: WebContents,
-  body: (send: DebuggerTransport['sendCommand']) => Promise<T>,
-): Promise<T> {
-  const transport = getDebugger(wc);
-  const alreadyAttached = transport.isAttached();
-  if (!alreadyAttached) {
-    transport.attach('1.3');
-  }
-  try {
-    return await body(transport.sendCommand.bind(transport));
-  } finally {
-    if (!alreadyAttached && transport.isAttached()) {
-      transport.detach();
-    }
-  }
-}
-
 function buildSnapshotTree(nodes: RawAxNode[]): { tree: SnapshotTreeNode[]; roots: number[] } {
   const tree: SnapshotTreeNode[] = [];
   const byId = new Map<string, number>();
@@ -1630,8 +1612,70 @@ export class RsbWebviewAutomation {
   private readonly refsByTab = new Map<string, Map<string, SnapshotRef>>();
   private readonly resourcesByTab = new Map<string, Set<string>>();
   private readonly barriersByTab = new Map<string, HumanVerificationBarrier>();
+  private readonly ownedDebuggerLeases = new Map<DebuggerTransport, number>();
+  private disposed = false;
 
   constructor(private readonly logger: AutomationLogger) {}
+
+  /**
+   * Terminal generation fence for automation work owned by this backend.
+   * Detach only transports this instance attached itself. Late `finally`
+   * blocks deliberately skip detach after disposal so they cannot tear down a
+   * replacement backend's debugger session on the same WebContents.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const transport of this.ownedDebuggerLeases.keys()) {
+      try {
+        if (transport.isAttached()) transport.detach();
+      } catch (err) {
+        this.logger.warn('failed to detach embedded browser debugger during dispose', err);
+      }
+    }
+    this.ownedDebuggerLeases.clear();
+  }
+
+  private assertActive(): void {
+    if (this.disposed) {
+      throw new Error('embedded browser control generation was replaced');
+    }
+  }
+
+  private async withDebugger<T>(
+    wc: WebContents,
+    body: (send: DebuggerTransport['sendCommand']) => Promise<T>,
+  ): Promise<T> {
+    this.assertActive();
+    const transport = getDebugger(wc);
+    const existingLeases = this.ownedDebuggerLeases.get(transport);
+    const ownsAttachment = existingLeases !== undefined || !transport.isAttached();
+    if (!transport.isAttached()) transport.attach('1.3');
+    if (ownsAttachment) {
+      this.ownedDebuggerLeases.set(transport, (existingLeases ?? 0) + 1);
+    }
+    const send: DebuggerTransport['sendCommand'] = async (method, params) => {
+      this.assertActive();
+      const result = params === undefined
+        ? await transport.sendCommand(method)
+        : await transport.sendCommand(method, params);
+      this.assertActive();
+      return result;
+    };
+    try {
+      return await body(send);
+    } finally {
+      if (ownsAttachment) {
+        const remaining = (this.ownedDebuggerLeases.get(transport) ?? 1) - 1;
+        if (remaining > 0) {
+          this.ownedDebuggerLeases.set(transport, remaining);
+        } else {
+          this.ownedDebuggerLeases.delete(transport);
+          if (!this.disposed && transport.isAttached()) transport.detach();
+        }
+      }
+    }
+  }
 
   forgetTab(tabId: string): void {
     this.refsByTab.delete(tabId);
@@ -1662,7 +1706,7 @@ export class RsbWebviewAutomation {
             maxChars: req.maxChars ?? EFFICIENT_SNAPSHOT_MAX_CHARS,
           }
         : req;
-    return withDebugger(wc, async (send) => {
+    return this.withDebugger(wc, async (send) => {
       let inspection: PageInspection = { resources: [] };
       try {
         inspection = await inspectPage(send, snapshotReq.urls === true);
@@ -1815,7 +1859,7 @@ export class RsbWebviewAutomation {
       throw new Error('evaluate.fn (JS expression source) required');
     }
     const timeoutMs = positiveInt(request.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
-    return withDebugger(wc, async (send) => {
+    return this.withDebugger(wc, async (send) => {
       let response: {
         result?: { value?: unknown };
         exceptionDetails?: { text?: string; exception?: { description?: string } };
@@ -1877,7 +1921,7 @@ export class RsbWebviewAutomation {
       'paths' | 'ref' | 'inputRef' | 'element' | 'query' | 'timeoutMs'
     >,
   ): Promise<{ tabId: string; uploadedFiles: number }> {
-    return withDebugger(wc, async (send) => {
+    return this.withDebugger(wc, async (send) => {
       let target: ResolvedNode;
       if (req.query && typeof req.query === 'object') {
         target = await resolveElementQuery(send, req.query, req.timeoutMs, { allowHidden: true });
@@ -1944,9 +1988,11 @@ export class RsbWebviewAutomation {
       waitForNetworkIdle?: (timeoutMs: number) => Promise<void>;
     },
   ): Promise<RsbActResult> {
-    return withDebugger(wc, async (send) => {
+    return this.withDebugger(wc, async (send) => {
       const dispatchInput: InputDispatcher = async (method, params, targetTicket) => {
+        this.assertActive();
         await dispatchTranslatedInput(wc, method, params, targetTicket);
+        this.assertActive();
       };
       const resolveTarget = async (
         ref = request.ref,
