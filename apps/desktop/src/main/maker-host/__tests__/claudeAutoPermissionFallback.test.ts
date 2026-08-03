@@ -296,6 +296,119 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     ]);
   });
 
+  /**
+   * 漏检可观测性(issue #1579):这条链路是 Auto 档唯一的自救通道,它的两个前置条件
+   * (会话请求头、id 反解)任一不满足就整条静默失效。以前两处 early return 什么都不记,
+   * 排障时日志里没有任何线索指向这里。
+   */
+  describe('missed-detection visibility', () => {
+    function createObserver(resolve: (sdkSessionId: string) => string | null, t: () => number) {
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      return { logger, observer: createClaudeAutoClassifierFailureObserver(resolve, { now: t, logger }) };
+    }
+
+    /** 取某条 warn 携带的计数快照。 */
+    function warnCounters(logger: { warn: ReturnType<typeof vi.fn> }, callIndex = 0) {
+      return (logger.warn.mock.calls[callIndex]?.[1] as { counters?: Record<string, number> })?.counters;
+    }
+
+    it('warns when an error response carries no session header', () => {
+      const listener = vi.fn();
+      setClaudeAutoClassifierUnavailableListener(listener);
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      expect(observer(ctx({ status: 429, requestHeaders: {} }))).toBeUndefined();
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('without session header');
+      expect(warnCounters(logger)).toMatchObject({
+        errorsMissingSessionHeader: 1,
+        classifierFailures: 0,
+      });
+    });
+
+    it('warns when the sdk session id cannot be resolved', () => {
+      const { logger, observer } = createObserver(() => null, () => 0);
+
+      expect(observer(ctx({ status: 500 }))).toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('unresolvable sdk session id');
+      expect(warnCounters(logger)).toMatchObject({ errorsUnresolvedSession: 1 });
+    });
+
+    it('counts non-classifier error responses without warning about them', () => {
+      // 普通 turn 的错误响应也流经这里,是正常大头 —— 只计数,不刷 warn。
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      observer(ctx({ status: 429, requestBody: requestBody({ system: 'ordinary assistant' }) }));
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      // 让它随下一条真漏检的 warn 一起显形,充当识别率的分母。
+      observer(ctx({ status: 429, requestHeaders: {} }));
+      expect(warnCounters(logger)).toMatchObject({
+        errorsNotClassifier: 1,
+        errorsMissingSessionHeader: 1,
+      });
+    });
+
+    it('throttles the same reason but keeps different reasons independent', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(
+        (sdkId) => (sdkId === 'sdk-known' ? 'session-1' : null),
+        () => t,
+      );
+
+      // 同一原因连发:60s 窗口内只出一条。
+      for (let i = 0; i < 5; i += 1) {
+        t += 1_000;
+        observer(ctx({ status: 429, requestHeaders: {} }));
+      }
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      // 另一个原因不被前者的限流窗口饿死。
+      observer(ctx({ status: 429, requestHeaders: { 'x-claude-code-session-id': 'sdk-unknown' } }));
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+
+      // 越过窗口后同一原因重新可见 —— 持续故障不能只报一次就消失。
+      t += 60_000; // OBSERVER_WARN_THROTTLE_MS(与 TRANSIENT_* 同款:常量不导出,测试写字面量)
+      observer(ctx({ status: 429, requestHeaders: {} }));
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+      expect(warnCounters(logger, 2)).toMatchObject({ errorsMissingSessionHeader: 6 });
+    });
+
+    it('warns when a success response cannot clear an existing transient tally', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(() => 'session-1', () => t);
+
+      observer(ctx({ status: 429 })); // 建立一条记账
+      t += 1_000;
+      // 恢复响应缺 header → 找不到要清哪一条账。
+      expect(observer(ctx({ status: 200, requestHeaders: {} }))).toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('recovery reset skipped');
+      expect(warnCounters(logger)).toMatchObject({ recoveryMissingSessionHeader: 1 });
+    });
+
+    it('logs the escalation with the full tally and stays silent without a logger', () => {
+      const signals: unknown[] = [];
+      setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      observer(ctx({ status: 400 })); // 确定性 4xx → 立即升级
+      expect(signals).toHaveLength(1);
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      expect((logger.debug.mock.calls[0][1] as { counters?: Record<string, number> }).counters)
+        .toMatchObject({ classifierFailures: 1 });
+
+      // 不注入 logger 时整段退化为纯计数,不得抛。
+      const silent = createClaudeAutoClassifierFailureObserver(() => null);
+      expect(() => silent(ctx({ status: 429, requestHeaders: {} }))).not.toThrow();
+    });
+  });
+
   it('does not parse/report success, redirects, non-classifier bodies, or unresolved sessions', () => {
     const listener = vi.fn();
     setClaudeAutoClassifierUnavailableListener(listener);

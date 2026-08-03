@@ -140,6 +140,39 @@ function isTransientClassifierStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/** 观察器只需要这两级;coordinator 的 FallbackLogger 用 info/warn,两者刻意不共用。 */
+interface ClassifierObserverLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+}
+
+/**
+ * 观察器生命周期内的识别记账。挂在限流日志上,用来回答一个排障时问不出来的问题:
+ * 「分类器正在报错,但我们到底有没有识别出来?」
+ *
+ * `classifierFailures` 是识别成功数;它与两个漏检计数的比例才是识别率信号。
+ * `errorsNotClassifier` 是**正常**的大头(普通 turn 的错误响应也会流经这里),不参与
+ * 漏检判断,单列出来只为让另外两个计数有分母。
+ */
+interface ClassifierObserverCounters {
+  /** 有 header + 反解成功 + body 判定为分类器 → 真正识别出的分类器故障。 */
+  classifierFailures: number;
+  /** 错误响应缺 x-claude-code-session-id → 无法归属会话,漏检。 */
+  errorsMissingSessionHeader: number;
+  /** 错误响应有 header 但反解不出业务会话 id → 漏检。 */
+  errorsUnresolvedSession: number;
+  /** 有 header + 反解成功,但 body 不是分类器请求 → 正常,普通 turn 的错误。 */
+  errorsNotClassifier: number;
+  /** 已有瞬时记账的成功响应缺 header → 这一轮「恢复即清零」不会发生。 */
+  recoveryMissingSessionHeader: number;
+}
+
+/**
+ * 同一漏检原因的 warn 限流间隔。漏检是**每个**错误响应都可能触发的,不限流会在上游
+ * 持续故障时把日志刷爆;但也不能只报一次 —— 排障的人需要知道它还在持续发生。
+ */
+const OBSERVER_WARN_THROTTLE_MS = 60_000;
+
 /**
  * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
  * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
@@ -148,22 +181,57 @@ function isTransientClassifierStatus(status: number): boolean {
  * fallback 信号分两类:
  * - 非瞬时 4xx(400/401/403/404/422 等确定性错误)→ 立即通知协调器(与 #596 前一致);
  * - 瞬时 408/429/5xx → 按上方 episode 阈值记账,持续故障才通知。
+ *
+ * 这条链路是 Auto 档唯一的自救通道,而它的两个前置条件(会话请求头、id 反解)任一不满足
+ * 就整条静默失效 —— 会话被留在无限 fail-closed,而日志里没有任何线索指向这里。所以两处
+ * 提前返回都带限流 warn 与识别记账(见 ClassifierObserverCounters,issue #1579)。记账与
+ * 日志都是旁路的:不改判定、不改短路顺序,logger 缺省时整段退化为纯计数。
  */
 export function createClaudeAutoClassifierFailureObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
-  opts: { now?: () => number } = {},
+  opts: { now?: () => number; logger?: ClassifierObserverLogger } = {},
 ): ResponseObserver {
   const now = opts.now ?? Date.now;
+  const logger = opts.logger;
   // key = sdkSessionId(cc 侧会话 id,请求头自带,成功路径无需反解);
   // value = 各 episode 的起始时间戳,升序。
   const transientEpisodes = new Map<string, number[]>();
+  const counters: ClassifierObserverCounters = {
+    classifierFailures: 0,
+    errorsMissingSessionHeader: 0,
+    errorsUnresolvedSession: 0,
+    errorsNotClassifier: 0,
+    recoveryMissingSessionHeader: 0,
+  };
+  /** 每个 reason 各自限流,免得高频的那个把另一个饿死。 */
+  const lastWarnAt = new Map<string, number>();
+  const warnThrottled = (reason: string, fields: Record<string, unknown>): void => {
+    if (!logger) return;
+    const ts = now();
+    const last = lastWarnAt.get(reason);
+    if (last !== undefined && ts - last < OBSERVER_WARN_THROTTLE_MS) return;
+    lastWarnAt.set(reason, ts);
+    logger.warn(`auto classifier failure observer: ${reason}`, {
+      ...fields,
+      counters: { ...counters },
+    });
+  };
 
   return (ctx: ResponseObserverCtx) => {
     if (ctx.status < 400) {
       // 分类器恢复 → 清零该会话的瞬时故障记账。仅在有记账时才 parse body。
       if (transientEpisodes.size === 0) return undefined;
       const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
-      if (!sdkSessionId) return undefined;
+      if (!sdkSessionId) {
+        // 拿不到 header 就找不到要清哪一条账。后果有界(记账最终会因窗口过期被弃),
+        // 但期间该会话可能被残账提前推过升级阈值,值得在日志里可见。
+        counters.recoveryMissingSessionHeader += 1;
+        warnThrottled('success response without session header; recovery reset skipped', {
+          status: ctx.status,
+          trackedSessions: transientEpisodes.size,
+        });
+        return undefined;
+      }
       const episodes = transientEpisodes.get(sdkSessionId);
       if (!episodes) return undefined;
       // 过期即弃:记账已整体滑出窗口 → 直接删,该会话的后续成功响应回到零开销
@@ -182,9 +250,32 @@ export function createClaudeAutoClassifierFailureObserver(
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
-    if (!sdkSessionId) return undefined;
+    if (!sdkSessionId) {
+      // 上游未回传原请求头(SDK 版本差异、代理链改写、部分错误响应本就不带)→ 无法归属,
+      // 该会话的分类器故障永远不会升级到 Cindy fallback。
+      counters.errorsMissingSessionHeader += 1;
+      warnThrottled('error response without session header; classifier failure unattributable', {
+        status: ctx.status,
+      });
+      return undefined;
+    }
     const sessionId = resolveSessionId(sdkSessionId);
-    if (!sessionId || !isClaudeAutoClassifierRequest(ctx.requestBody)) return undefined;
+    if (!sessionId) {
+      // 映射尚未建立 / 会话刚 resume / 映射表已清理。同样导致故障不会升级。
+      counters.errorsUnresolvedSession += 1;
+      warnThrottled('error response with unresolvable sdk session id', {
+        status: ctx.status,
+        sdkSessionId,
+      });
+      return undefined;
+    }
+    // 先判 sessionId 再 parse body —— 保持原有短路顺序,不为无法归属的响应付 parse 成本。
+    if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
+      // 正常大头:普通 turn 的错误响应也流经这里。只计数,不 warn。
+      counters.errorsNotClassifier += 1;
+      return undefined;
+    }
+    counters.classifierFailures += 1;
 
     if (isTransientClassifierStatus(ctx.status)) {
       const ts = now();
@@ -218,6 +309,14 @@ export function createClaudeAutoClassifierFailureObserver(
     // 用户重开 Auto 时从零累计,不因残账被单次偶发失败提前推过阈值。协调器自身有
     // in-flight 去重 + 持久态 CAS,重复信号安全。
     transientEpisodes.delete(sdkSessionId);
+
+    // 识别成功且已过阈值的那一刻记一条,带完整计数 —— coordinator 侧的日志只覆盖
+    // 「切换成功/失败」,看不到「识别到了但被 episode 阈值挡住」的那些。
+    logger?.debug('auto classifier failure escalated; notifying fallback coordinator', {
+      sessionId,
+      status: ctx.status,
+      counters: { ...counters },
+    });
 
     try {
       notifyAutoPermissionClassifierUnavailable({
