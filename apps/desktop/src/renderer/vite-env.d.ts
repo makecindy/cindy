@@ -1614,6 +1614,7 @@ interface ElectronAPI {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     } | null>;
     /** 子窗口根组件挂载握手。 */
@@ -1628,6 +1629,7 @@ interface ElectronAPI {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     }) => void;
     onStateChanged: (cb: (state: { detached: boolean; open: boolean }) => void) => () => void;
@@ -1636,6 +1638,7 @@ interface ElectronAPI {
         sessionId: string | null;
         workdir: string | null;
         remoteHostId: string | null;
+        deviceLinkDeviceId?: string | null;
         available: boolean;
       }) => void,
     ) => () => void;

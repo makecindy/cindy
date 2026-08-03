@@ -1325,6 +1325,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 子窗口根组件挂载握手(main 侧 ensureOpen 等它)。 */
@@ -1337,6 +1338,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     }): void => ipcRenderer.send('maker:rsb-window:set-context', ctx),
     onStateChanged: fanOutRsbWindowStateChanged,

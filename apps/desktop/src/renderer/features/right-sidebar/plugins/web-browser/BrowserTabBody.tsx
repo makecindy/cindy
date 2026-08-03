@@ -27,7 +27,7 @@
  * 跳过避免双重 load。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -46,10 +46,6 @@ import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../types';
-import {
-  getSessionDeviceId,
-  remoteProjectsStore,
-} from '@/features/device-link/remoteProjectsStore';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
@@ -90,13 +86,9 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // sessionId 跟 tabId 一起喂给 hook,用于 dom-ready 后给 main 端 TabRegistry
   // 上报 (sessionId, tabId, webContentsId) 三元组(Phase 2 browser bridge)。
   const { tabId, sessionId } = ctx;
-  // device-link 会话的 workdir 也可能是 file://,但文件实际位于被控端。
-  // 与 file-browser plugin 相同,通过 sessionId → deviceId 注册表区分本机与被控端,
-  // 避免控制端把远端路径交给自己的系统文件打开器。
-  const deviceLinkDeviceId = useSyncExternalStore(
-    remoteProjectsStore.subscribe,
-    () => getSessionDeviceId(sessionId) ?? null,
-  );
+  // device-link 归属由 host context 携带三态事实：字符串=远端、null=已确认本机、
+  // undefined=冷启动/bootstrap 尚未解析。系统文件打开对后两者只放行已确认本机。
+  const deviceLinkDeviceId = ctx.deviceLinkDeviceId;
   // 真实可见性:顶层 active tab 且整个侧栏展开。shellVisible 缺省(旧宿主 /
   // 测试)按可见处理,与 active 的既有缺省语义一致。
   const tabVisible = active === true && shellVisible !== false;

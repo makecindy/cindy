@@ -29,13 +29,6 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  getSessionDeviceId: vi.fn(() => undefined),
-  remoteProjectsStore: {
-    subscribe: vi.fn(() => vi.fn()),
-  },
-}));
-
 vi.mock('@/components/ui/dropdown-menu', () => {
   const react = require('react') as typeof import('react');
   return {
@@ -120,12 +113,17 @@ function renderBrowserTab(
     favicon: string | null;
     isAudible: boolean;
   }> = {},
+  deviceLinkDeviceId?: string | null,
 ): ReactElement {
+  // Omitted fifth arg models the confirmed-local default; an explicit undefined
+  // models the unresolved bootstrap/cache state under test.
+  const resolvedDeviceLinkDeviceId = arguments.length >= 5 ? deviceLinkDeviceId : null;
   const ctx: TabKindHostContext = {
     tabId: 'tab-browser',
     sessionId: 'session-a',
     workdir: 'C:/repo',
     remoteHostId: null,
+    deviceLinkDeviceId: resolvedDeviceLinkDeviceId,
     patchState,
     onVisibilityChange: vi.fn(),
     setCloseInterceptor: vi.fn(() => () => undefined),
@@ -619,10 +617,19 @@ describe('BrowserTabBody navigation', () => {
   });
 
   it('disables system-browser opening for device-link local-file URLs', async () => {
-    const { getSessionDeviceId } = await import('@/features/device-link/remoteProjectsStore');
-    vi.mocked(getSessionDeviceId).mockReturnValue('device-1');
     browserState = makeBrowserState({ url: 'file:///remote/repo/index.html' });
-    render(renderBrowserTab('file:///remote/repo/index.html'));
+    render(renderBrowserTab('file:///remote/repo/index.html', vi.fn(), true, {}, 'device-1'));
+
+    expect(
+      (screen.getByRole('button', {
+        name: 'rightSidebar.browser.openInSystemBrowser',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('disables system-browser opening until device-link ownership is resolved', () => {
+    browserState = makeBrowserState({ url: 'file:///remote/repo/index.html' });
+    render(renderBrowserTab('file:///remote/repo/index.html', vi.fn(), true, {}, undefined));
 
     expect(
       (screen.getByRole('button', {
