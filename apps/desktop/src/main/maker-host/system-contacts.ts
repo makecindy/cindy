@@ -313,6 +313,18 @@ function buildSystemContactGroupScript(groupName: string, appleIds: string[]): s
     created = true;
   }
 
+  // 仅 ensure 分组时无需扫描分组成员或整个系统通讯录。
+  if (appleIds.length === 0) {
+    return JSON.stringify({
+      groupName,
+      created,
+      requested: 0,
+      added: 0,
+      alreadyPresent: 0,
+      missingAppleIds: [],
+    });
+  }
+
   const existingIds = new Set((group.people.id() || []).map((id) => String(id)));
   // 只把全量 id 快照中明确不存在的联系人归为 missing。读取 id、add 或 save 的
   // 权限/JXA 错误必须抛给 host，不能伪装成“联系人不存在”后成功退出。

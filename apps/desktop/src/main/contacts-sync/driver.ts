@@ -604,8 +604,14 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
         };
       }
     } else {
+      // 旧客户端 key 同样代表新的运行连接；异步 pin 前先让上一连接的
+      // challenge 永久失效，迟到 state 即使完整到达也只能触发安全交付。
+      sentCapabilityNonces.delete(srcDeviceId);
       peerCapabilityNonces.delete(srcDeviceId);
     }
+    // key 握手是运行边界，不能把上一运行确认的 clocks 用于新连接增量编码。
+    peerKnownClocks.delete(srcDeviceId);
+    peerKnownMergeClocks.delete(srcDeviceId);
     invalidatePeerMergeCapability(srcDeviceId);
     prepareAndRun(async (isCurrent) => {
       const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
@@ -661,6 +667,15 @@ function handleIncomingCipherFrame(
     }
     if (message.type !== 'applied-state') {
       throw new Error('contacts sync worker did not apply the decoded state');
+    }
+    if (
+      message.capabilityNonce !== undefined &&
+      message.capabilityNonce !== sentCapabilityNonces.get(srcDeviceId)
+    ) {
+      // 同一设备旧运行的密文仍可安全并入 CRDT，但不能更新当前连接的确认 clocks、
+      // 请求回包或重新授权 capability；新 key 完成后会发送一次完整校准。
+      if (message.changed) broadcastContactsChanged({ origin: 'remote' });
+      return;
     }
 
     peerKnownClocks.set(

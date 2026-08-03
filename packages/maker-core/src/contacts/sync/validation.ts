@@ -382,6 +382,12 @@ export function isValidContactsSyncState(
     if (clockNodes.has(clock.nodeId as string)) return false;
     clockNodes.add(clock.nodeId as string);
   }
+  if (
+    (value.merges !== undefined || value.deletions !== undefined) &&
+    value.mergeClocks === undefined
+  ) {
+    return false;
+  }
   if (value.mergeClocks !== undefined) {
     if (!Array.isArray(value.mergeClocks) || value.mergeClocks.length > 256)
       return false;

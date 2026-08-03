@@ -119,7 +119,7 @@ function registerListToolsEntry(server: McpServer, registry: ContactsToolRegistr
   );
 }
 
-function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry, deps: ContactsMcpDeps): void {
+function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry): void {
   server.tool(
     'call_tool',
     D_CALL_TOOL,
@@ -127,25 +127,7 @@ function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry
       name: z.string().describe('工具名, 从 list_tools 获取 (e.g. contacts_resolve / contacts_search)'),
       args: jsonObjectArg('工具参数 JSON; 不确定 schema 可先传 {} 触发反馈'),
     },
-    async ({ name, args }) => {
-      const result = await registry.call(name, args);
-      // agent 经 MCP 直写同进程 store, 绕过 IPC 层的变更广播 — 这里按类目
-      // 兜底通知宿主(write/manage 均可能改库), 让设置页/管理浮层实时刷新
-      const category = registry.get(name)?.category;
-      const recoveryPlanOnly =
-        name === 'contacts_recover_pending_system_anchor' && args.confirm !== true;
-      if (
-        !result.isError &&
-        (category === 'write' || (category === 'manage' && !recoveryPlanOnly))
-      ) {
-        try {
-          deps.onMutated?.();
-        } catch {
-          // 通知失败不影响工具结果
-        }
-      }
-      return result;
-    },
+    async ({ name, args }) => registry.call(name, args),
   );
 }
 
@@ -182,7 +164,7 @@ export function createCindyContactsMcpServer(deps: ContactsMcpDeps): McpServer {
   registerContactsGroupTools(registry, deps);
 
   registerListToolsEntry(server, registry);
-  registerCallToolEntry(server, registry, deps);
+  registerCallToolEntry(server, registry);
 
   return server;
 }

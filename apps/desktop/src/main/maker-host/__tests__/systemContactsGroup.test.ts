@@ -63,6 +63,30 @@ describe('syncSystemContactGroup', () => {
     expect(script).not.toContain('catch (err) {\n      missingAppleIds.push(appleId)');
   });
 
+  it('仅 ensure 分组时在扫描系统联系人前直接返回', async () => {
+    execFileAsyncMock.mockResolvedValue({
+      stdout: JSON.stringify({
+        groupName: 'Cindy 管理',
+        created: false,
+        requested: 0,
+        added: 0,
+        alreadyPresent: 0,
+        missingAppleIds: [],
+      }),
+      stderr: '',
+    });
+
+    await expect(syncSystemContactGroup('Cindy 管理', [])).resolves.toMatchObject({
+      requested: 0,
+      added: 0,
+    });
+    const script = (execFileAsyncMock.mock.calls[0]?.[1] as string[])[3] ?? '';
+    expect(script.indexOf('if (appleIds.length === 0)')).toBeGreaterThan(-1);
+    expect(script.indexOf('if (appleIds.length === 0)')).toBeLessThan(
+      script.indexOf('group.people.id()'),
+    );
+  });
+
   it('空名称和超过单批上限在启动 osascript 前拒绝', async () => {
     await expect(syncSystemContactGroup('   ', [])).rejects.toThrow('[INVALID_PARAMS]');
     await expect(

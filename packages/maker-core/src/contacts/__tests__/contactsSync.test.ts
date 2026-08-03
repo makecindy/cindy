@@ -420,8 +420,14 @@ describe("contacts device sync", () => {
     const b = createStore();
     a.activateDeviceSync();
     b.activateDeviceSync();
-    const target = a.createContact({ kind: "person", displayName: "稍后删除目标" });
-    const source = a.createContact({ kind: "person", displayName: "合并来源锚点" });
+    const target = a.createContact({
+      kind: "person",
+      displayName: "稍后删除目标",
+    });
+    const source = a.createContact({
+      kind: "person",
+      displayName: "合并来源锚点",
+    });
     exchange(b, a);
     b.addIdentity(source.id, {
       platform: "apple-contacts",
@@ -438,9 +444,7 @@ describe("contacts device sync", () => {
     const bDb = databases.at(-1)!;
     expect(
       bDb
-        .prepare(
-          `SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`,
-        )
+        .prepare(`SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`)
         .get(),
     ).toEqual({ count: 0 });
     expect(
@@ -526,9 +530,7 @@ describe("contacts device sync", () => {
     const bDb = databases.at(-1)!;
     expect(
       bDb
-        .prepare(
-          `SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`,
-        )
+        .prepare(`SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`)
         .get(),
     ).toEqual({ count: 0 });
     expect(
@@ -1323,6 +1325,13 @@ describe("contacts device sync", () => {
     const mismatchedDeletion = structuredClone(valid);
     mismatchedDeletion.deletions[0]!.value.value.contactId = "other-contact";
     expect(isValidContactsSyncState(mismatchedDeletion)).toBe(false);
+
+    const missingIndependentClocks = structuredClone(valid) as Omit<
+      typeof valid,
+      "mergeClocks"
+    > & { mergeClocks?: typeof valid.mergeClocks };
+    delete missingIndependentClocks.mergeClocks;
+    expect(isValidContactsSyncState(missingIndependentClocks)).toBe(false);
 
     const uncovered = structuredClone(valid);
     uncovered.mergeClocks[0]!.counter = 0;

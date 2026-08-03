@@ -46,7 +46,11 @@ const harness = vi.hoisted(() => {
     wireFrames,
     encodeContactsSyncMessage: vi.fn(
       async (options?: {
-        database?: { peerSupportsMergeRedirects?: boolean };
+        database?: {
+          peerSupportsMergeRedirects?: boolean;
+          knownClocks?: Array<{ nodeId: string; counter: number }>;
+          knownMergeClocks?: Array<{ nodeId: string; counter: number }>;
+        };
         signal?: AbortSignal;
       }) => {
         void options;
@@ -988,11 +992,8 @@ describe('contacts sync runtime ownership', () => {
         decoderCallsBeforeWholeDelayedTransfer + 1,
       ),
     );
-    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
-    expect(
-      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
-        ?.peerSupportsMergeRedirects,
-    ).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.encodeContactsSyncMessage).not.toHaveBeenCalled();
 
     // 新运行先用 key 声明自己的 runtime nonce，随后再完成 capability 协商。
     driver.handleIncomingContactsRelayFrame('peer-device', {
@@ -1107,6 +1108,7 @@ describe('contacts sync runtime ownership', () => {
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,
     ).toBe(true);
+    const previousConnectionChallenge = harness.lastSentCapabilityNonce!;
 
     let releasePin: ((firstSeen: boolean) => void) | undefined;
     harness.pinPeerPublicKey.mockImplementationOnce(
@@ -1120,7 +1122,6 @@ describe('contacts sync runtime ownership', () => {
       version: 1,
       type: 'key',
       publicKey: 'peer-public',
-      capabilityNonce: 'peer-runtime-after-restart',
     });
     await vi.waitFor(() => expect(harness.pinPeerPublicKey).toHaveBeenCalled());
 
@@ -1134,6 +1135,41 @@ describe('contacts sync runtime ownership', () => {
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,
     ).toBe(false);
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database?.knownClocks,
+    ).toBeUndefined();
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database?.knownMergeClocks,
+    ).toBeUndefined();
+
+    // 旧运行的完整 state 在 key 后、pin 完成前抵达时，旧 challenge 已同步失效；
+    // 该消息不能更新当前 clocks、请求回包或重新授权 capability。
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [{ nodeId: 'old-runtime', counter: 9 }],
+      mergeClocks: [{ nodeId: 'old-runtime', counter: 7 }],
+      requestReply: true,
+      capabilities: ['merge-redirects-v1'],
+      capabilityNonce: previousConnectionChallenge,
+    });
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'late-state-while-old-key-pin-waits',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.encodeContactsSyncMessage).not.toHaveBeenCalled();
+
     const callsBeforePinRelease = harness.encodeContactsSyncMessage.mock.calls.length;
     releasePin?.(false);
     await vi.waitFor(() =>
