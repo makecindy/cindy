@@ -3323,7 +3323,7 @@ export function ChatInput({
         {
           sessionId,
           includeLocalContext: !remoteDeviceId,
-          includeTaskHistory: true,
+          includeTaskHistory: !!normalizedQuery,
         },
       )
         .then((res) => {

@@ -72,7 +72,6 @@ const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
   new Set(['file-browser']),
   new Set(['browser-tab', 'desktop-window']),
   new Set(['agent']),
-  new Set(['session']),
   new Set(['plugin-provider']),
 ];
 

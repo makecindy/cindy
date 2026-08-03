@@ -74,19 +74,24 @@ describe('filterAtResources', () => {
     expect(filterAtResources(items, '').map((item) => item.type)).toEqual([
       'file-browser',
       'agent',
-      'session',
       'plugin-provider',
     ]);
   });
 
   it('keeps each empty-query source compact', () => {
-    const tasks = Array.from({ length: 5 }, (_, index) => ({
-      type: 'session' as const,
-      name: `Task ${index}`,
-      relPath: `cindy://session/${index}`,
+    const providers = Array.from({ length: 5 }, (_, index) => ({
+      type: 'plugin-provider' as const,
+      name: `Provider ${index}`,
+      relPath: `provider-${index}`,
     }));
 
-    expect(filterAtResources(tasks, '')).toHaveLength(3);
+    expect(filterAtResources(providers, '')).toHaveLength(3);
+  });
+
+  it('searches historical tasks after the user types a query', () => {
+    expect(filterAtResources(items, 'release').map((item) => item.type)).toEqual([
+      'session',
+    ]);
   });
 
   it('searches files and directories and caps the global result list', () => {
