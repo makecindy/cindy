@@ -379,13 +379,45 @@ const PATCH_INFO_FILE = 'patch-info.json';
 const UPDATE_LOCK_FILE = '.updating';
 
 /**
- * Snapshot of the current update lifecycle state. Used by callers that need to
- * gate side-effects (e.g. don't bring the FeishuBot online if an update is
- * actively downloading or staged for relaunch — it would just go offline again
- * within seconds and spam the owner with a needless online/offline pair).
+ * Snapshot of the current update lifecycle state. Prefer
+ * `isUpdateRelaunchImminent()` for gating side-effects — a staged patch does
+ * NOT imply a relaunch is coming (see below).
  */
 export function getUpdateStatus(): UpdateStatus {
   return currentStatus;
+}
+
+/**
+ * Whether this process is actually about to be replaced by the updater.
+ *
+ * Callers use this to gate side-effects that would be torn down seconds later
+ * (e.g. don't bring the FeishuBot online right before a relaunch — it would go
+ * offline again immediately and spam the owner with a needless online/offline
+ * pair).
+ *
+ * This is deliberately NOT `status === 'downloading' | 'ready'`: `ready` only
+ * means "a patch is staged", and a staged patch stays staged forever when the
+ * user turned auto-relaunch off (`getStartupRelaunchBlockReason() → 'disabled'`)
+ * or on a dev build. Gating on the raw status made every cold boot of an
+ * out-of-date install re-observe `ready` and skip the side-effect again, so the
+ * "we'll do it on the next cold boot" fallback could never fire — the IM
+ * transport stayed down permanently and `feishuBot:save` failed with
+ * `[IM_NOT_READY]` until the user manually applied the update.
+ *
+ * When auto-relaunch IS on, a `ready` patch that is currently blocked by the
+ * idle/busy policy still counts as imminent: the poller applies it once the app
+ * goes idle, and the following cold boot is up to date and ungated.
+ */
+export function isUpdateRelaunchImminent(): boolean {
+  // Already committed — the updater is spawning / windows are tearing down.
+  if (isRelaunching || autoRelaunchInProgress) return true;
+  // Nothing staged or being staged can relaunch us.
+  if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
+  // The native updater replaces the *installed* app; it never runs in dev.
+  if (isDev()) return false;
+  // Respecting the user's switch: with auto-relaunch off the patch just sits
+  // there until they click the banner, which is not "imminent".
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
 }
 
 export function setUpdateAutoRelaunchBusyProbe(
