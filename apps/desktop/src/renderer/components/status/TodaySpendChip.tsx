@@ -726,21 +726,6 @@ function quotaTurnModel(details: TurnUsageDetails, t: TFunction): string | null 
   return null;
 }
 
-/** 累计金额与当前分段金额一致时，Token 明细就是整轮明细，无需额外分段标题。 */
-function hasSeparateFinalSegment(summary: LatestTurnUsageSummary): boolean {
-  if (!summary.isUserTurnTotal) return false;
-  if (summary.money && summary.segmentMoney) {
-    return summary.money.currency !== summary.segmentMoney.currency
-      || Math.abs(summary.money.amount - summary.segmentMoney.amount) > 1e-10
-      || Boolean(summary.isEstimate) !== Boolean(summary.segmentIsEstimate);
-  }
-  if (summary.costUsd != null && summary.segmentCostUsd != null) {
-    return Math.abs(summary.costUsd - summary.segmentCostUsd) > 1e-10
-      || Boolean(summary.isEstimate) !== Boolean(summary.segmentIsEstimate);
-  }
-  return true;
-}
-
 function toQuotaHoverCardTurnUsage(
   summary: LatestTurnUsageSummary | null,
   t: TFunction,
@@ -752,7 +737,6 @@ function toQuotaHoverCardTurnUsage(
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
       : null;
-  const separateFinalSegment = hasSeparateFinalSegment(summary);
   const finalSegmentCostText = summary.segmentMoney
     ? formatTurnCostMoney(summary.segmentMoney)
     : summary.segmentCostUsd != null
@@ -763,7 +747,9 @@ function toQuotaHoverCardTurnUsage(
     costText,
     costIsEstimate: summary.isEstimate,
     isUserTurnTotal: summary.isUserTurnTotal,
-    ...(separateFinalSegment
+    // userTurnMoney 是用户轮累计，而 turnUsageDetails 始终只描述收尾 SDK 分段。
+    // 两笔金额可能因前段无报价而恰好相等，不能用金额相等反推只有一个分段。
+    ...(summary.isUserTurnTotal
       ? {
           finalSegment: {
             costText: finalSegmentCostText,
@@ -1246,6 +1232,8 @@ export function TodaySpendChip({
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
   const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
+  const quotaPopoverPointerInsideRef = React.useRef(false);
+  const quotaPopoverFocusInsideRef = React.useRef(false);
   const quotaPopoverOpenSourceRef = React.useRef<'hover' | 'focus' | null>(null);
   const quotaPopoverFocusTakenRef = React.useRef(false);
   const quotaPopoverRestoringFocusRef = React.useRef(false);
@@ -1304,6 +1292,23 @@ export function TodaySpendChip({
       restoreQuotaPopoverFocus();
     }, QUOTA_POPOVER_CLOSE_GRACE_MS);
   }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer, restoreQuotaPopoverFocus]);
+  const handleQuotaPopoverMouseEnter = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = true;
+    keepQuotaPopoverOpen();
+  }, [keepQuotaPopoverOpen]);
+  const scheduleQuotaPopoverCloseIfOutside = React.useCallback(() => {
+    if (quotaPopoverPointerInsideRef.current || quotaPopoverFocusInsideRef.current) return;
+    scheduleQuotaPopoverClose();
+  }, [scheduleQuotaPopoverClose]);
+  const handleQuotaPopoverMouseLeave = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = false;
+    // 鼠标离开不能抢走卡片内的键盘焦点；只有指针与焦点都在外部才走 hover 关闭。
+    scheduleQuotaPopoverCloseIfOutside();
+  }, [scheduleQuotaPopoverCloseIfOutside]);
+  const handleQuotaPopoverTriggerMouseEnter = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = true;
+    scheduleQuotaPopoverOpen();
+  }, [scheduleQuotaPopoverOpen]);
 
   React.useEffect(() => () => {
     clearQuotaPopoverOpenTimer();
@@ -1638,13 +1643,17 @@ export function TodaySpendChip({
                   event.preventDefault();
                   handleClick();
                 }}
-                onMouseEnter={scheduleQuotaPopoverOpen}
-                onMouseLeave={scheduleQuotaPopoverClose}
+                onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
+                onMouseLeave={handleQuotaPopoverMouseLeave}
                 onFocus={() => {
                   if (quotaPopoverRestoringFocusRef.current) return;
+                  quotaPopoverFocusInsideRef.current = true;
                   openQuotaPopoverImmediately();
                 }}
-                onBlur={scheduleQuotaPopoverClose}
+                onBlur={() => {
+                  quotaPopoverFocusInsideRef.current = false;
+                  scheduleQuotaPopoverClose();
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Escape') return;
                   event.preventDefault();
@@ -1658,8 +1667,8 @@ export function TodaySpendChip({
             ) : (
               <span
                 className={cn(buttonClass, 'cursor-default')}
-                onMouseEnter={scheduleQuotaPopoverOpen}
-                onMouseLeave={scheduleQuotaPopoverClose}
+                onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
+                onMouseLeave={handleQuotaPopoverMouseLeave}
               >
                 {labelNode}
               </span>
@@ -1682,15 +1691,19 @@ export function TodaySpendChip({
               restoreQuotaPopoverFocus();
             }}
             onEscapeKeyDown={closeQuotaPopoverImmediately}
-            onMouseEnter={keepQuotaPopoverOpen}
-            onMouseLeave={scheduleQuotaPopoverClose}
-            onFocusCapture={keepQuotaPopoverOpen}
+            onMouseEnter={handleQuotaPopoverMouseEnter}
+            onMouseLeave={handleQuotaPopoverMouseLeave}
+            onFocusCapture={() => {
+              quotaPopoverFocusInsideRef.current = true;
+              keepQuotaPopoverOpen();
+            }}
             onBlurCapture={(event) => {
               const nextTarget = event.relatedTarget;
               if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
               if (quotaPopoverRestoringFocusRef.current) return;
               // Tab 已将焦点交给卡片外的控件；自然离开只关闭卡片，
               // 不让延时器或 close-autofocus 再把焦点抢回 trigger。
+              quotaPopoverFocusInsideRef.current = false;
               quotaPopoverFocusTakenRef.current = false;
               quotaPopoverOpenSourceRef.current = null;
               scheduleQuotaPopoverClose();

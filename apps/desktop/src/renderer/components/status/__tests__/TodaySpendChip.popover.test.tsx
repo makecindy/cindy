@@ -243,6 +243,23 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('卡片内保持键盘焦点时，鼠标移入再移出不会关闭', () => {
+    renderClaudeSubscriptionChip();
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+
+    act(() => trigger.focus());
+    const card = screen.getByTestId('quota-hover-card');
+    const dashboardButton = within(card).getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(document.activeElement).toBe(dashboardButton);
+
+    fireEvent.mouseEnter(card);
+    fireEvent.mouseLeave(card);
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(screen.getByTestId('quota-hover-card')).toBeTruthy();
+    expect(document.activeElement).toBe(dashboardButton);
+  });
+
   it('Tab 离开卡片后自然保留下一控件的焦点', () => {
     render(
       <>
@@ -405,20 +422,20 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(within(sessionSection).queryByText('本任务已用 $0.50')).toBeNull();
   });
 
-  it('单分段不加冗余标题，多分段则分开累计金额与最后分段明细', () => {
+  it('等额累计投影仍分开用户轮累计与最后分段明细', () => {
     setLatestUsageMessage({
       turnMoney: usdMoney(0.46, 'value-estimate'),
       userTurnMoney: usdMoney(0.46, 'value-estimate'),
       turnCostIsEstimate: true,
       userTurnCostIsEstimate: true,
     });
-    const single = renderClaudeSubscriptionChip();
+    const equalAmount = renderClaudeSubscriptionChip();
     openCardFromHover();
     expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
-    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
-    expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
+    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
+    expect(screen.getAllByText('本轮 token 价值：$0.46')).toHaveLength(2);
 
-    single.unmount();
+    equalAmount.unmount();
     vi.clearAllTimers();
     setLatestUsageMessage({
       turnMoney: usdMoney(0.20),

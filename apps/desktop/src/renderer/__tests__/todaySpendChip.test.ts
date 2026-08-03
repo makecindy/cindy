@@ -229,8 +229,11 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote');
     expect(source).toContain('usesClaudeSubscriptionPopover = true;');
     expect(source).toContain('open={quotaPopoverOpen}');
-    expect(source).toContain('onMouseEnter={scheduleQuotaPopoverOpen}');
-    expect(source).toContain('onMouseLeave={scheduleQuotaPopoverClose}');
+    expect(source).toContain('onMouseEnter={handleQuotaPopoverTriggerMouseEnter}');
+    expect(source).toContain('onMouseLeave={handleQuotaPopoverMouseLeave}');
+    expect(source).toContain(
+      'if (quotaPopoverPointerInsideRef.current || quotaPopoverFocusInsideRef.current) return;',
+    );
     expect(source).toContain('<QuotaHoverCard');
     expect(source).toContain('snapshot={claudeSubscriptionUsage}');
     expect(source).toContain('sessionUsage={quotaCardSessionUsage}');
