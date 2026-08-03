@@ -5971,8 +5971,11 @@ describe('CodexAgent MCP thread context hooks', () => {
           willRetry: true,
         });
         expect((errorEvents[0].data as { message: string }).message).toContain(
-          'auto-retry 1/2',
+          'rate-limit-retry 1/2',
         );
+        expect(errorEvents[0].data).toMatchObject({
+          reason: 'terminal-rate-limit-retry',
+        });
         expect(
           events.some(
             (event) =>
@@ -6398,7 +6401,7 @@ describe('CodexAgent MCP thread context hooks', () => {
             (e) =>
               e.type === 'error' &&
               (e.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
-              (e.data as { reason?: string }).reason === 'codex-overload-retry-aborted',
+              (e.data as { reason?: string }).reason === 'codex-turn-replay-retry-aborted',
           ),
         ).toBe(true);
         expect(
@@ -8238,7 +8241,13 @@ describe('CodexAgent MCP thread context hooks', () => {
         controller.abort();
         await vi.advanceTimersByTimeAsync(0);
         const after = events.slice(before);
-        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        const terminalAfterSignal = after.filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(terminalAfterSignal).toHaveLength(1);
+        expect(terminalAfterSignal[0].data).toMatchObject({
+          reason: 'codex-turn-replay-retry-cancelled',
+        });
         expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
         expect(handle.isTurnRunning?.()).toBe(false);
 
@@ -9556,7 +9565,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         );
         expect(terminalAfterAbort).toHaveLength(1);
         expect(terminalAfterAbort[0].data).toMatchObject({
-          reason: 'codex-overload-retry-aborted',
+          reason: 'codex-turn-replay-retry-aborted',
         });
 
         // 随后在途的重投 RPC 失败：**不得**再补第二条 terminal error / Done。

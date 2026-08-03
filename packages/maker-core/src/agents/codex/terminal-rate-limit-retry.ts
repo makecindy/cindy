@@ -5,6 +5,8 @@ import {
 
 /** Cindy 只在 daemon 自己的 retry budget 已耗尽后，再给短时 429 两次外层机会。 */
 export const TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS = 2;
+/** 终态 429 外层重投的稳定 reason key；Desktop / Mobile 镜像同值。 */
+export const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
 
 const TERMINAL_RATE_LIMIT_RETRY_BASE_DELAY_MS = 15_000;
 const TERMINAL_RATE_LIMIT_RETRY_MAX_DELAY_MS = 30_000;
@@ -65,4 +67,13 @@ export function terminalRateLimitRetryDelayMs(
     Math.round(base * factor),
     TERMINAL_RATE_LIMIT_RETRY_MAX_DELAY_MS,
   );
+}
+
+/** 给终态 429 原文追加独立进度后缀，避免被下游误判成模型容量过载。 */
+export function formatTerminalRateLimitRetryMessage(
+  message: string,
+  attempt: number,
+  maxAttempts: number,
+): string {
+  return `${message} (rate-limit-retry ${attempt}/${maxAttempts})`;
 }

@@ -9195,14 +9195,15 @@ function ComposerActivityStatus({
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenText = formatComposerActivityTokens(tokenUsage);
-  // 过载退避与传输层重连共用这一个 attempt 字段, 但说法必须分开: 前者是上游没有可用
-  // 容量、agent 在退避重投, 说「正在重新连接」会把用户引向排查自己的网络
-  // (review #844 codex P1)。
+  // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
+  // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
     ? t(
         reconnectAttempt.kind === 'overload'
           ? 'session.screen.modelBusyRetrying'
-          : 'session.screen.networkReconnecting',
+          : reconnectAttempt.kind === 'rate-limit'
+            ? 'session.screen.rateLimitRetrying'
+            : 'session.screen.networkReconnecting',
       )
     : t('session.screen.thinking');
 

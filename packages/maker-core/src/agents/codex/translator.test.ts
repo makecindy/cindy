@@ -448,7 +448,7 @@ describe('translateErrorNotification', () => {
       q,
       {
         ...makeCtx(rt),
-        tryTakeOverTerminalError: () => ({ attempt: 1, maxAttempts: 2 }),
+        tryTakeOverTerminalRateLimit: () => ({ attempt: 1, maxAttempts: 2 }),
       },
     );
     const events = await collect(q);
@@ -457,9 +457,12 @@ describe('translateErrorNotification', () => {
       errorStatus: 429,
       isTerminal: false,
       willRetry: true,
+      reason: 'terminal-rate-limit-retry',
     });
-    expect((events[0]!.data as { message: string }).message).toContain('auto-retry 1/2');
-    expect(events[0]!.data).not.toHaveProperty('reason');
+    expect((events[0]!.data as { message: string }).message).toContain(
+      'rate-limit-retry 1/2',
+    );
+    expect((events[0]!.data as { message: string }).message).not.toContain('auto-retry');
   });
 
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {

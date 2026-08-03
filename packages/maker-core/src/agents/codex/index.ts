@@ -6641,7 +6641,7 @@ export class CodexAgent extends BaseAgent {
         data: {
           message: 'Codex turn cancelled while waiting for an automatic retry',
           isTerminal: true,
-          reason: 'codex-overload-retry-cancelled',
+          reason: 'codex-turn-replay-retry-cancelled',
         },
         source: 'codex',
       });
@@ -7590,7 +7590,7 @@ export class CodexAgent extends BaseAgent {
             if (progress) turnReplayRetryScheduled = true;
             return progress;
           },
-          tryTakeOverTerminalError: () => {
+          tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
             if (params.willRetry === true) return null;
@@ -8593,7 +8593,7 @@ export class CodexAgent extends BaseAgent {
             data: {
               message: 'Codex turn stopped while waiting for an automatic retry',
               isTerminal: true,
-              reason: 'codex-overload-retry-aborted',
+              reason: 'codex-turn-replay-retry-aborted',
             },
             source: 'codex',
           });

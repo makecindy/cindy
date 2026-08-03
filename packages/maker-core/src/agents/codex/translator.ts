@@ -47,6 +47,10 @@ import {
 } from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
+import {
+  formatTerminalRateLimitRetryMessage,
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
+} from './terminal-rate-limit-retry.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -138,10 +142,10 @@ export interface CodexTranslateContext {
    */
   tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
   /**
-   * 其它明确可安全重投的终态错误接管钩子。agent 层负责白名单判定、产出守卫与预算；
-   * translator 只把接管成功的错误转换成带进度的非终止事件。
+   * daemon 已耗尽内部 retry budget 的终态 429 接管钩子。agent 层负责严格分类、
+   * turn 归属、产出守卫与预算；translator 只编码独立 reason / 进度契约。
    */
-  tryTakeOverTerminalError?: () => {
+  tryTakeOverTerminalRateLimit?: () => {
     attempt: number;
     maxAttempts: number;
   } | null;
@@ -380,13 +384,14 @@ export function translateErrorNotification(
     }
   }
   if (!params.willRetry && !isCapacityError) {
-    const progress = ctx.tryTakeOverTerminalError?.();
+    const progress = ctx.tryTakeOverTerminalRateLimit?.();
     if (progress) {
       queue.push({
         type: 'error',
         data: {
           ...safeErrorData,
-          message: formatOverloadRetryMessage(
+          reason: TERMINAL_RATE_LIMIT_RETRY_REASON,
+          message: formatTerminalRateLimitRetryMessage(
             safeMessage,
             progress.attempt,
             progress.maxAttempts,

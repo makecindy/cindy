@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatTerminalRateLimitRetryMessage,
   isTerminalRateLimitRetryExhaustion,
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
   terminalRateLimitRetryDelayMs,
 } from './terminal-rate-limit-retry.js';
 
@@ -79,5 +81,18 @@ describe('terminal rate-limit retry', () => {
     expect(terminalRateLimitRetryDelayMs(2, () => 0.5)).toBe(30_000);
     expect(terminalRateLimitRetryDelayMs(2, () => 0)).toBe(22_500);
     expect(terminalRateLimitRetryDelayMs(2, () => 0.999999)).toBe(30_000);
+  });
+
+  it('uses a dedicated reason and progress marker instead of the overload contract', () => {
+    expect(TERMINAL_RATE_LIMIT_RETRY_REASON).toBe('terminal-rate-limit-retry');
+    expect(
+      formatTerminalRateLimitRetryMessage(
+        'exceeded retry limit, last status: 429 Too Many Requests',
+        1,
+        2,
+      ),
+    ).toBe(
+      'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)',
+    );
   });
 });
