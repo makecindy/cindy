@@ -624,6 +624,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
     if (groupLane) {
       const link = groupMessageLink(groupLane.chatId, this.peekReplyTargetId(userId));
+      // 卡片不再发到群里 —— callSend 只停它自己那条 chat 的 typing loop(这里是宿主私聊),
+      // 群里那条会继续每 4.5s 打一次 sendChatAction, 于是群里一直显示「正在输入…」。
+      // 手动停掉原群的那条(review 指出的回归)。
+      this.stopTypingLoopsForChat(groupLane.chatId);
       // 说明文案由调用方给(传输层不造用户可见措辞); 深链是 URL 不是文案, 在这里拼。
       const notice = [opts?.ownerDmNote, link].filter((line) => line).join('\n');
       const { html, replyMarkup } = buildCardPayload({
