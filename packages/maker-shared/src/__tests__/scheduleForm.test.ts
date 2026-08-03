@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyMobileTemplateParams,
+  applyScheduleWireCompat,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -9,7 +10,11 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftCronExpr,
+  updateDraftIntervalMinutes,
+  updateDraftRunMode,
   updateDraftSessionMode,
+  updateDraftTimezone,
   validateTemplateParamValues,
   validateMobileScheduleDraft,
 } from '../scheduleForm.js';
@@ -83,6 +88,71 @@ describe('mobile schedule form model', () => {
       silentWhenIdle: true,
       notify: { desktop: false, feishu: true },
     });
+  });
+
+  it('clears intervalMs with a serializable null that survives the JSON wire', () => {
+    const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
+
+    // 清空必须走编辑入口(标记 touched)——未触碰的空值是「表达不了」不是「清空」。
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(edited, ''));
+    expect(cleared.intervalMs).toBeNull();
+
+    const manual = buildMobileScheduleInput({ ...edited, runMode: 'manual', intervalMinutes: '' });
+    expect(manual.intervalMs).toBeNull();
+
+    // device-link 经 JSON.stringify 传输:undefined 的 key 会被丢掉(= 桌面端
+    // 视为「不修改」),清空语义必须以 null 原样过线,由桌面接收端归一化。
+    const wire = JSON.parse(JSON.stringify(cleared)) as Record<string, unknown>;
+    expect(hasOwn(wire, 'intervalMs')).toBe(true);
+    expect(wire.intervalMs).toBeNull();
+
+    const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
+    expect(kept.intervalMs).toBe(15 * 60_000);
+  });
+
+  it('downgrades the null clear to key omission for hosts without the capability', () => {
+    const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(edited, ''));
+
+    // 旧 desktop:null 会被旧引擎当成已设间隔立即触发;省略 key 让旧引擎的
+    // 隐式清空(带 cronExpr 不带 intervalMs)承担等价语义。
+    const legacy = applyScheduleWireCompat(cleared, { supportsIntervalNullClear: false });
+    expect(hasOwn(legacy, 'intervalMs')).toBe(false);
+    expect(legacy.cronExpr).toBe(cleared.cronExpr);
+
+    // 新 desktop:null 原样过线,由 IPC 入口归一化。
+    expect(applyScheduleWireCompat(cleared, { supportsIntervalNullClear: true })).toBe(cleared);
+
+    // 数值间隔与能力无关,两种 host 都原样透传。
+    const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
+    expect(applyScheduleWireCompat(kept, { supportsIntervalNullClear: false })).toBe(kept);
+  });
+
+  it('preserves a form-inexpressible interval unless the user explicitly touches it', () => {
+    // 90 分钟表单表达不了(非 1-59 分钟/整点小时),intervalMinutes 折叠成 ''
+    const draft = createMobileScheduleDraft(schedule({ intervalMs: 90 * 60_000 }));
+    expect(draft.intervalMinutes).toBe('');
+
+    // 只改 prompt:间隔原值回传,不因「表单显示不了」被顺手清空
+    const untouched = buildMobileScheduleInput({ ...draft, prompt: 'new prompt' });
+    expect(untouched.intervalMs).toBe(90 * 60_000);
+
+    // 用户经编辑入口清空 → 明确清空
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(draft, ''));
+    expect(cleared.intervalMs).toBeNull();
+
+    // 切 manual 是显式 cadence 操作:切回 recurring 也不复活旧间隔
+    const manualRoundTrip = updateDraftRunMode(updateDraftRunMode(draft, 'manual'), 'recurring');
+    expect(buildMobileScheduleInput(manualRoundTrip).intervalMs).toBeNull();
+
+    // 编辑可见 cron / 时区同样是显式 cadence 操作:隐藏 interval 不得继续权威,
+    // 否则用户刚改的排期完全不生效(codex review 发现)。
+    const cronEdited = buildMobileScheduleInput(updateDraftCronExpr(draft, '30 8 * * *'));
+    expect(cronEdited.intervalMs).toBeNull();
+    expect(cronEdited.cronExpr).toBe('30 8 * * *');
+    expect(
+      buildMobileScheduleInput(updateDraftTimezone(draft, 'America/New_York')).intervalMs,
+    ).toBeNull();
   });
 
   it('writes an explicit false when mobile disables WeCom group notifications', () => {

@@ -89,6 +89,9 @@ export function SettingsView() {
     if (rawTab !== 'billing' || canAccessBilling) return;
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
+    // 计费页不可见时它的深链意图(intent=topup)也一并作废,不留在 URL 上等着
+    // 用户切到别的 tab 再被误消费。
+    next.delete('intent');
     setSearchParams(next, { replace: true });
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
 
@@ -118,9 +121,11 @@ export function SettingsView() {
       next.delete('ghost');
       next.delete('imGroup');
       next.delete('section');
-      // providers 页深链参数(connect/wizard):切走 tab 即作废,防再切回来被误消费。
+      // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
+      // 作废,防再切回来被误消费。
       next.delete('connect');
       next.delete('wizard');
+      next.delete('intent');
       if (tab === 'general') {
         next.delete('tab');
       } else {

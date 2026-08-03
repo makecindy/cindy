@@ -448,6 +448,69 @@ describe('SessionCard visual cases', () => {
     expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
   });
 
+  it('matches text-mode action chrome in list mode while preserving card buttons', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+    if (!visualCase) throw new Error('Missing idle visual case');
+
+    const commonProps = {
+      session: visualCase.session,
+      isActive: false,
+      isRunning: false,
+      isAttached: false,
+      hasAttentionNotification: false,
+      isSelected: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+      projectOptions: [],
+    };
+    const moreActionsName = /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/;
+
+    const { container: listContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list' }),
+    );
+    const listMore = within(listContainer).getByRole('button', {
+      name: moreActionsName,
+    });
+    const listArchive = within(listContainer).getByRole('button', { name: '归档' });
+    for (const action of [listMore, listArchive]) {
+      expect(action.className).toContain('size-5');
+      expect(action.className).toContain('rounded-md');
+      expect(action.className).toContain('text-sidebar-action-icon');
+      expect(action.className).not.toContain('size-6');
+      expect(action.className).not.toContain('bg-[var(--cmd-palette-bg)]');
+      expect(action.className).not.toContain('border-sidebar-border');
+      expect(action.querySelector('svg')?.getAttribute('width')).toBe('14');
+    }
+    const listTimeFade = listContainer.querySelector('time')?.parentElement;
+    expect(listTimeFade?.className).toContain('group-focus-within/slot:opacity-0');
+    expect(listTimeFade?.parentElement?.className).toContain('group/slot');
+    cleanup();
+
+    const { container: activeListContainer } = render(
+      createElement(SessionCard, { ...commonProps, variant: 'list', isActive: true }),
+    );
+    const activeListMore = within(activeListContainer).getByRole('button', {
+      name: moreActionsName,
+    });
+    expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
+    expect(activeListMore.className).toContain(
+      'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
+    );
+    cleanup();
+
+    const { container: cardContainer } = render(createElement(SessionCard, commonProps));
+    const cardMore = within(cardContainer).getByRole('button', {
+      name: moreActionsName,
+    });
+    expect(cardMore.className).toContain('size-6');
+    expect(cardMore.className).toContain('bg-[var(--cmd-palette-bg)]');
+    expect(cardMore.className).toContain('border-sidebar-border');
+    expect(cardMore.className).not.toContain('size-5');
+    expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
+  });
+
   it.each(['list', 'card'] as const)('keeps the %s archive confirmation pill on one line', (variant) => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
     if (!visualCase) throw new Error('Missing idle visual case');

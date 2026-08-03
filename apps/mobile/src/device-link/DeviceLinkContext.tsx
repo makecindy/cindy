@@ -801,6 +801,37 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         void refreshDeviceCapabilities(client, deviceId);
       },
     }));
+    // 与 transport-timeout link-close 同族的链路死锁自救(互为兜底):对端还在按
+    // 可靠流给本机发帧,而本机侧 link 未就绪——典型成因是 link-accept 在弱网丢失
+    // 后互等(发送端等 ACK、接收端等 link)。transport-timeout 是对端主动通知
+    // (best-effort,本身可能丢帧);本回调是本机从入站帧自行推断,通知丢了也能
+    // 自救。client 层已做 30s/peer 节流。收到帧即对端可达的直接证据,处理与
+    // transport-timeout 分支一致:冲销遗留离线判定 → rehydrate 重建链路与订阅
+    // (online 检查 / in-flight 去重 / 退避 / revoked 与永久关闭抑制等既有门全部
+    // 由 rehydrate 把守;特别地,永久关闭抑制**不在此解除**——对端用户显式关闭
+    // 后即使迟到帧还在飞,也不把用户关掉的链路自动建回来)。
+    const offBeforeLink = client.onReliableFrameBeforeLink((deviceId) => {
+      // 先失效 peer 级缓存(与 transport-timeout 分支同序):收到 before-link 帧
+      // 说明 client 层 link 已不在就绪态,但 openLinkInFlightRef 可能还留着已
+      // resolved 的旧建链结果、remoteSubscribedTopicsRef 还留着旧 ACK——不清掉,
+      // rehydrate 会复用旧 open、跳过 subscribe,后续请求继续排进未就绪的可靠流
+      // (review P2)。
+      invalidatePeerLinkState(
+        deviceId,
+        openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current,
+        noteSessionLiveStreamsInterrupted,
+      );
+      markRemoteResponseEvidence(deviceId);
+      reconcileAvailabilityAfterInboundFrame(
+        presenceAvailableByDeviceRef.current,
+        presencePendingRecoveryDeviceIdsRef.current,
+        presenceUnavailableVerdictsRef.current,
+        deviceId,
+      );
+      clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
+      void rehydrateWithClient(client);
+    });
     client.start();
 
     const offResponseEvidence = subscribeRemoteResponseEvidence((deviceId) => {
@@ -919,6 +950,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       clearBackgroundStopTimer();
       offUnresponsive();
       offResponseEvidence();
+      offBeforeLink();
       offFrame();
       offPresence();
       offStatus();

@@ -21,6 +21,12 @@ const uiMocks = vi.hoisted(() => ({
 
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
+/**
+ * 计费页只用 useSearchParams 消费 `?intent=topup` 深链，不需要真的挂 Router：
+ * 用一个可读写的 URLSearchParams 替身，既能驱动深链分支，也能断言参数被摘除。
+ */
+const routerState = vi.hoisted(() => ({ search: '' as string }));
+
 const checkout = {
   state: {
     open: false,
@@ -63,6 +69,17 @@ vi.mock('@/features/feature-context', () => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: authState.dataOwnerId }),
 }));
+// 只覆写 useSearchParams(深链 ?intent=topup 的读写口),其余导出保留真实实现 ——
+// 全量替换会让后续用到 Link / useNavigate 等导出的用例拿到 undefined 才炸在别处。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useSearchParams: () => [
+    new URLSearchParams(routerState.search),
+    (next: URLSearchParams) => {
+      routerState.search = next.toString();
+    },
+  ],
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: uiMocks.confirm }),
 }));
@@ -90,6 +107,7 @@ beforeEach(() => {
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
   authState.dataOwnerId = 'account-fixture';
+  routerState.search = '';
 });
 
 async function openSubscriptionManagementMenu() {
@@ -823,6 +841,25 @@ describe('BillingPage remote catalog rendering', () => {
       'disabled',
       false,
     );
+  });
+
+  it('深链 ?intent=topup 直接打开充值弹窗，并把参数摘掉防返回/刷新重复弹', async () => {
+    // 供应商设置页的账户资产模块「余额充值」走的就是这条深链：充值弹窗依赖本页的
+    // 目录 / 选项 / checkout 状态，跨 feature 只投递意图。
+    routerState.search = 'tab=billing&intent=topup';
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured top-up')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('没有 intent 参数时不自动弹充值弹窗', async () => {
+    render(<BillingPage />);
+
+    await screen.findByText('billing.settings.topupCard.action');
+    expect(screen.queryByText('Configured top-up')).toBeNull();
   });
 
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {

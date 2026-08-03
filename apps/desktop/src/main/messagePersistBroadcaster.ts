@@ -45,6 +45,7 @@ import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
 const log = createLogger('messagePersistBroadcaster');
@@ -1153,6 +1154,14 @@ export function onTurnErrorEvent(
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
+  // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
+  // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
+  // 不足(或反向丢失充值入口)。在入队前取值,写队列延迟消费不影响快照语义。
+  // null(未显式选择,走默认路由)时不写字段:来源不明确的错误行,读侧一律不启用
+  // 余额分类(fail-closed),与 live 路径「显式 providerId 才分类」同一判据。
+  const providerIdAtError = getSessionProvider(sessionId);
+  if (providerIdAtError) content.providerId = providerIdAtError;
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
   enqueueWrite(`turn_error:${sessionId}:${persistId}`, async () => {
