@@ -41,7 +41,7 @@
  *   不依赖 React 渲染。Hook 只做 `useState` + 持久化副作用。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import {
   loadStatus,
@@ -61,6 +61,8 @@ import {
   persistManualProjectOrder,
   persistManualPinnedOrder,
   nextProjectsAfterToggle,
+  includeProjectInFilter,
+  removeProjectsFromFilter,
   gcProjectsAgainstActive,
   normalizeManualProjectOrder,
   normalizeManualPinnedOrder,
@@ -119,6 +121,8 @@ export interface UseSidebarFilterReturn {
   setStatus: (s: FilterStatus) => void;
   /** 含 0 选自动回退到 'all'。 */
   toggleProject: (workingDir: string) => void;
+  /** Idempotently include a restored project without toggling an existing selection off. */
+  ensureProjectIncluded: (workingDir: string) => void;
   /** 切回 'all'（不取消勾选状态，是显式 reset）。 */
   setProjectsAll: () => void;
   /**
@@ -154,7 +158,7 @@ export interface UseSidebarFilterReturn {
   removePin: (entryId: string) => void;
 }
 
-export function useSidebarFilter(): UseSidebarFilterReturn {
+export function useSidebarFilter(hiddenProjectKeys: ReadonlySet<string>): UseSidebarFilterReturn {
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
   const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects());
   const [vendor, setVendorState] = useState<FilterVendor>(() => loadVendor());
@@ -163,6 +167,22 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => loadSortBy());
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() => loadManualProjectOrder());
   const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(() => loadManualPinnedOrder());
+
+  // Hidden projects are a main-process snapshot shared by every renderer.
+  // Reconcile before paint so a broadcast received in another window cannot
+  // leave a stale project-only filter behind.
+  useLayoutEffect(() => {
+    setProjectsState((prev) => {
+      const next = removeProjectsFromFilter(
+        prev,
+        hiddenProjectKeys,
+        window.electronAPI.platform,
+      );
+      if (next === prev) return prev;
+      persistProjects(next);
+      return next;
+    });
+  }, [hiddenProjectKeys]);
 
   useEffect(
     () =>
@@ -184,6 +204,15 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
   const toggleProject = useCallback((workingDir: string) => {
     setProjectsState((prev) => {
       const next = nextProjectsAfterToggle(prev, workingDir);
+      if (next === prev) return prev;
+      persistProjects(next);
+      return next;
+    });
+  }, []);
+
+  const ensureProjectIncluded = useCallback((workingDir: string) => {
+    setProjectsState((prev) => {
+      const next = includeProjectInFilter(prev, workingDir);
       if (next === prev) return prev;
       persistProjects(next);
       return next;
@@ -304,6 +333,7 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
     manualPinnedOrder,
     setStatus,
     toggleProject,
+    ensureProjectIncluded,
     setProjectsAll,
     gc,
     setVendor,

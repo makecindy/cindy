@@ -356,4 +356,44 @@ describe('TabRegistry — pin set', () => {
     expect(registry.pin('unknown')).toBe(true);
     expect(registry.isPinned('unknown')).toBe(true);
   });
+
+  it('keeps independent scoped pin leases until their own release', () => {
+    const { registry } = buildRegistry();
+    const listener = vi.fn();
+    registry.onPinChange(listener);
+
+    const releaseFirst = registry.acquirePinLease('t1');
+    const releaseSecond = registry.acquirePinLease('t1');
+    expect(registry.isPinned('t1')).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    expect(registry.isPinned('t1')).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    releaseSecond();
+    releaseSecond();
+    expect(registry.isPinned('t1')).toBe(false);
+    expect(listener).toHaveBeenLastCalledWith('t1', false);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates old leases when a tab is released and later re-reported', () => {
+    const { registry, wcMap } = buildRegistry();
+    const oldWc = fakeWc(101);
+    const nextWc = fakeWc(102);
+    wcMap.set(101, oldWc);
+    wcMap.set(102, nextWc);
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 101 });
+    const releaseOld = registry.acquirePinLease('t1');
+
+    registry.release('t1');
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 102 });
+    const releaseNext = registry.acquirePinLease('t1');
+    releaseOld();
+
+    expect(registry.isPinned('t1')).toBe(true);
+    releaseNext();
+    expect(registry.isPinned('t1')).toBe(false);
+  });
 });

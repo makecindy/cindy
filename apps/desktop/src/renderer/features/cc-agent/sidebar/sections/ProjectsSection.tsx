@@ -21,7 +21,7 @@
  *   ghost / chosen / drag class 提供视觉。
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -70,10 +70,15 @@ export interface ProjectsSectionProps {
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
-   * F-PJ-10：未经过过滤的全量 Project（用于 SidebarFilterPopover 列表渲染）。
-   * 与 `projects` 区分以便 Popover 始终展示完整候选集。
+   * 未经过用户筛选、但已排除“从侧栏移除”项目的候选集。
+   * 用于 SidebarFilterPopover 与来源标签；隐藏项目不能从这些入口泄漏。
    */
   allKnownProjects: ProjectNodeData[];
+  /**
+   * 原始项目全集的规范 key。手动排序以此为 baseline，保证隐藏项目的
+   * 位置记忆不会因用户拖动其它可见项目而被 GC。
+   */
+  allProjectKeysForOrder: readonly string[];
   /** F-PJ-10：filter 完整对象传给 Popover；段内不直接读取，仅透传给子组件。 */
   filter: UseSidebarFilterReturn;
   collapsed: Set<string>;
@@ -95,6 +100,7 @@ export interface ProjectsSectionProps {
   onToggleProject: (projectKey: string) => void;
   onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
+  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
   /** 段头新建项目：选择一个新项目目录后进入 transient draft route。 */
@@ -119,6 +125,7 @@ export function ProjectsSection({
   unclassified,
   projects,
   allKnownProjects,
+  allProjectKeysForOrder,
   filter,
   collapsed,
   isAllCollapsed,
@@ -138,6 +145,7 @@ export function ProjectsSection({
   onToggleProject,
   onToggleProjectPin,
   onRenameProject,
+  onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
   onCreateProject,
@@ -155,10 +163,7 @@ export function ProjectsSection({
   // 我们就在 onReorder 里自动切到 manual 并持久化，避免"默认 recency 排序下永远拖不动"
   // 的反直觉体验。
   const projectDragEnabled = filter.groupBy === 'project';
-  const activeProjectWorkingDirs = useMemo(
-    () => allKnownProjects.map((project) => project.projectKey),
-    [allKnownProjects],
-  );
+  const projectKeysForOrderBaseline = allProjectKeysForOrder;
   const [isSectionCollapsed, setIsSectionCollapsed] = useState(false);
   const [showAllProjects, setShowAllProjects] = useCollapsibleShowAll(isSectionCollapsed);
 
@@ -170,28 +175,29 @@ export function ProjectsSection({
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
-      // activeProjectWorkingDirs = allKnownProjects(未过滤全量 universe)的 key,因此 baseline 含
+      // projectKeysForOrderBaseline 是未过滤全量 universe 的 key,因此 baseline 含
       // 隐藏项;setManualProjectOrder 内部会再归一化一次(对已规范的 merged 结果幂等)。
       const fullOrder = normalizeManualProjectOrder(
         filter.manualProjectOrder,
-        activeProjectWorkingDirs,
+        projectKeysForOrderBaseline,
       );
       const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
-      filter.setManualProjectOrder(merged, activeProjectWorkingDirs);
+      filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
       // 用户随手一拖即表达"我要手动排序"的意图；如果当前不是 manual，自动切过去
       // 并持久化，让拖拽结果立刻生效，不需要用户先去 Filter Popover 切换排序模式。
       if (filter.sortBy !== 'manual') {
         filter.setSortBy('manual');
       }
     },
-    [filter, activeProjectWorkingDirs],
+    [filter, projectKeysForOrderBaseline],
   );
 
   // F-PJ-10：即使 projects 因 filter 收窄到空，也要保留段头供用户切回 Filter。
-  // 这里用 allKnownProjects 作为"是否有过任何 project"的判定 — 完全没有 project
+  // 这里用原始 key 全集作为"是否有过任何 project"的判定 — 全部项目都被隐藏时
+  // 仍保留段头的 Add Project 入口，用户才能重新选择目录恢复项目。完全没有 project
   // 且没有未分类 → 整段不渲染。(机器切换入口已移到侧栏顶部固定行,不再依赖本段头,
   // 故无需再为「有远程机器」保留空段头。)
-  if (allKnownProjects.length === 0 && unclassified.length === 0 && !filter.isFilterActive) {
+  if (allProjectKeysForOrder.length === 0 && unclassified.length === 0 && !filter.isFilterActive) {
     return null;
   }
 
@@ -365,6 +371,7 @@ export function ProjectsSection({
                 isProjectPinned={false}
                 onToggleProjectPin={onToggleProjectPin}
                 onRenameProject={onRenameProject}
+                onRemoveFromSidebar={onRemoveFromSidebar}
                 onSessionClick={onSessionClick}
                 onAction={onAction}
                 onRename={onRename}

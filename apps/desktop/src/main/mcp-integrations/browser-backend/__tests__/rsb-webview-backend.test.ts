@@ -28,16 +28,18 @@ import { RsbWebviewBackend } from '../rsb-webview-backend.js';
 // or failure of the body.
 interface FakeRegistry extends TabRegistry {
   pinHistory: Array<{ op: 'pin' | 'unpin'; tabId: string }>;
+  activePinLeases: Set<symbol>;
 }
 
 function fakeRegistry(rows: TabRecord[], wcMap: Map<string, WebContents>): FakeRegistry {
   const pinHistory: Array<{ op: 'pin' | 'unpin'; tabId: string }> = [];
+  const activePinLeases = new Set<symbol>();
   const reg = {
     listAll: () => rows.slice(),
     listBySession: (sid: string) => rows.filter((r) => r.sessionId === sid),
     getWebContentsByTabId: (tabId: string) => wcMap.get(tabId) ?? null,
-    listPinned: () => [],
-    isPinned: () => false,
+    listPinned: () => (activePinLeases.size > 0 ? ['t1'] : []),
+    isPinned: () => activePinLeases.size > 0,
     pin: (tabId: string) => {
       pinHistory.push({ op: 'pin', tabId });
       return true;
@@ -46,7 +48,20 @@ function fakeRegistry(rows: TabRecord[], wcMap: Map<string, WebContents>): FakeR
       pinHistory.push({ op: 'unpin', tabId });
       return true;
     },
+    acquirePinLease: (tabId: string) => {
+      const token = Symbol(tabId);
+      activePinLeases.add(token);
+      pinHistory.push({ op: 'pin', tabId });
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        activePinLeases.delete(token);
+        pinHistory.push({ op: 'unpin', tabId });
+      };
+    },
     pinHistory,
+    activePinLeases,
   };
   return reg as unknown as FakeRegistry;
 }
@@ -101,6 +116,42 @@ afterEach(() => {
 });
 
 describe('RsbWebviewBackend — diagnostic actions', () => {
+  it('health probe performs a no-side-effect renderer bridge round trip', async () => {
+    dispatchTabOpSpy.mockResolvedValueOnce({ reqId: 'probe-1', ok: true });
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([], new Map()),
+      getActiveSessionId: () => null,
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    await expect(backend.probeControl()).resolves.toBeUndefined();
+    expect(dispatchTabOpSpy).toHaveBeenCalledWith(
+      { op: 'probe' },
+      expect.any(Object),
+      expect.any(Function),
+      { ensureHost: false },
+    );
+  });
+
+  it('manual recovery probe verifies the configured host startup path', async () => {
+    dispatchTabOpSpy.mockResolvedValueOnce({ reqId: 'probe-2', ok: true });
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([], new Map()),
+      getActiveSessionId: () => null,
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+    });
+
+    await expect(backend.probeControl({ ensureHost: true })).resolves.toBeUndefined();
+    expect(dispatchTabOpSpy).toHaveBeenCalledWith(
+      { op: 'probe' },
+      expect.any(Object),
+      expect.any(Function),
+      { ensureHost: true },
+    );
+  });
+
   it('status returns ready + tab count for active session', async () => {
     const wc = fakeWc();
     const registry = fakeRegistry(
@@ -254,6 +305,7 @@ describe('RsbWebviewBackend — open / focus / close (renderer bridge)', () => {
     expect(dispatchTabOpSpy).toHaveBeenCalledWith(
       { op: 'open', sessionId: 's1', url: 'https://example.com' } satisfies RsbBrowserBridgeTabOp,
       expect.any(Object),
+      expect.any(Function),
     );
     expect(res.ok).toBe(true);
     expect(res.data).toEqual({ targetId: 't-new', tabId: 't-new' });
@@ -300,6 +352,7 @@ describe('RsbWebviewBackend — open / focus / close (renderer bridge)', () => {
     expect(dispatchTabOpSpy).toHaveBeenCalledWith(
       { op: 'close', sessionId: 's1', tabId: 't1' } satisfies RsbBrowserBridgeTabOp,
       expect.any(Object),
+      expect.any(Function),
     );
     expect(res.ok).toBe(true);
   });
@@ -709,7 +762,7 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
   // bare — normal LRU / user-close rules apply, surfacing clear errors on the
   // next call if the tab is gone.
 
-  function buildBackend(wc: WebContents) {
+  function buildBackend(wc: WebContents, disposeGraceMs?: number) {
     const registry = fakeRegistry(
       [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
       new Map([['t1', wc]]),
@@ -720,6 +773,7 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
         getActiveSessionId: () => 's1',
         bridge: { getHostWebContents: () => null, logger: logger() },
         logger: logger(),
+        ...(disposeGraceMs === undefined ? {} : { disposeGraceMs }),
       }),
       registry,
     };
@@ -743,7 +797,7 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
     { label: 'request timeout', timeoutMs: 25, elapsedMs: 25 },
     { label: 'bounded default', timeoutMs: undefined, elapsedMs: 60_000 },
   ])(
-    'navigate uses the $label, stops a stalled load, and lets dispose finish',
+    'navigate uses the $label and stops a stalled load',
     async ({ timeoutMs, elapsedMs }) => {
       vi.useFakeTimers();
       let finishLoad = () => {};
@@ -764,11 +818,9 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
           url: 'https://stalled.test',
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         } as never);
-        const disposing = backend.dispose();
-
         await vi.advanceTimersByTimeAsync(elapsedMs);
         const result = await navigating;
-        await disposing;
+        await backend.dispose();
 
         expect(result.ok).toBe(false);
         expect(result.message).toBe(`navigation timed out after ${elapsedMs}ms`);
@@ -783,6 +835,139 @@ describe('RsbWebviewBackend — per-action automation pin', () => {
       }
     },
   );
+
+  it('bounds disposal of a stalled call and returns an actionable retry error', async () => {
+    vi.useFakeTimers();
+    let finishLoad = () => {};
+    const wc = fakeWc();
+    wc.loadURLMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+    const { backend } = buildBackend(wc, 25);
+
+    try {
+      const navigating = backend.call({
+        action: 'navigate',
+        targetId: 't1',
+        url: 'https://stalled.test',
+      } as never);
+      const disposing = backend.dispose();
+      const statusWhileDisposing = await backend.call({ action: 'status' });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await disposing;
+
+      expect(statusWhileDisposing).toMatchObject({
+        ok: false,
+        errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+      });
+      expect(statusWhileDisposing.message).toMatch(/retry shortly/i);
+
+      finishLoad();
+      await navigating;
+    } finally {
+      finishLoad();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a late old-generation finally release the replacement pin', async () => {
+    let finishOld = () => {};
+    let finishReplacement = () => {};
+    const wc = fakeWc();
+    wc.capturePageMock
+      .mockImplementationOnce(
+        () => new Promise<{ toPNG(): Buffer }>((resolve) => {
+          finishOld = () => resolve({ toPNG: () => Buffer.from('OLD') });
+        }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<{ toPNG(): Buffer }>((resolve) => {
+          finishReplacement = () => resolve({ toPNG: () => Buffer.from('NEW') });
+        }),
+      );
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const createBackend = () => new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+      disposeGraceMs: 0,
+    });
+    const oldGeneration = createBackend();
+    const replacement = createBackend();
+
+    const oldCall = oldGeneration.call({
+      action: 'screenshot',
+      targetId: 't1',
+    } as never);
+    await vi.waitFor(() => expect(registry.activePinLeases.size).toBe(1));
+    await oldGeneration.dispose();
+    expect(registry.activePinLeases.size).toBe(0);
+
+    const replacementCall = replacement.call({
+      action: 'screenshot',
+      targetId: 't1',
+    } as never);
+    await vi.waitFor(() => expect(registry.activePinLeases.size).toBe(1));
+
+    finishOld();
+    await oldCall;
+    expect(registry.activePinLeases.size).toBe(1);
+
+    finishReplacement();
+    await replacementCall;
+    expect(registry.activePinLeases.size).toBe(0);
+  });
+
+  it('does not start a WebContents action after a delayed host wait outlives disposal', async () => {
+    vi.useFakeTimers();
+    let finishEnsureHost: (() => void) | undefined;
+    const ensureHost = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finishEnsureHost = resolve;
+      }),
+    );
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, ensureHost, logger: logger() },
+      logger: logger(),
+      disposeGraceMs: 0,
+    });
+
+    try {
+      const navigating = backend.call({
+        action: 'navigate',
+        targetId: 't1',
+        url: 'https://late.test',
+      } as never);
+      await vi.waitFor(() => expect(ensureHost).toHaveBeenCalledOnce());
+      const disposing = backend.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      await disposing;
+
+      finishEnsureHost?.();
+      await expect(navigating).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+      });
+      expect(wc.loadURLMock).not.toHaveBeenCalled();
+    } finally {
+      finishEnsureHost?.();
+      vi.useRealTimers();
+    }
+  });
 
   it('unpins even when wc operation throws (action failure path)', async () => {
     const wc = {
@@ -1844,6 +2029,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(dispatchTabOpSpy).toHaveBeenCalledWith(
       { op: 'ensure', sessionId: 's1', tabId: 't1' },
       expect.any(Object),
+      expect.any(Function),
     );
   });
 
@@ -1883,6 +2069,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(dispatchTabOpSpy).toHaveBeenCalledWith(
       { op: 'ensure', sessionId: 's1' },
       expect.any(Object),
+      expect.any(Function),
     );
     expect(wc.loadURLMock).toHaveBeenCalledWith('https://example.com');
   });

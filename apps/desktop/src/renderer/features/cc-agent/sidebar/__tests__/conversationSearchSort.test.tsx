@@ -10,13 +10,12 @@
  */
 
 import { act, cleanup, render, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  SEARCH_SORT_BY_KEY,
-  __resetSearchSortByStoreForTests,
-} from '../conversationSearchPrefs';
+import { SEARCH_SORT_BY_KEY, __resetSearchSortByStoreForTests } from '../conversationSearchPrefs';
 import { SearchFilterMenu, useConversationSearch } from '../ConversationSearchBox';
+import { searchConversations } from '@/lib/conversationSearchService';
+import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -33,10 +32,20 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: vi.fn(async () => '/'),
 }));
 
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: { platform: 'linux' },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(window, 'electronAPI');
   localStorage.clear();
   __resetSearchSortByStoreForTests();
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });
 
 function renderSearch() {
@@ -114,6 +123,59 @@ describe('useConversationSearch sort persistence', () => {
     });
     // 非法值回落默认排序,而不是把 'bogus' 塞进请求。
     expect(result.current.sortBy).toBe('relevance');
+  });
+});
+
+describe('useConversationSearch visibility scope', () => {
+  it('keeps global search unbounded while bounding an explicit project selection', async () => {
+    vi.useFakeTimers();
+    const searchMock = vi.mocked(searchConversations);
+    const project: ProjectNodeData = {
+      projectKey: 'local:/repo',
+      scope: 'local',
+      workingDir: '/repo',
+      remoteHostId: null,
+      deviceLinkDeviceId: null,
+      deviceLinkDeviceName: null,
+      deviceLinkConnectionStatus: null,
+      displayName: 'Repo',
+      segments: 1,
+      sessions: [
+        { id: 'loaded' } as ProjectNodeData['sessions'][number],
+        { id: 'outside-sidebar-cache' } as ProjectNodeData['sessions'][number],
+      ],
+      latestActivityAt: '2026-08-02T00:00:00.000Z',
+    };
+    const { result } = renderHook(() =>
+      useConversationSearch({
+        enabled: true,
+        navigate: vi.fn() as never,
+        allKnownProjects: [project],
+        allowedSessionIds: ['loaded'],
+      }),
+    );
+
+    act(() => result.current.setQuery('needle'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251);
+    });
+    expect(searchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        semanticMode: 'keyword',
+        filters: expect.objectContaining({ sessionIds: null }),
+      }),
+    );
+
+    searchMock.mockClear();
+    act(() => result.current.setProjectSelection([project.projectKey]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251);
+    });
+    expect(searchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ sessionIds: ['loaded'] }),
+      }),
+    );
   });
 });
 
