@@ -598,30 +598,39 @@ export class DeviceLinkClient {
     // 的回调会在链路已关闭后补发瞬时重置帧,诱使对端重开用户已关掉的控制方向。
     this.cancelTimeoutCloseNotify(dst);
     this.pendingInboundLinkOffers.delete(dst);
-    this.rejectPendingLinkOpen(
-      dst,
-      'LINK_NOT_OPEN',
-      `control link closed locally (${reason})`,
-    );
     const peer = this.peerTransport.get(dst);
-    if (peer) {
-      peer.linkReady = false;
-      peer.explicitlyClosed = true;
-      peer.unlinkedLegacyResponseIds.clear();
-      // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
-      // 保守撤销的代价只是回到整连接重连语义(安全侧),而保留错误的 true
-      // 会让 transport-timeout 重开用户已关闭的控制方向。
-      peer.linkAcceptedInbound = false;
-      // 只有出站方向的关闭才意味着「本机不再主动控制对方」;入站方向的
-      // 撤权/踢控制端不得封死仍存续的主动控制意图(见方法注释)。
-      if (direction === 'outbound') peer.outboundExplicitlyClosed = true;
-      // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
-      // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
-      peer.reliable = false;
-      peer.remoteStreamId = null;
-      peer.remoteBaseSeq = 1;
-      peer.receive.clear();
-      this.abandonReliablePending(dst, `control link closed locally (${reason})`);
+    if (direction === 'inbound') {
+      // 入站方向关闭(撤权/踢控制端):PeerTransportState 按 deviceId 共享两个
+      // 方向,互控时仍存续的**出站**可靠层不得陪葬——不置 explicitlyClosed、
+      // 不拆 reliable/stream、不清 pending、不 reject 在途请求与出站 openLink 等待,
+      // 否则本机仍在进行的主动控制会立刻吃到 LINK_NOT_OPEN、在途调用被丢。
+      // 只撤销入站语义:活动入站标记(后续重试耗尽回退整连接重连,升级前
+      // 语义)并通知对端。纯被控场景(无出站活动)下保留的传输层状态无害:
+      // dispatch 已清订阅,不会再有新流量灌入。
+      if (peer) peer.linkAcceptedInbound = false;
+    } else {
+      this.rejectPendingLinkOpen(
+        dst,
+        'LINK_NOT_OPEN',
+        `control link closed locally (${reason})`,
+      );
+      if (peer) {
+        peer.linkReady = false;
+        peer.explicitlyClosed = true;
+        peer.unlinkedLegacyResponseIds.clear();
+        // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
+        // 保守撤销的代价只是回到整连接重连语义(安全侧),而保留错误的 true
+        // 会让 transport-timeout 重开用户已关闭的控制方向。
+        peer.linkAcceptedInbound = false;
+        peer.outboundExplicitlyClosed = true;
+        // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
+        // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
+        peer.reliable = false;
+        peer.remoteStreamId = null;
+        peer.remoteBaseSeq = 1;
+        peer.receive.clear();
+        this.abandonReliablePending(dst, `control link closed locally (${reason})`);
+      }
     }
     // 显式关闭的本地语义不能依赖 relay 当前可写；离线时只跳过通知，
     // 已经清掉的可靠 pending 也绝不能在下一次 openLink 后复活。

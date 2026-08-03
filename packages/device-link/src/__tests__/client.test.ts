@@ -1112,6 +1112,63 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站方向 closeLink 不拆共享可靠层:在途出站请求不被拒、后续发送不报 LINK_NOT_OPEN、回包照常送达', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 互控:入站 accept + 本机出站 openLink
+    await establishInboundReliableLink(h, 'iso-mutual-stream');
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'iso-mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 在途出站 invoke(尚无回包)
+    const invokeResult = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    let settled = false;
+    void invokeResult.finally(() => { settled = true; });
+    const invokeFrame = h.current().sent.find((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ))!;
+
+    // 入站方向撤权:不得陪葬仍存续的出站可靠层
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+    await tick();
+    expect(settled).toBe(false); // 在途请求未被拒
+    // 后续可靠发送不报 LINK_NOT_OPEN(可靠层未被拆)
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { still: 'alive' })).not.toThrow();
+
+    // 回包到达 → 在途请求正常完成
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: invokeFrame.id,
+      src: 'dev-b',
+      payload: { ok: true, result: [] },
+    });
+    await expect(invokeResult).resolves.toMatchObject({ ok: true });
+    h.client.stop();
+  });
+
   it('入站方向撤权(closeLink inbound)不封死仍存续的主动控制:transport-timeout 照常交 app 层触发重建', async () => {
     const h = makeHarness({
       timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },

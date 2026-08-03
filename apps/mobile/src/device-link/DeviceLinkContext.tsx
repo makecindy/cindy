@@ -44,6 +44,8 @@ import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import {
   handlePeerLinkCloseFrame,
   invalidatePeerLinkState,
+  liftRehydrateSuppressionForNewConnection,
+  liftRehydrateSuppressionOnExplicitOpen,
   updateRehydrateSuppressionOnLinkClose,
 } from '@/device-link/linkClose';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
@@ -654,7 +656,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       );
       // 新连接代际 = 世界重置:永久关闭抑制不跨代际(断线期间对方状态未知,
       // 新代按乐观补齐;若对方仍拒绝,入站永久 link-close 会重新建立抑制)。
-      rehydrateSuppressedDeviceIds.clear();
+      liftRehydrateSuppressionForNewConnection(rehydrateSuppressedDeviceIds);
       // 上一连接代的 rehydrate verdict 已被降为 unknown;新连接的 late response
       // 不能再借旧 verdict 清理当前代状态。权威 presence 会在 delta 到达时重建。
       for (const deviceId of staleUnavailableDeviceIds) {
@@ -733,8 +735,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
       // 触发。逐设备且幂等(map 单点查删),不影响其它设备的风暴止损。
       invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
-      // 权威 presence 可用快照 = 合法的重建信号:解除永久关闭后的重建抑制。
-      rehydrateSuppressedDeviceIds.delete(snap.deviceId);
+      // 注意:普通 available=true 快照**不**解除永久关闭后的重建抑制——在线
+      // ≠ 对方重新授权或本机用户主动重开(对方结束链路后一直在线是常态)。
+      // 解除点只有:transport-timeout / 新连接代际 / 显式 openLink 成功
+      // (见 linkClose.ts 的具名 lift 入口)。
       if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
@@ -1200,7 +1204,7 @@ async function sendOpenLink(
     settleDeviceSend(deviceId, slot, 'inconclusive');
     markRemoteResponseEvidence(deviceId);
     // 显式 openLink 成功 = 链路已重建:解除永久关闭后的重建抑制。
-    rehydrateSuppressedDeviceIds.delete(deviceId);
+    liftRehydrateSuppressionOnExplicitOpen(rehydrateSuppressedDeviceIds, deviceId);
     return accepted;
   } catch (err) {
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
