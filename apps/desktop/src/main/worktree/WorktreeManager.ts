@@ -562,6 +562,32 @@ async function listProtectedClaudeSiviPaths(
   return out;
 }
 
+/**
+ * git worktree add 参数(导出仅供单测断言)。--no-track 是分支边界约束:sourceBranch
+ * 现在常是远端跟踪引用(refs/remotes/<remote>/<默认分支>),不加它 git 会按
+ * branch.autoSetupMerge 默认给新 xdt/* 分支挂上对远端默认分支的 upstream 配置
+ * (branch.<name>.remote/merge)——此后裸 git push/pull 可能误推/误并默认分支,
+ * 破坏自动 worktree 的独立分支边界;起点是本地分支时 --no-track 为无害 no-op。
+ */
+export function buildWorktreeAddArgs(
+  branch: string,
+  worktreePath: string,
+  sourceBranch: string,
+): string[] {
+  return [
+    '-c',
+    'core.longpaths=true',
+    'worktree',
+    'add',
+    '--no-checkout',
+    '--no-track',
+    '-b',
+    branch,
+    worktreePath,
+    sourceBranch,
+  ];
+}
+
 export async function copyClaudeSiviDirs(
   baseRepo: string,
   worktreePath: string,
@@ -720,7 +746,7 @@ async function createWorktreeInner(
     //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
     //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
     const branch = getBranchName(name);
-    const addArgs = ['-c', 'core.longpaths=true', 'worktree', 'add', '--no-checkout', '-b', branch, worktreePath, req.sourceBranch];
+    const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
     try {
       await timed('git worktree add', () => gitExec(addArgs, baseRepo));
     } catch (err) {
