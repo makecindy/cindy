@@ -13,6 +13,7 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  diffGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -96,7 +97,11 @@ import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
 import { reconcileGhostSkillLinks } from './skillSlot.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../security/trustedAppRenderer.js';
 import {
   FILO_GOOGLE_GHOST_ID,
   FILO_GOOGLE_SECRET_KEY,
@@ -153,6 +158,18 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
+import { GhostBadgeSlot } from './badgeSlot.js';
+import {
+  clearGhostUnread,
+  loadGhostUnread,
+  markGhostUnread,
+  readGhostUnread,
+  type GhostUnreadEntry,
+} from './ghostUnreadStore.js';
+import {
+  isGhostUnreadProjectable,
+  selectRevokedGhostUnreadIds,
+} from './ghostUnreadProjection.js';
 import { GhostConfirmSlot } from './confirmSlot.js';
 import {
   getGhostConfirmDialogBridge,
@@ -804,7 +821,8 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
   });
   // 播种绕过 manager 写盘,广播由这里补上(renderer 首帧 sendSync 早于对账
   // 完成时,靠 ghosts:changed 热更新兜底,多窗口同一套通道)。
-  broadcastGhostsChanged(manager.list());
+  // 对账跑完 = 一次完整扫描,清单权威(见 broadcastGhostsChanged 的说明)。
+  broadcastGhostsChanged(manager.list(), true);
   // 首装的意识停进布局树(与 installAndDock 同一套停靠逻辑;覆盖更新 id 未变,
   // 布局位置天然保留,不动树;回收不动树 —— 与 uninstall 口径一致,位置记录
   // 由布局引擎保留)。
@@ -1694,6 +1712,189 @@ export function getGhostNotifySlot(): GhostNotifySlot {
     });
   }
   return notifySlotSingleton;
+}
+
+let badgeSlotSingleton: GhostBadgeSlot | null = null;
+
+/** 意识未读角标通道(main → 全窗口 renderer;插件入口与插件卡上的绿点)。 */
+export const GHOST_BADGE_CHANNEL = 'ghosts:badge';
+
+/**
+ * 未读全量快照通道(main → 全窗口 renderer)。逐条的 GHOST_BADGE_CHANNEL 只表达
+ * 增量,**换账号**必须整表替换:未读账本按 owner 分文件(ownerScopedUserDataPath),
+ * 切到账号 B 后 renderer 手上还攥着账号 A 的点和摘要,不推一次快照就是跨账号残留。
+ */
+export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
+
+/**
+ * 未读推送的收口:**只发给可信的 Cindy 自有顶层页面**。
+ *
+ * 载荷里的 summary 是插件正文(工单标题、邮件主题、任务名)。无条件
+ * `getAllWindows().send()` 会把它发给所有窗口,包括已经导航到别处的那些——
+ * 出站推送与入站 IPC 是同一道授权边界,不能只守一边(codex review)。
+ * 判据复用 `isTrustedAppRendererWindow`,与 `ghosts:unread` 同步读那道闸同源。
+ */
+function sendToTrustedAppWindows(channel: string, payload: unknown): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (window.isDestroyed()) return;
+    if (!isTrustedAppRendererWindow(window)) return;
+    window.webContents.send(channel, payload);
+  });
+}
+
+function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summary?: string; at?: number }): void {
+  sendToTrustedAppWindows(GHOST_BADGE_CHANNEL, payload);
+}
+
+/**
+ * 推一份当前 owner 的未读全量快照(登录 / 登出 / 换账号后由 onAuthStateChange 调)。
+ * 由 main 主动推而不是让 renderer 自己重读:owner 是否已经切完只有 main 说了算,
+ * renderer 猜时机就可能读到旧账号的账本。读失败按空表推——宁可少一颗点,不可
+ * 把账号 A 的未读留在账号 B 的界面上。
+ */
+function broadcastGhostUnreadSnapshot(): void {
+  const entries = visibleGhostUnread();
+  sendToTrustedAppWindows(GHOST_UNREAD_SNAPSHOT_CHANNEL, { entries });
+}
+
+/**
+ * 可投影的未读 = 账本里还亮着 **且** 意识当前可用且已启用。
+ *
+ * 停用**保留记录、只停投影**(不是删记录):用户把插件按沉睡是"先别烦我",
+ * 不是"这条我读过了";重新启用时那颗点应该回来。已卸载的残留条目也在这里
+ * 被滤掉——包都没了的点用户既点不开也清不掉。
+ * 读失败按空表:宁可少一颗点,不可让损坏的账本挡住插件页首屏。
+ */
+function visibleGhostUnread(): GhostUnreadEntry[] {
+  try {
+    const entries = loadGhostUnread();
+    if (entries.length === 0) return [];
+    // **一次快照建索引**,不要逐条 findAvailableGhost():那个函数每次都调
+    // GhostManager.list(),而 list() 会同步重扫插件目录、重读每份 manifest /
+    // locale / 图标 / 信任文件。账本允许 200 条,逐条查就是 O(未读 × 已装) 次
+    // 磁盘扫描,而本函数服务的是**同步** ghosts:unread(首屏渲染路径),
+    // 足以卡住启动(codex review)。
+    const available = new Map(availableGhosts().map((ghost) => [ghost.manifest.id, ghost]));
+    return entries.filter((entry) => isGhostUnreadProjectable(available.get(entry.ghostId) ?? null));
+  } catch (error) {
+    log.warn('ghost unread 读取失败', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * 未读角标槽单例(badge 槽):资格审/净化/限速在 GhostBadgeSlot,这里只装配
+ * 取意识、落盘与广播。落盘失败**不吞成静默**——账本写不进去时角标只在本次
+ * 运行期有效,如实记日志,但仍然推给 renderer(用户当下看得见比事后可靠更重要)。
+ */
+export function getGhostBadgeSlot(): GhostBadgeSlot {
+  if (!badgeSlotSingleton) {
+    badgeSlotSingleton = new GhostBadgeSlot({
+      getGhost: findAvailableGhost,
+      mark: (ghostId, summary, at) => {
+        try {
+          // 触到上限被挤掉的条目要补一条熄灭广播,否则 renderer 表里留着账本
+          // 已经删掉的点(卡片与聚合入口一直亮到重启)。
+          for (const evictedId of markGhostUnread(ghostId, summary, at).evicted) {
+            broadcastGhostBadge({ ghostId: evictedId, unread: false });
+          }
+          return true;
+        } catch (error) {
+          // 写不进去就**如实回 false**,由槽决定不广播。此前这里吞掉异常后
+          // 照常广播,renderer 会留下一颗账本里根本不存在的点;而后续熄灭
+          // 路径查不到记录 → 不广播 → 那颗点再也清不掉(codex review)。
+          log.warn('ghost unread 落盘失败', {
+            ghostId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        }
+      },
+      clear: (ghostId) => {
+        try {
+          return clearGhostUnread(ghostId) !== null;
+        } catch (error) {
+          log.warn('ghost unread 清除失败', {
+            ghostId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // 落盘清不掉时仍回 true:让广播照发,界面上的点先灭掉,
+          // 否则用户点开了面板却看到点还亮着,属于更可见的错。
+          return true;
+        }
+      },
+      broadcast: broadcastGhostBadge,
+      log,
+    });
+  }
+  return badgeSlotSingleton;
+}
+
+/**
+ * 主机侧熄灭未读(用户打开面板 / 停用 / 卸载)。与意识自发的 badge 熄灭同
+ * 通道同落盘,但不经意识代码、不占限速——判定者是主机。
+ */
+function extinguishGhostUnread(ghostId: string, seenAt?: number): void {
+  try {
+    // null = 没发生变化(本来就没亮,或账本比 seenAt 新)——免掉一轮广播,
+    // 也别把仍然亮着的那条误报成已熄灭。
+    if (clearGhostUnread(ghostId, seenAt) === null) return;
+  } catch (error) {
+    log.warn('ghost unread 清除失败', {
+      ghostId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  broadcastGhostBadge({ ghostId, unread: false });
+}
+
+/**
+ * 停用:只停投影,**不删记录**——沉睡是"先别烦我",不是"这条我读过了"。
+ * 限速记账一并抹掉,重新唤醒后的第一条不该被上一世的时刻挡住。
+ */
+function suspendGhostUnreadProjection(ghostId: string): void {
+  badgeSlotSingleton?.forget(ghostId);
+  broadcastGhostBadge({ ghostId, unread: false });
+}
+
+/**
+ * 撤销扫尾:插件更新后身份卡不再声明 badge 卡槽时,
+ * 既有未读**立即清除**——权限撤了还留一颗点,等于把已收回的能力继续兑现。
+ * 挂在 broadcastGhostsChanged 上:装入 / 更新 / 卸载 / 对账都从这一处过,
+ * 不用在每条清单变更路径上各补一遍。
+ */
+function sweepRevokedGhostUnread(ghosts: InstalledGhost[], rosterAuthoritative: boolean): void {
+  let entries: GhostUnreadEntry[];
+  try {
+    entries = loadGhostUnread();
+  } catch {
+    return; // 账本读不出来时不做任何猜测,交给下一次变更
+  }
+  for (const id of selectRevokedGhostUnreadIds(entries, ghosts, rosterAuthoritative)) {
+    extinguishGhostUnread(id);
+  }
+}
+
+/** 重新启用:账本里还留着的那颗点要回来(与 suspend 成对)。 */
+function resumeGhostUnreadProjection(ghostId: string): void {
+  let entry: GhostUnreadEntry | null = null;
+  try {
+    entry = readGhostUnread(ghostId);
+  } catch (error) {
+    log.warn('ghost unread 读取失败', {
+      ghostId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!entry) return;
+  broadcastGhostBadge({
+    ghostId,
+    unread: true,
+    ...(entry.summary ? { summary: entry.summary } : {}),
+    at: entry.at,
+  });
 }
 
 let confirmSlotSingleton: GhostConfirmSlot | null = null;
@@ -2958,6 +3159,12 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
+    /**
+     * 装入确认框实际展示给用户的那份 manifest(来源方给的)。给了就逐项比对:
+     * 包里多出来的权限一律拒装(见 Locked 版里的说明)。两条市场路径都必须给;
+     * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
+     */
+    reviewedManifest?: GhostManifest;
   },
 ): Promise<InstalledGhost> {
   // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
@@ -2973,6 +3180,7 @@ async function installOrUpdateMarketGhostPackageLocked(
   expected: {
     ghostId: string;
     version: string;
+    reviewedManifest?: GhostManifest;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2991,6 +3199,36 @@ async function installOrUpdateMarketGhostPackageLocked(
       );
     }
     requireGhostAvailableForActiveSession(expected.ghostId);
+    /**
+     * 「审阅过的」与「真要装的」权限必须一致(2026-08-03,codex review P1)。
+     *
+     * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
+     * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
+     * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
+     * 那份平行校验器就已经缺了 `confirm` 槽;新登记的槽(如 `badge`)在它眼里是
+     * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
+     * 它装进来,用户**从没审过就多出一个常驻能力面**。
+     *
+     * 这里按权限项逐项比对,包里多出来的一律拒装——不是只挡 badge,是把这一整类
+     * 「来源投影漏字段」的洞一次封死。落在 inspect 之后、任何落地动作之前,所以
+     * 拒绝时磁盘上什么都没动,不需要回滚。
+     */
+    if (expected.reviewedManifest) {
+      const unreviewed = diffGhostPermissionItems(
+        expected.reviewedManifest,
+        inspected.manifest,
+      ).added;
+      if (unreviewed.length > 0) {
+        log.warn('market package declares unreviewed permissions', {
+          ghostId: expected.ghostId,
+          keys: unreviewed.map((item) => item.key),
+        });
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          '下载包申请的权限多于安装确认框展示的内容,已阻止安装(请向插件来源反馈)',
+        );
+      }
+    }
     rejectUnauthorizedTokenBroker(inspected.manifest);
 
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
@@ -3154,7 +3392,13 @@ async function uninstallGhostAndCleanupLocked(
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    broadcastGhostsChanged(manager.list());
+    // 未读随意识一起走:包都没了还留一颗点,用户既点不开也清不掉。
+    // 限速记账一并抹掉,重装后的第一条不该被上一世的时刻挡住。
+    extinguishGhostUnread(id);
+    badgeSlotSingleton?.forget(id);
+    // 卸载刚落地,manager.list() 就是当下的全部事实(哪怕是空表)——标权威,
+    // 好让「卸掉最后一个插件」也能把账本里的孤儿记录一并清掉。
+    broadcastGhostsChanged(manager.list(), true);
     if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
     try {
       await completeLedger?.();
@@ -3631,6 +3875,9 @@ export function registerGhostIpc(): void {
       // Even when provisioning itself is a no-op, the renderer and agent
       // roster must immediately reflect the new session capability set.
       broadcastGhostsChanged(manager.list());
+      // 未读账本按 owner 分文件,换账号后必须整表替换,否则账号 A 的绿点与摘要
+      // 会留在账号 B 的插件入口与卡片上(跨账号残留)。
+      broadcastGhostUnreadSnapshot();
       void scheduleBuiltinReconcile('auth-change');
       builtinReconcileChain = builtinReconcileChain.then(
         activateGhostsAndMigrateLegacyAccounts,
@@ -3742,6 +3989,11 @@ export function registerGhostIpc(): void {
     // invoke 返回值即结构化结果(失败带人话原因,供意识作者调试)。
     if (type === 'notify') {
       return getGhostNotifySlot().handleNotify(id, payload);
+    }
+    // badge = 未读角标(badge 槽):资格审看 badge 卡槽、
+    // 净化/限速/落盘在 badgeSlot。与 notify 的分工是"持久状态"对"一次性 toast"。
+    if (type === 'badge') {
+      return getGhostBadgeSlot().handleBadge(id, payload);
     }
     // confirm-request = 确认弹窗(confirm 槽):资格审/净化/限速/单飞在
     // confirmSlot,往返与超时兜底在 ghostConfirmDialogBridge。invoke 返回值即
@@ -3872,6 +4124,36 @@ export function registerGhostIpc(): void {
       });
       return { ids: [] };
     }
+  });
+
+  // 未读角标快照(badge 槽)。同步读的理由与 recent-usage 同款:插件入口
+  // 与插件卡的绿点必须**首帧就对**,先渲染成"全无未读"再跳出一颗点是可见跳变。
+  // 账本损坏 / 权限异常一律降级成空,不阻断首屏。
+  // 来源闸:未读 summary 是**插件正文**(工单标题、邮件主题、任务名),
+  // 泄给导航到别处的 renderer / WebView / 插件页就是内容泄漏。
+  // 这里用非抛出的判据而不是 assert:sendSync 里抛错会在 renderer 侧变成同步
+  // 异常炸掉调用点,而未读只是提醒——不可信来源降级成空表即可(codex review)。
+  ipcMain.on('ghosts:unread', (event) => {
+    event.returnValue = { entries: isTrustedAppRendererEvent(event) ? visibleGhostUnread() : [] };
+  });
+
+  // 用户侧熄灭未读(打开面板 = 明确已读)。不要求意识仍在装:卸载残留的
+  // 陈旧条目也该能被清掉,否则界面上会留一颗永远点不掉的点。
+  // 来源闸同上:它会改写 owner 作用域的账本,不能让非可信 frame 拿任意合法
+  // 插件 id 把别人的未读清掉(codex review)。
+  ipcMain.handle('ghosts:clear-unread', (event, id: unknown, seenAt: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) {
+      throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+    }
+    if (seenAt !== undefined && (typeof seenAt !== 'number' || !Number.isFinite(seenAt))) {
+      throwIpcError('INVALID_PARAMS', 'seenAt must be a finite number when provided');
+    }
+    // seenAt = renderer 当时**实际看到的那条**的点亮时刻。清除请求与插件的新点亮
+    // 走两条独立 IPC,「新点亮先到、旧清除后到」完全可能发生;按它做条件删除,
+    // 陈旧清除不会把用户还没看到的新摘要一并抹掉(codex review)。
+    extinguishGhostUnread(id, seenAt as number | undefined);
+    return { ok: true };
   });
 
   // ── 配置就绪检查(使用前置门,判定与 handler 主体在 ghostSetupStatus.ts)──
@@ -4316,6 +4598,16 @@ export function registerGhostIpc(): void {
       runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
       const ghost = findAvailableGhost(id);
       if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
+      resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来
+    } else {
+      // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
+      // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
+      //
+      // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
+      // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
+      // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
+      // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
+      suspendGhostUnreadProjection(id);
     }
     return { ok: true };
   });
@@ -4497,8 +4789,18 @@ function broadcastGhostProvisioning(active: boolean): void {
   });
 }
 
-function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
+/**
+ * `rosterAuthoritative` = 传进来的这份清单是否来自**刚做完的完整扫描**。
+ * 只影响未读孤儿扫尾:权威的空表意味着"插件真的一个都没有了",要清账本;
+ * 非权威的空表(账号切换窗口里 manager 尚未重扫)必须当作"还不知道",
+ * 否则会把用户的未读整批误清。缺省 false = 保守。
+ */
+function broadcastGhostsChanged(
+  ghosts: InstalledGhost[],
+  rosterAuthoritative = false,
+): void {
   getGhostSetupManifestTracker().note(ghosts);
+  sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
   const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;

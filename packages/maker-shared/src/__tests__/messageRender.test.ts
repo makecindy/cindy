@@ -7,6 +7,7 @@ import {
   findLatestMessageTodoInsertion,
   findMessageTodoInsertions,
   formatDuration,
+  getLatestMessageTodoState,
   type MessageRenderItem,
   type MessageRenderNormalizedMessage,
   type MessageRenderSourceMessageLike,
@@ -896,6 +897,166 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([todo, update])).toBeNull();
   });
 
+  it('keeps a Task update unresolved when the loaded window only contains a different task', () => {
+    const visibleCreate = tool(
+      'task4',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      'create-4',
+    );
+    const olderTaskUpdate = tool(
+      'task3-update',
+      'TaskUpdate',
+      { taskId: '3', status: 'completed' },
+      'update-3',
+    );
+
+    expect(findLatestMessageTodoInsertion([
+      visibleCreate,
+      result('create-4', 'Task #4 created successfully: Fix existing tests'),
+      olderTaskUpdate,
+    ])).toBeNull();
+  });
+
+  it('keeps the Task window unresolved until every earlier updated task is reconstructed', () => {
+    const missingOlderUpdate = tool(
+      'task1-update',
+      'TaskUpdate',
+      { taskId: '1', status: 'completed' },
+      'update-1',
+    );
+    const visibleTarget = tool(
+      'task3',
+      'TaskCreate',
+      { subject: 'Run stress tests' },
+      'create-3',
+    );
+    const visiblePending = tool(
+      'task4',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      'create-4',
+    );
+    const latestUpdate = tool(
+      'task3-update',
+      'TaskUpdate',
+      { taskId: '3', status: 'completed' },
+      'update-3',
+    );
+
+    expect(findLatestMessageTodoInsertion([
+      visibleTarget,
+      result('create-3', 'Task #3 created successfully: Run stress tests'),
+      missingOlderUpdate,
+      visiblePending,
+      result('create-4', 'Task #4 created successfully: Fix existing tests'),
+      latestUpdate,
+    ])).toBeNull();
+  });
+
+  it('keeps a partial Task session unresolved while older messages may contain earlier creates', () => {
+    const create = tool('task2', 'TaskCreate', { subject: 'Fix renderer' }, 'create-2');
+    const update = tool(
+      'task2-update',
+      'TaskUpdate',
+      { taskId: '2', status: 'in_progress' },
+      'update-2',
+    );
+    const messages = [
+      create,
+      result('create-2', 'Task #2 created successfully: Fix renderer'),
+      update,
+    ];
+
+    expect(getLatestMessageTodoState(messages, { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      insertion: null,
+      isResolved: false,
+    });
+    expect(getLatestMessageTodoState(messages, { taskHistoryMayBeIncomplete: false })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        todos: [{ content: 'Fix renderer', status: 'in_progress' }],
+      },
+    });
+  });
+
+  it('keeps a titleless TaskList unresolved until the missing task title is reconstructed', () => {
+    const list = tool('task-list', 'TaskList', {}, 'list-1');
+    const listResult = result('list-1', JSON.stringify({
+      tasks: [
+        { id: 'abc', status: 'completed' },
+        { id: 'def', subject: 'Write summary', status: 'pending' },
+      ],
+    }));
+
+    expect(getLatestMessageTodoState([list, listResult])).toMatchObject({
+      insertion: null,
+      isResolved: false,
+    });
+
+    const create = tool('task-create', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    expect(getLatestMessageTodoState([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      list,
+      listResult,
+    ])).toMatchObject({
+      isResolved: true,
+      insertion: {
+        todos: [
+          { content: 'Collect logs', status: 'completed' },
+          { content: 'Write summary', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('preserves a completed task title when a later TaskList repeats the same id', () => {
+    const create = tool('task-create', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const complete = tool(
+      'task-complete',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      'update-1',
+    );
+    const list = tool('task-list', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      complete,
+      list,
+      result('list-1', JSON.stringify({ tasks: [{ id: 'abc', status: 'completed' }] })),
+    ])).toMatchObject({
+      todos: [{ content: 'Collect logs', status: 'completed' }],
+    });
+  });
+
+  it('does not let an orphan completed update block a later complete task session', () => {
+    const orphanUpdate = tool(
+      'old-task-update',
+      'TaskUpdate',
+      { taskId: 'old', status: 'completed' },
+      'update-old',
+    );
+    const first = tool('new-task-1', 'TaskCreate', { subject: 'Inspect logs' }, 'create-new-1');
+    const second = tool('new-task-2', 'TaskCreate', { subject: 'Fix renderer' }, 'create-new-2');
+
+    expect(findLatestMessageTodoInsertion([
+      orphanUpdate,
+      first,
+      result('create-new-1', 'Task #new-1 created successfully: Inspect logs'),
+      second,
+      result('create-new-2', 'Task #new-2 created successfully: Fix renderer'),
+    ])).toMatchObject({
+      key: 'todo-new-task-1',
+      todos: [
+        { content: 'Inspect logs', status: 'pending' },
+        { content: 'Fix renderer', status: 'pending' },
+      ],
+    });
+  });
+
   it('findLatestMessageTodoInsertion clears the pinned plan when the latest Task update deletes the last task', () => {
     const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
     const remove = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-1');
@@ -970,6 +1131,20 @@ describe('message render todo grouping', () => {
       result('create-1', 'Task #abc created successfully: Collect logs'),
       listEmpty,
       result('list-1', JSON.stringify({ tasks: [] })),
+    ])).toBeNull();
+  });
+
+  it('treats deleted-only TaskList snapshots as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const listDeleted = tool('task2', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      listDeleted,
+      result('list-1', JSON.stringify({
+        tasks: [{ id: 'abc', status: 'deleted' }],
+      })),
     ])).toBeNull();
   });
 

@@ -913,7 +913,13 @@ describe('进度快照(turn.progress 链路)', () => {
       // agent 的常态: 先说一句要去看看 -> 干活 -> 给结论。
       cb({ type: 'text', data: { text: '我先看看这个链接。', isFinal: true } });
       cb({ type: 'tool_use', data: { toolName: 'WebFetch', toolUseId: 'u1', input: {} } });
-      cb({ type: 'text', data: { text: '结论: 该库已停止维护。', isFinal: true } });
+      cb({
+        type: 'text',
+        data: {
+          text: '结论: 该库已停止维护。\uE200cite\uE202turn17search1\uE202turn17search2\uE201',
+          isFinal: true,
+        },
+      });
       cb({ type: 'done', data: null });
 
       const outcome = await p;
@@ -922,6 +928,7 @@ describe('进度快照(turn.progress 链路)', () => {
       // 发到公开时间线, 稀释最终结论 —— X 只发最后一条。
       expect(outcome.finalText).toBe('结论: 该库已停止维护。');
       expect(outcome.finalText).not.toContain('我先看看');
+      expect(outcome.finalText).not.toContain('\uE200');
     } finally {
       vi.useRealTimers();
     }

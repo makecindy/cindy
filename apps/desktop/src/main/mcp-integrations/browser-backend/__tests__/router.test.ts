@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
+import type { BrowserControlResult } from '@cindy/browser-control-runtime';
 
 import { BackendRouter } from '../router.js';
 import type { BackendKind, BrowserBackend } from '../types.js';
@@ -21,7 +21,7 @@ function fakeBackend(kind: BackendKind, opts?: { disposeImpl?: () => Promise<voi
   dispose: ReturnType<typeof vi.fn>;
 } {
   const call = vi.fn(
-    async (_req: BrowserControlRequest): Promise<BrowserControlResult> => ({
+    async (): Promise<BrowserControlResult> => ({
       ok: true,
       action: 'status',
       data: { kind },
@@ -134,6 +134,39 @@ describe('BackendRouter', () => {
 
     expect(ext.dispose).toHaveBeenCalledTimes(1);
     expect(rsb.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('same-kind restart disposes before exposing the replacement', async () => {
+    let releaseDispose = () => {};
+    const disposing = new Promise<void>((resolve) => {
+      releaseDispose = resolve;
+    });
+    const first = fakeBackend('rsb-webview', { disposeImpl: () => disposing });
+    const replacement = fakeBackend('rsb-webview');
+    const router = new BackendRouter(first, fakeLogger());
+
+    const restarting = router.restartBackend(replacement);
+    await Promise.resolve();
+    await router.call({ action: 'status' });
+
+    expect(first.call).toHaveBeenCalledOnce();
+    expect(replacement.call).not.toHaveBeenCalled();
+
+    releaseDispose();
+    await restarting;
+    await router.call({ action: 'status' });
+    expect(replacement.call).toHaveBeenCalledOnce();
+  });
+
+  it('same-kind restart rejects an accidental cross-kind replacement', async () => {
+    const ext = fakeBackend('external');
+    const router = new BackendRouter(ext, fakeLogger());
+
+    await expect(router.restartBackend(fakeBackend('rsb-webview'))).rejects.toThrow(
+      /restart kind mismatch/,
+    );
+    expect(ext.dispose).not.toHaveBeenCalled();
+    expect(router.kind).toBe('external');
   });
 
   it('an in-flight call against the outgoing backend resolves against that backend even after swap', async () => {

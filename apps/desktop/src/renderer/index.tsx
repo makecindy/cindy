@@ -35,6 +35,9 @@ import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
+import { initRsbBrowserBridge } from './features/right-sidebar/lib/rsbBrowserBridge';
+import { isGhostPanelWindow } from './lib/ghostPanelWindow';
+import { isSecondaryWindow } from './lib/secondaryWindow';
 import {
   installForegroundRecoveryDiagnostics,
   installPerformanceTimelineCleanupInterval,
@@ -184,6 +187,16 @@ void (async () => {
       </ThemeProvider>,
     );
     return;
+  }
+
+  // Install the RSB control listener before any child Settings effect can ask
+  // main for health. It is renderer-process scoped and must survive collapsed
+  // or unmounted sidebar UI. Only the primary and dedicated sidebar windows
+  // can own RSB tabs; other full-app windows must not publish an empty pool
+  // snapshot into the primary registry.
+  if (!isGhostPanelWindow() && !isSecondaryWindow()) {
+    const disposeRsbBrowserBridge = initRsbBrowserBridge();
+    import.meta.hot?.dispose(disposeRsbBrowserBridge);
   }
 
   // 主视图挂载前完成 memory 真值同步与旧配置迁移，确保用户可交互的 toggle 不会和

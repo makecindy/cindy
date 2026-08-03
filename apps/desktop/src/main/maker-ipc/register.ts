@@ -539,6 +539,7 @@ import {
   isLocalSessionBusy,
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
+import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -9543,7 +9544,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
       return;
     }
-    await sess.setEffort(effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra');
+    try {
+      const result = await applyRuntimeEffortWithRecovery({
+        applyRuntime: () =>
+          sess.setEffort(
+            effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
+          ),
+        terminateSession: () => maker.closeSession(sessionId),
+      });
+      if (result === 'session-terminated') {
+        log.warn('set-effort: timed-out runtime session terminated for lazy rebuild', {
+          sessionId,
+        });
+      }
+    } catch (error) {
+      log.warn('set-effort runtime update failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', 'Runtime effort update failed');
+    }
   });
 
   ipcMain.handle(MAKER_INVOKE.SET_PERMISSION_MODE, async (_e, sessionId: unknown, mode: unknown) => {

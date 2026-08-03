@@ -18,14 +18,21 @@ function planMessage(
   status: 'pending' | 'in_progress' | 'completed',
   createdAtMs: number | null = T0,
   planUpdatedAtMs?: number,
+  stepCount = 2,
 ): ChatMessage {
+  const plan = Array.from({ length: stepCount }, (_, index) => ({
+    step: index === 0 ? 'Finish work' : `Follow-up ${index}`,
+    status:
+      status === 'completed' ? ('completed' as const) : index === 0 ? status : ('pending' as const),
+  }));
+
   return {
     clientId: 'plan-1',
     role: 'tool_use',
     content: '',
     toolName: 'update_plan',
     toolUseId: 'plan:turn-1',
-    toolInput: { plan: [{ step: 'Finish work', status }] },
+    toolInput: { plan },
     ...(createdAtMs === null ? {} : { createdAt: new Date(createdAtMs).toISOString() }),
     ...(planUpdatedAtMs === undefined ? {} : { planUpdatedAtMs }),
   };
@@ -42,6 +49,74 @@ afterEach(() => {
 });
 
 describe('PinnedPlanPanel completed plan lifetime', () => {
+  it('does not show a progress pill for a single-step plan', () => {
+    render(
+      <PinnedPlanPanel
+        sessionId="single-step"
+        messages={[planMessage('in_progress', T0, undefined, 1)]}
+        animated
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('does not show a Task plan while older messages may contain earlier steps', () => {
+    const messages: ChatMessage[] = [
+      {
+        clientId: 'task-2',
+        role: 'tool_use',
+        content: '',
+        toolName: 'TaskCreate',
+        toolUseId: 'create-2',
+        toolInput: { subject: 'Fix renderer' },
+      },
+      {
+        clientId: 'result-2',
+        role: 'tool_result',
+        content: 'Task #2 created successfully: Fix renderer',
+        toolUseId: 'create-2',
+      },
+      {
+        clientId: 'task-3',
+        role: 'tool_use',
+        content: '',
+        toolName: 'TaskCreate',
+        toolUseId: 'create-3',
+        toolInput: { subject: 'Run tests' },
+      },
+      {
+        clientId: 'result-3',
+        role: 'tool_result',
+        content: 'Task #3 created successfully: Run tests',
+        toolUseId: 'create-3',
+      },
+    ];
+
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="partial-task-plan"
+        messages={messages}
+        animated
+        width={400}
+        taskHistoryMayBeIncomplete
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="partial-task-plan"
+        messages={messages}
+        animated
+        width={400}
+        taskHistoryMayBeIncomplete={false}
+      />,
+    );
+    expect(screen.getByTestId('plan-pill').textContent).toBe('Fix renderer,Run tests');
+  });
+
   it('keeps a completed plan visible for 2 seconds, then hides it', () => {
     render(
       <PinnedPlanPanel

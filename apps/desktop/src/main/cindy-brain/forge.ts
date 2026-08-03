@@ -559,7 +559,10 @@ async function buildGhostPackage(
    */
   expectedRealDir?: string,
 ): Promise<
-  | { ok: true; buf: Buffer; manifest: GhostManifest }
+  // manifestRaw = 校验前的原始清单对象。作者期严格校验(见 firstGhostAuthoringIssue)
+  // 需要它来看见「作者写了但被校验器按未登记字段忽略掉」的内容——校验后的
+  // manifest 里那些字段已经不见了,只看它无从判断。
+  | { ok: true; buf: Buffer; manifest: GhostManifest; manifestRaw: Record<string, unknown> }
   | Exclude<ForgePackResult, { ok: true }>
 > {
   try {
@@ -781,7 +784,12 @@ async function buildGhostPackage(
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    return { ok: true, buf, manifest };
+    return {
+      ok: true,
+      buf,
+      manifest,
+      manifestRaw: (manifestRaw ?? {}) as Record<string, unknown>,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -799,6 +807,10 @@ async function buildGhostPackage(
 export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
+  const authoringIssue = firstGhostAuthoringIssue(built.manifestRaw);
+  if (authoringIssue) {
+    return { ok: false, errorCode: 'MANIFEST_INVALID', message: authoringIssue };
+  }
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
@@ -812,6 +824,32 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     };
   }
   return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * **作者期严格校验**(只在 packGhostDir 这条打包出口上跑,不进任何安装路径)。
+ *
+ * 未读角标现在由 `badge` **卡槽**声明。槽名走硬白名单,写错直接被
+ * validateGhostManifest 拒掉,所以本身不需要额外把关。真正会静默失败的是另一种:
+ * 作者(或 agent)照着**早期示例**写成顶层 `notify: { badge: ... }` —— 那个字段
+ * 从来没被登记过,校验器一律忽略,于是包打出来了、装进去了、运行期每次发 badge
+ * 都被拒,作者却以为自己声明过(codex review)。
+ *
+ * 这里在打包期把它变成一条可行动的报错。放在 packGhostDir 而不是共用校验器或
+ * packGhostDirToFile:后两者会作用到**已在用户机器上**的清单与自定义市场安装管道,
+ * 给它们加新拒绝面就会踩存量红线;而作者正在打包的这一份没有存量问题。
+ */
+function firstGhostAuthoringIssue(raw: Record<string, unknown>): string | null {
+  const notifyRaw = raw.notify;
+  if (
+    notifyRaw !== null &&
+    typeof notifyRaw === 'object' &&
+    !Array.isArray(notifyRaw) &&
+    'badge' in (notifyRaw as Record<string, unknown>)
+  ) {
+    return '未读角标已改为独立卡槽:请把 notify.badge 删掉,改成在 slots 里声明 "badge"(并同时声明 "panel")';
+  }
+  return null;
 }
 
 /**
@@ -877,7 +915,8 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
   显式点名(推荐,§2)。
 - **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
   的场景,§2)。
-- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、
+- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、留一条持久
+  未读绿点(badge 槽,§4.9.1)、
   动手前弹确认框征求同意(confirm 槽,§4.18)。
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
@@ -1028,7 +1067,8 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
-见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`confirm\`(弹主机
+见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
+(在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
@@ -2265,6 +2305,43 @@ const r = await cindy.send({ type: 'notify', text: '视频已生成,点面板查
 - 提示自动消失、无按钮、无回执——**不是确认框**。要用户点「同意/取消」并把答案交回
   给你,用 §4.18 的 confirm 槽(主机同款确认框);要在聊天流里放按钮用交互卡
   (§4.5 的 data-ghost-action)。
+
+### 4.9.1 未读角标(badge 槽 —— 与 notify 槽并列的独立一档)
+
+toast 是"说一句就走",错过就没了。要留下一条**持久**的"我这儿有新内容"——
+用户没去看就一直亮着——在身份卡里加一档:
+
+\`\`\`json
+{ "slots": ["panel", "badge"] }
+\`\`\`
+
+\`badge\` 与 \`notify\` 是**并列的两档权限**,谁也不是谁的前置。只想安静点个绿点就
+别申请 \`notify\` 槽——多要一档"能弹全屏顶部提示"的权限,用户装的时候只会更犹豫。
+两个都要就两个都声明。
+
+\`\`\`js
+// 有新内容:点亮侧栏插件入口与自己卡片上的绿点,并把摘要显示在卡片简介位
+await cindy.send({ type: 'badge', unread: true, summary: '3 条新工单待处理' });
+// 自己清零(比如插件内已读)
+await cindy.send({ type: 'badge', unread: false });
+\`\`\`
+
+规则(都由主机强制):
+
+- **必须同时声明 \`panel\`**,装入时校验,漏了整个包装不进去。这是本档唯一的门槛:
+  未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,给了就是骗点击;
+- 装入确认框里**单列一项**权限,已装插件加这一档会触发扩权重新确认——常驻的
+  注意力入口值这一次打断;
+- \`summary\`(可选):**纯文本**,≤80 字符,换行会被坍缩成空格,超长直接拒
+  (\`ok:false\`,不静默截断);净化后为空按"没给摘要"处理,点照亮;
+- **限速**只挡点亮方向:同一意识两次点亮最小间隔 500 毫秒;\`unread:false\` 的
+  清零不限速(降级动作被拦会留下一颗清不掉的死点);
+- **用户打开你的面板 = 已读**,主机自动清零(三种面板宿主都算:插件页页签、
+  停靠态、独立窗口);
+- **沉睡只停显示、不算已读**:用户唤醒你之后那颗点会回来。卸载、或更新后身份卡
+  不再声明 badge,既有未读则被清除(权限撤了就不再兑现);
+- 角标**不出声、不震动、不进系统通知中心**——它只是屏幕内的一颗点;
+- 状态跨重启存活,按账号隔离(账号 A 的未读不会在账号 B 的界面上亮)。
 
 ## 4.10 写文件(fs 槽)
 

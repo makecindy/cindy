@@ -2373,6 +2373,22 @@
         "defaultTag": "기본",
         "resetToDefault": "기본값으로 재설정",
         "toggleFailed": "브라우저 대상 전환에 실패했습니다",
+        "health": {
+          "ready": "내장 브라우저 제어 연결이 준비되었습니다.",
+          "error": "내장 브라우저 연결 오류: {{reason}}. ‘내장 브라우저 복구’를 눌러 제어 연결을 다시 만드세요.",
+          "reasons": {
+            "disposing": "이전 종료 작업이 완료되지 않았습니다",
+            "hostUnavailable": "내장 브라우저 화면이 준비되지 않았거나 연결이 끊어졌습니다",
+            "startFailed": "새 제어 프로세스를 시작하지 못했습니다",
+            "statusFailed": "제어 프로세스 상태 확인에 실패했습니다",
+            "recoveryFailed": "제어 연결을 다시 구성하지 못했습니다"
+          },
+          "reconnect": "내장 브라우저 다시 연결",
+          "recover": "내장 브라우저 복구",
+          "recovering": "내장 브라우저 복구 중…",
+          "recovered": "내장 브라우저가 다시 연결되었습니다",
+          "recoverFailed": "내장 브라우저 복구에 실패했습니다. 오류 원인을 확인하고 다시 시도하세요."
+        },
         "rsbWebview": {
           "title": "사이드바 내장 브라우저",
           "description": "에이전트가 오른쪽 사이드바의 webview 탭에서 작동합니다. 팝업 없음, 로그인 상태는 별도 유지됩니다."
@@ -3376,6 +3392,8 @@
         "cardExternalLinkDetail": "카드의 링크를 클릭하면 확인 대화 상자가 표시되며, 승인 후에만 시스템 브라우저에서 열립니다. http/https 주소만 허용됩니다.",
         "notify": "시스템 알림 표시 가능(화면 상단의 가벼운 알림)",
         "notifyDetail": "알림 내용은 이 플러그인이 제공하며 알림에는 이름이 표시됩니다. 자동으로 사라지며 작업을 방해하지 않습니다.",
+        "badge": "플러그인 입구에 읽지 않음 표시를 켤 수 있음",
+        "badgeDetail": "새 내용이 있으면 사이드바 플러그인 입구와 자체 카드에 초록 점을 켜고 한 줄 요약을 함께 표시할 수 있습니다. 패널을 열면 사라집니다. 소리를 내지 않고 진동하지도 않으며 시스템 알림 센터에도 들어가지 않고, 시스템 알림과는 별개의 권한입니다.",
         "confirm": "확인 대화상자로 동의를 요청할 수 있음",
         "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "파일을 쓸 수 있음(생성/수정)",
@@ -3513,6 +3531,7 @@
         "slotCard": "메시지 카드",
         "slotNetwork": "네트워크 접근",
         "slotNotify": "시스템 알림",
+        "slotBadge": "읽지 않음 배지",
         "slotFs": "파일 쓰기",
         "slotSkill": "에이전트 스킬",
         "slotWorkspace": "워크스페이스 세션"
@@ -5230,6 +5249,7 @@
         "dismiss": "닫기"
       },
       "credentialSwitchDeferred": "모델 제공자를 전환했습니다. 현재 작업이 끝난 후 적용됩니다.",
+      "effortRuntimeDirty": "추론 강도를 업데이트하고 있습니다. 잠시 후 다시 전송해 주세요.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
       "modelSwitchContextGuard": {
         "title": "대상 모델의 컨텍스트 창이 더 작습니다",
@@ -6523,6 +6543,11 @@
         "rename": "프로젝트 이름 변경",
         "pin": "프로젝트 고정",
         "unpin": "프로젝트 고정 해제",
+        "removeFromSidebar": "사이드바에서 프로젝트 제거",
+        "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
+        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
+        "removeFromSidebarConfirmAction": "프로젝트 제거",
+        "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",
         "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
         "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",
