@@ -2,7 +2,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 跳过明细只落日志(不进返回值、不进 IPC),所以断言必须打在 logger 上。
+const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mocks.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
 
 import { discoverMarketplace } from '../sources/discover';
 
@@ -22,6 +35,10 @@ const canSymlink = (() => {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
 })();
+
+beforeEach(() => {
+  mocks.warn.mockClear();
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -395,5 +412,56 @@ describe('discoverMarketplace', () => {
     const root2 = makeRoot();
     writeManifest(root2, { name: 'x', plugins: {} });
     expect((await discoverMarketplace(root2)).ok).toBe(false);
+  });
+
+  it('logs why an entry was skipped when the plugin directory has no ghost.json', async () => {
+    const root = makeRoot();
+    writeManifest(root, { name: 'sub-market', plugins: [{ source: './plugins/dep' }] });
+    // Git submodule 未递归检出的形态:目录在,ghost.json 不在。市场 clone 不带
+    // --recurse-submodules,所以这是"市场发现出 0 个插件"最常见的成因。
+    fs.mkdirSync(path.join(root, 'plugins', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.gitmodules'), '[submodule "plugins/dep"]\n');
+
+    const result = await discoverMarketplace(root);
+
+    // 既有事实不变:清单本身合法,来源照旧可用,条目静默跳过——没有任何错误码。
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.plugins).toHaveLength(0);
+    expect(result.marketplace.skippedCount).toBe(1);
+    expect(result.marketplace.unreadableCount).toBe(0);
+    // 唯一的新增:排查者能定位到是第几条、哪个路径、为什么。path 是清单自报的
+    // repo-relative 路径原样回显(逻辑路径,不跟随宿主分隔符)。
+    expect(mocks.warn).toHaveBeenCalledWith(
+      'marketplace skipped plugin entries',
+      expect.objectContaining({
+        market: 'sub-market',
+        declared: 1,
+        accepted: 0,
+        skippedCount: 1,
+        entries: [{ index: 0, path: './plugins/dep', reason: 'manifest-missing', errno: 'ENOENT' }],
+      }),
+    );
+  });
+
+  it('caps skip details and reports how many were dropped', async () => {
+    const root = makeRoot();
+    // 损坏或恶意清单可有数百条非法条目;发现会被列表/快照/详情反复调用,明细必须限量。
+    writeManifest(root, {
+      name: 'noisy',
+      plugins: Array.from({ length: 25 }, () => 'not-an-object'),
+    });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(25);
+    const payload = mocks.warn.mock.calls.at(-1)?.[1] as {
+      entries: unknown[];
+      detailsTruncated?: number;
+    };
+    expect(payload.entries).toHaveLength(20);
+    expect(payload.detailsTruncated).toBe(5);
   });
 });
