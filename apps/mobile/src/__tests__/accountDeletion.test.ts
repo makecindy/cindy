@@ -69,7 +69,19 @@ describe('mobile account deletion', () => {
       'serializeAccountDeletionReceiptRecord(realm, receiptToken)',
     );
     expect(requestBody).toContain('activeAuthRealmRef.current,\n    );');
-    expect(confirmBody).toContain('await clearLocalSession();');
+    expect(confirmBody).toContain('const clearSession = clearLocalSession();');
+    expect(confirmBody).toContain(
+      'await clearFullAccessAcknowledgementsForAccount(deletedAccountId);',
+    );
+    expect(confirmBody.indexOf('const deletedAccountId = getMobileAuthOwner().accountId;')).toBeLessThan(
+      confirmBody.indexOf('const token = await getAccessToken();'),
+    );
+    expect(confirmBody.indexOf('const clearSession = clearLocalSession();')).toBeLessThan(
+      confirmBody.indexOf('await clearFullAccessAcknowledgementsForAccount'),
+    );
+    expect(confirmBody.indexOf('await clearFullAccessAcknowledgementsForAccount')).toBeLessThan(
+      confirmBody.indexOf('await clearSession;'),
+    );
     expect(confirmBody).not.toContain(
       'persistAccountDeletionReceipt(input.receiptToken)',
     );

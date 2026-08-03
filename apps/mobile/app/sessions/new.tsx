@@ -353,6 +353,18 @@ export default function NewRemoteSessionScreen() {
     && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || deviceOptions.length <= 1);
   const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
   const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
+  selectedDeviceIdRef.current = selectedDeviceId;
+  const confirmFullAccessForSelectedDevice = useCallback(
+    (currentMode: unknown, nextMode: unknown) => {
+      const controlledDeviceId = selectedDeviceIdRef.current;
+      return confirmFullAccessChange(currentMode, nextMode, {
+        controlledDeviceId,
+        isControlledDeviceCurrent: () => selectedDeviceIdRef.current === controlledDeviceId,
+      });
+    },
+    [],
+  );
   const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
   const [newSessionPreferencesLoaded, setNewSessionPreferencesLoaded] = useState(false);
   const [devicePickerOpen, setDevicePickerOpen] = useState(false);
@@ -682,7 +694,7 @@ export default function NewRemoteSessionScreen() {
       defaultPermissionModeForNewSessionAgent(storedAgentKind);
     let cancelled = false;
     void (async () => {
-      const confirmed = await confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode);
+      const confirmed = await confirmFullAccessForSelectedDevice(draft.permissionMode, rememberedPermissionMode);
       if (cancelled) return;
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
@@ -707,7 +719,7 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
     };
   }, [
-    confirmFullAccessChange,
+    confirmFullAccessForSelectedDevice,
     draft.permissionMode,
     deviceProviders.loading,
     deviceProviders.providers,
@@ -730,14 +742,14 @@ export default function NewRemoteSessionScreen() {
     const remembered = newSessionPreferences?.permissionModeByAgent[draft.agentKind];
     if (!remembered || remembered === draft.permissionMode) return;
     let cancelled = false;
-    void confirmFullAccessChange(draft.permissionMode, remembered).then((confirmed) => {
+    void confirmFullAccessForSelectedDevice(draft.permissionMode, remembered).then((confirmed) => {
       if (cancelled || !confirmed) return;
       setDraft((current) => ({ ...current, permissionMode: remembered }));
     });
     return () => {
       cancelled = true;
     };
-  }, [draft.agentKind, draft.permissionMode, newSessionPreferences, newSessionPreferencesLoaded]);
+  }, [confirmFullAccessForSelectedDevice, draft.agentKind, draft.permissionMode, newSessionPreferences, newSessionPreferencesLoaded]);
 
   // 新建任务默认运行配置 = 跟随最近一次会话(整套 agent+model+effort,按所选设备 scope);没有最近会话则用
   // 模型列表最上面那个(列表异步就绪后再设)。一旦用户手动选过模型即不再覆盖;切设备(未手动选过)按新设备重算。
@@ -762,7 +774,7 @@ export default function NewRemoteSessionScreen() {
         : newSessionPreferences?.permissionModeByAgent[nextAgentKind] ??
           defaultPermissionModeForNewSessionAgent(nextAgentKind);
     let cancelled = false;
-    void confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
+    void confirmFullAccessForSelectedDevice(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
       setDraft((current) => ({
         ...current,
@@ -774,7 +786,7 @@ export default function NewRemoteSessionScreen() {
     return () => {
       cancelled = true;
     };
-  }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+  }, [confirmFullAccessForSelectedDevice, draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
   const draftContent = useMemo(
     // pending(乐观上传中)也算数:拍完照立刻点创建是常见路径,create() 里会等它们落定。
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
@@ -1535,7 +1547,7 @@ export default function NewRemoteSessionScreen() {
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!await confirmFullAccessChange(draft.permissionMode, mode)) return;
+      if (!await confirmFullAccessForSelectedDevice(draft.permissionMode, mode)) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -1549,7 +1561,7 @@ export default function NewRemoteSessionScreen() {
         permissionModeForAgent: { agentKind: draft.agentKind, mode },
       });
     })();
-  }, [draft.agentKind, draft.permissionMode, patchDraft]);
+  }, [confirmFullAccessForSelectedDevice, draft.agentKind, draft.permissionMode, patchDraft]);
 
   // —— worktree 资格探测:目录 / 设备 / 链路变化即重探(seq 防竞态,旧结果作废)。
   // CHANNEL_NOT_ALLOWED(老被控端)→ unsupported 整行隐藏;其余失败保留行但禁用。
@@ -2241,7 +2253,7 @@ export default function NewRemoteSessionScreen() {
     const rememberedPermissionMode =
       newSessionPreferences?.permissionModeByAgent[nextKind] ??
       defaultPermissionModeForNewSessionAgent(nextKind);
-    void confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
+    void confirmFullAccessForSelectedDevice(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
       setDraft((current) => {
         const next = pickAgentDefaultRuntime({
           agentKind: nextKind,
@@ -2261,7 +2273,7 @@ export default function NewRemoteSessionScreen() {
         };
       });
     });
-  }, [draft.agentKind, draft.permissionMode, deviceProviders.providers, deviceProviders.modelVisibilityOverrides, newSessionPreferences, sessions, selectedDeviceId]);
+  }, [confirmFullAccessForSelectedDevice, draft.agentKind, draft.permissionMode, deviceProviders.providers, deviceProviders.modelVisibilityOverrides, newSessionPreferences, sessions, selectedDeviceId]);
 
   // 选中的 agent 在被控端未注册(如 Pi 二进制缺失)时,coerce 到首个可用来源,避免用户停在
   // 被隐藏的选项、并防止创建出注定 requireAgent 报错的会话。仅在已拉到可用集后收敛一次。

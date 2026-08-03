@@ -84,8 +84,9 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import { clearFullAccessAcknowledgementsForAccount } from '@/session/fullAccessConfirmationStore';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
 import {
   clearAllMobileVoiceDictionaryCaches,
@@ -1434,6 +1435,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       receiptToken: string;
       code: string;
     }): Promise<AccountDeletionStatus> => {
+      // Capture before any request can terminate the session and clear the owner.
+      const deletedAccountId = getMobileAuthOwner().accountId;
       const token = await getAccessToken();
       if (!token) throw authCodeError('UNAUTHENTICATED');
       const did = deviceIdRef.current ?? (await ensureDeviceId());
@@ -1464,7 +1467,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // confirm 已在服务端撤销 refresh token；当前客户端只做本地
       // 清理，不再调用普通 logout，以免覆盖或依赖已撤销的会话。receipt 已在
       // challenge 返回前持久化，不做可能阻断本地登出的冗余二次写入。
-      await clearLocalSession();
+      // Calling clearLocalSession invalidates the auth owner synchronously before
+      // its first await, so no new confirmation can race with account cleanup.
+      const clearSession = clearLocalSession();
+      await clearFullAccessAcknowledgementsForAccount(deletedAccountId);
+      await clearSession;
       return status;
     },
     [clearLocalSession, getAccessToken, runProtectedAuthRequest],

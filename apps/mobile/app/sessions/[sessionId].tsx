@@ -1200,6 +1200,16 @@ export default function SessionScreen() {
   useLayoutEffect(() => {
     deviceIdRef.current = deviceId;
   }, [deviceId]);
+  const confirmFullAccessForSessionDevice = useCallback(
+    (currentMode: unknown, nextMode: unknown) => {
+      const controlledDeviceId = deviceIdRef.current;
+      return confirmFullAccessChange(currentMode, nextMode, {
+        controlledDeviceId,
+        isControlledDeviceCurrent: () => deviceIdRef.current === controlledDeviceId,
+      });
+    },
+    [],
+  );
   // 命名空间同时含账号与设备:桌面 deviceId 是跨登录存续的机器 id,登出也不清
   // remote-media 缓存目录——同一台手机 + 同一台桌面换账号,仅设备命名空间仍会
   // 命中上一账号的缓存文件。账号 id 经 deps ref 读(layout effect 已同步刷新)。
@@ -6514,13 +6524,13 @@ export default function SessionScreen() {
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
+      if (!await confirmFullAccessForSessionDevice(currentSession.permissionMode, mode)) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },
       );
     })();
-  }, [currentSession, maker, runControlAction, sessionId]);
+  }, [confirmFullAccessForSessionDevice, currentSession, maker, runControlAction, sessionId]);
 
   // 「已提交、仍在上传」的相册资产:pendingUploads 携带 sourceId(相册来源才有)。
   // 重开面板时这些格子标 busy(spinner + 禁点),onUploaded 落定后自然转为勾选态,
