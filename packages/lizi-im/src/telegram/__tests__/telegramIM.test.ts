@@ -1049,65 +1049,78 @@ describe('TelegramIM', () => {
     expect(api2.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
   });
 
-  it('DM 流式走 sendMessageDraft: 空占位→draft 更新→定稿真消息(不 edit)', async () => {
+  it('DM 流式与群一致: send+edit 经典路径, 不再走草稿通道', async () => {
     await connect();
-    const sendsBefore = api.calls.filter((c) => c.method === 'sendMessage').length;
     const handle = await im.startStreamingText(OWNER_ID);
-    // 构造即推空 draft = 客户端原生 Thinking 占位
-    await vi.waitFor(() => {
-      expect(
-        api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === ''),
-      ).toBe(true);
-    });
     handle.replace('部分回答');
     await vi.waitFor(
       () => {
-        expect(
-          api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === '部分回答'),
-        ).toBe(true);
+        expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
       },
       { timeout: 3_000, interval: 50 },
     );
-    // 同一 draft_id 连续更新(客户端动画的前提)
-    const draftIds = new Set(
-      api.calls.filter((c) => c.method === 'sendMessageDraft').map((c) => c.params.draft_id),
-    );
-    expect(draftIds.size).toBe(1);
-    expect([...draftIds][0]).not.toBe(0);
-
+    // 私聊不再依赖 sendMessageDraft(草稿只能一行纯文本, 装不下过程时间线)
+    expect(api.calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     await handle.finalize('最终回答');
-    // 定稿走 rich(markdown 直投 + 👍 特效), 不产生 sendMessage / edit
-    const rich = api.calls.filter((c) => c.method === 'sendRichMessage');
-    expect(rich.length).toBe(1);
-    expect((rich[0].params.rich_message as { markdown?: string }).markdown).toBe('最终回答');
-    expect(rich[0].params.message_effect_id).toBeTruthy();
-    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(sendsBefore);
-    expect(api.calls.some((c) => c.method === 'editMessageText')).toBe(false);
+    // 定稿与群一样是原地 rich 升级(同一条消息), 不另发一条
+    const richEdits = api.calls.filter(
+      (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+    );
+    expect(richEdits.length).toBe(1);
+    expect((richEdits[0].params.rich_message as { markdown?: string }).markdown).toBe('最终回答');
+    expect(api.calls.some((c) => c.method === 'sendRichMessage')).toBe(false);
   });
 
-  it('rich 定稿 404(方法不可用)实例级 latch, 回落经典分段且后续不再尝试', async () => {
+  it('DM 中间态能承载多行过程时间线(工具调用在私聊也可见)', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.replace('⚙️ 工作中 · 2 项 · 3s\n> ✓ 读取 adapter.ts\n> ▸ 搜索 draft\n\n正在看代码');
+    await vi.waitFor(
+      () => {
+        const sent = api.calls.filter((c) => c.method === 'sendMessage').at(-1);
+        expect(sent).toBeTruthy();
+        const text = String(sent?.params.text ?? '');
+        expect(text).toContain('读取 adapter.ts');
+        expect(text).toContain('搜索 draft');
+        expect(text).toContain('正在看代码');
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+    // 收口后只留干净正文(过程区由编排层移除), 与群同口径
+    await handle.finalize('看完了');
+    const richEdits = api.calls.filter(
+      (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+    );
+    expect((richEdits.at(-1)?.params.rich_message as { markdown?: string }).markdown).toBe('看完了');
+  });
+
+  it('rich 原地定稿 404(方法不可用)实例级 latch, 后续不再尝试', async () => {
     await connect();
     const originalCall = api.call.bind(api);
     api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
-      if (method === 'sendRichMessage') {
+      if (method === 'editMessageText' && params?.rich_message !== undefined) {
         api.calls.push({ method, params: params ?? {} });
-        throw new TelegramApiError('sendRichMessage', 404, 'Not Found');
+        throw new TelegramApiError('editMessageText', 404, 'Not Found');
       }
       return originalCall(method, params, signal);
     }) as FakeApi['call'];
 
     const handle = await im.startStreamingText(OWNER_ID);
     await handle.finalize('回答一');
-    // rich 试了一次 → 404 latch → 回落 sendMessage
-    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
+    const richEditCount = () =>
+      api.calls.filter(
+        (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+      ).length;
+    // rich 升级试了一次 → 404 latch; 正文仍由 sendMessage 落地不丢
+    expect(richEditCount()).toBe(1);
     expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
 
     const handle2 = await im.startStreamingText(OWNER_ID);
     await handle2.finalize('回答二');
-    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
+    expect(richEditCount()).toBe(1);
   });
 
-  it('群 lane 流式仍走 send+edit 经典路径, 不用 draft; 定稿 rich 原地升级', async () => {
+  it('群 lane 流式: send+edit 经典路径 + 定稿 rich 原地升级(本次统一的基准)', async () => {
     await connect();
     const handle = await im.startStreamingText('g/-100200/r7');
     handle.replace('进行中');
@@ -1122,32 +1135,6 @@ describe('TelegramIM', () => {
     expect((richEdits[0].params.rich_message as { markdown?: string }).markdown).toBe(
       '群里的最终回答',
     );
-  });
-
-  it('draft 400 失败: 本 turn 落回经典路径, 本实例后续 turn 不再尝试 draft', async () => {
-    await connect();
-    const originalCall = api.call.bind(api);
-    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
-      if (method === 'sendMessageDraft') {
-        api.calls.push({ method, params: params ?? {} });
-        throw new TelegramApiError('sendMessageDraft', 400, 'Bad Request: method not available');
-      }
-      return originalCall(method, params, signal);
-    }) as FakeApi['call'];
-
-    const handle = await im.startStreamingText(OWNER_ID);
-    // 首次 pushDraft 失败 → latch 到经典 handle(会先 send 一条占位消息)
-    await vi.waitFor(() => {
-      expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
-    });
-    handle.replace('落回后的内容');
-    await handle.finalize('落回后的最终回答');
-    expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
-
-    // 400 = 能力性失败, 实例级 latch: 新 turn 不再发 draft
-    await im.startStreamingText(OWNER_ID);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
   });
 
   it('多图出站合成原生相册(sendMediaGroup), 单图仍走 sendPhoto', async () => {

@@ -105,7 +105,6 @@ import {
   markActivityWriting,
   pushToolStep,
   renderActivity,
-  renderActivityLine,
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
@@ -1737,14 +1736,6 @@ export function createTurnRunner(
   function composeStreamingView(turn: TurnState): string {
     const body = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
     if (turn.done) return body;
-    if (adapter.answerOnlyProgress?.(turn.userId)) {
-      // Telegram 私聊: 多行过程时间线会打断客户端的草稿动画渲染 → 中间态
-      // 只发正文; 正文出来之前用单行紧凑状态(当前工具/思考 · N 项 · 时长)
-      // 顶住草稿占位 —— 工具期停在纯 "Thinking…" 是哑巴(桌面端有时间线,
-      // 渠道零信息, Chris 2026-07-30 实测点名)。notice(过载重试)含在内。
-      if (body) return body;
-      return renderActivityLine(turn.activity, Date.now());
-    }
     const act = renderActivity(turn.activity, Date.now());
     if (!act) return body;
     return body ? `${act}\n\n${body}` : act;
