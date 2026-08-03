@@ -15,7 +15,9 @@ const TERMINAL_RATE_LIMIT_RETRY_JITTER_RATIO = 0.25;
 const RETRY_LIMIT_EXHAUSTED_PATTERN =
   /\b(?:exceeded\s+(?:the\s+)?retry\s+limit|retry\s+limit\s+exceeded|too\s+many\s+failed\s+attempts)\b/i;
 const DETERMINISTIC_LIMIT_PATTERN =
-  /\b(?:usage\s+limit|quota\s+(?:exhausted|exceeded)|insufficient_quota|(?:session\s+)?budget\s+(?:exhausted|exceeded))\b/i;
+  /\b(?:usage\s+limit|insufficient_quota|(?:session\s+)?budget\s+(?:exhausted|exceeded))\b/i;
+const QUOTA_EXHAUSTION_PATTERN =
+  /\b(?:quota\s+(?:(?:has|is|was)\s+)?(?:been\s+)?(?:exhausted|exceeded)|(?:exhausted|exceeded)\s+(?:(?:the|your)\s+)?(?:current\s+)?quota)\b/i;
 
 function responseTooManyFailedAttemptsStatus(
   info: CodexErrorInfo | null | undefined,
@@ -42,7 +44,12 @@ export function isTerminalRateLimitRetryExhaustion(
 ): boolean {
   const tag = codexErrorInfoTag(info);
   if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded') return false;
-  if (DETERMINISTIC_LIMIT_PATTERN.test(message)) return false;
+  if (
+    DETERMINISTIC_LIMIT_PATTERN.test(message) ||
+    QUOTA_EXHAUSTION_PATTERN.test(message)
+  ) {
+    return false;
+  }
   const status = responseTooManyFailedAttemptsStatus(info) ?? errorStatus;
   if (status !== 429) return false;
   return (

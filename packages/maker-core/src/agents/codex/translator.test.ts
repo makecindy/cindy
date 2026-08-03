@@ -437,7 +437,7 @@ describe('translateErrorNotification', () => {
     });
   });
 
-  it('其它终态错误被 agent 接管时透成非终止进度且不冒充过载', async () => {
+  it('终态 429 被 agent 接管时透成非终止限流进度且不冒充过载', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     translateErrorNotification(

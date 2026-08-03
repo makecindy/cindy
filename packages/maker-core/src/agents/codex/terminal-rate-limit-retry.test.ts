@@ -57,6 +57,20 @@ describe('terminal rate-limit retry', () => {
         undefined,
       ),
     ).toBe(false);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit, last status: 429: You exceeded your current quota',
+        429,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      isTerminalRateLimitRetryExhaustion(
+        'exceeded retry limit, last status: 429: Your quota has been exceeded',
+        429,
+        undefined,
+      ),
+    ).toBe(false);
   });
 
   it('does not retry a plain terminal 429 or a non-429 exhausted response', () => {
