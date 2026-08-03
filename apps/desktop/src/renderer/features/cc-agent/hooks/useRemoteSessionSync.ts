@@ -388,6 +388,15 @@ export function useRemoteSessionSync(
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
       engine.handlePresence(snap.deviceId, snap.online);
     });
+    // 「设备无响应」熔断恢复(main 权威)→ 与 relay 上线同处理:重订阅 + 对账。
+    // 熔断 open 期间本会话的订阅与消息拉取都被快速失败挡掉了,而 presence / relay
+    // 状态全程没变、窗口可能一直聚焦、turn 也可能还在跑 —— 既有的四个对账触发点
+    // (relay online / presence online / focus / turn 结束)一个都不会发生,恢复后
+    // 视图会继续缺消息。连接类状态的恢复必须全自动,不能靠横幅按钮兜(review P2)。
+    const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
+      if (p.deviceId !== deviceId || p.unresponsive) return;
+      engine.handleOnline();
+    });
     const offStore = makerChatStore.subscribe(sessionId, () => {
       const running = makerChatStore.getSnapshot(sessionId).agentStatus.isRunning;
       if (!running) setSuspectStall(false); // turn 结束(含被收尾)→ 收起兜底
@@ -399,6 +408,7 @@ export function useRemoteSessionSync(
     return () => {
       offStatus();
       offPresence();
+      offResponsiveness();
       offStore();
       window.removeEventListener('focus', onFocus);
       engine.dispose();

@@ -546,6 +546,24 @@ export class DeviceLinkClient {
     return this.peerTransport.get(dst)?.linkReady === true;
   }
 
+  /**
+   * 本机是否有仍在等该设备回包的出站请求(invoke / link-open)。
+   *
+   * 供 host 判定「本机确实在控制该设备」这个**方向**:订阅快照是常态判据,但订阅
+   * 可能先于在途请求被退掉(用户关掉最后一个会话视图而请求还没回包)。此时迟到的
+   * 可靠 invoke-result —— 尤其大结果无法回退成单帧 legacy —— 仍需要重开链路才能
+   * 交付,否则只能一路丢弃到请求超时(review P2)。
+   *
+   * 只反映**出站**方向:pending 里只有本机发起、正在等对端响应的请求;对端控制本机
+   * 的入站请求不在其中,所以不会把「纯被控端方向」误判成可重开。
+   */
+  hasPendingRequestsTo(dst: string): boolean {
+    for (const request of this.pending.values()) {
+      if (request.dst === dst) return true;
+    }
+    return false;
+  }
+
   onStatusChange(cb: (s: DeviceLinkStatus) => void): () => void {
     this.statusHandlers.add(cb);
     return () => this.statusHandlers.delete(cb);

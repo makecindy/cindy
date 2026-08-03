@@ -70,20 +70,31 @@ describe('shouldEnqueuePeerLinkReopen —— 授权判据', () => {
   it('持有出站订阅且本地未关闭控制才入队', () => {
     expect(shouldEnqueuePeerLinkReopen({
       hasOutboundSubscriptions: true,
+      hasPendingOutboundRequests: false,
       controlDisabledLocally: false,
     })).toBe(true);
   });
 
-  it('无出站订阅(纯被控端方向)不入队 —— 入站帧不得触发反向建链', () => {
+  it('订阅已退但仍有在途出站请求 → 仍算出站方向证据(迟到的可靠回包需要重开才能交付)', () => {
     expect(shouldEnqueuePeerLinkReopen({
       hasOutboundSubscriptions: false,
+      hasPendingOutboundRequests: true,
+      controlDisabledLocally: false,
+    })).toBe(true);
+  });
+
+  it('既无订阅也无在途请求(纯被控端方向)不入队 —— 入站帧不得触发反向建链', () => {
+    expect(shouldEnqueuePeerLinkReopen({
+      hasOutboundSubscriptions: false,
+      hasPendingOutboundRequests: false,
       controlDisabledLocally: false,
     })).toBe(false);
   });
 
-  it('本机已关闭对该设备的控制不入队 —— 避免在必然失败的 reopen 上空转', () => {
+  it('本机已关闭对该设备的控制:两种证据都不放行 —— 避免在必然失败的 reopen 上空转', () => {
     expect(shouldEnqueuePeerLinkReopen({
       hasOutboundSubscriptions: true,
+      hasPendingOutboundRequests: true,
       controlDisabledLocally: true,
     })).toBe(false);
   });

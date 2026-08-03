@@ -171,6 +171,9 @@ const peerLinkReopenQueue = createPeerLinkReopenQueue({
     // 方向判据:只有本机确实在控制该设备(持有出站订阅)时才重开,否则纯被控端
     // 方向的入站帧会触发反向建链(review P1)。
     hasOutboundSubscriptions: snapshotSubscriptions(deviceId).length > 0,
+    // 订阅可能先于在途请求被退掉(关掉最后一个会话视图而回包未到):此时迟到的
+    // 可靠 invoke-result 仍需重开链路才能交付(review P2)。
+    hasPendingOutboundRequests: client?.hasPendingRequestsTo(deviceId) === true,
     // 与 openRemoteLink 的 fail-closed 门同源(#1408)。
     controlDisabledLocally: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
   }),

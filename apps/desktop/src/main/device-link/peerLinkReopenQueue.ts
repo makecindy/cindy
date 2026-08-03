@@ -59,10 +59,15 @@ const DEFAULT_RETRY_MS = 5_000;
 /**
  * 入队授权判据(纯函数,供 index.ts 接线 + 单测固化契约)。
  *
- * `hasOutboundSubscriptions` 是**方向判据**:openRemoteLink 语义是「本机去控制
- * 对方」,只有本机确实在控制该设备时才重开。否则纯被控端方向的入站可靠帧会触发
- * 反向建链 —— 对端接受则凭空多出一条非用户发起的控制链与受控横幅,拒绝则队列
- * 持续空转。
+ * 方向判据是 `hasOutboundSubscriptions || hasPendingOutboundRequests`:openRemoteLink
+ * 语义是「本机去控制对方」,只有本机确实在控制该设备时才重开。否则纯被控端方向的
+ * 入站可靠帧会触发反向建链 —— 对端接受则凭空多出一条非用户发起的控制链与受控横幅,
+ * 拒绝则队列持续空转。
+ *
+ * 两项都算证据、缺一不可:订阅是常态判据,但订阅可能先于在途请求被退掉(用户关掉
+ * 最后一个会话视图而请求还没回包)。那种时刻迟到的可靠 invoke-result —— 尤其大结果
+ * 无法回退成单帧 legacy —— 仍需重开链路才能交付,否则只能一路丢弃到请求超时
+ * (review P2)。两项都只反映出站方向,不会把纯被控端方向误判成可重开。
  *
  * 判据里**刻意没有** client 的 `peer.explicitlyClosed`:那是 peer 级双向共享位,
  * 互控时对端仅关闭「它控制本机」的方向也会置位,据此抑制会把本机仍然有效的出站
@@ -72,6 +77,8 @@ const DEFAULT_RETRY_MS = 5_000;
 export interface PeerLinkReopenAuthorizationInputs {
   /** 本机持有该设备的出站订阅(= 本机确实在控制它)。 */
   hasOutboundSubscriptions: boolean;
+  /** 本机有仍在等该设备回包的出站请求(订阅已退但回包未到时的方向证据)。 */
+  hasPendingOutboundRequests: boolean;
   /** 本机已在本地关闭对该设备的控制(与 openRemoteLink 的 fail-closed 门同源)。 */
   controlDisabledLocally: boolean;
 }
@@ -79,9 +86,8 @@ export interface PeerLinkReopenAuthorizationInputs {
 export function shouldEnqueuePeerLinkReopen(
   inputs: PeerLinkReopenAuthorizationInputs,
 ): boolean {
-  if (!inputs.hasOutboundSubscriptions) return false;
   if (inputs.controlDisabledLocally) return false;
-  return true;
+  return inputs.hasOutboundSubscriptions || inputs.hasPendingOutboundRequests;
 }
 
 export function createPeerLinkReopenQueue(
