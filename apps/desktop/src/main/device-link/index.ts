@@ -777,7 +777,7 @@ export async function revokeController(deviceId: string): Promise<void> {
   );
   // 在线连着的:发 link-close('revoked'),控制端据此立即移除本机项目/对话 + 标记「已撤销」。
   try {
-    client?.closeLink(deviceId, 'revoked');
+    client?.closeLink(deviceId, 'revoked', 'inbound');
   } catch (err) {
     log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
   }
@@ -871,7 +871,7 @@ function pollExternalSettingsChange(): void {
   const newlyRevoked = revokedControllers.filter((id) => !prev.revokedControllers.includes(id));
   for (const deviceId of newlyRevoked) {
     try {
-      client.closeLink(deviceId, 'revoked');
+      client.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
       log.warn(
         `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,

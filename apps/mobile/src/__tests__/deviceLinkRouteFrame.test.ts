@@ -3,6 +3,7 @@ import type { Envelope } from '@cindy/device-link';
 import {
   handlePeerLinkCloseFrame,
   invalidatePeerLinkState,
+  updateRehydrateSuppressionOnLinkClose,
 } from '@/device-link/linkClose';
 
 describe('handlePeerLinkCloseFrame', () => {
@@ -43,6 +44,33 @@ describe('handlePeerLinkCloseFrame', () => {
       src: 'desktop-a',
     } as Envelope, onLinkClosed)).toBe(false);
     expect(onLinkClosed).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateRehydrateSuppressionOnLinkClose', () => {
+  it.each(['user', 'toggle-off', 'shutdown', 'revoked', 'future-unknown', undefined])(
+    '永久关闭 reason(%s)抑制后台重建',
+    (reason) => {
+      const suppressed = new Set<string>();
+      updateRehydrateSuppressionOnLinkClose(suppressed, 'desktop-a', reason as string | undefined);
+      expect(suppressed.has('desktop-a')).toBe(true);
+    },
+  );
+
+  it('transport-timeout 解除抑制:只有它能继续恢复', () => {
+    const suppressed = new Set<string>(['desktop-a']);
+    updateRehydrateSuppressionOnLinkClose(suppressed, 'desktop-a', 'transport-timeout');
+    expect(suppressed.has('desktop-a')).toBe(false);
+  });
+
+  it('抑制后收到 transport-timeout 再次可恢复(抑制 → 解除 → 再抑制 的往返稳定)', () => {
+    const suppressed = new Set<string>();
+    updateRehydrateSuppressionOnLinkClose(suppressed, 'desktop-a', 'user');
+    expect(suppressed.has('desktop-a')).toBe(true);
+    updateRehydrateSuppressionOnLinkClose(suppressed, 'desktop-a', 'transport-timeout');
+    expect(suppressed.has('desktop-a')).toBe(false);
+    updateRehydrateSuppressionOnLinkClose(suppressed, 'desktop-a', 'shutdown');
+    expect(suppressed.has('desktop-a')).toBe(true);
   });
 });
 

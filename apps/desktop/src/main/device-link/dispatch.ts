@@ -852,7 +852,7 @@ export function dropAllControllers(
   ]);
   for (const dst of controllerIds) {
     try {
-      client.closeLink(dst, reason);
+      client.closeLink(dst, reason, 'inbound');
     } catch (err) {
       // 本地授权/订阅清理不能依赖弱网下 link-close 真正写进 socket。
       log.warn(`closeLink to ${shortId(dst)} failed during ${reason}: ${String(err)}`);
@@ -976,7 +976,7 @@ function handleLinkOpen(
   if (isControllerRevoked(src)) {
     log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
     purgeRevokedController(src);
-    client.closeLink(src, 'revoked');
+    client.closeLink(src, 'revoked', 'inbound');
     return;
   }
   const name =

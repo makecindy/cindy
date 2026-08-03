@@ -1112,6 +1112,57 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站方向撤权(closeLink inbound)不封死仍存续的主动控制:transport-timeout 照常交 app 层触发重建', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 互控:对方控制本机(入站)+ 本机控制对方(出站)
+    await establishInboundReliableLink(h, 'revoke-mutual-stream');
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'revoke-mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 本机撤销对方对本机的控制(入站方向):revoked 帧可能丢失,对方无感知
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+
+    // 对方(作为本机出站控制的被控端)发来 transport-timeout:本机仍在主动
+    // 控制对方,必须照常交 app 层(desktop 据此 openRemoteLink 重建)
+    const seenFrames: Envelope[] = [];
+    const off = h.client.onFrame((env) => {
+      seenFrames.push(env);
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    expect(seenFrames.filter((env) => env.kind === 'link-close')).toHaveLength(1);
+    off();
+    h.client.stop();
+  });
+
   it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
     const h = makeHarness({
       timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },

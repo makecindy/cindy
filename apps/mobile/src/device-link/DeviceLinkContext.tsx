@@ -44,6 +44,7 @@ import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import {
   handlePeerLinkCloseFrame,
   invalidatePeerLinkState,
+  updateRehydrateSuppressionOnLinkClose,
 } from '@/device-link/linkClose';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import {
@@ -143,6 +144,12 @@ const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
 // 响应性熔断;只用于判定并发返回的 unavailable 是否已被更晚目标应答推翻。
 const remoteResponseEvidenceEpochs = createPresenceAvailabilityEpochs();
 const remoteResponseEvidenceListeners = new Set<(deviceId: string) => void>();
+
+// 永久 link-close 后被抑制后台重建的设备(见 updateRehydrateSuppressionOnLinkClose)。
+// 模块级(与 remoteResponseEvidenceEpochs 同模式):sendOpenLink 等模块级函数也需要
+// 在显式重开成功时解除抑制。解除点:transport-timeout/权威 presence 可用快照/
+// 新 relay 连接代际/显式 openLink 成功。
+const rehydrateSuppressedDeviceIds = new Set<string>();
 
 function markRemoteResponseEvidence(deviceId: string): void {
   markPresenceAvailabilityEpoch(remoteResponseEvidenceEpochs, deviceId);
@@ -402,7 +409,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             // subscribe / snapshot,只会制造一簇 DEVICE_OFFLINE 并放大弱网抖动。
             // 当前连接尚无该设备的 presence 记录(unknown)仍允许尝试;恢复快照会显式触发下一轮。
             const availablePlans = grantedPlans.filter(
-              (plan) => isPresenceEligibleForRemoteRequest(presenceAvailableByDeviceRef.current, plan.deviceId),
+              (plan) =>
+                isPresenceEligibleForRemoteRequest(presenceAvailableByDeviceRef.current, plan.deviceId)
+                // 永久关闭后的自动重建抑制:只有 transport-timeout/权威恢复/显式
+                // 重开才解除,否则在途 openLink 被 LINK_NOT_OPEN 拒后的重试链会
+                // 把对方用户刚关掉的链路建回来。
+                && !rehydrateSuppressedDeviceIds.has(plan.deviceId),
             );
             // 改走显式代表性探测(review P1 多轮收敛):不能依赖 openLink /
             // subscribe 顺带探测——link-accept 与 subscribe 都在被控端 dispatch
@@ -423,6 +435,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
               if (
                 !revokedDevicesStore.has(deviceId)
                 && isPresenceEligibleForRemoteRequest(presenceAvailableByDeviceRef.current, deviceId)
+                // 探针会 sendOpenLinkOnce:被抑制设备同样不得经探针路径重建链路。
+                && !rehydrateSuppressedDeviceIds.has(deviceId)
               ) {
                 openDeviceIds.add(deviceId);
               }
@@ -638,6 +652,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         presenceAvailableByDeviceRef.current,
         presencePendingRecoveryDeviceIdsRef.current,
       );
+      // 新连接代际 = 世界重置:永久关闭抑制不跨代际(断线期间对方状态未知,
+      // 新代按乐观补齐;若对方仍拒绝,入站永久 link-close 会重新建立抑制)。
+      rehydrateSuppressedDeviceIds.clear();
       // 上一连接代的 rehydrate verdict 已被降为 unknown;新连接的 late response
       // 不能再借旧 verdict 清理当前代状态。权威 presence 会在 delta 到达时重建。
       for (const deviceId of staleUnavailableDeviceIds) {
@@ -716,11 +733,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
       // 触发。逐设备且幂等(map 单点查删),不影响其它设备的风暴止损。
       invalidateOfflineScheduleIndexFailureFor(snap.deviceId);
+      // 权威 presence 可用快照 = 合法的重建信号:解除永久关闭后的重建抑制。
+      rehydrateSuppressedDeviceIds.delete(snap.deviceId);
       if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
       onLinkClosed: (deviceId, reason) => {
+        updateRehydrateSuppressionOnLinkClose(
+          rehydrateSuppressedDeviceIds,
+          deviceId,
+          reason,
+        );
         invalidatePeerLinkState(
           deviceId,
           openLinkInFlightRef.current,
@@ -1175,6 +1199,8 @@ async function sendOpenLink(
     // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
     settleDeviceSend(deviceId, slot, 'inconclusive');
     markRemoteResponseEvidence(deviceId);
+    // 显式 openLink 成功 = 链路已重建:解除永久关闭后的重建抑制。
+    rehydrateSuppressedDeviceIds.delete(deviceId);
     return accepted;
   } catch (err) {
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。

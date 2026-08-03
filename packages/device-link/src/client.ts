@@ -281,6 +281,13 @@ interface PeerTransportState {
    * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
    */
   linkAcceptedInbound: boolean;
+  /**
+   * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
+   * 迟到 transport-timeout 的拦截依据:只有本机不再主动控制对方时才吞帧;
+   * 入站方向的撤权/踢控制端(direction='inbound')不置位——互控时仍存续的
+   * 主动控制方向必须保留可恢复。openLink(意图续新)与收到 link-accept 时清除。
+   */
+  outboundExplicitlyClosed: boolean;
   /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
   supportsTransportTimeoutClose: boolean;
   /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
@@ -557,6 +564,8 @@ export class DeviceLinkClient {
 
   /** 控制端:向目标设备发起 link-open,等待 link-accept */
   async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
+    // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
+    this.getPeerTransport(dst).outboundExplicitlyClosed = false;
     const linkPayload = this.addLocalCapabilities(dst, payload);
     const env = await this.request(
       { v: PROTOCOL_VERSION, kind: 'link-open', dst, payload: linkPayload },
@@ -568,8 +577,23 @@ export class DeviceLinkClient {
     return env.payload as LinkAcceptPayload;
   }
 
-  /** 任一端:解除控制链路(fire-and-forget) */
-  closeLink(dst: string, reason: LinkCloseReason): void {
+  /**
+   * 任一端:解除控制链路(fire-and-forget)。
+   *
+   * `direction` 声明本次关闭的是哪个控制方向(PeerTransportState 按 deviceId
+   * 共享两方向,互控时必须区分):
+   * - 'outbound'(默认):本机主动结束**控制对方**(closeRemoteLink / mobile 断开)。
+   *   置 outboundExplicitlyClosed —— 此后迟到的 transport-timeout 被拦截,
+   *   不再自动重建用户关掉的控制链。
+   * - 'inbound':本机结束**对方对本机的控制**(撤权/踢控制端)。不碰
+   *   outboundExplicitlyClosed —— 若本机仍在主动控制对方,对方发来的
+   *   transport-timeout 仍应触发重建,保留可恢复的主动控制方向。
+   */
+  closeLink(
+    dst: string,
+    reason: LinkCloseReason,
+    direction: 'outbound' | 'inbound' = 'outbound',
+  ): void {
     // 本地永久关闭必须同步撤销已排期的 transport-timeout 重试通知:否则迟到
     // 的回调会在链路已关闭后补发瞬时重置帧,诱使对端重开用户已关掉的控制方向。
     this.cancelTimeoutCloseNotify(dst);
@@ -585,9 +609,12 @@ export class DeviceLinkClient {
       peer.explicitlyClosed = true;
       peer.unlinkedLegacyResponseIds.clear();
       // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
-      // 方向无法在此区分,保守撤销的代价只是回到整连接重连语义(安全侧),
-      // 而保留错误的 true 会让 transport-timeout 重开用户已关闭的控制方向。
+      // 保守撤销的代价只是回到整连接重连语义(安全侧),而保留错误的 true
+      // 会让 transport-timeout 重开用户已关闭的控制方向。
       peer.linkAcceptedInbound = false;
+      // 只有出站方向的关闭才意味着「本机不再主动控制对方」;入站方向的
+      // 撤权/踢控制端不得封死仍存续的主动控制意图(见方法注释)。
+      if (direction === 'outbound') peer.outboundExplicitlyClosed = true;
       // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
       // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
       peer.reliable = false;
@@ -1309,6 +1336,7 @@ export class DeviceLinkClient {
             const peer = this.getPeerTransport(env.src);
             const resumedLink = !peer.linkReady;
             peer.linkReady = true;
+            peer.outboundExplicitlyClosed = false;
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
@@ -1404,9 +1432,13 @@ export class DeviceLinkClient {
             // 重新建起。吞帧即稳态:对端通知重试自行终止,其保留 pending 等待
             // 将来显式重开或其自身清理路径回收。
             const existing = this.peerTransport.get(env.src);
-            if (existing?.explicitlyClosed) {
+            // 按控制方向判断:只有本机已显式结束**出站**控制(closeRemoteLink /
+            // mobile 断开)才吞帧。入站方向的撤权(revokeController →
+            // closeLink('revoked','inbound'))也会置共享的 explicitlyClosed,但本机
+            // 可能仍在主动控制对方——若据此吞帧,存续的主动控制方向永不恢复。
+            if (existing?.outboundExplicitlyClosed) {
               this.log.debug(
-                `ignoring late transport-timeout from ${env.src.slice(0, 8)} after local explicit close`,
+                `ignoring late transport-timeout from ${env.src.slice(0, 8)} after local outbound close`,
               );
               return true;
             }
@@ -1955,6 +1987,7 @@ export class DeviceLinkClient {
         linkReady: false,
         explicitlyClosed: false,
         linkAcceptedInbound: false,
+        outboundExplicitlyClosed: false,
         supportsTransportTimeoutClose: false,
         unlinkedLegacyResponseIds: new Set(),
         pending: new Map(),
