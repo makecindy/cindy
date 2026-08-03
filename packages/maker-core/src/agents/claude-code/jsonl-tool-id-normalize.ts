@@ -359,8 +359,12 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     // assistant/tool_result 把 duplicate 分配到 Bash_x5 + Bash_5_dup2 —— 第二个
     // tool card 会以错 id 创建/更新。aheadPtr 按 val 记录前瞻已消费到的下标, 每条
     // content_block_start 取「上一个已消费之后、line >= index 的第一个」occurrence。
-    // 无前瞻命中(所有同名调用都已过去, 异常顺序)时 fallback 到最近的 line < index,
-    // 不推进 aheadPtr。
+    // 无前瞻命中(stream_event 记录在 assistant 之后)时, fallback **同样按内容顺序**
+    // 消费**之前**的 occurrence —— 而不是总返回最后一个: 两个重复 start 落在
+    // assistant 行之后时, 第一条应指向首个调用(Bash_x5), 第二条指向第二个
+    // (Bash_5_dup2), 都返回最后一个会让首张 tool card 以错 id 创建/更新
+    // (codex-connector P2: Consume post-assistant stream starts by occurrence)。
+    // fallback 超出 occurrence 数(stream start 数 > 调用数, 异常)时取最后一个兜底。
     const aheadPtr = new Map<string, number>();
     const resolveAhead = (val: string, index: number): string | undefined => {
       const occs = occurrenceByOriginal.get(val);
@@ -371,6 +375,11 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           aheadPtr.set(val, i);
           return occs[i].finalId;
         }
+      }
+      // 无 future occurrence: fallback 按内容顺序消费之前未消费的 occurrence。
+      if (start < occs.length) {
+        aheadPtr.set(val, start);
+        return occs[start].finalId;
       }
       return occs[occs.length - 1].finalId;
     };
