@@ -186,7 +186,6 @@ import { createLogger } from '../logger.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
 import { setRemoteCodexLiveTurnChecker, setRemoteSessionStartEnsure, getRemoteCcTurnSettledHandler, getRemoteCcStaleQuery } from '../maker-host/remote-session-start-ensure.js';
-import { syncExternalCodexSessionFromDesktop } from '../maker-host/codex-local-sessions.js';
 import { getCodexProxyAuthInjection, getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
   readCollaborationSettings,
@@ -3878,16 +3877,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             void triggerClaudeAccountUsageRefresh();
           }
         });
-      if (session.id.startsWith('codex-')) {
-        const threadId = session.id.slice('codex-'.length);
-        void syncExternalCodexSessionFromDesktop(threadId).catch((err) => {
-          log.warn('failed to sync linked Codex session back to external home', {
-            sessionId: session.id,
-            threadId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
     }
     // Pi done 事件同样携带 per-turn token/cache 明细。Pi 复用 Cindy 的 provider
     // 路由，因此计费形态必须看 session provider，而不是把它当成一个新的计费方：

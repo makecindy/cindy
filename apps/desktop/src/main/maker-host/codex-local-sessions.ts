@@ -8,7 +8,6 @@
 
 import { app } from 'electron';
 import type Database from 'better-sqlite3';
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { createReadStream } from 'node:fs';
@@ -27,7 +26,6 @@ import { finalizeCodexCitationText } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
-import { getReadyBinaryPath, getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
@@ -212,55 +210,45 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
     ?? findExternalThreadById(threadId)
     ?? (targetRollout ? findThreadByIdInHome(targetHome, threadId) : null);
   if (found) {
-    const isBrandMigration = isLegacyBrandedCodexLocation(targetHome, found.sourceHome)
-      || isLegacyBrandedCodexLocation(targetHome, found.rolloutPath);
-    if (isBrandMigration) {
-      const adoptedRolloutPath = targetRolloutPathForExternalThread(found, targetHome);
-      const sourceRolloutExists = !!found.rolloutPath && fs.existsSync(found.rolloutPath);
-      let adoptedRollout = false;
-      if (sourceRolloutExists) {
-        try {
-          adoptedRollout = await copyExternalRolloutAtomically(found.rolloutPath, adoptedRolloutPath);
-        } catch (err) {
-          log.warn('failed to adopt external Codex rollout into current home', {
-            threadId,
-            sourceRolloutPath: found.rolloutPath,
-            targetRolloutPath: adoptedRolloutPath,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+    // 外部会话(~/.codex、Codex.app、历史品牌 HOME)一律**复制成 Cindy 私有副本**,
+    // 不再链接源 rollout(#789 方案 A:Dash 定稿)。Cindy 的续聊只写进 desktop CODEX_HOME
+    // 的这份副本,源会话零改动、也没有任何回写通道——彻底消除跨 runtime 版本回写污染源会话
+    // 的风险。接管进当前 HOME 还避免 state 长期指向可能被用户清理的外部目录。
+    const adoptedRolloutPath = targetRolloutPathForExternalThread(found, targetHome);
+    const sourceRolloutExists = !!found.rolloutPath && fs.existsSync(found.rolloutPath);
+    let adoptedRollout = false;
+    if (sourceRolloutExists) {
+      try {
+        adoptedRollout = await copyExternalRolloutAtomically(found.rolloutPath, adoptedRolloutPath);
+      } catch (err) {
+        log.warn('failed to adopt external Codex rollout into current home', {
+          threadId,
+          sourceRolloutPath: found.rolloutPath,
+          targetRolloutPath: adoptedRolloutPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-
-      // 原文件存在但接管失败时仍指回原文件,保证本次 resume 不因迁移 IO 故障被阻断;
-      // 原文件本就缺失时则把 state 指向当前 HOME,随后由 localDb 历史合成兜底 rollout。
-      const preparedRolloutPath = adoptedRollout || !sourceRolloutExists
-        ? adoptedRolloutPath
-        : found.rolloutPath;
-      const copiedState = copyThreadStateToTarget(found, targetDbPath, {
-        rolloutPathOverride: preparedRolloutPath,
-      });
-      const linkedState = pointThreadAtRollout(targetDbPath, threadId, preparedRolloutPath);
-      targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-      log.info('prepared legacy branded Codex thread for resume', {
-        threadId,
-        sourceHome: found.sourceHome,
-        copiedState,
-        linkedState,
-        adoptedRollout,
-        rolloutPath: targetRollout,
-      });
-    } else {
-      // 显式导入的 ~/.codex / Codex.app 会话保持链接语义,close 时仍同步回原 HOME。
-      const copiedState = copyThreadStateToTarget(found, targetDbPath);
-      targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-      log.info('prepared linked external Codex thread for resume', {
-        threadId,
-        sourceHome: found.sourceHome,
-        copiedState,
-        rolloutPath: targetRollout,
-      });
     }
+
+    // 原文件存在但接管失败时仍指回原文件,保证本次 resume 不因迁移 IO 故障被阻断(此时
+    // app-server 仍以 CODEX_HOME=desktop 运行、新事件写进 desktop home,不改源);原文件
+    // 本就缺失时把 state 指向当前 HOME,随后由 localDb 历史合成兜底 rollout。
+    const preparedRolloutPath = adoptedRollout || !sourceRolloutExists
+      ? adoptedRolloutPath
+      : found.rolloutPath;
+    const copiedState = copyThreadStateToTarget(found, targetDbPath, {
+      rolloutPathOverride: preparedRolloutPath,
+    });
+    const pointedState = pointThreadAtRollout(targetDbPath, threadId, preparedRolloutPath);
     targetRollout = readThreadRolloutPath(targetDbPath, threadId);
+    log.info('prepared private-copy external Codex thread for resume', {
+      threadId,
+      sourceHome: found.sourceHome,
+      copiedState,
+      pointedState,
+      adoptedRollout,
+      rolloutPath: targetRollout,
+    });
     if (targetRollout && fs.existsSync(targetRollout)) return targetRollout;
   }
 
@@ -958,73 +946,6 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return out;
 }
 
-/** Copy a linked Codex thread updated by xdt-maker back into the original Codex home. */
-export async function syncExternalCodexSessionFromDesktop(threadId: string): Promise<void> {
-  if (!isLikelyThreadId(threadId)) return;
-
-  const desktopThread = findThreadByIdInHome(getDesktopCodexHome(), threadId);
-  if (!desktopThread) {
-    log.debug('sync external skipped: desktop thread missing', { threadId });
-    return;
-  }
-
-  const externalThread = findExternalThreadById(threadId);
-  if (!externalThread) {
-    log.debug('sync external skipped: original external thread missing', { threadId });
-    return;
-  }
-
-  // 版本门禁(#789):desktop 侧新事件由 Cindy 实际跑的 codex runtime 写出(app-server 以
-  // CODEX_HOME=desktop 运行,新 rollout 落在 desktop home——见 findRolloutPath),回写是唯一
-  // 触碰源 ~/.codex 的通道。当该 runtime 与创建源会话的 runtime 版本不同时,事件格式(如
-  // function_call.id 前缀:旧版 `call_*` vs 新版 `fc_*`)可能不兼容,覆盖回源会让原 Codex
-  // 客户端后续重放历史被 API 拒(invalid_id_prefix),源会话就此无法继续。
-  // 判据用「实际 runtime 版本(spawn --version)vs 源 session_meta.cli_version」——不用 desktop
-  // rollout 自身的 session_meta(可能沿用源旧版本号),也不用编译期 pin(prod 会从 CDN 动态选到
-  // 不同版本)。仅两者完全一致(格式可证兼容)才回写;拿不到版本或不一致时降级为不回写、保源
-  // 会话原样(用户仍可在 Cindy 内继续该会话的私有副本)。
-  const runtimeCliVersion = await getActiveCodexRuntimeVersion();
-  const externalCliVersion = readRolloutCliVersion(externalThread.rolloutPath);
-  if (!runtimeCliVersion || !externalCliVersion || runtimeCliVersion !== externalCliVersion) {
-    log.info('skip external Codex sync-back: runtime version mismatch or unknown', {
-      threadId,
-      runtimeCliVersion,
-      externalCliVersion,
-      sourceHome: desktopThread.sourceHome,
-      targetHome: externalThread.sourceHome,
-    });
-    return;
-  }
-
-  let copiedRollout = false;
-  if (
-    desktopThread.rolloutPath &&
-    externalThread.rolloutPath &&
-    !samePath(desktopThread.rolloutPath, externalThread.rolloutPath) &&
-    fs.existsSync(desktopThread.rolloutPath)
-  ) {
-    await fsp.mkdir(path.dirname(externalThread.rolloutPath), { recursive: true });
-    await fsp.copyFile(desktopThread.rolloutPath, externalThread.rolloutPath);
-    copiedRollout = true;
-  }
-
-  const copiedState = externalThread.sourceDbPath
-    ? copyThreadStateToTarget(desktopThread, externalThread.sourceDbPath, {
-      replaceExisting: true,
-      rolloutPathOverride: externalThread.rolloutPath || desktopThread.rolloutPath,
-    })
-    : false;
-  await appendSessionIndexEntry(externalThread.sourceHome, desktopThread);
-
-  log.info('synced linked Codex thread back to external home', {
-    threadId,
-    sourceHome: desktopThread.sourceHome,
-    targetHome: externalThread.sourceHome,
-    copiedRollout,
-    copiedState,
-  });
-}
-
 /**
  * 为外部 Codex thread 创建的本地会话按需导入可读消息。
  * 源 rollout 文件未变化时直接短路；文件变化后按行号 upsert，刷新已导入行并追加新行。
@@ -1446,70 +1367,6 @@ function rolloutThreadRowFromFirstLine(
     approval_mode: stringValue(payload.approval_mode),
     archived: isArchivedRolloutPath(file) ? 1 : 0,
   };
-}
-
-/** binaryPath → 解析出的 semver;同一 binary 只 spawn 一次 `--version`。 */
-const codexRuntimeVersionCache = new Map<string, string>();
-
-/** 当前实际会被 spawn 的 codex 二进制路径(prepare 成功后回填;无则读受管缓存)。 */
-function resolveActiveCodexBinaryPath(): string | null {
-  const ready = getReadyBinaryPath('codex');
-  if (ready) return ready;
-  const cached = getCachedBinaryStatus('codex');
-  return cached.binaryReady && cached.binaryPath ? cached.binaryPath : null;
-}
-
-/** 从 `codex --version` 首行抽取 semver(如 "codex-cli 0.145.0" → "0.145.0")。 */
-function parseCodexVersionOutput(output: string): string | null {
-  const match = output.trim().match(/\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/i);
-  return match ? match[1] : null;
-}
-
-/**
- * 写出 desktop 侧新事件的那个 codex runtime 的**实际**版本——spawn 当前解析到的 codex
- * 二进制 `--version` 得到,而非任何编译期 pin 或路径推断。这样才与真正跑的 runtime 一致:
- * dev bundle(apps/codex-bin)、prod 从 CDN manifest 动态选中的版本、Linux 受管 fallback 各
- * 布局都取到真值(#789 review:factory 按远端 asset.version 选二进制,pin/路径都可能与实际不符)。
- * 结果按 binaryPath 进程内缓存。二进制未就绪 / 非受管路径 / --version 失败或无法解析 → null,
- * 回写门禁据此按「无法确认」降级为不写(安全侧)。
- */
-async function getActiveCodexRuntimeVersion(): Promise<string | null> {
-  const binaryPath = resolveActiveCodexBinaryPath();
-  // 执行前复核确为受管二进制(与 binary-version.ts 同口径,CodeQL 命令注入防御纵深)。
-  if (!binaryPath || !isVettedAgentBinaryPath('codex', binaryPath)) return null;
-  const cached = codexRuntimeVersionCache.get(binaryPath);
-  if (cached) return cached;
-  const firstLine = await new Promise<string | null>((resolve) => {
-    execFile(binaryPath, ['--version'], { timeout: 5000, windowsHide: true }, (err, stdout, stderr) => {
-      if (err) {
-        resolve(null);
-        return;
-      }
-      resolve(((stdout || stderr || '').toString().split(/\r?\n/)[0] ?? '').trim() || null);
-    });
-  });
-  const version = firstLine ? parseCodexVersionOutput(firstLine) : null;
-  if (version) codexRuntimeVersionCache.set(binaryPath, version);
-  return version;
-}
-
-/**
- * 读取 rollout 首行 session_meta 里的 `cli_version`(写出这份 rollout 的 Codex runtime 版本)。
- * 文件缺失、首行非 session_meta、或 cli_version 缺失/为空 → null(调用方按「无法确认」处理)。
- */
-function readRolloutCliVersion(rolloutPath: string | null | undefined): string | null {
-  if (!rolloutPath) return null;
-  const line = readFirstLineSync(rolloutPath);
-  if (!line) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(obj) || obj.type !== 'session_meta' || !isRecord(obj.payload)) return null;
-  const version = stringValue(obj.payload.cli_version).trim();
-  return version || null;
 }
 
 function readFirstLineSync(file: string): string | null {
