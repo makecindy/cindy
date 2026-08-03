@@ -55,7 +55,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
   });
 
-  it('本机目录热刷新会原子替换两个 agent 的缓存快照', async () => {
+  it('本机目录热刷新会原子替换核心 agent 的缓存快照', async () => {
     const { getCapabilities } = stubElectron();
     const mod = await import('@/hooks/useAgentCapabilities');
     await mod.preloadAllCapabilities();
@@ -68,6 +68,34 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
     expect(mod.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
       'refreshed:codex',
+    );
+  });
+
+  it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
+    const { getCapabilities } = stubElectron();
+    getCapabilities.mockImplementation(async (agent: string) => {
+      if (agent === 'pi') throw new Error("Agent 'pi' is not registered");
+      return caps(`local:${agent}`);
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await expect(mod.loadLocalCapabilitiesSnapshot()).resolves.toEqual([
+      ['claude-code', caps('local:claude-code')],
+      ['codex', caps('local:codex')],
+    ]);
+    expect(getCapabilities).toHaveBeenCalledWith('pi');
+  });
+
+  it('本机目录快照在核心 agent 不可用时仍拒绝提交部分能力', async () => {
+    const { getCapabilities } = stubElectron();
+    getCapabilities.mockImplementation(async (agent: string) => {
+      if (agent === 'codex') throw new Error("Agent 'codex' is not registered");
+      return caps(`local:${agent}`);
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await expect(mod.loadLocalCapabilitiesSnapshot()).rejects.toThrow(
+      "Agent 'codex' is not registered",
     );
   });
 
