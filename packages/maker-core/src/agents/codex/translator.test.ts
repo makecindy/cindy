@@ -437,6 +437,31 @@ describe('translateErrorNotification', () => {
     });
   });
 
+  it('其它终态错误被 agent 接管时透成非终止进度且不冒充过载', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'exceeded retry limit, last status: 429 Too Many Requests',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverTerminalError: () => ({ attempt: 1, maxAttempts: 2 }),
+      },
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({
+      errorStatus: 429,
+      isTerminal: false,
+      willRetry: true,
+    });
+    expect((events[0]!.data as { message: string }).message).toContain('auto-retry 1/2');
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
     // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
     // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到

@@ -137,6 +137,14 @@ export interface CodexTranslateContext {
    * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
    */
   tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
+  /**
+   * 其它明确可安全重投的终态错误接管钩子。agent 层负责白名单判定、产出守卫与预算；
+   * translator 只把接管成功的错误转换成带进度的非终止事件。
+   */
+  tryTakeOverTerminalError?: () => {
+    attempt: number;
+    maxAttempts: number;
+  } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -363,6 +371,26 @@ export function translateErrorNotification(
           ...safeErrorData,
           ...overloadReason,
           message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
+  if (!params.willRetry && !isCapacityError) {
+    const progress = ctx.tryTakeOverTerminalError?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          message: formatOverloadRetryMessage(
+            safeMessage,
+            progress.attempt,
+            progress.maxAttempts,
+          ),
           isTerminal: false,
           willRetry: true,
         },
