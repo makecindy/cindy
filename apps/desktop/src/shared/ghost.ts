@@ -115,6 +115,7 @@ export const GHOST_SLOTS = [
   'node',
   'network',
   'notify',
+  'badge',
   'confirm',
   'fs',
   'session-context',
@@ -1349,6 +1350,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'card') keys.push('slotCard');
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
+    else if (slot === 'badge') keys.push('slotBadge');
     else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
@@ -1770,6 +1772,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     else if (slot === 'notify') {
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
     }
+  }
+  // 未读角标:与 notify 槽**并列**的独立一档(不是它的子项)——绿点比 toast 克制,
+  // 只想安静点个绿点的意识不该被迫连"能弹全屏顶部提示"一起申请。
+  // key 独立还有一层必要性(同 subscribe 的 activity topic 判例):
+  // diffGhostPermissionItems 按 key + detail 比对,若并进某个固定 key,已装插件
+  // 新增这一档时 added 为空,plugin-market 的扩权确认就不会拦——用户会在毫不
+  // 知情的情况下多给出一个常驻的注意力入口。
+  if (manifest.slots.includes('badge')) {
+    items.push({ key: 'badge', kind: 'notify', labelKey: 'badge', detailKey: 'badgeDetail' });
   }
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
   // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
@@ -2744,6 +2755,28 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (cardRaw.externalLinks === true) {
       card = { externalLinks: true };
     }
+  }
+
+  /**
+   * 未读角标槽(badge)与 `panel` 严格成对:未读点承诺「点开能看到内容」,
+   * 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
+   *
+   * **为什么用一个新 slot 而不是 `notify` 下的子字段**(2026-08-03,codex review P1):
+   * `slots` 是硬白名单——未登记的槽名一律拒装。所以任何**已经装在用户机器上**的
+   * 老包都不可能带 `badge` 槽:当初装它的客户端会直接拒绝那份清单。这让「新声明」
+   * 与「老包的同名自定义字段」成为**可证明**可分,而不是靠概率赌。
+   *
+   * 早前的方案把它放在顶层 `notify` 对象里。那个字段在本改动前完全未登记、会被
+   * 校验器静默忽略,于是两头堵:严格校验会让写过同名字段的老包升级后消失(§5 红线),
+   * 放松成"识别到就给"又会让恰好写成 `badge:true` 且有面板的老包在**没有任何安装
+   * 或更新确认**的情况下白拿一个常驻注意力面。换成 slot 后两个问题同时消失,
+   * `notify` 顶层字段也不再被解释——存量清单里有什么形态都照旧忽略。
+   */
+  if (slots.includes('badge') && panel === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "badge" 但缺少 panel——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+    };
   }
 
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
@@ -4825,6 +4858,49 @@ export interface GhostPipeNotify {
 
 /** notify 的 invoke 返回(失败带人话原因,供意识作者调试;不涉他人信息)。 */
 export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * 上行:未读角标(badge 槽,2026-08-03)。意识告诉主机"我这儿有新内容了",
+ * 主机在插件入口与插件卡上点一颗**绿点**,并把 summary 显示在卡片简介位。
+ *
+ * 与 notify 的分工:notify 是"弹一条即走"的一次性 toast(错过就没了);本消息
+ * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。两者是**并列的两档
+ * 权限**,不是加档关系:要 toast 声明 `notify` 槽,要绿点声明 `badge` 槽,
+ * 谁也不是谁的前置(绿点比 toast 克制,不该被 toast 权限捆绑)。
+ *
+ * 门槛(validateGhostManifest 强制):只有声明了 `panel` 的意识能申请。理由是
+ * 未读点承诺"点开能看到内容",纯工具型/对话型意识没有可打开的界面,给了就是
+ * 骗点击。
+ *
+ * 信任边界与 notify 同款:意识只供纯文本 summary(净化 + 限长),点的颜色、
+ * 位置、身份头全由主机画;意识改不了别人的角标(id 由沙箱绑定,不看载荷自报)。
+ */
+export interface GhostPipeBadge {
+  type: 'badge';
+  /** true = 有未读(点亮);false = 自己清零(如意识内已读)。 */
+  unread: boolean;
+  /**
+   * 最新一条的摘要(纯文本,≤ GHOST_BADGE_SUMMARY_MAX_CHARS)。
+   * 显示在插件卡的简介位,替代静态描述——用户扫一眼就知道新内容是什么。
+   * unread:false 时忽略。
+   */
+  summary?: string;
+}
+
+/** badge 的 invoke 返回(与 notify 同款结构化拒绝,不抛异常穿透沙箱)。 */
+export type GhostPipeBadgeResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * 未读摘要长度上限。比 notify 正文更短:它要挤进卡片一行、单行省略,
+ * 太长的部分用户根本看不到,不如让作者自己裁。
+ */
+export const GHOST_BADGE_SUMMARY_MAX_CHARS = 80;
+
+/**
+ * 同一意识两次角标上报的最小间隔 ms。比 notify 宽松得多——角标是幂等的
+ * 状态写入(不像 toast 每条都打扰用户),但仍要挡住死循环刷写。
+ */
+export const GHOST_BADGE_MIN_INTERVAL_MS = 500;
 
 /** 提示正文长度上限(与订阅槽 block reason ≤200 同量级:一眼能读完的量)。 */
 export const GHOST_NOTIFY_MAX_CHARS = 200;

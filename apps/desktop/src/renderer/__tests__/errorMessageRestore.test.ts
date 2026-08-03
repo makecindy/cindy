@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
-import { ERROR_REASON_I18N_KEYS } from '@/components/chat/ErrorMessageCard';
+import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';
@@ -44,6 +44,16 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     expect(ERROR_REASON_I18N_KEYS[UPSTREAM_OVERLOAD_REASON]).toBe(
       'chat.errorBanner.overloadBusyNoRetry',
     );
+  });
+
+  it('maps Codex reconnect stalls to the existing upstream timeout copy', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_reconnect_stalled).toBe(
+      'logic.errors.upstreamResponseIdleTimeout',
+    );
+  });
+
+  it('maps an event-loop crash to the generic terminal failure copy', () => {
+    expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
   });
 
   it('restores the overload reason from persisted rows so history can localize it', () => {

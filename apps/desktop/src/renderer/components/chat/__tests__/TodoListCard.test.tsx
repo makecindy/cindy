@@ -20,6 +20,18 @@ const TODOS = [
 afterEach(cleanup);
 
 describe('TodoListCard flyout interaction', () => {
+  it('uses the pending icon when no step is currently in progress', () => {
+    const { container } = render(
+      <TodoListCard todos={[{ content: 'Queued step', status: 'pending' }]} animated />,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 1' });
+
+    expect(trigger.querySelector('svg.lucide-circle')).not.toBeNull();
+    expect(trigger.querySelector('svg.lucide-circle-dashed')).toBeNull();
+    expect(container.querySelector('svg.lucide-circle-dashed')).toBeNull();
+  });
+
   it('opens transiently on hover and closes when the pointer leaves', () => {
     render(<TodoListCard todos={TODOS} animated={false} />);
 
@@ -53,6 +65,30 @@ describe('TodoListCard flyout interaction', () => {
     fireEvent.mouseLeave(hoverRegion);
     fireEvent.mouseEnter(hoverRegion);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('closes a pinned flyout when the pointer goes outside the card', () => {
+    render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.pointerDown(document.body);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes a pinned flyout with Escape', () => {
+    render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('toggles the pinned flyout for keyboard-generated clicks', () => {

@@ -91,7 +91,8 @@ export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:res
 
 /**
  * Channel name for main → renderer "execute this tab operation against the
- * store" (RsbWebviewBackend dispatches `open` / `focus` / `close` actions).
+ * store" (RsbWebviewBackend dispatches `probe` / `open` / `focus` / `close`
+ * actions).
  * The renderer answers via `tab-op-result` keyed by `reqId`.
  */
 export const RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL = 'rsb-browser-bridge:tab-op-request';
@@ -105,6 +106,10 @@ export const RSB_BROWSER_BRIDGE_TAB_OP_RESULT_CHANNEL = 'rsb-browser-bridge:tab-
  * into an intersection.
  */
 export type RsbBrowserBridgeTabOp =
+  | {
+      /** No-side-effect renderer round trip used by backend health checks. */
+      op: 'probe';
+    }
   | {
       op: 'open';
       sessionId: string;

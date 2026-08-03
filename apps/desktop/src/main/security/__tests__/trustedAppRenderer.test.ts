@@ -17,6 +17,7 @@ import { markAppContentWindow } from '../../windowFocusClassifier';
 import {
   isTrustedAppRendererEventForLocation,
   isTrustedAppRendererUrl,
+  isTrustedAppRendererWindowForLocation,
 } from '../trustedAppRenderer';
 
 const packagedRendererFile = path.resolve('/Applications/Cindy/resources/app/renderer/index.html');
@@ -83,5 +84,42 @@ describe('trustedAppRenderer · sender frame', () => {
     expect(
       isTrustedAppRendererEventForLocation(fakeEvent('https://attacker.example/'), packagedOptions),
     ).toBe(false);
+  });
+});
+
+/**
+ * 出站推送(webContents.send)与入站 IPC 是同一道授权边界。载荷带用户私密内容时
+ * (如插件未读摘要:工单标题、邮件主题),拿 getAllWindows() 无条件广播就是把它
+ * 发给所有窗口,包括已经导航到别处的那些。
+ */
+describe('trustedAppRenderer · 窗口级判据(出站推送用)', () => {
+  const fakeWindow = (url: string) =>
+    ({ isDestroyed: () => false, webContents: { mainFrame: { url } } }) as never;
+
+  it('登记过且停在 renderer 页的窗口才可收推送', () => {
+    const win = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    markAppContentWindow(win);
+    expect(isTrustedAppRendererWindowForLocation(win, packagedOptions)).toBe(true);
+  });
+
+  it('已导航到别处的窗口不可收 —— 这正是内容泄漏面', () => {
+    const win = fakeWindow('https://attacker.example/index.html');
+    markAppContentWindow(win);
+    expect(isTrustedAppRendererWindowForLocation(win, packagedOptions)).toBe(false);
+  });
+
+  it('未登记的窗口、已销毁的窗口、null 一律不可收', () => {
+    const unregistered = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    expect(isTrustedAppRendererWindowForLocation(unregistered, packagedOptions)).toBe(false);
+
+    const destroyed = {
+      isDestroyed: () => true,
+      webContents: { mainFrame: { url: pathToFileURL(packagedRendererFile).toString() } },
+    } as never;
+    markAppContentWindow(destroyed);
+    expect(isTrustedAppRendererWindowForLocation(destroyed, packagedOptions)).toBe(false);
+
+    expect(isTrustedAppRendererWindowForLocation(null, packagedOptions)).toBe(false);
+    expect(isTrustedAppRendererWindowForLocation(undefined, packagedOptions)).toBe(false);
   });
 });

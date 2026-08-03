@@ -1204,6 +1204,7 @@ export function CCAgentSessionView({
     loadOlderMessages,
     isLoadingMore,
     hasMoreMessages,
+    historyWindowHasIsland,
     pendingPermission,
     respondToPermission,
     pendingAskUser,
@@ -3582,6 +3583,9 @@ export function CCAgentSessionView({
                 messages={messages}
                 animated={isStreaming}
                 width={inputWidth}
+                taskHistoryMayBeIncomplete={
+                  !historyLoaded || hasMoreMessages || historyWindowHasIsland
+                }
                 visible={!(
                   pendingPlanReview ||
                   pendingPermission ||

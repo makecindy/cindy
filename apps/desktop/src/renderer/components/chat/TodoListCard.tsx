@@ -16,7 +16,7 @@
  *   --msg-tool-card-chevron: secondary(completed 置灰)
  */
 
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { CircleCheck, CircleDashed, Circle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
@@ -50,9 +50,30 @@ export function TodoListCard({
 }) {
   const { t } = useTranslation();
   const flyoutId = useId();
+  const cardRef = useRef<HTMLDivElement>(null);
   const [openMode, setOpenMode] = useState<FlyoutOpenMode>('closed');
   const [renderFlyout, setRenderFlyout] = useState(false);
   const revealed = openMode !== 'closed';
+
+  useEffect(() => {
+    if (openMode !== 'pinned') return;
+
+    const handlePointerDownOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && cardRef.current?.contains(target)) return;
+      setOpenMode('closed');
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMode('closed');
+    };
+
+    document.addEventListener('pointerdown', handlePointerDownOutside, true);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutside, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openMode]);
 
   useEffect(() => {
     if (revealed) setRenderFlyout(true);
@@ -81,6 +102,7 @@ export function TodoListCard({
   return (
     <div className="flex w-full justify-center">
       <div
+        ref={cardRef}
         className="relative inline-flex items-center justify-center"
         onMouseEnter={() => {
           setOpenMode((current) => (current === 'closed' ? 'hover' : current));
@@ -112,12 +134,18 @@ export function TodoListCard({
               strokeWidth={2}
               className="shrink-0 text-[var(--msg-tool-card-text)]"
             />
-          ) : (
+          ) : hasActive ? (
             <Spinner
               icon={CircleDashed}
               size={14}
               strokeWidth={2}
-              spinning={animated && hasActive}
+              spinning={animated}
+              className="shrink-0 text-[var(--msg-tool-card-text)]"
+            />
+          ) : (
+            <Circle
+              size={14}
+              strokeWidth={2}
               className="shrink-0 text-[var(--msg-tool-card-text)]"
             />
           )}

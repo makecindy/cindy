@@ -872,18 +872,40 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 /* 需关注圆点——深色 + box-shadow 扩散脉冲（对照 redesign 稿 xdtsb-pulse） */
+/* 呼吸点(AttentionDot 的 breathing 形态)。
+   常驻循环动画按 DESIGN.md §14.4 只允许动 transform / opacity(compositor-only);
+   原实现动的是 box-shadow,每帧都要重绘,多张未读卡长期同屏时持续吃 CPU 与电量
+   (codex review)。改成一个 ::after 光环做 scale + opacity,视觉节奏不变:
+   6px 的点外扩到约 4px 光环(6→14px ≈ scale 2.33),同时淡出。
+   起始帧 opacity 为 0,所以 scale(1) 那一刻光环不可见,不会给点本身蒙一层底色。 */
 .session-card-dot {
+  position: relative;
+}
+.session-card-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: hsl(var(--foreground));
   animation: session-card-pulse 2.1s infinite;
+  will-change: transform, opacity;
+  pointer-events: none;
 }
 @keyframes session-card-pulse {
   0% {
-    box-shadow: 0 0 0 0 hsl(var(--foreground) / 0.32);
+    transform: scale(1);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.32;
   }
   70% {
-    box-shadow: 0 0 0 4px hsl(var(--foreground) / 0);
+    transform: scale(2.33);
+    opacity: 0;
   }
   100% {
-    box-shadow: 0 0 0 0 hsl(var(--foreground) / 0);
+    transform: scale(2.33);
+    opacity: 0;
   }
 }
 
@@ -907,7 +929,7 @@ body.resizing-pane [data-ghost-webview] {
   .session-status-breathing,
   .session-card-bar::before,
   .session-card--settle,
-  .session-card-dot,
+  .session-card-dot::after,
   .session-running-dot,
   .thinking-dot,
   .card-col-fade {
@@ -946,7 +968,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .status-bar-shimmer,
 [data-app-hidden='true'] .session-status-breathing,
 [data-app-hidden='true'] .session-card-bar::before,
-[data-app-hidden='true'] .session-card-dot,
+[data-app-hidden='true'] .session-card-dot::after,
 [data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,

@@ -24,6 +24,10 @@ import {
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
@@ -1474,6 +1478,31 @@ function handleResult(
     ctx.turn.apiCalls > 0 &&
     turnUsageDeltaAllZero;
 
+  // 上下文超限终态判定(提前到 endTurn 之前算, #1429): 超限请求被上游 400 整体拒绝,
+  // 不返回 usage —— tracker.lastApi 停在上一次成功值(会话重启后首轮就失败则是 0),
+  // 圆环显示低占用甚至 0%, auto-compact 的 ratio 永远到不了阈值, 会话进入
+  // "超限 → 无 usage → 不压缩 → 重试再超限"的自锁。提前算的原因(与 isEmptyResponseTurn
+  // 的提前同构):
+  //  (a) 在 endTurn 前 markContextOverflow() 把 tracker 锁到窗口满载, endSnapshot 的
+  //      contextTokens 如实反映"已超限"(status Done / done 事件跟随);
+  //  (b) 下方 ctx.onUsageUpdate 用该 endSnapshot 把 ratio=1.0 喂给 auto-compact /
+  //      memory-flush, turn end 即触发一次静默 /compact。best-effort: 压缩请求自身
+  //      发送全量历史, 真超限时可能同样失败; 失败轮不产生 compact_boundary,
+  //      AutoCompactController.fired 保持置位, 不会循环重压;
+  //  (c) endTurn 的 replaceLastApi 守卫加 !isContextOverflowTurn: 失败轮的 usage delta
+  //      通常为 0, 放任覆盖会把 (a) 刚锁上的满载值又冲回 0;
+  //  (d) is_error 分支给 error 事件带 CONTEXT_OVERFLOW_REASON, renderer 按稳定 key
+  //      隐藏必败的 Retry 并给出压缩 / 新开会话入口。
+  // 判定文本 = result 原文 + pendingApiError.message(信息可能只在其一; pattern 只认
+  // 错误措辞形态, 与 provider 无关)。interruptRequested 排除与下方 is_error 分支一致。
+  const isContextOverflowTurn =
+    Boolean(msg.is_error) &&
+    !ctx.turn.interruptRequested &&
+    isContextOverflowErrorMessage(
+      `${typeof msg.result === 'string' ? msg.result : ''}\n${ctx.turn.pendingApiError?.message ?? ''}`,
+    );
+  if (isContextOverflowTurn) ctx.tracker.markContextOverflow();
+
   // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用之前先取出来给后面日志用
   const preTurnEndCacheStats = ctx.tracker.getCacheStats();
   const finalTextForLogs = msg.is_error ? redactSensitiveText(finalText) : finalText;
@@ -1489,8 +1518,12 @@ function handleResult(
           cacheCreateTokens: resultUsage.cacheCreateTokens,
           costUsd: msg.total_cost_usd,
           // 空响应轮不 replaceLastApi: 否则用本轮 0 增量覆盖 lastApi, 丢掉上一轮真实 context。
+          // 超限轮同理: markContextOverflow 刚锁上的满载值不能被失败轮的 0 增量冲掉。
           replaceLastApi:
-            ctx.turn.apiCalls === 1 && !ctx.turn.sawCompactBoundary && !isEmptyResponseTurn,
+            ctx.turn.apiCalls === 1 &&
+            !ctx.turn.sawCompactBoundary &&
+            !isEmptyResponseTurn &&
+            !isContextOverflowTurn,
         }
       : undefined,
   );
@@ -1670,6 +1703,10 @@ function handleResult(
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
+    // 上下文超限带稳定 reason key(判定在上方 endTurn 前已算好): renderer 靠它
+    // 隐藏必败的 Retry(原样重发必然再撞同一个 4xx)并给出压缩 / 新开会话入口;
+    // 文案匹配仅作历史持久化错误行的兜底(overload reason 同款分层)。
+    const overflowReason = isContextOverflowTurn ? { reason: CONTEXT_OVERFLOW_REASON } : {};
     queue.push({
       type: 'error',
       data: pendingApiError
@@ -1677,6 +1714,7 @@ function handleResult(
             message: errorMessage,
             sdkError: pendingApiError.sdkError,
             isTerminal: true,
+            ...overflowReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
             ...(pendingApiError.retryAttempt !== undefined
@@ -1690,6 +1728,7 @@ function handleResult(
         ? {
             message: errDetail,
             isTerminal: true,
+            ...overflowReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
           }

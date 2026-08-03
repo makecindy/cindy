@@ -451,6 +451,97 @@ describe('Maker session close events', () => {
       reason: 'agent-switch',
     });
   });
+
+  it('removes a session whose event iterator crashes and recreates it on the next request', async () => {
+    const crashingHandle = createHandle({ id: 'thread-crashed' });
+    crashingHandle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            throw new Error('iterator crashed');
+          },
+        };
+      },
+    });
+    crashingHandle.close = vi.fn(async () => undefined);
+    const healthyHandle = createHandle({ id: 'thread-rebuilt' });
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(crashingHandle)
+      .mockResolvedValueOnce(healthyHandle);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    maker.on((event) => {
+      if (event.type === 'session:closed' && event.sessionId === 'session-crash') {
+        expect(event.reason).toBe('unexpected');
+        resolveClosed();
+      }
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-crash',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    await maker.createSession(options);
+    await closed;
+    expect(maker.getSession('session-crash')).toBeUndefined();
+    expect(maker.listActiveSessions()).toEqual([]);
+
+    const rebuilt = await maker.createSession(options);
+    expect(rebuilt.sdkSessionId).toBe('thread-rebuilt');
+    expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed crash cleanup before recreating the session', async () => {
+    const crashingHandle = createHandle({ id: 'thread-crashed-close-retry' });
+    crashingHandle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            throw new Error('iterator crashed');
+          },
+        };
+      },
+    });
+    let closeAttempts = 0;
+    crashingHandle.close = vi.fn(async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) throw new Error('transport close failed');
+    });
+    const healthyHandle = createHandle({ id: 'thread-rebuilt-after-close-retry' });
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(crashingHandle)
+      .mockResolvedValueOnce(healthyHandle);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-crash-close-retry',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    const crashed = await maker.createSession(options);
+    await vi.waitFor(() => expect(crashed.getStatus()).toBe('error'));
+    expect(maker.getSession('session-crash-close-retry')).toBe(crashed);
+
+    const rebuilt = await maker.createSession(options);
+    expect(rebuilt.sdkSessionId).toBe('thread-rebuilt-after-close-retry');
+    expect(maker.getSession('session-crash-close-retry')).toBe(rebuilt);
+    expect(closeAttempts).toBe(2);
+    expect(startSession).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('Maker before-start lifecycle hook', () => {
@@ -1371,14 +1462,24 @@ describe('Session turn send guard', () => {
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects sends after the event iterator crashes', async () => {
+  it('emits a terminal error and closes the session after the event iterator crashes', async () => {
     const crash = new Error('events crashed');
+    let crashIterator!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      crashIterator = resolve;
+    });
+    let releaseClose!: () => void;
+    const closeReady = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
     const handle = createHandle({ id: 'thread-1' });
     handle.send = vi.fn(async () => undefined);
+    handle.close = vi.fn(async () => closeReady);
     const crashingEvents: AsyncIterable<never> = {
       [Symbol.asyncIterator]() {
         return {
           async next(): Promise<IteratorResult<never>> {
+            await crashReady;
             throw crash;
           },
         };
@@ -1393,20 +1494,331 @@ describe('Session turn send guard', () => {
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
+    const order: string[] = [];
+    const terminalEvents: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalEvents.push(event);
+        order.push('error');
+      }
+    });
+    let closedObserved = false;
+    const statusChanged = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') {
+          closedObserved = true;
+          order.push('closed');
+          resolve();
+        }
+      });
+    });
+
+    await session.send('first');
+    crashIterator();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(terminalEvents).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(order).toEqual(['error']);
+    expect(closedObserved).toBe(false);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(session.getStatus()).toBe('active');
+    await expect(session.send('second')).rejects.toThrow('is closing');
+
+    releaseClose();
+    await statusChanged;
+    expect(order).toEqual(['error', 'closed']);
+    expect(session.getStatus()).toBe('closed');
+    await expect(session.send('third')).rejects.toThrow('is closed');
+    expect(handle.send).toHaveBeenCalledTimes(1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish closed when an iterator crash cannot close the handle', async () => {
+    const handle = createHandle({ id: 'thread-crash-close-failed' });
+    handle.close = vi.fn(async () => {
+      throw new Error('transport close failed');
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            throw new Error('events crashed');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-crash-close-failed',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
         if (status === 'error') resolve();
       });
     });
 
-    await session.send('first');
     await statusChanged;
 
-    await expect(session.send('second')).rejects.toThrow('is in error state');
-    expect(handle.send).toHaveBeenCalledTimes(1);
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(session.getStatus()).toBe('error');
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
-  it('does not revive an error session when abort is called after the event iterator crashes', async () => {
+  it('emits a terminal error before closing when the event iterator ends during an active turn', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let running = false;
+    const handle = createHandle({ id: 'thread-natural-end-active-turn' });
+    handle.send = vi.fn(async () => {
+      running = true;
+    });
+    handle.isTurnRunning = () => running;
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-active-turn',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const order: string[] = [];
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalErrors.push(event);
+        order.push('error');
+      }
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') {
+          order.push('closed');
+          resolve();
+        }
+      });
+    });
+
+    await session.send('first');
+    releaseEnd();
+    await closed;
+
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(order).toEqual(['error', 'closed']);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('clears the turn stall watchdog when the event iterator ends naturally', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseEnd!: () => void;
+      const endReady = new Promise<void>((resolve) => {
+        releaseEnd = resolve;
+      });
+      let running = false;
+      const handle = createHandle({ id: 'thread-natural-end' });
+      handle.send = vi.fn(async () => {
+        running = true;
+      });
+      handle.isTurnRunning = () => running;
+      handle.events = () => ({
+        [Symbol.asyncIterator]() {
+          let ended = false;
+          return {
+            async next(): Promise<IteratorResult<AgentEvent>> {
+              if (!ended) {
+                ended = true;
+                await endReady;
+                return { done: false, value: { type: 'done', data: {}, source: 'codex' } };
+              }
+              return { done: true, value: undefined as never };
+            },
+          };
+        },
+      });
+      const session = new Session({
+        id: 'session-natural-end',
+        agentKind: 'codex',
+        workDir: '/repo',
+        handle,
+        capabilities: createAgent(async () => handle).capabilities,
+        logger: createLogger(),
+        turnStallMs: 1_000,
+      });
+      const closed = new Promise<void>((resolve) => {
+        session.onStatusChange((status) => {
+          if (status === 'closed') resolve();
+        });
+      });
+
+      await session.send('first');
+      const terminalErrors: AgentEvent[] = [];
+      session.onEvent((event) => {
+        if (event.type === 'error') terminalErrors.push(event);
+      });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      running = false;
+      releaseEnd();
+      await closed;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(terminalErrors).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels an in-flight send when the event iterator ends naturally', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let sendEntered!: () => void;
+    const sendReady = new Promise<void>((resolve) => {
+      sendEntered = resolve;
+    });
+    const handle = createHandle({ id: 'thread-natural-end-pending-send' });
+    handle.send = vi.fn(async (_message, opts) => {
+      sendEntered();
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-pending-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+    const terminalErrors: AgentEvent[] = [];
+
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
+    const sendPromise = session.send('first');
+    await sendEntered;
+    releaseEnd();
+    await closed;
+
+    await expect(sendPromise).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('lets an explicit close own the closed status when the event iterator ends first', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let releaseClose!: () => void;
+    const closeReady = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const handle = createHandle({ id: 'thread-natural-end-during-close' });
+    handle.close = vi.fn(async () => closeReady);
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-during-close',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
+
+    const closePromise = session.close();
+    releaseEnd();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.getStatus()).toBe('active');
+    expect(terminalErrors).toEqual([]);
+
+    releaseClose();
+    await closePromise;
+    expect(session.getStatus()).toBe('closed');
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not revive a closed session when abort is called after the event iterator crashes', async () => {
     const crash = new Error('events crashed');
     const handle = createHandle({ id: 'thread-1' });
     handle.send = vi.fn(async () => undefined);
@@ -1431,7 +1843,7 @@ describe('Session turn send guard', () => {
     });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
-        if (status === 'error') resolve();
+        if (status === 'closed') resolve();
       });
     });
 
@@ -1439,12 +1851,12 @@ describe('Session turn send guard', () => {
     await statusChanged;
     await session.abort();
 
-    expect(session.getStatus()).toBe('error');
-    await expect(session.send('second')).rejects.toThrow('is in error state');
+    expect(session.getStatus()).toBe('closed');
+    await expect(session.send('second')).rejects.toThrow('is closed');
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not revive an error session when the event iterator crashes while abort is awaiting', async () => {
+  it('does not revive a closed session when the event iterator crashes while abort is awaiting', async () => {
     let releaseAbort!: () => void;
     const abortReady = new Promise<void>((resolve) => {
       releaseAbort = resolve;
@@ -1479,7 +1891,7 @@ describe('Session turn send guard', () => {
     });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
-        if (status === 'error') resolve();
+        if (status === 'closed') resolve();
       });
     });
 
@@ -1490,9 +1902,235 @@ describe('Session turn send guard', () => {
     releaseAbort();
     await abortPromise;
 
-    expect(session.getStatus()).toBe('error');
-    await expect(session.send('second')).rejects.toThrow('is in error state');
+    expect(session.getStatus()).toBe('closed');
+    await expect(session.send('second')).rejects.toThrow('is closed');
     expect(handle.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate a current terminal error when the iterator crashes while provider send is pending', async () => {
+    let markSendEntered!: () => void;
+    const sendEntered = new Promise<void>((resolve) => {
+      markSendEntered = resolve;
+    });
+    let releaseSend!: () => void;
+    const sendReady = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const handle = createHandle({ id: 'thread-1' });
+    handle.send = vi.fn(async () => {
+      markSendEntered();
+      await sendReady;
+    });
+    handle.isTurnRunning = () => false;
+    handle.close = vi.fn(async () => undefined);
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        let first = true;
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            if (first) {
+              first = false;
+              await sendEntered;
+              return {
+                done: false,
+                value: {
+                  type: 'error',
+                  data: {
+                    message: 'terminal error before provider send settled',
+                    reason: 'original_terminal',
+                    isTerminal: true,
+                  },
+                  source: 'codex',
+                },
+              };
+            }
+            throw new Error('events crashed after terminal error');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalReasons: Array<string | undefined> = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalReasons.push((event.data as { reason?: string }).reason);
+      }
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    const sendPromise = session.send('first');
+    await closed;
+    releaseSend();
+    await sendPromise;
+
+    expect(terminalReasons).toEqual(['original_terminal']);
+  });
+
+  it('does not attribute a queued prior-turn error to a newer non-Codex dispatch', async () => {
+    let releasePriorError!: () => void;
+    const priorErrorReady = new Promise<void>((resolve) => {
+      releasePriorError = resolve;
+    });
+    let releaseCrash!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      releaseCrash = resolve;
+    });
+    let sendEntered!: () => void;
+    const sendReady = new Promise<void>((resolve) => {
+      sendEntered = resolve;
+    });
+    let running = false;
+    const handle = createHandle({ id: 'thread-queued-prior-error', agentKind: 'claude-code' });
+    handle.isTurnRunning = () => running;
+    handle.send = vi.fn(async (message, opts) => {
+      if (message.content === 'first') {
+        running = false;
+        return;
+      }
+      sendEntered();
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        let first = true;
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            if (first) {
+              first = false;
+              await priorErrorReady;
+              return {
+                done: false,
+                value: {
+                  type: 'error',
+                  data: {
+                    message: 'queued prior-turn terminal error',
+                    reason: 'prior_terminal',
+                    isTerminal: true,
+                  },
+                  source: 'claude-code',
+                },
+              };
+            }
+            await crashReady;
+            throw new Error('events crashed during newer dispatch');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-queued-prior-error',
+      agentKind: 'claude-code',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle, 'claude-code').capabilities,
+      logger: createLogger(),
+    });
+    const terminalReasons: Array<string | undefined> = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalReasons.push((event.data as { reason?: string }).reason);
+      }
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    await session.send('first');
+    const secondSend = session.send('second');
+    await sendReady;
+    releasePriorError();
+    await Promise.resolve();
+    releaseCrash();
+    await closed;
+
+    await expect(secondSend).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(terminalReasons).toEqual(['prior_terminal', 'session_event_loop_crashed']);
+  });
+
+  it('reports a crash after a queued prior-turn terminal event when a newer turn is running', async () => {
+    let releasePriorDone!: () => void;
+    const priorDoneReady = new Promise<void>((resolve) => {
+      releasePriorDone = resolve;
+    });
+    let releaseCrash!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      releaseCrash = resolve;
+    });
+    let running = false;
+    const handle = createHandle({ id: 'thread-1' });
+    handle.isTurnRunning = () => running;
+    handle.send = vi.fn(async (message) => {
+      running = message.content === 'second';
+    });
+    handle.close = vi.fn(async () => undefined);
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        let first = true;
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            if (first) {
+              first = false;
+              await priorDoneReady;
+              return { done: false, value: { type: 'done', data: {}, source: 'codex' } };
+            }
+            await crashReady;
+            throw new Error('events crashed during newer turn');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    await session.send('first');
+    running = false;
+    await session.send('second');
+    releasePriorDone();
+    await Promise.resolve();
+    releaseCrash();
+    await closed;
+
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
   });
 
   it('does not call handle.send when close happens during onAccepted', async () => {

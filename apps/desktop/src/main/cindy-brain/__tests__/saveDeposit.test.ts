@@ -90,9 +90,13 @@ describe('SaveDepositVault', () => {
     const originalStatSync = fs.statSync.bind(fs);
     const statSpy = vi.spyOn(fs, 'statSync').mockImplementationOnce((filePath) => {
       const stat = originalStatSync(filePath);
-      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-        ino: stat.ino + 1,
-      }) as fs.Stats;
+      const tamperedIno = stat.ino === 0 ? 1 : 0;
+      return new Proxy(stat, {
+        get(target, property, receiver) {
+          if (property === 'ino') return tamperedIno;
+          return Reflect.get(target, property, receiver);
+        },
+      });
     });
     try {
       await expect(

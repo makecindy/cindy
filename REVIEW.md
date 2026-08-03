@@ -67,6 +67,12 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：`cindy-protocol` 升级、device-link／relay／隧道 payload、IPC allowlist
   等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-and-submodules.md`。
+- **device-link 恢复动作的故障半径**：重试／超时／断链／重连路径的改动，恢复动作的
+  作用半径是否大于故障半径——被控端一条 relay 连接服务同账号全部控制端，单 peer
+  故障不得强拆整条共享连接；扩大半径必须在 PR 描述里给出明确理由，并有多控制端拓扑
+  用例证明其它 peer 零感知。wire 向后兼容 + 单测全绿拦不住这类问题（单测只验证实现
+  忠实于设计，设计选错半径时不会报警）。见
+  `docs/dev-rules/remote-and-mobile-adaptation.md` 的「恢复动作先回答故障半径」。
 - **system prompt 与 Agent 行为**：进入模型 system 段的提示词、tool／MCP 暴露、
   usage 计量。见 `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - **插件沙箱**：`.cindy` 运行时的权限、能力 slot、网络／凭证／文件交接。见
