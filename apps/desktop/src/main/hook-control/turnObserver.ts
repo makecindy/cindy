@@ -31,7 +31,7 @@ import {
   renderActivity,
   setActivityNotice,
 } from '../im/shared/turnActivity.js';
-import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, turnRetryNotice } from '../im/shared/turnRetryNotice.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -395,10 +395,10 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'error' && !isTerminalAgentErrorEvent(ev)) {
-        // 非终止 error = agent 正在自愈(当前只透过载类的自动重试)。turn 没
+        // 非终止 error = agent 正在自愈(仅透已有本地化契约的自动重试)。turn 没
         // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
         // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。
-        const notice = overloadRetryNotice(ev.data);
+        const notice = turnRetryNotice(ev.data);
         if (notice !== null && setActivityNotice(activity, notice)) {
           // ticker 让"第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何
           // 新事件也能看出还在动。

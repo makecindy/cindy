@@ -95,6 +95,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
+    parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({

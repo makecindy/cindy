@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatTerminalRateLimitRetryMessage,
   isTerminalRateLimitRetryExhaustion,
+  parseTerminalRateLimitRetryProgress,
   TERMINAL_RATE_LIMIT_RETRY_REASON,
   terminalRateLimitRetryDelayMs,
 } from './terminal-rate-limit-retry.js';
@@ -136,5 +137,21 @@ describe('terminal rate-limit retry', () => {
     ).toBe(
       'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)',
     );
+    expect(
+      parseTerminalRateLimitRetryProgress(
+        'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)',
+        TERMINAL_RATE_LIMIT_RETRY_REASON,
+      ),
+    ).toEqual({ attempt: 1, maxAttempts: 2 });
+  });
+
+  it.each([
+    ['provider failed (rate-limit-retry 1/2)', 'other-reason'],
+    ['provider failed', TERMINAL_RATE_LIMIT_RETRY_REASON],
+    ['provider failed (rate-limit-retry 0/2)', TERMINAL_RATE_LIMIT_RETRY_REASON],
+    ['provider failed (rate-limit-retry 3/2)', TERMINAL_RATE_LIMIT_RETRY_REASON],
+    ['provider failed (rate-limit-retry 1/2) trailing', TERMINAL_RATE_LIMIT_RETRY_REASON],
+  ])('rejects malformed or mismatched progress: %s', (message, reason) => {
+    expect(parseTerminalRateLimitRetryProgress(message, reason)).toBeNull();
   });
 });

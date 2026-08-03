@@ -109,7 +109,7 @@ import {
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
-import { overloadRetryNotice, terminalErrorText } from './turnRetryNotice';
+import { terminalErrorText, turnRetryNotice } from './turnRetryNotice';
 import {
   toCoreAgentKind,
   readPermissionMode,
@@ -1766,8 +1766,8 @@ export function createTurnRunner(
   /**
    * 非终止 error → 过程区状态行 + 卡片刷新。turn 不收口。
    *
-   * 只对"正在自动重试的过载"出提示(见 turnRetryNotice.ts): 其它非终止 error 的
-   * message 是内部英文串, 没有对应中文表达, 保持既有静默。
+   * 只对已有本地化契约的自动重试出提示(见 turnRetryNotice.ts): 其它非终止
+   * error 的 message 是内部英文串, 没有对应中文表达, 保持既有静默。
    *
    * **要惰性建卡**(与 ensureActivityTicker「ticker 不该是创建卡片的理由」相反):
    * 过载重投只在本 turn 零产出时发生(maker-core 的 currentTurnProducedOutput
@@ -1776,7 +1776,7 @@ export function createTurnRunner(
    * 同一张卡上, 重试耗尽时 handleTurnErrorAsync 会把它 finalize 成失败说明。
    */
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
-    const notice = overloadRetryNotice(event.data);
+    const notice = turnRetryNotice(event.data);
     if (notice === null) return;
     if (!setActivityNotice(turn.activity, notice)) return;
     ensureActivityTicker(turn);
@@ -1919,7 +1919,7 @@ export function createTurnRunner(
         // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
         // 万一那轮重试成功后 agent 零输出收口, thread 里就多出一张只有标题的卡。
         {
-          const notice = overloadRetryNotice(event.data);
+          const notice = turnRetryNotice(event.data);
           if (notice !== null && setActivityNotice(t.activity, notice)) {
             t.streamingHandle?.replace(composeTranspondView(t, false));
           }

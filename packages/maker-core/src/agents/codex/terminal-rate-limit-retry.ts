@@ -13,9 +13,32 @@ export const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
 const TERMINAL_RATE_LIMIT_RETRY_BASE_DELAY_MS = 15_000;
 const TERMINAL_RATE_LIMIT_RETRY_MAX_DELAY_MS = 30_000;
 const TERMINAL_RATE_LIMIT_RETRY_JITTER_RATIO = 0.25;
+const TERMINAL_RATE_LIMIT_RETRY_PROGRESS_RE =
+  /\(rate-limit-retry\s+(\d+)\s*\/\s*(\d+)\)\s*$/;
 
 const RETRY_LIMIT_EXHAUSTED_PATTERN =
   /\b(?:exceeded\s+(?:the\s+)?retry\s+limit|retry\s+limit\s+exceeded|too\s+many\s+failed\s+attempts)\b/i;
+
+/** reason 与 marker 同时命中时，解析终态 429 外层重投进度。 */
+export function parseTerminalRateLimitRetryProgress(
+  message: string,
+  reason?: string | null,
+): { attempt: number; maxAttempts: number } | null {
+  if (reason !== TERMINAL_RATE_LIMIT_RETRY_REASON) return null;
+  const match = TERMINAL_RATE_LIMIT_RETRY_PROGRESS_RE.exec(message);
+  if (!match) return null;
+  const attempt = Number(match[1]);
+  const maxAttempts = Number(match[2]);
+  if (
+    !Number.isSafeInteger(attempt) ||
+    !Number.isSafeInteger(maxAttempts) ||
+    attempt < 1 ||
+    maxAttempts < attempt
+  ) {
+    return null;
+  }
+  return { attempt, maxAttempts };
+}
 
 function responseTooManyFailedAttemptsStatus(
   info: CodexErrorInfo | null | undefined,
