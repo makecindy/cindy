@@ -108,4 +108,32 @@ describe('ContactsSection AI 管理入口', () => {
     await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'settings.contacts.guide.cta' })).toBeNull();
   });
+
+  it('开启处理中及 Codex MCP 刷新延迟时禁止启动空任务', async () => {
+    mocks.settingsGet.mockResolvedValue({ enabled: false, isCustomized: true });
+    let resolveSettingsSet!: (value: { enabled: boolean; codexMcpRefreshed: boolean }) => void;
+    mocks.settingsSet.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSettingsSet = resolve;
+        }),
+    );
+    mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
+    render(<ContactsSection />);
+
+    fireEvent.click(
+      await screen.findByRole('switch', { name: 'settings.contacts.enable.toggleAria' }),
+    );
+
+    const cta = await screen.findByRole('button', { name: 'settings.contacts.guide.cta' });
+    await waitFor(() => expect(mocks.settingsSet).toHaveBeenCalledWith(true));
+    expect((cta as HTMLButtonElement).disabled).toBe(true);
+
+    resolveSettingsSet({ enabled: true, codexMcpRefreshed: false });
+    await waitFor(() => expect((cta as HTMLButtonElement).disabled).toBe(true));
+
+    fireEvent.click(cta);
+    expect(mocks.prefill).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
 });

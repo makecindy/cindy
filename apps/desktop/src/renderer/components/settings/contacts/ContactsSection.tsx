@@ -30,6 +30,7 @@ export function ContactsSection() {
   const navigate = useNavigate();
 
   const [enabled, setEnabled] = useState(false);
+  const [aiSessionReady, setAiSessionReady] = useState(false);
   const [togglePending, setTogglePending] = useState(false);
   const [stats, setStats] = useState<ContactsStats | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -47,7 +48,10 @@ export function ContactsSection() {
   useEffect(() => {
     void contactsService
       .settingsGet()
-      .then((s) => setEnabled(s.enabled))
+      .then((s) => {
+        setEnabled(s.enabled);
+        setAiSessionReady(s.enabled);
+      })
       .catch((err) => log.warn('contacts settingsGet failed', err));
     void reloadStats();
     void contactsService
@@ -66,15 +70,19 @@ export function ContactsSection() {
   const handleToggle = useCallback(
     async (next: boolean) => {
       const prev = enabled;
+      const prevAiSessionReady = aiSessionReady;
       setEnabled(next);
+      // 开启请求完成前不能创建缺少 cindy_contacts 工具的新任务。
+      setAiSessionReady(false);
       setTogglePending(true);
       try {
         const res = await contactsService.settingsSet(next);
         if (res.codexMcpRefreshed === false) {
           // 开关已落盘(Claude 侧下次会话即生效), 但 Codex 正忙软重启失败 —
-          // 明示延迟生效, 不静默报成功(否则用户以为 Codex 也已切换)
+          // 继续沿用已有延迟生效提示，并保持 AI 入口禁用，直到重启或重新切换成功。
           toast.warning(t('settings.contacts.toast.codexRefreshDeferred'));
         } else {
+          setAiSessionReady(next);
           toast.success(
             t(next ? 'settings.contacts.toast.enabled' : 'settings.contacts.toast.disabled'),
           );
@@ -83,19 +91,21 @@ export function ContactsSection() {
         log.warn('contacts settingsSet failed', err);
         toast.error(t(contactsErrorI18nKey(err)));
         setEnabled(prev);
+        setAiSessionReady(prevAiSessionReady);
       } finally {
         setTogglePending(false);
       }
     },
-    [enabled, t],
+    [aiSessionReady, enabled, t],
   );
 
   /** 常驻 AI 管理入口：同一意图按当前库状态推进建库或持续管理。 */
   const startAiSession = useCallback(() => {
+    if (!aiSessionReady) return;
     prefillContactsAiSessionDraft(t('settings.contacts.guide.managementPrompt'));
     setManagerOpen(false);
     navigate('/cc-agent/new');
-  }, [navigate, t]);
+  }, [aiSessionReady, navigate, t]);
 
   const statsLine =
     stats && (stats.people > 0 || stats.orgs > 0 || stats.groups > 0)
@@ -337,9 +347,11 @@ export function ContactsSection() {
             <button
               type="button"
               onClick={startAiSession}
+              disabled={togglePending || !aiSessionReady}
               className={cn(
                 'flex shrink-0 select-none items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
+                'disabled:cursor-not-allowed disabled:opacity-50',
               )}
             >
               <Sparkles size={14} />
@@ -358,7 +370,7 @@ export function ContactsSection() {
         syncPending={syncPending}
         syncSummary={syncSummary}
         onSyncNow={() => void handleSyncNow()}
-        {...(enabled ? { onAiOrganize: startAiSession } : {})}
+        {...(enabled && aiSessionReady ? { onAiOrganize: startAiSession } : {})}
       />
     </div>
   );
