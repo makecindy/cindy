@@ -178,3 +178,33 @@ describe('ErrorBanner overload guidance', () => {
     expect(screen.getByText('chat.errorBanner.overloadRetrying:3/10')).toBeTruthy();
   });
 });
+
+describe('ErrorBanner terminal rate-limit retry guidance', () => {
+  const RATE_LIMIT =
+    'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)';
+
+  it('shows localized rate-limit progress without calling it model overload', () => {
+    render(createElement(ErrorBanner, {
+      error: RATE_LIMIT,
+      errorReason: 'terminal-rate-limit-retry',
+      onRetry: vi.fn(),
+      isRecoverable: true,
+    }));
+
+    expect(screen.getByText('chat.errorBanner.rateLimitRetrying:1/2')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.overloadRetrying:1/2')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+  });
+
+  it('keeps the raw provider error available for diagnosis', () => {
+    render(createElement(ErrorBanner, {
+      error: RATE_LIMIT,
+      errorReason: 'terminal-rate-limit-retry',
+      onRetry: vi.fn(),
+      isRecoverable: true,
+    }));
+
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(RATE_LIMIT)).toBeTruthy();
+  });
+});

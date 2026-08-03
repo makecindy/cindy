@@ -33,6 +33,14 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 
 import { AGENT_OPTIONS, agentOptionOf } from './agentOptions';
 
+/**
+ * 面板期望高度(px): 标题行 ~28 + 每个引擎行 ~36 + 面板 padding ~16。
+ * field 形态据它判断朝下够不够 —— MorphPopover 只按给定 side 钳高、**不做碰撞
+ * 翻转**, 固定 side="bottom" 时字段滚到视口底部会把菜单钳成很矮甚至 0 高,
+ * 用户就选不了引擎(codex review #1490)。
+ */
+const FIELD_PANEL_MIN_H = 28 + AGENT_OPTIONS.length * 36 + 16;
+
 interface AgentSelectProps {
   value: MakerVendor;
   onChange: (next: MakerVendor) => void;
@@ -58,6 +66,32 @@ interface AgentSelectProps {
    * 否则触发器会显示一个列表里不存在的引擎。
    */
   hiddenVendors?: readonly MakerVendor[];
+  /**
+   * 面板弹出方向。工具条在底部所以默认 'top'; 设置面板里的字段在
+   * 页面中部, 往下弹才不遮住自己(与 ModelSelector 的 popoverSide 同口径)。
+   */
+  side?: 'top' | 'bottom';
+  /**
+   * 追加到可及名前的上下文(如「字段名 · 目录别名」)。同屏多行各自一个
+   * 选择器时, 读屏听到的不能全是同一个名字(与 ModelSelector.ariaContext 同规则)。
+   */
+  ariaContext?: string;
+  /**
+   * true = 重选当前项也触发 onChange。给「当前值可能是**继承值**, 重选
+   * 等于把它钉成显式偏好」的场景用(工作目录偏好行); 默认只在真的换了
+   * 引擎时才回调, 不产生空写。
+   */
+  reselectEmitsChange?: boolean;
+  /**
+   * 触发器形态。'toolbar'(默认) = 工具条胶囊, 宽度 hug 内容、面板 196px;
+   * 'field' = 设置页字段, trigger 撑满字段宽并与单行输入同规格, 面板宽度
+   * **绑定 trigger 实测宽度**(DESIGN.md §4 Select & Dropdown 的宽度铁则:
+   * 面板绝不得比触发控件更宽或更窄 —— 直接把工具条形态放进字段时, 短标签
+   * (Claude / Pi)会让 196px 面板明显宽于 trigger, codex review #1490)。
+   */
+  triggerVariant?: 'toolbar' | 'field';
+  /** field 形态的紧凑高(h-9); 与同排 ModelSelector 的 dense 保持一致。 */
+  dense?: boolean;
 }
 
 export function AgentSelect({
@@ -69,11 +103,20 @@ export function AgentSelect({
   iconOnly = false,
   visualVariant = 'default',
   hiddenVendors,
+  side = 'top',
+  ariaContext,
+  reselectEmitsChange = false,
+  triggerVariant = 'toolbar',
+  dense = false,
 }: AgentSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  /** field 形态每次打开前按上下可用空间定的方向; null = 用调用方给的 side。 */
+  const [autoSide, setAutoSide] = useState<'top' | 'bottom' | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const isCreateAgent = visualVariant === 'create-agent';
+  const isField = triggerVariant === 'field';
   const current = agentOptionOf(value);
   // 当前值始终保留 —— 隐藏它会让触发器显示一个列表里不存在的引擎。
   const visibleOptions =
@@ -88,9 +131,43 @@ export function AgentSelect({
     if (disabled) setOpen(false);
   }, [disabled]);
 
+  /**
+   * field 形态: 面板打开期间祖先一滚就关掉。
+   *
+   * MorphPopover 是**形变定位** —— 打开那一刻按触发器的位置算好坐标并钉住(它服务的
+   * composer toolbar 固定在底部, 没有可滚动祖先, 所以够用)。设置页不一样: 内容列本身
+   * 可滚, 滚一下面板就与字段分离、悬在半空(review 指出)。这里不给 MorphPopover 补一套
+   * 跟随定位(那是把工具条的形变语义扩成通用锚点定位, 影响面远超本 PR), 改为在祖先滚动 /
+   * 视口变化时收起 —— 与常见下拉的行为一致, 且不会留下错位的面板。
+   *
+   * capture 阶段监听: scroll 不冒泡, 只有捕获期才能收到祖先滚动容器的事件。
+   */
+  useEffect(() => {
+    if (!isField || !open) return;
+    const close = (): void => setOpen(false);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [isField, open]);
+
+  /**
+   * 朝下空间放得下就朝下(设置字段的自然方向), 否则比较上下取更宽裕的一侧。
+   * 只作用于 field 形态: 工具条永远在底部, 方向由调用方定死。
+   */
+  const resolveFieldSide = (): 'top' | 'bottom' => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return side;
+    const below = window.innerHeight - rect.bottom;
+    if (below >= FIELD_PANEL_MIN_H) return 'bottom';
+    return below >= rect.top ? 'bottom' : 'top';
+  };
+
   const select = (next: MakerVendor) => {
     setOpen(false);
-    if (next !== value) onChange(next);
+    if (next !== value || reselectEmitsChange) onChange(next);
   };
 
   // ↑↓ 在选项间移动(菜单语义);Home/End 跳首尾。Esc / 外部点击由 MorphPopover 兜。
@@ -116,20 +193,42 @@ export function AgentSelect({
 
   const trigger = (
     <button
+      ref={triggerRef}
       type="button"
       disabled={disabled}
       // 阻 mousedown 抢焦点 —— 否则点击时下方 ChatInput 的 :focus-within 边框会瞬间掉色。
       // 键盘 Tab 仍可正常 focus(preventDefault 只阻断鼠标路径)。
       onMouseDown={(e) => e.preventDefault()}
-      onClick={() => setOpen((prev) => (disabled ? false : !prev))}
+      onClick={() => {
+        if (disabled) {
+          setOpen(false);
+          return;
+        }
+        // 每次打开都重算 —— 设置卡可停在滚动视口任意位置。
+        if (isField && !open) setAutoSide(resolveFieldSide());
+        setOpen((prev) => !prev);
+      }}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
-      aria-label={t('newChat.agentSelect.trigger.aria', { agent: current.label })}
+      aria-label={
+        ariaContext
+          ? `${ariaContext} · ${t('newChat.agentSelect.trigger.aria', { agent: current.label })}`
+          : t('newChat.agentSelect.trigger.aria', { agent: current.label })
+      }
       title={current.label}
       className={cn(
-        'flex shrink-0 items-center gap-1.5 rounded-full transition-colors',
-        'h-[30px]',
-        iconOnly ? 'w-[34px] min-w-[34px] justify-center px-0' : 'px-2.5',
+        'flex items-center gap-1.5 rounded-full transition-colors',
+        // 字段形态: 撑满字段、高度与同排选择器对齐, 底色走设置页输入框 token
+        // (与 ModelSelector 的 field trigger 同规格); 工具条形态保持 hug 不变。
+        isField
+          ? cn('w-full min-w-0 px-3', dense ? 'h-9' : 'h-10')
+          : cn(
+              'shrink-0',
+              // 工具条高度是 CREATE AGENT 视觉契约锁定值(见
+              // newMakerCreateAgentVisualContract.test.ts), 保持独立字面量。
+              'h-[30px]',
+              iconOnly ? 'w-[34px] min-w-[34px] justify-center px-0' : 'px-2.5',
+            ),
         isCreateAgent
           ? [
               'border border-[var(--create-agent-control-border)]',
@@ -137,7 +236,10 @@ export function AgentSelect({
             ]
           : [
               'border border-[var(--border-default)]',
-              'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+              // 字段形态用设置页输入框底色; 工具条形态用 composer pill 底色。
+              isField
+                ? 'bg-[var(--settings-input-bg)]'
+                : 'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
               'text-[var(--text-primary)]',
             ],
         // 交互态按变体取:create-agent 有自己的 hover/pressed token(某些主题下
@@ -164,7 +266,12 @@ export function AgentSelect({
           {/* 不用 flex-1:撑满会把 chevron 顶到最右,短引擎名后面拖一片空白。
               文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 mark 光学居中对齐。 */}
           <span
-            className="min-w-0 truncate text-left text-[12px] font-medium leading-none"
+            className={cn(
+              'min-w-0 truncate text-left font-medium leading-none',
+              // 字段形态跟随设置页字号(13px, 同 ModelSelector field trigger);
+              // flex-1 把 chevron 顶到右缘 —— 字段是定宽控件, 不是 hug。
+              isField ? 'flex-1 text-[13px]' : 'text-[12px]',
+            )}
             style={maxLabelWidth ? { maxWidth: maxLabelWidth } : undefined}
           >
             <span className="inline-block translate-y-[0.5px]">{current.label}</span>
@@ -187,9 +294,10 @@ export function AgentSelect({
     <MorphPopover
       open={open && !disabled}
       onOpenChange={(next) => setOpen(disabled ? false : next)}
-      side="top"
+      side={isField ? (autoSide ?? side) : side}
       align="start"
-      panelWidth={196}
+      // 字段形态不传定宽, 改用 trigger 实测宽度(DESIGN.md §4 宽度铁则)。
+      {...(isField ? { panelWidthMode: 'trigger' as const } : { panelWidth: 196 })}
       panelClassName="p-2"
       panelAriaLabel={t('newChat.agentSelect.label')}
       startBg={
@@ -198,7 +306,9 @@ export function AgentSelect({
       startBorderColor={
         isCreateAgent ? 'var(--create-agent-control-border)' : 'var(--border-default)'
       }
-      wrapperClassName="shrink-0"
+      // 字段形态: wrapper 也要撑满, 否则 inline-flex + shrink-0 会把 trigger 的
+      // w-full 压回内容宽, 面板跟着缩 —— 字段就不是字段宽了。
+      wrapperClassName={isField ? 'w-full min-w-0' : 'shrink-0'}
       trigger={trigger}
     >
       <div

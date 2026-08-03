@@ -58,6 +58,18 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
  * 统一按不定论收尾(与 mobile 同语义;desktop 额外把 subscribe / unsubscribe 也
  * 列入——它们同样是 pre-runInvoke 特判应答的控制帧)。超时分类不受影响。
  */
+/**
+ * openLink 的熔断观测名(本地观测标签,不是 wire channel,也刻意**不复用**
+ * DEVICE_LINK_INVOKE.OPEN_LINK——那是 renderer↔main 的 IPC channel 名,两个体系
+ * 语义无关,同值纯属撞名;用 observe: 命名空间隔开,避免误导成 IPC 常量漂移):
+ * link-accept 在被控端 dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常
+ * 回包——成功必须记不定论,不作关熔断的恢复证据(mobile sendOpenLink 同语义,
+ * 那边的事故形态正是凭 link-accept 关熔断后立刻放进订阅+快照突发,3 次超时
+ * 再 open,周期性风暴)。
+ */
+export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:observe:open-link';
+
+
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:media:fetch',
   'device-link:voice:credential-sync',
@@ -65,6 +77,7 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:voice:transcribe',
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  OPEN_LINK_OBSERVATION_CHANNEL,
 ]);
 
 /**
@@ -79,13 +92,45 @@ const BOOTSTRAP_FAN_OUT_CHANNELS: ReadonlySet<string> = new Set([
 const BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS = 250;
 
 /**
- * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;NOT_CONNECTED /
- * relay 层错误 / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
+ * 「该失败已被某个熔断观测席位结算」的本地标记(与 DeviceLinkError.inFlight 同
+ * 模式:错误对象上的进程内旁路字段,不进 wire)。openLink 的 in-flight 复用会让
+ * 同一个物理请求的失败冒泡进多个 guard(发起者的观测 + 加入者的业务 guard),
+ * 不打标记就双记 strike,三批阈值退化(review P2 ×2 收敛检查点:标记是「单次
+ * 物理失败恰好结算一次」不变量的唯一判据,所有 guard 共用)。
+ */
+const BREAKER_OBSERVED_MARKER = Symbol.for('cindy.deviceLink.breakerObserved');
+
+export function markBreakerObserved(err: unknown): void {
+  if (err instanceof Error) {
+    (err as Error & { [BREAKER_OBSERVED_MARKER]?: true })[BREAKER_OBSERVED_MARKER] = true;
+  }
+}
+
+export function isBreakerObservedError(err: unknown): boolean {
+  return err instanceof Error
+    && (err as Error & { [BREAKER_OBSERVED_MARKER]?: true })[BREAKER_OBSERVED_MARKER] === true;
+}
+
+/**
+ * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;**终态 relay 应答**
+ * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
+ * 恢复证据(responded)——「无响应」语义只对无回包成立,relay 已给出终态时应
+ * 让位给对应的终态 UI;presence 未及时翻转的竞态下,若归不定论,熔断 open 后的
+ * 周期探测收到同类终态也永远关不上(review P2)。对**任何** channel(含嵌套
+ * openLink 冒泡到外层业务 channel 的失败)统一适用,失败来源无需特判。
+ * NOT_CONNECTED / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
  */
 export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome {
-  return error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT'
-    ? 'timeout'
-    : 'inconclusive';
+  if (!(error instanceof DeviceLinkError)) return 'inconclusive';
+  if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
+  if (
+    error.code === 'DEVICE_OFFLINE'
+    || error.code === 'REMOTE_DISABLED'
+    || error.code === 'VERSION_MISMATCH'
+  ) {
+    return 'responded';
+  }
+  return 'inconclusive';
 }
 
 /**
@@ -218,10 +263,18 @@ export function createResponsivenessTracker(
       settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
       return result;
     } catch (err) {
+      // 结算所有权(收敛检查点不变量 A):同一个错误对象只允许第一个 settle 的
+      // guard 按真实分类记账,之后立刻打标;openLink in-flight 复用会让同一物理
+      // 失败冒泡进任意多个 guard(observed 发起 + 业务加入者、或多个 unobserved
+      // 业务加入者,跨 cohort 窗口时不同批),后续 guard 一律不定论——
+      // 「单次物理失败恰好结算一次」由结算方原子地声明,与发起方形态无关。
+      // 探测席位上非探测通道的失败同样不定论(与成功侧分类对称)。
       const outcome =
-        wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL
+        isBreakerObservedError(err)
+        || (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL)
           ? 'inconclusive'
           : classifyDeviceSendFailure(err);
+      markBreakerObserved(err);
       settle(deviceId, slot, outcome);
       if (outcome === 'timeout') triggerLinkRecovery(deviceId);
       throw err;

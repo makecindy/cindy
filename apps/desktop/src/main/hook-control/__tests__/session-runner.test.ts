@@ -95,6 +95,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
+    parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -1151,32 +1152,13 @@ describe('进度快照(turn.progress 链路)', () => {
       const p = runner.run(
         baseReq({
           source: { im: 'telegram', userText: 'hi' },
-          laneKind: 'group',
           onProgress: (text: string) => emitted.push(text),
         }),
       );
       await flush();
-      expect(fakeMaker.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ permissionMode: 'ask' }),
-      );
-      const session = await fakeMaker.createSession.mock.results[0].value;
-      const sendOptions = session.send.mock.calls[0]?.[1] as {
-        turnPermissionPolicy?: {
-          origin: { kind: string; channel?: string };
-          forceConfirmToolCall?: (toolName: string, input: unknown) => boolean;
-        };
-      };
-      expect(sendOptions.turnPermissionPolicy?.origin).toMatchObject({
-        kind: 'im',
-        channel: 'telegram',
-      });
-      expect(sendOptions.turnPermissionPolicy?.forceConfirmToolCall?.('file_change', {})).toBe(
-        true,
-      );
       const cb = h.eventCbs.get('sess-new')!;
 
-      // 与 DM(answer-only)不同: 群 lane 只有工具活动、还没有正文时,
-      // 也要发时间线, 群成员能看到"正在干什么"。
+      // 只有工具活动、还没有正文时也要发时间线(DM 与群同款)。
       cb({
         type: 'tool_use',
         data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: '/repo/a.ts' } },
@@ -1199,319 +1181,85 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('Telegram 群复用 Full access 会话时仅在该轮临时切换安全权限档', async () => {
+  it('Telegram 群轮次沿用用户配置的权限档, 不再隐式降档、不挂强确认策略', async () => {
+    // 「完全访问就是完全访问」(Chris 2026-08-03): 此前群轮次会把新会话强制建成
+    // 'ask'、给复用会话每轮临时切档, 并挂破坏性操作强确认 —— 用户在设置里选的
+    // 完全访问在群里静默失效。官方 bot 的群聊定位是引导用户装自己的个人 bot,
+    // 不承担「群里多人共用一个 bot」的权限模型(那套在个人 bot 里另有设计)。
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
-        isNew: false,
         source: { im: 'telegram', userText: 'hi' },
         laneKind: 'group',
+        permissionMode: 'bypassPermissions',
       }),
     );
 
     expect(outcome.status).toBe('ok');
+    // 新会话按用户配置建, 不被替换成 'ask'
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ permissionMode: 'bypassPermissions' }),
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
-  });
-
-  it('Telegram 群按 reservation 时用户已收紧的实时权限档决定不恢复旧 Full access', async () => {
-    const session = makeFakeSession('sess-old');
-    session.send.mockImplementationOnce(
-      async (
-        _msg: unknown,
-        opts: {
-          afterTurnReserved?: () => Promise<void> | void;
-          beforeProviderStart?: () => Promise<void> | void;
-          onAccepted?: () => Promise<void>;
-        },
-      ): Promise<unknown> => {
-        // Simulate the user tightening the live session after meta was read but
-        // before this Telegram turn wins the reservation.
-        await session.setPermissionModeTracked('ask');
-        await opts.afterTurnReserved?.();
-        await opts.beforeProviderStart?.();
-        await opts.onAccepted?.();
-        queueMicrotask(() => h.eventCbs.get('sess-old')?.({ type: 'done', data: null }));
-        return { accepted: true };
-      },
-    );
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome.status).toBe('ok');
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
-    expect(session.setPermissionModeIfUnchanged).not.toHaveBeenCalled();
-    expect(session.permissionModeState.mode).toBe('ask');
-  });
-
-  it('Telegram 群轮次终态同步启动权限恢复并在收口前等完', async () => {
-    const session = makeManualSession('sess-old');
-    let releaseRestore!: () => void;
-    session.setPermissionMode.mockResolvedValueOnce(undefined).mockImplementationOnce(
-      () =>
-        new Promise<undefined>((resolve) => {
-          releaseRestore = () => resolve(undefined);
-        }),
-    );
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-    const pending = runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-    await flush();
-
-    h.eventCbs.get('sess-old')!({ type: 'done', data: null });
-    // The terminal listener starts restore in the same event stack, before
-    // observer.finished can open attachment collection or the next send.
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
-
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await flush();
-    expect(settled).toBe(false);
-
-    releaseRestore();
-    await expect(pending).resolves.toMatchObject({ status: 'ok' });
-  });
-
-  it('Telegram 群后台任务及自动续跑完成前保持安全权限档和 turn lease', async () => {
-    vi.useFakeTimers();
-    try {
-      const session = makeManualSession('sess-old');
-      fakeMaker.createSession.mockResolvedValueOnce(session);
-      const runner = createMakerHookSessionRunner({ log });
-      const pending = runner.run(
-        baseReq({
-          sessionId: 'sess-old',
-          isNew: false,
-          source: { im: 'telegram', userText: 'hi' },
-          laneKind: 'group',
-        }),
-      );
-      await flush();
-
-      const cb = h.eventCbs.get('sess-old')!;
-      cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'running' } });
-      cb({ type: 'done', data: null });
-      await flush();
-
-      const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
-      expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
-      expect(releaseLease).not.toHaveBeenCalled();
-
-      let settled = false;
-      void pending.then(() => {
-        settled = true;
-      });
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(settled).toBe(false);
-      expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
-      expect(releaseLease).not.toHaveBeenCalled();
-
-      cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'completed' } });
-      cb({ type: 'done', data: null });
-      await expect(pending).resolves.toMatchObject({ status: 'ok' });
-      expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
-      expect(releaseLease).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('Telegram 群复用安全权限档会话也在后台续跑完成前持有 turn lease', async () => {
-    fakeMaker.getSessionMeta.mockResolvedValueOnce({
-      workDir: 'D:/repo',
-      model: 'meta-model',
-      sdkSessionId: 'sdk-1',
-      agentKind: 'claude-code',
-      permissionMode: 'ask',
-    });
-    const session = makeManualSession('sess-old');
-    await session.setPermissionModeTracked('ask');
-    session.setPermissionMode.mockClear();
-    session.setPermissionModeTracked.mockClear();
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-    const pending = runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-    await flush();
-
-    const cb = h.eventCbs.get('sess-old')!;
-    cb({ type: 'agent_task_update', data: { taskId: 'bg-safe', status: 'running' } });
-    cb({ type: 'done', data: null });
-    await flush();
-
-    const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
-    expect(session.acquireTurnLease).toHaveBeenCalledOnce();
+    // 不再挂 turnPermissionPolicy(它在 bypass 档下会被 maker fail-closed 拒绝,
+    // 正是当初必须降档的原因)
+    const sendOptions = session.send.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(sendOptions.turnPermissionPolicy).toBeUndefined();
+    // afterTurnReserved 仍在, 但只用来取 turn lease(见另一条用例) —— 权限档一律不碰
     expect(session.setPermissionMode).not.toHaveBeenCalled();
-    expect(releaseLease).not.toHaveBeenCalled();
+    expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
+  });
 
-    cb({ type: 'agent_task_update', data: { taskId: 'bg-safe', status: 'completed' } });
-    cb({ type: 'done', data: null });
-    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+  it('Telegram 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async () => {
+    // lease 与权限档是两件事: 上一版把它跟临时降档一起删了, 于是「前台 done →
+    // 后台任务续跑」的空窗里 Desktop 轮次会被放进来共享 session 事件流 / origin /
+    // 交互路由(codex review #1490)。这里锁住「取了、且不早放」。
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
+    await flush();
+
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const release = session.acquireTurnLease.mock.results[0]?.value as ReturnType<typeof vi.fn>;
+    expect(session.acquireTurnLease).toHaveBeenCalledTimes(1);
+    // turn 还在跑 —— 不许提前释放
+    expect(release).not.toHaveBeenCalled();
+
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    await p;
+    expect(release).toHaveBeenCalled();
+  });
+
+  it('Telegram DM 轮次不取 turn lease(独占只为群的后台续跑窗口)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'dm' }));
+    await flush();
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.acquireTurnLease).not.toHaveBeenCalled();
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    await p;
+  });
+
+  it('Telegram 群复用会话不再临时切换权限档', async () => {
+    const session = makeFakeSession('sess-old');
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        isNew: false,
+        sessionId: 'sess-old',
+        laneKind: 'group',
+        source: { im: 'telegram', userText: 'hi' },
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
     expect(session.setPermissionMode).not.toHaveBeenCalled();
-    expect(releaseLease).toHaveBeenCalledOnce();
-  });
-
-  it('Telegram 群轮次结束时不覆盖用户并发选择的更严格权限档', async () => {
-    const session = makeFakeSession('sess-old');
-    session.send.mockImplementationOnce(
-      async (
-        _msg: unknown,
-        opts: {
-          afterTurnReserved?: () => Promise<void> | void;
-          beforeProviderStart?: () => Promise<void> | void;
-          onAccepted?: () => Promise<void>;
-        },
-      ): Promise<unknown> => {
-        await opts.afterTurnReserved?.();
-        await session.setPermissionModeTracked('auto');
-        await opts.beforeProviderStart?.();
-        await opts.onAccepted?.();
-        queueMicrotask(() => h.eventCbs.get('sess-old')?.({ type: 'done', data: null }));
-        return { accepted: true };
-      },
-    );
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome.status).toBe('ok');
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['auto']]);
-    expect(session.setPermissionModeIfUnchanged).toHaveBeenCalledOnce();
-    expect(session.permissionModeState.mode).toBe('auto');
-  });
-
-  it('Telegram 群复用会话发送失败时也恢复原权限档', async () => {
-    const session = makeFakeSession('sess-old');
-    session.send.mockImplementationOnce(
-      async (
-        _msg: unknown,
-        opts: { afterTurnReserved?: () => Promise<void> | void },
-      ): Promise<never> => {
-        await opts.afterTurnReserved?.();
-        throw new Error('send failed');
-      },
-    );
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome).toMatchObject({ status: 'error', errorMessage: 'send failed' });
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
-  });
-
-  it('Telegram 群复用会话权限恢复失败时重试，避免 live 状态与持久配置漂移', async () => {
-    const session = makeFakeSession('sess-old');
-    session.setPermissionMode
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('restore transport failed'))
-      .mockResolvedValueOnce(undefined);
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome.status).toBe('ok');
-    expect(session.setPermissionMode.mock.calls).toEqual([
-      ['ask'],
-      ['bypassPermissions'],
-      ['bypassPermissions'],
-    ]);
-    expect(fakeMaker.closeSession).not.toHaveBeenCalled();
-  });
-
-  it('Telegram 群复用会话权限恢复连续失败时失效 live handle', async () => {
-    const session = makeFakeSession('sess-old');
-    session.setPermissionMode
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('restore transport failed'))
-      .mockRejectedValueOnce(new Error('restore retry failed'));
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome.status).toBe('ok');
-    expect(h.withRehydrateCloseSuppressed).toHaveBeenCalledWith('sess-old', expect.any(Function));
-    expect(fakeMaker.closeSession).toHaveBeenCalledWith('sess-old');
-  });
-
-  it('Telegram 群复用会话 busy 时不改动正在运行桌面轮次的权限档', async () => {
-    const session = makeFakeSession('sess-old');
-    session.send.mockRejectedValueOnce(new Error('session is already running'));
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-
-    const outcome = await runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-
-    expect(outcome).toMatchObject({
-      status: 'error',
-      errorMessage: 'session is already running',
-    });
-    expect(session.setPermissionMode).not.toHaveBeenCalled();
+    expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
   });
 
   it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {
@@ -1575,54 +1323,6 @@ describe('进度快照(turn.progress 链路)', () => {
       expect(outcome.status).toBe('ok');
       expect(outcome.finalText).toBe('结论是……');
       expect(emitted).toHaveLength(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('Telegram draft 只流式输出正文，不把会重排的 thinking/tool timeline 塞进 Rich Message', async () => {
-    vi.useFakeTimers();
-    try {
-      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
-        makeManualSession(opts.id ?? 'sess-x'),
-      );
-      const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
-      const p = runner.run(
-        baseReq({
-          source: { im: 'telegram', userText: 'hello' },
-          onProgress: (text: string) => emitted.push(text),
-        }),
-      );
-      await flush();
-
-      const cb = h.eventCbs.get('sess-new')!;
-      cb({
-        type: 'tool_use',
-        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: '/repo/a.ts' } },
-      });
-      cb({ type: 'thinking', data: { stage: 'final', blockId: 't-1', text: '检查实现' } });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual([]);
-
-      cb({ type: 'text', data: { text: '**结论**', isFinal: false } });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual(['**结论**']);
-
-      // Later activity-only ticks must not resend or rewrite the same draft.
-      cb({
-        type: 'tool_use',
-        data: { toolUseId: 'test-1', toolName: 'Bash', input: { command: 'pnpm test' } },
-      });
-      await vi.advanceTimersByTimeAsync(6_500);
-      expect(emitted).toEqual(['**结论**']);
-
-      cb({ type: 'text', data: { text: '已完成。', isFinal: false } });
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(emitted).toEqual(['**结论**', '**结论**已完成。']);
-
-      cb({ type: 'done', data: null });
-      await p;
     } finally {
       vi.useRealTimers();
     }
@@ -1750,7 +1450,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('Telegram 草稿在零正文时也给出重试提示, 有正文后只发正文', async () => {
+  it('Telegram DM 与群同一套过程区: 工具时间线在上正文在下', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -1767,16 +1467,32 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
 
+      // 零产出的过载重试: 与群同款的“工作中 + 状态行”, 不再是裸文本一行。
       cb({
         type: 'error',
         data: { message: 'model is at capacity (auto-retry 1/4)', isTerminal: false },
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual(['模型服务繁忙，正在自动重试（1/4）…']);
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toContain('⚙️ 工作中');
+      expect(emitted[0]).toContain('⏳ 模型服务繁忙，正在自动重试（1/4）…');
 
+      // 工具调用在 DM 也可见(本次统一的核心): 旧行为这里什么都不发。
+      cb({
+        type: 'tool_use',
+        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: 'D:/repo/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted.at(-1)).toContain('读取 a.ts');
+      expect(emitted.at(-1)).toContain('工作中 · 1 项');
+
+      // 有正文后仍保留过程区: 时间线在上, 正文在下(与群 lane 逐字同口径)。
       cb({ type: 'text', data: { text: '结论。', isFinal: false } });
       await vi.advanceTimersByTimeAsync(1_500);
-      expect(emitted.at(-1)).toBe('结论。');
+      const last = emitted.at(-1)!;
+      expect(last).toContain('读取 a.ts');
+      expect(last).toContain('结论。');
+      expect(last.indexOf('读取 a.ts')).toBeLessThan(last.indexOf('结论。'));
 
       cb({ type: 'done', data: null });
       await p;
@@ -2175,7 +1891,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
-      baseReq({ source: { im: 'telegram', userText: 'hello' }, laneKind: 'dm' }),
+      baseReq({ source: { im: 'telegram', userText: 'hello' } }),
     );
 
     expect(outcome.status).toBe('ok');
@@ -2315,7 +2031,6 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   it('终态回调抛错时仍拆监听并 settle finished', async () => {
     const session = makeManualSession('sess-terminal-callback');
     const observer = observeHookTurn(session as never, {
-      answerOnlyProgress: false,
       onTurnTerminal: () => {
         throw new Error('restore failed');
       },

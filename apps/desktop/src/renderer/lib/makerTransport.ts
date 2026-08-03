@@ -89,16 +89,51 @@ function invokeRemote(deviceId: string, channel: string, args: unknown[]): Promi
   return window.electronAPI.deviceLink.invoke(deviceId, channel, args);
 }
 
-/** 远程被控设备的 maker 操作适配器:每个方法把入参原样隧道到对应 channel。 */
+type SetModelArgs = Parameters<FullMaker['setModel']>;
+
+/**
+ * maker:set-model 的 wire 参数不能直接原样转发：Device Link 通过 JSON 传数组，
+ * undefined 会变成 null。保留中间参数的 null 占位，但裁掉尾部多余的 undefined，
+ * 使被控端能区分 providerId / revision / selection 的位置而不收到假的尾参。
+ */
+function buildRemoteSetModelArgs(args: SetModelArgs): unknown[] {
+  const [sessionId, model, providerId, expectedAgentSwitchRevision, selection] = args;
+  if (
+    providerId === undefined &&
+    (expectedAgentSwitchRevision !== undefined || selection !== undefined)
+  ) {
+    throw new Error(
+      '[INVALID_PARAMS] providerId is required when expectedAgentSwitchRevision or selection is provided',
+    );
+  }
+  const wireArgs: unknown[] = [sessionId, model];
+  if (
+    providerId !== undefined ||
+    expectedAgentSwitchRevision !== undefined ||
+    selection !== undefined
+  ) {
+    wireArgs.push(providerId === undefined ? null : providerId);
+  }
+  if (expectedAgentSwitchRevision !== undefined || selection !== undefined) {
+    wireArgs.push(
+      expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision,
+    );
+  }
+  if (selection !== undefined) wireArgs.push(selection);
+  return wireArgs;
+}
+
+/** 远程被控设备的 maker 操作适配器:每个方法把入参隧道到对应 channel。 */
 function remoteMakerApi(deviceId: string): RoutableMaker {
-  // 入参顺序与 window.electronAPI.maker.* / maker:* handler 完全一致,原样转发即可。
+  // 除 setModel 外，入参顺序与 window.electronAPI.maker.* / maker:* handler 完全一致。
   const t =
     (channel: string) =>
     (...args: unknown[]): Promise<unknown> =>
       invokeRemote(deviceId, channel, args);
   return {
     send: t('maker:send') as FullMaker['send'],
-    setModel: t('maker:set-model') as FullMaker['setModel'],
+    setModel: (async (...args: SetModelArgs) =>
+      invokeRemote(deviceId, 'maker:set-model', buildRemoteSetModelArgs(args))) as FullMaker['setModel'],
     switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
     getSessionAgentSwitchIntent: t(
       'maker:get-session-agent-switch-intent',

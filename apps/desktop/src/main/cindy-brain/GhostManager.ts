@@ -7,6 +7,8 @@ import JSZip from 'jszip';
 import {
   GHOST_MANIFEST_FILE,
   GHOST_LOCALE_MAX_BYTES,
+  GHOST_ICON_MAX_BYTES,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
@@ -34,12 +36,7 @@ import { checkSkillMdConsistency } from './skillSlot.js';
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_NODE_CINDY_FILE_BYTES = 128 * 1024 * 1024;
 /** 身份卡本身只应是小 JSON；先限流读取，避免在识别包类型前被单文件撑爆内存。 */
-const MAX_GHOST_MANIFEST_BYTES = 256 * 1024;
-/**
- * icon 文件大小上限。icon 以 data URL 形态随 ghosts:list(sendSync)下发,
- * 上限同时保护装载与首帧同步 IPC 的载荷体积。
- */
-const MAX_GHOST_ICON_BYTES = 512 * 1024; // 512 KB
+const MAX_GHOST_MANIFEST_BYTES = GHOST_INSTALL_MANIFEST_MAX_BYTES;
 /** 解压后总大小/条目数上限；Node 包允许携带已打包 CLI，但仍有硬闸。 */
 export const MAX_BASIC_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
 export const MAX_NODE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
@@ -236,7 +233,7 @@ export class GhostManager {
       // statSync 后再 readFileSync 是两次独立打开:并发方可在其间把 icon 换成
       // 指向宿主任意文件的链接,字节会被包成 dataURL 经 IPC 送进 Renderer。
       // 单句柄限量闸拒链接、限大小;containWithin 堵中间目录链接。
-      const bytes = readBoundedFileNoFollowSync(iconPath, MAX_GHOST_ICON_BYTES, {
+      const bytes = readBoundedFileNoFollowSync(iconPath, GHOST_ICON_MAX_BYTES, {
         containWithin: fs.realpathSync(dir),
       });
       if (bytes === null) {
@@ -527,14 +524,14 @@ export class GhostManager {
       try {
         iconData = await readZipEntryBufferWithLimit(
           iconEntry,
-          MAX_GHOST_ICON_BYTES,
+          GHOST_ICON_MAX_BYTES,
           'icon',
         );
       } catch {
         return {
           rejection: {
             code: 'file-invalid',
-            reason: `icon 过大(上限 ${MAX_GHOST_ICON_BYTES} 字节)`,
+            reason: `icon 过大(上限 ${GHOST_ICON_MAX_BYTES} 字节)`,
           },
         };
       }

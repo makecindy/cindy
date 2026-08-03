@@ -1325,6 +1325,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 子窗口根组件挂载握手(main 侧 ensureOpen 等它)。 */
@@ -1337,6 +1338,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     }): void => ipcRenderer.send('maker:rsb-window:set-context', ctx),
     onStateChanged: fanOutRsbWindowStateChanged,
@@ -2678,11 +2680,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openChatGPTApp: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('shell:open-chatgpt-app'),
 
-  // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
-  // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。main 端会再做
-  // 一次扩展名白名单校验和 isPathAllowed 安全校验。
-  openFileInBrowser: (filePath: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('shell:open-file-in-browser', filePath),
+  // file-chip 传绝对路径;内置浏览器传完整本地 file:// URL 以保留 query/hash。
+  // main 端统一解析并做扩展名白名单与 isPathAllowed 安全校验。
+  openFileInBrowser: (filePathOrUrl: string): Promise<{ success: true }> =>
+    ipcRenderer.invoke('shell:open-file-in-browser', filePathOrUrl),
 
   // ── 系统级通知（CC Agent session 状态变更）──
   // kind: 'done' = 真正完成；'error' = 执行失败；'needs-reply' = 等用户回复 ask/permission/plan-review。

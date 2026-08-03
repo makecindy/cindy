@@ -71,13 +71,13 @@ export interface RemoteSessionReconnectAttempt {
   attempt: number;
   maxAttempts: number;
   /**
-   * 重试原因。`'overload'` = 上游模型没有可用容量、agent 正在退避重投
-   * (maker-core 的 `(auto-retry N/M)` 标记); 缺省 / `'reconnect'` = 传输层重连。
+   * 重试原因。`'overload'` = 上游模型没有可用容量；`'rate-limit'` = Codex daemon
+   * 已耗尽内部 retry budget 后的受限外层重投；缺省 / `'reconnect'` = 传输层重连。
    *
    * 刻意复用同一个字段而不是新加一个: 这个 attempt 有 6 处清理点(turn 边界 / 快照 /
    * 收口 / 活动流), 拆成两个字段就得在每处各清一次, 漏一处就会残留一个假状态。
    */
-  kind?: 'reconnect' | 'overload';
+  kind?: 'reconnect' | 'overload' | 'rate-limit';
 }
 
 interface SessionMessageSyncMarker {
@@ -2355,7 +2355,10 @@ export const remoteSessionStore = {
     if (type === 'error') {
       const data = isRecord(event.data) ? event.data : null;
       const reconnectAttempt = data?.willRetry === true
-        ? parseReconnectAttemptMessage(readString(data, 'message') ?? '')
+        ? parseReconnectAttemptMessage(
+            readString(data, 'message') ?? '',
+            readString(data, 'reason'),
+          )
         : null;
       const current = readSessionRunStatus(sessionId);
       const changed = writeSessionRunStatus(sessionId, {
@@ -2796,17 +2799,30 @@ function parseAttemptPair(
 /**
  * 非终止 error 的 message → 重试进度。
  *
- * 两类各有自己的标记:
+ * 三类各有自己的标记:
  *  - 传输层重连: `Reconnecting... N/M`;
  *  - 上游过载退避重投: `(auto-retry N/M)`(maker-core 的
  *    agents/shared/overload-error.ts 统一后缀, Codex 与 Claude 两侧同款)。
+ *  - daemon 终态 429 外层重投: reason=`terminal-rate-limit-retry` +
+ *    `(rate-limit-retry N/M)`；reason 与 marker 必须同时命中。
  *
- * 后者不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
+ * 过载 marker 不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
  * 是在等上游容量(review #844 codex P1)。这里刻意在 mobile 侧独立实现一份判定, 与
  * renderer 的 utils/overloadError.ts 同规 —— maker-core 是 desktop/node 侧包, 不跨
  * bundle 共享。
  */
-function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
+const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
+
+function parseReconnectAttemptMessage(
+  message: string,
+  reason?: string | null,
+): RemoteSessionReconnectAttempt | null {
+  if (reason === TERMINAL_RATE_LIMIT_RETRY_REASON) {
+    const rateLimit = parseAttemptPair(
+      /\(rate-limit-retry\s+(\d+)\s*\/\s*(\d+)\)\s*$/i.exec(message),
+    );
+    return rateLimit ? { ...rateLimit, kind: 'rate-limit' } : null;
+  }
   const reconnect = parseAttemptPair(
     /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message),
   );

@@ -6,6 +6,8 @@
 //     · latest.runtimeVersion === 当前 runtimeVersion → 无需整包(JS OTA 通道会处理);
 //     · 不同 → 原生层变了,JS OTA 覆盖不到 → 引导用户打开 release record 的正常安装入口。
 // - minVersion(可选)用于强制更新:当前 version 低于它则阻断使用、只留"去更新"。
+//   强更判定**不经过 runtimeVersion 门闸**:门槛由服务端按 version 下发,同 runtimeVersion
+//   的旧构建也必须能被强更(否则"发布链写了 minVersion 却对同指纹装机无效")。
 
 /** mobile-update-server `/latest` 返回的整包版本记录(release.json 透传)。 */
 export interface LatestReleaseRecord {
@@ -98,8 +100,14 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * 判定是否需要引导整包更新。核心信号是 runtimeVersion 不一致。
- * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)或 `/latest` 无效 → 一律视为无更新。
+ * 判定是否需要引导整包更新。两条独立信号:
+ * - runtimeVersion 不一致 → 有整包更新(可跳过的普通提示);
+ * - 当前 version < minVersion → 强更,**与 runtimeVersion 是否一致无关**。
+ *   服务端可以对某个已发布版本事后下发门槛,把同指纹的问题构建也挡住;
+ *   反过来说,同 runtimeVersion 命中强更时 target.runtimeVersion 就等于当前值,
+ *   消费方不得把它当作"换了指纹"的证据。
+ * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)、拿不到当前 version 或
+ * `/latest` 无效 → 一律视为无更新(比不出来就不挡人,fail-open)。
  */
 export function evaluateBundleUpdate({
   currentRuntimeVersion,
@@ -112,13 +120,22 @@ export function evaluateBundleUpdate({
   const current = String(currentRuntimeVersion ?? '').trim();
   if (!current) return NO_UPDATE;
 
-  if (record.runtimeVersion === current) return NO_UPDATE;
-
+  // 强更要求这条记录本身**能被满足**:
+  // - 带 version:拿不到目标版本就无法证明"装上它就能解除阻断"(阻断态自愈全靠这个
+  //   可比较的版本,见 forcedUpdateRecheck 的新鲜度门);
+  // - minVersion ≤ version:否则唯一提供的安装目标仍低于门槛,用户装完照旧被强更,
+  //   阻断屏成了没有出口的死屋,只能等运维改指针。
+  // 发布链侧 assertMinVersionUsable 已经保证这两条,这里是客户端兜底(手工改过的 / 历史
+  // 遗留的指针也不能把人关死):记录不自洽时退化成可跳过的普通更新提示。
   const forced = Boolean(
     record.minVersion &&
+    record.version &&
     currentVersion &&
-    compareVersions(String(currentVersion), record.minVersion) < 0,
+    compareVersions(String(currentVersion), record.minVersion) < 0 &&
+    compareVersions(record.version, record.minVersion) >= 0,
   );
+
+  if (!forced && record.runtimeVersion === current) return NO_UPDATE;
 
   return {
     needsUpdate: true,

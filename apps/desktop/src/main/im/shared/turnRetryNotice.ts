@@ -17,7 +17,8 @@
  * currentTurnProducedOutput 守卫), 于是那段退避窗口(交互式约 22-38s)里过程区
  * 与正文都是空的, 渠道那条占位消息一个字都不变 —— 用户看到的就是"卡死了"。
  *
- * 只认过载一类, 其它非终止 error(429 / 5xx / 网络重连等)保持既有静默行为:
+ * 只认已有本地化契约的过载与终态 429 外层重投；其它非终止 error(普通 429 /
+ * 5xx / 网络重连等)保持既有静默行为:
  * 它们的 message 是内部英文串, 渠道侧没有对应的中文表达, 贸然透出等于把裸英文
  * 推给用户(这也是 maker-core 侧 claude translator 只透过载类的同一条理由)。
  * 将来要放开某一类, 在这里按 kind 补一条文案即可, 不要直接外发原文。
@@ -27,7 +28,24 @@
  * (见 docs/dev-rules/engineering-conventions.md §5)。
  */
 
-import { parseOverloadError, parseOverloadRetryProgress } from '@cindy/maker-core';
+import {
+  parseOverloadError,
+  parseOverloadRetryProgress,
+  parseTerminalRateLimitRetryProgress,
+} from '@cindy/maker-core';
+
+/** 已知的非终止自动重试事件 -> 渠道侧本地化进度；其它错误保持静默。 */
+export function turnRetryNotice(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const record = data as { message?: unknown; reason?: unknown };
+  const message = typeof record.message === 'string' ? record.message : '';
+  const reason = typeof record.reason === 'string' ? record.reason : undefined;
+  const rateLimitProgress = parseTerminalRateLimitRetryProgress(message, reason);
+  if (rateLimitProgress) {
+    return `请求受到限流，正在自动重试（${rateLimitProgress.attempt}/${rateLimitProgress.maxAttempts}）…`;
+  }
+  return overloadRetryNotice(data);
+}
 
 /**
  * 非终止 error 事件的 data -> 状态说明文案; 不是"正在自动重试的过载错误"时返回

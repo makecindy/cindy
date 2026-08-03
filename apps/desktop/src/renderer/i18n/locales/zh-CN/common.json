@@ -1,5 +1,6 @@
 {
   "ipcError": {
+    "INVALID_PARAMS": "参数无效，请检查后重试。",
     "SESSION_RUNNING": "当前任务正在运行，请稍后再试。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任务中运行，本次来源切换未生效（本任务仍使用原来源）。等它结束后再试。",
@@ -2980,7 +2981,8 @@
           "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
           "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
           "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
-          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
+          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。",
+          "officialHook": "官方 bot 的新对话会使用这组 Agent 和模型；Telegram 与 X 共用这一组，Slack 用它自己那份（在 Slack 卡里配）。权限模式按目录在上方「工作目录映射」里设置。已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -5564,6 +5566,7 @@
       "networkAutoRetrying": "网络异常，正在自动重试…",
       "networkReconnecting": "网络连接中断，正在重新连接（{{attempt}}/{{maxAttempts}}）…",
       "overloadRetrying": "模型服务繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
+      "rateLimitRetrying": "请求受到限流，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "模型服务繁忙，上游暂时没有可用容量。可点击「重试」，或换一个模型。",
       "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
       "networkShowRaw": "查看原始错误",
@@ -5914,6 +5917,11 @@
       "openInBrowser": "在浏览器中查看",
       "fileCopied": "文件已复制",
       "pathCopied": "路径已复制",
+      "BROWSER_FILE_INVALID_TARGET": "本地页面路径无效",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "不允许访问该路径",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "该文件类型无法在浏览器中打开",
+      "BROWSER_FILE_NOT_FOUND": "未找到本地页面",
+      "BROWSER_FILE_OPEN_FAILED": "在浏览器中打开失败",
       "openInBrowserFailed": "在浏览器中打开失败",
       "openLinkFailed": "打开链接失败",
       "anchorNotFound": "未找到对应标题",

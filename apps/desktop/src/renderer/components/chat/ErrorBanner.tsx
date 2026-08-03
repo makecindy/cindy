@@ -41,6 +41,7 @@ import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
@@ -254,6 +255,7 @@ export function ErrorBanner({
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
+  const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
@@ -310,6 +312,13 @@ export function ErrorBanner({
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
     displayError = t('chat.errorBanner.gatewayQuotaExhausted');
+  } else if (terminalRateLimitRetryProgress) {
+    // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
+    // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
+    displayError = t('chat.errorBanner.rateLimitRetrying', {
+      attempt: terminalRateLimitRetryProgress.attempt,
+      maxAttempts: terminalRateLimitRetryProgress.maxAttempts,
+    });
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -493,7 +502,10 @@ export function ErrorBanner({
             {t('chat.errorBanner.budgetModelHint')}
           </span>
         )}
-        {(isNetworkishError || isOverloadError || isClaudeGatewayOpusPlanMismatch) && (
+        {(isNetworkishError ||
+          isOverloadError ||
+          terminalRateLimitRetryProgress ||
+          isClaudeGatewayOpusPlanMismatch) && (
           // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
           // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
