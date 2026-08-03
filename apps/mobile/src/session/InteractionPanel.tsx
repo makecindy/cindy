@@ -38,9 +38,11 @@ import {
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   resolveInteractionResilient,
+  isPendingInteractionCollapsed,
   isPlanReviewResolveBusy,
   interactionKind,
   normalizeAskQuestions,
+  pendingInteractionSummaryText,
   planReviewFilePath,
   planReviewPlan,
   readRequestId,
@@ -74,6 +76,9 @@ import { contentToPreview } from '@/utils/contentPreview';
 
 const PLAN_PREVIEW_LINE_HEIGHT = 20;
 
+/** 未受控(没接会话页收起态)时的空集合,常量化避免每帧换引用。 */
+const EMPTY_COLLAPSED_REQUEST_IDS: readonly string[] = [];
+
 /**
  * 有本地化文案的 interaction kind 白名单(与 interaction.json 的 `kinds` 键一一对应)。
  *
@@ -98,30 +103,36 @@ type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
 export function InteractionPanel({
   safeAreaBottomInset = 0,
+  collapsedRequestIds,
   deviceId,
   fillAvailableHeight = false,
   sessionId,
   interactions,
   activeRequestId: controlledActiveRequestId,
   onActiveRequestIdChange,
+  onToggleCollapsed,
   planViewerState,
   onPlanViewerStateChange,
   onError,
   readOnlyReason,
 }: {
   safeAreaBottomInset?: number;
+  /** 已收起的 requestId(会话页持有,见 interactionModel 的收起态注释)。 */
+  collapsedRequestIds?: readonly string[];
   deviceId: string;
   fillAvailableHeight?: boolean;
   sessionId: string;
   interactions: PendingInteraction[];
   activeRequestId?: string | null;
   onActiveRequestIdChange?(requestId: string | null): void;
+  onToggleCollapsed?(requestId: string): void;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
   readOnlyReason?: string | null;
   onError(message: string | null): void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const { t } = useTranslation();
   const sortedInteractions = useMemo(
     () => sortPendingInteractions(interactions),
@@ -217,9 +228,54 @@ export function InteractionPanel({
       </View>
     );
   }
+  // 收起 = 「这条我先不答,让我看电脑端的输出」。整块 surface 只留一条 bar:再留着
+  // 队列头就还是两层结构,消息流照样看不到几行。
+  const collapsed = isPendingInteractionCollapsed(
+    collapsedRequestIds ?? EMPTY_COLLAPSED_REQUEST_IDS,
+    activeRequestIdForPresentation,
+  );
+  const canToggleCollapsed = !!onToggleCollapsed && !!activeRequestIdForPresentation;
+  const toggleCollapsed = () => {
+    if (!activeRequestIdForPresentation) return;
+    onToggleCollapsed?.(activeRequestIdForPresentation);
+  };
+  const summaryText = pendingInteractionSummaryText(activeInteraction);
+  if (collapsed && canToggleCollapsed) {
+    return (
+      <View style={[styles.root, rootLayoutStyle]} testID="interaction.panel">
+        <InteractionTouchButton
+          accessibilityLabel={t('interaction.panel.expandPendingCard', {
+            title: summaryText ?? activeQueuePresentation.title,
+          })}
+          onPress={toggleCollapsed}
+          style={[styles.card, styles.collapsedInteractionBar, { paddingHorizontal: touchLayout.cardPadding }]}
+          testID="interaction.panel.collapsedBar"
+        >
+          <View style={styles.collapsedInteractionText}>
+            <Text style={styles.collapsedInteractionLabel}>{activeQueuePresentation.title}</Text>
+            {summaryText ? (
+              <Text numberOfLines={1} style={styles.collapsedInteractionTitle}>{summaryText}</Text>
+            ) : null}
+          </View>
+          <View style={styles.compactHeaderActions}>
+            {activeQueuePresentation.totalCount > 1 ? (
+              <Text style={styles.collapsedInteractionMeta} testID="interaction.panel.collapsedCount">
+                {Math.max(0, selectedQueueIndex) + 1}/{activeQueuePresentation.totalCount}
+              </Text>
+            ) : null}
+            <Text style={styles.collapsedInteractionMeta}>{t('interaction.panel.collapsedHint')}</Text>
+            <View style={styles.iconControl}>
+              <Plus color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            </View>
+          </View>
+        </InteractionTouchButton>
+      </View>
+    );
+  }
   return (
     <View style={[styles.root, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
       <PendingTaskHeader
+        onCollapse={canToggleCollapsed ? toggleCollapsed : undefined}
         onSelectRequest={setActiveRequestId}
         presentation={activeQueuePresentation}
         touchLayout={touchLayout}
@@ -277,15 +333,18 @@ function resolveButtonLayoutStyle(
 }
 
 function PendingTaskHeader({
+  onCollapse,
   onSelectRequest,
   presentation,
   touchLayout,
 }: {
+  onCollapse?(): void;
   onSelectRequest(requestId: string | null): void;
   presentation: ReturnType<typeof buildPendingInteractionQueuePresentation>;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const { t } = useTranslation();
   const activeIndex = Math.max(0, presentation.items.findIndex((item) => item.active));
   const nextItem = presentation.items.length > 1
@@ -317,6 +376,22 @@ function PendingTaskHeader({
             <Text style={styles.taskCountText}>
               ‹ {activeIndex + 1}/{presentation.totalCount} ›
             </Text>
+          </InteractionTouchButton>
+        ) : null}
+        {/*
+          收起入口带可见文字:此前它是卡片里一个没有标签的「—」图标,用户看不出那是
+          「先不答、让我看输出」的出口(线上反馈)。放在队列头则三类卡通用,不再各自
+          实现一套收起。
+        */}
+        {onCollapse ? (
+          <InteractionTouchButton
+            accessibilityLabel={t('interaction.panel.collapsePendingCard')}
+            onPress={onCollapse}
+            style={[styles.taskCollapseButton, { minHeight: touchLayout.taskCountPillMinHeight }]}
+            testID="interaction.panel.collapseButton"
+          >
+            <Minus color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            <Text style={styles.taskCollapseText}>{t('interaction.panel.collapse')}</Text>
           </InteractionTouchButton>
         ) : null}
       </View>
@@ -653,7 +728,6 @@ function AskUserQuestionCard({
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [customInput, setCustomInput] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
   const presentation = useMemo(() => buildAskQuestionReviewPresentation({
     currentIndex,
     questions,
@@ -669,7 +743,6 @@ function AskUserQuestionCard({
     setSelectedLabels(new Set(draft?.selectedLabels ?? []));
     setCustomInput(draft?.customInput ?? '');
     setShowCustomInput(draft?.showCustomInput ?? false);
-    setCollapsed(false);
   }, [questions.length, requestId]);
 
   useEffect(() => {
@@ -786,47 +859,14 @@ function AskUserQuestionCard({
     });
   };
 
-  if (collapsed) {
-    return (
-      <InteractionTouchButton
-        accessibilityLabel={t('interaction.panel.expandQuestionCard')}
-        onPress={() => setCollapsed(false)}
-        style={[cardStyle(styles, touchLayout), styles.collapsedInteractionBar]}
-        testID="interaction.ask.collapsedCard"
-      >
-        <View style={styles.collapsedInteractionText}>
-          <Text style={styles.collapsedInteractionLabel}>{t('interaction.panel.awaitingAnswer')}</Text>
-          <Text numberOfLines={1} style={styles.collapsedInteractionTitle}>{presentation.title}</Text>
-        </View>
-        <View style={styles.compactHeaderActions}>
-          {questions.length > 1 ? (
-            <Text style={styles.collapsedInteractionMeta}>
-              {currentIndex + 1} / {questions.length}
-            </Text>
-          ) : null}
-          <View style={styles.iconControl}>
-            <Plus color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-          </View>
-        </View>
-      </InteractionTouchButton>
-    );
-  }
-
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.ask.card">
+      {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
+          两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
         <Text style={styles.askHeaderKind}>{t('interaction.panel.awaitingAnswer')}</Text>
         <View style={styles.compactHeaderActions}>
           <Text style={styles.pageText}>{presentation.pageLabel}</Text>
-          <InteractionTouchButton
-            accessibilityLabel={t('interaction.panel.collapseQuestionCard')}
-            busy={busy}
-            onPress={() => setCollapsed(true)}
-            style={styles.iconControl}
-            testID="interaction.ask.collapseButton"
-          >
-            <Minus color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-          </InteractionTouchButton>
         </View>
       </View>
       <Text style={styles.askQuestion} testID="interaction.ask.question">{presentation.title}</Text>
@@ -1679,6 +1719,23 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   taskCountText: {
     color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  taskCollapseButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: spacing.xs,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+  },
+  taskCollapseText: {
+    color: colors.textSecondary,
     fontSize: typeScale.caption,
     fontWeight: fontWeight.medium,
   },

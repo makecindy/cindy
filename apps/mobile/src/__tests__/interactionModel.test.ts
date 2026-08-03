@@ -20,11 +20,14 @@ import {
   encodeMultiSelectAnswer,
   extractPlanOutline,
   formatPermissionInput,
+  isPendingInteractionCollapsed,
   isPlanReviewResolveBusy,
   interactionBlocksRemoteComposer,
   interactionKind,
   normalizeAskQuestions,
+  pendingInteractionSummaryText,
   pendingInteractionsBlockRemoteComposer,
+  prunePendingInteractionCollapsed,
   remoteInteractionHandling,
   REMOTE_PLUGIN_SETUP_ACTION_KINDS,
   REMOTE_PLUGIN_SETUP_ERROR_CODES,
@@ -37,6 +40,7 @@ import {
   sessionScopedPermissionSuggestions,
   shouldUseFullHeightPendingInteractionSurface,
   sortPendingInteractions,
+  togglePendingInteractionCollapsed,
 } from '@/session/interactionModel';
 import type { PendingInteraction } from '@/session/types';
 
@@ -468,6 +472,122 @@ describe('interactionModel', () => {
       activeKind: selectedPlan ? interactionKind(selectedPlan) : null,
       planViewerState: 'half',
     })).toBe(false);
+    // 收起时固定高度必须失效:否则「收起」只是换了张空 bar,surface 照样占满屏。
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: selectedPlan ? interactionKind(selectedPlan) : null,
+      collapsed: true,
+      planViewerState: 'expanded',
+    })).toBe(false);
+  });
+
+  it('keeps the pending collapse intent per request and survives list churn', () => {
+    const pending = [
+      { request: { kind: 'ask_user_question', requestId: 'ask-1', questions: [{ question: '按哪种方式做?' }] } },
+      { request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash' } },
+    ] as unknown as PendingInteraction[];
+
+    expect(isPendingInteractionCollapsed([], 'ask-1')).toBe(false);
+    // 没有 requestId 的卡不可能被收起(收起态以 requestId 为键)。
+    expect(isPendingInteractionCollapsed(['ask-1'], null)).toBe(false);
+
+    const collapsed = togglePendingInteractionCollapsed([], 'ask-1');
+    expect(collapsed).toEqual(['ask-1']);
+    expect(isPendingInteractionCollapsed(collapsed, 'ask-1')).toBe(true);
+    expect(isPendingInteractionCollapsed(collapsed, 'perm-1')).toBe(false);
+    expect(togglePendingInteractionCollapsed(collapsed, 'ask-1')).toEqual([]);
+
+    // 队列刷新(同一批卡再来一遍)不得清掉收起意图 —— 这正是旧卡内 state 的病根。
+    expect(prunePendingInteractionCollapsed(collapsed, pending)).toBe(collapsed);
+    // 卡被回答 / 被撤后收起记录要清掉,免得同 requestId 复现时直接以收起态出现。
+    expect(prunePendingInteractionCollapsed(collapsed, [pending[1]!])).toEqual([]);
+    // 空集合走 identity 返回:effect 里 setState 每帧换引用会无限重入。
+    const empty: readonly string[] = [];
+    expect(prunePendingInteractionCollapsed(empty, [])).toBe(empty);
+  });
+
+  it('summarizes what each pending kind is waiting on, without shared Chinese defaults', () => {
+    expect(pendingInteractionSummaryText({
+      request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-1',
+        questions: [{ question: '手机来源提示这一条，按哪种方式做?' }, { question: '第二问' }],
+      },
+    } as unknown as PendingInteraction)).toBe('手机来源提示这一条，按哪种方式做?');
+    // permission 用工具名而非 permissionTitle:后者是共享层中文直出(「允许使用 X?」),
+    // 直接渲染会让 en / ja / ko 下的收起条念混语。
+    expect(pendingInteractionSummaryText({
+      request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash', title: '允许使用 Bash?' },
+    } as unknown as PendingInteraction)).toBe('Bash');
+    // 计划卡取正文首行并剥掉 markdown 标题标记。
+    expect(pendingInteractionSummaryText({
+      request: { kind: 'plan_review', requestId: 'plan-1', plan: '\n## 重构 InteractionPanel\n- 第一步' },
+    } as unknown as PendingInteraction)).toBe('重构 InteractionPanel');
+    // 正文为空时退到文件路径,仍然给得出「在等什么」。
+    expect(pendingInteractionSummaryText({
+      request: { kind: 'plan_review', requestId: 'plan-2', plan: '   ', planFilePath: 'docs/plan.md' },
+    } as unknown as PendingInteraction)).toBe('docs/plan.md');
+    // 超长首行截断,收起条永远是一行。
+    const long = pendingInteractionSummaryText({
+      request: { kind: 'ask_user_question', requestId: 'ask-2', questions: [{ question: 'x'.repeat(200) }] },
+    } as unknown as PendingInteraction);
+    expect(long).toHaveLength(80);
+    expect(long?.endsWith('…')).toBe(true);
+    // 手机端终结不了的卡没有专属摘要,收起条退回队列标题。
+    expect(pendingInteractionSummaryText({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
+    } as unknown as PendingInteraction)).toBeNull();
+  });
+
+  it('drives the pending collapse from session-level props, not card-local state', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+    const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    // 收起入口在队列头,三类卡通用;卡内不得再自持一份 collapsed(两套状态时页面级
+    // 那份会被卡片 key 变化冲掉,用户刚收起就弹回来)。
+    expect(interactionPanelSource).toContain('testID="interaction.panel.collapseButton"');
+    expect(interactionPanelSource).toContain('testID="interaction.panel.collapsedBar"');
+    expect(interactionPanelSource).not.toContain('setCollapsed(');
+    expect(interactionPanelSource).not.toContain('interaction.ask.collapseButton');
+    // 按钮要带可见文字:此前是个没有标签的「—」图标,用户看不出那是「先不答」的出口。
+    expect(interactionPanelSource).toContain("t('interaction.panel.collapse')");
+    // 收起态只留一条 bar:仍渲染 PendingTaskHeader 就还是两层结构,消息流照样看不到几行。
+    const collapsedStart = interactionPanelSource.indexOf('if (collapsed && canToggleCollapsed) {');
+    const collapsedEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', collapsedStart));
+    expect(collapsedStart).toBeGreaterThan(0);
+    expect(interactionPanelSource.slice(collapsedStart, collapsedEnd)).not.toContain('<PendingTaskHeader');
+
+    expect(sessionScreenSource).toContain('collapsedRequestIds={collapsedPendingRequestIds}');
+    expect(sessionScreenSource).toContain('onToggleCollapsed={togglePendingInteractionCollapse}');
+    expect(sessionScreenSource).toContain('collapsed: activePendingCollapsed');
+    expect(sessionScreenSource).toContain('prunePendingInteractionCollapsed(prev, pending)');
+  });
+
+  it('translates the collapse affordances in every locale', async () => {
+    const previous = i18n.language;
+    try {
+      for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+        await i18n.changeLanguage(locale);
+        for (const key of [
+          'interaction.panel.collapse',
+          'interaction.panel.collapsePendingCard',
+          'interaction.panel.collapsedHint',
+        ]) {
+          expect(i18n.t(key), `${locale} ${key}`).not.toBe(key);
+        }
+        const expanded = i18n.t('interaction.panel.expandPendingCard', { title: 'Fixture question' });
+        expect(expanded, `${locale} expandPendingCard`).toContain('Fixture question');
+      }
+    } finally {
+      await i18n.changeLanguage(previous);
+    }
+
+    for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
+      const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
+      expect(bundle.panel?.expandPendingCard, `${lang}/panel.expandPendingCard`).toContain('{{title}}');
+      // 旧的问题卡专属文案随卡内收起一起下线,不留悬空 key。
+      expect(bundle.panel?.collapseQuestionCard, `${lang}/panel.collapseQuestionCard`).toBeUndefined();
+      expect(bundle.panel?.expandQuestionCard, `${lang}/panel.expandQuestionCard`).toBeUndefined();
+    }
   });
 
   it('serializes permission allow-once, deny, and session scoped suggestions', () => {

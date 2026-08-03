@@ -1,4 +1,9 @@
 import {
+  interactionKind as sharedInteractionKind,
+  normalizeAskQuestions as sharedNormalizeAskQuestions,
+  permissionToolName as sharedPermissionToolName,
+  planReviewFilePath as sharedPlanReviewFilePath,
+  planReviewPlan as sharedPlanReviewPlan,
   readRequestId as sharedReadRequestId,
   selectActivePendingInteraction as sharedSelectActivePendingInteraction,
   type PendingInteractionLike,
@@ -86,10 +91,90 @@ export function selectPendingInteractionByRequestId<T extends PendingInteraction
 
 export function shouldUseFullHeightPendingInteractionSurface(input: {
   activeKind: string | null;
+  collapsed?: boolean;
   planViewerState: string;
 }): boolean {
+  // 收起时不能再吃固定高度:那正是「收起后仍然霸屏」的成因,收起的全部意义就是把
+  // 屏幕还给消息流。
+  if (input.collapsed) return false;
   return input.activeKind === 'plan_review'
     && (input.planViewerState === 'expanded' || input.planViewerState === 'edit');
+}
+
+// ─── 待处理卡收起态 ──────────────────────────────────────────────────────────
+
+/**
+ * 收起态按 requestId 记录、且必须由**会话页**持有。
+ *
+ * 曾经它是 AskUserQuestionCard 内部的 useState:卡片 key 变化(队列刷新 / 切卡)、
+ * 页面重挂载都会把状态冲掉,用户刚收起来看输出、下一帧卡又弹回来占满屏。状态提到
+ * 页面级后,收起是「这条请求我先不答」的稳定意图,只有该请求被终结才失效。
+ */
+export function isPendingInteractionCollapsed(
+  collapsedRequestIds: readonly string[],
+  requestId: string | null | undefined,
+): boolean {
+  if (!requestId) return false;
+  return collapsedRequestIds.includes(requestId);
+}
+
+export function togglePendingInteractionCollapsed(
+  collapsedRequestIds: readonly string[],
+  requestId: string,
+): string[] {
+  if (collapsedRequestIds.includes(requestId)) {
+    return collapsedRequestIds.filter((id) => id !== requestId);
+  }
+  return [...collapsedRequestIds, requestId];
+}
+
+/**
+ * 丢掉已经不在 pending 集合里的 requestId(卡被回答 / 被撤)。
+ *
+ * 无变化时**返回原数组**:调用方在 effect 里按 pending 变化 prune,返回新数组会
+ * 让 setState 每帧都换引用 → 依赖它的 effect 无限重入。
+ */
+export function prunePendingInteractionCollapsed<T extends PendingInteractionLike>(
+  collapsedRequestIds: readonly string[],
+  pending: readonly T[],
+): readonly string[] {
+  if (collapsedRequestIds.length === 0) return collapsedRequestIds;
+  const alive = new Set(
+    pending.map((item) => sharedReadRequestId(item)).filter((id): id is string => !!id),
+  );
+  const next = collapsedRequestIds.filter((id) => alive.has(id));
+  return next.length === collapsedRequestIds.length ? collapsedRequestIds : next;
+}
+
+/** 收起条上那行「具体在等什么」。语言无关(用户内容 / 工具名),不引入共享层中文直出。 */
+export function pendingInteractionSummaryText(item: PendingInteractionLike): string | null {
+  const kind = sharedInteractionKind(item);
+  if (kind === 'ask_user_question') {
+    const questions = sharedNormalizeAskQuestions(item.request.questions);
+    return firstLinePreview(questions[0]?.question);
+  }
+  if (kind === 'permission') {
+    return firstLinePreview(sharedPermissionToolName(item.request));
+  }
+  if (kind === 'plan_review') {
+    return firstLinePreview(sharedPlanReviewPlan(item.request))
+      ?? firstLinePreview(sharedPlanReviewFilePath(item.request));
+  }
+  return null;
+}
+
+const SUMMARY_PREVIEW_MAX_LENGTH = 80;
+
+function firstLinePreview(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const line = value
+    .split('\n')
+    .map((entry) => entry.replace(/^\s*#{1,6}\s*/, '').trim())
+    .find((entry) => entry.length > 0);
+  if (!line) return null;
+  return line.length > SUMMARY_PREVIEW_MAX_LENGTH
+    ? `${line.slice(0, SUMMARY_PREVIEW_MAX_LENGTH - 1)}…`
+    : line;
 }
 
 export function isPlanReviewResolveBusy(input: { busy: boolean }): boolean {
