@@ -103,29 +103,37 @@ type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
 export function InteractionPanel({
   safeAreaBottomInset = 0,
-  collapsedRequestIds,
+  collapse,
   deviceId,
   fillAvailableHeight = false,
   sessionId,
   interactions,
   activeRequestId: controlledActiveRequestId,
   onActiveRequestIdChange,
-  onToggleCollapsed,
   planViewerState,
   onPlanViewerStateChange,
   onError,
   readOnlyReason,
 }: {
   safeAreaBottomInset?: number;
-  /** 已收起的 requestId(会话页持有,见 interactionModel 的收起态注释)。 */
-  collapsedRequestIds?: readonly string[];
+  /**
+   * 收起能力:整组给或整组不给。
+   *
+   * 合成一个对象而不是两个可选 prop —— 只传状态不传回调会得到一个「显示为收起但点不开」
+   * 的死界面,类型上就该表达不出来(#1493 review)。不传 = 该放置点不提供收起(如贴在
+   * 输入框上方的 plugin_setup 卡)。
+   */
+  collapse?: {
+    /** 已收起的 requestId(会话页持有,见 interactionModel 的收起态注释)。 */
+    requestIds: readonly string[];
+    onToggle(requestId: string): void;
+  };
   deviceId: string;
   fillAvailableHeight?: boolean;
   sessionId: string;
   interactions: PendingInteraction[];
   activeRequestId?: string | null;
   onActiveRequestIdChange?(requestId: string | null): void;
-  onToggleCollapsed?(requestId: string): void;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
   readOnlyReason?: string | null;
@@ -230,17 +238,24 @@ export function InteractionPanel({
   }
   // 收起 = 「这条我先不答,让我看电脑端的输出」。整块 surface 只留一条 bar:再留着
   // 队列头就还是两层结构,消息流照样看不到几行。
-  const collapsed = isPendingInteractionCollapsed(
-    collapsedRequestIds ?? EMPTY_COLLAPSED_REQUEST_IDS,
+  const canToggleCollapsed = !!collapse && !!activeRequestIdForPresentation;
+  const collapsed = canToggleCollapsed && isPendingInteractionCollapsed(
+    collapse?.requestIds ?? EMPTY_COLLAPSED_REQUEST_IDS,
     activeRequestIdForPresentation,
   );
-  const canToggleCollapsed = !!onToggleCollapsed && !!activeRequestIdForPresentation;
   const toggleCollapsed = () => {
     if (!activeRequestIdForPresentation) return;
-    onToggleCollapsed?.(activeRequestIdForPresentation);
+    collapse?.onToggle(activeRequestIdForPresentation);
   };
-  const summaryText = pendingInteractionSummaryText(activeInteraction);
-  if (collapsed && canToggleCollapsed) {
+  // 多问提问卡收起后要显示用户翻到的那一问,不是永远第一问:草稿是卡内翻页时同步
+  // 保存的(saveAskUserDraft),收起时卡已卸载、进度不再变,读一次即准。
+  const summaryText = pendingInteractionSummaryText(
+    activeInteraction,
+    activeRequestIdForPresentation
+      ? readAskUserDraft(activeRequestIdForPresentation)?.currentIndex ?? 0
+      : 0,
+  );
+  if (collapsed) {
     return (
       <View style={[styles.root, rootLayoutStyle]} testID="interaction.panel">
         <InteractionTouchButton

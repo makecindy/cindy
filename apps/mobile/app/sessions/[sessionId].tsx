@@ -1529,6 +1529,12 @@ export default function SessionScreen() {
   const togglePendingInteractionCollapse = useCallback((requestId: string) => {
     setCollapsedPendingRequestIds((prev) => togglePendingInteractionCollapsed(prev, requestId));
   }, []);
+  // 状态与回调成对下发:Panel 的 collapse prop 是整组给或整组不给,只给一半会得到
+  // 「显示为收起但点不开」的死界面(#1493 review)。
+  const pendingInteractionCollapse = useMemo(
+    () => ({ requestIds: collapsedPendingRequestIds, onToggle: togglePendingInteractionCollapse }),
+    [collapsedPendingRequestIds, togglePendingInteractionCollapse],
+  );
   const hasActivePendingInteraction = activePendingInteraction !== null;
   // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
   // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
@@ -8259,14 +8265,13 @@ export default function SessionScreen() {
                 >
                   <InteractionPanel
                     safeAreaBottomInset={insets.bottom}
-                    collapsedRequestIds={collapsedPendingRequestIds}
+                    collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
                     fillAvailableHeight
                     sessionId={sessionId}
                     interactions={pending}
                     activeRequestId={pendingInteractionActiveRequestId}
                     onActiveRequestIdChange={setPendingInteractionActiveRequestId}
-                    onToggleCollapsed={togglePendingInteractionCollapse}
                     planViewerState={pendingPlanViewerState}
                     onPlanViewerStateChange={setPendingPlanViewerState}
                     onError={setError}
@@ -8281,13 +8286,12 @@ export default function SessionScreen() {
                 >
                 <InteractionPanel
                   safeAreaBottomInset={insets.bottom}
-                  collapsedRequestIds={collapsedPendingRequestIds}
+                  collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}
                   activeRequestId={pendingInteractionActiveRequestId}
                   onActiveRequestIdChange={setPendingInteractionActiveRequestId}
-                  onToggleCollapsed={togglePendingInteractionCollapse}
                   planViewerState={pendingPlanViewerState}
                   onPlanViewerStateChange={setPendingPlanViewerState}
                   onError={setError}

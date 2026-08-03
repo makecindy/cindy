@@ -505,6 +505,28 @@ describe('interactionModel', () => {
     expect(prunePendingInteractionCollapsed(empty, [])).toBe(empty);
   });
 
+  it('keeps the collapse intent through an offline pending blackout', () => {
+    // markDeviceOffline 按设计删掉 pendingInteractions(它是依赖实时连接的投影),
+    // 于是切网 / 进地铁都会让 pending 瞬时归零。此时若照「不在 alive 里就清」处理,
+    // 收起记录被清掉,重连后同一张卡以展开态灌回来占满屏 —— 本 PR 要治的病换条路径
+    // 复发(#1493 review)。
+    const collapsed = ['ask-1', 'perm-1'];
+    expect(prunePendingInteractionCollapsed(collapsed, [])).toBe(collapsed);
+
+    const restored = [
+      { request: { kind: 'ask_user_question', requestId: 'ask-1', questions: [{ question: '还在等回答' }] } },
+    ] as unknown as PendingInteraction[];
+    // 重连拿到权威快照后才按 alive 收敛:ask-1 还在 → 保留收起;perm-1 已终结 → 清掉。
+    expect(prunePendingInteractionCollapsed(collapsed, restored)).toEqual(['ask-1']);
+
+    // 代价是最后一条被答完的 id 会留下(交互请求一次性,不会复现),用上限截断保持有界。
+    const many = Array.from({ length: 12 }, (_, i) => `req-${i}`);
+    const bounded = prunePendingInteractionCollapsed(many, []);
+    expect(bounded).toHaveLength(8);
+    expect(bounded[0]).toBe('req-4');
+    expect(bounded[7]).toBe('req-11');
+  });
+
   it('summarizes what each pending kind is waiting on, without shared Chinese defaults', () => {
     expect(pendingInteractionSummaryText({
       request: {
@@ -513,6 +535,29 @@ describe('interactionModel', () => {
         questions: [{ question: '手机来源提示这一条，按哪种方式做?' }, { question: '第二问' }],
       },
     } as unknown as PendingInteraction)).toBe('手机来源提示这一条，按哪种方式做?');
+    // 多问卡按当前进度取问题:收起条写第一问、展开后停在第二问就是错位(#1493 review)。
+    expect(pendingInteractionSummaryText({
+      request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-1b',
+        questions: [{ question: '第一问' }, { question: '第二问' }, { question: '第三问' }],
+      },
+    } as unknown as PendingInteraction, 2)).toBe('第三问');
+    // 越界 / 非法索引夹回有效范围,不渲染 undefined。
+    expect(pendingInteractionSummaryText({
+      request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-1c',
+        questions: [{ question: '第一问' }, { question: '第二问' }],
+      },
+    } as unknown as PendingInteraction, 9)).toBe('第二问');
+    expect(pendingInteractionSummaryText({
+      request: {
+        kind: 'ask_user_question',
+        requestId: 'ask-1d',
+        questions: [{ question: '第一问' }, { question: '第二问' }],
+      },
+    } as unknown as PendingInteraction, Number.NaN)).toBe('第一问');
     // permission 用工具名而非 permissionTitle:后者是共享层中文直出(「允许使用 X?」),
     // 直接渲染会让 en / ja / ko 下的收起条念混语。
     expect(pendingInteractionSummaryText({
@@ -551,13 +596,21 @@ describe('interactionModel', () => {
     // 按钮要带可见文字:此前是个没有标签的「—」图标,用户看不出那是「先不答」的出口。
     expect(interactionPanelSource).toContain("t('interaction.panel.collapse')");
     // 收起态只留一条 bar:仍渲染 PendingTaskHeader 就还是两层结构,消息流照样看不到几行。
-    const collapsedStart = interactionPanelSource.indexOf('if (collapsed && canToggleCollapsed) {');
+    const collapsedStart = interactionPanelSource.indexOf('if (collapsed) {');
     const collapsedEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', collapsedStart));
     expect(collapsedStart).toBeGreaterThan(0);
     expect(interactionPanelSource.slice(collapsedStart, collapsedEnd)).not.toContain('<PendingTaskHeader');
+    // 状态与回调必须成对:只给一半会得到「显示为收起但点不开」的死界面(#1493 review),
+    // 所以 collapse 是一个对象 prop,且 collapsed 的判定挂在 canToggleCollapsed 上。
+    expect(interactionPanelSource).toContain('collapse?: {');
+    expect(interactionPanelSource).toContain('const collapsed = canToggleCollapsed && isPendingInteractionCollapsed(');
+    expect(interactionPanelSource).not.toContain('collapsedRequestIds?:');
+    expect(interactionPanelSource).not.toContain('onToggleCollapsed?(');
+    // 收起条按草稿里的当前进度取问题,不是永远第一问。
+    expect(interactionPanelSource).toContain('readAskUserDraft(activeRequestIdForPresentation)?.currentIndex');
 
-    expect(sessionScreenSource).toContain('collapsedRequestIds={collapsedPendingRequestIds}');
-    expect(sessionScreenSource).toContain('onToggleCollapsed={togglePendingInteractionCollapse}');
+    expect(sessionScreenSource).toContain('collapse={pendingInteractionCollapse}');
+    expect(sessionScreenSource).not.toContain('collapsedRequestIds={');
     expect(sessionScreenSource).toContain('collapsed: activePendingCollapsed');
     expect(sessionScreenSource).toContain('prunePendingInteractionCollapsed(prev, pending)');
   });

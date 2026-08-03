@@ -128,8 +128,21 @@ export function togglePendingInteractionCollapsed(
   return [...collapsedRequestIds, requestId];
 }
 
+/** 收起记录的保留上限:pending 空窗期不清时靠它保持有界(见下方 prune 注释)。 */
+const COLLAPSED_REQUEST_ID_LIMIT = 8;
+
 /**
  * 丢掉已经不在 pending 集合里的 requestId(卡被回答 / 被撤)。
+ *
+ * **pending 为空时一律不清**:空集合有两种来源而本端分辨不了——「最后一张卡被答完」
+ * 和「短暂离线」。`remoteSessionStore.markDeviceOffline` 会按设计删掉 pendingInteractions
+ * (它是依赖实时连接的投影),所以切网 / 进地铁都会让 pending 瞬时归零;此时若按
+ * 「不在 alive 里就清」处理,收起记录会被清掉,重连后被控端把同一张卡灌回来,它又
+ * 以展开态占满屏——正是本 PR 要治的病换条路径复发(#1493 review)。
+ *
+ * 代价是被答完的最后一条 requestId 会留在集合里。这无害:交互请求在被控端是一次性的,
+ * 已解决的 requestId 不会复现(见 resolveInteractionResilient 的权威分辨注释);再用
+ * COLLAPSED_REQUEST_ID_LIMIT 截断最旧的,保证集合有界。
  *
  * 无变化时**返回原数组**:调用方在 effect 里按 pending 变化 prune,返回新数组会
  * 让 setState 每帧都换引用 → 依赖它的 effect 无限重入。
@@ -142,16 +155,33 @@ export function prunePendingInteractionCollapsed<T extends PendingInteractionLik
   const alive = new Set(
     pending.map((item) => sharedReadRequestId(item)).filter((id): id is string => !!id),
   );
-  const next = collapsedRequestIds.filter((id) => alive.has(id));
-  return next.length === collapsedRequestIds.length ? collapsedRequestIds : next;
+  const next = alive.size === 0
+    ? collapsedRequestIds
+    : collapsedRequestIds.filter((id) => alive.has(id));
+  const bounded = next.length > COLLAPSED_REQUEST_ID_LIMIT
+    ? next.slice(next.length - COLLAPSED_REQUEST_ID_LIMIT)
+    : next;
+  return bounded.length === collapsedRequestIds.length ? collapsedRequestIds : bounded;
 }
 
-/** 收起条上那行「具体在等什么」。语言无关(用户内容 / 工具名),不引入共享层中文直出。 */
-export function pendingInteractionSummaryText(item: PendingInteractionLike): string | null {
+/**
+ * 收起条上那行「具体在等什么」。语言无关(用户内容 / 工具名),不引入共享层中文直出。
+ *
+ * `questionIndex` 是多问提问卡当前翻到第几问(来自 askUserDraft)。缺省 0;传当前进度
+ * 才不会出现「收起条写第一问、展开后停在第三问」的错位(#1493 review)。
+ */
+export function pendingInteractionSummaryText(
+  item: PendingInteractionLike,
+  questionIndex = 0,
+): string | null {
   const kind = sharedInteractionKind(item);
   if (kind === 'ask_user_question') {
     const questions = sharedNormalizeAskQuestions(item.request.questions);
-    return firstLinePreview(questions[0]?.question);
+    if (questions.length === 0) return null;
+    const index = Number.isInteger(questionIndex)
+      ? Math.min(Math.max(questionIndex, 0), questions.length - 1)
+      : 0;
+    return firstLinePreview(questions[index]?.question);
   }
   if (kind === 'permission') {
     return firstLinePreview(sharedPermissionToolName(item.request));
