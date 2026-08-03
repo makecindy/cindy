@@ -114,6 +114,27 @@ describe('contacts-ipc handlers', () => {
     });
   });
 
+  it('app-server 成功失效时即使 bridge 已清空也重置 contacts applied 快照', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../maker-host/index.ts'), 'utf8');
+    const finalizeStart = source.indexOf(
+      'export async function finalizeCodexAfterAuthModeChange()',
+    );
+    const finalizeEnd = source.indexOf(
+      'export async function restartCodexAfterAuthModeChange()',
+      finalizeStart,
+    );
+    expect(finalizeStart).toBeGreaterThanOrEqual(0);
+    expect(finalizeEnd).toBeGreaterThan(finalizeStart);
+
+    const finalizeBody = source.slice(finalizeStart, finalizeEnd);
+    expect(finalizeBody).toContain('await guard.finalize();');
+    expect(finalizeBody).toContain('await agent?.disposeLocalHostForCredentialChange();');
+    expect(finalizeBody).toContain('clearCodexAppliedContactsSnapshot();');
+    expect(finalizeBody.indexOf('clearCodexAppliedContactsSnapshot();')).toBeGreaterThan(
+      finalizeBody.indexOf('await agent?.disposeLocalHostForCredentialChange();'),
+    );
+  });
+
   it('开关落盘失败按 [CODE] 协议上抛, 不漏裸 Error(规则 13)', async () => {
     handlers = createContactsIpcHandlers({
       getManager: () => manager,

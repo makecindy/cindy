@@ -138,6 +138,11 @@ import { readContactsSettings } from './contacts-settings-store.js';
 let codexAppliedContactsEnabled: boolean | null = null;
 let codexAppliedContactsOwnerScope: string | null = null;
 
+function clearCodexAppliedContactsSnapshot(): void {
+  codexAppliedContactsEnabled = null;
+  codexAppliedContactsOwnerScope = null;
+}
+
 /**
  * 当前数据所有者的 Codex runtime 是否会为下一条新任务提供 cindy_contacts。
  * 没有当前 owner 的 applied 快照时，下次 lazy spawn 会读取 live 设置，视为就绪；
@@ -628,8 +633,7 @@ export function getMaker(): Maker {
     setCodexEnvironmentShutdownHook(() => {
       // 所有成功 MCP 重建路径最终都会 shutdown 旧 bridge；清掉 applied 快照后，
       // 当前 owner 的下一次 lazy spawn 将按 live 设置重建工具面。
-      codexAppliedContactsEnabled = null;
-      codexAppliedContactsOwnerScope = null;
+      clearCodexAppliedContactsSnapshot();
       handleCodexEnvironmentShutdownForRemote();
     });
     // bridge token 轮换 (账号切换 secrets 清空) 时同步失效远端 CC query —
@@ -1577,6 +1581,10 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
       } else {
         await agent?.disposeLocalHostForCredentialChange();
       }
+      // app-server 已成功失效后，下一次 lazy spawn 会按 live MCP 设置重建。
+      // 不能只等 shutdownCodexEnvironment hook：bridge 启动失败时 cached 已是 null，
+      // shutdown 会 early-return，但 applied=false 快照仍必须清掉以允许下一次重试。
+      clearCodexAppliedContactsSnapshot();
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
     } catch (e) {
