@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  parseBrowserTabReferenceHref,
+  parseDesktopWindowReferenceHref,
+} from '@cindy/maker-shared/agent-input-projection';
 
 import {
   AT_FILE_PICKER_RESOURCE,
@@ -294,6 +298,37 @@ describe('scanAtResources context providers', () => {
     expect(result.items[1].relPath).toBe(
       'cindy://desktop-window/11/22?app=Code.exe',
     );
+  });
+
+  it('strictly encodes Markdown delimiters in context reference links', async () => {
+    const tabId = "tab-('!*)";
+    const url = "https://example.com/docs_(v1)!'";
+    const appName = "Cindy ('!*)";
+    stubApi({
+      workspace: { success: true, items: [] },
+      context: {
+        success: true,
+        browserTabs: [{ tabId, title: 'Docs', url }],
+        desktopWindows: [{ windowId: 22, pid: 11, appName, title: 'Cindy' }],
+        unavailable: [],
+      },
+    });
+
+    const result = await scanAtResources('D:\\repo', 'codex', 2000, undefined, undefined, {
+      sessionId: 'session-1',
+      includeLocalContext: true,
+    });
+    const browserTab = result.items.find((item) => item.type === 'browser-tab');
+    const desktopWindow = result.items.find((item) => item.type === 'desktop-window');
+
+    expect(browserTab?.relPath).not.toMatch(/[!'()*]/);
+    expect(desktopWindow?.relPath).not.toMatch(/[!'()*]/);
+    expect(parseBrowserTabReferenceHref(browserTab?.relPath ?? '')).toEqual({ tabId, url });
+    expect(parseDesktopWindowReferenceHref(desktopWindow?.relPath ?? '')).toEqual({
+      pid: 11,
+      windowId: 22,
+      appName,
+    });
   });
 
   it('keeps local context when the workspace provider fails', async () => {

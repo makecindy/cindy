@@ -1,6 +1,6 @@
 import { createLogger } from '@/lib/logger';
 import type { Session } from '@/lib/ccAgent.types';
-import { buildSessionDeepLink } from '@/lib/deepLink';
+import { buildSessionDeepLink, strictEncodeURIComponent } from '@/lib/deepLink';
 
 const log = createLogger('AtResourceService');
 /**
@@ -89,7 +89,7 @@ export interface AtResourceScanContext {
 }
 
 function browserTabReference(tabId: string, url: string): string {
-  return `cindy://browser-tab/${encodeURIComponent(tabId)}?url=${encodeURIComponent(url)}`;
+  return `cindy://browser-tab/${strictEncodeURIComponent(tabId)}?url=${strictEncodeURIComponent(url)}`;
 }
 
 function desktopWindowReference(
@@ -97,7 +97,7 @@ function desktopWindowReference(
   windowId: number,
   appName: string,
 ): string {
-  return `cindy://desktop-window/${pid}/${windowId}?app=${encodeURIComponent(appName)}`;
+  return `cindy://desktop-window/${pid}/${windowId}?app=${strictEncodeURIComponent(appName)}`;
 }
 
 function oneLineText(value: unknown, maxLength: number): string {
