@@ -24,9 +24,10 @@ describe('composer quote palette boundary wiring', () => {
       'utf8',
     );
 
-    expect(source).toContain('detectTrigger(editor, atPluginScope?.triggerFrom)');
+    expect(source).toContain('const activeAtScopeFrom = atPluginScope?.triggerFrom;');
+    expect(source).toContain('detectTrigger(editor, activeAtScopeFrom)');
     expect(source).toContain("tr.replaceWith(from, to, editor.schema.text('@'));");
     expect(source).not.toContain('editor.schema.text(`@${item.pluginId}:`)');
-    expect(source).toContain('if (atPluginScope) {\n        atScanSeqRef.current += 1;');
+    expect(source).toMatch(/if \(atPluginScope\) \{\r?\n\s+atScanSeqRef\.current \+= 1;/);
   });
 });
