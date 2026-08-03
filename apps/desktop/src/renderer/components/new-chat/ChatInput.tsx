@@ -21,6 +21,7 @@ import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
+import { FullAccessConfirmContent } from './FullAccessConfirmContent';
 import { useEditor, EditorContent } from '@tiptap/react';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -5126,8 +5127,14 @@ export function ChatInput({
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
           description: t('newChat.chatInput.fullAccessConfirmation.description'),
+          // 逐类权限清单(文件 / 终端命令 / 网络)+ 高风险操作仍确认的脚注。
+          content: <FullAccessConfirmContent />,
+          // 带清单的确认框放宽到 440(§4:普通确认 400,富内容可适度放宽)。
+          maxWidth: 440,
           confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
           cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
+          // 警示三角跟随按钮文字颜色,不引入新语义色;高风险升级的视觉提醒。
+          confirmIcon: <TriangleAlert size={14} />,
         });
         if (!confirmed) return;
       }

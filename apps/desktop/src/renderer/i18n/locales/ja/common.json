@@ -5236,9 +5236,24 @@
       "permissionSwitchFailed": "権限モードの変更に失敗したため、以前の設定を維持しました",
       "fullAccessConfirmation": {
         "title": "Full access を有効にしますか？",
-        "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy はワークスペース外のファイル変更やネットワークコマンドを確認なしで実行できます。組み込みの高リスク操作では引き続き確認が必要です。",
+        "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしで次の操作ができるようになります:",
+        "items": {
+          "files": {
+            "title": "ファイルとフォルダ",
+            "description": "ワークスペース外のファイルの読み取りと変更"
+          },
+          "commands": {
+            "title": "ターミナルコマンド",
+            "description": "ターミナルコマンドやスクリプトを直接実行"
+          },
+          "network": {
+            "title": "ネットワークアクセス",
+            "description": "ネットワークコマンドの実行とインターネットへのアクセス"
+          }
+        },
+        "note": "組み込みの高リスク操作では引き続き確認が必要です。",
         "confirm": "Full access を有効にする",
-        "cancel": "現在の権限を維持"
+        "cancel": "キャンセル"
       },
       "attachmentRejection": {
         "dismiss": "閉じる"

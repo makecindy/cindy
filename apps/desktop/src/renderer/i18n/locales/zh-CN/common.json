@@ -5236,9 +5236,24 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
-        "description": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+        "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
+        "items": {
+          "files": {
+            "title": "文件与文件夹",
+            "description": "读取和修改工作区外的文件"
+          },
+          "commands": {
+            "title": "终端命令",
+            "description": "直接执行终端命令与脚本"
+          },
+          "network": {
+            "title": "网络访问",
+            "description": "执行联网命令、访问网络资源"
+          }
+        },
+        "note": "内置高风险操作仍会要求确认。",
         "confirm": "开启 Full access",
-        "cancel": "保留当前权限"
+        "cancel": "取消"
       },
       "attachmentRejection": {
         "dismiss": "关闭"

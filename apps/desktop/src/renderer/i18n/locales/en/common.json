@@ -5238,9 +5238,24 @@
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
-        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
+        "items": {
+          "files": {
+            "title": "Files and Folders",
+            "description": "Read and modify files outside the workspace"
+          },
+          "commands": {
+            "title": "Terminal Commands",
+            "description": "Run terminal commands and scripts directly"
+          },
+          "network": {
+            "title": "Network Access",
+            "description": "Run network commands and access the internet"
+          }
+        },
+        "note": "Built-in high-risk operations will still require confirmation.",
         "confirm": "Enable Full access",
-        "cancel": "Keep current permissions"
+        "cancel": "Cancel"
       },
       "attachmentRejection": {
         "dismiss": "Dismiss"

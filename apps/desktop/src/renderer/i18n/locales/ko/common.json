@@ -5236,9 +5236,24 @@
       "permissionSwitchFailed": "권한 모드 변경에 실패해 이전 설정을 유지했습니다",
       "fullAccessConfirmation": {
         "title": "Full access를 활성화할까요?",
-        "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
+        "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy는 확인 없이 다음 작업을 할 수 있습니다:",
+        "items": {
+          "files": {
+            "title": "파일 및 폴더",
+            "description": "작업 공간 밖의 파일 읽기 및 수정"
+          },
+          "commands": {
+            "title": "터미널 명령",
+            "description": "터미널 명령과 스크립트를 직접 실행"
+          },
+          "network": {
+            "title": "네트워크 액세스",
+            "description": "네트워크 명령 실행 및 인터넷 접근"
+          }
+        },
+        "note": "기본 제공 고위험 작업은 계속 확인을 요청합니다.",
         "confirm": "Full access 활성화",
-        "cancel": "현재 권한 유지"
+        "cancel": "취소"
       },
       "attachmentRejection": {
         "dismiss": "닫기"

@@ -54,6 +54,11 @@ export interface ConfirmDialogProps {
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
   /**
+   * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
+   * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
+   */
+  confirmIcon?: ReactNode;
+  /**
    * 进入"操作进行中"态:主按钮内容换成 spinner、所有按钮禁用,
    * 同时 ESC 和点击外部都不再关弹框。典型场景:用户点了确认后触发的
    * 不可逆操作(如关闭应用),期间不应再让用户操作 UI。
@@ -83,6 +88,7 @@ export function ConfirmDialog({
   autoFocusConfirm,
   confirmDisabled = false,
   confirmVariant = 'default',
+  confirmIcon,
   loading = false,
   onConfirm,
   onCancel,
@@ -225,7 +231,14 @@ export function ConfirmDialog({
                 {loading ? (
                   <Spinner size={14} />
                 ) : (
-                  resolvedConfirmText
+                  <>
+                    {confirmIcon && (
+                      <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                        {confirmIcon}
+                      </span>
+                    )}
+                    {resolvedConfirmText}
+                  </>
                 )}
               </button>
             </AlertDialog.Action>
