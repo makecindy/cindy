@@ -6,6 +6,7 @@ import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_FILENAME,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
+  CINDY_SUBAGENT_PARENT_PID_ENV,
   CINDY_SUBAGENT_TOOL_NAME,
 } from '../cindy-subagent-source.js';
 import { PI_SUBAGENT_PROGRESS_MARKER } from '../subagent-progress.js';
@@ -109,5 +110,49 @@ describe('cindy-subagent extension source', () => {
 
   it('ships as its own extension file rather than being folded into cindy-bridge', () => {
     expect(CINDY_SUBAGENT_EXTENSION_FILENAME).toBe('cindy-subagent.ts');
+  });
+
+  it('declares the watchdog constants exactly once in the composed module', () => {
+    // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
+    // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。
+    const declarations = [...CINDY_SUBAGENT_EXTENSION_SOURCE.matchAll(/const PARENT_PID_ENV\b/g)];
+    expect(declarations).toHaveLength(1);
+    const intervals = [...CINDY_SUBAGENT_EXTENSION_SOURCE.matchAll(/const PARENT_WATCHDOG_INTERVAL_MS\b/g)];
+    expect(intervals).toHaveLength(1);
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const PARENT_PID_ENV = '" + CINDY_SUBAGENT_PARENT_PID_ENV + "'");
+  });
+
+  it('installs the parent watchdog before the depth early-return', () => {
+    // 子代理走的正是深度早返回那条分支。装在 return 之后 = 看门狗永远不生效,
+    // 而字符串里"有这段代码"照样成立 —— 所以顺序必须钉住。
+    const install = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (readDepth() > 0) installParentWatchdog();');
+    const earlyReturn = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('if (readDepth() >= MAX_DEPTH) return;');
+    expect(install).toBeGreaterThan(-1);
+    expect(earlyReturn).toBeGreaterThan(install);
+  });
+
+  it('tracks live children and reaps them when the parent exits normally', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('liveChildren.add(child)');
+    // 摘除必须挂在进程真正结束的 'close' / 'error' 上,**不能**挂在 finish() 里:超时与中止
+    // 都是先 finish 再进 SIGKILL 宽限期,进程那时还活着,这段窗口内父进程退出仍要杀它。
+    const finishStart = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const finish = function');
+    const finishEnd = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf('const kill = function', finishStart);
+    expect(finishStart).toBeGreaterThan(-1);
+    expect(finishEnd).toBeGreaterThan(finishStart);
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(finishStart, finishEnd)).not.toContain('liveChildren.delete');
+    for (const handler of ["child.on('close'", "child.on('error'"]) {
+      const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
+      expect(at).toBeGreaterThan(-1);
+      expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 240)).toContain('liveChildren.delete(child)');
+    }
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("process.on('exit', reapLiveChildren)");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("childEnv[PARENT_PID_ENV] = String(process.pid)");
+  });
+
+  it('registers no signal handlers (that would suppress pi\'s default terminate)', () => {
+    // Node/Bun 里加一个 SIGTERM 监听就抑制了该信号的默认终止行为:pi 自身若没有别的处理器,
+    // 收到 Cindy 的 SIGTERM 后不会退出,每次关会话都要等满 3s 宽限再被 SIGKILL。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGTERM'");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGINT'");
   });
 });
