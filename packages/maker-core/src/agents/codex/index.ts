@@ -82,6 +82,7 @@ import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import {
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -2781,6 +2782,15 @@ export class CodexAgent extends BaseAgent {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
     };
+    // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Pi 同口径,走既有的
+    // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      eventQueue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'codex',
+      });
+    });
     /**
      * 用于**目录查找**的模型 id —— 与 mutableModel(送上游的 wire 值)刻意分开。
      *
@@ -4159,6 +4169,9 @@ export class CodexAgent extends BaseAgent {
         } else if (decision.verdict === 'allow') {
           return 'accept';
         } else if (decision.verdict === 'block') {
+          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
+          // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
+          if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return 'decline';
         } else {
           // Only red-line decisions reach the user and they cannot be remembered.
@@ -8653,6 +8666,7 @@ export class CodexAgent extends BaseAgent {
         if (newModel === mutableModel) {
           if (mutableProviderId !== prevProviderId) {
             autoReviewDecisionCache.clear();
+            autoReviewUnavailableNotice.reset();
             refreshCodexAutoReviewerRoute(threadId);
           }
           return;
@@ -8662,6 +8676,8 @@ export class CodexAgent extends BaseAgent {
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
+        // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
+        autoReviewUnavailableNotice.reset();
         // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
         mutableCatalogModel = newModel;
         try {
@@ -8698,6 +8714,8 @@ export class CodexAgent extends BaseAgent {
 
       async setPermissionMode(newMode: PermissionMode) {
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode });
+        // 用户自己动过权限档 → 一次性提示重新武装(与 Claude 同口径)。
+        if (newMode !== mutablePermissionMode) autoReviewUnavailableNotice.reset();
         // Full access 才能批量放行挂起的 ask。切到 Auto 时，已有请求不能绕过
         // reviewer / 人工降级审批，先 fail-closed 关闭；后续重试按当前路由能力
         // 选择 auto_review 或 user reviewer。

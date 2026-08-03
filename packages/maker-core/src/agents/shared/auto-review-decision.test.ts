@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTO_REVIEW_UNAVAILABLE_CODE,
   classifyLocalAutoReviewTier,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewRequest,
@@ -172,6 +174,95 @@ describe('resolveAutoReviewDecision', () => {
       verdict: 'block',
       reason: expect.stringContaining('could not complete'),
     });
+  });
+
+  /**
+   * 「审阅器没跑起来」与「模型判定动作危险」以前被压成同一个 `block`(issue #1574),
+   * 上层无法区分 —— 前者是基础设施故障、用户有权知道并接管,却和后者一样对 UI 静默。
+   */
+  describe('marks infrastructure failures apart from model verdicts', () => {
+    const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
+
+    it('flags a missing reviewer as unavailable', async () => {
+      await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({
+        verdict: 'block',
+        unavailable: true,
+      });
+    });
+
+    it('flags a throwing reviewer as unavailable', async () => {
+      await expect(resolveAutoReviewDecision(gray, async () => {
+        throw new Error('offline');
+      })).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+    });
+
+    it('flags invalid reviewer output as unavailable', async () => {
+      await expect(resolveAutoReviewDecision(
+        gray,
+        async () => ({ verdict: 'unknown' } as never),
+      )).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+    });
+
+    it('flags a reviewer timeout as unavailable', async () => {
+      vi.useFakeTimers();
+      const pending = resolveAutoReviewDecision(gray, async () => new Promise<never>(() => {}));
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+    });
+
+    it('does NOT flag a model block — that one stays silent by design', async () => {
+      const decision = await resolveAutoReviewDecision(
+        gray,
+        async () => ({ verdict: 'block', reason: 'ambiguous install target' }),
+      );
+      expect(decision).toEqual({ verdict: 'block', reason: 'ambiguous install target' });
+      expect(decision.unavailable).toBeUndefined();
+    });
+
+    it('does NOT flag under-specified or oversized actions — the reviewer is fine, the evidence is not', async () => {
+      const noEvidence = await resolveAutoReviewDecision(
+        request({ kind: 'exec', command: '   ' }),
+        async () => ({ verdict: 'allow' }),
+      );
+      expect(noEvidence.verdict).toBe('block');
+      expect(noEvidence.unavailable).toBeUndefined();
+
+      const oversized = await resolveAutoReviewDecision(
+        request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+        async () => ({ verdict: 'allow' }),
+      );
+      expect(oversized.verdict).toBe('block');
+      expect(oversized.unavailable).toBeUndefined();
+    });
+
+    it('ignores an unavailable flag claimed by a delegate that did answer', async () => {
+      // delegate 给出了合法 verdict 就说明它跑起来了;它无权自称 unavailable。
+      const decision = await resolveAutoReviewDecision(
+        gray,
+        async () => ({ verdict: 'block', reason: 'nope', unavailable: true }),
+      );
+      expect(decision.unavailable).toBeUndefined();
+    });
+  });
+});
+
+describe('createAutoReviewUnavailableNotice', () => {
+  it('emits once per session and re-arms only after reset', () => {
+    const emitted: string[] = [];
+    const notice = createAutoReviewUnavailableNotice((message) => emitted.push(message));
+
+    notice.notify();
+    notice.notify();
+    notice.notify();
+    // 逐条提示会把 Auto 退化成比 Ask 更烦的东西 —— 一个会话只说一次。
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
+    // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
+    expect(emitted[0]).toContain('Auto-review is temporarily unavailable');
+
+    notice.reset();
+    notice.notify();
+    expect(emitted).toHaveLength(2);
   });
 });
 
