@@ -201,6 +201,22 @@ describe('useComposerSendShortcutPreference', () => {
         expected: 'ignore',
       },
       {
+        name: 'keeps a repeated plain Enter native in modifier-enter mode',
+        preference: 'modifier-enter',
+        platform: 'darwin',
+        turnRunning: false,
+        event: enterEvent({ repeat: true }),
+        expected: 'native',
+      },
+      {
+        name: 'ignores a repeated modifier Enter send in modifier-enter mode',
+        preference: 'modifier-enter',
+        platform: 'darwin',
+        turnRunning: false,
+        event: enterEvent({ metaKey: true, repeat: true }),
+        expected: 'ignore',
+      },
+      {
         name: 'leaves IME composition to the native editor path',
         preference: 'enter',
         platform: 'darwin',

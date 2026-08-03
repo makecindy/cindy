@@ -122,7 +122,8 @@ describe('ChatInput steer shortcut contract', () => {
     expect(modeB(makeEnterEvent({ shiftKey: true }))).toBeNull();
     expect(modeB(makeEnterEvent({ altKey: true }))).toBeNull();
     expect(modeB(makeEnterEvent({ isComposing: true }))).toBe('native');
-    expect(modeB(makeEnterEvent({ repeat: true }))).toBe('ignore');
+    expect(modeB(makeEnterEvent({ repeat: true }))).toBe('native');
+    expect(modeB(makeEnterEvent({ metaKey: true, repeat: true }))).toBe('ignore');
   });
 
   it('wires Settings preference updates to ChatInput copy while preserving row-level steer', () => {

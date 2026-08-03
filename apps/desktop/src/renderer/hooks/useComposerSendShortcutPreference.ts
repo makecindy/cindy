@@ -55,9 +55,13 @@ export function resolveComposerEnterIntent(
 ): ComposerEnterIntent {
   if (event.key !== 'Enter' || event.shiftKey || event.altKey) return null;
   if (event.isComposing) return 'native';
-  if (event.repeat) return 'ignore';
 
   const hasModifier = hasComposerModifier(event, options.platform);
+  if (event.repeat) {
+    const isSendShortcut = preference === 'enter' || hasModifier;
+    return isSendShortcut ? 'ignore' : 'native';
+  }
+
   if (preference === 'modifier-enter') {
     return hasModifier ? 'queue' : 'native';
   }
