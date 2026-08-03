@@ -209,6 +209,10 @@ describe('interrupted continuation enqueue contract', () => {
     );
   });
 
+  it('advertises interval null-clear support for mobile wire compatibility', () => {
+    expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);
