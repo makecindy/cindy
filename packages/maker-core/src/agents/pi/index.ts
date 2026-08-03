@@ -706,27 +706,41 @@ export class PiAgent extends BaseAgent {
 
     // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
     // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
-    // 失败只告警不阻塞:读不到文件时扩展退回 pi 默认解析,不会拿 stale 值顶。
+    //
+    // **返回 Promise 且调用方必须 await**:不能 fire-and-forget。startSession 要在会话对外
+    // 暴露(模型能调 subagent)**之前**落盘初始 provider/model,否则 BYOM / 本地 provider 或
+    // 非默认模型的会话一开始就调子代理时,文件还不存在 → 扩展不传 --provider/--model → 子进程
+    // 走 pi 默认解析,直接跑错 endpoint(review)。setModel 同理:切完模型立刻派子代理必须already
+    // 看到新值。
+    //
+    // 写失败时**删除**该文件而不是留旧内容:让扩展退回 pi 默认解析,而不是拿一个已知过期的
+    // 显式模型顶 —— 后者正是本条 review 要消除的行为。删除本身也是 best-effort。
     let subagentRuntimeWriteChain: Promise<void> = Promise.resolve();
     let subagentRuntimeWriteGen = 0;
-    const writeSubagentRuntimeFile = (next: { model?: string; provider?: string }): void => {
+    const writeSubagentRuntimeFile = (next: { model?: string; provider?: string }): Promise<void> => {
       const gen = ++subagentRuntimeWriteGen;
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
       };
-      subagentRuntimeWriteChain = subagentRuntimeWriteChain
-        .then(async () => {
-          if (gen !== subagentRuntimeWriteGen) return;
+      const run = subagentRuntimeWriteChain.then(async () => {
+        // 已被更晚的意图取代:旧内容不得在新内容之后落盘。
+        if (gen !== subagentRuntimeWriteGen) return;
+        try {
           await fs.writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
-        })
-        // 链永不停在 rejected 上(同权限档):否则一次写失败后续写永远追加不进去。
-        .catch((error: unknown) => {
-          this.deps.logger.warn('pi subagent runtime snapshot write failed', {
+        } catch (error) {
+          this.deps.logger.warn('pi subagent runtime snapshot write failed; clearing stale snapshot', {
             message: error instanceof Error ? error.message : String(error),
           });
-        });
+          await fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
+        }
+      });
+      // 链永不停在 rejected 上(同权限档):否则一次写失败后续写永远追加不进去。
+      subagentRuntimeWriteChain = run.catch(() => {});
+      return run;
     };
+    // 会话暴露前先落初始快照(await:模型第一次调 subagent 时文件必须已经在)。
+    await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider });
 
     // MCP 桥:host 把 in-process MCP providers 暴露成 localhost streamable-HTTP。
     // 传 session 身份(sessionId/workingDir/vendorOptions)让 host 在 bridge 上注册
@@ -1314,8 +1328,9 @@ export class PiAgent extends BaseAgent {
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
         mutablePiProviderId = provider;
-        // 子代理读的是运行期文件,不是 spawn 时定型的 env —— 这里必须同步刷新。
-        writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId });
+        // 子代理读的是运行期文件,不是 spawn 时定型的 env —— 必须**等写入落盘**再返回,
+        // 否则切完模型立刻派子代理会读到旧值(review)。
+        await writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId });
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };

@@ -1297,5 +1297,141 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         scriptedResponses.length = 0;
       }
     },
+  );  it(
+    'subagent write boundary is enforced, not cosmetic: child cannot shell out even under Full Access',
+    { timeout: 120_000 },
+    async () => {
+      // 安全回归:父会话给 Full Access(bypassPermissions)时,bridge 会在子进程里重新注册
+      // bash —— 但 `--tools read,grep,find,ls` 是 pi 的**注册面**白名单(文档:allowlist
+      // built-in, extension, and custom tools),对扩展注册的工具同样生效。这里同时验证
+      // 「没被告知」与「调了也不执行」两层,防止把只读画像做成表面白名单。
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-boundary-'));
+      const marker = path.join(workingDir, 'pwned.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe the write boundary' }),
+          // 子代理这一轮:硬调 bash 往工作区写文件(白名单外的工具)。
+          anthropicToolUseBody('bash', { command: `echo pwned > ${JSON.stringify(marker)}` }),
+          anthropicStreamBody('child could not run bash'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const agent = new PiAgent(buildDeps());
+        let handle: AgentSessionHandle | null = null;
+        try {
+          handle = await agent.startSession({
+            sessionId: 'pi-subagent-boundary',
+            workingDir,
+            model: 'pi-test-model',
+            // 最宽档:子代理的写边界不能靠父会话的权限档兜。
+            permissionMode: 'bypassPermissions',
+          });
+          const done = (async () => {
+            for await (const ev of handle!.events()) {
+              if (ev.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'go' });
+          await done;
+        } finally {
+          await handle?.close();
+        }
+
+        // 第一层:子进程被告知的工具面里没有 bash,也没有桥接的 MCP 工具。
+        const childRequest = seenRequests.find((r) => r.body.includes('scout subagent'));
+        expect(childRequest).toBeDefined();
+        const advertised = new Set(
+          [...(childRequest?.body ?? '').matchAll(/"name":"([a-zA-Z0-9_]+)"/g)].map((m) => m[1]),
+        );
+        expect([...advertised].sort()).toEqual(['find', 'grep', 'ls', 'read']);
+        expect(advertised.has('bash')).toBe(false);
+
+        // 第二层(真正的边界):即便模型硬调 bash,工作区也不得被改动。
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+  it(
+    'BYOM: a subagent dispatched right after startSession still routes to the native endpoint',
+    { timeout: 120_000 },
+    async () => {
+      // review 回归:子代理的 provider/model 来自运行期快照文件。若该快照不是在会话对外暴露
+      // **之前**写好,BYOM / 本地 provider 会话一开始就派子代理时文件还不存在 → 扩展不传
+      // --provider/--model → 子进程退回 pi 默认解析,直接打到网关而不是用户选的原生端点。
+      const nativeBodies: string[] = [];
+      // 原生端点自带脚本队列:第 1 个请求(父)派子代理,第 2 个(子)出结论,其余兜底。
+      const nativeScript = [
+        anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe byom routing' }),
+        anthropicStreamBody('native child conclusion'),
+      ];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += String(chunk); });
+        req.on('end', () => {
+          nativeBodies.push(body);
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          res.end(nativeScript.shift() ?? anthropicStreamBody('native done'));
+        });
+      });
+      await new Promise<void>((r) => nativeServer.listen(0, '127.0.0.1', r));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl = typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) => (options?.providerId === 'localbyom'
+        ? { authenticated: true, identity: 'Local BYOM', authSource: 'api-key' as const }
+        : { authenticated: false });
+      deps.auth.getAuthEnv = async () => ({ CINDY_PI_API_KEY: 'gateway-unavailable-placeholder' });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localbyom',
+            name: 'Local BYOM',
+            baseUrl: nativeUrl,
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALBYOM',
+            models: [{ id: 'byom-model', name: 'BYOM Model' }],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALBYOM: 'byom-secret-key' },
+      });
+
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-subagent-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        const gatewayBefore = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'byom-subagent-session',
+          workingDir,
+          model: 'byom-model',
+          // 派子代理本身要过审批门(ask 档无 resolver 即拒);本例只验路由,给最宽档。
+          permissionMode: 'bypassPermissions',
+        });
+        const done = (async () => {
+          for await (const ev of handle!.events()) {
+            if (ev.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'delegate now' });
+        await done;
+
+        // eslint-disable-next-line no-console
+        // 父 + 子两轮都打在原生端点上。
+        expect(nativeBodies.length).toBeGreaterThanOrEqual(2);
+        // 子进程确实是原生端点接的(子代理画像 prompt 只出现在子进程的请求里)。
+        expect(nativeBodies.some((b) => b.includes('scout subagent'))).toBe(true);
+        // 网关一个请求都没有 —— 子代理没有退回默认 provider。
+        expect(seenRequests.length).toBe(gatewayBefore);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((r) => nativeServer.close(() => r()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
   );
 });
