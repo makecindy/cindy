@@ -9,6 +9,11 @@ import type { UseBrowserWebviewResult } from '../../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../../types';
 import { BrowserTabBody } from '../BrowserTabBody';
 
+const toastMocks = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+}));
+
 const browserNavigate = vi.fn();
 let browserState: UseBrowserWebviewResult;
 
@@ -21,6 +26,41 @@ vi.mock('react-i18next', () => ({
     t: (key: string) => key,
   }),
 }));
+
+vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
+
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: vi.fn(() => undefined),
+  remoteProjectsStore: {
+    subscribe: vi.fn(() => vi.fn()),
+  },
+}));
+
+vi.mock('@/components/ui/dropdown-menu', () => {
+  const react = require('react') as typeof import('react');
+  return {
+    DropdownMenu: ({ children }: { children: React.ReactNode }) =>
+      react.createElement(react.Fragment, null, children),
+    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+      react.createElement(react.Fragment, null, children),
+    DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuItem: ({
+      children,
+      onSelect,
+      disabled,
+    }: {
+      children: React.ReactNode;
+      onSelect?: () => void;
+      disabled?: boolean;
+    }) =>
+      react.createElement(
+        'button',
+        { type: 'button', disabled, onClick: () => onSelect?.() },
+        children,
+      ),
+  };
+});
 
 vi.mock('../../../hooks/useBrowserWebview', () => ({
   useBrowserWebview: () => browserState,
@@ -109,6 +149,8 @@ describe('BrowserTabBody navigation', () => {
       configurable: true,
       value: {
         platform: 'win32',
+        openExternal: vi.fn().mockResolvedValue({ success: true }),
+        openFileInBrowser: vi.fn().mockResolvedValue({ success: true }),
         onRsbBrowserFocusUrlBar: vi.fn(() => vi.fn()),
         onRsbBrowserCommand: vi.fn(() => vi.fn()),
       },
@@ -120,6 +162,8 @@ describe('BrowserTabBody navigation', () => {
     poolMocks.currentWrapper = null;
     document.getElementById('browser-webview-pool')?.remove();
     vi.clearAllMocks();
+    toastMocks.error.mockReset();
+    toastMocks.success.mockReset();
     browserState = makeBrowserState();
   });
 
@@ -479,5 +523,111 @@ describe('BrowserTabBody navigation', () => {
     view.rerender(renderBrowserTab(callback, patchState));
 
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('opens a local HTML page through the file opener, preserving URL state', async () => {
+    const openExternal = vi.fn().mockResolvedValue({ success: true });
+    const openFileInBrowser = vi.fn().mockResolvedValue({ success: true });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'win32',
+        openExternal,
+        openFileInBrowser,
+        onRsbBrowserFocusUrlBar: vi.fn(() => vi.fn()),
+        onRsbBrowserCommand: vi.fn(() => vi.fn()),
+      },
+    });
+    browserState = makeBrowserState({
+      url: 'file:///C:/repo/%E6%B5%8B%E8%AF%95%20page.html?mode=review#section',
+    });
+    render(
+      renderBrowserTab(
+        'file:///C:/repo/%E6%B5%8B%E8%AF%95%20page.html?mode=review#section',
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rightSidebar.browser.openInSystemBrowser' }),
+    );
+    await Promise.resolve();
+
+    expect(openFileInBrowser).toHaveBeenCalledWith(
+      'file:///C:/repo/%E6%B5%8B%E8%AF%95%20page.html?mode=review#section',
+    );
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('keeps HTTP pages on the external URL opener', async () => {
+    const openExternal = vi.fn().mockResolvedValue({ success: true });
+    const openFileInBrowser = vi.fn().mockResolvedValue({ success: true });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'win32',
+        openExternal,
+        openFileInBrowser,
+        onRsbBrowserFocusUrlBar: vi.fn(() => vi.fn()),
+        onRsbBrowserCommand: vi.fn(() => vi.fn()),
+      },
+    });
+    browserState = makeBrowserState({ url: 'https://example.com/path?q=1' });
+    render(renderBrowserTab('https://example.com/path?q=1'));
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rightSidebar.browser.openInSystemBrowser' }),
+    );
+    await Promise.resolve();
+
+    expect(openExternal).toHaveBeenCalledWith('https://example.com/path?q=1');
+    expect(openFileInBrowser).not.toHaveBeenCalled();
+  });
+
+  it('disables system-browser opening for remote local-file URLs', () => {
+    browserState = makeBrowserState({ url: 'file:///remote/repo/index.html' });
+    const ctx: TabKindHostContext = {
+      tabId: 'tab-browser',
+      sessionId: 'session-a',
+      workdir: 'C:/repo',
+      remoteHostId: 'ssh-host',
+      patchState: vi.fn(),
+      onVisibilityChange: vi.fn(),
+      setCloseInterceptor: vi.fn(() => () => undefined),
+    };
+    render(
+      createElement(BrowserTabBody, {
+        active: true,
+        ctx,
+        state: {
+          url: 'file:///remote/repo/index.html',
+          title: '',
+          favicon: null,
+          isAudible: false,
+        },
+      }),
+    );
+
+    expect(
+      (screen.getByRole('button', {
+        name: 'rightSidebar.browser.openInSystemBrowser',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'rightSidebar.browser.copyLink' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it('disables system-browser opening for device-link local-file URLs', async () => {
+    const { getSessionDeviceId } = await import('@/features/device-link/remoteProjectsStore');
+    vi.mocked(getSessionDeviceId).mockReturnValue('device-1');
+    browserState = makeBrowserState({ url: 'file:///remote/repo/index.html' });
+    render(renderBrowserTab('file:///remote/repo/index.html'));
+
+    expect(
+      (screen.getByRole('button', {
+        name: 'rightSidebar.browser.openInSystemBrowser',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });
