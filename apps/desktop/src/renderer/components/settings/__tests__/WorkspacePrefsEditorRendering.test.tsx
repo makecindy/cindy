@@ -154,6 +154,7 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
     hint: null,
     retry: null,
     imDefaults: { agentKind: 'claude-code', agents: {} },
+    reloadImDefaults: async () => {},
     applyPatch,
     teams: [],
     selectedTeamId: null,

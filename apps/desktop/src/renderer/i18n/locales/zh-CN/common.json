@@ -2701,7 +2701,9 @@
           "defaultWorkspaceChip": "默认：{{name}}",
           "defaultWorkspaceAria": "选择派发任务时使用的默认工作目录",
           "defaultWorkspaceRadioAria": "把「{{name}}」设为默认工作目录",
-          "defaultWorkspaceRowHint": "选中的目录是默认工作目录：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /workspace 单独选过的，仍按那个走）。请留意所选目录这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个仓库里执行。"
+          "defaultWorkspaceRowHint": "选中的目录是默认工作目录：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /workspace 单独选过的，仍按那个走）。请留意所选目录这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个仓库里执行。",
+          "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
+          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置（{{agent}} · {{model}}），它仍会作为没有单独配置过的目录的兜底值。现在这些值统一在上方每个目录里设置，恢复默认即可让这份旧设置失效；从未改过的设备不会看到这一条。"
         },
         "binding": {
           "copyLink": "复制链接",

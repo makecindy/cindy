@@ -550,8 +550,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       xBindingCache: account.x.bindingCache ? { ...account.x.bindingCache } : null,
       // 读侧兜底: 正常路径上 setWorkspaces 已把失效别名从存档里删了, 这里只兜
       // 手改配置文件、或将来新增了别的清单写入口的情况。代价不对称 —— 漏兜的
-      // 后果是 hello 带上清单外别名被协议拒收, X 连接断在握手上且没有任何用户
-      // 可见线索, 所以这层留着。
+      // 后果是 hello 带上清单外别名被协议拒收, **该 provider 的连接**断在握手上
+      // 且没有任何用户可见线索(Telegram / X 两条线同样适用), 所以这层留着。
       xDefaultWorkspace: selectableDefaultWorkspace(document, account.x.defaultWorkspace),
       telegramDefaultWorkspace: selectableDefaultWorkspace(
         document,

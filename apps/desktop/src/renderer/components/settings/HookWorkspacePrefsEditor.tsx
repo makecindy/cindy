@@ -111,6 +111,8 @@ export interface HookWorkspacePrefsState {
   retry: (() => void) | null;
   /** 桌面新会话默认设置(解析「当前生效默认值」的数据源; 未就绪为 null)。 */
   imDefaults: ImDefaultsLike | null;
+  /** 重新拉取 imDefaults(存量 global override 被清掉后刷新目录行的生效值)。 */
+  reloadImDefaults: () => Promise<void>;
   /** alsoProviderSource: 远端写成功后串联落本地来源(undefined = 不动来源)。 */
   applyPatch: (
     workspace: string,
@@ -156,6 +158,22 @@ export function useHookWorkspacePrefs(
   const [providerSources, setProviderSources] = useState<HookWorkspaceProviderSourceEntry[]>([]);
   // latest-wins 守卫(Copilot review): 快速连选/跨窗口广播时, 较慢的旧回复不得覆盖新状态。
   const providerSourceRevisionRef = useRef(0);
+  /**
+   * 拉一次「新会话默认设置」(目录行未显式设置字段的生效值解析源)。
+   * 单独抽出来是因为存量 global override 被清掉后要能立刻刷新生效值 —— 否则目录行
+   * 会继续显示已经不再生效的旧默认。
+   */
+  const fetchImDefaults = useCallback(async (): Promise<void> => {
+    try {
+      const state: ImDefaultSettingsState = await window.electronAPI.maker.imDefaultSettingsGet(
+        provider === 'slack' ? 'slack' : undefined,
+      );
+      setImDefaults({ agentKind: state.agentKind, agents: state.agents });
+    } catch {
+      /* 读不到就保持上一份(解析退回内置默认), 不影响目录行其它字段 */
+    }
+  }, [provider]);
+
   const neutral = isNeutralPrefsProvider(provider);
   const neutralView = neutral && hook !== null ? hook[provider as NeutralPrefsProvider] : null;
   const neutralBindingId =
@@ -244,12 +262,7 @@ export function useHookWorkspacePrefs(
     // channels.slack, 官方 Telegram 读 global；个人 Telegram Bot 才读
     // channels.telegram。这里必须与官方派发侧同源，否则目录行会显示一套默认值、
     // 实际会话却使用另一套。
-    void window.electronAPI.maker
-      .imDefaultSettingsGet(provider === 'slack' ? 'slack' : undefined)
-      .then((state: ImDefaultSettingsState) => {
-        if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
-      })
-      .catch(() => {});
+    void fetchImDefaults();
     // 初次拉取同样受 latest-wins 守卫(Copilot review): 回复未归时若已收到其它
     // 窗口的写入广播(revision 已前进), 旧快照不得回滚新状态。
     const initialSourcesRevision = providerSourceRevisionRef.current;
@@ -445,6 +458,7 @@ export function useHookWorkspacePrefs(
     hint,
     retry: loadError === 'unavailable' ? () => void fetchPrefs() : null,
     imDefaults,
+    reloadImDefaults: fetchImDefaults,
     applyPatch,
     teams,
     selectedTeamId,

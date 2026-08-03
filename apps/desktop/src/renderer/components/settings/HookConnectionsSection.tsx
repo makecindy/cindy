@@ -35,7 +35,7 @@
  * 颜色全部走主题 token; 状态徽章沿用「个人」栏的 --settings-badge-* 语义色。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
 
@@ -50,6 +50,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
+import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
 import {
@@ -126,6 +127,103 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
 }
 
 /**
+ * 存量 global override 的收尾入口（**只对升级用户可见**）。
+ *
+ * 官方卡的「新对话配置」区块删掉后, 用户此前在那里改过的 agent / model / effort 仍以
+ * global scope 落在盘上, 并继续被 session-runner(`readImDefaultSettings(undefined)`)与
+ * 目录行的生效值解析当作 fallback —— 于是旧设置照旧影响所有没显式配置的目录、以及
+ * 以后新加的目录, 而用户再也看不到、也改不了它(review 指出)。
+ *
+ * 不选"静默清除": 那会在升级瞬间悄悄改掉用户已保存的 agent / 模型。也不选"把区块留
+ * 着": 那等于把这次要消除的重叠原样放回来。折中是**仅当确实存在 override 时**露出这
+ * 一条: 说清它还在生效、显示它是什么、给一个恢复默认的按钮; 恢复后它永久消失, 从未
+ * 设过的用户一次都看不到。
+ */
+function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
+  const { t } = useTranslation();
+  const [state, setState] = useState<ImDefaultSettingsState | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void window.electronAPI.maker
+      .imDefaultSettingsGet()
+      .then((next) => {
+        if (active) setState(next);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const restore = useCallback(async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      setState(await window.electronAPI.maker.imDefaultSettingsReset());
+      onCleared();
+      toast.success(t('settings.defaults.restored'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+    } finally {
+      setPending(false);
+    }
+  }, [onCleared, pending, t]);
+
+  if (state === null || !state.isCustomized) return null;
+  return (
+    <div
+      data-testid="hook-legacy-global-defaults"
+      className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5"
+    >
+      <span className="text-12 font-medium text-[var(--text-secondary)]">
+        {t('settings.remoteControl.hook.form.legacyDefaultsTitle')}
+      </span>
+      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t('settings.remoteControl.hook.form.legacyDefaultsDescription', {
+          agent: state.agentKind,
+          model: state.agents[state.agentKind].model,
+        })}
+      </span>
+      <button
+        type="button"
+        data-testid="hook-legacy-global-defaults-restore"
+        onClick={() => void restore()}
+        disabled={pending}
+        className="mt-0.5 flex h-7 w-fit items-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-50"
+      >
+        {t('settings.defaults.restore')}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 单选组的方向键导航(WAI-ARIA radio group: 方向键同时移动焦点与选中项)。
+ *
+ * roving tabIndex 只解决"Tab 一次进组"; 组内换项必须靠方向键 —— 只给 tabIndex 的话
+ * 键盘用户进组后就再也切不出去(review 指出)。禁用项(未落盘的新目录行)跳过。
+ * 复用各项自己的 onClick 完成写入, 不在这里重复一条写路径。
+ */
+function handleRadioGroupKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+  const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+  const backward = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+  if (!forward && !backward) return;
+  const options = [
+    ...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]:not([disabled])'),
+  ];
+  if (options.length === 0) return;
+  const current = options.indexOf(document.activeElement as HTMLButtonElement);
+  // 焦点还不在任何一项上(例如刚点进容器): 从选中项开始, 没有选中项就从头。
+  const from = current >= 0 ? current : Math.max(0, options.findIndex((o) => o.getAttribute('aria-checked') === 'true'));
+  const next = options[(from + (forward ? 1 : -1) + options.length) % options.length];
+  e.preventDefault();
+  next.focus();
+  next.click();
+}
+
+/**
  * 目录行头部的「设为默认工作目录」单选(row 形态; Telegram 用)。
  *
  * 视觉沿用 LanguageSection 的选中态范式与 --settings-menu-* 语义 token —— 双模式
@@ -137,10 +235,13 @@ function DefaultWorkspaceRadio({
   selected,
   label,
   onSelect,
+  disabled = false,
 }: {
   selected: boolean;
   label: string;
   onSelect: () => void;
+  /** true = 这一行还没落盘, 不能当默认目录(别名尚未进 workspaces)。 */
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -148,6 +249,8 @@ function DefaultWorkspaceRadio({
       role="radio"
       aria-checked={selected}
       aria-label={label}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
       title={label}
       tabIndex={selected ? 0 : -1}
       onClick={onSelect}
@@ -156,6 +259,7 @@ function DefaultWorkspaceRadio({
         selected
           ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
           : 'border-[var(--border-default)] text-transparent hover:border-[var(--settings-menu-border-selected)]',
+        disabled && 'cursor-not-allowed opacity-40 hover:border-[var(--border-default)]',
       )}
     >
       <Check size={12} aria-hidden />
@@ -833,6 +937,16 @@ export function HookConnectionsSection() {
    * 渠道切换 chip。用普通函数而非内联子组件渲染: 内联组件每次渲染都会
    * 重建类型导致子树 remount, 别名输入框会在输入中途失焦。
    */
+  /**
+   * 该目录当前**已保存**的别名(null = 这一行还没落盘, 或别名正在编辑中)。
+   *
+   * 默认工作目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 所以选中态
+   * 与写入都必须以落盘的那份映射为准, 不能用别名输入框的临时值。目录路径在一次渲染
+   * 里是稳定键(rows 就按 dir 去重), 用它反查别名。
+   */
+  const savedAliasOf = (dir: string): string | null =>
+    Object.keys(hook.workspaces).find((alias) => hook.workspaces[alias] === dir) ?? null;
+
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
@@ -952,6 +1066,7 @@ export function HookConnectionsSection() {
             ? {
                 role: 'radiogroup',
                 'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+                onKeyDown: handleRadioGroupKeyDown,
               }
             : {})}
         >
@@ -989,18 +1104,23 @@ export function HookConnectionsSection() {
             <div className="flex items-center gap-1.5">
               {defaultWorkspace?.mode === 'row' ? (
                 <DefaultWorkspaceRadio
-                  // 别名正在编辑(未保存)时不能当选中目标: 写进去的别名要与
-                  // workspaces 里那份一致, 否则 store 校验直接拒。
-                  selected={defaultWorkspace.value === row.alias.trim()}
-                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
-                    name: row.alias.trim(),
-                  })}
-                  onSelect={() =>
-                    void setProviderDefaultWorkspace(
-                      defaultWorkspace.provider,
-                      row.alias.trim(),
-                    )
+                  // **只认已保存的 alias → dir 映射**, 不看输入框里的临时值: 别名改了
+                  // 但还没 blur 落盘时, 拿它当选中判据会把未保存的名字显示成已选中,
+                  // 点下去还会把 workspaces 里不存在的别名发给 store(直接抛校验错)。
+                  // 未保存的新行(还没有对应映射)不给选 —— 先落盘再设默认。
+                  selected={
+                    savedAliasOf(row.dir) !== null &&
+                    defaultWorkspace.value === savedAliasOf(row.dir)
                   }
+                  disabled={savedAliasOf(row.dir) === null}
+                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
+                    name: savedAliasOf(row.dir) ?? row.alias.trim(),
+                  })}
+                  onSelect={() => {
+                    const saved = savedAliasOf(row.dir);
+                    if (saved === null) return;
+                    void setProviderDefaultWorkspace(defaultWorkspace.provider, saved);
+                  }}
                 />
               ) : null}
               <input
@@ -1215,6 +1335,12 @@ export function HookConnectionsSection() {
                 provider,
               })
             : null}
+          {/* 存量 global override 的收尾入口。刻意不放在 cs.confirmed 里 —— 旧设置在
+              绑定确认之前就已经在盘上影响解析了, 要能看见才谈得上"可管理"。
+              从未改过的设备一次都不会渲染这一条(见组件注释)。 */}
+          {provider === 'telegram' && view.enabled ? (
+            <LegacyGlobalDefaultsNotice onCleared={() => void prefsState.reloadImDefaults()} />
+          ) : null}
           {provider === 'telegram' && cs.confirmed ? (
             <div
               key={cs.binding?.bindingId ?? 'telegram-unbound'}

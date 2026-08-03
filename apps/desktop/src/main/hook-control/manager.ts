@@ -1740,6 +1740,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // 每次连接成功都重读配置 —— 别名映射变更后重连即生效
     const device = deviceInfo();
     const config = store.get();
+    const defaultWorkspace = defaultWorkspaceOf(config, provider);
     return {
       deviceId: device.deviceId,
       deviceName: device.deviceName,
@@ -1755,9 +1756,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 默认工作目录: X 与 Telegram 都有(Slack 的默认仍走它自己的卡)。
       // store 侧已保证读出来的别名仍在 workspaces 里(目录删掉即归零), 所以这里
       // 不再复核 —— 复核两遍反而会让"哪边是权威"变模糊。
-      ...(defaultWorkspaceOf(config, provider) !== null
-        ? { defaultWorkspace: defaultWorkspaceOf(config, provider) }
-        : {}),
+      // 只算一次再复用: 判断与赋值必须是同一个值(将来这个函数变复杂也不会分叉)。
+      ...(defaultWorkspace !== null ? { defaultWorkspace } : {}),
     };
   }
 

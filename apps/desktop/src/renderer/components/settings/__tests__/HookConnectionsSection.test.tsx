@@ -18,13 +18,22 @@ const ipc = vi.hoisted(() => ({
   openProviderAction: vi.fn(),
   openExternal: vi.fn(),
   setProviderDefaultWorkspace: vi.fn(),
+  imDefaultSettingsGet: vi.fn(),
+  imDefaultSettingsReset: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
 const toast = vi.hoisted(() => ({ error: vi.fn() }));
 
+/** t 只回键名 —— 插值参数另存一份, 让"文案带没带上正确的值"也能断言。 */
+const tCalls: Array<{ key: string; vars?: Record<string, unknown> }> = [];
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, vars?: Record<string, unknown>) => {
+      tCalls.push({ key, vars });
+      return key;
+    },
+  }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -147,6 +156,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     // X 用法确认门按 principalId 记账在 localStorage 里, 而 jsdom 的 localStorage
     // 跨用例保留 —— 不清就会被前一条用例的记账吃掉, 后面的用例白绿。
     localStorage.clear();
+    tCalls.length = 0;
     resetXUsageNoticeMemoryState();
     ipc.onStatusChanged.mockReturnValue(() => {});
     ipc.setEnabled.mockResolvedValue({ hook: BASE_HOOK });
@@ -154,6 +164,9 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     ipc.providerBindRevoke.mockResolvedValue({ hook: BASE_HOOK });
     ipc.revokeTeam.mockResolvedValue({ hook: BASE_HOOK });
     ipc.openProviderAction.mockResolvedValue(undefined);
+    // 默认: 没有存量 global override(绝大多数设备) —— 收尾入口一次都不该露出来
+    ipc.imDefaultSettingsGet.mockResolvedValue({ isCustomized: false });
+    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false });
     dialog.confirm.mockResolvedValue(true);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       hookControl: {
@@ -168,6 +181,10 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
         revokeTeam: ipc.revokeTeam,
         openProviderAction: ipc.openProviderAction,
         setProviderDefaultWorkspace: ipc.setProviderDefaultWorkspace,
+      },
+      maker: {
+        imDefaultSettingsGet: ipc.imDefaultSettingsGet,
+        imDefaultSettingsReset: ipc.imDefaultSettingsReset,
       },
       openExternal: ipc.openExternal,
     };
@@ -991,6 +1008,111 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await waitFor(() =>
       expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
     );
+  });
+
+  /** 目录清单 + 两条 provider lane 的 hook 视图(默认目录相关用例共用)。 */
+  function hookWithWorkdirs(telegramDefault: string | null): SlackHookView {
+    const lane = {
+      enabled: true,
+      url: 'wss://tg-hook.example.test',
+      status: 'connected' as const,
+      lastError: null,
+      available: true,
+      capabilityPending: false,
+      defaultWorkspace: telegramDefault,
+      binding: null,
+    };
+    return {
+      ...BASE_HOOK,
+      workspaces: { cindy: '/Users/dash/Code/cindy', blog: '/Users/dash/Code/blog' },
+      telegram: lane,
+      x: { ...lane, url: 'wss://x-hook.example.test', defaultWorkspace: null },
+    };
+  }
+
+  it('方向键能在目录之间切换默认工作目录(roving tabIndex 之外还要能换项)', async () => {
+    // 只给 roving tabIndex 的话, 键盘用户 Tab 进组后其余项都是 tabIndex=-1,
+    // 没有方向键处理就再也切不动 —— 这一条锁住 WAI-ARIA radio group 的换项行为。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+
+    const radios = await screen.findAllByRole('radio');
+    expect(radios).toHaveLength(3); // 对话 + cindy + blog
+    radios[0].focus();
+    fireEvent.keyDown(radios[0].parentElement!.closest('[role="radiogroup"]')!, {
+      key: 'ArrowDown',
+    });
+    await waitFor(() =>
+      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
+    );
+    // 焦点也要跟过去, 否则连按方向键只会在原处反复触发同一项
+    expect(document.activeElement).toBe(radios[1]);
+  });
+
+  it('别名输入框里未保存的临时值不影响选中态, 也不会被写进 IPC', async () => {
+    // 默认目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 拿输入框的
+    // 临时值当判据会把未保存的名字显示成已选中, 点下去还会触发 store 校验报错。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs('cindy') });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+
+    const radios = await screen.findAllByRole('radio');
+    // cindy 是当前默认 → 第二项选中(第一项是「对话」)
+    expect(radios[1].getAttribute('aria-checked')).toBe('true');
+
+    // 把 cindy 这一行的别名改成 renamed 但**不失焦**(不落盘)
+    const aliasInput = screen.getByDisplayValue('cindy');
+    fireEvent.change(aliasInput, { target: { value: 'renamed' } });
+
+    // 选中态仍按已保存的映射走, 没有跳成"未选中"
+    expect(screen.getAllByRole('radio')[1].getAttribute('aria-checked')).toBe('true');
+    // 点它写回去的也必须是已保存的 cindy, 不是 renamed
+    ipc.setProviderDefaultWorkspace.mockClear();
+    fireEvent.click(screen.getAllByRole('radio')[1]);
+    await waitFor(() =>
+      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
+    );
+    expect(ipc.setProviderDefaultWorkspace).not.toHaveBeenCalledWith(
+      'telegram',
+      expect.stringContaining('renamed'),
+    );
+  });
+
+  it('存量 global override: 露出可恢复入口, 恢复后消失; 从未设过的设备看不到', async () => {
+    // 删掉「新对话配置」后, 旧 override 仍被 session-runner 与目录行解析当 fallback,
+    // 却再也没有入口 —— 那是"旧设置继续生效但完全不可管理"(review 指出)。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
+    ipc.imDefaultSettingsGet.mockResolvedValue({
+      isCustomized: true,
+      agentKind: 'codex',
+      agents: { codex: { model: 'codex/gpt-5.5' } },
+    });
+    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    await screen.findByTestId('hook-legacy-global-defaults');
+    // 「查看」: 说清它是什么, 而不是只说"有个旧设置"。t 的 mock 只回键名, 所以断言
+    // 插值参数(否则这条会在文案退化成"存在旧设置"时照样绿)。
+    expect(
+      tCalls.find((c) => c.key === 'settings.remoteControl.hook.form.legacyDefaultsDescription')
+        ?.vars,
+    ).toMatchObject({ agent: 'codex', model: 'codex/gpt-5.5' });
+
+    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
+    await waitFor(() => expect(ipc.imDefaultSettingsReset).toHaveBeenCalled());
+    // 恢复后永久消失(不是折叠起来)
+    await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
+
+    // 从未改过的设备一次都不该看到它 —— 否则等于把删掉的重叠原样放回来
+    cleanup();
+    ipc.imDefaultSettingsGet.mockResolvedValue({ isCustomized: false });
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    await screen.findAllByRole('radio');
+    expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull();
   });
 
   /**
