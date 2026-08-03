@@ -7,6 +7,11 @@
  *
  * 这条把「呼吸挂在哪个属性上」钉在样式表里,而不是靠 code review 记住。
  * node 环境(不加 jsdom docblock):要用 import.meta.url 直接读源文件。
+ *
+ * **读进来先归一化行尾**:仓库只对 .sh / .mjs / hooks / .sql 钉了 LF,.css 没钉,
+ * Windows 检出成 CRLF。任何按 `\n` 定位的匹配在那边都会落空——本仓已经因为同一类
+ * 问题红过(#1448 的 VoiceInputSection 源码正则)。这类「读源文件做断言」的用例
+ * 一律不得对检出行尾敏感。
  */
 
 import { readFileSync } from 'node:fs';
@@ -17,13 +22,13 @@ import { describe, expect, it } from 'vitest';
 const CSS = readFileSync(
   fileURLToPath(new URL('../../../styles/globals.css', import.meta.url)),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('未读呼吸点 · 常驻动画红线', () => {
   it('关键帧只动 transform / opacity,不含任何触发绘制或布局的属性', () => {
-    const start = CSS.indexOf('@keyframes session-card-pulse');
-    expect(start).toBeGreaterThan(-1);
-    const block = CSS.slice(start, CSS.indexOf('}\n', CSS.indexOf('100%', start)) + 2);
+    // 用正则整块捕获,不靠 indexOf 数括号:嵌套的 `{}` 与行尾差异都不会把它切歪。
+    const block = /@keyframes session-card-pulse\s*\{([\s\S]*?)\n\}/.exec(CSS)?.[1];
+    expect(block, '找不到 session-card-pulse 关键帧').toBeTruthy();
     expect(block).toMatch(/transform:/);
     expect(block).toMatch(/opacity:/);
     expect(block).not.toMatch(/box-shadow|width|height|top:|left:|background|filter/);
