@@ -499,6 +499,49 @@ describe('Maker session close events', () => {
     expect(rebuilt.sdkSessionId).toBe('thread-rebuilt');
     expect(startSession).toHaveBeenCalledTimes(2);
   });
+
+  it('retries a failed crash cleanup before recreating the session', async () => {
+    const crashingHandle = createHandle({ id: 'thread-crashed-close-retry' });
+    crashingHandle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<AgentEvent>> {
+            throw new Error('iterator crashed');
+          },
+        };
+      },
+    });
+    let closeAttempts = 0;
+    crashingHandle.close = vi.fn(async () => {
+      closeAttempts += 1;
+      if (closeAttempts === 1) throw new Error('transport close failed');
+    });
+    const healthyHandle = createHandle({ id: 'thread-rebuilt-after-close-retry' });
+    const startSession = vi.fn()
+      .mockResolvedValueOnce(crashingHandle)
+      .mockResolvedValueOnce(healthyHandle);
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    const options: CreateSessionOptions = {
+      id: 'session-crash-close-retry',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    };
+
+    const crashed = await maker.createSession(options);
+    await vi.waitFor(() => expect(crashed.getStatus()).toBe('error'));
+    expect(maker.getSession('session-crash-close-retry')).toBe(crashed);
+
+    const rebuilt = await maker.createSession(options);
+    expect(rebuilt.sdkSessionId).toBe('thread-rebuilt-after-close-retry');
+    expect(maker.getSession('session-crash-close-retry')).toBe(rebuilt);
+    expect(closeAttempts).toBe(2);
+    expect(startSession).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('Maker before-start lifecycle hook', () => {

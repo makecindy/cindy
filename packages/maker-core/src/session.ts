@@ -623,10 +623,20 @@ export class Session {
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus(closeSucceeded ? 'closed' : 'error');
       this.eventListeners.clear();
-      this.statusListeners.clear();
       this.interactionListener = null;
+      if (closeSucceeded) {
+        this.setStatus('closed');
+        this.statusListeners.clear();
+      } else {
+        // handle.close() rejected: keep the Session in error rather than
+        // claiming the underlying transport is gone.  Clear the rejected
+        // close promise so Maker can retry the same close before rebuilding
+        // this id; retain status listeners so a later successful retry still
+        // removes the Session from Maker.activeSessions.
+        this.closePromise = null;
+        this.setStatus('error');
+      }
     }
   }
 

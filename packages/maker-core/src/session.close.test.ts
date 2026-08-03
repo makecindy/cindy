@@ -88,4 +88,37 @@ describe('Session close lifecycle', () => {
     expect(session.getStatus()).toBe('error');
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('retries a failed transport shutdown before publishing closed', async () => {
+    let attempts = 0;
+    const close = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('transport close failed');
+    });
+    const handle = {
+      id: 'thread-close-retry',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-close-retry',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+    const statuses: string[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+
+    await expect(session.close()).rejects.toThrow('transport close failed');
+    expect(session.getStatus()).toBe('error');
+
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(statuses).toEqual(['error', 'closed']);
+    expect(session.getStatus()).toBe('closed');
+    expect(close).toHaveBeenCalledTimes(2);
+  });
 });
