@@ -110,9 +110,6 @@ export function isBreakerObservedError(err: unknown): boolean {
  * NOT_CONNECTED / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
  */
 export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome {
-  // 已被其它观测席位结算过的失败(openLink in-flight 复用冒泡)不重复计——
-  // 「单次物理失败恰好结算一次」不变量,见 markBreakerObserved。
-  if (isBreakerObservedError(error)) return 'inconclusive';
   if (!(error instanceof DeviceLinkError)) return 'inconclusive';
   if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
   if (
@@ -227,7 +224,16 @@ export function createResponsivenessTracker(
       settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
       return result;
     } catch (err) {
-      settle(deviceId, slot, classifyDeviceSendFailure(err));
+      // 结算所有权(收敛检查点不变量 A):同一个错误对象只允许第一个 settle 的
+      // guard 按真实分类记账,之后立刻打标;openLink in-flight 复用会让同一物理
+      // 失败冒泡进任意多个 guard(observed 发起 + 业务加入者、或多个 unobserved
+      // 业务加入者,跨 250ms cohort 窗口时不同批),后续 guard 一律不定论——
+      // 「单次物理失败恰好结算一次」由结算方原子地声明,与发起方形态无关。
+      const outcome = isBreakerObservedError(err)
+        ? 'inconclusive'
+        : classifyDeviceSendFailure(err);
+      markBreakerObserved(err);
+      settle(deviceId, slot, outcome);
       throw err;
     }
   };

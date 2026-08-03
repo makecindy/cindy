@@ -101,7 +101,6 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
-  markBreakerObserved,
   OPEN_LINK_OBSERVATION_CHANNEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
@@ -855,19 +854,39 @@ function isPermanentSubscriptionReplayError(err: unknown): boolean {
   return code !== undefined && PERMANENT_SUBSCRIPTION_REPLAY_CODES.has(code);
 }
 
+/**
+ * 每设备的重放代次:只有当前代允许排下一次重试。timer map 只能取消**未触发**的
+ * 排期,取消不了已在途的 remoteSubscribe——并发触发(ws-online / presence 恢复 /
+ * 熔断恢复重叠)会让新旧两轮各自失败后各排各的 timer,旧轮回调还会误删新轮的
+ * 登记,退化成多条并行永久循环(review P2)。代次是在途请求失败回调的身份证:
+ * 外部触发翻代,旧代失败回调见代次不符即终止,任意并发形态下每设备至多一条
+ * 收敛循环存活。
+ */
+const subscriptionReplayGenerations = new Map<string, number>();
+
 function replayDeviceSubscription(
   deviceId: string,
   topics: string[],
   reason: string,
   attempt: number,
+  generation?: number,
 ): void {
-  // 新一轮重放顶掉该设备挂起的重试,避免多路触发(ws-online / presence / 熔断恢复)叠加。
+  // 外部触发(无 generation)翻代:顶掉挂起的 timer,同时使旧代在途请求失效。
+  let gen: number;
+  if (generation === undefined) {
+    gen = (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1;
+    subscriptionReplayGenerations.set(deviceId, gen);
+  } else {
+    gen = generation;
+  }
   const prev = subscriptionReplayRetryTimers.get(deviceId);
   if (prev) {
     clearTimeout(prev);
     subscriptionReplayRetryTimers.delete(deviceId);
   }
   void remoteSubscribe(deviceId, topics).catch((err) => {
+    // 旧代在途请求的迟到失败:已被新一轮取代,不再排重试也不动新代的登记。
+    if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
     // 永久失败不进收敛循环(review P2):VERSION_MISMATCH 等终态下 presence 可能
     // 一直 online、熔断也把终态应答记为恢复证据,定时器的终止条件全不命中,
     // 移除次数上限后会永久每 30s 重发刷 warn。放弃后由对应终态自己的恢复事件
@@ -887,13 +906,14 @@ function replayDeviceSubscription(
     );
     const timer = setTimeout(() => {
       subscriptionReplayRetryTimers.delete(deviceId);
+      if (subscriptionReplayGenerations.get(deviceId) !== gen) return;
       if (linkTornDown || client?.getStatus() !== 'online') return;
       if (responsivenessTracker?.isUnresponsive(deviceId)) return;
       if (presenceAvailableByDevice.get(deviceId) !== true) return;
       // 快照可能已变(窗口退订 / 新增 topic):按该设备当前的订阅快照重放。
       const current = snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId);
       if (!current || current.topics.length === 0) return;
-      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1);
+      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1, gen);
     }, delay);
     timer.unref?.();
     subscriptionReplayRetryTimers.set(deviceId, timer);
@@ -1193,16 +1213,12 @@ export async function openRemoteLink(
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     });
   };
+  // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
+  // 后续 guard 见标不定论):observed 发起、unobserved 发起被多个业务加入者
+  // 复用等全部形态都收敛到同一判据,这里不再自行打标。
   const observed = opts?.observed !== false;
   const request = observed && responsivenessTracker
-    ? responsivenessTracker
-        .guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
-        .catch((err: unknown) => {
-          // 该失败已由本观测席位结算:打标记,复用同一 promise 的外层 guard
-          // 不再重复计(见「观测唯一性不变量」)。
-          markBreakerObserved(err);
-          throw err;
-        })
+    ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
     : doOpen();
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {

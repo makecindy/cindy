@@ -17,7 +17,6 @@ import {
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
-  markBreakerObserved,
 } from '../responsivenessTracker';
 
 const DEV = 'device-under-test';
@@ -227,18 +226,32 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
     expect(classifyDeviceSendFailure(new Error('random'))).toBe('inconclusive');
   });
 
-  it('已被观测席位结算的失败(openLink in-flight 复用冒泡)不重复计 strike', () => {
-    // 观测唯一性不变量:observed 发起的 openLink 失败打标记,复用同一 promise
-    // 的外层业务 guard 再 classify 时一律不定论——单次物理失败恰好结算一次,
-    // 三批阈值不因跨 250ms cohort 窗口的 in-flight 共享退化(review P2 收敛检查点)。
-    const markedTimeout = timeoutError();
-    markBreakerObserved(markedTimeout);
-    expect(classifyDeviceSendFailure(markedTimeout)).toBe('inconclusive');
-    const markedOffline = new DeviceLinkError('DEVICE_OFFLINE', 'target offline');
-    markBreakerObserved(markedOffline);
-    expect(classifyDeviceSendFailure(markedOffline)).toBe('inconclusive');
+  it('结算所有权:同一错误对象只有第一个 settle 的 guard 记账,后续 guard 不定论', async () => {
+    // 观测唯一性不变量:openLink in-flight 复用会让同一物理失败冒泡进任意多个
+    // guard(跨 250ms cohort 窗口时不同批)。guardInvoke 结算后立刻打标,后续
+    // guard 见标一律不定论——三个 guard 共享同一超时,只记 1 个 strike,
+    // 熔断保持关闭(无标记时 3 个独立批次恰好误开,review P2 收敛检查点)。
+    const h = harness();
+    const sharedErr = timeoutError();
+    const failing = (): Promise<never> => Promise.reject(sharedErr);
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', failing),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100); // 越过 cohort 归批窗口:各 guard 确为独立批次
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
     // 标记只影响熔断结算,不改变错误本体(上层错误协议照常)
-    expect(markedTimeout.code).toBe('INVOKE_TIMEOUT');
+    expect(sharedErr.code).toBe('INVOKE_TIMEOUT');
+    // 独立的新错误对象照常累计:共享错误已记的 1 strike + 两批新超时 = 阈值,
+    // 熔断打开——证明标记只去重「同一物理失败」,不吞真实的后续失败。
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD - 1; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () => Promise.reject(timeoutError())),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100);
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
   });
 
   it('openLink 观测:成功不定论(link-accept 不作恢复证据),超时照常计失败', async () => {
