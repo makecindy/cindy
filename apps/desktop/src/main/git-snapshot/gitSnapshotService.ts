@@ -718,6 +718,31 @@ export async function writeWorktreeTreeForPaths(
   });
 }
 
+/**
+ * Returns the subset of the given repo paths whose *current* content the
+ * snapshot safety filter excludes (sensitive / oversized / nested repo) and
+ * which still exist as regular files. Readers use this to refuse building
+ * worktree trees or restore plans over bytes the savepoint system is not
+ * allowed to persist or protect.
+ */
+export async function listUnprotectedPaths(
+  repoPath: string,
+  paths: readonly string[],
+): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const plan = await buildSnapshotFilePlan(repoPath);
+  const skipped = new Set(plan.skippedFiles.map((file) => file.path));
+  const out: string[] = [];
+  for (const rawPath of uniqueRawPaths(paths)) {
+    if (!skipped.has(rawPath)) continue;
+    const abs = resolveSnapshotGitPath(repoPath, rawPath);
+    if (!abs) continue;
+    const stats = await fs.lstat(abs).catch(() => null);
+    if (stats && !stats.isDirectory()) out.push(rawPath);
+  }
+  return out;
+}
+
 async function resolveTreeOf(repoPath: string, commitish: string): Promise<string | null> {
   try {
     const { stdout } = await gitExec(['rev-parse', `${commitish}^{tree}`], repoPath);

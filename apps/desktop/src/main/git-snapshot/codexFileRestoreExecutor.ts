@@ -362,26 +362,60 @@ async function makeWorktreeMatchCommit(
     }
   }
 
-  // realpath 围栏:受影响路径来自 Git diff,词法上都在仓库内,但工作区当前
-  // 状态可能把某个父目录换成了指向仓库外的符号链接;所有 fs 删除都必须先
-  // 确认真实父目录仍在仓库内,否则跳过并告警(内容可从 pre-rollback 恢复)。
+  // ── 阶段一:全量校验,零改动 ──
+  // 不变量:回退报成功 ⇒ 受影响文件全部回到目标状态。任何围栏命中都必须
+  // 在动第一个文件之前中止(REWIND_GIT_FAILED),而不是跳过后报成功——
+  // 否则对话被裁掉、文件却没回去,形成静默的不一致。
   const repoReal = await fs.realpath(repoRoot);
+  const affectedSet = new Set(paths);
 
+  const deletions: Array<{ filePath: string; realAbs: string }> = [];
+  for (const filePath of toDelete) {
+    const abs = resolveSnapshotGitPath(repoRoot, filePath);
+    if (!abs) continue;
+    const resolved = await resolveRealPathInsideRepo(repoReal, abs);
+    if (resolved.kind === 'missing') continue; // 目标本就不存在,删除是 no-op
+    if (resolved.kind === 'escaped') {
+      throw fenceAbort(filePath, '待删除路径的真实父目录已在仓库外(符号链接)');
+    }
+    deletions.push({ filePath, realAbs: resolved.realAbs });
+  }
+
+  // git restore 会写穿指向仓库外的符号链接父目录(创建前导目录时 stat 跟随
+  // 链接):最近存在祖先的真实路径必须仍在仓库内;缺失祖先向上追溯,保住
+  // 「恢复进尚不存在的目录」的合法场景。
+  const collisionsToClear: Array<{ filePath: string; realAbs: string }> = [];
+  for (const filePath of toRestore) {
+    const abs = resolveSnapshotGitPath(repoRoot, filePath);
+    if (!abs) continue;
+    if (await nearestExistingAncestorEscapes(repoReal, abs)) {
+      throw fenceAbort(filePath, '恢复目标的真实父目录已在仓库外(符号链接)');
+    }
+    const stats = await fs.lstat(abs).catch(() => null);
+    if (!stats?.isDirectory()) continue;
+    const resolved = await resolveRealPathInsideRepo(repoReal, abs);
+    if (resolved.kind !== 'ok') {
+      throw fenceAbort(filePath, '碰撞目录的真实路径已离开仓库');
+    }
+    // 碰撞目录里可能有用户在保存点之后手工放入、未被任何 turn 记录的文件:
+    // 它们不在受影响集合里,成功路径不会恢复、补偿也不覆盖。发现即中止,
+    // 交用户先处理该目录。
+    const outOfScope = await listDescendantsOutsideScope(resolved.realAbs, filePath, affectedSet);
+    if (outOfScope.length > 0) {
+      throw new CodexFileRewindExecutionError(
+        'REWIND_GIT_FAILED',
+        `文件回退已中止:${filePath} 现在是目录,且包含本次回退范围之外的文件(如 ${outOfScope.slice(0, 3).join('、')}),请先移出或删除这些文件后重试`,
+      );
+    }
+    collisionsToClear.push({ filePath, realAbs: resolved.realAbs });
+  }
+
+  // ── 阶段二:执行 ──
   // Deletions first: a turn that converted a directory into a file makes the
   // reverse diff delete the file (`swap`) and restore its former descendants
   // (`swap/child.txt`); deleting after the restore would wipe what was just
   // recreated.
-  for (const filePath of toDelete) {
-    const abs = resolveSnapshotGitPath(repoRoot, filePath);
-    if (!abs) continue;
-    const realAbs = await resolveRealPathInsideRepo(repoReal, abs);
-    if (!realAbs) {
-      log.warn('[file-restore] delete skipped: real path escapes the repository', {
-        repoRoot,
-        filePath,
-      });
-      continue;
-    }
+  for (const { realAbs } of deletions) {
     // recursive: the path may be a directory in the worktree (e.g. a file →
     // directory conversion the target tree does not have). ENOTDIR means a
     // parent segment is a file again, so the old nested path is already gone.
@@ -393,74 +427,38 @@ async function makeWorktreeMatchCommit(
   }
 
   if (toRestore.length > 0) {
-    // git restore 会写穿指向仓库外的符号链接父目录(创建前导目录时 stat 跟随
-    // 链接),所以恢复目标也要过 realpath 围栏:最近存在祖先的真实路径必须
-    // 仍在仓库内,否则跳过该路径并告警(基线内容仍在保存点树里,不丢)。
-    const restorable: string[] = [];
-    for (const filePath of toRestore) {
-      const abs = resolveSnapshotGitPath(repoRoot, filePath);
-      if (!abs) continue;
-      if (await nearestExistingAncestorEscapes(repoReal, abs)) {
-        log.warn('[file-restore] restore skipped: real parent escapes the repository', {
-          repoRoot,
-          filePath,
-        });
-        continue;
-      }
-      restorable.push(filePath);
-    }
-    toRestore.length = 0;
-    toRestore.push(...restorable);
-
     // A turn may have replaced a file with a directory; git restore cannot
-    // write a blob over an existing directory, so clear such collisions
-    // first (contents are recoverable from the pre-rollback savepoint).
-    const affectedSet = new Set(paths);
-    for (const filePath of toRestore) {
-      const abs = resolveSnapshotGitPath(repoRoot, filePath);
-      if (!abs) continue;
-      const stats = await fs.lstat(abs).catch(() => null);
-      if (!stats?.isDirectory()) continue;
-      const realAbs = await resolveRealPathInsideRepo(repoReal, abs);
-      if (!realAbs) {
-        log.warn('[file-restore] collision cleanup skipped: real path escapes the repository', {
-          repoRoot,
-          filePath,
-        });
-        continue;
-      }
-      // 碰撞目录里可能有用户在保存点之后手工放入、未被任何 turn 记录的文件:
-      // 它们不在受影响集合里,成功路径不会恢复、补偿也不覆盖。发现即在改动
-      // 任何文件前中止(与安全过滤盲区同款语义),交用户先处理该目录。
-      const outOfScope = await listDescendantsOutsideScope(realAbs, filePath, affectedSet);
-      if (outOfScope.length > 0) {
-        throw new CodexFileRewindExecutionError(
-          'REWIND_GIT_FAILED',
-          `文件回退已中止:${filePath} 现在是目录,且包含本次回退范围之外的文件(如 ${outOfScope.slice(0, 3).join('、')}),请先移出或删除这些文件后重试`,
-        );
-      }
+    // write a blob over an existing directory, so clear such (validated)
+    // collisions first — contents are recoverable from the pre-rollback
+    // savepoint.
+    for (const { realAbs } of collisionsToClear) {
       await fs.rm(realAbs, { recursive: true, force: true });
     }
-    if (toRestore.length > 0) {
-      await withPathspecFile(
-        toRestore.map((p) => `:(literal)${p}`),
-        (pathspecFile) =>
-          deps.gitExec(
-            [
-              'restore',
-              `--source=${targetCommit}`,
-              '--worktree',
-              '--pathspec-from-file',
-              pathspecFile,
-              '--pathspec-file-nul',
-            ],
-            repoRoot,
-          ),
-      );
-    }
+    await withPathspecFile(
+      toRestore.map((p) => `:(literal)${p}`),
+      (pathspecFile) =>
+        deps.gitExec(
+          [
+            'restore',
+            `--source=${targetCommit}`,
+            '--worktree',
+            '--pathspec-from-file',
+            pathspecFile,
+            '--pathspec-file-nul',
+          ],
+          repoRoot,
+        ),
+    );
   }
 
   return { restored: toRestore, deleted: toDelete };
+}
+
+function fenceAbort(filePath: string, reason: string): CodexFileRewindExecutionError {
+  return new CodexFileRewindExecutionError(
+    'REWIND_GIT_FAILED',
+    `文件回退已中止:${filePath} 未通过安全围栏(${reason}),为避免对话与文件不一致,本次未修改任何文件,请先处理该路径后重试`,
+  );
 }
 
 /**
@@ -513,21 +511,28 @@ async function listDescendantsOutsideScope(
   return outOfScope.sort();
 }
 
+type RealPathResolution =
+  | { kind: 'ok'; realAbs: string }
+  | { kind: 'missing' }
+  | { kind: 'escaped' };
+
 /**
- * Resolves the deletion target with intermediate symlinks flattened, and
- * refuses paths whose real parent directory left the repository. The final
- * component itself is never followed (fs.rm removes a symlink, not its
- * target), so only the parent needs the realpath check.
+ * Resolves the mutation target with intermediate symlinks flattened. The
+ * final component itself is never followed (fs.rm removes a symlink, not
+ * its target), so only the parent needs the realpath check. `missing` means
+ * the parent (hence the target) does not exist; `escaped` means the real
+ * parent directory left the repository — callers must abort, not skip.
  */
 async function resolveRealPathInsideRepo(
   repoReal: string,
   absPath: string,
-): Promise<string | null> {
+): Promise<RealPathResolution> {
   const parentReal = await fs.realpath(path.dirname(absPath)).catch(() => null);
-  // 父目录不存在 → 目标必然不存在,调用方的 force 删除本来就是 no-op。
-  if (!parentReal) return null;
-  if (parentReal !== repoReal && !parentReal.startsWith(repoReal + path.sep)) return null;
-  return path.join(parentReal, path.basename(absPath));
+  if (!parentReal) return { kind: 'missing' };
+  if (parentReal !== repoReal && !parentReal.startsWith(repoReal + path.sep)) {
+    return { kind: 'escaped' };
+  }
+  return { kind: 'ok', realAbs: path.join(parentReal, path.basename(absPath)) };
 }
 
 /** Removes now-empty real parent directories left behind by file deletion. */

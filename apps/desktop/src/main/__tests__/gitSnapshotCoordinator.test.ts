@@ -12,8 +12,19 @@ import type {
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
-function savepointResult(commit: string | null): ShadowSavepointResult {
-  return { commit, tree: 'tree1', includedFiles: [], skippedFiles: [] };
+function savepointResult(
+  commit: string | null,
+  skippedPaths: string[] = [],
+): ShadowSavepointResult {
+  return {
+    commit,
+    tree: 'tree1',
+    includedFiles: [],
+    skippedFiles: skippedPaths.map((path) => ({
+      path,
+      reason: 'sensitive-path' as const,
+    })),
+  };
 }
 
 function makeDeps(overrides: Partial<GitSnapshotCoordinatorDeps> = {}): GitSnapshotCoordinatorDeps {
@@ -217,6 +228,58 @@ describe('GitSnapshotCoordinator', () => {
       label: 'File rewind gap: turn-start baseline unavailable',
       meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
     });
+  });
+
+  it('appends a rewind gap marker when the turn introduces newly filtered paths', async () => {
+    // 本轮新出现的被过滤文件(如 Agent 写入 .env):其改动没进任何快照,
+    // 覆盖本轮的回退必须降级,链上补 gap 标记。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockResolvedValueOnce(savepointResult('hash2', ['.env'])),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn changes were partially filtered',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+  });
+
+  it('does not append a gap marker for filtered paths that predate the turn', async () => {
+    // session 全程躺着一个大文件/敏感文件(turn-start 与 after-edit 都 skip):
+    // 不是本轮改动,不打 gap,否则常驻 dirty 的过滤文件会永久禁用文件回退。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1', ['big.bin']))
+        .mockResolvedValueOnce(savepointResult('hash2', ['big.bin'])),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
+  it('skips the filtered-paths gap marker for agents that do not consume the chain', async () => {
+    const deps = makeDeps({
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1'))
+        .mockResolvedValueOnce(savepointResult('hash2', ['.env'])),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
   it('appends a rewind gap marker when the after-edit savepoint itself fails', async () => {

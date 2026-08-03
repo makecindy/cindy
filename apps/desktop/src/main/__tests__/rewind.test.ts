@@ -38,6 +38,7 @@ const getHeadMock = vi.fn();
 const getCurrentBranchMock = vi.fn();
 const listSnapshotsMock = vi.fn();
 const listShadowSavepointsMock = vi.fn();
+const listUnprotectedPathsMock = vi.fn();
 const writeWorktreeTreeForPathsMock = vi.fn();
 const gitExecMock = vi.fn();
 
@@ -111,6 +112,7 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
     const value = await listShadowSavepointsMock(...args);
     return Array.isArray(value) ? { entries: value, truncated: false } : value;
   },
+  listUnprotectedPaths: listUnprotectedPathsMock,
   writeWorktreeTreeForPaths: writeWorktreeTreeForPathsMock,
   // 单测里不需要真实拆块: preview 的 pathspec 数量远小于命令行上限。
   chunkPathspecArgs: (pathspecs: readonly string[]) =>
@@ -206,6 +208,8 @@ beforeEach(async () => {
   listSnapshotsMock.mockResolvedValue([]);
   listShadowSavepointsMock.mockReset();
   listShadowSavepointsMock.mockResolvedValue([]);
+  listUnprotectedPathsMock.mockReset();
+  listUnprotectedPathsMock.mockResolvedValue([]);
   writeWorktreeTreeForPathsMock.mockReset();
   gitExecMock.mockReset();
   recomputePrRefsForSessionMock.mockReset();
@@ -966,6 +970,39 @@ describe('commitRewindAtMessage', () => {
     });
     expect(writeWorktreeTreeForPathsMock).toHaveBeenCalledWith('/repo', ['src/a.ts', 'new-file.txt']);
     expect(gitExecMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('Codex: preview refuses file-restore when affected files are currently filtered', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1',
+        sessionId: 'sess-1',
+        kind: 'after-edit',
+        source: 'cindy',
+        parentCount: 1,
+        anchor: 'client-id',
+        baselineCommit: 'base1',
+        time: '2026-08-04T00:00:00+08:00',
+      },
+    ]);
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (args.includes('--name-only')) {
+        return { stdout: ['big.bin', ''].join('\0'), stderr: '' };
+      }
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    });
+    // 受影响文件当前处于安全过滤范围:预览必须拒绝,且不把字节写进对象库。
+    listUnprotectedPathsMock.mockResolvedValueOnce(['big.bin']);
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+
+    const preview = await previewRewindAtMessage('sess-1', 'client-id');
+
+    expect(preview.canRewind).toBe(false);
+    expect(preview.error).toContain('big.bin');
+    expect(listUnprotectedPathsMock).toHaveBeenCalledWith('/repo', ['big.bin']);
+    expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
   });
 
   it('Codex: treats unborn Git histories as no-savepoints conversation-only rewind', async () => {

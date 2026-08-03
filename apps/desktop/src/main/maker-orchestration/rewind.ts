@@ -54,6 +54,7 @@ import {
   getHead,
   listShadowSavepoints,
   listSnapshots,
+  listUnprotectedPaths,
   writeWorktreeTreeForPaths,
   type SnapshotEntry,
 } from '../git-snapshot/gitSnapshotService';
@@ -417,6 +418,16 @@ async function previewCodexFileRestorePlan(plan: CodexFileRestorePlan): Promise<
     const affectedPaths = await collectRestoreAffectedPaths(plan);
     if (affectedPaths.length === 0) {
       return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    }
+    // 与执行侧同款的安全过滤前置:受影响文件当前若处于过滤范围(敏感/超限/
+    // 嵌套仓库),预览直接报不可回退,不把这些字节写进 Git 对象库(下面的
+    // 临时 worktree 树会 hash 受影响路径的当前内容)。
+    const unprotected = await listUnprotectedPaths(plan.repoRoot, affectedPaths);
+    if (unprotected.length > 0) {
+      return {
+        canRewind: false,
+        error: `受影响文件 ${unprotected.slice(0, 3).join('、')}${unprotected.length > 3 ? ' 等' : ''} 当前处于安全过滤范围(敏感路径/超大文件/嵌套仓库),回退前快照无法完整保护其内容,请先手动备份或移出这些文件`,
+      };
     }
     const affectedPathspecs = affectedPaths.map((p) => `:(literal)${p}`);
     const worktreeTree = await writeWorktreeTreeForPaths(plan.repoRoot, affectedPaths);

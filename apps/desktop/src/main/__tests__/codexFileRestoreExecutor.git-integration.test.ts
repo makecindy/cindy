@@ -348,14 +348,16 @@ describe('executeCodexFileRestorePlan', () => {
       await fs.symlink(outside, path.join(repoPath, 'evil'));
 
       const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
-      const result = await executeCodexFileRestorePlan(plan, {
-        createRollbackId: () => 'rb-restore-symlink',
-      });
+      // 恢复目标的最近存在祖先(evil)真实路径在仓库外 → 改动前中止:
+      // 既不把基线 blob 写到仓库外,也不允许"跳过后报成功"造成对话与
+      // 工作区不一致。外部文件与符号链接均原样。
+      await expect(
+        executeCodexFileRestorePlan(plan, { createRollbackId: () => 'rb-restore-symlink' }),
+      ).rejects.toMatchObject({ code: 'REWIND_GIT_FAILED' });
 
-      // 恢复目标的最近存在祖先(evil)真实路径在仓库外 → 跳过恢复,
-      // 基线 blob 绝不写到仓库外;外部文件原样。
-      expect(result?.restoredFiles).toEqual([]);
       expect(await fs.readFile(path.join(outside, 'target.txt'), 'utf8')).toBe('external data\n');
+      const evilStats = await fs.lstat(path.join(repoPath, 'evil'));
+      expect(evilStats.isSymbolicLink()).toBe(true);
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }

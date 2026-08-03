@@ -69,6 +69,8 @@ interface TurnStartState {
   repoRoot: string;
   /** Turn-start savepoint on the shadow chain; unset when creation failed. */
   turnStartCommit: string;
+  /** Paths the safety filter excluded from the turn-start snapshot. */
+  turnStartSkippedPaths: string[];
   metadata: TurnStartMetadata;
 }
 
@@ -122,11 +124,13 @@ export class GitSnapshotCoordinator {
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
         const metadata = await metadataPromise;
         record.metadata = metadata;
-        record.turnStartCommit = await this.createTurnStartSavepoint(
+        const turnStart = await this.createTurnStartSavepoint(
           sessionId,
           resolved.repoRoot,
           metadata,
         );
+        record.turnStartCommit = turnStart.commit;
+        record.turnStartSkippedPaths = turnStart.skippedPaths;
       });
       record.metadata ??= await metadataPromise;
     } catch (err) {
@@ -282,13 +286,40 @@ export class GitSnapshotCoordinator {
         repoRoot,
       });
     }
+
+    // 本轮**新出现**的被过滤路径(相对 turn-start 的 skipped 集合):这些文件
+    // 的本轮改动没有进任何快照,回退无法恢复它们——在链上补 gap 标记,让
+    // 覆盖本轮的回退降级为 conversation-only,而不是静默留下半截修改。
+    // 已知残余限制:整个 turn 期间都处于过滤范围的既存文件(两侧集合都有)
+    // 若被 Agent 修改,这里判不出来;完备方案需要给被过滤文件记指纹,留作
+    // 后续增强。
+    if (agentKind === 'codex' || agentKind === 'pi') {
+      const baselineSkips = new Set(turnStart?.turnStartSkippedPaths ?? []);
+      const newlySkipped = result.skippedFiles
+        .map((file) => file.path)
+        .filter((skippedPath) => !baselineSkips.has(skippedPath));
+      if (newlySkipped.length > 0) {
+        this.deps.logger.warn('[git-snapshot] turn changes partially filtered', {
+          sessionId,
+          repoRoot,
+          skipped: newlySkipped.slice(0, 5),
+        });
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: turn changes were partially filtered',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
+    }
   }
 
   private async createTurnStartSavepoint(
     sessionId: string,
     repoRoot: string,
     metadata: TurnStartMetadata,
-  ): Promise<string | undefined> {
+  ): Promise<{ commit: string | undefined; skippedPaths: string[] }> {
     // Always created, dirty or clean, so every turn has a uniform restore
     // baseline; an unchanged tree costs almost nothing thanks to object reuse.
     const result = await this.deps.createShadowSavepoint(repoRoot, {
@@ -299,6 +330,7 @@ export class GitSnapshotCoordinator {
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
+    const skippedPaths = result.skippedFiles.map((file) => file.path);
 
     if (result.commit) {
       this.deps.logger.info('[git-snapshot] turn-start baseline created', {
@@ -307,14 +339,14 @@ export class GitSnapshotCoordinator {
         commit: result.commit.slice(0, 8),
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       });
-      return result.commit;
+      return { commit: result.commit, skippedPaths };
     }
 
     this.deps.logger.warn('[git-snapshot] turn-start baseline missing commit', {
       sessionId,
       repoRoot,
     });
-    return undefined;
+    return { commit: undefined, skippedPaths };
   }
 
   private async resolveTurnStartMetadata(sessionId: string): Promise<TurnStartMetadata> {
