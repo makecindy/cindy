@@ -14,7 +14,7 @@
  * 剔除(旧 server 不发时降级为不剔重, 仅多一条重复)。
  */
 
-import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
 
 import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
 
@@ -207,61 +207,86 @@ export async function buildGroupContextPrefix(
   const cursorKey = cursorKeyOf(payload.externalKey);
   const cursor = contextCursors.get(cursorKey) ?? 0;
   const triggerMessageId = payload.source?.triggerMessageId ?? null;
-  const rows = await db
-    .select({
-      id: hookGroupMessages.id,
-      messageId: hookGroupMessages.messageId,
-      author: hookGroupMessages.author,
-      text: hookGroupMessages.text,
-      fileNames: hookGroupMessages.fileNames,
-    })
-    .from(hookGroupMessages)
-    .where(
-      and(
-        eq(hookGroupMessages.provider, providerOf(lane.principalId)),
-        eq(hookGroupMessages.chatId, lane.chatId),
-        // 主群流(threadId='')**刻意不按 threadId 过滤**: server 曾把普通群里 reply 链的
-        // message_thread_id 当成 topic 下发(Telegram 对非 forum 群的 reply 链也给这个
-        // 字段, 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03
-        // 实机: 172 条在主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里
-        // 答"我看不到群里的历史消息"。判据只能在 server 修(客户端拿不到 is_forum /
-        // is_topic_message), 所以这里按"宁可多读同群发言、不可漏读"兜住存量与老 server。
-        // topic lane(threadId 非空)仍按 topic 严格隔离。
-        // 已知取舍: forum 群的 General 话题也走 group lane, 因此会把该群其它 topic 的
-        // 发言一起读进来 —— 都是同群同成员可见的内容, 不跨群; server 修复部署后新数据
-        // 不再分桶, 这条兜底最终只服务存量行。
-        ...(lane.threadId === '' ? [] : [eq(hookGroupMessages.threadId, lane.threadId)]),
-        gt(hookGroupMessages.id, cursor),
-      ),
-    )
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(CONTEXT_READ_LIMIT);
+  const readWindow = async (
+    threadFilter: SQL<unknown>,
+  ): Promise<
+    Array<{
+      id: number;
+      messageId: string;
+      author: string;
+      text: string;
+      fileNames: string | null;
+    }>
+  > =>
+    db
+      .select({
+        id: hookGroupMessages.id,
+        messageId: hookGroupMessages.messageId,
+        author: hookGroupMessages.author,
+        text: hookGroupMessages.text,
+        fileNames: hookGroupMessages.fileNames,
+      })
+      .from(hookGroupMessages)
+      .where(
+        and(
+          eq(hookGroupMessages.provider, providerOf(lane.principalId)),
+          eq(hookGroupMessages.chatId, lane.chatId),
+          threadFilter,
+          gt(hookGroupMessages.id, cursor),
+        ),
+      )
+      .orderBy(desc(hookGroupMessages.id))
+      .limit(CONTEXT_READ_LIMIT);
 
-  // 从最新往回累加, 超出预算保新丢旧(rows 已是新→旧序)。
-  const lines: string[] = [];
+  // 本 lane 自己的消息(主群流 threadId='' 或指定 topic) —— 预算优先给它。
+  const primaryRows = await readWindow(eq(hookGroupMessages.threadId, lane.threadId));
+  // 主群流额外兜一层非空 threadId 的行: server 曾把普通群里 reply 链的
+  // message_thread_id 当成 topic 下发(Telegram 对非 forum 群的 reply 链也给这个字段,
+  // 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03 实机: 172 条在
+  // 主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里答"我看不到群里的历史
+  // 消息"。判据只能在 server 修(客户端拿不到 is_forum / is_topic_message), 这里按"宁可多
+  // 读同群发言、不可漏读"兜住存量与老 server。**只作兜底, 不与主群流争预算也不推游标越过
+  // 主群流未读**: forum 群的 General 也走 group lane, 否则该群其它 topic 的突发流量会把
+  // General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
+  // 这条兜底最终只服务存量行。topic lane 不读兜底集(topic 之间严格隔离)。
+  const fallbackRows =
+    lane.threadId === '' ? await readWindow(ne(hookGroupMessages.threadId, '')) : [];
+
+  // 从最新往回累加, 超出预算保新丢旧(两个集合各自已是新→旧序)。
+  const picked: Array<{ id: number; line: string }> = [];
   let totalChars = 0;
   let truncated = false;
   let maxId = cursor;
-  for (const row of rows) {
-    if (row.id > maxId) maxId = row.id;
-    if (triggerMessageId !== null && row.messageId === triggerMessageId) continue;
-    let fileNote = '';
-    if (row.fileNames !== null) {
-      try {
-        const names = JSON.parse(row.fileNames) as string[];
-        if (names.length > 0) fileNote = ` (附件: ${names.join(', ')})`;
-      } catch {
-        /* 老行损坏时静默丢附件标注 */
+  const consume = (rows: typeof primaryRows): void => {
+    for (const row of rows) {
+      if (row.id > maxId) maxId = row.id;
+      if (triggerMessageId !== null && row.messageId === triggerMessageId) continue;
+      let fileNote = '';
+      if (row.fileNames !== null) {
+        try {
+          const names = JSON.parse(row.fileNames) as string[];
+          if (names.length > 0) fileNote = ` (附件: ${names.join(', ')})`;
+        } catch {
+          /* 老行损坏时静默丢附件标注 */
+        }
       }
+      const line = neutralizeFenceTags(`[${row.author}] ${row.text}${fileNote}`);
+      if (totalChars + line.length > CONTEXT_MAX_CHARS) {
+        truncated = true;
+        break;
+      }
+      picked.push({ id: row.id, line });
+      totalChars += line.length;
     }
-    const line = neutralizeFenceTags(`[${row.author}] ${row.text}${fileNote}`);
-    if (totalChars + line.length > CONTEXT_MAX_CHARS) {
-      truncated = true;
-      break;
-    }
-    lines.unshift(line);
-    totalChars += line.length;
-  }
+  };
+  consume(primaryRows);
+  consume(fallbackRows);
+  // 拼装按时间序(id 升序): 两个集合交错取回, 单独 unshift 会把兜底集整块排到前面。
+  picked.sort((a, b) => a.id - b.id);
+  const lines = picked.map((entry) => entry.line);
+  // 游标仍是单值(取两集合的最大 id): 窗口行 id 全局单调, 兜底集的 id 必然高于同批取回的
+  // 主群流行, 所以推进它不会跳过任何**已取回**的主群流消息; 被省略的主群流行只可能是它
+  // 自己超字符预算的那几条 —— 保新丢旧是既有策略, 与其它 topic 的流量无关。
   // 游标推进与"是否有可拼内容"解耦(窗口里只剩触发消息时也要前移),
   // 但延迟到任务受理: dispatch 被拒时这批消息不能被跳过。
   const commit =

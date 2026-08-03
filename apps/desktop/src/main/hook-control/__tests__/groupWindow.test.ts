@@ -419,6 +419,31 @@ describe('buildGroupContextPrefix', () => {
     expect(prefix).toContain('reply 链里的话');
   });
 
+  it('其它 topic 的突发流量不得把主群流发言挤出预算', async () => {
+    // forum 群的 General 也走 group lane, 于是兜底集会带进该群其它 topic 的发言。
+    // 按全局 id 排序时它们(更新)会先吃满 4000 字符预算, 把主群流那条挤掉并让游标越过去
+    // —— 主群流预算优先, 兜底集只能用剩下的。
+    // 正文取到接近单条上限(500): 短句会在预算溢出后仍塞进缝隙, 用例就失去判别力。
+    await recordGroupMessage(
+      frame({ messageId: '40', text: `主群流的关键一句${'z'.repeat(500)}` }),
+    );
+    for (let i = 0; i < 20; i += 1) {
+      await recordGroupMessage(
+        frame({ messageId: `5${i}`, threadId: '77', text: `topic 长文${'x'.repeat(500)}` }),
+      );
+    }
+    const prefix = (
+      await buildGroupContextPrefix({
+        requestId: 'r-forum-burst',
+        externalKey: 'telegram:group:1:-900:9:g1',
+        workspace: 'chat',
+        sessionId: null,
+        prompt: 'q',
+      })
+    ).prefix;
+    expect(prefix).toContain('主群流的关键一句');
+  });
+
   it('换绑 Telegram 主账号后不读取前一账号的群历史', async () => {
     await recordScopedGroupMessage(
       frame({ messageId: '30', text: '前一账号的私密上下文' }),
