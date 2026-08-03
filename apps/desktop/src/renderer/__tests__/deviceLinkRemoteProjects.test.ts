@@ -86,6 +86,58 @@ describe('startRemoteSessionsReconciler', () => {
     stop();
   });
 
+  it('单次刷新横跨多个 tick 时只发一次、只记账一次(在途合并不重复累计退避)', async () => {
+    vi.useFakeTimers();
+    const eligible = new Map([['dev-slow', 'Mac Slow']]);
+    let settle: ((r: string) => void) | null = null;
+    const refresh = vi.fn(
+      () => new Promise<string>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    const failures: string[] = [];
+    const backoff = createReconcileBackoff({ baseMs: 1_000, maxMs: 8_000, jitter: (d) => d });
+    const origReport = backoff.report.bind(backoff);
+    backoff.report = (deviceId, outcome) => {
+      if (outcome === 'failure') failures.push(deviceId);
+      origReport(deviceId, outcome);
+    };
+    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
+
+    // 三个 tick 过去,刷新仍在途:不再重复发起,也没有任何记账
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(failures).toEqual([]);
+
+    // 在途请求最终 gave-up:恰好记一次失败
+    settle!('gave-up');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failures).toEqual(['dev-slow']);
+    stop();
+  });
+
+  it('抖动结果被 clamp 在 maxMs 内(封顶是硬上限,+15% 不得越过)', () => {
+    let at = 0;
+    const backoff = createReconcileBackoff({
+      baseMs: 1_000,
+      maxMs: 8_000,
+      jitter: (d) => d * 1.15, // 模拟上向抖动
+      now: () => at,
+    });
+    for (let i = 0; i < 10; i++) backoff.report('dev-a', 'failure');
+    at = 8_000; // 恰到封顶值:若 jitter 越过 maxMs,这里仍会是退避中
+    expect(backoff.shouldAttempt('dev-a')).toBe(true);
+    // 负值抖动防御:不会把 nextEligibleAt 推到过去之前(行为上等价于立即可试)
+    const negBackoff = createReconcileBackoff({
+      baseMs: 1_000,
+      maxMs: 8_000,
+      jitter: () => -5_000,
+      now: () => 100,
+    });
+    negBackoff.report('dev-b', 'failure');
+    expect(negBackoff.shouldAttempt('dev-b')).toBe(true);
+  });
+
   it('设备移出合格集后退避账本随之清理,重新合格时从零开始', () => {
     let at = 0;
     const backoff = createReconcileBackoff({

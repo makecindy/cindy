@@ -2637,6 +2637,30 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('restartConnection:online(可能半开假活)也强制重建;stopped 不拉起', async () => {
+    const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await tick();
+    expect(h.client.getStatus()).toBe('online');
+
+    const before = h.sockets.length;
+    h.client.restartConnection('system-resume');
+    await tick();
+    expect(h.sockets.length).toBe(before + 1); // 丢弃旧 socket,新建连接
+    h.current().ack();
+    await tick();
+    expect(h.client.getStatus()).toBe('online');
+
+    h.client.stop();
+    const count = h.sockets.length;
+    h.client.restartConnection('after-stop');
+    await tick(20);
+    expect(h.sockets.length).toBe(count); // 生命周期仍归 start/stop 管
+    expect(h.client.getStatus()).toBe('stopped');
+  });
+
   it('stop 后不再重连', async () => {
     const h = makeHarness();
     h.client.start();

@@ -109,7 +109,10 @@ export function createReconcileBackoff(opts?: {
       }
       const failures = (state.get(deviceId)?.failures ?? 0) + 1;
       const delay = Math.min(baseMs * 2 ** (failures - 1), maxMs);
-      state.set(deviceId, { failures, nextEligibleAt: now() + jitter(delay) });
+      // 抖动后再 clamp:maxMs 是硬封顶(review:+15% 抖动曾把封顶档放大到 138s),
+      // 负值防御性归零。
+      const jittered = Math.min(Math.max(0, jitter(delay)), maxMs);
+      state.set(deviceId, { failures, nextEligibleAt: now() + jittered });
     },
     /** 只保留仍合格的设备,防止退避账本随设备增删无界增长。 */
     retainOnly(deviceIds: ReadonlySet<string>): void {
@@ -134,11 +137,16 @@ export function startRemoteSessionsReconciler(
   intervalMs = RECONCILE_INTERVAL_MS,
   backoff: ReconcileBackoff = createReconcileBackoff({ baseMs: intervalMs }),
 ): () => void {
+  // 单次刷新可能横跨多个 tick(弱网下超时链 >10s);weak coalescing 会让后续 tick 拿到
+  // 同一个在途 Promise,若每个 tick 都挂 then,一次 gave-up 会被重复记账、退避直接跳档
+  // (review P2)。per-device 在途标记保证一次合并请求只记一次。
+  const inFlight = new Set<string>();
   const timer = setInterval(() => {
     const seen = new Set<string>();
     for (const [deviceId, name] of getEligibleDevices()) {
       seen.add(deviceId);
-      if (!backoff.shouldAttempt(deviceId)) continue;
+      if (inFlight.has(deviceId) || !backoff.shouldAttempt(deviceId)) continue;
+      inFlight.add(deviceId);
       void refresh(deviceId, name)
         .then((result) => {
           backoff.report(
@@ -149,6 +157,9 @@ export function startRemoteSessionsReconciler(
         .catch((err) => {
           backoff.report(deviceId, 'failure');
           log.debug(`periodic sessions reconcile failed for ${deviceId.slice(0, 8)}`, err);
+        })
+        .finally(() => {
+          inFlight.delete(deviceId);
         });
     }
     backoff.retainOnly(seen);
@@ -443,11 +454,13 @@ export function useDeviceLinkRemoteProjects(): void {
 
     // 目标设备「无响应」熔断翻转(main 权威):镜像给 UI;恢复时重跑 subscribe+bootstrap
     // ——熔断 open 期间的订阅 / 首拉都被快速失败挡掉了,恢复必须主动补,不能等用户手点。
-    // push 一旦到达即权威:迟到的 getState 快照不得覆盖更新的 push 值(同 linkStatus)。
-    let responsivenessPushSeen = false;
+    // push 一旦到达即权威,但只对**它自己那台设备**权威:迟到的 getState 快照按设备合并,
+    // 未被 push 覆盖的设备仍取快照值 —— 整份丢弃会让「A 设备先来一条 push」掩盖掉
+    // 快照里 B 设备的 unresponsive 初值,B 在下一次熔断翻转前一直假装 connected(review P1)。
+    const responsivenessPushedDeviceIds = new Set<string>();
     const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
       if (disposed) return;
-      responsivenessPushSeen = true;
+      responsivenessPushedDeviceIds.add(p.deviceId);
       unresponsiveDevicesStore.apply(p.deviceId, p.unresponsive);
       if (!p.unresponsive) {
         const name = eligible.get(p.deviceId);
@@ -461,9 +474,12 @@ export function useDeviceLinkRemoteProjects(): void {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
         disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
-        // 「无响应」熔断镜像的初值(push 先到时不回退)。
-        if (!responsivenessPushSeen) {
-          unresponsiveDevicesStore.replaceAll(state.unresponsiveDeviceIds ?? []);
+        // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
+        // (store 初始为空,快照只需补写 unresponsive 的未覆盖设备)。
+        for (const deviceId of state.unresponsiveDeviceIds ?? []) {
+          if (!responsivenessPushedDeviceIds.has(deviceId)) {
+            unresponsiveDevicesStore.apply(deviceId, true);
+          }
         }
         reseed();
       })

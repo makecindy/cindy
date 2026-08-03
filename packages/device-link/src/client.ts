@@ -413,6 +413,26 @@ export class DeviceLinkClient {
   }
 
   /**
+   * 强制重建连接:与 connectNow 的区别是 **online 也重建**。
+   *
+   * 供「当前 socket 大概率已经半开假活」的场景(系统睡眠唤醒)使用:睡眠期间
+   * TCP 对端早已消失,但本端没收到 close/error、心跳也未累计到判死,状态机仍是
+   * online —— connectNow 会直接返回,唤醒后的请求继续写进失效 socket 黑洞约一个
+   * 判死周期(~45s)。这里无条件走 connect():它自带丢弃旧 socket、fail 掉
+   * in-flight 请求、epoch 递增的完整语义;真在线时代价只是一次 1-2s 的重连抖动,
+   * 对刚唤醒的空闲会话可接受。stopped 时不拉起(生命周期仍归 start/stop 管)。
+   */
+  restartConnection(reason = 'restart-connection'): void {
+    if (this.stopped) return;
+    this.reconnectAttempt = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    void this.connect(reason);
+  }
+
+  /**
    * 有界等待连接就绪。online 立即 resolve;否则订阅状态变化,在 timeoutMs 内
    * 等到 online 就 resolve,超时 / stopped 则 reject(NOT_CONNECTED)。
    *

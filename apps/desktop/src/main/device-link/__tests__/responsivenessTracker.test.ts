@@ -47,12 +47,13 @@ function harness(overrides?: {
   };
 }
 
-/** 连续 N 个超时批次把熔断打开。 */
+/** 连续 N 个超时批次把熔断打开(批次间推进时钟越过 1s 归批窗口,构成独立故障证据)。 */
 async function openBreaker(h: ReturnType<typeof harness>): Promise<void> {
   for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
     await expect(
       h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () => Promise.reject(timeoutError())),
     ).rejects.toThrow('no invoke-result');
+    h.advance(1_100);
   }
   expect(h.tracker.isUnresponsive(DEV)).toBe(true);
 }
@@ -78,6 +79,30 @@ describe('responsivenessTracker', () => {
       'unresponsive',
     );
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('同一 1s 窗口内的并发超时归入同一批次,单轮 fan-out 不会误开熔断', async () => {
+    const h = harness();
+    // 同 tick 并发 3 个请求(capabilities/providers/git-safety 预取形态)同时超时:
+    // 只算一次独立故障证据,熔断保持关闭。
+    await Promise.all(
+      Array.from({ length: BREAKER_FAILURE_THRESHOLD }, () =>
+        expect(
+          h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () =>
+            Promise.reject(timeoutError()),
+          ),
+        ).rejects.toThrow('no invoke-result'),
+      ),
+    );
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    // 再来两个跨窗口的独立超时批次才凑满阈值。
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD - 1; i++) {
+      h.advance(1_100);
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () => Promise.reject(timeoutError())),
+      ).rejects.toThrow('no invoke-result');
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
   });
 
   it('非超时失败(NOT_CONNECTED 等)不定论,不累计熔断', async () => {

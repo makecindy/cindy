@@ -129,6 +129,7 @@ export function createResponsivenessTracker(
   deps: ResponsivenessTrackerDeps,
 ): DeviceResponsivenessTracker {
   const log = deps.log ?? { info: () => {}, warn: () => {}, debug: () => {} };
+  const now = deps.now ?? Date.now;
   const unresponsive = new Set<string>();
   const breaker = createDeviceResponsivenessBreaker({
     now: deps.now,
@@ -146,12 +147,28 @@ export function createResponsivenessTracker(
     breaker.settle(deviceId, slot, outcome);
   };
 
+  // 同一设备短时间窗内的并发请求共享一个熔断批次(cohort):renderer 的 fan-out
+  // 预取(capabilities / providers / git-safety 同 tick 并发)在一次短暂链路中断里
+  // 会同时超时,逐请求独立记账会让单轮并发直接凑满 3 次阈值误开熔断(review P2)。
+  // 归批后同窗并发的超时只算一次独立故障证据;窗口(1s)远小于对账周期(10s),
+  // 不会把跨轮次的真实连续失败误并成一批。窗口从批首请求起算,不滑动。
+  const COHORT_WINDOW_MS = 1_000;
+  const activeCohorts = new Map<string, { id: number; startedAt: number }>();
+  const cohortFor = (deviceId: string): number => {
+    const nowMs = now();
+    const entry = activeCohorts.get(deviceId);
+    if (entry && nowMs - entry.startedAt < COHORT_WINDOW_MS) return entry.id;
+    const id = breaker.createCohort(deviceId);
+    activeCohorts.set(deviceId, { id, startedAt: nowMs });
+    return id;
+  };
+
   const guardInvoke = async <T>(
     deviceId: string,
     channel: string,
     run: () => Promise<T>,
   ): Promise<T> => {
-    const slot = breaker.acquire(deviceId);
+    const slot = breaker.acquire(deviceId, cohortFor(deviceId));
     if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
     const wasProbe = slot.decision === 'probe';
     try {
@@ -186,7 +203,13 @@ export function createResponsivenessTracker(
     probeTick,
     isUnresponsive: (deviceId) => unresponsive.has(deviceId),
     getUnresponsiveDeviceIds: () => [...unresponsive],
-    clearDevice: (deviceId) => breaker.clear(deviceId),
-    resetAll: () => breaker.resetAll(),
+    clearDevice: (deviceId) => {
+      activeCohorts.delete(deviceId);
+      breaker.clear(deviceId);
+    },
+    resetAll: () => {
+      activeCohorts.clear();
+      breaker.resetAll();
+    },
   };
 }

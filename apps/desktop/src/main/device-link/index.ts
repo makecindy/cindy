@@ -821,17 +821,18 @@ export function getUnresponsiveDeviceIds(): string[] {
 }
 
 /**
- * 系统睡眠唤醒:立即重连而不是干等退避计时器(最坏 30s)+ 心跳判死(~45s)。
- * 只在本实例仍持有 relay、链路确实不在线时 un-park;connectNow 对 stopped client
- * 会重新拉起连接,所以必须先过 linkTornDown / 持有权双闸,不能绕过仲裁。
+ * 系统睡眠唤醒:立即重建连接而不是干等退避计时器(最坏 30s)+ 心跳判死(~45s)。
+ * 状态仍是 online 也要重建 —— 睡眠期间 socket 大概率已半开假活(对端早没了,
+ * 本端没收到 close、心跳未累计到判死),此时只解除退避救不了半开黑洞
+ * (review P1/P2:connectNow 对 online 是空操作)。restartConnection 对 stopped
+ * client 不拉起,但持有权 / 登录双闸仍在前面,不绕过仲裁。
  */
 export function handleDeviceLinkSystemResume(): void {
   if (!client || linkTornDown) return;
   if (arbiter && !arbiter.isOwner()) return;
   if (!authManager.getAuthState().isAuthenticated) return;
-  if (client.getStatus() === 'online') return;
-  log.info('system resume: reconnecting device-link immediately');
-  client.connectNow('system-resume');
+  log.info('system resume: rebuilding device-link connection immediately');
+  client.restartConnection('system-resume');
 }
 
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
