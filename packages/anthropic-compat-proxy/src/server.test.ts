@@ -2358,6 +2358,27 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     return res.text();
   }
 
+  it('全新 kimi 会话(无 minted id 历史)仍接管并记录首个 streamed id(codex-connector P1)', async () => {
+    await setupSingleProxy();
+    // 全新 kimi 会话: 请求体无任何铸造形态 id → requestedIds null, cache 空;
+    // 修复前 responseToolUseIds 也 null → 不接管 → 首 fresh id 未记录。
+    // 修复后: 请求体 model=kimi 判定接管, onObserved 记录 Bash_210。
+    const r1 = await postAs('sess-fresh', {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: '你好' }],
+    });
+    expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
+
+    // 第二次请求(同 session, 无铸造 id 历史, 模拟 rewind): 缓存里已有 Bash_210
+    // → 响应铸 Bash_210 仍被拦截改名
+    const r2 = await postAs('sess-fresh', {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: '继续' }],
+    });
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
   it('请求1(历史含 Bash_210)改名;请求2(同 session,历史不含 Bash_210)仍拦截重铸', async () => {
     await setupSingleProxy();
     // 请求1: 历史带 Bash_210 → 响应铸 Bash_210 → 撞车 → 改名; Bash_210 进线程缓存

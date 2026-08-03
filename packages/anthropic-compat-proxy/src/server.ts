@@ -110,6 +110,44 @@ const DEBUG_REQUEST_DUMP_MAX_BYTES = 64 * 1024;
 // (~几百字节),给 16KB 已经非常宽裕,超出按相同截断策略尾部追加 "... (truncated, total N bytes)"。
 const ERROR_RESPONSE_DUMP_MAX_BYTES = 16 * 1024;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// per-thread 已见 id 缓存的有界上限(Copilot review 防内存 DoS;proxy 只绑
+// loopback 不暴露外部,属防御性上限)。
+const MAX_CACHED_THREADS = 1024;
+const MAX_IDS_PER_THREAD = 8192;
+
+/**
+ * 往 per-thread 已见 id 缓存写入一条(id 去重)。有界:线程数超限 FIFO 淘汰最老
+ * (re-insert 到 Map 末尾近似 LRU),单线程 id 超限丢最老(Set 按插入序)。
+ */
+function addThreadMintedId(
+  threadMintedIdCache: Map<string, Set<string>>,
+  threadIdKey: string,
+  id: string,
+): void {
+  let set = threadMintedIdCache.get(threadIdKey);
+  if (!set) {
+    threadMintedIdCache.delete(threadIdKey); // 已存在则触底(近似 LRU)
+    threadMintedIdCache.set(threadIdKey, new Set<string>());
+    set = threadMintedIdCache.get(threadIdKey);
+    while (threadMintedIdCache.size > MAX_CACHED_THREADS) {
+      const oldest = threadMintedIdCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      threadMintedIdCache.delete(oldest);
+    }
+  }
+  if (set && !set.has(id)) {
+    set.add(id);
+    if (set.size > MAX_IDS_PER_THREAD) {
+      const oldestId = set.keys().next().value as string | undefined;
+      if (oldestId !== undefined) set.delete(oldestId);
+    }
+  }
+}
+
 interface UpstreamTarget {
   hostname: string;
   port: number;
@@ -1135,7 +1173,7 @@ function forward(
       .toLowerCase();
     const isCompressed = contentEncoding !== '' && contentEncoding !== 'identity';
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
-    if (responseToolUseIds && responseToolUseIds.size > 0 && isSse && !isCompressed) {
+    if (responseToolUseIds && isSse && !isCompressed) {
       delete respHeaders['content-length'];
       const rewriter = new ToolUseIdDedupeRewriter(
         responseToolUseIds,
@@ -1153,9 +1191,7 @@ function forward(
         (observed) => {
           const renameThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
           if (renameThreadId && threadMintedIdCache) {
-            const cache = threadMintedIdCache.get(renameThreadId) ?? new Set<string>();
-            cache.add(observed);
-            threadMintedIdCache.set(renameThreadId, cache);
+            addThreadMintedId(threadMintedIdCache, renameThreadId, observed);
           }
         },
       );
@@ -1595,9 +1631,6 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
-    // 响应流撞车改名的历史 id 集合: 只在请求历史带「铸造形态」tool_use id 时非空
-    // (moonshot/kimi 会话); rawParsed 缺失(无 routingTransform)时补一次解析,
-    // 解析失败按 undefined → null → 响应字节透传(fail-open)。
     let parsedForRewrite: unknown = rawParsed;
     if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
       try {
@@ -1607,34 +1640,42 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       }
     }
     const requestedIds = collectToolUseIdsForResponseRewrite(parsedForRewrite);
+    // 全新/刚归一化的 kimi 会话,请求体可能还没有任何铸造形态 id(历史缺席),
+    // 但模型仍会铸 minted id —— 用请求体 model 判定 kimi,确保首 fresh id 也
+    // 被接管记录(codex-connector review: Cache first streamed Kimi tool IDs)。
+    const isKimiRequest =
+      isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
+        ? /(^|[\/_-])kimi/i.test(parsedForRewrite.model)
+        : false;
 
     // per-thread 已见 id 缓存(跨请求并入 usedIds):rewind / 中断 / CLI 压缩会让
     // 历史撞车 id 缺席于某个请求体,若只从请求体建 usedIds,该 id 重铸时 proxy
     // 认作「新 id」放行,转录出现重复 → 下轮 ensureToolResultPairing 丢弃 → 请求
     // 体更缺 → 自激循环(codex-connector review P1)。缓存让本线程内见过的 minted
     // 形态 id 持续设防。副作用:rewind 后 kimi 本可安全复用的旧号被改名(无害,
-    // _dupN 后缀不影响语义);缓存随线程会话线性增长(每 id 十几个字节,长会话
-    // 数百 KB),无主动清理,会话结束随 Map 回收。
+    // _dupN 后缀不影响语义)。
     //
     // 注意:缓存读取**不能**依赖 requestedIds 非空 —— rewind 后请求体恰恰
     // 可能不含任何铸造 id(历史缺席),而缓存里留有上次见过的撞车 id,这正
     // 是缓存存在的意义。请求体无铸造 id 但缓存非空时,用缓存建 usedIds 设防。
     let responseToolUseIds: Set<string> | null = null;
     if (threadId) {
-      const cache = threadMintedIdCache.get(threadId) ?? new Set<string>();
+      const cache = threadMintedIdCache.get(threadId);
       if (requestedIds) {
         responseToolUseIds = requestedIds;
         // 缓存里本线程见过但缺席当前请求体的撞车 id 也必须并入 —— rewind 后
         // 请求体可能只含部分铸造 id,漏掉这些会让 kimi 重铸同号时被当新 id
         // 放行(codex-connector review: Merge cached tool IDs into rewrite seeds)。
-        if (cache.size > 0) {
+        if (cache && cache.size > 0) {
           for (const id of cache) responseToolUseIds.add(id);
         }
-        for (const id of requestedIds) cache.add(id);
-      } else if (cache.size > 0) {
+        for (const id of requestedIds) addThreadMintedId(threadMintedIdCache, threadId, id);
+      } else if (cache && cache.size > 0) {
         responseToolUseIds = new Set(cache);
+      } else if (isKimiRequest) {
+        // 全新 kimi 会话:空种子集接管响应流,onObserved 记录首个 streamed id。
+        responseToolUseIds = new Set<string>();
       }
-      if (cache.size > 0) threadMintedIdCache.set(threadId, cache);
     } else {
       responseToolUseIds = requestedIds;
     }
@@ -1677,6 +1718,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   // at-capacity 体验反而劣于同版本 Codex。刻意不并入 inflight —— WS 是长连接,
   // 计入会让 dispose 的清零等待永不满足。
   // per-thread 已见 tool_use id 缓存(跨请求),供响应流撞车改名的 usedIds 并入。
+  // 有界见 addThreadMintedId(Copilot review 防内存 DoS)。
   const threadMintedIdCache = new Map<string, Set<string>>();
 
   let liveWebSockets = 0;
