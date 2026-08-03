@@ -320,6 +320,39 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('does not let a failed newer escalation erase an older push that succeeded', async () => {
+    // 代际号的语义是「最后一个**发起**的档位变更」,前提是发起者最终会写状态。会话级升级
+    // 穿透在飞的 turn 级降级、自己 push 失败(终态也没置上)时,先发起的 turn 级 push 之后
+    // 成功了却因代际不匹配直接返回 —— SDK 已在 default 而状态仍是 'native',send() 不再
+    // 回探、default 档也不再产生分类器响应触发新信号,会话永久停在没记账的 Cindy fallback。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    let releaseTurnPush!: () => void;
+    const turnPushGate = new Promise<void>((resolve) => { releaseTurnPush = resolve; });
+    fakeQuery.setPermissionMode
+      .mockReturnValueOnce(turnPushGate)                                  // turn 级:先发起、后成功
+      .mockRejectedValueOnce(new Error('transport not ready'));           // 会话级:后发起、失败
+
+    const turnFallback = handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(
+      handle.useCindyAutoReviewFallback?.({ scope: 'session' }),
+    ).rejects.toThrow('transport not ready');
+
+    releaseTurnPush();
+    // 失败的会话级把写入权交还了它,所以这次成功仍然要提交状态。
+    await expect(turnFallback).resolves.toBe(true);
+
+    // 状态确实是「已确认降级」而不是残留的 'native':下一 turn 会正常回探 auto。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
   it('keeps the tentative flag when a turn cannot probe, and probes on the next eligible turn', async () => {
     // 回探的不变量:标记与 SDK 档位必须一致。推不了档的 turn(底层档已不是 auto、plan 档、
     // rewind/bridge 重建窗口)必须**保留**标记 —— 提前清掉会让判据说"该用原生"而 SDK 停在

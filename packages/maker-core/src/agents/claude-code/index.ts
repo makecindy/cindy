@@ -4708,8 +4708,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // **先推档,成功之后才提交状态** —— 与回探侧同一条不变量:状态必须与 SDK 实际档位
         // 一致。反过来(先置状态、push 再失败)会让 SDK 留在 auto 继续硬拒绝,而后续故障信号
         // 全被上面两道幂等闸吞掉、再也进不来,等于把 #1573 的修复整轮吃掉;scope='session'
-        // 更糟 —— 第一道闸是永久的,整个会话余生的信号都被吞。这里刻意不 catch:失败向上抛
-        // 给 coordinator 记 failed,状态未动,同一 turn 的下一个故障信号就能重试(codex P2)。
+        // 更糟 —— 第一道闸是永久的,整个会话余生的信号都被吞。失败仍向上抛给 coordinator 记
+        // failed,状态未动,同一 turn 的下一个故障信号就能重试(codex P2)。
         //
         // 递增代际:本次降级是**更新的**决策,在飞的回探(可能已超时进 unconfirmed)迟到返回
         // 时会因代际过期而不再改写状态,避免它把这次降级覆盖掉。
@@ -4717,6 +4717,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 推不了档的窗口不算失败,状态照常提交:plan 档恒在 plan、rewind/bridge 重建期 q
         // 不可写、底层档已不是 auto —— 这些路径各自会按状态推导档位(plan turn 收尾的
         // effectiveSdkPermissionMode()、buildQuery 的起档 permissionMode),状态正是它们的输入。
+        const previousGeneration = turnAutoReviewGeneration;
         const fallbackGeneration = ++turnAutoReviewGeneration;
         if (
           mutablePermissionMode === 'auto'
@@ -4724,7 +4725,21 @@ export class ClaudeCodeAgent extends BaseAgent {
           && !planTurnActive
           && !controlRequestsBlocked()
         ) {
-          await q.setPermissionMode('default');
+          try {
+            await q.setPermissionMode('default');
+          } catch (e) {
+            // 代际号的语义是「最后一个**发起**的档位变更」,而它成立的前提是发起者最终会
+            // 写状态。本次请求失败 = 没落地也没人写,必须把写入权**交还上一个发起者**,
+            // 否则一个失败的新决策会永久遮住一个已成功的旧决策:会话级升级穿透在飞的
+            // turn 级降级、自己 push 失败(终态也没置上),而先发起的 turn 级 push 之后
+            // 成功了,却因代际不匹配直接返回 —— SDK 已在 default 而状态仍是 'native',
+            // send() 不再回探、default 档也不再产生分类器响应来触发新信号,会话永久停在
+            // 没有记账的 Cindy fallback(codex P1,本轮回归)。
+            if (turnAutoReviewGeneration === fallbackGeneration) {
+              turnAutoReviewGeneration = previousGeneration;
+            }
+            throw e;
+          }
           // await 期间更高优先级的决策可能已落地(会话级信号能穿透在飞的 turn 级操作,或
           // 另一次降级已推进代际):按**当前**状态重判,不用入口快照。
           if (nativeAutoReviewUnavailable) return false;
