@@ -4337,6 +4337,10 @@ export class CodexAgent extends BaseAgent {
     let reconnectStallTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
+    /** 还需要清醒等待的重连额度；系统挂起的片段不扣除。 */
+    let reconnectStallRemainingMs = 0;
+    /** 当前重连计时分片的起始壁钟时刻，用于识别系统挂起。 */
+    let reconnectStallSliceStartedAt = 0;
     /** 还需要"清醒地"静默多久才判上游哑火;按分片递减(见 armUpstreamIdleSlice)。 */
     let upstreamIdleRemainingMs = 0;
     /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
@@ -4356,6 +4360,8 @@ export class CodexAgent extends BaseAgent {
       }
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
+      reconnectStallRemainingMs = 0;
+      reconnectStallSliceStartedAt = 0;
     }
     function armUpstreamIdle(): void {
       clearUpstreamIdle();
@@ -4445,25 +4451,45 @@ export class CodexAgent extends BaseAgent {
       armUpstreamIdle();
     }
 
-    function armReconnectStall(turnId = currentTurnId): void {
-      if (closed || (!isTurnInFlight && !isTurnStartPending) || !turnId) return;
-      // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不重置整个重连序列的 deadline。
-      if (reconnectStallTimer) return;
-      reconnectStallTurnId = turnId;
-      reconnectStallTurnGeneration = turnStartGeneration;
+    function isReconnectStallCurrent(): boolean {
+      const pendingTurnStart =
+        !isTurnInFlight &&
+        isTurnStartPending &&
+        currentTurnId === null &&
+        reconnectStallTurnId !== null;
+      return (
+        !closed &&
+        turnStartGeneration === reconnectStallTurnGeneration &&
+        ((isTurnInFlight && currentTurnId === reconnectStallTurnId) || pendingTurnStart)
+      );
+    }
+
+    function armReconnectStallSlice(): void {
+      if (!isReconnectStallCurrent() || reconnectStallRemainingMs <= 0) {
+        clearReconnectStall();
+        return;
+      }
+      const slice = Math.min(reconnectStallRemainingMs, CODEX_UPSTREAM_IDLE_SLICE_MS);
+      reconnectStallSliceStartedAt = Date.now();
       reconnectStallTimer = setTimeout(() => {
         reconnectStallTimer = null;
-        const pendingTurnStart =
-          !isTurnInFlight &&
-          isTurnStartPending &&
-          currentTurnId === null &&
-          reconnectStallTurnId !== null;
-        if (
-          closed ||
-          (!isTurnInFlight && !pendingTurnStart) ||
-          (isTurnInFlight && currentTurnId !== reconnectStallTurnId) ||
-          turnStartGeneration !== reconnectStallTurnGeneration
-        ) {
+        const elapsed = Date.now() - reconnectStallSliceStartedAt;
+        if (elapsed > slice + CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS) {
+          log.info('codex reconnect watchdog skipped a suspended slice', {
+            threadId,
+            sliceMs: slice,
+            elapsedMs: elapsed,
+          });
+          // 系统挂起的时间不计入总 deadline；只重开当前分片，不能重新装满 120s。
+          armReconnectStallSlice();
+          return;
+        }
+        reconnectStallRemainingMs -= Math.max(0, elapsed);
+        if (reconnectStallRemainingMs > 0) {
+          armReconnectStallSlice();
+          return;
+        }
+        if (!isReconnectStallCurrent()) {
           clearReconnectStall();
           return;
         }
@@ -4471,15 +4497,25 @@ export class CodexAgent extends BaseAgent {
           reason: 'codex_reconnect_stalled',
           timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
           ignorePendingTools: true,
-          allowPendingTurnStart: pendingTurnStart,
+          allowPendingTurnStart: !isTurnInFlight,
           logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
           message:
             `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
             'without making progress; the turn was interrupted automatically. ' +
             'You can send the next message to continue.',
         });
-      }, CODEX_RECONNECT_STALL_TIMEOUT_MS);
+      }, slice);
       (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
+    }
+
+    function armReconnectStall(turnId = currentTurnId): void {
+      if (closed || (!isTurnInFlight && !isTurnStartPending) || !turnId) return;
+      // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不重置整个重连序列的 deadline。
+      if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
+      reconnectStallTurnId = turnId;
+      reconnectStallTurnGeneration = turnStartGeneration;
+      reconnectStallRemainingMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
+      armReconnectStallSlice();
     }
 
     function isReconnectRecoveryEvent(event: AgentEvent): boolean {

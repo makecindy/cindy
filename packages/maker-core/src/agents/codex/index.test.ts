@@ -16804,6 +16804,40 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  it('系统休眠期间不消耗重连额度，醒来后只等待剩余清醒时间', async () => {
+    vi.useFakeTimers();
+    try {
+      const startAt = Date.now();
+      vi.setSystemTime(startAt);
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-suspend',
+      );
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.setSystemTime(startAt + 8 * 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(seen.some(
+        (event) =>
+          event.type === 'error' &&
+          (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
+      )).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('deadline 内重新收到 thinking 或工具产出后不再触发', async () => {
     vi.useFakeTimers();
     try {
