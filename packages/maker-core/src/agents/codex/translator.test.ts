@@ -1300,7 +1300,7 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
   });
 });
 
-describe('codex file citation 归一化 (#785)', () => {
+describe('codex internal citation 归一化 (#785)', () => {
   it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
     const { normalizeCodexFileCitations } = await import('./translator.js');
     expect(
@@ -1405,6 +1405,50 @@ describe('codex file citation 归一化 (#785)', () => {
     expect(stableCitationBoundary(braceInQuote)).toBe(4);
     const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
     expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+  });
+
+  it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    const one = '\uE200cite\uE202turn17search1\uE201';
+    const many = '\uE200cite\uE202turn17search1\uE202turn17search2\uE201';
+    expect(finalizeCodexCitationText(`结论。${one}`)).toBe('结论。');
+    expect(finalizeCodexCitationText(`A ${one}；B ${many}。`)).toBe('A ；B 。');
+    expect(finalizeCodexCitationText('Please cite the source.')).toBe('Please cite the source.');
+  });
+
+  it('Web Search 引用跨 update 到达时不进入 delta,completed 截断残尾也不泄漏', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-web-citation',
+          turnId: 'turn-web-citation',
+          item: { type: 'agentMessage', id: 'msg-web-citation', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+
+    push('started', '结论。');
+    push('updated', '结论。 \uE200ci');
+    push('updated', '结论。 \uE200cite\uE202turn17search1');
+    push('updated', '结论。 \uE200cite\uE202turn17search1\uE201 后续');
+    push('completed', '结论。 \uE200cite\uE202turn17search1\uE201 后续。\uE200cite\uE202turn18sea');
+
+    const events = await collect(q);
+    const deltas = events
+      .filter((event) => event.type === 'text' && !(event.data as { isFinal: boolean }).isFinal)
+      .map((event) => (event.data as { text: string }).text);
+    expect(deltas.join('')).toBe('结论。  后续');
+    expect(deltas.join('')).not.toContain('\uE200');
+    const final = events.find(
+      (event) => event.type === 'text' && (event.data as { isFinal: boolean }).isFinal,
+    );
+    expect((final?.data as { text: string }).text).toBe('结论。  后续。');
   });
 
   it('路径本身含标记开头字面量:完整标记结构化消费,不被误认成新的未闭合开头', async () => {
