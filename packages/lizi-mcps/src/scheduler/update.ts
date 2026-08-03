@@ -111,11 +111,12 @@ export function registerScheduleUpdateTool(
           // 这是 JSON 边界唯一的清空表达。
           input = { ...input, intervalMs: undefined };
         }
-        if (typeof input.intervalMs === 'number') {
-          // patch 带 intervalMs 数值时引擎按 now + intervalMs 重排、不解析 patch 里的
-          // cronExpr / timezone,工具层补回校验(只校验本次 patch 显式带的字段)。
-          assertCronAndTimezoneValid(input.cronExpr, input.timezone);
-        }
+        // 无条件校验本次 patch 显式带的 cronExpr / timezone(函数对缺省字段是
+        // no-op)。不能只在 patch 带 intervalMs 数值时校验:任务已有 intervalMs、
+        // patch 只改 cronExpr 时,真 partial 语义保留原 interval,引擎按
+        // now + intervalMs 重排、全程不解析 cron——无效表达式会被静默写入,等
+        // 切回 cron 模式才爆(codex review 发现)。
+        assertCronAndTimezoneValid(input.cronExpr, input.timezone);
         if (bindToCurrentSession) {
           // 与 schedule_create 对称:把"改绑当前对话"翻成 targetSessionId,杜绝 agent
           // 复用上下文里过期的 session id。识别不到当前会话时报 INVALID_PARAMS,不静默绑错。

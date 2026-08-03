@@ -1057,6 +1057,18 @@ describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
     expect(updated.patch?.preRunHook).toEqual({ command: 'node /abs/old.mjs' });
   });
 
+  it('interval 任务只 patch cronExpr 也校验表达式,无效 cron 不被静默写入', async () => {
+    // 真 partial 保留原 interval → 引擎按 now + intervalMs 重排、不解析 cron;
+    // 工具层必须无条件校验显式提供的 cronExpr,否则坏表达式潜伏到切回 cron 才爆。
+    const { updated, registry } = setup({ intervalMs: 600_000 });
+    const env = await callUpdate(registry, { cronExpr: 'not-a-cron' });
+    expect(env.ok).toBe(false);
+    expect(updated.patch).toBeUndefined();
+
+    const okEnv = await callUpdate(registry, { cronExpr: '*/10 * * * *' });
+    expect(okEnv.ok).toBe(true);
+  });
+
   it('preRunHook.timeoutMs 带 key 的 undefined → 视作缺省沿用现有超时,不是清除', async () => {
     // JSON 表达不出这个形态,但进程内调用能;只有 null 才是清除
     // (copilot review 指出带 key undefined 曾漏进清空分支)。
