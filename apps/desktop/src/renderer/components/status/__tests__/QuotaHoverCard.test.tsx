@@ -12,6 +12,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.fiveHourLabel') return '5 小时';
       if (key === 'quotaCard.weeklyLabel') return '周限';
       if (key === 'quotaCard.modelWeeklyLabel') return `${options.model} 周限`;
+      if (key === 'quotaCard.windowsRegionLabel') return '配额窗口列表';
       if (key === 'quotaCard.usedPercent') return `已用 ${options.percent}%`;
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
       if (key === 'quotaCard.tokenBreakdown') {
@@ -487,6 +488,13 @@ describe('QuotaHoverCard', () => {
     expect(scrollContent.classList.contains('min-h-0')).toBe(true);
     expect(scrollContent.classList.contains('overflow-y-auto')).toBe(true);
     expect(scrollContent.contains(dashboardButton)).toBe(false);
+  });
+
+  it('让滚动内容区进入 Tab 顺序并提供可访问名称', () => {
+    render(<QuotaHoverCard snapshot={makeSnapshot()} nowMs={NOW_MS} />);
+
+    const scrollContent = screen.getByRole('region', { name: '配额窗口列表' });
+    expect(scrollContent.tabIndex).toBe(0);
   });
 
   it('shows a ten-minute stale footnote but omits a one-minute age', () => {

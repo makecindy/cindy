@@ -422,7 +422,10 @@ export function QuotaHoverCard({
     >
       <div
         data-testid="quota-hover-card-scroll-content"
-        className="min-h-0 overflow-y-auto pt-[6px]"
+        role="region"
+        aria-label={t('quotaCard.windowsRegionLabel')}
+        tabIndex={0}
+        className="min-h-0 overflow-y-auto pt-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
       >
         {snapshot ? (
           <>

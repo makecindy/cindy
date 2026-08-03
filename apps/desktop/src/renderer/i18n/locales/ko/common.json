@@ -3842,6 +3842,7 @@
     "fiveHourLabel": "5시간",
     "weeklyLabel": "주간",
     "modelWeeklyLabel": "{{model}} 주간",
+    "windowsRegionLabel": "할당량 구간 목록",
     "usedPercent": "사용 {{percent}}%",
     "resetAt": "{{at}} 재설정",
     "noWindows": "사용량 한도 구간 데이터가 없습니다",

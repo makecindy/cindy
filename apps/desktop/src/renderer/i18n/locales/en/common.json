@@ -3844,6 +3844,7 @@
     "fiveHourLabel": "5 hours",
     "weeklyLabel": "Weekly",
     "modelWeeklyLabel": "{{model}} weekly",
+    "windowsRegionLabel": "Quota Windows",
     "usedPercent": "Used {{percent}}%",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",

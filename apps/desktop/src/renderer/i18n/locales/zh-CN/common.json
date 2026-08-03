@@ -3842,6 +3842,7 @@
     "fiveHourLabel": "5 小时",
     "weeklyLabel": "周限",
     "modelWeeklyLabel": "{{model}} 周限",
+    "windowsRegionLabel": "配额窗口列表",
     "usedPercent": "已用 {{percent}}%",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
