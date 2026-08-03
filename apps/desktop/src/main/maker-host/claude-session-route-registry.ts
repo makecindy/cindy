@@ -17,13 +17,25 @@
  *     providerId 直接驱动 chip 形态, 不需要用这份 session 记录)。
  *   - reqId → 路由同时覆盖内置 XD / Anthropic 的显式请求,因为错误归因必须知道
  *     产生响应的那一笔请求究竟去了哪里。
- *   - session 记录的是**最近一个请求**的生效路由;凭证中途变化后, 下一个请求会在
+ *   - session route 记录的是**最近一个默认路由请求**的生效路由;凭证中途变化后,
+ *     下一个请求会在
  *     transform 里按新状态重判并自动纠正记录。
+ *   - `lastFailedRequestBridge` 独立槽在 SDK 确认**终止且不再重试**的 turn error
+ *     落账,归因到最终展示的那笔失败:bridge(chatgpt/ / xai/ 覆写,含子代理)
+ *     → true;forward 路径 → false;缺少可靠模型 → null。不能在 proxy 单次响应
+ *     侧写入:429/529、连接错误或 SSE error 都可能退避后成功,会留下过期归因
+ *     (PR review P1)。bridge 花个人订阅额度, 错误横幅靠本槽避免把
+ *     bridge 配额错误贴成 Cindy 点数耗尽;拿不到可靠失败模型时写 null,让 UI
+ *     宁可不显示计费入口也不继承上一笔失败的 true/false 归因。会话主计费
+ *     形态(chip)仍由 route 驱动, 不读本槽 —— 网关会话跑 bridge 子代理不改判
+ *     形态(PR review P1 ×2)。
+ *     本槽**不限默认路由会话**:显式 XD 会话的 bridge 子代理失败同样要归因
+ *     (PR review P1)。
  *   - 会话尚未发过请求(新会话 / app 重启后未活动)→ 无记录, 消费方回落
  *     活性启发式 —— 此时下一次 spawn 恰按当前凭证决定, 启发式就是正确预测。
  *
- * 热路径纪律(规则 10):record 每请求调用, 只做 Map 读写 + 同值短路;
- * listener 仅在路由值变化时触发(每会话生命周期通常一次)。
+ * 热路径纪律(规则 10):record 每请求调用, 只做 Map/Set 读写 + 同值短路;
+ * listener 仅在状态实际变化时触发(每会话生命周期通常少数几次)。
  * 会话路由随 app 生命周期常驻;请求路由会在响应观察时消费,并有容量上限兜住
  * 连接失败等永远收不到响应的请求。
  */
@@ -35,9 +47,17 @@ export interface ClaudeRequestRoute {
   route: ClaudeSessionBillingRoute;
 }
 
-type RouteChangeListener = (sessionId: string, route: ClaudeSessionBillingRoute) => void;
+export interface ClaudeSessionRouteState {
+  /** 最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
+  route: ClaudeSessionBillingRoute | null;
+  /** 最近一笔**失败**请求是否订阅直连 bridge;null = 本次失败无法可靠归因。 */
+  lastFailedRequestBridge: boolean | null;
+}
+
+type RouteChangeListener = (sessionId: string, state: ClaudeSessionRouteState) => void;
 
 const routes = new Map<string, ClaudeSessionBillingRoute>();
+const failedBridge = new Map<string, boolean | null>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
@@ -78,28 +98,52 @@ export function readLatestClaudeSessionRequestId(sessionId: string): number | nu
   return latestRequestIds.get(sessionId) ?? null;
 }
 
-/** proxy transform 决策点旁路调用;同值幂等(不重复通知)。 */
-export function recordClaudeSessionRoute(
-  sessionId: string,
-  route: ClaudeSessionBillingRoute,
-): void {
-  if (routes.get(sessionId) === route) return;
-  routes.set(sessionId, route);
+function notify(sessionId: string): void {
+  const state = readClaudeSessionRouteState(sessionId);
   for (const listener of listeners) {
     try {
-      listener(sessionId, route);
+      listener(sessionId, state);
     } catch {
       /* listener 异常不影响路由热路径与其它订阅者 */
     }
   }
 }
 
-/** IPC GET 用:该会话最近一个默认路由请求的生效路由;未观察到 → null。 */
+/** proxy transform ② 段决策点旁路调用;同值幂等(不重复通知);不动失败归因槽。 */
+export function recordClaudeSessionRoute(
+  sessionId: string,
+  route: ClaudeSessionBillingRoute,
+): void {
+  if (routes.get(sessionId) === route) return;
+  routes.set(sessionId, route);
+  notify(sessionId);
+}
+
+/** terminal turn error 侧失败归因:true = bridge,false = forward,null = 未知;
+ *  同值幂等。每个最终失败都覆写,避免沿用上一笔失败的过期归因。 */
+export function recordClaudeSessionFailedRequestSource(
+  sessionId: string,
+  bridge: boolean | null,
+): void {
+  if (failedBridge.get(sessionId) === bridge) return;
+  failedBridge.set(sessionId, bridge);
+  notify(sessionId);
+}
+
+/** 该会话最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
 export function readClaudeSessionRoute(sessionId: string): ClaudeSessionBillingRoute | null {
   return routes.get(sessionId) ?? null;
 }
 
-/** 路由值变化订阅(bootstrap 接 renderer 广播)。返回取消函数。 */
+/** IPC GET 用:route + bridge 标志的完整观察状态。 */
+export function readClaudeSessionRouteState(sessionId: string): ClaudeSessionRouteState {
+  return {
+    route: routes.get(sessionId) ?? null,
+    lastFailedRequestBridge: failedBridge.has(sessionId) ? failedBridge.get(sessionId)! : false,
+  };
+}
+
+/** 观察状态变化订阅(bootstrap 接 renderer 广播)。返回取消函数。 */
 export function onClaudeSessionRouteChange(listener: RouteChangeListener): () => void {
   listeners.add(listener);
   return () => {
@@ -110,6 +154,7 @@ export function onClaudeSessionRouteChange(listener: RouteChangeListener): () =>
 /** 测试隔离用。 */
 export function resetClaudeSessionRouteRegistryForTest(): void {
   routes.clear();
+  failedBridge.clear();
   listeners.clear();
   requestRoutes.clear();
   latestRequestIds.clear();

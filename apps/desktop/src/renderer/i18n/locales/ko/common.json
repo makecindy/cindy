@@ -4045,6 +4045,7 @@
       "second": "초"
     },
     "openProxyUsage": "브라우저에서 전체 사용량 대시보드 열기",
+    "openBilling": "사용량 및 결제 열기",
     "openXaiUsage": "xAI 계정 페이지 열기",
     "xai": {
       "requestsLine": "속도 제한(요청): 남음 {{remaining}}/{{limit}}",
@@ -5512,6 +5513,10 @@
       "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
+      "gatewayQuotaExceeded": "Cindy AI 잔액이 부족하여 이번 턴을 완료하지 못했습니다. 충전 후 ‘다시 시도’를 클릭하면 계속할 수 있습니다.",
+      "gatewayQuotaExceededNoRetry": "Cindy AI 잔액이 부족하여 이번 턴을 완료하지 못했습니다. 충전 후 작업을 다시 시작하면 계속할 수 있습니다.",
+      "openBilling": "잔액 충전",
+      "openBillingTitle": "'사용량 및 결제' 열기",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",

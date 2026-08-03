@@ -226,8 +226,15 @@ export function createModelRoutingTransform(): RoutingTransform {
       const effort = sessionId ? getSessionEffort(sessionId) : null;
       const fast = sessionId ? getSessionFastMode(sessionId) : false;
       return {
-        localHandler: (args) =>
-          bridgeHandler.handle({ ...args, prefs: { reasoningEffort: effort ?? undefined, fast } }),
+        // 这里只转发单次 bridge 尝试,不写 lastFailedRequestBridge:HTTP 429/529、
+        // handler throw 与 SSE error 都可能被 SDK 退避后重试成功,提前落账会让
+        // 瞬时失败污染下一条真正 surface 的错误。失败来源统一在 register.ts
+        // 收到 terminal turn error 后按 event.agentMeta.model 写入;拿不到模型时
+        // 写 null,也不会继承旧值(PR review P1 / P2)。
+        localHandler: (args) => bridgeHandler.handle({
+          ...args,
+          prefs: { reasoningEffort: effort ?? undefined, fast },
+        }),
       };
     }
 
@@ -342,6 +349,7 @@ export function createModelRoutingTransform(): RoutingTransform {
   };
 }
 
+
 /**
  * 启动本地代理。幂等 —— 重复调用直接返回已缓存 handle。
  *
@@ -371,6 +379,11 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
+        // 失败归因(lastFailedRequestBridge=false 侧)不在这里做:单次 HTTP 响应
+        // 无法可靠区分"SDK 还会重试"与"真正终止、即将 surface 给用户"(429/529
+        // 尤其如此),这个判断只有 SDK/maker-core 自己的终止事件知道。false 侧
+        // 改在 register.ts 的 isTerminalTurnErrorEvent 分支里记(与 bridge
+        // localHandler 的 true 侧配对,PR review P1 ×3)。
         createClaudeSubagentUsageResponseObserver(),
         createClaudeFastModeResponseObserver(log),
         createClaudeRateLimitHeadersObserver(),

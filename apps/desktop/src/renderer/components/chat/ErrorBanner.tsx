@@ -13,13 +13,19 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
+import { AlertCircle, Check, CreditCard, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { extractIpcError } from '@/utils/ipcError';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
+import { useApiKey } from '@/hooks/useApiKey';
+import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
+import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import {
@@ -32,6 +38,8 @@ import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import { isQuotaExceededMessage } from '../../../shared/providerErrors';
+import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 
 interface ErrorBannerProps {
   error: string;
@@ -64,6 +72,17 @@ interface ErrorBannerProps {
   /** XD Gateway 返回了误导性的 Claude Pro/Opus 套餐错误时，切到已连接的
    * Claude.ai 订阅来源并重试本轮。未连接 Anthropic 时不提供此操作。 */
   onSwitchToClaudeSubscription?: () => Promise<void>;
+  /** 当前 session id。cc 默认路由(无显式来源)的余额不足引导需要它读会话的
+   *  生效计费路由(gateway/subscription),缺省时该引导只按显式来源判定。 */
+  sessionId?: string;
+  /** 会话的 provider / model 元数据已加载。冷启动 / 深链路首帧时为 false，
+   *  防止把暂时的 null/undefined 冻结成隐式 Cindy 计费来源。 */
+  sourceMetadataReady?: boolean;
+  /** true = 本横幅渲染的是持久化历史错误(ErrorTail),而非刚发生的 live 错误。
+   *  codex 共享 app-server 的 runtime route 是「当前」全局值,不是产生该失败的
+   *  那一轮的路由——切换鉴权模式后重开旧会话,按当前路由分类会张冠李戴,故
+   *  持久化路径不启用 codex 隐式来源的点数引导(显式 xd / codex 骨折不受影响)。 */
+  persistedError?: boolean;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -89,6 +108,9 @@ export function ErrorBanner({
   modelId,
   providerId,
   onSwitchToClaudeSubscription,
+  sessionId,
+  sourceMetadataReady = true,
+  persistedError = false,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -108,9 +130,10 @@ export function ErrorBanner({
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
   // 本会话 codex app-server 的 spawn 鉴权注入(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
   // 默认 'env-key'(保守):真值未回来前不会误命中 OAuth 引导分支而短暂 hide Retry。
-  const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
-    enabled: agentKind === 'codex' && !isAnyRemoteSession,
-  });
+  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } =
+    useCodexRuntimeRoute({
+      enabled: agentKind === 'codex' && !isAnyRemoteSession,
+    });
   const [syncing, setSyncing] = useState(false);
   // 已同步标志:点击同步成功后置 true, 让 displayError 切换成"已同步,请重试"提示,
   // 同时把 Retry 按钮显出来。
@@ -150,6 +173,155 @@ export function ErrorBanner({
   // 不能因为错误文案碰巧含 token_revoked 就引导用户去修 ChatGPT 登录态。历史无来源
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
+  // ── Cindy AI 余额不足 → 「余额充值」直达 ────────────────────────────────
+  // 转化闭环:被余额挡住的瞬间给出可行动入口,而不是让用户自己去设置里找计费页。
+  // 三重门,缺一不显(防止把别家供应商的余额问题错误指向 Cindy 计费):
+  //  1. 错误文本命中共享分类器的余额/配额 pattern(与 QUOTA_EXCEEDED 同口径);
+  //  2. 账号本身有计费页可去(cloud + personal,与设置页 billing tab 同一判定);
+  //  3. 该会话的花费确实走 XD 网关:显式 xd 来源 / codex 骨折模型 / env-key spawn
+  //     的 codex 默认路由 / cc 默认路由按会话观察到的计费路由为 gateway。
+  //     显式第三方来源(自定义供应商等)一律不命中——那是对方平台的余额。
+  const { mode: authMode, user: authUser } = useAuth();
+  const canAccessBilling = canAccessBillingSettings({
+    mode: authMode,
+    membershipKind: authUser?.membershipKind ?? null,
+  });
+  const isQuotaError = isQuotaExceededMessage(error);
+  // ── 计费引导的来源归因快照(错误实例级)────────────────────────────────
+  // providerId / modelId 是会话的**可变**当前值:错误还挂着时用户切换来源
+  // (ChatInput.performProviderChange 不清错误尾部),自定义供应商的余额错误会
+  // 被换上的 xd 重新贴成 Cindy 余额不足(PR review P1)。快照按 (sessionId, 错误
+  // 文本) 联合实例冻结首帧的来源归因,只服务下方计费引导;其它恢复分支维持既有
+  // 行为。只按错误文本键控不够:route-owner 会话视图直接切到另一会话时,若两个
+  // 会话的错误文案恰好相同(如都命中 insufficient_quota),旧会话的快照会被
+  // 误认成仍然有效并沿用其 providerId(PR review P1)。持久化历史错误连首帧
+  // 快照都不可信(重开时来源可能早已换过),由下方 !persistedError 门控整体
+  // 抑制显式来源子句。
+  const [billingAttribution, setBillingAttribution] = useState<{
+    sessionId: string | undefined;
+    err: string;
+    ready: boolean;
+    providerId: string | null;
+    modelId: string | undefined;
+  }>(() => ({
+    sessionId,
+    err: error,
+    ready: sourceMetadataReady,
+    providerId: normalizedProviderId,
+    modelId,
+  }));
+  if (
+    billingAttribution.sessionId !== sessionId ||
+    billingAttribution.err !== error ||
+    (!billingAttribution.ready && sourceMetadataReady)
+  ) {
+    // 同一错误只允许从「元数据未就绪」刷新一次到真实来源；一旦
+    // ready，后续用户手动切换 provider 仍不改写该错误的归因快照。
+    setBillingAttribution({
+      sessionId,
+      err: error,
+      ready: sourceMetadataReady,
+      providerId: normalizedProviderId,
+      modelId,
+    });
+  }
+  const billingMetadataReady = billingAttribution.ready;
+  const billingProviderId = billingAttribution.providerId;
+  const billingModelId = billingAttribution.modelId;
+  // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
+  // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 余额不足(PR review
+  // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
+  // 由观察状态的 lastFailedRequestBridge 失败归因兜住(PR review P1 ×3)。
+  const isSubscriptionBridgeModel = !!billingModelId && isSubscriptionDirectModel(billingModelId);
+  // 观察状态对默认路由 cc 会话与显式 XD cc 会话都要读:子代理 bridge 覆写按请求
+  // 绕过会话来源,显式 XD 会话同样会出现 bridge 配额失败(PR review P1)。
+  const wantCcRouteState =
+    isQuotaError &&
+    canAccessBilling &&
+    !isAnyRemoteSession &&
+    agentKind === 'cc' &&
+    !isSubscriptionBridgeModel &&
+    (billingProviderId === null || billingProviderId === 'xd');
+  // 生效路由 + 活性启发式只服务默认路由会话(显式 XD 由 providerId 直接驱动)。
+  const wantCcRouteForBilling = wantCcRouteState && billingProviderId === null;
+  const {
+    route: claudeSessionRoute,
+    lastFailedRequestBridge: ccLastFailedRequestBridge,
+    resolved: ccRouteStateResolved,
+  } = useClaudeSessionRoute(sessionId, wantCcRouteState);
+  // resolved 门控:观察状态清空/首查在途时的占位 false **不是**权威的「非
+  // bridge」——显式 XD 的 bridge 配额失败若在 GET 落地前放行,会闪现一帧错误
+  // 的购买引导再消失(PR review P1)。cc 的引导子句一律等 resolved;codex
+  // 会话不读本观察(hook 未启用),不受此门控。
+  const ccRouteStateReady = agentKind !== 'cc' || ccRouteStateResolved;
+  // 观察值缺失时的活性凭证启发式(与 TodaySpendChip 同口径)只对 live 错误启用:
+  // live 错误刚由当前凭证形态的请求产生,启发式就是正确预测——有网关 key 判
+  // gateway;无 key 且连了 Claude OAuth 判 subscription;reconcile 未完成 / 状态
+  // 未知则形态未定、不显引导(宁缺勿错)。持久化历史错误不回落:失败那一轮之后
+  // 凭证可能已变(订阅失败后配上网关 key,或反向),按**当前**凭据分类历史错误
+  // 会张冠李戴(PR review P1);同 run 的错误尾部仍可命中会话观察值,不受影响。
+  const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
+  const claudeOAuthConnected = useClaudeOAuthConnected(
+    wantCcRouteForBilling && !persistedError && ccRouteStateResolved && claudeSessionRoute == null,
+  );
+  const ccEffectiveBillingRoute =
+    claudeSessionRoute ??
+    (!wantCcRouteForBilling || persistedError || !ccRouteStateResolved || gatewayKeyReconciling
+      ? null
+      : hasGatewayKey
+        ? 'gateway'
+        : claudeOAuthConnected === true
+          ? 'subscription'
+          : claudeOAuthConnected === false
+            ? 'gateway'
+            : null);
+  // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
+  // 发现 codex/ 开头的模型 id,且 proxy 按显式来源优先路由(PR review P1)。
+  // 显式 xd 也要排除订阅桥模型:路由层的 bridge 分流优先于会话来源,xd 会话里
+  // 的 chatgpt/ / xai/ 模型花的仍是个人订阅额度(PR review P1)。
+  // ccLastFailedRequestBridge:最近一笔**失败**请求是子代理覆写的 bridge 模型
+  // (chatgpt/ / xai/,花个人订阅额度;proxy 响应侧落账,归因到失败那笔而非
+  // 发起序)——顶层模型与会话来源都看不出它,默认路由与显式 XD 的 cc 会话
+  // 都必须据此闭嘴,不把 bridge 配额错误引导去充值(PR review P1 ×2)。
+  // null = 本次失败没有可靠模型归因。与 bridge=true 一样 fail closed:不能沿用
+  // 旧 false 或按会话顶层模型猜成网关,否则会给未知来源的余额错误展示 Cindy
+  // 充值入口(PR review P2)。只有明确 false 才允许 cc 计费来源子句继续判定。
+  const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge !== false;
+  // 显式来源子句统一要求 !persistedError:历史错误的来源归因不可回溯(快照
+  // 也只是重开时的当前值),按现值分类必然张冠李戴;持久化错误仅剩 cc 会话
+  // 观察值路径(绑定该会话实际流量,同 run 可信)可放行引导(PR review P1)。
+  const isGatewayBilledSource =
+    billingMetadataReady &&
+    ((!persistedError &&
+      billingProviderId === 'xd' &&
+      !isSubscriptionBridgeModel &&
+      ccRouteStateReady &&
+      !ccBridgeFailureVeto) ||
+    // codex/ 骨折模型子句同样吃 bridge 失败否决:cc 会话顶层是 codex/ 模型时,
+    // 子代理照样可以覆写 bridge 请求,失败归因优先于顶层模型判断(PR review P1)。
+    (!persistedError &&
+      (billingProviderId === null || billingProviderId === 'xd') &&
+      !!billingModelId?.startsWith('codex/') &&
+      (agentKind !== 'cc' || (ccRouteStateResolved && !ccBridgeFailureVeto))) ||
+    // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅
+    // 会话的配额错误误判成网关计费(与 TodaySpendChip 同口径)。持久化历史
+    // 错误不启用:共享 app-server 的当前路由 ≠ 产生该失败那一轮的路由,
+    // codex 没有 per-session 路由记录可回溯(PR review P1)。
+    (!persistedError &&
+      billingProviderId === null &&
+      agentKind === 'codex' &&
+      !isSubscriptionBridgeModel &&
+      codexRouteResolved &&
+      codexAuthInjection === 'env-key') ||
+    (billingProviderId === null &&
+      agentKind === 'cc' &&
+      !isSubscriptionBridgeModel &&
+      !ccBridgeFailureVeto &&
+      ccEffectiveBillingRoute === 'gateway'));
+  const showGatewayQuotaRecovery =
+    isQuotaError && canAccessBilling && !isAnyRemoteSession && isGatewayBilledSource;
+  const navigate = useNavigate();
+
   const hasExplicitOpenAiProvider = normalizedProviderId === 'openai';
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&
@@ -282,6 +454,15 @@ export function ErrorBanner({
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
       : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+  } else if (showGatewayQuotaRecovery) {
+    // 余额不足:原始报错(LiteLLM budget 措辞等)对用户没有行动价值,换成
+    // 「点数不足 + 购买后重试」。外部发起的 turn(scheduler/goal)没有安全
+    // retry 目标 → Retry 按钮不显示,文案也不能让用户点一个不存在的按钮。
+    displayError = t(
+      safeRetryText
+        ? 'chat.errorBanner.gatewayQuotaExceeded'
+        : 'chat.errorBanner.gatewayQuotaExceededNoRetry',
+    );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -554,7 +735,7 @@ export function ErrorBanner({
           {t('chat.errorBanner.silentStopContinue')}
         </button>
       )}
-      {onContinueAfterUsageReset && (
+      {onContinueAfterUsageReset && !showGatewayQuotaRecovery && (
         <button
           type="button"
           onClick={onContinueAfterUsageReset}
@@ -567,6 +748,23 @@ export function ErrorBanner({
         >
           <Timer size={12} />
           {t('chat.errorBanner.continueAfterReset')}
+        </button>
+      )}
+      {showGatewayQuotaRecovery && (
+        // 直达设置页 billing tab(可见性与 SettingsView 同一判定,不会 404 回弹)。
+        // 新增控件走 --error-fg token(规则 16;本组件 red-600/400 为历史存量)。
+        <button
+          type="button"
+          onClick={() => navigate('/settings?tab=billing')}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.openBillingTitle')}
+        >
+          <CreditCard size={12} />
+          {t('chat.errorBanner.openBilling')}
         </button>
       )}
       {safeRetryText && (

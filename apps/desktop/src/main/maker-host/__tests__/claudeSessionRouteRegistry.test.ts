@@ -12,6 +12,8 @@ import {
   readLatestClaudeSessionRequestId,
   readClaudeSessionRoute,
   recordClaudeRequestRoute,
+  readClaudeSessionRouteState,
+  recordClaudeSessionFailedRequestSource,
   recordClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
@@ -40,11 +42,74 @@ describe('claude-session-route-registry', () => {
     recordClaudeSessionRoute('s1', 'gateway');  // 同值: 每请求都会调, 不得重复广播
     recordClaudeSessionRoute('s1', 'gateway');
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith('s1', 'gateway');
+    expect(listener).toHaveBeenCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
 
     recordClaudeSessionRoute('s1', 'subscription');
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenLastCalledWith('s1', 'subscription');
+    expect(listener).toHaveBeenLastCalledWith('s1', {
+      route: 'subscription',
+      lastFailedRequestBridge: false,
+    });
+  });
+
+  it('attributes failures in a separate slot without clobbering the session route', () => {
+    // 网关会话跑 bridge 子代理:主路由(chip 形态)不得被改判成订阅,但错误横幅
+    // 要能看到「最近一笔失败是 bridge」;归因在响应侧落账,不随后续请求发起而清
+    // (并发时按发起序清会误清在途 bridge 的归因,PR review P1)。
+    recordClaudeSessionRoute('s1', 'gateway');
+    recordClaudeSessionFailedRequestSource('s1', true);
+    expect(readClaudeSessionRoute('s1')).toBe('gateway');
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: true,
+    });
+    // ② 段路由记录不动失败归因槽(只有下一笔**失败**响应才覆写)。
+    recordClaudeSessionRoute('s1', 'gateway');
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: true,
+    });
+    // 非 bridge 请求失败 → 归因覆写为 false。
+    recordClaudeSessionFailedRequestSource('s1', false);
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
+  });
+
+  it('notifies on failure-attribution transitions and stays idempotent on same value', () => {
+    const listener = vi.fn();
+    recordClaudeSessionRoute('s1', 'gateway');
+    onClaudeSessionRouteChange(listener);
+
+    recordClaudeSessionFailedRequestSource('s1', true);
+    recordClaudeSessionFailedRequestSource('s1', true);  // 同值: 不重复广播
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: true,
+    });
+
+    recordClaudeSessionFailedRequestSource('s1', false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith('s1', {
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
+  });
+
+  it('replaces stale bridge attribution with unknown when a later failure cannot be classified', () => {
+    recordClaudeSessionRoute('s1', 'gateway');
+    recordClaudeSessionFailedRequestSource('s1', true);
+    recordClaudeSessionFailedRequestSource('s1', null);
+
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: null,
+    });
   });
 
   it('isolates listener exceptions from the routing hot path and other listeners', () => {
@@ -54,7 +119,7 @@ describe('claude-session-route-registry', () => {
     onClaudeSessionRouteChange(good);
 
     expect(() => recordClaudeSessionRoute('s1', 'gateway')).not.toThrow();
-    expect(good).toHaveBeenCalledWith('s1', 'gateway');
+    expect(good).toHaveBeenCalledWith('s1', { route: 'gateway', lastFailedRequestBridge: false });
   });
 
   it('unsubscribes via the returned disposer', () => {

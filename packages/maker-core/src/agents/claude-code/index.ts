@@ -1870,12 +1870,17 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      turnStartModel: mutableModel,
     };
     const runtimeState: RuntimeState = newRuntimeState();
     const beginNewTurn = (): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮 API call 计数。
       usageTracker.beginTurn();
+      // 请求真正 dispatch 前的模型快照 —— translator 的 api_retry 无 envelope 兜底
+      // 归因靠它,不能读 mutableModel 的活值(PR review P2 ×3,详见 translator.ts
+      // pendingApiError 字段注释)。
+      turnState.turnStartModel = mutableModel;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -3550,6 +3555,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         await replayRuntimeDrift(runtimeSnapshot, 'invalid resume rebuild');
         releaseGate();
         if (replayInput) {
+          // beginNewTurn() 在 buildQuery 之前打过一次快照,但 await buildQuery /
+          // replayRuntimeDrift 期间 runtime setter 仍可能把 mutableModel 热切走
+          // (replayRuntimeDrift 会把新选择应用到重建的 query 上);重放请求真正
+          // 入队前(漂移已回放完成、query 已确定)重新打一次快照,覆盖掉可能过期
+          // 的旧值,与普通 send() 路径同一约定(PR review P2)。
+          turnState.turnStartModel = mutableModel;
           if (!inputQueue.push(replayInput)) throw new Error('fresh retry input queue rejected replay');
           armUpstreamResponseIdle();
         }
@@ -4020,6 +4031,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
+          // beginNewTurn() 在上面 toClaudeSdkContent 之前打过一次快照,但多模态
+          // 转换(图片 resize)可以异步等数百毫秒~几秒;这段空窗内 runtimeSetModel
+          // 仍可能通过 q.setModel() 热切模型,实际发出的请求会用新模型,但那次
+          // 快照仍是旧模型。这里在真正入队前(转换已完成、请求内容已确定)重新
+          // 打一次快照,覆盖掉可能过期的旧值——只有这里才是"这次请求最终确定
+          // 使用哪个模型"的边界(PR review P2)。
+          turnState.turnStartModel = mutableModel;
           const accepted = inputQueue.push(sdkInput);
           if (!accepted) {
             // close() can win while content conversion is still preparing files or
@@ -4395,6 +4413,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           authState.authSource,
         );
         mutableModel = newModel;
+        // 特意**不**在这里同步刷新 turnStartModel。一个 turn 内 apiCalls 可以
+        // 大于 1(工具调用后 SDK 自己发起下一次 API call,不经过我们显式的
+        // dispatch 代码路径),这次 setModel 之后、下一次实际 API 请求何时真正
+        // 发出、抑或是否还有一个更早的请求仍在无 envelope 重试(此时
+        // q.setModel() 根本改不了那个已经发出的旧请求),我们都拿不到任何可靠
+        // 信号——之前几轮尝试过"turn 内热切即刷新"“仅在没有未解决重试序列时
+        // 刷新”,都还留有旧请求已发出但尚未收到第一条 api_retry 的窗口
+        // (review P2 ×3)。翻译层(translator.ts)改为只在 apiCalls === 0(当前
+        // 仍在本 turn**第一次**、由 beginNewTurn/入队时已可靠打过快照的那次
+        // API 调用)才使用 turnStartModel 兜底,apiCalls > 0 时没有可靠信号,
+        // 宁可跳过归因也不猜(与拿不到 agentMeta 时的既有原则一致)。
         autoReviewDecisionCache.clear();
         if (
           !isControlBlocked

@@ -7,6 +7,8 @@
  * deliberately conservative because this result exposes an Automation action.
  */
 
+import { isQuotaExceededMessage } from '../../shared/providerErrors';
+
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
 }
@@ -262,9 +264,8 @@ export function extractUsageLimitRecoveryHint(
     sdkError === 'billing_error' ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
-    /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low)|at capacity|overloaded_error)\b/i.test(
-      text,
-    )
+    isQuotaExceededMessage(text) ||
+    /\b(?:billing_error|at capacity|overloaded_error)\b/i.test(text)
   ) {
     return null;
   }

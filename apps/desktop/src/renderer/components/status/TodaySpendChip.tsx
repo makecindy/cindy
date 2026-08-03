@@ -5,7 +5,8 @@
  *   - 不在 desktop 重做完整看板（点击 chip 跳到对应供应商的 web 用量看板）
  *   - 仅在右下角与 Context 同行显示区域币种的今日 / 本会话金额
  *   - 点击 → 在系统默认浏览器打开对应 vendor 的用量看板
- *     (XD 网关 / 托管账号暂无看板可跳,点击无反应,详见 usageDashboardUrl)
+ *     (XD 网关 / 托管账号无外部看板;个人云账号点击改为站内直达「用量和计费」,
+ *      其余账号点击无反应,详见 usageDashboardUrl / opensBillingSettings)
  *
  * Claude / gateway 形态: 主 chip 固定显示 daily + session, monthly 进 tooltip。
  *   - daily: 今日跨客户端已用 / 软日限额 (maxBudget/30*4.5, 与 web 看板同公式)
@@ -32,6 +33,7 @@
  */
 
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -49,6 +51,8 @@ import {
 } from '@/lib/usageFormat';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import {
@@ -101,8 +105,9 @@ import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
-// 看板地址;推理 endpoint 与看板 console 不同源、无法从中推导。故网关账号暂无看板可跳
-// (点击无反应)。
+// 看板地址;推理 endpoint 与看板 console 不同源、无法从中推导。故网关账号无外部看板,
+// 个人云账号点击改为站内直达设置页「用量和计费」(见 opensBillingSettings),其余账号
+// 点击无反应。
 // TODO(后续): 若 model-access-server 在下发凭据时附带看板地址(按个人 / 企业租户区分的
 // usageDashboardUrl / consoleUrl),据此恢复网关账号的跳转 + tooltip 链接行
 // (i18n 文案 todaySpend.openProxyUsage 已保留待复用,勿当死 key 删)。
@@ -1045,7 +1050,7 @@ export function TodaySpendChip({
   // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
   // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
   const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
-  const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
+  const { authInjection: codexAuthInjection, resolved: codexRouteResolved } = useCodexRuntimeRoute({
     enabled: vendorKey === 'codex' && !isDeviceLinkRemote,
     refreshKey: sessionId,
   });
@@ -1071,9 +1076,17 @@ export function TodaySpendChip({
     vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null;
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
-  const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
-  const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
-    && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
+  // 只消费 route(会话主计费形态)与 resolved:bridge 子代理覆写不改会话形态,
+  // lastFailedRequestBridge 是错误横幅专用的失败归因信号,chip 不读。
+  const { route: observedClaudeRoute, resolved: claudeRouteResolved } =
+    useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
+  // resolved 门控:首查在途 / 切会话清空后的 route=null 是占位、不是权威「无观察」,
+  // 此时套活性启发式会把「冻结订阅路由的旧会话 + 刚配的网关 key」短暂判成网关并
+  // 亮出计费入口,GET 落地后又跳回——形态未定一律 pending(PR review P1)。
+  const ccBillingFormPending = isDefaultRouteClaudeSession
+    && (!claudeRouteResolved
+      || (observedClaudeRoute == null
+        && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null))));
   const isClaudeSubscription = !isDeviceLinkRemote && (
     (
       vendorKey === 'cc'
@@ -1083,26 +1096,29 @@ export function TodaySpendChip({
         || (providerId == null && (
           observedClaudeRoute != null
             ? observedClaudeRoute === 'subscription'
-            : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
+            : claudeRouteResolved && !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
         ))
       )
     )
     // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
     || (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')
   );
-  // cc 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
+  // cc / Pi 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
   // 订阅额度,真实计费恒 0,gateway quota 与之无关):
   //   - chatgpt/ → 与 codex 同一 ChatGPT 账户,复用 codex 订阅 chip 形态(限额窗口 + 价值估算);
   //   - xai/    → SuperGrok 无订阅窗口端点,尽力显示 bridge 抓到的限流头,否则仅价值估算。
-  // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
+  // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。anthropic-compat-proxy-host.ts
+  // 的 bridge provider 配置只按 model id 前缀匹配,不看 providerId——xd 网关来源的会话
+  // 若模型是 chatgpt/ / xai/ 前缀,实际请求仍会被路由到订阅 bridge,不是网关计费;
+  // providerId==='xd' 必须与 null/openai/xai 一样算作可能命中 bridge(review P2)。
   const isChatgptBridge =
     (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'openai')
+    && (providerId == null || providerId === 'openai' || providerId === 'xd')
     && typeof modelId === 'string'
     && modelId.startsWith(CHATGPT_MODEL_PREFIX);
   const isXaiBridge =
     (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'xai')
+    && (providerId == null || providerId === 'xai' || providerId === 'xd')
     && typeof modelId === 'string'
     && modelId.startsWith(XAI_MODEL_PREFIX);
   const isSubscriptionBridge = isChatgptBridge || isXaiBridge;
@@ -1121,13 +1137,23 @@ export function TodaySpendChip({
   const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (
     isRemoteCodexSession ||
     (
-      codexAuthInjection === 'oauth-bearer'
+      codexRouteResolved
+      && codexAuthInjection === 'oauth-bearer'
       && !isCodexGatewayBudgetModel
       && (providerId == null || providerId === 'openai')
     )
   );
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
-  const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
+  // 本地 codex 会话在 runtime route 真值回来前形态未定:env-key 占位可能把 OAuth
+  // 订阅会话误判成 API/网关计费(下方 codexApiHasTokenFallback / EmptyState 与
+  // dashboard 链接都据 isCodexApi/isCodexOauth 分流),切会话瞬间也可能残留上一个
+  // 会话的 oauth-bearer 分类——整张 codex 计费 form 必须等 resolved 才提交分类,
+  // 不能先渲染一种形态再闪切(PR review P1)。远端 / xAI 由 remoteHostId / modelId
+  // 直接判定,不依赖 runtime route,不受本门控。
+  const codexBillingFormPending =
+    vendorKey === 'codex' && !isRemoteCodexSession && !isDeviceLinkRemote
+    && !isCodexXaiProvider && !codexRouteResolved;
+  const isCodexApi = vendorKey === 'codex' && !isCodexSubscription && !codexBillingFormPending;
   const isPiGateway =
     vendorKey === 'pi'
     && !remoteHostId
@@ -1164,6 +1190,10 @@ export function TodaySpendChip({
     vendorKey === 'codex'
     && !isAnyRemoteSession
     && !isCodexSubscription
+    // 占位 authInjection('env-key')在 route 真值回来前不能提交分类:route 观察
+    // 落地前把它当真会读网关配额、瞬间显示 Cindy Gateway 余额再闪切成 ChatGPT
+    // 限额(review P2)。
+    && !codexBillingFormPending
     && (
       providerId === 'xd'
       || (
@@ -1226,10 +1256,47 @@ export function TodaySpendChip({
         cost: formatTurnCostMoney(sessionMoney),
       })
     : null;
+  // 网关 / 托管账号没有外部看板(url 恒 null,见文件头),但个人云账号有站内
+  // 「用量和计费」页可去:chip 从不可点升级为直达计费页。两重门,缺一保持不可点:
+  //  1. 账号可进计费页(与 SettingsView 的 billing tab 同一判定;企业/本地/未登录
+  //     账号没有计费页,不假装有入口);
+  //  2. 本会话的花费确实由 XD 网关计费:显式 xd 来源 / codex 骨折模型 / 默认路由
+  //     的网关形态(复用上方 form 判定)。显式第三方来源(自定义供应商)展示的是
+  //     对方平台的花费,不得指向 Cindy 计费页;远程会话(SSH / device-link)计费
+  //     事实在远端账号,同样不进(PR review P1 ×2)。
+  const { mode: authMode, user: authUser } = useAuth();
+  // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
+  // 发现 codex/ 开头的模型 id,其花费属于对方平台(PR review P1)。
+  const isGatewayBilledSource =
+    // 显式 xd 来源的 cc 会话仍可能实际路由到订阅 bridge(chatgpt/ / xai/ 模型前缀
+    // 优先于会话来源判定),此时花费属于对方订阅,不是网关计费(review P2)。
+    (providerId === 'xd' && !isSubscriptionBridge) ||
+    ((providerId == null || providerId === 'xd') && isCodexBudgetModel) ||
+    // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅会话
+    // 首帧误判成网关计费,chip 先指计费页再闪切外部看板(PR review P1)。
+    (providerId == null &&
+      vendorKey === 'codex' &&
+      codexRouteResolved &&
+      !isCodexSubscription) ||
+    (providerId == null &&
+      vendorKey === 'cc' &&
+      !isSubscriptionBridge &&
+      !isClaudeSubscription &&
+      !ccBillingFormPending);
+  const opensBillingSettings =
+    !isAnyRemoteSession &&
+    isGatewayBilledSource &&
+    canAccessBillingSettings({
+      mode: authMode,
+      membershipKind: authUser?.membershipKind ?? null,
+    });
+  const navigate = useNavigate();
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → xAI 账户页;
-  // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 暂无看板(null,见文件头 TODO)。
-  // device-link 远程会话额度属于被控端账号,本机浏览器打开的看板是控制端自己的账号 → 不跳。
-  const usageDashboardUrl: string | null = isDeviceLinkRemote
+  // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 无外部看板(null),
+  // 个人云账号退而指向站内计费页(见 opensBillingSettings / usageDashboardLabel 兜底)。
+  // 远程会话(SSH / device-link)额度属于远端账号,本机浏览器打开的看板是控制端
+  // 自己的账号 → 一律不跳(PR review P1:SSH 此前漏排)。
+  const usageDashboardUrl: string | null = isAnyRemoteSession
     ? null
     : usesXaiQuotaForm
       ? XAI_ACCOUNT_URL
@@ -1238,9 +1305,10 @@ export function TodaySpendChip({
         : isClaudeSubscription
           ? CLAUDE_USAGE_DASHBOARD_URL
           : null;
-  // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无看板 → null
-  // (tooltip 不显示"打开看板"行,chip 也不可点)。
-  const usageDashboardLabel: string | null = isDeviceLinkRemote
+  // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无外部看板 → 个人云
+  // 账号兜底为站内「用量和计费」(opensBillingSettings),其余账号 null
+  // (tooltip 不显示链接行,chip 也不可点)。
+  const usageDashboardLabel: string | null = isAnyRemoteSession
     ? null
     : usesXaiQuotaForm
       ? t('todaySpend.openXaiUsage')
@@ -1248,7 +1316,9 @@ export function TodaySpendChip({
         ? t('todaySpend.openCodexUsage')
         : isClaudeSubscription
           ? t('todaySpend.openClaudeUsage')
-          : null;
+          : opensBillingSettings
+            ? t('todaySpend.openBilling')
+            : null;
   const [windowLabelNowMs, setWindowLabelNowMs] = React.useState(() => Date.now());
   const codexResetSummary = React.useMemo(
     () => summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs),
@@ -1370,10 +1440,15 @@ export function TodaySpendChip({
     }
   }, [hasPendingResetWindow, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, windowLabelNowMs]);
 
-  const isDashboardClickable = usageDashboardUrl !== null;
+  const isDashboardClickable = usageDashboardUrl !== null || opensBillingSettings;
   const handleClick = () => {
-    if (!usageDashboardUrl) return; // 网关账号暂无看板:点击无反应
-    void window.electronAPI.openExternal(usageDashboardUrl);
+    if (usageDashboardUrl) {
+      void window.electronAPI.openExternal(usageDashboardUrl);
+    } else if (opensBillingSettings) {
+      // 网关 / 托管形态:站内直达设置页 billing tab(可见性同 SettingsView,不会被重定向吞掉)。
+      navigate('/settings?tab=billing');
+    }
+    // 其余形态不可点(企业/本地账号无计费页;device-link 计费在被控端)。
   };
 
   let labelNode: React.ReactNode;

@@ -43,15 +43,29 @@ vi.mock('../provider-route', () => ({
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
 }));
+// bridge 分流用例需要 handler 存在(真模块懒装配依赖订阅凭证环境)。
+// handle 按 bridgeHandleImpl 可编程,用于验证单次 transport 失败不提前落账。
+const bridgeMock = vi.hoisted(() => ({
+  bridgeHandleImpl: undefined as
+    | ((args: { res: { statusCode: number } }) => Promise<void>)
+    | undefined,
+}));
+vi.mock('../anthropic-responses-bridge-host', () => ({
+  getResponsesBridgeHandler: () => ({
+    handle: (args: { res: { statusCode: number } }) =>
+      bridgeMock.bridgeHandleImpl ? bridgeMock.bridgeHandleImpl(args) : Promise.resolve(),
+  }),
+}));
 
 import {
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
-import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
+  readClaudeSessionRouteState,
   takeClaudeRequestRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
@@ -70,6 +84,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
     gatewayKey = null;
     routeMocks.resolveSessionRouteDecision.mockReset();
     routeMocks.resolveSessionRouteDecision.mockReturnValue(null);
+    bridgeMock.bridgeHandleImpl = undefined;
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-abc' ? 'sess-1' : null));
   });
@@ -183,4 +198,65 @@ describe('claude session route observation (routing transform ② 段)', () => {
     );
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
+
+  it('does not attribute retryable bridge transport failures before a terminal turn error', async () => {
+    // localHandler 只代表 SDK 的一次 HTTP 尝试。429/529、throw 或流内错误都
+    // 可能被 SDK 重试成功,不能在这里污染 lastFailedRequestBridge；真正 surface
+    // 的 terminal error 由 register.ts 按 agentMeta.model 统一归因(review P1)。
+    gatewayKey = 'sk-live';
+    const transform = createModelRoutingTransform();
+    transform(
+      { model: 'claude-opus-4-8[1m]' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    );
+    const decision = transform(
+      { model: 'chatgpt/gpt-5.5' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
+    expect(decision).toHaveProperty('localHandler');
+    expect(readClaudeSessionRouteState('sess-1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
+    bridgeMock.bridgeHandleImpl = async ({ res }) => {
+      res.statusCode = 429;
+    };
+    await decision.localHandler({ res: { statusCode: 0 } });
+    expect(readClaudeSessionRouteState('sess-1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: false,
+    });
+
+    // 抛错也只是一次 transport 尝试；保持原样向 SDK 传播,但不提前落账。
+    bridgeMock.bridgeHandleImpl = async () => {
+      throw new Error('upstream 429');
+    };
+    await expect(decision.localHandler({ res: { statusCode: 0 } })).rejects.toThrow();
+    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
+  });
+
+  it('does not pre-attribute bridge transport failures for explicit-provider sessions', async () => {
+    setSessionProvider('sess-1', 'xd');
+    try {
+      const transform = createModelRoutingTransform();
+      const decision = transform(
+        { model: 'xai/grok-4.5' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
+      bridgeMock.bridgeHandleImpl = async ({ res }) => {
+        res.statusCode = 429;
+      };
+      await decision.localHandler({ res: { statusCode: 0 } });
+      expect(readClaudeSessionRouteState('sess-1')).toEqual({
+        route: null,
+        lastFailedRequestBridge: false,
+      });
+    } finally {
+      setSessionProvider('sess-1', null);
+    }
+  });
+
+  // bridge / forward 两侧都不再有独立的 transport-level 失败观察器:单次 HTTP
+  // 响应无法可靠区分 SDK 还会重试与真正终止。两侧统一由 register.ts 的
+  // isTerminalTurnErrorEvent 分支按最终失败模型记 true / false / null。
 });

@@ -80,13 +80,46 @@ const MODEL_NOT_FOUND_RE =
 /** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
 const CONTEXT_TOO_LONG_RE =
   /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
-/** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞。 */
-const QUOTA_RE = /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|余额不足|欠费/i;
+/** 明确的余额 / 预算耗尽措辞：即使外层同时带 RateLimitError，也不得
+ *  被速率限额排除。LiteLLM 的实际形状会把 BudgetExceededError 包在
+ *  RateLimitError 里(review P1)。 */
+const EXPLICIT_DEPLETION_RE =
+  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
+/** 单独出现的 quota exceeded 可能是余额配额，也可能是每分钟 / token 速率配额。 */
+const AMBIGUOUS_QUOTA_RE = /quota.{0,20}exceed/i;
+/** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
+ *  metric 'requests per minute'"、紧凑斜杠写法 "100 requests/minute"、
+ *  "1M tokens/day"、缩写斜杠写法 "100 requests/min"、"500 tokens/sec"、单字母斜杠
+ *  写法 "100 tokens/s"、速率缩写 RPS/RPM/RPH/RPD 与 TPS/TPM/TPH/TPD):
+ *  也含 quota exceeded 字样,但等待重试即可恢复,**不是**
+ *  余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发充值引导
+ *  (review P1 ×5)。 */
+const RATE_QUOTA_RE =
+  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day|sec|min|hr|s)\b|\b[rt]p[smhd]\b|quota metric|rate.{0,8}limit/i;
+/** makerChatStore 会把结构化 errorStatus 保留为原文中的状态码或 `(HTTP N)` 后缀。 */
+const HTTP_402_MESSAGE_RE =
+  /(?:^\s*402\b|\bHTTP\s*402\b|\b(?:status|error)\s+code\s*[:=]?\s*402\b|\bstatus\s*[:=]?\s*402\b)/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
 const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
+
+/**
+ * 消息级「余额 / 配额耗尽」判定:给只有错误文本、拿不到 HTTP status 的消费方用
+ * (会话 ErrorBanner 的 turn 错误是 agent 透传的字符串)。正文为空或只有通用
+ * Payment Required 时,识别 makerChatStore 从结构化 errorStatus 保留的 402:
+ * 原文已有状态码时 store 不重复追加,否则会加 `(HTTP 402)` 后缀,两种形态都
+ * 必须覆盖。其它情况与 classifyProviderError 的 QUOTA_EXCEEDED 共用同一
+ * pattern,避免两处口径漂移。
+ */
+export function isQuotaExceededMessage(text: string): boolean {
+  return (
+    HTTP_402_MESSAGE_RE.test(text) ||
+    EXPLICIT_DEPLETION_RE.test(text) ||
+    (AMBIGUOUS_QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text))
+  );
+}
 
 /**
  * 分类一次供应商上游失败。确定性纯函数：同输入必同输出。
@@ -115,7 +148,12 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     return { code: 'AUTH_FORBIDDEN', retryable: false, detail };
   }
-  if (status === 429 || status === 529) return { code: 'RATE_LIMITED', retryable: true, detail };
+  if (status === 429 || status === 529) {
+    // LiteLLM 会用 429 携带 ExceededBudget(预算耗尽):这是不可重试的余额问题,
+    // 不能落进「限流,可重试」误导用户空转。
+    if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    return { code: 'RATE_LIMITED', retryable: true, detail };
+  }
   if (status === 404) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     return { code: 'ENDPOINT_NOT_FOUND', retryable: false, detail };
@@ -123,7 +161,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
-    if (QUOTA_RE.test(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+    if (isQuotaExceededMessage(body)) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
     return { code: 'UNKNOWN', retryable: false, detail };

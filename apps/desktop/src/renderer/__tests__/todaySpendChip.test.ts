@@ -59,9 +59,12 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("providerId === 'openai'");
     expect(source).toContain("providerId === 'xai'");
     expect(source).toContain('const isSubscriptionBridge = isChatgptBridge || isXaiBridge;');
-    // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。
-    expect(source).toContain("(providerId == null || providerId === 'openai')");
-    expect(source).toContain("(providerId == null || providerId === 'xai')");
+    // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。xd 网关
+    // 来源也算命中——anthropic-compat-proxy-host.ts 的 bridge provider 配置只按
+    // model id 前缀匹配、不看 providerId,xd 来源的会话若模型带 chatgpt/ / xai/
+    // 前缀,实际请求仍会被路由到订阅 bridge(review P2)。
+    expect(source).toContain("(providerId == null || providerId === 'openai' || providerId === 'xd')");
+    expect(source).toContain("(providerId == null || providerId === 'xai' || providerId === 'xd')");
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
     // gateway quota 对订阅 bridge 会话关闭;device-link 远程同样不读本机网关配额
     expect(source).toContain('&& !isDeviceLinkRemote');
@@ -85,9 +88,32 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("(providerId == null || providerId === 'openai')");
     expect(source).toContain('modelId.startsWith(XAI_MODEL_PREFIX)');
     expect(source).toContain("providerId === 'xai'");
+    // 本地 oauth-bearer 子句整体等 codexRouteResolved 才提交分类,不先按 env-key
+    // 占位值渲染再闪切(PR review P1)。
+    expect(source).toContain(
+      "codexRouteResolved\n      && codexAuthInjection === 'oauth-bearer'\n      && !isCodexGatewayBudgetModel\n      && (providerId == null || providerId === 'openai')",
+    );
     expect(source).toContain('const isCodexSubscription = isCodexOauth || isCodexXaiProvider;');
-    expect(source).toContain("const isCodexApi = vendorKey === 'codex' && !isCodexSubscription");
+    expect(source).toContain(
+      "const isCodexApi = vendorKey === 'codex' && !isCodexSubscription && !codexBillingFormPending;",
+    );
     expect(source).not.toContain("codexAuthState.authSource === 'oauth'");
+  });
+
+  it('keeps the whole local codex billing form pending until the runtime route resolves', () => {
+    // 整张 codex 计费 form(isCodexOauth / isCodexApi 及其驱动的 dashboard 链接、
+    // API 空态/token 兜底展示)都据 codexBillingFormPending 等 resolved,不能先按
+    // env-key 占位渲染一种形态再闪切(PR review P1)。远端 / xAI 由 remoteHostId /
+    // modelId 直接判定,不受本门控。
+    expect(source).toContain(
+      "const codexBillingFormPending =\n    vendorKey === 'codex' && !isRemoteCodexSession && !isDeviceLinkRemote\n    && !isCodexXaiProvider && !codexRouteResolved;",
+    );
+    // isCodexGateway(驱动 usesGatewayQuota / 网关配额读取)同样要等 route 解析
+    // 完成:占位 authInjection('env-key')在真值回来前不能提交分类,否则会先读到
+    // Cindy Gateway 余额再闪切成 ChatGPT 限额(review P2)。
+    expect(source).toMatch(
+      /const isCodexGateway =\n\s*vendorKey === 'codex'\n\s*&& !isAnyRemoteSession\n\s*&& !isCodexSubscription\n(\s*\/\/.*\n)*\s*&& !codexBillingFormPending/,
+    );
   });
 
   it('renders device-link remote sessions data-driven without local-account classification', () => {
@@ -104,7 +130,8 @@ describe('TodaySpendChip dashboard routing', () => {
     // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
     expect(source).toContain('if (isDeviceLinkRemote) {');
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
-    expect(source).toMatch(/usageDashboardUrl: string \| null = isDeviceLinkRemote\s*\?\s*null/);
+    // 外链看板对一切远程会话关闭(SSH + device-link,额度属远端账号)。
+    expect(source).toMatch(/usageDashboardUrl: string \| null = isAnyRemoteSession\s*\?\s*null/);
   });
 
   it('does not classify remote Codex sessions from the local runtime route', () => {
@@ -262,8 +289,10 @@ describe('TodaySpendChip dashboard routing', () => {
     // OAuth」启发式 (新会话下一次 spawn 恰按当前凭证决定)
     expect(source).toContain('useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession)');
     expect(source).toMatch(
-      /observedClaudeRoute != null\s*\? observedClaudeRoute === 'subscription'\s*: !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true/,
+      /observedClaudeRoute != null\s*\? observedClaudeRoute === 'subscription'\s*: claudeRouteResolved && !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true/,
     );
+    // resolved 门控:首查在途的占位 null 不得触发活性启发式(形态未定一律 pending)
+    expect(source).toContain('(!claudeRouteResolved');
     expect(source).toContain('const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey()');
     expect(source).toContain('useClaudeOAuthConnected(isDefaultRouteClaudeSession)');
     // 无观察值且 key reconcile / OAuth 首查未完成时形态未定, 两侧 hook 都不启用
@@ -373,11 +402,31 @@ describe('TodaySpendChip dashboard routing', () => {
     // + 三元结尾落 null(见上一个用例的正则),即等价于"内部域名已从源码移除";
     // 这里不重新写出被禁的内部域名字面量,否则它又会 grep 命中公开仓。
     expect(source).not.toContain('PROXY_USAGE_DASHBOARD_URL');
-    // 网关账号无看板 → url/label 落 null,chip 不可点(点击无跳转)。
-    expect(source).toContain('const isDashboardClickable = usageDashboardUrl !== null');
-    expect(source).toContain('if (!usageDashboardUrl) return;');
-    // tooltip "打开看板" 行经 helper 统一追加,label 为 null(网关账号)时不追加。
+    // 网关账号无外部看板 → url 落 null;个人云账号点击改为站内直达「用量和计费」,
+    // 其余账号(企业/本地/未登录/device-link)不可点。
+    expect(source).toContain(
+      'const isDashboardClickable = usageDashboardUrl !== null || opensBillingSettings',
+    );
+    expect(source).toContain("navigate('/settings?tab=billing')");
+    // 站内计费入口与设置页 billing tab 共用同一可见性判定;远程会话(SSH +
+    // device-link)与非网关计费来源(自定义供应商等)不进(PR review P1 ×2)。
+    expect(source).toContain('canAccessBillingSettings({');
+    expect(source).toMatch(/opensBillingSettings =\n\s*!isAnyRemoteSession &&\n\s*isGatewayBilledSource &&/);
+    // 显式 xd 来源的 cc 会话仍可能实际路由到订阅 bridge(chatgpt/ / xai/ 模型前缀
+    // 优先于会话来源判定);此时花费属于对方订阅,不是网关计费,不能只凭
+    // providerId === 'xd' 就判定(PR review P2)。
+    expect(source).toMatch(/\(providerId === 'xd' && !isSubscriptionBridge\)/);
+    // codex 隐式来源等 runtime route 真值(占位 env-key 不算);外链看板对一切
+    // 远程会话(SSH + device-link)关闭(PR review P1 ×2)。
+    expect(source).toContain('codexRouteResolved &&');
+    expect(source).toContain('const usageDashboardUrl: string | null = isAnyRemoteSession');
+    // tooltip "打开看板" 行经 helper 统一追加,label 为 null(不可点账号)时不追加;
+    // 个人云网关账号 label 兜底为站内计费入口文案,四语言 key 齐备。
     expect(source).toContain('function pushDashboardLinkLine(lines: string[], label: string | null)');
+    expect(source).toContain("t('todaySpend.openBilling')");
+    for (const localeSource of localeSources) {
+      expect(localeSource).toContain('"openBilling"');
+    }
     // 网关账号仍展示 daily/credit/session 指标 + tooltip(仅去掉"打开看板"链接行)。
     // credit 段服务个人租户的三池账本(LiteLLM 语义的 daily/monthly 对它恒不可用)。
     expect(source).toContain("const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session']");

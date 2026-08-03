@@ -399,7 +399,7 @@ describe('readMessages / writeMessages', () => {
     expect(files.length).toBeLessThanOrEqual(MAX_MESSAGE_FILES);
     expect(await c.readMessages('dev-1', 'sess-0')).toEqual([]);
     expect(await c.readMessages('dev-1', `sess-${MAX_MESSAGE_FILES + 4}`)).not.toEqual([]);
-  });
+  }, 45_000); // Windows hosted runner 上 200+ 次真实文件写入可超过默认 20s。
 });
 
 describe('重复写入去重', () => {
@@ -478,7 +478,7 @@ describe('重复写入去重', () => {
     await c.writeMessages('dev-1', 'sess-victim', victim);
 
     expect((await c.readMessages('dev-1', 'sess-victim')).map((m) => m.id)).toEqual(['victim']);
-  });
+  }, 45_000); // 同上:保留真实淘汰链路,只放宽平台 I/O 时间预算。
 });
 
 describe('deviceId / sessionId 归一化', () => {

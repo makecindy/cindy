@@ -109,5 +109,14 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
     ).toBeNull();
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          message: 'litellm.BudgetExceededError: ExceededBudget: Budget has been exceeded!',
+        },
+        NOW,
+      ),
+    ).toBeNull();
   });
 });

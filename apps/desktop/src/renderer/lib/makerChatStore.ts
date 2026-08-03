@@ -2797,13 +2797,18 @@ export function handleStreamEvent(
         errorStatus?: number | null;
       };
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
+      const canonicalStatusMarker =
+        typeof errorStatus === 'number' ? `(HTTP ${errorStatus})` : null;
       const safeErrMsg =
         typeof errorStatus === 'number' &&
         Number.isInteger(errorStatus) &&
         errorStatus >= 100 &&
         errorStatus <= 599 &&
-        !new RegExp(`\\b${errorStatus}\\b`).test(safeErrMsgRaw)
-          ? `${safeErrMsgRaw} (HTTP ${errorStatus})`
+        !safeErrMsgRaw.includes(canonicalStatusMarker!) &&
+        // 402 是结构化的余额证据：无论供应商正文里是否已有裸
+        // 数字 402，都附上稳定标记供消息级分类，避免枚举正文语法(review P2)。
+        (errorStatus === 402 || !new RegExp(`\\b${errorStatus}\\b`).test(safeErrMsgRaw))
+          ? `${safeErrMsgRaw} ${canonicalStatusMarker}`
           : safeErrMsgRaw;
       // 空响应/无详情失败 banner 文案走 i18n(四语言),不直接渲染 maker-core 发来的
       // 中文 message(规则 18:UI 文案必须 i18n)。maker-core 用稳定 reason 当 key

@@ -57,6 +57,29 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
 
+// 点数耗尽引导的新依赖:本测试聚焦 Codex OAuth 恢复链,身份固定为「无计费页」
+// (user=null → membershipKind=null → canAccessBillingSettings=false),引导分支恒不命中。
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'cloud' as const, user: null }),
+}));
+
+vi.mock('@/hooks/useClaudeSessionRoute', () => ({
+  useClaudeSessionRoute: () => ({ route: null, lastFailedRequestBridge: false, resolved: true }),
+}));
+
+vi.mock('@/hooks/useApiKey', () => ({
+  // reconcile 未完成 → 计费形态未定,点数耗尽引导分支恒不命中。
+  useApiKey: () => ({ hasSavedKey: false, isReconciling: true }),
+}));
+
+vi.mock('@/hooks/useClaudeOAuthConnected', () => ({
+  useClaudeOAuthConnected: () => null,
+}));
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
   // invalidate 会在横幅渲染前把已收割的 OAuth host 回落为 env-key；明确失效原因
   // 仍必须保留 ChatGPT 重连入口。

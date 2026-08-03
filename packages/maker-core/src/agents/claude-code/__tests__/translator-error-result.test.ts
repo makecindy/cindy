@@ -439,8 +439,128 @@ describe('Claude Code translator is_error result guard', () => {
       maxRetries: 3,
       isTerminal: true,
     });
-    expect(errors[0]?.agentMeta, 'api_retry has no assistant transcript anchor').toBeUndefined();
+    // 没有 assistant transcript 锚点(uuid / parentUuid 等),但本 session 从未
+    // 启动过 subagent,归因给下游计费用的 model 仍能安全填上当前 ctx.getModel()
+    // (PR review P1 / P2:见 translator.ts api_retry 分支注释)。
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'codex/gpt-5.5' });
     expect(events.some((e) => e.type === 'done'), 'done tail remains available for usage accounting').toBe(true);
+  });
+
+  it('falls back to ctx.getModel() for a no-envelope api_retry when no subagent has ever launched', async () => {
+    // 本 session 从未启动过 subagent 时,当前活跃 lane 只能是主 agent —— 一条
+    // 完全没有 assistant.error envelope 的 api_retry 可以安全归因到当前模型
+    // 选择,不会像并发 subagent 场景那样猜错 lane(PR review P1:不应把"拿不到
+    // agentMeta"一律等同于"必须跳过")。归因必须来自 ctx.getModel()(本 turn
+    // 当前实际选择),而不是上一轮成功 turn 遗留的 ctx.rt.lastAssistantMeta——
+    // 用户切换模型后,新模型的请求在产生任何 envelope 前耗尽重试时,借用旧
+    // meta 会把失败错误标注成上一轮的模型(PR review P2)。这里刻意让上一条
+    // assistant 消息的模型与 ctx.getModel() 不同,锁住"用当前模型而非历史
+    // 模型"这条。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = { ...createCtx(tracker), getModel: () => 'chatgpt/gpt-5.5' };
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        message: { model: 'codex/gpt-5.5', content: [{ type: 'text', text: 'hi' }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        retry_delay_ms: 4_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 100, output_tokens: 0 },
+        modelUsage: { 'chatgpt/gpt-5.5': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'chatgpt/gpt-5.5' });
+  });
+
+  it('uses turnStartModel (frozen at request dispatch) instead of the live current model selection', async () => {
+    // ctx.getModel() 是活的当前选择:用户可能在这次失败请求发出之后、甚至在
+    // 第一条 api_retry 到达**之前**就把模型热切走(gateway host 可直接复用
+    // provider-oauth、setModel 即时生效)。归因必须用 ctx.turn.turnStartModel——
+    // index.ts 的 beginNewTurn 在请求真正 dispatch 前打的快照,turn 内不变——
+    // 而不是无论第一次还是后续 retry 都去读的 ctx.getModel(),否则会把归因
+    // 指向切换后的新模型,而不是这次实际失败请求发出时用的模型
+    // (PR review P2 ×3)。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+    ctx.turn.turnStartModel = 'xd/gateway-model';
+    // 模拟:请求发出后、第一条 api_retry 到达前,用户已经把模型热切到 chatgpt/*——
+    // ctx.getModel() 此时已经是新选择,但这次失败请求仍是旧模型发出的。
+    ctx.getModel = () => 'chatgpt/gpt-5.5';
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        retry_delay_ms: 1_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 2,
+        max_retries: 3,
+        retry_delay_ms: 2_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 100, output_tokens: 0 },
+        modelUsage: { 'xd/gateway-model': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'xd/gateway-model' });
+    expect(errors[0]?.data).toMatchObject({ retryAttempt: 2, maxRetries: 3 });
   });
 
   // SDK 自带退避重试（529 overloaded / 429 / 连接错误都走它）。这组用例锁住

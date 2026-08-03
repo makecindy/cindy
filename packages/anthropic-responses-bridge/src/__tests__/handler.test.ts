@@ -7,7 +7,13 @@
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createResponsesHandler, type BridgeSessionPrefs, type ResponsesBridgeHandler } from '../handler.js';
+import type { ServerResponse } from 'node:http';
+import {
+  createResponsesHandler,
+  wasBridgeStreamFailure,
+  type BridgeSessionPrefs,
+  type ResponsesBridgeHandler,
+} from '../handler.js';
 import type { BridgeProviderConfig } from '../types.js';
 
 function sse(lines: string[]): ReadableStream<Uint8Array> {
@@ -43,9 +49,12 @@ async function invoke(
   handler: ResponsesBridgeHandler,
   body: unknown,
   opts?: { url?: string; prefs?: BridgeSessionPrefs },
-): Promise<{ status: number; text: string }> {
+): Promise<{ status: number; text: string; serverRes: ServerResponse }> {
+  let serverRes!: ServerResponse;
+  let handled: Promise<void> = Promise.resolve();
   const server: Server = createServer((req, res) => {
-    void handler.handle({
+    serverRes = res;
+    handled = handler.handle({
       parsedBody: body,
       ctx: { method: 'POST', url: opts?.url ?? '/v1/messages', headers: { 'x-claude-code-session-id': 's1' } },
       res,
@@ -57,7 +66,7 @@ async function invoke(
   const port = typeof addr === 'object' && addr ? addr.port : 0;
   try {
     // 用 node:http 直连 harness —— 全局 fetch 已被 stub 成 mock 上游,不能拿来打 harness。
-    return await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const result = await new Promise<{ status: number; text: string }>((resolve, reject) => {
       const req = httpRequest({ hostname: '127.0.0.1', port, method: 'POST', path: '/' }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
@@ -67,6 +76,10 @@ async function invoke(
       req.on('error', reject);
       req.end();
     });
+    // 客户端收到响应结束(res.end())时 handle() 才刚好落完 finally 块;等它真正
+    // resolve,确保 wasBridgeStreamFailure 的标记已写入(PR review P1 回归用)。
+    await handled;
+    return { ...result, serverRes };
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -125,6 +138,10 @@ describe('createResponsesHandler', () => {
     expect(r.text).toContain('prompt too large for context window');
     expect(warns).toContain('upstream 2xx with non-SSE content-type');
     expect(warns).toContain('upstream stream yielded no translatable events');
+    // 这条 error 事件是 handler 手写、绕过 translator 直接 writeOut 的合成事件,
+    // translator 自己的 errored 状态感知不到它;host 侧的失败归因必须仍然能
+    // 查到这是一次失败(PR review P1)。
+    expect(wasBridgeStreamFailure(r.serverRes)).toBe(true);
   });
 
   it('content-type 判定大小写不敏感:Text/Event-Stream 不触发 non-SSE warn', async () => {
@@ -179,6 +196,21 @@ describe('createResponsesHandler', () => {
     expect(r.status).toBe(200);
     expect(r.text).toContain('[server_error] boom');
     expect(r.text).not.toContain('no translatable SSE events');
+    // HTTP 状态码本身仍是 200(SSE 约定,一开始就 writeHead),host 侧的失败归因
+    // 不能只看 statusCode——必须查 wasBridgeStreamFailure 才知道这条流其实以
+    // 错误收尾(PR review P1)。
+    expect(wasBridgeStreamFailure(r.serverRes)).toBe(true);
+  });
+
+  it('wasBridgeStreamFailure 对正常完成的流保持 false', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      sse(OK_SSE),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )));
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+    const r = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] });
+    expect(r.status).toBe(200);
+    expect(wasBridgeStreamFailure(r.serverRes)).toBe(false);
   });
 
   it('wire model 带 [1m] 后缀 → 上游 model 剥后缀(目录 1M 模型经 toSdkModelString 会带)', async () => {

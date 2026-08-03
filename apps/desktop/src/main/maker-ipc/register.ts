@@ -530,7 +530,10 @@ import {
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
-import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import {
+  readClaudeSessionRoute,
+  recordClaudeSessionFailedRequestSource,
+} from '../maker-host/claude-session-route-registry.js';
 import { consumeClaudeGatewayOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
@@ -3083,6 +3086,46 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
       // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
       isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
+      // 计费引导的失败归因(claude-session-route-registry):cc 会话真正终止
+      // (会向用户展示)的失败落地时,把该会话的 lastFailedRequestBridge 按这次
+      // 失败的来源覆写。用**这个 SDK 已判定"不再重试、即将 surface 给用户"的
+      // 终止事件**做归因边界,而不是在 proxy 层按单次 HTTP 状态码猜测:429/529
+      // 是 SDK 自带退避重试的状态码,单次响应不代表终态,之前在 HTTP 层直接
+      // 排除/放行这两个状态码都不对——排除会让真正耗尽重试的终止 429(如网关
+      // 预算耗尽)永远清不掉残留的 bridge 归因,放行又会被中途还会重试成功的
+      // 瞬时响应误清掉(PR review P1 ×2)。
+      //
+      // 两个方向都要记,不能只记 false 侧:bridge 子代理与默认路由请求可并发
+      // 失败,若默认请求的终止事件先落地记 false,随后 bridge 自己的终止事件
+      // 才是真正 surface 给用户的那个——只判"非 bridge 才覆写"会让这个真正
+      // 需要改判成 true 的时刻被跳过,银幕上显示的 bridge 配额错误仍带着
+      // 前一个事件残留的 false(PR review P1)。
+      //
+      // 判据必须是**这次失败请求实际用的模型**,不能是 session.model:Task/
+      // sub-agent 可以在 frontmatter 里把单次请求覆写成 chatgpt/ / xai/,会话
+      // 顶层选择的模型不变,若照顶层模型判断,bridge 子代理失败时这里会立刻把
+      // bridge 的 localHandler 刚记的 true 覆写回 false(PR review P1)。terminal
+      // error 事件的 agentMeta.model 反映 SDK 消息里那次调用真实用的模型
+      // (translator.ts extractAssistantMeta 读 msg.message.model,不是会话
+      // 静态选择),按它判断才对;拿不到 agentMeta 时(极少数无 envelope 的
+      // 兜底错误分支,SDKAPIRetryMessage 本身不带 parent_tool_use_id)translator
+      // 已经在"本 session 从未启动过 subagent + turn 首次 API 调用"这一
+      // 无歧义场景下用 dispatch 前快照兜底填了 agentMeta(见 translator.ts
+      // api_retry 分支注释,PR review P1 / P2)。仍然拿不到时不能跳过并沿用
+      // 上一笔失败的 true/false:顺序执行的下一笔网关失败会继承旧 bridge=true,
+      // 错误横幅因此错误隐藏充值入口。这里显式写 null 表示本次失败来源未知,
+      // UI 宁可不显示计费入口也不猜模型或复用旧证据(PR review P2 ×2)。
+      const failingModel = (event as { agentMeta?: { model?: string } | null }).agentMeta?.model;
+      if (
+        event.source === 'claude-code' &&
+        !isPlannedUpgradeClose &&
+        !isRemoteAuthRetry
+      ) {
+        recordClaudeSessionFailedRequestSource(
+          session.id,
+          typeof failingModel === 'string' ? isSubscriptionDirectModel(failingModel) : null,
+        );
+      }
       if (!isPlannedUpgradeClose) {
         agentInputCoordinatorHolder?.onTurnEvent(
           session.id,

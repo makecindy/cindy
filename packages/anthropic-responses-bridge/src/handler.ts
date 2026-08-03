@@ -156,6 +156,21 @@ export interface BridgeHandleArgs {
   prefs?: BridgeSessionPrefs;
 }
 
+/**
+ * res 实例 → 该响应的 SSE 流是否以错误帧收尾。流式响应一开始就 `res.writeHead(200, …)`
+ * (SSE 约定,不能等翻出结果才决定状态码),上游在流中途报 `response.failed` / `error`
+ * 时 HTTP 状态码仍是 200——host 侧(anthropic-compat-proxy-host.ts)的失败归因只看
+ * `res.statusCode` 会漏掉这类失败(PR review P1)。WeakMap 键失效随 res 对象一起 GC,
+ * 不需要手动清理;只在流式分支写入,非流式的早退路径(已用非 2xx 状态码正确反映失败)
+ * 不需要这个标记。
+ */
+const streamFailureMarkers = new WeakMap<ServerResponse, boolean>();
+
+/** 供 host 侧在 handle() resolve 后查询(见上方 streamFailureMarkers 注释)。 */
+export function wasBridgeStreamFailure(res: ServerResponse): boolean {
+  return streamFailureMarkers.get(res) === true;
+}
+
 export interface ResponsesBridgeHandler {
   handle(args: BridgeHandleArgs): Promise<void>;
 }
@@ -359,6 +374,12 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     let eventsWritten = 0;
     let rawPrefix = '';
     const RAW_PREFIX_LIMIT = 500;
+    // 零事件兜底与断流(catch 分支的 translator.fail())都靠 translator 自己的
+    // errored 状态被 wasBridgeStreamFailure 感知;但零事件这条 error 是 handler
+    // 手写、绕过 translator 直接 writeOut 的合成事件,translator 不知道它的存在,
+    // errored 不会被置位。没有这个独立标志,零事件路径若恰好携带配额错误正文,
+    // host 侧的失败归因会把它当成功流(PR review P1)。
+    let synthesizedFailure = false;
     const writeOut = (ev: AnthropicSseEvent): void => {
       eventsWritten += 1;
       writeSseEvent(res, ev);
@@ -372,6 +393,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         contentType: upstreamContentType || '(missing)',
         bodyPrefix,
       });
+      synthesizedFailure = true;
       writeOut({
         event: 'error',
         data: {
@@ -428,6 +450,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         for (const outEv of translator.fail(`upstream stream error: ${errMsg}`)) writeOut(outEv);
       }
     } finally {
+      streamFailureMarkers.set(res, translator.failed || synthesizedFailure);
       res.end();
     }
   }

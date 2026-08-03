@@ -4712,10 +4712,19 @@ interface ElectronAPI {
       cb: (payload: { sessionId: string; model: string; providerId: string | null }) => void,
     ) => () => void;
 
-    /** cc 默认路由会话的生效计费路由(proxy 按请求观察);null = 会话尚未发过请求 */
-    claudeSessionRouteGet: (sessionId: string) => Promise<'gateway' | 'subscription' | null>;
+    /** cc 会话的生效计费路由观察状态(proxy 观察):route = 最近一个 ② 段默认
+     *  路由请求的路由(null = 未观察到);lastFailedRequestBridge = 最近一笔**失败**
+     *  请求是订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账,不覆盖 route)。 */
+    claudeSessionRouteGet: (sessionId: string) => Promise<{
+      route: 'gateway' | 'subscription' | null;
+      lastFailedRequestBridge: boolean | null;
+    } | null>;
     onClaudeSessionRouteChanged: (
-      cb: (payload: { sessionId: string; route: 'gateway' | 'subscription' }) => void,
+      cb: (payload: {
+        sessionId: string;
+        route: 'gateway' | 'subscription' | null;
+        lastFailedRequestBridge: boolean | null;
+      }) => void,
     ) => () => void;
 
     /** Claude.ai 订阅 OAuth 登录状态(系统 ~/.claude 凭证库是否有 OAuth 登录) */
