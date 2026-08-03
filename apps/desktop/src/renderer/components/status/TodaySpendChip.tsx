@@ -1720,6 +1720,8 @@ export function TodaySpendChip({
             onMouseLeave={handleQuotaPopoverMouseLeave}
             onFocusCapture={() => {
               quotaPopoverFocusInsideRef.current = true;
+              // 内容无论因键盘还是鼠标获得焦点，都算卡片已接管焦点；关闭时统一归还 trigger。
+              quotaPopoverFocusTakenRef.current = true;
               keepQuotaPopoverOpen();
             }}
             onBlurCapture={(event) => {

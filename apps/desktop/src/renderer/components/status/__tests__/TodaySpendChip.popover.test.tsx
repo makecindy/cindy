@@ -243,6 +243,23 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('悬停打开后鼠标点击卡片按钮，Escape 关闭时归还 trigger', () => {
+    renderClaudeSubscriptionChip();
+    const { trigger, card } = openCardFromHover();
+    const dashboardButton = within(card).getByRole('button', { name: '打开 Claude 用量页面' });
+
+    fireEvent.mouseDown(dashboardButton);
+    // JSDOM 不执行鼠标按下后的浏览器默认聚焦动作，这里显式补齐真实点击序列。
+    act(() => dashboardButton.focus());
+    fireEvent.mouseUp(dashboardButton);
+    fireEvent.click(dashboardButton);
+    expect(document.activeElement).toBe(dashboardButton);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('卡片内保持键盘焦点时，鼠标移入再移出不会关闭', () => {
     renderClaudeSubscriptionChip();
     const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
