@@ -240,6 +240,7 @@ import {
 import { readFileThumbnail } from './fileThumbnail';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
+import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
@@ -4962,26 +4963,11 @@ const registerIpcHandlers = () => {
   // `shell:open-external` 分开是因为后者只放行 http(s) 防滥用;这里收窄到
   // 受控的扩展名集合后,放行 file:// 是可控的。
   const openFileInBrowserLog = createLogger('shell:open-file-in-browser');
-  const openFileUrlWithWindowsStart =
-    process.platform === 'win32'
-      ? (fileUrl: string) =>
-          new Promise<void>((resolve, reject) => {
-            const command = `start "" "${fileUrl.replace(/"/g, '""')}"`;
-            execFile(
-              process.env.ComSpec?.trim() || process.env.COMSPEC?.trim() || 'cmd.exe',
-              ['/d', '/s', '/c', command],
-              { windowsHide: true },
-              (error, _stdout, stderr) => {
-                if (!error) {
-                  resolve();
-                  return;
-                }
-                const detail = String(stderr).trim();
-                reject(new Error(detail || error.message));
-              },
-            );
-          })
-      : undefined;
+  const openFileUrlWithWindowsHandler = createWindowsFileUrlOpener({
+    platform: process.platform,
+    windowsDir: process.env.WINDIR,
+    execFile: (file, args, options, callback) => execFile(file, args, options, callback),
+  });
   ipcMain.handle(
     'shell:open-file-in-browser',
     async (
@@ -4995,14 +4981,14 @@ const registerIpcHandlers = () => {
         existsSync: fs.existsSync,
         openExternal: (url) => shell.openExternal(url),
         openPath: (filePath) => shell.openPath(filePath),
-        openUrlWithWindowsStart: openFileUrlWithWindowsStart,
+        openUrlWithWindowsHandler: openFileUrlWithWindowsHandler,
         onOpenExternalError: ({ filePath, hasUrlState, error }) => {
           openFileInBrowserLog.warn('openExternal failed', {
             filePath,
             hasUrlState,
             fallback: hasUrlState
-              ? openFileUrlWithWindowsStart
-                ? 'windows-start'
+                ? openFileUrlWithWindowsHandler
+                ? 'windows-url-handler'
                 : 'disabled'
               : 'openPath',
             error: String(error),

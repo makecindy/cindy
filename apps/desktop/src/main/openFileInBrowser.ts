@@ -58,8 +58,8 @@ export interface OpenFileInBrowserDeps {
   existsSync(filePath: string): boolean;
   openExternal(url: string): Promise<void>;
   openPath(filePath: string): Promise<string>;
-  /** Windows-only fallback that hands the complete file URL to the OS shell. */
-  openUrlWithWindowsStart?(url: string): Promise<void>;
+  /** Windows-only fallback that hands the complete file URL to the OS handler. */
+  openUrlWithWindowsHandler?(url: string): Promise<void>;
   onOpenExternalError?(details: { filePath: string; hasUrlState: boolean; error: unknown }): void;
   onWindowsUrlFallbackError?(details: { filePath: string; error: unknown }): void;
 }
@@ -93,11 +93,11 @@ export async function handleOpenFileInBrowser(
         error,
       });
       // openPath only accepts a native path. On Windows, hand the complete URL
-      // to `start` first so query/hash state survives the fallback.
+      // to the OS URL handler first so query/hash state survives the fallback.
       if (target.hasUrlState) {
-        if (deps.openUrlWithWindowsStart) {
+        if (deps.openUrlWithWindowsHandler) {
           try {
-            await deps.openUrlWithWindowsStart(target.fileUrl);
+            await deps.openUrlWithWindowsHandler(target.fileUrl);
             return { success: true };
           } catch (fallbackError) {
             deps.onWindowsUrlFallbackError?.({

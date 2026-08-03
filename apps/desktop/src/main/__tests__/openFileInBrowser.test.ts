@@ -15,7 +15,7 @@ function harness(overrides: Partial<OpenFileInBrowserDeps> = {}) {
     existsSync: vi.fn(() => true),
     openExternal: vi.fn(async () => undefined),
     openPath: vi.fn(async () => ''),
-    openUrlWithWindowsStart: vi.fn(async () => undefined),
+    openUrlWithWindowsHandler: vi.fn(async () => undefined),
     onOpenExternalError: vi.fn(),
     onWindowsUrlFallbackError: vi.fn(),
     ...overrides,
@@ -87,7 +87,7 @@ describe('handleOpenFileInBrowser', () => {
     await expect(handleOpenFileInBrowser(url.toString(), deps)).resolves.toEqual({
       success: true,
     });
-    expect(deps.openUrlWithWindowsStart).toHaveBeenCalledWith(url.toString());
+    expect(deps.openUrlWithWindowsHandler).toHaveBeenCalledWith(url.toString());
     expect(deps.openPath).not.toHaveBeenCalled();
   });
 
@@ -98,7 +98,7 @@ describe('handleOpenFileInBrowser', () => {
       openExternal: vi.fn(async () => {
         throw new Error('browser rejected URL');
       }),
-      openUrlWithWindowsStart: undefined,
+      openUrlWithWindowsHandler: undefined,
     });
 
     await expect(handleOpenFileInBrowser(url.toString(), deps)).resolves.toEqual({
