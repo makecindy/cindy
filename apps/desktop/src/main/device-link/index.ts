@@ -389,7 +389,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   client.onStatusChange((status) => {
     if (status !== 'online') {
-      openLinkInFlight.clear();
+      // 不清 openLinkInFlight:登记生命周期的唯一判据是 promise settle(每个
+      // 请求 settle 时自清理,closeRemoteLink 的显式删除有取消代次兜底)。建链
+      // 可能正 park 在上线等待里,状态抖动时提前删登记会让同设备的下一次调用
+      // 开出第二个物理 link-open,破坏单飞(review P2);而已上管道的请求断线
+      // 时由 client 层 reject,settle 清理有界,不会滞留。
       // relay 离线:重开循环全部终止,恢复交给断线重连后的 presence 闪断路径。
       transportTimeoutReopen.dispose();
     }
