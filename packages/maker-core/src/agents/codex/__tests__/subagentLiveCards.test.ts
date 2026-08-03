@@ -132,11 +132,106 @@ describe('createSubagentLiveCardTracker', () => {
       .toBe('running');
   });
 
-  it('tracks V1 spawns that fan out to several child threads', () => {
+  it('aggregates every receiver of one V1 spawn into a single shared card', () => {
+    // 同一次 spawnAgent 扇出多个 receiverThreadIds,但它们共用一张卡:计数必须挂在
+    // taskId 上按线程分量累计,否则后到的快照会把先到的覆盖成更小值(用量回退)。
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
-    expect(tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'))?.taskId).toBe('card-v1');
-    expect(tracker.handleDescendantNotification('t-b', 'item/started', toolItem('x-2'))?.taskId).toBe('card-v1');
+
+    expect(tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'))).toMatchObject({
+      taskId: 'card-v1',
+      toolUses: 1,
+    });
+    // 第二个 receiver 的工具调用是累加,不是覆盖。
+    expect(tracker.handleDescendantNotification('t-b', 'item/started', toolItem('x-2'))).toMatchObject({
+      taskId: 'card-v1',
+      toolUses: 2,
+    });
+
+    // token 是各线程累计快照之和;同线程再报只覆盖自己那份,不重复相加。
+    expect(
+      tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 100 } },
+      })?.totalTokens,
+    ).toBe(100);
+    expect(
+      tracker.handleDescendantNotification('t-b', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 40 } },
+      })?.totalTokens,
+    ).toBe(140);
+    expect(
+      tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 130 } },
+      })?.totalTokens,
+    ).toBe(170);
+  });
+
+  it('keeps a multi-receiver card running until every receiver is terminal', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
+
+    // sibling 先收口不得把整张卡误报成完成。
+    expect(
+      tracker.handleDescendantNotification('t-a', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('running');
+    expect(
+      tracker.handleDescendantNotification('t-b', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('completed');
+  });
+
+  it('reports the worst terminal outcome across receivers, regardless of arrival order', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b', 't-c']));
+    tracker.handleDescendantNotification('t-c', 'turn/completed', { turn: { status: 'interrupted' } });
+    tracker.handleDescendantNotification('t-a', 'turn/completed', { turn: { status: 'completed' } });
+    // failed 最后到也必须胜出(stopped / completed 不得掩盖失败)。
+    expect(
+      tracker.handleDescendantNotification('t-b', 'turn/completed', { turn: { status: 'failed' } })?.status,
+    ).toBe('failed');
+  });
+
+  it('replays child notifications that arrived before the spawn item was registered', () => {
+    // 乱序:子线程 thread/started 已建立 lineage,但父线程的 spawn item 还没被处理。
+    // 这些通知此前会被直接丢弃 —— 首个工具调用 / 初始 token / 甚至终态永久缺失。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+
+    expect(tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-1'))).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 500 } },
+      }),
+    ).toBeNull();
+
+    const replayed = tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child', '/root/scout'));
+    expect(replayed).toMatchObject({
+      taskId: 'card-1',
+      agentPath: '/root/scout',
+      status: 'running',
+      toolUses: 1,
+      totalTokens: 500,
+    });
+    // 重放后继续增量,不重复计数。
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-2'))?.toolUses).toBe(2);
+  });
+
+  it('replays an early terminal notification instead of leaving the card stuck running', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'failed' } });
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))?.status).toBe('failed');
+  });
+
+  it('returns null from noteSpawnItem when there is nothing buffered to replay', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toBeNull();
+    expect(tracker.noteSpawnItem({ type: 'commandExecution', id: 'x' })).toBeNull();
+  });
+
+  it('does not buffer notifications it would never consume', () => {
+    // 缓冲只为我们真正消费的 method 服务,别给无关线程攒垃圾。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.handleDescendantNotification('t-child', 'thread/status/changed', { status: 'idle' });
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toBeNull();
   });
 
   it('ignores unknown threads, unknown methods and malformed payloads', () => {
@@ -170,7 +265,7 @@ describe('createSubagentLiveCardTracker', () => {
   });
 
   it('bounds tracked threads, evicting settled cards first', () => {
-    const tracker = createSubagentLiveCardTracker({ now: () => 0, maxTrackedThreads: 2 });
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, maxTrackedCards: 2 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-done'));
     tracker.handleDescendantNotification('t-done', 'turn/completed', { turn: { status: 'completed' } });
     tracker.noteSpawnItem(v2SpawnItem('card-2', 't-live'));

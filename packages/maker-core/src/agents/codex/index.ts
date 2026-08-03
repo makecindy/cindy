@@ -111,7 +111,10 @@ import {
   extractRolloutUpdatePlanFunctionCallEvent,
   type CodexRuntimeState,
 } from './translator.js';
-import { createSubagentLiveCardTracker } from './subagent-live-cards.js';
+import {
+  createSubagentLiveCardTracker,
+  type SubagentLiveCardUpdate,
+} from './subagent-live-cards.js';
 import {
   TurnRetryTracker,
   buildBackendUnreachableMessage,
@@ -3064,13 +3067,7 @@ export class CodexAgent extends BaseAgent {
     // AgentTaskCard,本改动只补 Codex 侧缺失的数据源,不新建 UI。
     const subagentLiveCards = createSubagentLiveCardTracker();
 
-    const handleDescendantNotification = (
-      childThreadId: string,
-      method: string,
-      params: unknown,
-    ): void => {
-      const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
-      if (!update) return;
+    const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
       eventQueue.push({
         type: 'agent_task_update',
         data: {
@@ -3087,6 +3084,28 @@ export class CodexAgent extends BaseAgent {
         },
         source: 'codex',
       });
+    };
+
+    const handleDescendantNotification = (
+      childThreadId: string,
+      method: string,
+      params: unknown,
+    ): void => {
+      const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
+      if (update) emitSubagentCardUpdate(update);
+    };
+
+    /**
+     * 登记 spawn 映射;若有早到的子线程通知被重放出状态,补发一帧。
+     *
+     * 发帧点必须在 translateItemNotification 之后:translator 对 V2 spawn 会推一帧
+     * status=running(无 usage),而重放帧可能已经是终态。让重放帧后发,最新状态才不会
+     * 被那帧 running 盖回去(store 是字段级 merge,usage 不会丢,但 status 会)。
+     */
+    const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
+      const replayed = subagentLiveCards.noteSpawnItem(item);
+      if (!replayed) return null;
+      return () => emitSubagentCardUpdate(replayed);
     };
     function currentApprovalConfig(): CodexPermissionConfig {
       return mapPermissionToCodex(
@@ -6881,7 +6900,7 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
-        subagentLiveCards.noteSpawnItem(params.item);
+        const emitReplayedSubagentUpdate = noteSubagentSpawnItem(params.item);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -6890,6 +6909,8 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
+        emitReplayedSubagentUpdate?.();
       },
       itemUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
@@ -6917,7 +6938,7 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
-        subagentLiveCards.noteSpawnItem(params.item);
+        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(params.item);
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -6925,6 +6946,7 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        emitReplayedSubagentUpdateOnCompleted?.();
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         if (isTurnInFlight) pushStatus('Generating...');

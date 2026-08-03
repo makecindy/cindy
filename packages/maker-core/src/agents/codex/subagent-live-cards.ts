@@ -10,9 +10,18 @@
  * 状态,由调用方按同一 `taskId` 发 `agent_task_update`。卡片本体与 Claude 子代理共用
  * `AgentTaskCard`,这里只负责补齐 Codex 侧此前缺失的数据源,不引入新的 UI 概念。
  *
+ * 两条容易踩空的语义,单测各有覆盖:
+ *  - **一次 spawn 可能扇出多个子线程**(V1 `spawnAgent` 的 `receiverThreadIds`),但它们
+ *    共用同一张卡。聚合状态必须挂在 taskId 上、按 thread 分量累计,否则各线程用自己的
+ *    计数器发同一个 taskId,后到的快照会把先到的覆盖成更小的值(token/工具数回退),
+ *    且任一 sibling 先收口就会把整张卡误报成完成。
+ *  - **通知可能早于 spawn 登记到达**(子线程 `thread/started` 建立 lineage 后,父线程的
+ *    spawn item 还没被处理)。这类通知先缓冲,登记后重放,否则首个工具调用、初始 token
+ *    甚至终态会永久缺失。
+ *
  * 设计约束:
  * - **纯聚合、零 IO**:落在 translator/event-loop 热路径上,每条通知只做 Map 查 + 计数。
- * - **有界**:跟踪条目数封顶,优先淘汰已收口的最早条目(长会话大量 spawn 不无界增长)。
+ * - **有界**:跟踪条目与缓冲都封顶,长会话大量 spawn 不无界增长。
  * - **不猜**:认不出的 method / item 一律忽略并返回 null,不合成任何状态。
  */
 
@@ -25,19 +34,24 @@ export interface SubagentLiveCardUpdate {
   taskId: string;
   status: SubagentLiveCardStatus;
   agentPath?: string;
-  /** 子线程累计 token(thread/tokenUsage/updated 的 total);未知为 0。 */
+  /** 本卡全部子线程的累计 token 之和;未知为 0。 */
   totalTokens: number;
-  /** 子线程内的工具类 item 数;未知为 0。 */
+  /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
   toolUses: number;
   durationMs: number;
 }
 
 export interface SubagentLiveCardTracker {
-  /** 主线程 item 里认出 spawn → 登记「子线程 id → 子代理卡 taskId」。非 spawn 时无副作用。 */
-  noteSpawnItem(item: unknown): void;
+  /**
+   * 主线程 item 里认出 spawn → 登记「子线程 id → 子代理卡 taskId」。
+   *
+   * 返回聚合快照 = 该 spawn 有早到的子线程通知被重放出了状态,调用方应发一帧
+   * `agent_task_update`;返回 null = 非 spawn item,或没有待重放的通知。
+   */
+  noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null;
   /**
    * 消费一条子线程通知。返回聚合快照表示卡片需要刷新;返回 null = 与子代理卡无关
-   * (未登记的线程、不关心的 method、无效载荷),调用方直接忽略。
+   * (不关心的 method、无效载荷),或该子线程尚未登记(已缓冲,等 spawn 到达后重放)。
    */
   handleDescendantNotification(
     childThreadId: string,
@@ -46,7 +60,7 @@ export interface SubagentLiveCardTracker {
   ): SubagentLiveCardUpdate | null;
   /** 会话收口时清空(与 descendant MCP context 注销同点调用)。 */
   clear(): void;
-  /** 诊断/测试用:当前跟踪的子线程数。 */
+  /** 诊断/测试用:当前跟踪的子代理卡数。 */
   readonly size: number;
 }
 
@@ -62,69 +76,228 @@ const TOOL_ITEM_TYPES = new Set([
   'collabAgentToolCall',
 ]);
 
-const DEFAULT_MAX_TRACKED_THREADS = 64;
+/** 我们会消费的 method —— 只有这些值得在 spawn 登记前缓冲。 */
+const CONSUMED_METHODS = new Set([
+  'item/started',
+  'item/completed',
+  'thread/tokenUsage/updated',
+  'turn/started',
+  'turn/completed',
+]);
+
+const DEFAULT_MAX_TRACKED_CARDS = 64;
+/** 早到通知的缓冲上限(线程数 × 每线程条数),防永不登记的线程无界堆积。 */
+const MAX_PENDING_THREADS = 32;
+const MAX_PENDING_PER_THREAD = 64;
+
+interface ThreadState {
+  status: SubagentLiveCardStatus;
+  /** 该子线程最新的**累计** token(tokenUsage.total 是快照,按线程覆盖而非相加)。 */
+  totalTokens: number;
+}
 
 interface TrackedCard {
   taskId: string;
   agentPath?: string;
   startedAt: number;
   toolUses: number;
-  totalTokens: number;
-  status: SubagentLiveCardStatus;
   /** 已计数的 item id:部分 item 只发 completed(如 imageView),据此防重复计数。 */
   countedItemIds: Set<string>;
+  /** 同一次 spawn 的全部子线程(V1 可能多 receiver);状态与 token 分量按线程存。 */
+  threads: Map<string, ThreadState>;
+}
+
+interface PendingNotification {
+  method: string;
+  params: unknown;
 }
 
 export function createSubagentLiveCardTracker(opts: {
   now?: () => number;
-  maxTrackedThreads?: number;
+  maxTrackedCards?: number;
 } = {}): SubagentLiveCardTracker {
   const now = opts.now ?? (() => Date.now());
-  const maxTrackedThreads = opts.maxTrackedThreads ?? DEFAULT_MAX_TRACKED_THREADS;
+  const maxTrackedCards = opts.maxTrackedCards ?? DEFAULT_MAX_TRACKED_CARDS;
   const cards = new Map<string, TrackedCard>();
+  const taskIdByThread = new Map<string, string>();
+  const pending = new Map<string, PendingNotification[]>();
 
-  const prune = (): void => {
-    if (cards.size < maxTrackedThreads) return;
-    for (const [childThreadId, card] of cards) {
-      if (card.status !== 'running') {
-        cards.delete(childThreadId);
+  const isTerminal = (status: SubagentLiveCardStatus): boolean => status !== 'running';
+
+  const aggregateStatus = (card: TrackedCard): SubagentLiveCardStatus => {
+    let sawFailed = false;
+    let sawStopped = false;
+    for (const thread of card.threads.values()) {
+      // 任一子线程仍在跑 → 整张卡仍在跑。sibling 先收口不得把卡提前收成完成。
+      if (thread.status === 'running') return 'running';
+      if (thread.status === 'failed') sawFailed = true;
+      else if (thread.status === 'stopped') sawStopped = true;
+    }
+    if (card.threads.size === 0) return 'running';
+    if (sawFailed) return 'failed';
+    if (sawStopped) return 'stopped';
+    return 'completed';
+  };
+
+  const snapshot = (card: TrackedCard): SubagentLiveCardUpdate => {
+    let totalTokens = 0;
+    for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
+    const status = aggregateStatus(card);
+    // 全部收口后释放本卡的 item 登记(计数值保留),长跑子代理不把 id 攒到会话结束。
+    if (isTerminal(status)) card.countedItemIds.clear();
+    return {
+      taskId: card.taskId,
+      status,
+      ...(card.agentPath ? { agentPath: card.agentPath } : {}),
+      totalTokens,
+      toolUses: card.toolUses,
+      durationMs: Math.max(0, now() - card.startedAt),
+    };
+  };
+
+  const pruneCards = (): void => {
+    if (cards.size < maxTrackedCards) return;
+    for (const [taskId, card] of cards) {
+      if (isTerminal(aggregateStatus(card))) {
+        dropCard(taskId);
         return;
       }
     }
-    // 全在跑:淘汰最早插入的一条(Map 保序)。宁可丢最老的实时数据也不无界增长。
+    // 全在跑:淘汰最早插入的一张(Map 保序)。宁可丢最老的实时数据也不无界增长。
     const oldest = cards.keys().next();
-    if (!oldest.done) cards.delete(oldest.value);
+    if (!oldest.done) dropCard(oldest.value);
   };
 
-  const snapshot = (card: TrackedCard): SubagentLiveCardUpdate => ({
-    taskId: card.taskId,
-    status: card.status,
-    ...(card.agentPath ? { agentPath: card.agentPath } : {}),
-    totalTokens: card.totalTokens,
-    toolUses: card.toolUses,
-    durationMs: Math.max(0, now() - card.startedAt),
-  });
+  const dropCard = (taskId: string): void => {
+    const card = cards.get(taskId);
+    if (card) {
+      for (const childThreadId of card.threads.keys()) {
+        if (taskIdByThread.get(childThreadId) === taskId) taskIdByThread.delete(childThreadId);
+      }
+    }
+    cards.delete(taskId);
+  };
+
+  /** 把某子线程从它当前归属的卡上解绑(resume / 再 spawn 同线程时改绑到新卡)。 */
+  const unbindThread = (childThreadId: string): void => {
+    const previousTaskId = taskIdByThread.get(childThreadId);
+    if (previousTaskId === undefined) return;
+    taskIdByThread.delete(childThreadId);
+    const previousCard = cards.get(previousTaskId);
+    if (!previousCard) return;
+    previousCard.threads.delete(childThreadId);
+    if (previousCard.threads.size === 0) cards.delete(previousTaskId);
+  };
+
+  const bufferPending = (childThreadId: string, method: string, params: unknown): void => {
+    if (!CONSUMED_METHODS.has(method)) return;
+    let queue = pending.get(childThreadId);
+    if (!queue) {
+      if (pending.size >= MAX_PENDING_THREADS) {
+        // 淘汰最早缓冲的线程(它很可能永远不会被登记 —— 比如不属于任何子代理卡的后代)。
+        const oldest = pending.keys().next();
+        if (!oldest.done) pending.delete(oldest.value);
+      }
+      queue = [];
+      pending.set(childThreadId, queue);
+    }
+    if (queue.length >= MAX_PENDING_PER_THREAD) queue.shift();
+    queue.push({ method, params });
+  };
+
+  /** 应用一条通知到卡上;返回是否产生了变化(无变化不必发帧)。 */
+  const applyNotification = (
+    card: TrackedCard,
+    thread: ThreadState,
+    method: string,
+    params: unknown,
+  ): boolean => {
+    switch (method) {
+      case 'item/started':
+      case 'item/completed': {
+        const item = (params as { item?: { type?: unknown; id?: unknown } } | null)?.item;
+        const itemType = typeof item?.type === 'string' ? item.type : '';
+        const itemId = typeof item?.id === 'string' ? item.id : '';
+        if (!itemId || !TOOL_ITEM_TYPES.has(itemType)) return false;
+        if (card.countedItemIds.has(itemId)) return false;
+        card.countedItemIds.add(itemId);
+        card.toolUses += 1;
+        return true;
+      }
+      case 'thread/tokenUsage/updated': {
+        const total = (params as { tokenUsage?: { total?: { totalTokens?: unknown } } } | null)
+          ?.tokenUsage?.total?.totalTokens;
+        if (typeof total !== 'number' || !Number.isFinite(total)) return false;
+        // total 是该线程的累计快照 → 覆盖本线程分量,卡片总量由各线程求和。
+        thread.totalTokens = total;
+        return true;
+      }
+      case 'turn/started':
+        thread.status = 'running';
+        return true;
+      case 'turn/completed': {
+        const turnStatus = (params as { turn?: { status?: unknown } } | null)?.turn?.status;
+        thread.status = turnStatus === 'failed'
+          ? 'failed'
+          : turnStatus === 'interrupted'
+            ? 'stopped'
+            : turnStatus === 'inProgress'
+              ? 'running'
+              : 'completed';
+        return true;
+      }
+      default:
+        return false;
+    }
+  };
 
   return {
-    noteSpawnItem(item: unknown): void {
+    noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null {
       const registration = readCodexSubagentSpawnRegistration(item);
-      if (!registration) return;
-      for (const childThreadId of registration.childThreadIds) {
-        const existing = cards.get(childThreadId);
-        // 同一 spawn 的 started/completed 两个 phase 都会走到这里,已登记就不重置计数。
-        if (existing && existing.taskId === registration.taskId) continue;
-        prune();
-        // 同一子线程被 resume / 再次 spawn 时改绑到最新那张卡,计数从新卡重新起算。
-        cards.set(childThreadId, {
-          taskId: registration.taskId,
-          ...(registration.agentPath ? { agentPath: registration.agentPath } : {}),
-          startedAt: now(),
-          toolUses: 0,
-          totalTokens: 0,
-          status: 'running',
-          countedItemIds: new Set(),
-        });
+      if (!registration) return null;
+
+      const existing = cards.get(registration.taskId);
+      // 同一 spawn 的 started/completed 两个 phase 都会走到这里:已登记且线程集合一致
+      // 就不重置计数(否则第二个 phase 会把已聚合的用量清零)。
+      if (
+        existing
+        && registration.childThreadIds.every((childThreadId) => existing.threads.has(childThreadId))
+      ) {
+        return null;
       }
+
+      const card: TrackedCard = existing ?? {
+        taskId: registration.taskId,
+        ...(registration.agentPath ? { agentPath: registration.agentPath } : {}),
+        startedAt: now(),
+        toolUses: 0,
+        countedItemIds: new Set<string>(),
+        threads: new Map<string, ThreadState>(),
+      };
+      if (!existing) {
+        pruneCards();
+        cards.set(card.taskId, card);
+      }
+
+      let replayed = false;
+      for (const childThreadId of registration.childThreadIds) {
+        if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
+        if (!card.threads.has(childThreadId)) {
+          card.threads.set(childThreadId, { status: 'running', totalTokens: 0 });
+        }
+        taskIdByThread.set(childThreadId, card.taskId);
+
+        // 早到通知重放:登记前到达的 item / tokenUsage / turn 事件在此补进聚合。
+        const queued = pending.get(childThreadId);
+        if (!queued) continue;
+        pending.delete(childThreadId);
+        const thread = card.threads.get(childThreadId)!;
+        for (const entry of queued) {
+          if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
+        }
+      }
+
+      return replayed ? snapshot(card) : null;
     },
 
     handleDescendantNotification(
@@ -132,51 +305,23 @@ export function createSubagentLiveCardTracker(opts: {
       method: string,
       params: unknown,
     ): SubagentLiveCardUpdate | null {
-      const card = cards.get(childThreadId);
-      if (!card) return null;
-      switch (method) {
-        case 'item/started':
-        case 'item/completed': {
-          const item = (params as { item?: { type?: unknown; id?: unknown } } | null)?.item;
-          const itemType = typeof item?.type === 'string' ? item.type : '';
-          const itemId = typeof item?.id === 'string' ? item.id : '';
-          if (!itemId || !TOOL_ITEM_TYPES.has(itemType)) return null;
-          if (card.countedItemIds.has(itemId)) return null;
-          card.countedItemIds.add(itemId);
-          card.toolUses += 1;
-          break;
-        }
-        case 'thread/tokenUsage/updated': {
-          const total = (params as { tokenUsage?: { total?: { totalTokens?: unknown } } } | null)
-            ?.tokenUsage?.total?.totalTokens;
-          if (typeof total !== 'number' || !Number.isFinite(total)) return null;
-          card.totalTokens = total;
-          break;
-        }
-        case 'turn/started':
-          card.status = 'running';
-          break;
-        case 'turn/completed': {
-          const turnStatus = (params as { turn?: { status?: unknown } } | null)?.turn?.status;
-          card.status = turnStatus === 'failed'
-            ? 'failed'
-            : turnStatus === 'interrupted'
-              ? 'stopped'
-              : turnStatus === 'inProgress'
-                ? 'running'
-                : 'completed';
-          // 收口即释放本轮 item 登记(计数值保留),长跑子代理不把 id 攒到会话结束。
-          if (card.status !== 'running') card.countedItemIds.clear();
-          break;
-        }
-        default:
-          return null;
+      const taskId = taskIdByThread.get(childThreadId);
+      if (taskId === undefined) {
+        // spawn item 还没被处理(乱序):缓冲等重放,别丢掉首个工具调用或终态。
+        bufferPending(childThreadId, method, params);
+        return null;
       }
+      const card = cards.get(taskId);
+      const thread = card?.threads.get(childThreadId);
+      if (!card || !thread) return null;
+      if (!applyNotification(card, thread, method, params)) return null;
       return snapshot(card);
     },
 
     clear(): void {
       cards.clear();
+      taskIdByThread.clear();
+      pending.clear();
     },
 
     get size(): number {
