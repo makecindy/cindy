@@ -565,6 +565,13 @@ export class DeviceLinkClient {
    * 只反映**出站**方向:pending 里只有本机发起、正在等对端响应的请求;对端控制本机
    * 的入站请求不在其中,所以不会把「纯被控端方向」误判成可重开。
    */
+  hasPendingRequestsTo(dst: string): boolean {
+    for (const request of this.pending.values()) {
+      if (request.dst === dst && request.expectKind === 'invoke-result') return true;
+    }
+    return false;
+  }
+
   /**
    * 本机是否已显式结束对该设备的**出站**控制(closeLink direction='outbound')。
    *
@@ -577,13 +584,6 @@ export class DeviceLinkClient {
    */
   isOutboundExplicitlyClosed(dst: string): boolean {
     return this.peerTransport.get(dst)?.outboundExplicitlyClosed === true;
-  }
-
-  hasPendingRequestsTo(dst: string): boolean {
-    for (const request of this.pending.values()) {
-      if (request.dst === dst && request.expectKind === 'invoke-result') return true;
-    }
-    return false;
   }
 
   onStatusChange(cb: (s: DeviceLinkStatus) => void): () => void {
