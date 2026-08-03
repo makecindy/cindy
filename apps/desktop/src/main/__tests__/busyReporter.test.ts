@@ -78,3 +78,66 @@ describe('busyReporter', () => {
     expect(__testing.getLastReported()).toBe(false);
   });
 });
+
+/**
+ * probe 抛错(账号 / owner 边界切换期 maker facade 抛 PRECONDITION_FAILED)。
+ * 修复前:异常从 pollBusyChange 逃到 5s setInterval,成为主进程 uncaughtException →
+ * beginShutdown → exitCode=1,冷启动崩溃循环(issue #1358)。
+ */
+describe('busyReporter · probe 不可用(issue #1358)', () => {
+  const boundaryError = () =>
+    new Error('[PRECONDITION_FAILED] App session is switching; retry after the owner boundary settles.');
+
+  it('pollBusyChange 不外抛,返回 null(不上报)', () => {
+    setBusyProbe(() => {
+      throw boundaryError();
+    });
+    expect(() => pollBusyChange()).not.toThrow();
+    expect(pollBusyChange()).toBeNull();
+  });
+
+  it('probe 抛错时基线保持不动 —— 不退化成「不忙」', () => {
+    // turn 正在跑并已上报过 → 基线 true。
+    let probe: () => boolean = () => true;
+    setBusyProbe(() => probe());
+    expect(pollBusyChange()).toBe(true);
+    expect(__testing.getLastReported()).toBe(true);
+
+    // 边界切换:probe 开始抛错。若把未知当 false,基线会被推成 false,
+    // turn 仍在跑时其它设备整轮把本机看成空闲(同 New-F 那个坑)。
+    probe = () => {
+      throw boundaryError();
+    };
+    expect(pollBusyChange()).toBeNull();
+    expect(__testing.getLastReported()).toBe(true);
+  });
+
+  it('probe 恢复后照常工作:未错过的翻转仍会上报', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    expect(pollBusyChange()).toBeNull(); // 边界期:跳过,基线仍 false
+    expect(__testing.getLastReported()).toBe(false);
+
+    // 边界稳定,期间 turn 已经起来了 → 恢复后第一拍就补报 true。
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true);
+    expect(__testing.getLastReported()).toBe(true);
+  });
+
+  it('currentBusy / helloBusy 在 probe 不可用时按 false,且能自我纠正', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    // hello 帧必须带一个具体值,未知只能按 false 发;基线随之为 false。
+    expect(currentBusy()).toBe(false);
+    expect(helloBusy()).toBe(false);
+    expect(__testing.getLastReported()).toBe(false);
+
+    // 边界稳定后若实际在跑 turn,下一拍轮询就把它补正回 true(不会被 dedupe 压掉)。
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true);
+  });
+});
