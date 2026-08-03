@@ -2863,8 +2863,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   /**
    * `@` 资源入口复用 `tool` 槽，不另造硬白名单 slot：旧版宿主会接受这类包，
    * 并像其它未知顶层字段一样忽略 atResourceProvider。这个字段在本版之前也可能被
-   * 存量包当作自定义元数据使用，因此只有形态完整、且确实引用已声明工具时才启用；
-   * 其它历史形态继续忽略，避免客户端升级后让已安装插件消失。
+   * 存量包当作自定义元数据使用，因此这里仅收窄出待审声明；安装运行时还必须命中
+   * Main 在 install/update 后写下的 host receipt。其它历史形态继续忽略，避免客户端
+   * 升级后让已安装插件消失或凭字段形状自动扩权。
    */
   let atResourceProvider: GhostAtResourceProviderDecl | undefined;
   if (isPlainObject(raw.atResourceProvider)) {
