@@ -25,7 +25,10 @@ import { AddMarketplaceDialog } from '../AddMarketplaceDialog';
 const addSource = vi.fn(async () => ({}) as never);
 const pickLocalSource = vi.fn(async () => ({ canceled: false, summary: {} }) as never);
 const resolveDefaultBranch = vi.fn(async () => null as string | null);
-const gitPreflight = vi.fn(async () => ({ ok: true, version: '2.43.0' }));
+const gitPreflight = vi.fn<() => Promise<{ ok: boolean; version: string | null }>>(async () => ({
+  ok: true,
+  version: '2.43.0',
+}));
 
 beforeEach(() => {
   addSource.mockClear();
@@ -78,7 +81,7 @@ describe('AddMarketplaceDialog', () => {
   });
 
   it('does not probe the remote default branch when Git is unavailable', async () => {
-    gitPreflight.mockResolvedValueOnce({ ok: false, error: 'git unavailable' });
+    gitPreflight.mockResolvedValueOnce({ ok: false, version: null });
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
 
     await screen.findByText('settings.ghosts.market.sources.gitUnavailable');
