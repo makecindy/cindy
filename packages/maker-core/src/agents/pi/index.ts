@@ -726,7 +726,14 @@ export class PiAgent extends BaseAgent {
     // (它把"读不到快照"当作不可用,而不是退回 pi 默认解析)。
     let subagentRuntimeWriteChain: Promise<void> = Promise.resolve();
     let subagentRuntimeWriteGen = 0;
-    /** 快照持久化失败 → 本次会话不暴露子代理工具/不接受子代理调用。 */
+    /**
+     * 首次快照持久化失败 → 本次会话根本不注入 runtime 文件 env,扩展因此不注册 subagent 工具。
+     *
+     * **只在 spawn 之前有意义**:它的唯一消费点是下面构造 spawnEnv 的那一处。进程一旦起来,改它
+     * 既收不回已注入的 env、也拦不住扩展继续读快照文件 —— 所以**禁止**在 setModel 等运行期路径上
+     * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
+     * 能力只有一条可证明有效的路:终止会话。
+     */
     let subagentRoutingEnabled = true;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string },
@@ -1378,14 +1385,33 @@ export class PiAgent extends BaseAgent {
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
         if (!resp.success) {
           // pi 侧没切成:快照必须回滚,否则子代理会按"新模型"跑而父会话还在旧模型上。
-          // 回滚同样可能失败(同一个只读文件系统),此时才退到禁用路由 —— 那是最后一道闸。
           if (!(await writeSubagentRuntimeFile(previousSnapshot))) {
-            subagentRoutingEnabled = false;
-            // 用闭包里的 deps,不是 this.deps —— setModel 是对象字面量的方法简写,
-            // 它的 this 是 handle 而不是 agent(本文件 1224 行起就是为此把 deps 提出来的)。
+            // 回滚也失败(第一次写成功之后文件系统才转只读之类):此刻盘上的快照指向**被拒绝的**
+            // provider/model,而父会话仍在旧路由 —— 子代理的下一次派发就会打到用户并未启用的
+            // 端点(错误计费 + 提示词与仓库上下文外泄)。
+            //
+            // 这里**不能**再退回 `subagentRoutingEnabled = false`(上一版就是这么写的,而它是个
+            // 空操作,我在上面的注释里已经承认过):该标志只在构造 spawnEnv 时读一次,进程早就
+            // 起来了,改它既收不回已注入的 env,也拦不住扩展继续读那个文件。删除文件同样已经
+            // 试过并失败 —— 使用点的 fail-closed 因此也指望不上。
+            //
+            // 写不了、删不掉,唯一还能保证的手段就是**让这个 pi 进程不再有下一次派发**:直接
+            // 终止会话。代价明确(会话中断,用户要重开),但它是可证明有效的;继续跑下去的代价
+            // 是把提示词发到错误端点,那个不可接受。
             deps.logger.error(
               'pi: set_model failed and the subagent routing snapshot could not be rolled back; '
-              + 'subagent routing may still point at the attempted model until the session restarts',
+              + 'terminating the session because subagent delegation would otherwise route to the rejected provider',
+            );
+            try {
+              await proc.close();
+            } catch (err) {
+              deps.logger.warn('pi: session termination after routing rollback failure also failed', {
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }
+            throw new Error(
+              'pi: 模型切换失败且子代理路由快照无法回滚,已终止本会话以避免委派请求发往未启用的端点。'
+              + '请检查运行目录是否可写后重开会话。',
             );
           }
           throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);

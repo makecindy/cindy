@@ -21,6 +21,9 @@ const captured = vi.hoisted(() => ({
   sent: [] as Array<Record<string, unknown>>,
   proxyRegistration: null as { sessionId: string; token: string } | null,
   requests: [] as string[],
+  failSetModel: false,
+  onAfterSetModel: null as null | (() => void),
+  closed: false,
 }));
 
 vi.mock('../rpc-client.js', () => ({
@@ -37,6 +40,10 @@ vi.mock('../rpc-client.js', () => ({
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
       captured.requests.push(cmd.type);
+      if (cmd.type === 'set_model' && captured.failSetModel) {
+        captured.onAfterSetModel?.();
+        return { success: false };
+      }
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
@@ -47,6 +54,7 @@ vi.mock('../rpc-client.js', () => ({
     }
     async close(): Promise<void> {
       this.isClosed = true;
+      captured.closed = true;
     }
   },
 }));
@@ -75,6 +83,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.sent = [];
     captured.proxyRegistration = null;
     captured.requests = [];
+    captured.failSetModel = false;
+    captured.onAfterSetModel = null;
+    captured.closed = false;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-cwd-'));
     savedNoProxy = process.env.NO_PROXY;
@@ -211,6 +222,33 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(snapshotPath, { recursive: true, force: true });
     writeFileSync(snapshotPath, before);
     await handle.close();
+  });
+
+
+  it('terminates the session when the routing snapshot cannot be rolled back', async () => {
+    // 新快照落盘成功、set_model 失败、回滚又失败(第一次写之后文件系统才转只读)时,盘上的
+    // 快照指向**被拒绝的** provider/model,而父会话仍在旧路由 —— 下一次委派就打到用户并未启用
+    // 的端点。此时 subagentRoutingEnabled 是空操作(只在 spawn 前读),删文件也已失败,唯一
+    // 可证明有效的手段是让这个 pi 进程不再有下一次派发:终止会话(review 连点两轮)。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+
+    // 让 set_model 失败;第一次快照写入照常成功。
+    captured.failSetModel = true;
+    captured.requests = [];
+    // 让**回滚**写入失败:回滚发生在 set_model 之后,这里用只读目录制造 EACCES/EISDIR。
+    captured.onAfterSetModel = () => {
+      rmSync(snapshotPath, { force: true });
+      mkdirSync(snapshotPath);
+    };
+
+    await expect(handle.setModel('m')).rejects.toThrow(/已终止本会话/);
+    // 会话必须真的被关掉,而不是只置一个拦不住任何东西的标志。
+    expect(captured.closed).toBe(true);
+
+    rmSync(snapshotPath, { recursive: true, force: true });
   });
 
   it('overrides the Pi bash tool and strips host credentials at its spawn boundary', async () => {
