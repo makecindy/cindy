@@ -494,7 +494,7 @@ export function beginLocalCapabilitiesRefresh(): number {
 }
 
 /**
- * 读取本地 agent 能力快照；核心 agent 失败向上抛，未注册的可选 Pi 不阻断 provider 目录。
+ * 读取本地 agent 能力快照；核心 agent 失败向上抛，可选 Pi 的能力读取失败不阻断 provider 目录。
  */
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();

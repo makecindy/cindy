@@ -41,6 +41,33 @@ function stubElectron() {
   return { getCapabilities, invoke };
 }
 
+function stubLocalCatalog() {
+  let providerId = 'provider-old';
+  let capabilityRevision = 'old';
+  let unavailableAgent: string | null = null;
+  const getCapabilities = vi.fn(async (agent: string) => {
+    if (agent === unavailableAgent) throw new Error(`Agent '${agent}' is not registered`);
+    return caps(`${capabilityRevision}:${agent}`);
+  });
+  const listProviders = vi.fn(async () => ({
+    dataOwnerId: null,
+    ownerGeneration: 0,
+    providers: [{ id: providerId }],
+    providerOrder: [providerId],
+  }));
+  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities, listProviders } } });
+  return {
+    getCapabilities,
+    setSnapshot(nextProviderId: string, nextCapabilityRevision: string): void {
+      providerId = nextProviderId;
+      capabilityRevision = nextCapabilityRevision;
+    },
+    setUnavailableAgent(agent: string | null): void {
+      unavailableAgent = agent;
+    },
+  };
+}
+
 describe('useAgentCapabilities deviceId-aware cache', () => {
   it('本机路径:preload 命中 maker.getCapabilities,不碰 deviceLink', async () => {
     const { getCapabilities, invoke } = stubElectron();
@@ -96,6 +123,66 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
     await expect(mod.loadLocalCapabilitiesSnapshot()).rejects.toThrow(
       "Agent 'codex' is not registered",
+    );
+  });
+
+  it('Pi 不可用且没有旧快照时仍联合提交 provider 与核心能力', async () => {
+    const harness = stubLocalCatalog();
+    harness.setSnapshot('provider-initial', 'initial');
+    harness.setUnavailableAgent('pi');
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-initial' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'initial:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'initial:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  it('Pi 不可用时用新 provider 快照替换 last-valid snapshot', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-new', 'new');
+    harness.setUnavailableAgent('pi');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-new' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'new:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'new:codex',
+    );
+  });
+
+  it('核心 agent 失败时联合刷新保留 last-valid provider 与能力快照', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-rejected', 'rejected');
+    harness.setUnavailableAgent('codex');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(false);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-old' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'old:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'old:codex',
     );
   });
 
