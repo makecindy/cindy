@@ -15,6 +15,8 @@
  *         reselectEmitsChange 重选即回调、side 透传(默认 top)
  *      6. field 形态(设置字段):trigger 撑满字段、面板宽度绑定 trigger 实测宽度
  *         (DESIGN.md §4 Select & Dropdown 宽度铁则),工具条形态维持 hug + 196px
+ *      7. field 形态按上下可用空间翻转方向 —— MorphPopover 不做碰撞翻转,固定
+ *         side="bottom" 在视口底部会把菜单钳成 0 高
  *
  *   B. 选项表单一来源
  *      AGENT_OPTIONS 由 lib/agentVendors 的 SELECTABLE_VENDORS 派生,顺序一致、
@@ -197,6 +199,51 @@ describe('AgentSelect', () => {
     const trigger = screen.getByRole('button', { name: '选择引擎：Claude' });
     expect(trigger.className).toContain('h-9');
     expect(trigger.className).not.toContain('h-10');
+  });
+
+  it('field 形态: 朝下空间不足且上方更宽裕时翻转到 top', () => {
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({
+        // 视口高 768(jsdom 默认): 字段贴近底部 —— 下方仅 20px, 上方 712px
+        top: 712, bottom: 748, left: 0, right: 168, width: 168, height: 36, x: 0, y: 712,
+        toJSON: () => ({}),
+      } as DOMRect);
+    try {
+      render(<AgentSelect value="cc" onChange={() => {}} triggerVariant="field" side="bottom" />);
+      fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+      expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('top');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('field 形态: 朝下空间够就保持 bottom;工具条形态永不翻转', () => {
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({
+        top: 100, bottom: 136, left: 0, right: 168, width: 168, height: 36, x: 0, y: 100,
+        toJSON: () => ({}),
+      } as DOMRect);
+    try {
+      const { unmount } = render(
+        <AgentSelect value="cc" onChange={() => {}} triggerVariant="field" side="bottom" />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+      expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('bottom');
+      unmount();
+
+      // 工具条形态: 即使贴底也保持调用方给的 side(工具条本身就在底部, 由布局保证)
+      spy.mockReturnValue({
+        top: 712, bottom: 748, left: 0, right: 90, width: 90, height: 30, x: 0, y: 712,
+        toJSON: () => ({}),
+      } as DOMRect);
+      render(<AgentSelect value="cc" onChange={() => {}} side="top" />);
+      fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+      expect(screen.getByTestId('agent-select-popover').getAttribute('data-side')).toBe('top');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('打开时初始焦点落在当前选中行,不是第一行(经 data-morph-autofocus)', async () => {

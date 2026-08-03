@@ -180,6 +180,11 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     // 设置字段形态: 面板宽度绑 trigger(DESIGN.md §4 宽度铁则); dense 与同排 ModelSelector 齐高
     expect(agent.getAttribute('data-trigger-variant')).toBe('field');
     expect(agent.getAttribute('data-dense')).toBe('true');
+    // field 形态的 trigger 是 w-full, 外层字段必须自带确定宽度, 否则整列缩到
+    // 标签固有宽度、面板跟着缩(codex review #1490)。
+    const agentField = agent.closest('div.flex.min-w-0.flex-col');
+    expect(agentField?.className).toContain('w-[168px]');
+    expect(agentField?.className).toContain('basis-[168px]');
     expect(agent.textContent).not.toContain('claude-code');
 
     const model = screen.getByTestId('model-selector');

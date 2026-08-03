@@ -33,6 +33,14 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 
 import { AGENT_OPTIONS, agentOptionOf } from './agentOptions';
 
+/**
+ * 面板期望高度(px): 标题行 ~28 + 每个引擎行 ~36 + 面板 padding ~16。
+ * field 形态据它判断朝下够不够 —— MorphPopover 只按给定 side 钳高、**不做碰撞
+ * 翻转**, 固定 side="bottom" 时字段滚到视口底部会把菜单钳成很矮甚至 0 高,
+ * 用户就选不了引擎(codex review #1490)。
+ */
+const FIELD_PANEL_MIN_H = 28 + AGENT_OPTIONS.length * 36 + 16;
+
 interface AgentSelectProps {
   value: MakerVendor;
   onChange: (next: MakerVendor) => void;
@@ -103,7 +111,10 @@ export function AgentSelect({
 }: AgentSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  /** field 形态每次打开前按上下可用空间定的方向; null = 用调用方给的 side。 */
+  const [autoSide, setAutoSide] = useState<'top' | 'bottom' | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const isCreateAgent = visualVariant === 'create-agent';
   const isField = triggerVariant === 'field';
   const current = agentOptionOf(value);
@@ -119,6 +130,18 @@ export function AgentSelect({
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
+
+  /**
+   * 朝下空间放得下就朝下(设置字段的自然方向), 否则比较上下取更宽裕的一侧。
+   * 只作用于 field 形态: 工具条永远在底部, 方向由调用方定死。
+   */
+  const resolveFieldSide = (): 'top' | 'bottom' => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return side;
+    const below = window.innerHeight - rect.bottom;
+    if (below >= FIELD_PANEL_MIN_H) return 'bottom';
+    return below >= rect.top ? 'bottom' : 'top';
+  };
 
   const select = (next: MakerVendor) => {
     setOpen(false);
@@ -148,12 +171,21 @@ export function AgentSelect({
 
   const trigger = (
     <button
+      ref={triggerRef}
       type="button"
       disabled={disabled}
       // 阻 mousedown 抢焦点 —— 否则点击时下方 ChatInput 的 :focus-within 边框会瞬间掉色。
       // 键盘 Tab 仍可正常 focus(preventDefault 只阻断鼠标路径)。
       onMouseDown={(e) => e.preventDefault()}
-      onClick={() => setOpen((prev) => (disabled ? false : !prev))}
+      onClick={() => {
+        if (disabled) {
+          setOpen(false);
+          return;
+        }
+        // 每次打开都重算 —— 设置卡可停在滚动视口任意位置。
+        if (isField && !open) setAutoSide(resolveFieldSide());
+        setOpen((prev) => !prev);
+      }}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
       aria-label={
@@ -240,7 +272,7 @@ export function AgentSelect({
     <MorphPopover
       open={open && !disabled}
       onOpenChange={(next) => setOpen(disabled ? false : next)}
-      side={side}
+      side={isField ? (autoSide ?? side) : side}
       align="start"
       // 字段形态不传定宽, 改用 trigger 实测宽度(DESIGN.md §4 宽度铁则)。
       {...(isField ? { panelWidthMode: 'trigger' as const } : { panelWidth: 196 })}

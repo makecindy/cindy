@@ -545,7 +545,14 @@ export function WorkspacePrefsEditor({
       {/* 引擎选择用与新建对话工具条同一个下拉(AgentSelect, #1350): 定宽分段器每
           多一个引擎就窄一截(168px 三等分 = 每段 56px, Pi 已贴边), 而下拉只渲染
           当前引擎, 引擎数量不再影响布局; 未选中项也不再因为置灰而看着像不可用。 */}
-      <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
+      {/* 确定宽度是 field 形态的前提: PrefsField 只有 min-w-0 时, trigger 的 w-full
+          解析不到包含块宽度, 字段会缩到当前标签的固有宽度(选 Pi 时 trigger 与绑定
+          它的面板只有一个短标签宽, 选项行图标/文字/勾选被截断, codex review #1490)。
+          168px = 被替换的定宽分段器原宽度, 视觉落位不变。 */}
+      <PrefsField
+        label={t('settings.tina.prefs.agentLabel')}
+        className="w-[168px] shrink-0 basis-[168px]"
+      >
         <AgentSelect
           value={vendorKey}
           // 设置字段形态: trigger 撑满字段、面板绑 trigger 实测宽度
