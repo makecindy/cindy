@@ -16,6 +16,7 @@ import {
   OPEN_LINK_OBSERVATION_CHANNEL,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
+  classifyOpenLinkFailure,
   createResponsivenessTracker,
 } from '../responsivenessTracker';
 
@@ -227,6 +228,36 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
       h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_CHANNEL, run),
     ).rejects.toThrow('unresponsive');
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('openLink 失败分类:超时计失败,终态 relay 应答是恢复证据,其余不定论', async () => {
+    expect(classifyOpenLinkFailure(timeoutError())).toBe('timeout');
+    expect(
+      classifyOpenLinkFailure(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
+    ).toBe('responded');
+    expect(
+      classifyOpenLinkFailure(new DeviceLinkError('REMOTE_DISABLED', 'remote disabled')),
+    ).toBe('responded');
+    expect(
+      classifyOpenLinkFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
+    ).toBe('responded');
+    expect(
+      classifyOpenLinkFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
+    ).toBe('inconclusive');
+    expect(classifyOpenLinkFailure(new Error('random'))).toBe('inconclusive');
+
+    // 行为:熔断 open 后,探测窗口内的 openLink 收到终态 relay 应答 → 关熔断
+    // (presence 未及时翻转的竞态下,终态 UI 不再被「无响应」长期遮蔽)。
+    const h = harness();
+    await openBreaker(h);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS + 1);
+    await expect(
+      h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_CHANNEL, () =>
+        Promise.reject(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
+      ),
+    ).rejects.toThrow('target offline');
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
   });
 
   it('控制帧 / dispatch 特判通道的成功不定论;业务 DB 通道的成功是恢复证据', () => {

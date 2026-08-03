@@ -1103,8 +1103,25 @@ async function ensureOnlineForRequest(): Promise<void> {
   await client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
-/** 控制端:向目标设备发起控制链路(link-open → link-accept) */
-export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayload> {
+/**
+ * 控制端:向目标设备发起控制链路(link-open → link-accept)。
+ *
+ * observed=true(默认,顶层入口:renderer 显式打开 / reopen 收敛循环)时纳入
+ * 熔断观测(mobile sendOpenLink 同语义):熔断 open 时快速失败不上管道;超时
+ * 计失败;终态 relay 应答(DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)
+ * 是「链路在应答」的恢复证据(见 classifyOpenLinkFailure);成功经
+ * OPEN_LINK_OBSERVATION_CHANNEL(NEUTRAL 集合)记不定论——link-accept 在被控端
+ * dispatch 于 runInvoke 之前特判应答,不作关熔断的恢复证据。
+ *
+ * observed=false 供**已在外层 guardInvoke 观测内**的嵌套路径使用
+ * (remoteSubscribe 的按需建链 / remoteInvoke 的 LINK_NOT_OPEN 恢复):同一次
+ * openLink 超时若内外层各记一次,单次失败消耗两个 strike,三批阈值退化成两批
+ * 就误开熔断(review P2)——嵌套路径的失败由外层统一记账。
+ */
+export async function openRemoteLink(
+  deviceId: string,
+  opts?: { observed?: boolean },
+): Promise<LinkAcceptPayload> {
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
@@ -1121,11 +1138,8 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     });
   };
-  // openLink 纳入熔断观测(mobile sendOpenLink 同语义):熔断 open 时快速失败
-  // 不上管道;超时计失败——link-open 都等不到回包说明被控端链路层都没在应答;
-  // 成功经 OPEN_LINK_OBSERVATION_CHANNEL(NEUTRAL 集合)记不定论,link-accept
-  // 只证明链路层活着、不证明 invoke 路径健康,不作关熔断的恢复证据。
-  const request = responsivenessTracker
+  const observed = opts?.observed !== false;
+  const request = observed && responsivenessTracker
     ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
     : doOpen();
   openLinkInFlight.set(deviceId, request);
@@ -1183,7 +1197,8 @@ export async function remoteInvoke(
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
       invoke,
-      () => openRemoteLink(deviceId),
+      // 已在外层 guardInvoke 观测内:openLink 失败由外层统一记账,不重复观测。
+      () => openRemoteLink(deviceId, { observed: false }),
       () => assertRemoteControlTargetEnabled(deviceId),
       () => closeRemoteLink(deviceId),
     );
@@ -1208,7 +1223,8 @@ export async function remoteSubscribe(
     await ensureOnlineForRequest();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
-      await openRemoteLink(deviceId);
+      // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
+      await openRemoteLink(deviceId, { observed: false });
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');

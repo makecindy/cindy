@@ -59,12 +59,35 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
  * 列入——它们同样是 pre-runInvoke 特判应答的控制帧)。超时分类不受影响。
  */
 /**
- * openLink 的熔断观测名(本地观测标签,不是 wire channel):link-accept 在被控端
- * dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常回包——成功必须记不定论,
- * 不作关熔断的恢复证据(mobile sendOpenLink 同语义,那边的事故形态正是凭
- * link-accept 关熔断后立刻放进订阅+快照突发,3 次超时再 open,周期性风暴)。
+ * openLink 的熔断观测名(本地观测标签,不是 wire channel,也刻意**不复用**
+ * DEVICE_LINK_INVOKE.OPEN_LINK——那是 renderer↔main 的 IPC channel 名,两个体系
+ * 语义无关,同值纯属撞名;用 observe: 命名空间隔开,避免误导成 IPC 常量漂移):
+ * link-accept 在被控端 dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常
+ * 回包——成功必须记不定论,不作关熔断的恢复证据(mobile sendOpenLink 同语义,
+ * 那边的事故形态正是凭 link-accept 关熔断后立刻放进订阅+快照突发,3 次超时
+ * 再 open,周期性风暴)。
  */
-export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:open-link';
+export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:observe:open-link';
+
+/**
+ * openLink 观测的失败分类(mobile classifyLinkOpenFailure 同款):超时照常计失败
+ * ——link-open 都等不到回包说明被控端链路层都没在应答;**终态 relay 应答**
+ * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
+ * 恢复证据(responded)——熔断 open 且 presence 未及时翻转的竞态下,若把终态
+ * 归为不定论,周期探测永远无法关熔断,「无响应」会长期遮蔽更可操作的终态 UI。
+ */
+export function classifyOpenLinkFailure(error: unknown): BreakerSettleOutcome {
+  if (!(error instanceof DeviceLinkError)) return 'inconclusive';
+  if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
+  if (
+    error.code === 'DEVICE_OFFLINE'
+    || error.code === 'REMOTE_DISABLED'
+    || error.code === 'VERSION_MISMATCH'
+  ) {
+    return 'responded';
+  }
+  return 'inconclusive';
+}
 
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:media:fetch',
@@ -188,7 +211,13 @@ export function createResponsivenessTracker(
       settle(deviceId, slot, classifyDeviceSendSuccess(channel, wasProbe));
       return result;
     } catch (err) {
-      settle(deviceId, slot, classifyDeviceSendFailure(err));
+      settle(
+        deviceId,
+        slot,
+        channel === OPEN_LINK_OBSERVATION_CHANNEL
+          ? classifyOpenLinkFailure(err)
+          : classifyDeviceSendFailure(err),
+      );
       throw err;
     }
   };
