@@ -14,7 +14,11 @@ vi.mock('@/components/chat/TodoListCard', () => ({
 
 const T0 = 1_700_000_000_000;
 
-function planMessage(status: 'pending' | 'in_progress' | 'completed'): ChatMessage {
+function planMessage(
+  status: 'pending' | 'in_progress' | 'completed',
+  createdAtMs: number | null = T0,
+  planUpdatedAtMs?: number,
+): ChatMessage {
   return {
     clientId: 'plan-1',
     role: 'tool_use',
@@ -22,7 +26,8 @@ function planMessage(status: 'pending' | 'in_progress' | 'completed'): ChatMessa
     toolName: 'update_plan',
     toolUseId: 'plan:turn-1',
     toolInput: { plan: [{ step: 'Finish work', status }] },
-    createdAt: new Date(T0).toISOString(),
+    ...(createdAtMs === null ? {} : { createdAt: new Date(createdAtMs).toISOString() }),
+    ...(planUpdatedAtMs === undefined ? {} : { planUpdatedAtMs }),
   };
 }
 
@@ -38,7 +43,14 @@ afterEach(() => {
 
 describe('PinnedPlanPanel completed plan lifetime', () => {
   it('keeps a completed plan visible for 2 seconds, then hides it', () => {
-    render(<PinnedPlanPanel messages={[planMessage('completed')]} animated={false} width={400} />);
+    render(
+      <PinnedPlanPanel
+        sessionId="completed-lifetime"
+        messages={[planMessage('completed')]}
+        animated={false}
+        width={400}
+      />,
+    );
 
     expect(screen.queryByTestId('plan-pill')).not.toBeNull();
     act(() => vi.advanceTimersByTime(1_999));
@@ -48,7 +60,14 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
   });
 
   it('does not hide a plan that is still running', () => {
-    render(<PinnedPlanPanel messages={[planMessage('in_progress')]} animated width={400} />);
+    render(
+      <PinnedPlanPanel
+        sessionId="running-plan"
+        messages={[planMessage('in_progress')]}
+        animated
+        width={400}
+      />,
+    );
 
     act(() => vi.advanceTimersByTime(10_000));
     expect(screen.queryByTestId('plan-pill')).not.toBeNull();
@@ -57,30 +76,127 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
   it('stays hidden after an interaction card temporarily hides the panel', () => {
     const completed = planMessage('completed');
     const view = render(
-      <PinnedPlanPanel messages={[completed]} animated={false} width={400} visible />,
+      <PinnedPlanPanel
+        sessionId="interaction-hidden"
+        messages={[completed]}
+        animated={false}
+        width={400}
+        visible
+      />,
     );
 
     act(() => vi.advanceTimersByTime(2_000));
     expect(screen.queryByTestId('plan-pill')).toBeNull();
 
     view.rerender(
-      <PinnedPlanPanel messages={[completed]} animated={false} width={400} visible={false} />,
+      <PinnedPlanPanel
+        sessionId="interaction-hidden"
+        messages={[completed]}
+        animated={false}
+        width={400}
+        visible={false}
+      />,
     );
     view.rerender(
-      <PinnedPlanPanel messages={[completed]} animated={false} width={400} visible />,
+      <PinnedPlanPanel
+        sessionId="interaction-hidden"
+        messages={[completed]}
+        animated={false}
+        width={400}
+        visible
+      />,
     );
     expect(screen.queryByTestId('plan-pill')).toBeNull();
   });
 
   it('starts a fresh 2-second wait when a running plan completes', () => {
     const running = planMessage('in_progress');
-    const view = render(<PinnedPlanPanel messages={[running]} animated width={400} />);
+    const view = render(
+      <PinnedPlanPanel sessionId="running-completes" messages={[running]} animated width={400} />,
+    );
 
     act(() => vi.advanceTimersByTime(5_000));
-    view.rerender(<PinnedPlanPanel messages={[planMessage('completed')]} animated={false} width={400} />);
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="running-completes"
+        messages={[planMessage('completed', T0, T0 + 5_000)]}
+        animated={false}
+        width={400}
+      />,
+    );
     act(() => vi.advanceTimersByTime(1_999));
     expect(screen.queryByTestId('plan-pill')).not.toBeNull();
     act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('does not restart the completion lifetime after the session view remounts', () => {
+    const completed = planMessage('completed');
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="session-remount"
+        messages={[completed]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    act(() => vi.advanceTimersByTime(1_000));
+    view.unmount();
+
+    render(
+      <PinnedPlanPanel
+        sessionId="session-remount"
+        messages={[completed]}
+        animated={false}
+        width={400}
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+    act(() => vi.advanceTimersByTime(999));
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    cleanup();
+    render(
+      <PinnedPlanPanel
+        sessionId="session-remount"
+        messages={[completed]}
+        animated={false}
+        width={400}
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('keeps an already-expired historical completion hidden without retaining session state', () => {
+    vi.setSystemTime(T0 + 10_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="historical-completion"
+        messages={[planMessage('completed')]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('falls back to a component-local lifetime when the completion timestamp is missing', () => {
+    render(
+      <PinnedPlanPanel
+        sessionId="missing-completion-timestamp"
+        messages={[planMessage('completed', null)]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+    act(() => vi.advanceTimersByTime(2_000));
     expect(screen.queryByTestId('plan-pill')).toBeNull();
   });
 });

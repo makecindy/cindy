@@ -73,6 +73,16 @@ const ALL_TOOL_KEYS = [
 ] as const;
 
 describe('cindy_feishu_bot channel routing note', () => {
+  it('X note only constrains the plain-text delivery format', () => {
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain(
+      '正文直接使用纯文本作答,不要使用 Markdown 标题、列表标记、表格、强调、代码围栏或 Markdown 链接语法(附件引用除外)',
+    );
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('不要解释或复述这些格式要求');
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toMatch(
+      /280|字数|字符|长度|简短|压缩|截断|篇幅|不超过|以内/i,
+    );
+  });
+
   it.each([
     ['slack-hook', SLACK_HOOK_SESSION_CHANNEL_NOTE],
     ['telegram', TELEGRAM_HOOK_SESSION_CHANNEL_NOTE],

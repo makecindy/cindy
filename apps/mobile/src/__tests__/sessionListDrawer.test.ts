@@ -92,13 +92,14 @@ describe('mobile session list drawer', () => {
     ]) {
       expect(text).toContain(`testID="${testId}"`);
     }
-    expect(text).toContain('accessibilityViewIsModal={open}');
+    expect(text).toContain('accessibilityViewIsModal={mounted}');
     expect(text).toContain("t('home.drawer.closeA11y')");
-    // 读屏焦点管理(review #1328):打开移焦到面板首控件,关闭归还三条杠;
-    // 导航型关闭(本屏已失焦)不归还,不抢新屏焦点。
+    // 打开时把读屏焦点移到面板首控件;关闭后的背景焦点归还由父级在解除
+    // accessibility 隔离后的 commit effect 负责。
     expect(text).toContain('AccessibilityInfo.setAccessibilityFocus(node)');
-    expect(text).toContain('AccessibilityInfo.setAccessibilityFocus(returnNode)');
     expect(text).toContain('ref={newSessionButtonRef}');
-    expect(text).toContain('if (!navigation.isFocused()) return;');
+    // 导航动作必须等 overlay 的 mounted=false commit 后执行,不能与 Android 原生换屏同帧。
+    expect(text).toContain('onClosedRef.current?.();');
+    expect(text).not.toContain('returnFocusRef');
   });
 });

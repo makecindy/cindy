@@ -38,6 +38,12 @@ describe('buildHookPromptNote', () => {
     expect(x).toContain('本会话来自 X。');
     expect(x).toContain('[X 回复格式]');
     expect(x).toContain('纯文本');
+    expect(x).toContain('不要使用 Markdown 标题、列表标记、表格、强调');
+    expect(x).toContain('代码围栏或 Markdown 链接语法');
+    expect(x).toContain('上述附件引用除外');
+    expect(x).toContain('不要解释或复述这些格式要求');
+    const xFormat = x.slice(x.indexOf('[X 回复格式]'));
+    expect(xFormat).not.toMatch(/280|字数|字符|长度|简短|压缩|截断|篇幅|不超过|以内/i);
     expect(x).not.toContain('[Telegram 回复格式]');
     expect(x).not.toContain('本会话来自 Slack');
     // 未接线前的回归写法: x 曾被三元兜底误标成 Slack。

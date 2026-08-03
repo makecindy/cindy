@@ -227,7 +227,12 @@ export function buildPiNativeProvidersFromConfigs(
         baseUrl: string;
         wireProtocol?: ProviderWireProtocol;
         headers?: Record<string, string>;
-        models: Array<{ id: string; name?: string; contextWindow?: number }>;
+        models: Array<{
+          id: string;
+          name?: string;
+          contextWindow?: number;
+          supportsImageInput?: boolean;
+        }>;
       };
     };
   }>,
@@ -290,7 +295,14 @@ export function buildPiNativeProvidersFromConfigs(
       api: wireProtocolToPiApi(rt.wireProtocol),
       apiKeyEnvVar,
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      models: rt.models.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow })),
+      models: rt.models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        contextWindow: m.contextWindow,
+        ...(m.supportsImageInput === true
+          ? { input: ['text', 'image'] as Array<'text' | 'image'> }
+          : {}),
+      })),
     });
   }
   return { providers, env };

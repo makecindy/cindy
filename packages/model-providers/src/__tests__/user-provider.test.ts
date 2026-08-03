@@ -279,7 +279,7 @@ describe('buildUserProvider (per-runtime)', () => {
         pi: {
           baseUrl: 'http://127.0.0.1:11434/v1',
           wireProtocol: 'openai-chat',
-          models: [{ id: 'qwen3:8b', name: 'Qwen3 8B' }],
+          models: [{ id: 'qwen3:8b', name: 'Qwen3 8B', supportsImageInput: true }],
         },
       },
     });
@@ -290,6 +290,7 @@ describe('buildUserProvider (per-runtime)', () => {
     expect((p.models.pi ?? [])[0]?.efforts).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect((p.models.pi ?? [])[0]?.defaultEffort).toBe('high');
     expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
+    expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
   });
 
   it('orders pi after claude-code and codex (AGENT_ORDER)', () => {

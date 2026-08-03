@@ -360,11 +360,104 @@ export interface ResponsesChatBridgeHandler {
   handle(args: ChatBridgeHandleArgs): Promise<void>;
 }
 
+const UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX =
+  'Responses feature is not supported by the Chat Completions bridge: ';
+const RESPONSES_IMAGE_CONTENT_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
+const CODEX_UNEXPECTED_BAD_REQUEST_PREFIX = /^unexpected status 400(?: Bad Request)?: /;
+const CODEX_ERROR_METADATA_MARKERS = [
+  ', url: ',
+  ', cf-ray: ',
+  ', request id: ',
+  ', auth error: ',
+  ', auth error code: ',
+] as const;
+
+export function isResponsesImageContentPartType(
+  value: unknown,
+): value is 'input_image' | 'image_url' | 'image' {
+  return typeof value === 'string' && RESPONSES_IMAGE_CONTENT_PART_TYPES.has(value);
+}
+
+function unsupportedResponsesFeatureFromMessage(message: string): string | null {
+  return message.startsWith(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX)
+    ? message.slice(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX.length)
+    : null;
+}
+
+function isUnsupportedResponsesImageFeature(feature: string): boolean {
+  const contentPartMatch = /^input content part '([^']+)'$/.exec(feature);
+  const contentPartType = contentPartMatch?.[1] ?? feature;
+  return isResponsesImageContentPartType(contentPartType)
+    || contentPartType.startsWith('input_image.');
+}
+
+function isUnsupportedResponsesImageErrorObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const error = (value as Record<string, unknown>).error;
+  if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
+  const { code, message } = error as Record<string, unknown>;
+  if (code !== 'unsupported_feature' || typeof message !== 'string') return false;
+  const feature = unsupportedResponsesFeatureFromMessage(message);
+  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function parseCodexWrappedJson(value: string): unknown {
+  const jsonStart = value.indexOf('{');
+  if (jsonStart < 0) return null;
+
+  // Codex may append transport metadata after the serialized response body. Walk closing braces
+  // from right to left so braces in that metadata cannot prevent recovery of the response object.
+  let jsonEnd = value.lastIndexOf('}');
+  while (jsonEnd > jsonStart) {
+    const parsed = parseJson(value.slice(jsonStart, jsonEnd + 1));
+    if (parsed !== null) return parsed;
+    jsonEnd = value.lastIndexOf('}', jsonEnd - 1);
+  }
+  return null;
+}
+
+function stripCodexErrorMetadata(value: string): string {
+  let end = value.length;
+  for (const marker of CODEX_ERROR_METADATA_MARKERS) {
+    const index = value.indexOf(marker);
+    if (index >= 0 && index < end) end = index;
+  }
+  return value.slice(0, end);
+}
+
+/**
+ * Classifies an unsupported-image error emitted by this bridge. Direct OpenAI-style response
+ * bodies and Codex's `unexpected status 400 ...` rendering are both accepted; current Codex
+ * extracts `error.message`, while older/future runtimes may retain the serialized body. Both the
+ * current content-part feature and the legacy direct `input_image` feature remain recoverable.
+ */
+export function isUnsupportedResponsesImageErrorPayload(payload: string | null): boolean {
+  if (!payload) return false;
+  if (isUnsupportedResponsesImageErrorObject(parseJson(payload))) return true;
+
+  const codexPrefix = CODEX_UNEXPECTED_BAD_REQUEST_PREFIX.exec(payload);
+  if (!codexPrefix) return false;
+  const renderedBody = payload.slice(codexPrefix[0].length);
+  if (isUnsupportedResponsesImageErrorObject(parseCodexWrappedJson(renderedBody))) return true;
+
+  const message = stripCodexErrorMetadata(renderedBody);
+  const feature = unsupportedResponsesFeatureFromMessage(message);
+  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+}
+
 export class UnsupportedResponsesFeatureError extends Error {
   readonly feature: string;
 
   constructor(feature: string) {
-    super(`Responses feature is not supported by the Chat Completions bridge: ${feature}`);
+    super(`${UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX}${feature}`);
     this.name = 'UnsupportedResponsesFeatureError';
     this.feature = feature;
   }

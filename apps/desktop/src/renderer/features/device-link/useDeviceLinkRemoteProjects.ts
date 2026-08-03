@@ -34,7 +34,11 @@
 import { useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { createLogger } from '@/lib/logger';
-import { remoteProjectsStore, setRemoteReseedImpl } from './remoteProjectsStore';
+import {
+  remoteProjectsStore,
+  setRemoteReseedImpl,
+  setRemoteSessionBootstrapRetryImpl,
+} from './remoteProjectsStore';
 import {
   clearRemoteSessionActivity,
   removeRemoteSessionActivityForDevice,
@@ -164,8 +168,9 @@ export function useDeviceLinkRemoteProjects(): void {
      * 任一步返回 ACCESS_REVOKED → 标记已撤销并移除该设备;全程无撤销 → 清掉残留标记(恢复收尾)。
      */
     const runSubscribeAndBootstrap = async (deviceId: string, name: string): Promise<void> => {
-      // 新一轮 bootstrap 是有意义的重试：恢复 loading，直到本轮落下 snapshot 或再次终态失败。
-      remoteProjectsStore.clearBootstrapFailure(deviceId);
+      // 新一轮 bootstrap 是有意义的重试：即使还保留旧 shard 也要显式进入
+      // loading，直到本轮落下 snapshot 或再次终态失败。
+      remoteProjectsStore.markBootstrapLoading(deviceId);
       try {
         await window.electronAPI.deviceLink.subscribe(deviceId, ['sessions']);
       } catch (err) {
@@ -178,9 +183,9 @@ export function useDeviceLinkRemoteProjects(): void {
       const result = await refreshRemoteDeviceSessions(deviceId, name);
       if (result === 'revoked') return void handleRevoked(deviceId);
       if (disposed || !eligible.has(deviceId)) return;
-      if (result === 'gave-up' && !remoteProjectsStore.hasDevice(deviceId)) {
+      if (result === 'gave-up') {
         // 永久错误（如旧被控端 CHANNEL_NOT_ALLOWED）或瞬态重试耗尽：不是权威空列表，
-        // 但本轮 bootstrap 已有终态，不能让「所有」侧边栏永久停在 loading。
+        // 即使还有旧 shard 也必须标明本轮读取失败，不能把缓存伪装成刚返回的结果。
         // superseded 表示断连 / 清理使请求失效，必须等重连，不能误记成终态失败。
         remoteProjectsStore.markBootstrapFailed(deviceId);
       }
@@ -330,6 +335,13 @@ export function useDeviceLinkRemoteProjects(): void {
       reseed();
     });
 
+    // 用户点击失败态重试 → 重走 subscribe + bootstrap，恢复 loading 与完整重试语义。
+    setRemoteSessionBootstrapRetryImpl((deviceId) => {
+      const name = eligible.get(deviceId);
+      if (!name || disposed) return;
+      void subscribeAndBootstrap(deviceId, name);
+    });
+
     // sessions:created push(无 row 数据)/ applyPatch 的 unarchive 兜底 → 防抖重拉该设备(reconcile)。
     setRemoteReseedImpl((deviceId) => {
       const name = eligible.get(deviceId);
@@ -473,6 +485,7 @@ export function useDeviceLinkRemoteProjects(): void {
     return () => {
       disposed = true;
       setRemoteReseedImpl(null);
+      setRemoteSessionBootstrapRetryImpl(null);
       stopPeriodicReconcile();
       for (const t of reseedTimers.values()) clearTimeout(t);
       reseedTimers.clear();

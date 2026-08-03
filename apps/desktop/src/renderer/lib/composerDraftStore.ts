@@ -40,6 +40,7 @@ import {
 } from '@/lib/composerQuoteDocument';
 import type { JSONContent } from '@tiptap/core';
 import { createLogger } from '@/lib/logger';
+import { cleanupStagedChatAttachmentFiles } from './chatAttachmentStageCleanup';
 import { plainTextToComposerDocument } from './composerListDocument';
 
 const log = createLogger('ComposerDraftStore');
@@ -277,6 +278,18 @@ export function clearDraft(sessionId: string): void {
   drafts.delete(draftKey(sessionId));
   recomputeDraftPresence(sessionId);
   syncDraftUrlsToMain();
+}
+
+/**
+ * Discard a draft and release dangerous attachment copies owned by it.
+ * `clearDraft` intentionally remains a non-destructive primitive because it
+ * is also used after a successful send, when message history still references
+ * the attachment paths.
+ */
+export function discardDraft(sessionId: string): void {
+  const draft = drafts.get(draftKey(sessionId));
+  if (draft) cleanupStagedChatAttachmentFiles(draft.attachments);
+  clearDraft(sessionId);
 }
 
 /**

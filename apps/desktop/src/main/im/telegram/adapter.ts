@@ -7,11 +7,11 @@
  *   - 群/topic: userId = `g/{chatId}[/{threadId}]`, 每 lane 一个长期会话,
  *     与官方 bot 的 telegram:group/topic externalKey 语义对齐。
  *
- * 两个渠道级差异化钩子(官方通道行为的移植):
- *   - answerOnlyProgress(DM): Telegram 客户端把可编辑消息渲染成 Rich draft
- *     动画, 过程时间线反复重排会清空重播(#848) → DM 中间态只发正文;
+ * 渠道级差异化钩子(官方通道行为的移植):
  *   - prepareAgentTurnText(群): 触发消息送模型前拼本地群上下文前缀(#843),
  *     游标在消息被路由受理后 commit。
+ *
+ * 流式呈现不按 DM / 群分叉: 两边共用同一份过程时间线 + 正文视图。
  */
 
 import fs from 'node:fs';
@@ -91,7 +91,6 @@ export function buildTelegramAdapter(
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
-    answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
     // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): **所有群轮次**都挂
     // 破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
     // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一

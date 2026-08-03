@@ -11,7 +11,6 @@ import { PanelChrome } from '../panels/PanelChrome';
 import { registerPanelKind, unregisterPanelKind, type PanelComponentProps } from '../panels/registry';
 import { extractIpcError } from '../utils/ipcError';
 import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
-import { syncGhostTabRegistrations } from './ghostTabPlugins';
 import { ghostInstallErrorKey } from './installErrorKey';
 import { pruneGhostSettingsSnapshots } from './ghostSettingsSnapshot';
 import { useGhostRuntimeState } from './runtimeStates';
@@ -29,7 +28,7 @@ import { useGhostRuntimeState } from './runtimeStates';
  *   树数据保留,重装即原位复活(§6 规则 5 的正式生效点)。
  *
  * 面板体(webview 供片/主题注入/崩溃接管/媒体右键)在 ghostPanelBody.tsx,
- * 与右侧栏页签形态(position:'tab',ghostTabPlugins.tsx)共用;本模块只管
+ * 与插件页页签形态(position:'tab',features/plugin/GhostPagePanelHost)共用;本模块只管
  * 停靠形态(left / right)与两个注册表的同步入口。
  */
 
@@ -159,8 +158,8 @@ const registeredFingerprints = new Map<string, string>();
  * 把注册表与"当前已装清单"对齐:新装的注册、卸下的注销、没变的不动。
  * 停用(enabled=false)的意识视同不在场 —— 面板注销、布局里 pane 隐藏休眠,
  * 重新启用时走同一条对齐路径复活(与"卸下再重装"共用 §6 规则 5 语义)。
- * position:'tab' 的面板不进本注册表,分派给右侧栏页签注册表(ghostTabPlugins);
- * 换版改 position 时,两边的差集注销各自兜住旧形态。
+ * position:'tab' 的面板不进任何常驻注册表(面板收束,2026-08):由插件页
+ * 独占承载(features/plugin/GhostPagePanelHost),离开插件页即卸载。
  */
 export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 顺手清设置区快照缓存的孤儿(卸载的意识不该在 localStorage 留位图);
@@ -170,12 +169,10 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 气泡状态对齐(与快照 prune 不同:停用/失格的要强制还原,不只清卸载)——
   // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
   reconcileGhostPanelBubbles(ghosts);
-  // 页签形态与停靠形态同源同步:一次广播喂两个注册表,不各自订阅。
-  syncGhostTabRegistrations(ghosts);
   const seen = new Set<string>();
   for (const { manifest, enabled } of ghosts) {
     if (!manifest.panel) continue; // 无面板的意识(未来纯工具卡)不进注册表
-    if (manifest.panel.position === 'tab') continue; // 页签形态归右侧栏注册表
+    if (manifest.panel.position === 'tab') continue; // 页签形态由插件页承载(面板收束)
     if (enabled === false) continue; // 停用 = 休眠,不注册(注销走下方 seen 差集)
     const kind = ghostPanelKind(manifest.id);
     seen.add(kind);

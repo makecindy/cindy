@@ -23,15 +23,13 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain(
       '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
     );
-    expect(sidebarSource).toContain(
-      '<ProjectsSection\n              unclassified={visibleUnclassified}\n              projects={visibleProjectsWithVendor}',
+    expect(sidebarSource).toMatch(
+      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
     );
   });
 
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
-    expect(sidebarSource).toContain(
-      'const groupsWithPinnedProjects = useProjectGroups(',
-    );
+    expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain(
       'if (filter.projectsAsSet === null) return groupsWithPinnedProjects.projects;',
     );

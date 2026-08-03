@@ -65,7 +65,8 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
 
     // The preview button carries the hand cursor; the outer wrapper owns the
     // hover boundary so moving onto the remove button does not hide the preview.
-    expect(block).toMatch(/className="h-full w-full cursor-pointer/);
+    expect(block).toContain("isDownloadOnly ? 'cursor-default' : 'cursor-pointer'");
+    expect(block).toContain('disabled={isDownloadOnly}');
 
     // A click handler that delegates to handleOpenPreview must exist.
     expect(block).toMatch(/onClick=\{handleOpenPreview\}/);
@@ -76,6 +77,9 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
     expect(block).toMatch(/file\.category === 'image'/);
     expect(block).toMatch(/<ImageLightbox\s+src=\{lightboxSrc\}/);
     expect(block).toMatch(/<TextLightbox[\s\S]+filePath=\{file\.path\}/);
+    expect(block).toMatch(
+      /if \(isDownloadOnly\) return;[\s\S]+shouldOpenTextLightbox\(file\.path\)/,
+    );
   });
 
   it('keeps thumbnail hover state on the outer wrapper so the remove button does not dismiss preview', () => {

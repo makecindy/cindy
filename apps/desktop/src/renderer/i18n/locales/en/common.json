@@ -1,6 +1,7 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
     "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
     "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
@@ -126,6 +127,7 @@
       "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
+      "composer": "Message input",
       "linkOpen": "Link open behavior",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
@@ -1310,6 +1312,8 @@
           "modelNamePlaceholder": "Display name",
           "modelContextWindowPlaceholder": "Context (tokens)",
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
+          "modelSupportsImageInput": "Supports image input",
+          "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -2255,6 +2259,14 @@
         "selectAria": "Select default terminal shell"
       }
     },
+    "composer": {
+      "title": "Message input",
+      "sendShortcut": {
+        "label": "Use {{shortcut}} to send",
+        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages"
+      }
+    },
     "linkOpen": {
       "title": "Link open behavior",
       "description": "Where web links and HTML files in messages open on left click.",
@@ -2969,6 +2981,7 @@
         "systemReserved": "Reserved by the operating system",
         "conflict": "Conflicts with \"{{name}}\"",
         "voiceConflict": "Conflicts with the voice input shortcut",
+        "composerVoiceConflict": "Conflicts with the voice input shortcut. Change either the composer send shortcut or the voice input shortcut.",
         "menuAccelerator": "This combination cannot be registered as a menu shortcut"
       },
       "items": {
@@ -3095,12 +3108,15 @@
         "clearSearch": "Clear Plugin Search",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
+        "installedSection": "Installed",
+        "recommendedSection": "Recommended",
+        "updatesAvailable": "{{count}} plugin updates available",
+        "updateAll": "Update all",
+        "ignoreRound": "Ignore this round",
+        "updateTo": "Update to v{{version}}",
+        "updateAria": "Update {{name}} to v{{version}}",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, right-sidebar tab, chat card, or no UI), a $ command word, launch mode, network access, and whether a settings page is needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
-        "installedTitle": "Installed Plugins",
-        "installedExpand": "Show {{count}} more installed plugins",
-        "installedCollapse": "Hide additional installed plugins",
-        "allTitle": "All plugins",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, network access, and whether a settings page is needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
         "filterAll": "All",
         "filtersAria": "Filter plugins by source",
         "origin": {
@@ -3110,8 +3126,15 @@
           "custom": "Custom"
         },
         "emptyFiltered": "No matching plugins",
-        "useAction": "Use",
-        "useAria": "Use {{name}}"
+        "useAria": "Use {{name}}",
+        "usePanelAction": "Use",
+        "chatAction": "Chat",
+        "chatAria": "Chat with {{name}}",
+        "manageAction": "Manage",
+        "manageAria": "Manage {{name}}",
+        "agentInvoked": "Invoked by Agent",
+        "upToDate": "Up to date",
+        "installAria": "Install {{name}}"
       },
       "market": {
         "scopeAria": "Filter plugin sources",
@@ -3126,9 +3149,6 @@
         "install": "Install",
         "details": "Details",
         "update": "Update from market",
-        "updateAvailable": "Update available",
-        "updateAction": "Update",
-        "updateAria": "Update {{name}}",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
         "conflict": "Plugin ID conflict",
@@ -3283,7 +3303,7 @@
         "meta": "Version {{version}}. Installs locally and can be uninstalled anytime.",
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
         "enableNow": "Enable right after install",
-        "enableNowOpenTab": "Enable and open its tab right after install",
+        "enableNowOpenPanel": "Enable and open its panel right after install",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
       },
@@ -3330,7 +3350,7 @@
         "tool": "Tool \"{{name}}\"",
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
-        "panelTab": "Panel \"{{title}}\" · tab in the right sidebar",
+        "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -3413,6 +3433,7 @@
         "openLocation": "Open install location",
         "panelDocked": "Docked · min width {{min}}px",
         "panelNotDocked": "Not docked (no layout record yet)",
+        "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
         "customSlotTitle": "Plugin custom settings area",
         "dangerTitle": "Uninstall plugin",
@@ -3452,6 +3473,9 @@
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
         "useAction": "Use Plugin",
+        "chatAction": "Chat",
+        "enabledLabel": "Enabled",
+        "disabledLabel": "Disabled",
         "useDisabled": "Enable this Plugin before using it",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
@@ -3501,6 +3525,29 @@
       "workspace": {
         "dialogTitle": "Choose a project folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a project folder to create a session in the sidebar"
+      },
+      "panelHost": {
+        "close": "Close panel"
+      },
+      "updateAll": {
+        "title": "Update all · {{count}} plugins",
+        "description": "Updates without permission changes finish automatically; permission expansions need your per-item approval.",
+        "versionRange": "v{{from}} → v{{to}}",
+        "permissionChanged": "Permissions changed",
+        "reviewOutdated": "Permission diff outdated",
+        "rereview": "Review again",
+        "reviewDiff": "Review & confirm",
+        "collapseDiff": "Collapse",
+        "approve": "Approve & update",
+        "skip": "Skip",
+        "statusPending": "Queued",
+        "statusInstalling": "Updating…",
+        "statusDone": "Updated",
+        "statusSkipped": "Skipped",
+        "statusFailed": "Update failed",
+        "background": "Continue in background",
+        "doneAction": "Done",
+        "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed"
       }
     },
     "mcp": {
@@ -4177,13 +4224,10 @@
       "addAria": "Add tab",
       "addFailed": "Failed to add tab",
       "tabCloseAria": "Close tab",
-      "pinAria": "Pin — keep in all sessions",
-      "unpinAria": "Unpin — keep only in this session",
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
-        "alreadyOpen": "Open",
-        "pluginGroup": "Plugins"
+        "alreadyOpen": "Open"
       },
       "kinds": {
         "fileBrowser": "File browser",
@@ -4204,9 +4248,7 @@
       "contextMenu": {
         "close": "Close",
         "closeOthers": "Close others",
-        "closeAll": "Close all",
-        "pin": "Pin",
-        "unpin": "Unpin"
+        "closeAll": "Close all"
       },
       "empty": {
         "eyebrow": "Right Sidebar",
@@ -4222,9 +4264,6 @@
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
         "terminalSub": "Terminal",
-        "pluginSub": "Plugin",
-        "pluginGroup": "Plugin panels",
-        "pluginGroupSub": "{{count}} plugins",
         "addMoreHint": "Use the + button at the top to choose more panel types"
       },
       "placeholderHint": "{{kind}} — content coming in a later phase"
@@ -4757,6 +4796,7 @@
       "send": "Send message",
       "queue": "Queue message",
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
+      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
       "stop": "Stop generating"
     },
     "pluginSetup": {
@@ -4893,6 +4933,11 @@
         "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
       },
       "discovering": "Fetching models…",
+      "remoteLoading": "Loading models from the remote device…",
+      "remoteLoadFailed": "Couldn't load models from the remote device. Check the connection and try again.",
+      "remoteLoadFailedShort": "Model loading failed",
+      "retryRemoteModels": "Reload models",
+      "remoteEmpty": "This device has no available models",
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -5058,6 +5103,8 @@
       "browseProjectFolder": "Choose another project folder",
       "dialogue": "Chat",
       "dialogueOrSelectProject": "Chat or select project",
+      "remoteProjectsLoadFailed": "Couldn't load projects from {{device}}. Check the connection and try again.",
+      "retryRemoteProjects": "Reload projects",
       "removeFromList": "Remove from list",
       "missingDir": "Folder not found"
     },
@@ -5870,6 +5917,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",
+      "attachmentAttachedAria": "Attached {{name}}",
       "saveAttachmentAs": "Save attachment {{name}} as",
       "attachmentSaved": "Attachment {{name}} saved",
       "attachmentSavedUnsupported": "Attachment {{name}} saved, but this file type may not work on the current platform",
@@ -6176,6 +6224,7 @@
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
+      "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
@@ -6191,6 +6240,14 @@
         "allMachines": "All",
         "localMachine": "This device",
         "connecting": "Connecting…",
+        "tasksLoading": "Loading sessions from {{device}}…",
+        "tasksLoadFailed": "Couldn't load sessions from {{device}}. Check the connection and try again.",
+        "tasksPartiallyFailed": "Sessions from {{device}} couldn't be loaded. Showing only content that loaded successfully.",
+        "retryTasks": "Reload sessions",
+        "devicesLoading": "Loading remote devices…",
+        "devicesLoadFailed": "Couldn't load the remote device list. Check the connection and try again.",
+        "devicesPartiallyFailed": "The remote device list couldn't be refreshed. Showing only content that loaded successfully.",
+        "retryDevices": "Reload devices",
         "remoteSettings": "Remote connection settings",
         "multiSelect": "Multi-select",
         "deselect": "Deselect",

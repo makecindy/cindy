@@ -14,6 +14,7 @@ import { VOICE_INPUT_ASR_PROFILES } from '../../shared/voiceInputAsrProfiles';
 import {
   deriveRemoteReadiness,
   pickVoiceInputDialogCopy,
+  resolveRemoteProviderProbe,
   sourceReadyFromProviderList,
 } from '@/hooks/useVendorAuthGate';
 import { readinessFromBinaryStatus } from '@/hooks/useVendorReadiness';
@@ -62,7 +63,7 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     ).toBe('unauthenticated');
   });
 
-  it('全部判定不可用 → ready(控制端不臆断,交给被控端权威校验)', () => {
+  it('两个 channel 都明确 unsupported 的旧端兼容路径 → ready', () => {
     expect(
       deriveRemoteReadiness('codex', { binaryReady: null, sourceReady: null, authReady: null }),
     ).toBe('ready');
@@ -104,6 +105,7 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
       name: 'P',
       agents: ['codex'],
       routing: { codex: {} },
+      models: { codex: [] },
       connected: true,
       ...over,
     }) as ProviderView;
@@ -122,6 +124,31 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
     expect(sourceReadyFromProviderList(null, 'codex')).toBe(null);
     expect(sourceReadyFromProviderList({}, 'codex')).toBe(null);
     expect(sourceReadyFromProviderList({ providers: 'oops' }, 'codex')).toBe(null);
+    expect(sourceReadyFromProviderList({ providers: [{ id: 'broken' }] }, 'codex')).toBe(null);
+  });
+
+  it('只有结构化 channel unsupported 才进入旧端回退，真实失败与畸形响应都 fail closed', () => {
+    expect(
+      resolveRemoteProviderProbe(
+        {
+          status: 'rejected',
+          reason: new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel not allowed remotely'),
+        },
+        'codex',
+      ),
+    ).toEqual({ status: 'unsupported', sourceReady: null });
+    expect(
+      resolveRemoteProviderProbe(
+        {
+          status: 'rejected',
+          reason: new Error('proxy policy: request not allowed remotely'),
+        },
+        'codex',
+      ),
+    ).toEqual({ status: 'error', sourceReady: null });
+    expect(
+      resolveRemoteProviderProbe({ status: 'fulfilled', value: { providers: [null] } }, 'codex'),
+    ).toEqual({ status: 'error', sourceReady: null });
   });
 });
 

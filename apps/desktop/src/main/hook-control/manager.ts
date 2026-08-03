@@ -639,23 +639,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   /** (multi-team)在途授权状态(添加/重绑 workspace 的 pending 与其终止态)。 */
   let pendingBind: HookPendingBindView | null = null;
 
-  // ── provider-neutral 连接线注册表(目前仅 Telegram; 新 provider 在此追加) ────
+  // ── provider-neutral 连接线注册表(Telegram 与 X; 新 provider 在此追加) ────
+
+  // 服务端用客户端 hello.features 判定 provider 协商结果，因此客户端要求
+  // 服务端具备的基础能力也必须全部自报；共用一份清单避免双向契约再次漂移。
+  const telegramProviderBaseFeatures = [
+    HOOK_FEATURE_PROVIDER_BIND,
+    HOOK_FEATURE_PROVIDER_PREFS,
+    HOOK_FEATURE_SESSION_PICKER,
+    HOOK_FEATURE_PROVIDER_TELEGRAM,
+  ] as const;
 
   const telegramConfig: NeutralProviderConfig = {
     provider: 'telegram',
     label: 'Telegram',
     getUrl: getTelegramUrl,
     notConfiguredError: 'Telegram service endpoint is not configured',
-    requiredFeatures: [
-      HOOK_FEATURE_PROVIDER_BIND,
-      HOOK_FEATURE_PROVIDER_PREFS,
-      HOOK_FEATURE_SESSION_PICKER,
-      HOOK_FEATURE_PROVIDER_TELEGRAM,
-    ],
+    requiredFeatures: telegramProviderBaseFeatures,
     helloFeatures: [
-      HOOK_FEATURE_PROVIDER_BIND,
-      HOOK_FEATURE_PROVIDER_PREFS,
-      HOOK_FEATURE_SESSION_PICKER,
+      ...telegramProviderBaseFeatures,
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,

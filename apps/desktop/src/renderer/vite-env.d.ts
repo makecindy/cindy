@@ -2328,6 +2328,27 @@ interface ElectronAPI {
    */
   openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
 
+  /** Copy a dangerous local attachment into the controlled inert cache. */
+  stageChatAttachment: (params: {
+    sourcePath: string;
+    suggestedName: string;
+  }) => Promise<
+    | { success: true; path: string }
+    | {
+        success: false;
+        code:
+          | 'invalid_source'
+          | 'forbidden'
+          | 'not_found'
+          | 'not_file'
+          | 'unsupported_type'
+          | 'copy_failed';
+      }
+  >;
+
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]) => Promise<void>;
+
   /**
    * Save a safely materialized chat attachment under its sanitized original
    * filename. The main process validates the source and never opens the target.

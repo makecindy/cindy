@@ -28,7 +28,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
+import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -152,7 +152,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // composer-draft-per-session: drop any leftover composer draft (text /
       // attachments) for this session — without this the draft Map would
       // hold an orphan entry forever.
-      clearComposerDraft(sessionId);
+      discardComposerDraft(sessionId);
       if (action === 'delete') {
         void window.electronAPI.cleanupSessionImages(sessionId).catch((err: unknown) => {
           log.warn('[session delete] cleanup images failed', err);

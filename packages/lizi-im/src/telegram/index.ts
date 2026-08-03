@@ -93,8 +93,6 @@ const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
-/** DM 定稿的 message_effect_id(官方公开的标准特效 id, 👍; 仅私聊生效)。 */
-const DM_DONE_EFFECT_ID = '5107584321108051014';
 const DEFAULT_STRANGER_NOTICE =
   '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
 
@@ -205,10 +203,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private pollAbort: AbortController | null = null;
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
-  /** DM 流式草稿的 draft_id 单调计数(非零; 同 id 连续更新触发客户端动画)。 */
-  private draftIdCounter = 0;
-  /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
-  private draftStreamingDisabled = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
   private readonly mediaDir: string;
@@ -646,16 +640,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
-    // DM(非 lane 合成 id)走 sendMessageDraft 原生流式草稿: turn 开始即原生
-    // "Thinking…" 占位动画, 中间态无真实消息、定稿才落聊天记录(#848 的
-    // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
-    // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
-    const isDm = decodeLaneUserId(userId) === null;
+    // DM 与群/topic 共用同一条流式呈现: send + editMessageText 覆盖同一条
+    // 消息, 过程区(工具时间线)与正文一起原地刷新, 定稿原地升级为 rich。
+    // 私聊曾走 sendMessageDraft 草稿通道 —— 草稿只能承载一行纯文本, 工具调用
+    // 在私聊里因此整体不可见, 与群聊形成两套体验(Chris 2026-08 点名);
+    // 呈现规则不再按 DM / 群分叉。
     // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
     this.claimTurnReplyTarget(userId);
-    const useDraft = isDm && !this.draftStreamingDisabled;
-    if (useDraft) this.draftIdCounter += 1;
-    const draftId = this.draftIdCounter;
     return startTelegramStreaming(
       {
         send: async (markdown) => {
@@ -678,27 +669,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             message_id: Number(nativeId),
           });
         },
-        ...(useDraft
-          ? {
-              sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
-              sendDraft: async (plainText: string) => {
-                try {
-                  await this.requireApi().call('sendMessageDraft', {
-                    chat_id: Number(userId),
-                    draft_id: draftId,
-                    text: plainText,
-                  });
-                } catch (err) {
-                  // 能力性失败(旧 Bot API server / 客户端不支持)永久 latch,
-                  // 不再逐 turn 白付一次往返; 瞬时失败(限流等)只影响本 turn。
-                  if (err instanceof TelegramApiError && err.errorCode === 400) {
-                    this.draftStreamingDisabled = true;
-                  }
-                  throw err;
-                }
-              },
-            }
-          : {}),
       },
       initial,
     );
@@ -1130,8 +1100,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
-      // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
-      // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
+      // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
+      // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
       this.emitMessage(event);
       return;
@@ -1356,50 +1326,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * Rich 定稿(Bot API 10.1 sendRichMessage, markdown 直投): 表格/标题/代码块/
-   * LaTeX 原生渲染, 32768 上限一条到底不分段。仅 DM 定稿路径尝试;
-   *   - 404 = 方法不可用(旧 Bot API server) → 实例级永久 latch;
-   *   - 400 = 本条内容 rich 解析不过 → 只本条回落, rich 保持可用;
-   *   - 其它错误(网络/限流)回落经典路径, 不 latch。
-   * DM 定稿顺带 message_effect_id(👍 特效, 仅私聊生效)。
-   */
-  private async sendRichFinal(userId: string, markdown: string): Promise<string | null> {
-    if (this.richSendDisabled || !markdown.trim()) return null;
-    const api = this.api;
-    if (!api) return null;
-    // 只读取不消耗: rich 失败(404 latch/400 解析/网络)回落经典路径时,
-    // 目标必须还在, 否则定稿消息丢掉回挂。成功后才按档位消耗。
-    const pendingTarget = this.turnReplyTargets.get(userId);
-    try {
-      const target = this.targetOf(userId);
-      const sent = await this.callSend<TgMessage>('sendRichMessage', {
-        ...target,
-        ...(pendingTarget
-          ? {
-              reply_parameters: {
-                message_id: Number(pendingTarget),
-                allow_sending_without_reply: true,
-              },
-            }
-          : {}),
-        rich_message: { markdown },
-        message_effect_id: DM_DONE_EFFECT_ID,
-      });
-      if (pendingTarget) this.consumeReplyParams(userId); // 成功才消耗('all' 档语义由它处理)
-      this.recordOwnEcho(userId, markdown, sent);
-      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
-    } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 404) {
-        this.richSendDisabled = true;
-      }
-      return null;
-    }
-  }
-
-  /**
-   * 经典路径 rich 原地定稿(editMessageText + rich_message, Bot API 10.1):
-   * 群与降级档 DM 的流式占位消息一步升级 rich 渲染。404 → 实例级 latch;
-   * 400(本条解析不过)只回落本条。
+   * Rich 原地定稿(editMessageText + rich_message, Bot API 10.1): 把流式占位
+   * 消息一步升级成 rich 渲染(表格/标题/代码块/LaTeX 原生, 32768 上限免分段)。
+   * DM 与群共用。404 → 实例级 latch; 400(本条解析不过)只回落本条。
    */
   private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
     if (this.richSendDisabled || !markdown.trim()) return false;

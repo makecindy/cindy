@@ -3,9 +3,8 @@
  * active-catalog 再把同一份快照投影到 Codex 与 Claude bridge,避免两边名称、排序各维护一套。
  *
  * 数据源:codex app-server / CLI 维护的 `<codexHome>/models_cache.json`(与 live 端点
- * `chatgpt.com/backend-api/codex/models` 同结构)。筛选完全依赖后端自带的可见性字段:
- *   visibility === 'list' && supported_in_api === true
- * ——自动挡掉内部 / 隐藏模型(codex-auto-review=hide、gpt-5.3-codex-spark=api:false)。
+ * `chatgpt.com/backend-api/codex/models` 同结构)。筛选同时依赖后端可见性字段与客户端维护的
+ * 内部模型 ID 集合，避免上游把内部别名标成可见时泄漏到用户模型列表。
  *
  * 只读、纯派生。读取失败返回 null(保留上次快照 / 静态兜底),合法空 cache 返回 []。
  * mapper 与 fs 读分离:`mapCodexModelsToCatalog` 是纯函数(单测覆盖),`readCodexDiscoveredModels`
@@ -58,6 +57,13 @@ const CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
  */
 const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
 
+/** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
+const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
+
+function isInternalCodexModelId(id: string): boolean {
+  return INTERNAL_CODEX_MODEL_IDS.has(id);
+}
+
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
@@ -91,7 +97,7 @@ function sortOrderForPriority(priority: number): number {
 /**
  * codex models_cache 原始 JSON → 规范化的 Codex CatalogModel[]。纯函数。
  *
- * 只收 visibility:'list' && supported_in_api:true 的模型;缺关键字段(slug / efforts)则跳过。
+ * 只收 visibility:'list' && supported_in_api:true 且不在内部 ID 集合的模型；缺 slug 则跳过。
  * sortOrder 由 codex 的 priority 派生到 gpt 分组的一个子带内(纯展示,不影响路由 / 去重)。
  */
 export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
@@ -104,7 +110,7 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
     if (!m || typeof m !== 'object') continue;
     if (m.visibility !== 'list' || m.supported_in_api !== true) continue;
     const slug = str(m.slug);
-    if (!slug) continue;
+    if (!slug || isInternalCodexModelId(slug)) continue;
     const efforts = Array.isArray(m.supported_reasoning_levels)
       ? m.supported_reasoning_levels
           .map((e) => (e && typeof e === 'object' ? str((e as { effort?: unknown }).effort) : null))
@@ -158,7 +164,15 @@ export function mapCodexAppServerModelsToCatalog(
   const seen = new Set<string>();
   for (const [index, raw] of models.entries()) {
     if (!raw || raw.hidden === true) continue;
-    const slug = str(raw.model) ?? str(raw.id);
+    const modelId = str(raw.model);
+    const itemId = str(raw.id);
+    if (
+      (modelId && isInternalCodexModelId(modelId)) ||
+      (itemId && isInternalCodexModelId(itemId))
+    ) {
+      continue;
+    }
+    const slug = modelId ?? itemId;
     if (!slug || seen.has(slug)) continue;
     seen.add(slug);
 

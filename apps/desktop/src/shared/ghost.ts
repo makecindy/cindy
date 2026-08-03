@@ -332,7 +332,7 @@ export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 /**
  * 面板显示形态(相对主聊天窗)。left = 顶层布局树停靠 pane(缺省);
  * 'tab' = 不进布局树,作为右侧栏(right-tabs)里的每会话单例页签
- * (2026-07-24 定案,注册链路见 renderer/cindy-brain/ghostTabPlugins.tsx)。
+ * (2026-08 面板收束:页签面板由插件页 GhostPagePanelHost 独占承载)。
  * right 已退役(2026-07-25 Lizi 定案:右侧是右侧边栏的地盘,插件面板默认
  * 挤过去体验差;用户想放右边用拖拽换位即可)——旧包声明的 right 在校验期
  * 归一化为 left(已装插件每次启动都重过校验,硬拒会把存量插件打没;兼容
@@ -346,7 +346,8 @@ export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
-  /** 显示形态:left 停靠主聊天窗左侧(缺省),或 'tab' 右侧栏页签;
+  /** 显示形态:left 停靠主聊天窗左侧(缺省),或 'tab' 插件页内独占面板
+   *  (2026-08-02 面板收束:只从插件页打开,离开插件页即关闭);
    *  right 已退役并入 left(2026-07-25 Lizi 定案,见 GHOST_PANEL_POSITIONS 注释)。 */
   position?: GhostPanelPosition;
   /** 面板界面入口(安装目录内相对路径,意识自绘)。 */
@@ -1804,6 +1805,22 @@ export interface GhostPermissionDiff {
   unchanged: GhostPermissionItem[];
 }
 
+/**
+ * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
+ * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
+ *
+ * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
+ * manifest 重算比对——两侧必须用同一个实现,否则复核形同虚设,故住在 shared。
+ * 每项 JSON 编码后排序拼接,全可打印、无拼接歧义。
+ */
+export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
+  return ghostPermissionItems(manifest)
+    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
+    .sort()
+    .join('\n');
+}
+
 export function diffGhostPermissionItems(
   prev: GhostManifest,
   next: GhostManifest,
@@ -1888,7 +1905,7 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * 装入带面板的意识后,把面板停进布局树(main 侧随 install 调用)。
  * - 树上已有同 kind 的 pane(重装)→ 返回 null:不动树,位置记忆保留、原位复活;
  * - 意识没声明面板 → null;
- * - position:'tab' → null:页签形态不进布局树,由右侧栏页签(ghostTabPlugins)承载;
+ * - position:'tab' → null:页签形态不进布局树,由插件页(GhostPagePanelHost)承载;
  * - 否则停在聊天区左侧,宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
@@ -5127,6 +5144,24 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /**
+       * 要不要同时生成音频(对白 / 音效 / 背景音乐;2026-08 加法)。
+       *
+       * **三态,不传与传 false 不是一回事**:
+       *   - 不传(**缺省**):主机不向上游传递任何音频字段,出声与否随该型号
+       *     的上游默认——与本字段出现之前逐字节同形。存量插件不改一行代码,
+       *     产出不变。
+       *   - `true`:显式要求带音轨。台词/音效/配乐的具体内容写在 prompt 里
+       *     (主机遵守提示词 passthrough,不代写)。
+       *   - `false`:显式要求静音。
+       *
+       * 不是所有型号都有音轨能力:主机按解析出的选型二次校验,不支持的型号
+       * 上**显式传**本字段即明拒(不静默忽略——静默出一条无声/有声都不是
+       * 用户要的片子,还照样计费)。不传则永远不会因此被拒。
+       *
+       * 实际生效值随结果回传(见 GhostVideoResultParams 的 audio)。
+       */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /**
@@ -5162,6 +5197,8 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /** 音频开关(同 gen_video 分支的三态语义;参考图不改变它的含义)。 */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
@@ -5256,6 +5293,13 @@ export interface GhostVideoResultParams {
   resolution?: string;
   ratio?: string;
   fps?: number;
+  /**
+   * 本单是否带音轨。缺省 = 主机说不上来(该型号没有音轨能力,或老宿主根本
+   * 不认识这个字段),**不等于"无声"**——想确认有没有兑现就看这个字段在不在,
+   * 别把缺省读成 false。当前上游任务不回报音频状态,所以这里的值来自主机
+   * 提交值 / 该型号的已知默认,不是上游上报的实测结果。
+   */
+  audio?: boolean;
 }
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */

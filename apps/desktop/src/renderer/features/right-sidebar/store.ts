@@ -21,11 +21,6 @@ import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
-import {
-  clearGhostTabPinOnClose,
-  ghostIdOfTabKind,
-  markGhostTabOpened,
-} from './lib/pinnedGhostTabs';
 import type { TabKindId, TabState } from './types';
 
 const log = createLogger('rightSidebar.store');
@@ -588,11 +583,6 @@ export async function addOrFocusSingletonTab(
   kind: TabKindId,
   initialState: unknown = null,
 ): Promise<TabState> {
-  // 用户显式打开插件面板的唯一汇聚点(「+」菜单 / EmptyState / agent
-  // open-ghost-tab 都走这里):首次打开按默认写入钉住条目(见 pinnedGhostTabs
-  // 的三态语义);已有显式 override(含 pinned:false)保持不动。
-  const openedGhostId = ghostIdOfTabKind(kind);
-  if (openedGhostId) markGhostTabOpened(openedGhostId);
   const bucket = getBucket(sessionId);
   const existing = bucket.tabs.find((t) => t.kind === kind);
   if (existing) {
@@ -818,15 +808,7 @@ export async function closeTab(
       throw err;
     }
   });
-  // 关闭钉住中的插件面板页签 = 取消钉住并关闭:不清的话 Shell 的自动补挂会把
-  // 它立刻加回来,页签"关不掉"。挂在变更段成功之后 —— close 失败回滚时 tab
-  // 还在,钉住状态必须原样保留。所有关闭入口(pill X / 右键菜单 / ⌘W /
-  // closeAllTabs / agent tab-op)都汇聚到本函数,语义不会因入口不同而漂移。
-  const closedGhostId = ghostIdOfTabKind(tab.kind);
-  if (!closedGhostId) return mutation;
-  return mutation.then(() => {
-    clearGhostTabPinOnClose(closedGhostId);
-  });
+  return mutation;
 }
 
 /** 关闭某个 session bucket 的全部 tab,逐个走 closeTab 以触发 plugin cleanup。 */

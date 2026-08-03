@@ -78,7 +78,9 @@ vi.mock('@/components/ui/popover', async () => {
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: null }),
+  evictDeviceCapabilities: vi.fn(),
+  prefetchDeviceCapabilities: vi.fn(async () => {}),
+  useAgentCapabilities: () => ({ capabilities: null, loading: false, error: null }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -150,7 +152,14 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [], loading: false }),
+  evictDeviceProviders: vi.fn(),
+  prefetchDeviceProviders: vi.fn(async () => {}),
+  useDeviceProviders: () => ({
+    providers: [],
+    loading: false,
+    error: null,
+    unsupported: false,
+  }),
 }));
 
 vi.mock('@/lib/providerModels', () => ({

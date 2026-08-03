@@ -99,6 +99,7 @@ const detail: GhostPluginDetail = {
   version: '1.2.3',
   enabled: true,
   canUse: true,
+  tabPanel: false,
   author: 'XD',
   contents: ['code'],
   permissions: [],
@@ -145,6 +146,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
       />,
@@ -193,6 +195,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
         onIconLoadError={onIconLoadError}
@@ -223,6 +226,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
+        onUpdateFromFile={vi.fn()}
         updateVersion={detail.version}
         onUninstall={vi.fn()}
         toggleDisabled={false}
@@ -258,7 +262,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
-        updateLabel="Update from market"
+        onUpdateFromFile={vi.fn()}
         updateVersion="1.2.4"
         updateBusy
         onUninstall={vi.fn()}
@@ -275,10 +279,93 @@ describe('Ghost plugin detail sections', () => {
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    const menuUpdate = screen.getByRole('menuitem', { name: 'Update from market' });
+    // ⋮ 菜单固定为「从文件更新」兜底路径(市场更新已提级到头部 CTA),
+    // 更新进行中同样置灰。
+    const menuUpdate = screen.getByRole('menuitem', {
+      name: 'settings.ghosts.detail.updateFromFile',
+    });
     expect(menuUpdate.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(menuUpdate);
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('hides the local .cindy update entry for reserved official ids outside dev builds', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    // packaged 构建上 Main 会对 cindy- / filo- / xd- 前缀直接 GHOST_ID_RESERVED,
+    // 把这个必失败动作留在菜单里等于让用户选完文件才吃错误。
+    // vitest 默认 DEV=true,这里显式模拟打包产物(DEV=false)。
+    vi.stubEnv('DEV', false);
+    // 显式标注类型:JSX prop 位置的内联展开会让 tsc 现推一个巨大的匿名类型,
+    // desktop 的 typecheck 本就贴着 CI 的 4GB 堆上限跑,能省则省。
+    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art' };
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={officialDetail}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(
+      screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+    ).toBeNull();
+    // 卸载等其余菜单项不受影响。
+    expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps the local .cindy update entry for ordinary third-party plugins', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    // 同样是打包产物,但非保留前缀:Main 不会拒,入口必须留着。
+    vi.stubEnv('DEV', false);
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+    ).toBeTruthy();
+    vi.unstubAllEnvs();
   });
 
   it('renders an export menu item only when onExport is provided', async () => {
@@ -298,6 +385,7 @@ describe('Ghost plugin detail sections', () => {
       onToggle: vi.fn(),
       onUse: vi.fn(),
       onUpdate: vi.fn(),
+      onUpdateFromFile: vi.fn(),
       onUninstall: vi.fn(),
       toggleDisabled: false,
     };

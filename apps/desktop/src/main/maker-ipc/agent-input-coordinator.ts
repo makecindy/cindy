@@ -24,6 +24,8 @@
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
+import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
+import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -41,6 +43,7 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   buildMakerUserMessage,
+  getAgentInputAttachmentBlockType,
   getAgentFacingText,
   projectionRetryText,
   sanitizeQueuedMessageForPersistence,
@@ -65,6 +68,90 @@ const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
+
+type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
+
+function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
+  return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
+}
+
+function attachmentSourceKey(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.url === 'string') return `url:${record.url}`;
+  if (typeof record.base64 === 'string') return `base64:${record.base64}`;
+  return null;
+}
+
+function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
+  const remainingImageSources = new Set(
+    (remainingFiles ?? [])
+      .filter((file) => file.category === 'image')
+      .map(attachmentSourceKey)
+      .filter((source): source is string => source !== null),
+  );
+  const chatMessage = { ...item.chatMessage };
+  const remainingChatImages = chatMessage.images?.filter((image) => {
+    const source = attachmentSourceKey(image);
+    return source !== null && remainingImageSources.has(source);
+  });
+  if (remainingChatImages && remainingChatImages.length > 0) {
+    chatMessage.images = remainingChatImages;
+  } else {
+    delete chatMessage.images;
+  }
+
+  // Renderer queue objects historically carry retryFiles as an extra presentation field even
+  // though it is not part of the main-process wire contract. Strip only attachments that become
+  // maker image blocks: GIF keeps category=image for preview, but is sent as a file block.
+  const compatibleChatMessage = chatMessage as typeof chatMessage & {
+    retryFiles?: QueuedAttachment[];
+  };
+  if (Array.isArray(compatibleChatMessage.retryFiles)) {
+    const retryFiles = compatibleChatMessage.retryFiles.filter(
+      (file) => !isMakerImageAttachment(file),
+    );
+    if (retryFiles.length > 0) compatibleChatMessage.retryFiles = retryFiles;
+    else delete compatibleChatMessage.retryFiles;
+  }
+
+  let persistedContent = item.persistedContent;
+  try {
+    const parsed = JSON.parse(persistedContent) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      const remainingPersistedImages = Array.isArray(record.images)
+        ? record.images.filter((image) => {
+            const source = attachmentSourceKey(image);
+            return source !== null && remainingImageSources.has(source);
+          })
+        : [];
+      persistedContent = JSON.stringify({
+        ...record,
+        images: remainingPersistedImages,
+      });
+    }
+  } catch {
+    // Historical plain-text queue payloads contain no persisted image references.
+  }
+
+  const stripped: AgentInputQueuedMessage = {
+    ...item,
+    persistedContent,
+    chatMessage,
+  };
+  if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
+  else delete stripped.files;
+  return stripped;
+}
+
+function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
+  return getAgentFacingText(item).trim().length > 0
+    || (item.files?.length ?? 0) > 0
+    || (item.mentions?.length ?? 0) > 0
+    || (item.sessionRefs?.length ?? 0) > 0;
+}
 
 export interface AgentInputSendOpts {
   messageUuid?: string;
@@ -1331,12 +1418,23 @@ export class AgentInputCoordinator {
       if (markerStillPresent) {
         latest.error = errorMessage(err);
         latest.recovery = null;
+        // 视觉 capability 拒绝发生在 Pi RPC 之前，投递结果确定为“未接收”。把原消息
+        // 恢复到队首并留下 typed recovery；用户切换到视觉模型后可原样重试。与 ack
+        // 超时不同，这里不暂停队列，因为不存在重复投递风险。marker 已被 Stop/clear
+        // 清掉时不会进本分支，因此不会把显式丢弃的消息复活。
+        if (isPiImageInputUnsupportedError(err)) {
+          this.movePreparedItemToQueueFront(latest, item, true);
+          this.movePendingCompactWaitClientIdToFront(latest, item.clientId);
+          latest.recovery = { kind: 'queue-head', clientId: item.clientId };
+          latest.queuePaused = false;
+          latest.queuePausedByRestore = false;
+        }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"
         // 没有落点——用户按草稿重发同一段文字时模型可能双份消费,review #939 第三轮)
         // 并暂停队列,不让 turn 结束后的自动 drain 把它再派发一遍。用户确认模型
         // 已回应就删行,没回应就点「继续发送」。队列行入口 prepend 幂等,无副作用。
-        if (isSteerDeliveryUncertainError(err)) {
+        else if (isSteerDeliveryUncertainError(err)) {
           this.prependQueueHeadIfMissing(latest, item);
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
@@ -1671,6 +1769,20 @@ export class AgentInputCoordinator {
       log.debug('auto retry skipped — no assistant progress to continue from', { sessionId });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (
+      !continueItem
+      && retryItem
+      && isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)
+    ) {
+      retryItem = stripQueuedMessageImages(retryItem);
+      if (!hasRetryableQueuedContent(retryItem)) {
+        // An image-only turn has no truthful fallback. Keep the error/recovery intact so a later
+        // text message or model switch can take over instead of inventing replacement text.
+        log.debug('image-only retry skipped for unsupported Chat bridge input', { sessionId });
+        return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
+      }
+    }
     state.error = null;
     state.stickyError = null;
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
@@ -1682,7 +1794,7 @@ export class AgentInputCoordinator {
       if (!item) {
         const clientId = crypto.randomUUID();
         item = {
-          ...recovery.item,
+          ...(retryItem ?? recovery.item),
           clientId,
           // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
           // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
@@ -1690,7 +1802,7 @@ export class AgentInputCoordinator {
           // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
           supersedesUserClientId: recovery.item.clientId,
           chatMessage: {
-            ...recovery.item.chatMessage,
+            ...(retryItem ?? recovery.item).chatMessage,
             clientId,
             createdAt: new Date().toISOString(),
           },
@@ -1973,6 +2085,20 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      if (
+        active &&
+        state.recovery?.kind === 'queue-head' &&
+        isPiImageInputUnsupportedError(state.error)
+      ) {
+        // A Pi capability guard rejected a newer steer before RPC and restored it as the
+        // recoverable queue head. The terminal error belongs to the original active turn: close
+        // that old boundary, but do not replace the newer queue-head recovery/banner with an
+        // active-turn retry. The paired done path below preserves the same recovery as well.
+        state.activeTurn = null;
+        state.stickyError = null;
+        this.emit(sessionId);
+        return;
+      }
       if (active?.persisted) {
         state.activeTurn = null;
         state.stickyError = null;
@@ -2118,10 +2244,10 @@ export class AgentInputCoordinator {
     // 同轮注入的 steer 在飞期间,老 turn 的 done 可能先到(注入前 turn 恰好收尾)。
     // marker 属于 steer 事务而不是老 turn,必须留到 steer() 自己 resolve/reject
     // 或 Stop/close 取消,这里不动 steeringQueueClientIds。
-    if (!active && state.recovery?.kind === 'queue-head') {
-      // A pre-accept rollback has already restored the failed head. A late
-      // done/closed-style wake from the old turn must not clear that recovery,
-      // otherwise the next drain tick would silently resend it without Retry.
+    if (state.recovery?.kind === 'queue-head') {
+      // A pre-accept rollback or a capability-rejected steer has already restored the failed
+      // head. The latter can still have the original active turn here; its done boundary must
+      // not clear the steer recovery, otherwise the next drain silently resends without Retry.
       this.emit(sessionId);
       return;
     }
@@ -3317,6 +3443,13 @@ export class AgentInputCoordinator {
       waitForClientIds: entry.waitForClientIds.includes(clientId)
         ? entry.waitForClientIds
         : [clientId, ...entry.waitForClientIds],
+    }));
+  }
+
+  private movePendingCompactWaitClientIdToFront(state: SessionInputState, clientId: string): void {
+    state.pendingCompacts = state.pendingCompacts.map((entry) => ({
+      ...entry,
+      waitForClientIds: [clientId, ...entry.waitForClientIds.filter((id) => id !== clientId)],
     }));
   }
 
