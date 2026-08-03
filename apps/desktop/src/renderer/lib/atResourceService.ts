@@ -59,7 +59,7 @@ export interface ScanResult {
 }
 
 export const AT_MENTION_SEARCH_RESULT_LIMIT = 8;
-export const AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP = 3;
+export const AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP = 2000;
 export const AT_FILE_PICKER_RESOURCE: AtResourceItem = {
   type: 'file-picker',
   name: '',
@@ -84,6 +84,8 @@ export interface AtResourceScanContext {
   includeLocalContext?: boolean;
   /** Historical tasks are read from the execution device's local database. */
   includeTaskHistory?: boolean;
+  /** Emit usable sources immediately while slower providers are still loading. */
+  onPartial?: (result: ScanResult) => void;
 }
 
 function browserTabReference(tabId: string, url: string): string {
@@ -131,6 +133,145 @@ function normalizedBrowserPageTitle(value: string): string {
     .toLowerCase();
 }
 
+type RawWorkspaceScan = Awaited<ReturnType<typeof window.electronAPI.maker.scanAtResources>>;
+type RawContextScan = Awaited<ReturnType<typeof window.electronAPI.maker.listAtContext>>;
+type RawPluginProviders = Awaited<ReturnType<typeof window.electronAPI.ghosts.listAtResourceProviders>>;
+
+function normalizeWorkspaceResources(res: RawWorkspaceScan | null): AtResourceItem[] {
+  const agents: AtResourceItem[] = [];
+  const files: AtResourceItem[] = [];
+  const dirs: AtResourceItem[] = [];
+  const agentNames = new Set<string>();
+
+  for (const item of res?.items ?? []) {
+    if (item.type !== 'agent') continue;
+    agentNames.add(item.name);
+    agents.push({
+      type: 'agent', name: item.name, relPath: item.relPath,
+      description: item.description,
+      _nameLower: item.name.toLowerCase(),
+      _relPathLower: item.relPath.toLowerCase(),
+    });
+  }
+  for (const item of res?.items ?? []) {
+    if (item.type === 'file') {
+      const bare = item.name.replace(/\.md$/, '');
+      if (agentNames.has(bare)) {
+        log.warn(`File "${item.relPath}" conflicts with agent "${bare}"; agent wins.`);
+        continue;
+      }
+      files.push({
+        type: 'file', name: item.name, relPath: item.relPath,
+        _nameLower: item.name.toLowerCase(),
+        _relPathLower: item.relPath.toLowerCase(),
+      });
+    } else if (item.type === 'dir') {
+      dirs.push({
+        type: 'dir', name: item.name, relPath: item.relPath,
+        _nameLower: item.name.toLowerCase(),
+        _relPathLower: item.relPath.toLowerCase(),
+      });
+    }
+  }
+  return [...agents, ...dirs, ...files];
+}
+
+function normalizeContextResources(contextResult: RawContextScan | null): AtResourceItem[] {
+  const contextual: AtResourceItem[] = [];
+  const browserTabTitleKeys = new Set<string>();
+  for (const tab of contextResult?.browserTabs ?? []) {
+    const relPath = browserTabReference(tab.tabId, tab.url);
+    const titleKey = normalizedBrowserPageTitle(tab.title);
+    if (titleKey) browserTabTitleKeys.add(titleKey);
+    contextual.push({
+      type: 'browser-tab',
+      name: tab.title,
+      relPath,
+      description: tab.url,
+      _nameLower: tab.title.toLowerCase(),
+      _relPathLower: `${tab.url} ${tab.tabId}`.toLowerCase(),
+    });
+  }
+  const seenDesktopWindows = new Set<string>();
+  for (const appWindow of contextResult?.desktopWindows ?? []) {
+    const windowKey = `${appWindow.pid}:${appWindow.windowId}`;
+    if (seenDesktopWindows.has(windowKey)) continue;
+    seenDesktopWindows.add(windowKey);
+    if (
+      isBrowserApplication(appWindow.appName)
+      && browserTabTitleKeys.has(normalizedBrowserPageTitle(appWindow.title))
+    ) continue;
+    const relPath = desktopWindowReference(
+      appWindow.pid,
+      appWindow.windowId,
+      appWindow.appName,
+    );
+    contextual.push({
+      type: 'desktop-window',
+      name: appWindow.title,
+      relPath,
+      description: appWindow.appName,
+      _nameLower: appWindow.title.toLowerCase(),
+      _relPathLower: `${appWindow.appName} ${appWindow.pid} ${appWindow.windowId}`.toLowerCase(),
+    });
+  }
+  return contextual;
+}
+
+function normalizeHistoricalTaskResources(
+  sessions: Session[] | null,
+  currentSessionId: string | undefined,
+  deviceId: string | undefined,
+): AtResourceItem[] {
+  const historicalTasks: AtResourceItem[] = [];
+  for (const session of sessions ?? []) {
+    const taskId = oneLineText(session.id, 256);
+    if (
+      !taskId
+      || taskId === currentSessionId
+      || session.status !== 'active'
+      || (!session.userSendAt && (session._count?.messages ?? 0) === 0)
+    ) continue;
+    const title = oneLineText(session.title, 240);
+    if (!title) continue;
+    const description = oneLineText(session.summary || session.preview, 300);
+    const relPath = buildSessionDeepLink(taskId, { deviceId });
+    historicalTasks.push({
+      type: 'session',
+      name: title,
+      relPath,
+      ...(description ? { description } : {}),
+      _nameLower: title.toLowerCase(),
+      _relPathLower: `${title} ${description} ${oneLineText(session.workingDir, 2_000)}`
+        .toLowerCase(),
+    });
+  }
+  return historicalTasks;
+}
+
+function normalizePluginProviderResources(
+  result: RawPluginProviders | null,
+): AtResourceItem[] {
+  const pluginProviders: AtResourceItem[] = [];
+  for (const provider of result?.items ?? []) {
+    const ghostId = oneLineText(provider.ghostId, 32);
+    const name = oneLineText(provider.name, 128);
+    if (!ghostId || !name) continue;
+    const description = oneLineText(provider.description, 256);
+    pluginProviders.push({
+      type: 'plugin-provider',
+      name,
+      relPath: ghostId,
+      pluginId: ghostId,
+      sourceLabel: name,
+      ...(description ? { description } : {}),
+      _nameLower: name.toLowerCase(),
+      _relPathLower: `${ghostId} ${name} ${description}`.toLowerCase(),
+    });
+  }
+  return pluginProviders;
+}
+
 /**
  * Load candidate @-resources from independent workspace/context providers.
  * Partial provider failures keep the remaining candidates usable; the caller
@@ -157,13 +298,12 @@ export async function scanAtResources(
   if (!workingDir && !includeLocalContext && !includeTaskHistory) {
     return { success: false, error: 'workingDir not bound', items: [], truncated: false };
   }
-  type RawScan = Awaited<ReturnType<typeof window.electronAPI.maker.scanAtResources>>;
-  const workspacePromise: Promise<RawScan | null> = workingDir
+  const workspacePromise: Promise<RawWorkspaceScan | null> = workingDir
     ? deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:scan-at-resources', [
           agentKind,
           { workingDir, cap, query },
-        ]) as Promise<RawScan>)
+        ]) as Promise<RawWorkspaceScan>)
       : window.electronAPI.maker.scanAtResources(agentKind, { workingDir, cap, query })
     : Promise.resolve(null);
   const contextPromise = includeLocalContext
@@ -189,6 +329,57 @@ export async function scanAtResources(
         ...(workingDir ? { workingDir } : {}),
       })
     : Promise.resolve(null);
+
+  const partial = {
+    contextual: [] as AtResourceItem[],
+    historicalTasks: [] as AtResourceItem[],
+    pluginProviders: [] as AtResourceItem[],
+    workspace: [] as AtResourceItem[],
+    truncated: false,
+  };
+  const emitPartial = () => {
+    if (!context?.onPartial) return;
+    try {
+      context.onPartial({
+        success: true,
+        items: [
+          ...partial.contextual,
+          ...partial.historicalTasks,
+          ...partial.pluginProviders,
+          ...partial.workspace,
+        ],
+        truncated: partial.truncated,
+      });
+    } catch (err) {
+      log.warn('@ resource partial callback failed; continuing scan.', err);
+    }
+  };
+  void workspacePromise.then((value) => {
+    if (!value?.success || !value.items) return;
+    partial.workspace = normalizeWorkspaceResources(value);
+    partial.truncated = !!value.truncated;
+    emitPartial();
+  }, () => undefined);
+  void contextPromise.then((value) => {
+    if (!value) return;
+    partial.contextual = normalizeContextResources(value);
+    emitPartial();
+  }, () => undefined);
+  void taskHistoryPromise.then((value) => {
+    if (!value) return;
+    partial.historicalTasks = normalizeHistoricalTaskResources(
+      value,
+      context?.sessionId,
+      deviceId,
+    );
+    emitPartial();
+  }, () => undefined);
+  void pluginProvidersPromise.then((value) => {
+    if (!value) return;
+    partial.pluginProviders = normalizePluginProviderResources(value);
+    emitPartial();
+  }, () => undefined);
+
   const [workspaceSettled, contextSettled, taskHistorySettled, pluginProvidersSettled] = await Promise.allSettled([
     workspacePromise,
     contextPromise,
@@ -244,135 +435,25 @@ export async function scanAtResources(
   // Split into buckets so we can apply the agent-wins rule, then
   // reassemble in a deterministic order (agents first in the raw list —
   // the UI will re-rank during filtering anyway).
-  const agents: AtResourceItem[] = [];
-  const files: AtResourceItem[] = [];
-  const dirs: AtResourceItem[] = [];
-  const agentNames = new Set<string>();
+  const workspace = normalizeWorkspaceResources(res);
 
-  for (const item of res?.items ?? []) {
-    if (item.type === 'agent') {
-      agentNames.add(item.name);
-      agents.push({
-        type: 'agent', name: item.name, relPath: item.relPath,
-        description: item.description,
-        _nameLower: item.name.toLowerCase(),
-        _relPathLower: item.relPath.toLowerCase(),
-      });
-    }
-  }
-  for (const item of res?.items ?? []) {
-    if (item.type === 'file') {
-      const bare = item.name.replace(/\.md$/, '');
-      if (agentNames.has(bare)) {
-        log.warn(
-          `File "${item.relPath}" conflicts with agent "${bare}"; agent wins.`,
-        );
-        continue;
-      }
-      files.push({
-        type: 'file', name: item.name, relPath: item.relPath,
-        _nameLower: item.name.toLowerCase(),
-        _relPathLower: item.relPath.toLowerCase(),
-      });
-    } else if (item.type === 'dir') {
-      dirs.push({
-        type: 'dir', name: item.name, relPath: item.relPath,
-        _nameLower: item.name.toLowerCase(),
-        _relPathLower: item.relPath.toLowerCase(),
-      });
-    }
-  }
-
-  const contextual: AtResourceItem[] = [];
-  const browserTabTitleKeys = new Set<string>();
-  for (const tab of contextResult?.browserTabs ?? []) {
-    const relPath = browserTabReference(tab.tabId, tab.url);
-    const titleKey = normalizedBrowserPageTitle(tab.title);
-    if (titleKey) browserTabTitleKeys.add(titleKey);
-    contextual.push({
-      type: 'browser-tab',
-      name: tab.title,
-      relPath,
-      description: tab.url,
-      _nameLower: tab.title.toLowerCase(),
-      _relPathLower: `${tab.url} ${tab.tabId}`.toLowerCase(),
-    });
-  }
-  const seenDesktopWindows = new Set<string>();
-  for (const appWindow of contextResult?.desktopWindows ?? []) {
-    const windowKey = `${appWindow.pid}:${appWindow.windowId}`;
-    if (seenDesktopWindows.has(windowKey)) continue;
-    seenDesktopWindows.add(windowKey);
-    if (
-      isBrowserApplication(appWindow.appName)
-      && browserTabTitleKeys.has(normalizedBrowserPageTitle(appWindow.title))
-    ) continue;
-    const relPath = desktopWindowReference(
-      appWindow.pid,
-      appWindow.windowId,
-      appWindow.appName,
-    );
-    contextual.push({
-      type: 'desktop-window',
-      name: appWindow.title,
-      relPath,
-      description: appWindow.appName,
-      _nameLower: appWindow.title.toLowerCase(),
-      _relPathLower: `${appWindow.appName} ${appWindow.pid} ${appWindow.windowId}`.toLowerCase(),
-    });
-  }
-  const historicalTasks: AtResourceItem[] = [];
+  const contextual = normalizeContextResources(contextResult);
   const taskRows = taskHistorySettled.status === 'fulfilled'
     && Array.isArray(taskHistorySettled.value)
     ? taskHistorySettled.value
     : [];
-  for (const session of taskRows) {
-    const taskId = oneLineText(session.id, 256);
-    if (
-      !taskId
-      || taskId === context?.sessionId
-      || session.status !== 'active'
-      || (!session.userSendAt && (session._count?.messages ?? 0) === 0)
-    ) continue;
-    const title = oneLineText(session.title, 240);
-    if (!title) continue;
-    const description = oneLineText(session.summary || session.preview, 300);
-    const relPath = buildSessionDeepLink(taskId, { deviceId });
-    historicalTasks.push({
-      type: 'session',
-      name: title,
-      relPath,
-      ...(description ? { description } : {}),
-      _nameLower: title.toLowerCase(),
-      _relPathLower: `${title} ${description} ${oneLineText(session.workingDir, 2_000)}`
-        .toLowerCase(),
-    });
-  }
-
-  const pluginProviders: AtResourceItem[] = [];
-  const providerRows = pluginProvidersSettled.status === 'fulfilled'
-    ? pluginProvidersSettled.value?.items ?? []
-    : [];
-  for (const provider of providerRows) {
-    const ghostId = oneLineText(provider.ghostId, 32);
-    const name = oneLineText(provider.name, 128);
-    if (!ghostId || !name) continue;
-    const description = oneLineText(provider.description, 256);
-    pluginProviders.push({
-      type: 'plugin-provider',
-      name,
-      relPath: ghostId,
-      pluginId: ghostId,
-      sourceLabel: name,
-      ...(description ? { description } : {}),
-      _nameLower: name.toLowerCase(),
-      _relPathLower: `${ghostId} ${name} ${description}`.toLowerCase(),
-    });
-  }
+  const historicalTasks = normalizeHistoricalTaskResources(
+    taskRows,
+    context?.sessionId,
+    deviceId,
+  );
+  const pluginProviders = normalizePluginProviderResources(
+    pluginProvidersSettled.status === 'fulfilled' ? pluginProvidersSettled.value : null,
+  );
 
   return {
     success: true,
-    items: [...contextual, ...historicalTasks, ...pluginProviders, ...agents, ...dirs, ...files],
+    items: [...contextual, ...historicalTasks, ...pluginProviders, ...workspace],
     truncated: !!res?.truncated,
   };
 }
@@ -511,6 +592,22 @@ export function createAtResourceFromNativePath(
   const name = normalizedPath.split('/').filter(Boolean).pop() ?? trimmedPath;
 
   return { type: kind === 'directory' ? 'dir' : 'file', name, relPath };
+}
+
+/** Keep usable candidates visible while a narrower async query is still loading. */
+export function mergeAtResourceItems(
+  previous: readonly AtResourceItem[],
+  incoming: readonly AtResourceItem[],
+): AtResourceItem[] {
+  const merged: AtResourceItem[] = [];
+  const seen = new Set<string>();
+  for (const item of [...incoming, ...previous]) {
+    const key = `${item.type}:${item.pluginId ?? ''}:${item.relPath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
 }
 
 /**

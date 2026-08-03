@@ -5,6 +5,7 @@ import {
   createAtResourceFromNativePath,
   filterAtResources,
   getAtDirectoryCompletionQuery,
+  mergeAtResourceItems,
   scanAtResources,
   scanPluginAtResources,
 } from '@/lib/atResourceService';
@@ -59,6 +60,16 @@ function stubApi(options: {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('filterAtResources', () => {
   const items = [
@@ -182,7 +193,63 @@ describe('getAtDirectoryCompletionQuery', () => {
   });
 });
 
+describe('mergeAtResourceItems', () => {
+  it('keeps previous candidates while preferring refreshed duplicates', () => {
+    const previous = [
+      { type: 'dir' as const, name: 'prompts', relPath: 'packages/prompts' },
+      { type: 'file' as const, name: 'profile.ts', relPath: 'src/profile.ts' },
+    ];
+    const incoming = [
+      { type: 'dir' as const, name: 'prompts', relPath: 'packages/prompts', description: 'new' },
+      { type: 'session' as const, name: 'PR review', relPath: 'cindy://session/pr-review' },
+    ];
+
+    expect(mergeAtResourceItems(previous, incoming)).toEqual([
+      incoming[0],
+      incoming[1],
+      previous[1],
+    ]);
+  });
+});
+
 describe('scanAtResources context providers', () => {
+  it('emits workspace results without waiting for slower context providers', async () => {
+    const slowContext = deferred<{
+      success: boolean;
+      browserTabs: never[];
+      desktopWindows: never[];
+      unavailable: never[];
+    }>();
+    stubApi({
+      workspace: {
+        success: true,
+        items: [{ type: 'dir', name: 'prompts', relPath: 'packages/prompts' }],
+      },
+      context: slowContext.promise,
+    });
+    const partials: Array<{ items: Array<{ type: string; name: string }> }> = [];
+
+    const resultPromise = scanAtResources('D:\\repo', 'codex', 2000, 'pr', undefined, {
+      includeLocalContext: true,
+      onPartial: (result) => partials.push(result),
+    });
+    await vi.waitFor(() => {
+      expect(partials.some((result) => result.items.some((item) => item.name === 'prompts')))
+        .toBe(true);
+    });
+
+    slowContext.resolve({
+      success: true,
+      browserTabs: [],
+      desktopWindows: [],
+      unavailable: [],
+    });
+    const result = await resultPromise;
+    expect(result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'dir', name: 'prompts' }),
+    ]));
+  });
+
   it('prepends browser tabs and desktop windows without treating them as files', async () => {
     stubApi({
       workspace: {

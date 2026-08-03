@@ -199,6 +199,7 @@ import {
   AT_MENTION_SEARCH_RESULT_LIMIT,
   createAtResourceFromNativePath,
   getAtDirectoryCompletionQuery,
+  mergeAtResourceItems,
   scanAtResources,
   scanPluginAtResources,
   filterAtResources,
@@ -3295,7 +3296,7 @@ export function ChatInput({
   );
 
   const runAtScan = useCallback(
-    (query?: string) => {
+    (query?: string, reservedSeq?: number) => {
       // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
       if (isRemoteSession) return;
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
@@ -3304,8 +3305,10 @@ export function ChatInput({
       // 必须优先用 prop,否则 @ 扫描落到控制端本机 FS(扫到同名目录的错文件),插进首条远程消息的 mention 不可用。
       const remoteDeviceId =
         deviceLinkDeviceId ?? (sessionId ? getSessionDeviceId(sessionId) : undefined);
-      const seq = ++atScanSeqRef.current;
+      const seq = reservedSeq ?? ++atScanSeqRef.current;
+      if (atScanSeqRef.current !== seq) return;
       const normalizedQuery = query?.trim() ?? '';
+      const preservePreviousItems = reservedSeq !== undefined && !!normalizedQuery;
       atLastScanQueryRef.current = normalizedQuery;
       setAtState((prev) => {
         if (prev.kind === 'ready' && normalizedQuery) {
@@ -3323,6 +3326,17 @@ export function ChatInput({
           sessionId,
           includeLocalContext: !remoteDeviceId,
           includeTaskHistory: !!normalizedQuery,
+          onPartial: (partial) => {
+            if (atScanSeqRef.current !== seq || !partial.success) return;
+            setAtState((prev) => ({
+              kind: 'ready',
+              items: preservePreviousItems && prev.kind === 'ready'
+                ? mergeAtResourceItems(prev.items, partial.items)
+                : partial.items,
+              truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
+              searching: true,
+            }));
+          },
         },
       )
         .then((res) => {
@@ -3456,9 +3470,13 @@ export function ChatInput({
     if (atPluginScope) return;
     const normalizedQuery = atQuery.trim();
     if (normalizedQuery === atLastScanQueryRef.current) return;
+    const seq = ++atScanSeqRef.current;
+    setAtState((prev) => prev.kind === 'ready'
+      ? { ...prev, searching: true }
+      : prev);
     atQueryScanTimerRef.current = window.setTimeout(() => {
       atQueryScanTimerRef.current = null;
-      runAtScan(normalizedQuery);
+      runAtScan(normalizedQuery, seq);
     }, normalizedQuery ? 200 : 0);
     return () => {
       if (atQueryScanTimerRef.current !== null) {
