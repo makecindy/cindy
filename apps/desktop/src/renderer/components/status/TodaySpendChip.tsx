@@ -113,7 +113,7 @@ import {
   type QuotaHoverCardSessionUsage,
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
-import { quotaSeverity } from './QuotaBar';
+import { quotaSeverity, type QuotaSeverity } from './QuotaBar';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -1017,6 +1017,36 @@ function renderClaudeQuotaSegment(content: React.ReactNode, usedPercent: number)
   );
 }
 
+const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
+  normal: 0,
+  warn: 1,
+  crit: 2,
+};
+
+/**
+ * 整 chip 兜底告警的等级：被拒或当前会话相关窗口达到 90% 为严重告警；
+ * 其余由上游非 normal severity 触发的告警按警告级处理。
+ */
+function getClaudeSubscriptionAlertSeverity(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): QuotaSeverity {
+  if (!isClaudeSubscriptionAlerting(snapshot, modelId)) return 'normal';
+  if (snapshot?.rateLimitStatus?.trim().toLowerCase() === 'rejected') return 'crit';
+
+  const sessionWindows: Array<ClaudeUsageWindow | null | undefined> = [
+    snapshot?.fiveHour,
+    snapshot?.sevenDay,
+    matchScopedWindowForModel(snapshot?.scoped, modelId),
+  ];
+  const hasCriticalWindow = sessionWindows.some((window) => (
+    typeof window?.utilization === 'number'
+    && Number.isFinite(window.utilization)
+    && quotaSeverity(window.utilization) === 'crit'
+  ));
+  return hasCriticalWindow ? 'crit' : 'warn';
+}
+
 interface TodaySpendChipProps {
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
@@ -1644,12 +1674,20 @@ export function TodaySpendChip({
 
   // Claude 订阅有告警窗口段时由该段独立着色，避免把其它段与会话金额一起染红；
   // 告警来自未展示窗口或 rejected 时，仍保留整 chip 告警兜底。
-  const claudeSubscriptionAlerting = isClaudeSubscription
-    && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
-  const hasAlertingClaudeQuotaSegment = usesClaudeQuotaChipSegments
-    && chipWindows.some((window) => quotaSeverity(100 - window.remainingPercent) !== 'normal');
-  const showClaudeSubscriptionFallbackAlert = claudeSubscriptionAlerting
-    && !hasAlertingClaudeQuotaSegment;
+  const claudeSubscriptionAlertSeverity = isClaudeSubscription
+    ? getClaudeSubscriptionAlertSeverity(claudeSubscriptionUsage, modelId)
+    : 'normal';
+  const visibleClaudeQuotaSeverity = usesClaudeQuotaChipSegments
+    ? chipWindows.reduce<QuotaSeverity>((highestSeverity, window) => {
+        const severity = quotaSeverity(100 - window.remainingPercent);
+        return QUOTA_SEVERITY_RANK[severity] > QUOTA_SEVERITY_RANK[highestSeverity]
+          ? severity
+          : highestSeverity;
+      }, 'normal')
+    : 'normal';
+  const showClaudeSubscriptionFallbackAlert =
+    QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
+      < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
