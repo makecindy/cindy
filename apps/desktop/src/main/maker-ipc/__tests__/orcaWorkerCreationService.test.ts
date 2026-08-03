@@ -6,6 +6,8 @@ import {
   createOrcaWorkerCreationService,
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
+  type OrcaWorkerCreateParams,
+  type OrcaWorkerModelCapabilities,
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
 } from '../orcaWorkerCreationService';
@@ -306,7 +308,7 @@ describe('OrcaWorkerCreationService', () => {
       providerId: 'xd',
       remoteHostId: 'host-remote-1',
     };
-    const { deps, service } = createDeps({
+    const { service } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       ensureRemoteReadyForSessionStart,
       bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => {
@@ -423,6 +425,233 @@ describe('OrcaWorkerCreationService', () => {
 
     expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  describe('provider-aware managed model aliases', () => {
+    const shortId = 'deepseek-v4-flash';
+    const canonicalId = 'deepseek/deepseek-v4-flash';
+    const modelCapabilities: OrcaWorkerModelCapabilities[] = [
+      { id: shortId, efforts: ['high', 'max'], defaultEffort: 'high', supportsFastMode: false },
+      { id: canonicalId, efforts: ['high', 'max'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+
+    const managedProvider = (models: string[] = [canonicalId]): OrcaWorkerProviderSnapshot => ({
+      id: 'xd',
+      name: 'Cindy AI',
+      models,
+    });
+    const customProvider = (models: string[] = [shortId]): OrcaWorkerProviderSnapshot => ({
+      id: 'deepseek',
+      name: 'DeepSeek',
+      models,
+      requiresExplicitRoute: true,
+    });
+    const workerParams = (
+      overrides: Partial<OrcaWorkerCreateParams> = {},
+    ): OrcaWorkerCreateParams => ({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      ...overrides,
+    });
+    const aliasHarness = (options: {
+      agent?: AgentKind;
+      providers?: OrcaWorkerProviderSnapshot[];
+      availableModels?: OrcaWorkerModelCapabilities[];
+      overrides?: Partial<OrcaWorkerCreationDeps>;
+    } = {}) => {
+      const agent = options.agent ?? 'codex';
+      return createDeps({
+        getAvailableModels: vi.fn(() => options.availableModels ?? modelCapabilities),
+        getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+          [agent]: options.providers ?? [managedProvider()],
+        })),
+        ...options.overrides,
+      });
+    };
+    const expectNoCreationState = (deps: OrcaWorkerCreationDeps): void => {
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    };
+
+    it('keeps an exact managed canonical ID unchanged', async () => {
+      const { deps, service } = aliasHarness();
+
+      await expect(service.createWorker(workerParams({
+        model: canonicalId,
+      }))).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: canonicalId },
+      });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: canonicalId,
+      }));
+    });
+
+    it.each(['codex', 'claude-code'] as const)(
+      'maps a unique short ID to the managed canonical ID for %s workers',
+      async (agent) => {
+        const { deps, service } = aliasHarness({ agent });
+
+        await expect(service.createWorker(workerParams({
+          agent,
+          model: shortId,
+        }))).resolves.toMatchObject({
+          ok: true,
+          resolved: { model: canonicalId },
+        });
+
+        expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+          agentKind: agent,
+          model: canonicalId,
+        }));
+      },
+    );
+
+    it('keeps a Custom Provider short ID unchanged', async () => {
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider(), customProvider()],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: shortId,
+        providerId: 'deepseek',
+      }))).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: shortId, providerId: 'deepseek' },
+      });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: shortId,
+        providerId: 'deepseek',
+      }));
+    });
+
+    it('prefers an exact connected short ID over a managed alias candidate', async () => {
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider(), customProvider()],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: shortId,
+      }))).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: shortId, providerId: 'deepseek' },
+      });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: shortId,
+        providerId: 'deepseek',
+      }));
+    });
+
+    it('rejects ambiguous managed canonical candidates before creating state', async () => {
+      const otherCanonicalId = `mirror/${shortId}`;
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider([canonicalId, otherCanonicalId])],
+        availableModels: [
+          ...modelCapabilities,
+          { id: otherCanonicalId, efforts: ['high'], defaultEffort: 'high' },
+        ],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: shortId,
+      }))).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+        message: expect.stringContaining('ambiguous'),
+      });
+
+      expectNoCreationState(deps);
+    });
+
+    it('fails closed when an explicit non-managed provider has no exact short ID', async () => {
+      const custom = { ...customProvider(['another-model']), id: 'custom', name: 'Custom' };
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider(), custom],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: shortId,
+        providerId: 'custom',
+      }))).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: expect.stringContaining('Custom'),
+      });
+
+      expectNoCreationState(deps);
+    });
+
+    it('does not map a managed candidate that is absent from list_available_models capabilities', async () => {
+      const { deps, service } = aliasHarness({
+        // list_available_models consumes this capabilities list; the resolver must not create
+        // a route to a canonical ID that the same host snapshot does not advertise.
+        availableModels: [modelCapabilities[0]],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: shortId,
+        providerId: 'xd',
+      }))).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: expect.stringContaining('Cindy AI'),
+      });
+
+      expectNoCreationState(deps);
+    });
+
+    it('resolves a legacy persisted Lead model in memory without rewriting the Lead row', async () => {
+      const legacyLead = {
+        id: 'lead-1',
+        agentKind: 'codex' as const,
+        workspaceKind: 'project' as const,
+        workingDir: 'C:\\repo',
+        model: shortId,
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'xd',
+        remoteHostId: null,
+      };
+      const { deps, service } = aliasHarness({
+        overrides: { getLeadSessionRow: vi.fn(async () => legacyLead) },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: canonicalId, providerId: 'xd' },
+      });
+
+      expect(legacyLead.model).toBe(shortId);
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: canonicalId,
+        providerId: 'xd',
+      }));
+    });
+
+    it('resolves an inherited legacy Worker default with the same rule as an explicit model', async () => {
+      const legacyDefaults = { model: shortId, providerId: 'xd' };
+      const { deps, service } = aliasHarness({
+        overrides: { getWorkerDefaults: vi.fn(() => legacyDefaults) },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: canonicalId, providerId: 'xd' },
+      });
+
+      expect(legacyDefaults.model).toBe(shortId);
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: canonicalId,
+        providerId: 'xd',
+      }));
+    });
   });
 
   it('rejects worker creation when the target agent has no connected provider, suggesting another agent', async () => {
@@ -929,7 +1158,7 @@ describe('OrcaWorkerCreationService', () => {
   });
 
   it('drops an explicit fast request for a Pi worker when the model lacks Fast capability', async () => {
-    const { deps, service } = createDeps({
+    const { service } = createDeps({
       getAvailableModels: vi.fn((agent: AgentKind) => (
         agent === 'pi'
           ? [{ id: 'pi-no-fast', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false }]

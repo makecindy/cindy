@@ -294,6 +294,12 @@ Codex thread start / resume 成功后必须注册 `threadId -> session context`�
 
 对同一个 live worker session，中途换 model 应视为重建执行单元，不是普通请求参数。原因：model 切换会破坏 prompt/cache 前缀稳定，Claude SDK 也可能解析失败。effort 是 per-turn 参数，可以中途调。创建执行单元前可以选 model/effort；运行中 effort 可调，model 不可调。
 
+Worker 创建与默认模型继承边界对历史短 ID 做 provider-aware 兼容：优先保留目标路由上
+可用的精确 ID；只有精确匹配失败、候选来源属于 managed Gateway、且
+`namespace/short-id` 规范候选恰好一个并同时存在于 `list_available_models` 的 capabilities
+清单时，才在内存中解析为规范 ID。Custom Provider 的精确短 ID 必须保持不变；候选为零或
+多个时 fail-closed，不猜测、不改写已有 Lead、Session 或默认配置的持久化值。
+
 #### 7. Prompt / tool / MCP 注册路径必须评估 maker-core 四指标（状态：不变量）
 
 任何改动落在 prompt 拼接、tool/MCP 暴露、translator、event loop、model 映射、usage/token 计量路径时，都必须评估缓存率、性能/返回速度、返回内容准确性，并按 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md) §3 给出实测证据。尤其不要把 per-turn 易变内容塞进稳定 system/developer 前缀，不要在会话中途随意增删/重排 tool 定义。
