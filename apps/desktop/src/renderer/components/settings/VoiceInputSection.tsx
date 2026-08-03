@@ -27,6 +27,7 @@ import {
   type VoiceInputDictionaryEntrySource,
   type VoiceInputLanguage,
 } from '@/hooks/useVoiceInputSettings';
+import { getComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceInputUsageStats } from '@/hooks/useVoiceInputUsageStats';
 import { useVoiceInputHistory } from '@/hooks/useVoiceInputHistory';
@@ -41,6 +42,7 @@ import {
   findVoiceInputAppShortcutConflict,
   type AppShortcutComboEntry,
 } from '@/voice-input/appShortcutConflict';
+import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
 import { shouldShowInputMonitoringBadge } from '@/voice-input/inputMonitoringBadge';
 import {
   createVoiceInputModifierShortcut,
@@ -1342,6 +1344,20 @@ export function VoiceInputSection() {
     [t],
   );
 
+  const showComposerVoiceConflict = useCallback(() => {
+    toast.error(t('settings.shortcuts.errors.composerVoiceConflict'));
+  }, [t]);
+
+  const hasComposerVoiceConflict = useCallback(
+    (shortcut: VoiceInputShortcut | null): boolean =>
+      findComposerVoiceInputConflict(
+        getComposerSendShortcutPreference(),
+        shortcut,
+        window.electronAPI?.platform,
+      ) !== null,
+    [],
+  );
+
   const commitRecordedShortcut = useCallback(
     (shortcut: VoiceInputShortcut | null) => {
       // 提交代次。录制框在这次提交 await 期间仍然开着，用户可以再录一个键提交第二次；
@@ -1357,6 +1373,11 @@ export function VoiceInputSection() {
         if (isStaleSubmission()) return;
         // 被更晚的一轮顶掉：那一轮才决定最终结果，这里静默丢弃，不报错也不收口录制态。
         if (!result.ok && result.errorCode === 'superseded') return;
+        if (!result.ok && result.conflict === 'composer-voice-input') {
+          showComposerVoiceConflict();
+          if (shortcut) setRecordingShortcutPreview(shortcut);
+          return;
+        }
         if (!result.ok) {
           // 'failed' = 原生 listener 起不来。main 已把细节消毒成固定英文（原文含内部
           // 路径），所以这里改用自带下一步的中文文案，不再把那句英文插进模板。
@@ -1389,7 +1410,7 @@ export function VoiceInputSection() {
         if (shortcutCommitPromiseRef.current === commit) shortcutCommitPromiseRef.current = null;
       });
     },
-    [schedulePermissionRefresh, setShortcut, t],
+    [schedulePermissionRefresh, setShortcut, showComposerVoiceConflict, t],
   );
 
   const getAppShortcutEntries = useCallback((): AppShortcutComboEntry[] => {
@@ -1463,6 +1484,10 @@ export function VoiceInputSection() {
         toast.error(t('settings.voiceInput.shortcut.toast.systemReserved'));
         return;
       }
+      if (hasComposerVoiceConflict(shortcut)) {
+        showComposerVoiceConflict();
+        return;
+      }
       const conflictId = findVoiceInputAppShortcutConflict(shortcut, getAppShortcutEntries());
       if (conflictId) {
         showAppShortcutConflict(conflictId);
@@ -1472,7 +1497,15 @@ export function VoiceInputSection() {
       pendingKeyboardShortcutRef.current = shortcut;
       setRecordingShortcutPreview(shortcut);
     },
-    [commitRecordedShortcut, getAppShortcutEntries, recordingShortcut, showAppShortcutConflict, t],
+    [
+      commitRecordedShortcut,
+      getAppShortcutEntries,
+      hasComposerVoiceConflict,
+      recordingShortcut,
+      showAppShortcutConflict,
+      showComposerVoiceConflict,
+      t,
+    ],
   );
 
   const handleShortcutKeyUp = useCallback(
@@ -1527,6 +1560,10 @@ export function VoiceInputSection() {
         pendingKeyboardShortcutRef.current = null;
         setRecordingShortcutPreview(null);
         if (shortcut) {
+          if (hasComposerVoiceConflict(shortcut)) {
+            showComposerVoiceConflict();
+            return;
+          }
           const conflictId = findVoiceInputAppShortcutConflict(shortcut, getAppShortcutEntries());
           if (conflictId) {
             showAppShortcutConflict(conflictId);
@@ -1564,7 +1601,14 @@ export function VoiceInputSection() {
       pendingKeyboardShortcutRef.current = null;
       setRecordingShortcutPreview(null);
     },
-    [commitRecordedShortcut, getAppShortcutEntries, recordingShortcut, showAppShortcutConflict],
+    [
+      commitRecordedShortcut,
+      getAppShortcutEntries,
+      hasComposerVoiceConflict,
+      recordingShortcut,
+      showAppShortcutConflict,
+      showComposerVoiceConflict,
+    ],
   );
 
   useEffect(() => {

@@ -1611,6 +1611,36 @@ describe('被控端订阅 registry + topic 转发', () => {
     )).toBe(false);
   });
 
+  it('link-close(transport-timeout) 保留被控端反向控制状态;永久关闭 reason 维持清理语义', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    // 对端(另一台桌面)作为控制端订阅本机 sessions
+    feed(subFrame('ctrl-desktop', SUB, ['sessions'], 'OtherMac'));
+    calls.push.length = 0;
+
+    // 对端作为**被控端**对另一条方向的 link 做瞬时重置 → 发来 transport-timeout。
+    // 互控场景下这不得清掉它作为控制端的订阅/记忆路由——否则反向实时推送
+    // 静默断流而对端毫不知情。
+    feed({
+      v: 1,
+      kind: 'link-close',
+      src: 'ctrl-desktop',
+      payload: { reason: 'transport-timeout' },
+    });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    expect(calls.push).toEqual([
+      { dst: 'ctrl-desktop', channel: 'local-db:sessions:created', payload: { sessionId: 's1' } },
+    ]);
+
+    // 永久关闭(user)仍完整清理
+    calls.push.length = 0;
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-desktop', payload: { reason: 'user' } });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's2' });
+    expect(calls.push).toEqual([]);
+  });
+
   it('subscribe 帧 → 回 invoke-result;sessions topic 只发列表订阅者,不发未订阅的 heavy 事件', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();

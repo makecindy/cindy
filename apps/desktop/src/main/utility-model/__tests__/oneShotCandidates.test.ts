@@ -51,9 +51,14 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: vi.fn(),
 }));
 
-vi.mock('undici', () => ({
-  fetch: vi.fn(),
+vi.mock('../../maker-host/outbound-proxy-resolver.js', () => ({
+  resolveDesktopOutboundProxy: vi.fn(async () => null),
 }));
+
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, fetch: vi.fn() };
+});
 
 // SUT 链(maker-host/runtime-configs → effectiveXdGatewayBaseUrl)运行期读
 // model-access 下发的 endpoint;mock 成 fixture 值。

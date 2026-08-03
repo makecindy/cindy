@@ -127,6 +127,7 @@
       "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
+      "composer": "Message input",
       "linkOpen": "Link open behavior",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
@@ -2258,6 +2259,14 @@
         "selectAria": "Select default terminal shell"
       }
     },
+    "composer": {
+      "title": "Message input",
+      "sendShortcut": {
+        "label": "Use {{shortcut}} to send",
+        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages"
+      }
+    },
     "linkOpen": {
       "title": "Link open behavior",
       "description": "Where web links and HTML files in messages open on left click.",
@@ -2972,6 +2981,7 @@
         "systemReserved": "Reserved by the operating system",
         "conflict": "Conflicts with \"{{name}}\"",
         "voiceConflict": "Conflicts with the voice input shortcut",
+        "composerVoiceConflict": "Conflicts with the voice input shortcut. Change either the composer send shortcut or the voice input shortcut.",
         "menuAccelerator": "This combination cannot be registered as a menu shortcut"
       },
       "items": {
@@ -4795,6 +4805,7 @@
       "send": "Send message",
       "queue": "Queue message",
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
+      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
       "stop": "Stop generating"
     },
     "pluginSetup": {

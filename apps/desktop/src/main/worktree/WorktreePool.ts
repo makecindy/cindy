@@ -13,6 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 
 import { gitExec } from './gitExec';
+import { boundedNetworkGitOpts, NET_TOTAL_BUDGET_MS } from './freshBase';
 import { isWorktreeDirty } from './dirty';
 import { copyClaudeSiviDirs } from './WorktreeManager';
 import * as WorktreeManager from './WorktreeManager';
@@ -54,6 +55,13 @@ function repoKey(baseRepo: string): string {
  */
 export async function acquireWorktree(
   req: CreateWorktreeReq,
+  opts?: {
+    /** 调用方已在本次创建流程内完成对 sourceBranch 的网络刷新尝试(成功、失败或
+     * 预算耗尽放弃都算,如 scheduler 路径的 resolveFreshSourceBranch):池复用重置
+     * 时一律不再二次 fetch——离线时首次尝试已耗掉整份网络预算,这里再开一份新预算
+     * 就把总等待翻倍了。 */
+    sourceFetchAlreadyAttempted?: boolean;
+  },
 ): Promise<CreateWorktreeResp> {
   const key = repoKey(req.baseRepo);
   inflight.add(key);
@@ -65,7 +73,7 @@ export async function acquireWorktree(
 
       const newBranch = getBranchName(req.name);
       try {
-        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch);
+        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch, opts);
 
         const meta: WorktreeMeta = {
           ...entry.meta,
@@ -115,17 +123,28 @@ async function resetWorktree(
   baseRepo: string,
   sourceBranch: string,
   newBranch: string,
+  opts?: { sourceFetchAlreadyAttempted?: boolean },
 ): Promise<void> {
   // 防御性断言：池中 worktree 理论上必定 clean
   if (await isWorktreeDirty(worktreePath)) {
     throw new Error(`[WorktreePool] BUG: attempted to reset dirty worktree at ${worktreePath}`);
   }
 
-  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新
-  if (sourceBranch.startsWith('origin/')) {
-    const remoteBranch = sourceBranch.slice('origin/'.length);
+  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新。
+  //    调用方声明本次创建已做过网络刷新尝试时跳过——成功则二次 fetch 纯浪费,失败
+  //    (离线)则重试也会再挂满一份预算,把承诺的总等待上限翻倍;仅对未声明的调用方
+  //    保留该 fetch,且受限(真超时 + 禁终端凭证提问),失败非致命退 stale ref——池化
+  //    复用不允许被网络或凭证 helper 无限卡住。
+  // sourceBranch 可能是完整远端跟踪引用(refs/remotes/origin/x,freshBase 为消除
+  // 与同名本地分支的歧义所产出)或历史短名(origin/x),两种形态都要识别。
+  const remoteBranch = /^(?:refs\/remotes\/)?origin\/(.+)$/.exec(sourceBranch)?.[1];
+  if (!opts?.sourceFetchAlreadyAttempted && remoteBranch !== undefined) {
     try {
-      await gitExec(['fetch', 'origin', remoteBranch], baseRepo);
+      await gitExec(
+        ['fetch', 'origin', remoteBranch],
+        baseRepo,
+        boundedNetworkGitOpts(NET_TOTAL_BUDGET_MS),
+      );
     } catch (err) {
       log.warn(
         `[WorktreePool] git fetch failed (non-fatal, using stale ref):`,

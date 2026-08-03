@@ -81,6 +81,51 @@ describe('classifyShellCommand — 只读放行', () => {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
+  it('git 全局目录选项后仍识别工作区内的真实只读子命令', () => {
+    for (const c of [
+      'git -C /repo status',
+      'git -C /repo show HEAD',
+      'git -C/repo log --oneline',
+      'git --namespace=review -C /repo diff HEAD',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
+    }
+  });
+  it('子命令自身的 -c 参数不被当作危险全局选项', () => {
+    for (const c of ['git diff -c', 'git show -c']) {
+      expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
+    }
+  });
+  it('git 仓库路径选项只放行工作区内的静态路径', () => {
+    for (const c of [
+      'git -C /repo/subdir status',
+      'git -C /repo/link/.. status',
+      'git -C /tmp/untrusted status',
+      'git -C /extra status',
+      'git --git-dir=/repo/.git status',
+      'git --work-tree /repo status',
+      'git -C "$REPOSITORY" status',
+      'git -C ~/repo status',
+      'git -C ../outside status',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt');
+    }
+    expect(classifyShellCommand('git -C relative status', roots, { cwdUnknown: true })).toBe('prompt');
+    expect(classifyShellCommand('env -C /extra git -C . status', roots)).toBe('prompt');
+    expect(classifyShellCommand('env -C /repo git -C . status', roots)).toBe('prompt');
+  });
+  it('git 全局目录选项不放宽写操作或不可解析调用', () => {
+    for (const c of [
+      'git -C /repo commit -m message',
+      'git -C /repo branch feature/new',
+      'git -C /repo -c core.pager=evil show HEAD',
+      'git -C',
+      'git --git-dir',
+      'git --unknown-option status',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt');
+    }
+  });
   it('多段全只读才放行', () => {
     expect(classifyShellCommand('ls && git status', roots)).toBe('auto-approve');
     expect(classifyShellCommand('ls && npm install', roots)).toBe('prompt');

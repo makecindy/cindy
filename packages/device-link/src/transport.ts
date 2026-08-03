@@ -9,6 +9,14 @@ import { PROTOCOL_VERSION, type Envelope } from './protocol.js';
  */
 export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1';
 
+/**
+ * 声明本端理解 link-close(transport-timeout) 的瞬时重置语义(收到后保留可靠层
+ * 并立即重建链路)。被控端**只对声明了该能力的控制端**发送 transport-timeout;
+ * 对旧控制端(未声明)保留整连接重连的兼容恢复路径——旧版把未知 reason 当永久
+ * 关闭处理且不会自动重开,relay/presence 又保持在线,订阅与在途请求会静默挂死。
+ */
+export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 

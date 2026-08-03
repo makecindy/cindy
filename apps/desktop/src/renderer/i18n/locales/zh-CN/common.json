@@ -127,6 +127,7 @@
       "subagentModels": "Subagent",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
+      "composer": "消息输入",
       "linkOpen": "链接打开方式",
       "compatMode": "小技巧",
       "voiceInput": "语音输入",
@@ -2222,6 +2223,14 @@
         "selectAria": "选择默认终端 shell"
       }
     },
+    "composer": {
+      "title": "消息输入",
+      "sendShortcut": {
+        "label": "使用 {{shortcut}} 发送",
+        "hint": "开启后按 {{shortcut}} 发送消息；关闭后按 Enter 发送消息，按 Shift+Enter 换行。",
+        "ariaLabel": "使用 {{shortcut}} 发送消息"
+      }
+    },
     "linkOpen": {
       "title": "链接打开方式",
       "description": "消息里左键点击网页链接或 HTML 文件时的默认打开位置。",
@@ -2971,6 +2980,7 @@
         "systemReserved": "该组合键被系统保留",
         "conflict": "与「{{name}}」冲突",
         "voiceConflict": "与语音输入快捷键冲突",
+        "composerVoiceConflict": "与语音输入快捷键冲突，请修改发送或语音输入快捷键。",
         "menuAccelerator": "该组合键无法注册为菜单快捷键"
       },
       "items": {
@@ -4793,6 +4803,7 @@
       "send": "发送消息",
       "queue": "排队发送",
       "queueTooltip": "点击排队发送；按 {{shortcut}} 插话，不打断当前任务",
+      "queueTooltipSendMode": "点击可排队；按 {{shortcut}} 发送此消息",
       "stop": "停止生成"
     },
     "pluginSetup": {

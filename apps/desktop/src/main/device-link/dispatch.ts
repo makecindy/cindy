@@ -42,6 +42,7 @@ import {
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
+  type LinkClosePayload,
   type LinkOpenPayload,
   type Topic,
 } from '@cindy/device-link';
@@ -851,7 +852,7 @@ export function dropAllControllers(
   ]);
   for (const dst of controllerIds) {
     try {
-      client.closeLink(dst, reason);
+      client.closeLink(dst, reason, 'inbound');
     } catch (err) {
       // 本地授权/订阅清理不能依赖弱网下 link-close 真正写进 socket。
       log.warn(`closeLink to ${shortId(dst)} failed during ${reason}: ${String(err)}`);
@@ -920,6 +921,17 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       return;
     case 'link-close':
       if (!src) return;
+      // transport-timeout 是对端对「它作为被控端服务本机控制」的那条 link 做的
+      // peer 级瞬时重置,与本机作为被控端服务对端控制的**反向**状态无关。
+      // 两台桌面互控时若照常清理,会把对端作为控制端的订阅/记忆路由/去重
+      // 缓存/离线队列静默删掉而对端毫不知情 → 反向实时推送断流。瞬时重置
+      // 的恢复由控制端 wiring 负责(index.ts 立即 openRemoteLink / mobile
+      // rehydrate);此处保持被控端状态原样,重建后双向继续。永久关闭
+      // (user/toggle-off/shutdown/revoked)维持完整清理语义。
+      if ((env.payload as LinkClosePayload | undefined)?.reason === 'transport-timeout') {
+        log.info(`transport-timeout link reset from ${shortId(src)}; host-side controller state retained`);
+        return;
+      }
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
       clearSessionActivityStage(src);
@@ -964,7 +976,7 @@ function handleLinkOpen(
   if (isControllerRevoked(src)) {
     log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
     purgeRevokedController(src);
-    client.closeLink(src, 'revoked');
+    client.closeLink(src, 'revoked', 'inbound');
     return;
   }
   const name =

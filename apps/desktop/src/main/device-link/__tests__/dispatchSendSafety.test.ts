@@ -522,7 +522,8 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
 
     __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
 
-    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked');
+    // 'inbound':撤权关的是对方对本机的控制方向,不得封死本机仍存续的主动控制。
+    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked', 'inbound');
     expect(client.sendLinkAccept).not.toHaveBeenCalled();
     expect(__testing.queuedPushesFor('ctrl-revoked')).toEqual([]);
     expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
