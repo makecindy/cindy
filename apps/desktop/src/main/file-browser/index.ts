@@ -83,7 +83,7 @@ export const FILE_BROWSER_INVOKE = {
 export const FILE_BROWSER_PUSH = {
   EVENT: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT,
   /** 大文件取回进度(仅发给发起窗口):{ workdir, relPath, received, total }。 */
-  TRANSFER: 'maker:file-browser:transfer',
+  TRANSFER: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_TRANSFER,
 } as const;
 
 /**

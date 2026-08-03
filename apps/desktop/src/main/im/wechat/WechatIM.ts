@@ -24,6 +24,7 @@ import {
   type WechatTransport,
 } from '@cindy/wechat-ilink';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
@@ -1650,7 +1651,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
 
   #setState(state: Omit<WechatBotState, 'bound'>): void {
     this.#state = state;
-    this.host.ipc.broadcast('wechatBot:state-changed', this.getState());
+    this.host.ipc.broadcast(IPC_CHANNELS.WECHAT_BOT.STATE_CHANGED, this.getState());
     const status = this.getStatus();
     for (const handler of this.#statusHandlers) handler(status);
   }

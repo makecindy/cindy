@@ -13,7 +13,7 @@ import {
 } from '@cindy/maker-shared/device-responsiveness';
 import {
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
-  OPEN_LINK_OBSERVATION_CHANNEL,
+  OPEN_LINK_OBSERVATION_LABEL,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
@@ -323,7 +323,7 @@ describe('responsivenessTracker', () => {
     );
     const openLinkB = vi.fn(async () => 'accepted');
     await expect(
-      h.tracker.guardInvoke(DEV_B, OPEN_LINK_OBSERVATION_CHANNEL, openLinkB),
+      h.tracker.guardInvoke(DEV_B, OPEN_LINK_OBSERVATION_LABEL, openLinkB),
     ).resolves.toBe('accepted');
     expect(runB).toHaveBeenCalledTimes(1);
     expect(openLinkB).toHaveBeenCalledTimes(1);
@@ -407,13 +407,13 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
   it('openLink 观测:成功不定论(link-accept 不作恢复证据),超时照常计失败', async () => {
     // link-accept 在被控端 dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常
     // 回包——若凭它关熔断,恢复流程会放进订阅+快照突发再连超时,形成周期性风暴。
-    expect(classifyDeviceSendSuccess(OPEN_LINK_OBSERVATION_CHANNEL)).toBe('inconclusive');
+    expect(classifyDeviceSendSuccess(OPEN_LINK_OBSERVATION_LABEL)).toBe('inconclusive');
     const h = harness();
     await openBreaker(h);
     // open 态下 openLink 走 guardInvoke 会被快速拒绝,不上管道
     const run = vi.fn(async () => 'accepted');
     await expect(
-      h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_CHANNEL, run),
+      h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_LABEL, run),
     ).rejects.toThrow('unresponsive');
     expect(run).not.toHaveBeenCalled();
   });

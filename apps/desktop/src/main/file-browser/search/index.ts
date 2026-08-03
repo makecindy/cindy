@@ -29,7 +29,7 @@ export const SEARCH_INVOKE = {
 } as const;
 
 export const SEARCH_PUSH = {
-  EVENT: 'maker:search:event',
+  EVENT: IPC_CHANNELS.MAKER_EXTRA.SEARCH_EVENT,
 } as const;
 
 interface StartArgs {

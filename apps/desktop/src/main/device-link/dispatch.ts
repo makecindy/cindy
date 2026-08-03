@@ -131,17 +131,17 @@ const offlinePushQueue = createOfflinePushQueue();
 
 /** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
 const OFFLINE_QUEUEABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
-  'local-db:messages:created',
-  'local-db:messages:deleted',
-  'local-db:session:error-persisted',
-  'maker:event',
-  'maker:status-changed',
-  'maker:interaction-request',
-  'maker:interaction-dismissed',
-  'maker:input:projection',
-  'maker:goal:status-changed',
-  'usage:message-turn-cost',
-  'usage:message-model-mismatch',
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED,
+  IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED,
+  IPC_CHANNELS.MAKER_PUSH.EVENT,
+  IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED,
+  IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION,
+  IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED,
+  IPC_CHANNELS.USAGE.MESSAGE_TURN_COST,
+  IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH,
 ]);
 
 /** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */

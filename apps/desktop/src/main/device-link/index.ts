@@ -108,7 +108,7 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
-  OPEN_LINK_OBSERVATION_CHANNEL,
+  OPEN_LINK_OBSERVATION_LABEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
 
@@ -1292,7 +1292,7 @@ const openLinkCloseEpochs = new Map<string, number>();
  * 熔断观测(mobile sendOpenLink 同语义):熔断 open 时快速失败不上管道;超时
  * 计失败;终态 relay 应答(DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)
  * 是「链路在应答」的恢复证据(见 classifyOpenLinkFailure);成功经
- * OPEN_LINK_OBSERVATION_CHANNEL(NEUTRAL 集合)记不定论——link-accept 在被控端
+ * OPEN_LINK_OBSERVATION_LABEL(NEUTRAL 集合)记不定论——link-accept 在被控端
  * dispatch 于 runInvoke 之前特判应答,不作关熔断的恢复证据。
  *
  * observed=false 供**已在外层 guardInvoke 观测内**的嵌套路径使用
@@ -1345,7 +1345,7 @@ export async function openRemoteLink(
   // 复用等全部形态都收敛到同一判据,这里不再自行打标。
   const observed = opts?.observed !== false;
   const request = observed && responsivenessTracker
-    ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
+    ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_LABEL, doOpen)
     : doOpen();
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {

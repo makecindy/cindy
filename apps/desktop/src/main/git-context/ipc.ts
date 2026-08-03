@@ -69,8 +69,8 @@ export const GIT_CONTEXT_INVOKE = {
 } as const;
 
 export const GIT_CONTEXT_PUSH = {
-  CHANGED: 'git-context:changed',
-  PR_REFS_CHANGED: 'git-context:pr-refs-changed',
+  CHANGED: IPC_CHANNELS.GIT_CONTEXT.CHANGED,
+  PR_REFS_CHANGED: IPC_CHANNELS.GIT_CONTEXT.PR_REFS_CHANGED,
 } as const;
 
 function broadcastToAllWindows(channel: string, payload: unknown): void {

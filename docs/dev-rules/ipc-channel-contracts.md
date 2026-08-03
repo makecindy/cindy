@@ -34,11 +34,17 @@ channel 字符串。
 
 - `createIpcFanOut`
 - `broadcastToRenderers`
+- `broadcastToAllWindows`
 - `tapWindowBroadcast`
 
 `apps/desktop/src` 与 `packages/device-link/src` 内不得重新定义字符串值形式的
-`*_CHANNEL` / `*_CHANNELS` 常量。需要保留 shared 文件作为 payload 类型入口时，只能从
-`@cindy/cindy-ipc` re-export 或派生常量。
+`*_CHANNEL` / `*_CHANNELS` 常量（含 `new Set([...])`、`Object.freeze(...)` 等包装形式）。
+需要保留 shared 文件作为 payload 类型入口时，只能从 `@cindy/cindy-ipc` re-export 或
+派生常量。
+
+channel-keyed 的映射表（如 device-link 的 invoke 超时覆盖表）同样必须用
+`[IPC_CHANNELS.X.Y]` 计算键，不得写字符串键：guard 会把生产代码里与已登记 channel
+等值的任何字符串字面量（对象 key、Set 成员、任意实参位置）判为违规。
 
 测试里需要构造非法未知 channel 时，使用明显非法值并在同一行或上一行标注
 `ipc-channel-literal-ok`。该例外只用于负例测试，不得用于真实 handler、bridge 或

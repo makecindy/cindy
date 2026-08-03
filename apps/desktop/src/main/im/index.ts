@@ -324,7 +324,7 @@ export function startImOrchestrators(): void {
     // 2. 广播给所有 renderer window — desktop UI 用这个广播实时渲染 mask /
     //    收回按钮。渲染 attach 状态的 renderer 不需要知道 prevValue,
     //    它会按 sessionId 自己重拉 binding:resolve-session。
-    broadcastToAllWindows('binding:changed', {
+    broadcastToAllWindows(IPC_CHANNELS.BINDING.CHANGED, {
       sessionId: event.value, // null = detach
       attached: event.value !== null,
       channel,

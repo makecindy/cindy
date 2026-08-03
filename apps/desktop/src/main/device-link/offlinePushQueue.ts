@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 export interface OfflinePushQueueItem {
   channel: string;
   payload: unknown;
@@ -33,9 +35,9 @@ const DEFAULT_MAX_BYTES = 512 * 1024;
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const LEGACY_TOPIC = '*';
 const STATE_COALESCE_CHANNELS: ReadonlySet<string> = new Set([
-  'maker:status-changed',
-  'maker:input:projection',
-  'maker:goal:status-changed',
+  IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED,
+  IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION,
+  IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED,
 ]);
 
 function defaultEstimateBytes(item: OfflinePushQueueItem): number {

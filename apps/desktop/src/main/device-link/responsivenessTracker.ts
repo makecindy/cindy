@@ -68,17 +68,17 @@ export function buildDeviceResponsivenessProbeArgs(): unknown[] {
  * 那边的事故形态正是凭 link-accept 关熔断后立刻放进订阅+快照突发,3 次超时
  * 再 open,周期性风暴)。
  */
-export const OPEN_LINK_OBSERVATION_CHANNEL = 'device-link:observe:open-link';
+export const OPEN_LINK_OBSERVATION_LABEL = 'device-link:observe:open-link';
 
 
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
-  'device-link:media:fetch',
-  'device-link:voice:credential-sync',
-  'device-link:voice:dictionary-learning',
-  'device-link:voice:transcribe',
+  IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_CREDENTIAL_SYNC,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
-  OPEN_LINK_OBSERVATION_CHANNEL,
+  OPEN_LINK_OBSERVATION_LABEL,
 ]);
 
 /**
@@ -86,9 +86,9 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
  * 贡献一次 strike；其它通道仍按独立请求计数，避免把无关的重叠故障吞成一批。
  */
 const BOOTSTRAP_FAN_OUT_CHANNELS: ReadonlySet<string> = new Set([
-  'maker:get-capabilities',
-  'maker:provider:list',
-  'maker:git-safety:get',
+  IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES,
+  IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST,
+  IPC_CHANNELS.MAKER_INVOKE.GIT_SAFETY_GET,
 ]);
 const BOOTSTRAP_FAN_OUT_COHORT_WINDOW_MS = 250;
 
