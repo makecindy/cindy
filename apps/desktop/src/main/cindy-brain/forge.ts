@@ -38,6 +38,8 @@ const MAX_BASIC_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_NODE_TOTAL_BYTES = 256 * 1024 * 1024;
 const MAX_BASIC_CINDY_BYTES = 8 * 1024 * 1024;
 const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
+const FORGE_AI_ICON_PATH = 'assets/icon.png';
+const MAX_FORGE_AI_ICON_BYTES = 8 * 1024 * 1024;
 
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
 function shouldSkip(name: string): boolean {
@@ -558,6 +560,7 @@ async function buildGhostPackage(
    * 对账也发现不了)。锚点必须来自上游的既有结论,不能在下游重新发明。
    */
   expectedRealDir?: string,
+  options?: { iconPng?: Buffer },
 ): Promise<
   | { ok: true; buf: Buffer; manifest: GhostManifest }
   | Exclude<ForgePackResult, { ok: true }>
@@ -614,6 +617,20 @@ async function buildGhostPackage(
         errorCode: 'MANIFEST_INVALID',
         message: `${GHOST_MANIFEST_FILE} 缺失或不是合法 JSON:${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+    const iconPng = options?.iconPng;
+    if (iconPng !== undefined) {
+      if (iconPng.byteLength === 0 || iconPng.byteLength > MAX_FORGE_AI_ICON_BYTES) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `AI 图标体积必须在 1–${MAX_FORGE_AI_ICON_BYTES} 字节之间`,
+        };
+      }
+      // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
+      // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
+      manifestRaw = { ...(manifestRaw as Record<string, unknown>), icon: FORGE_AI_ICON_PATH };
+      manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw, null, 2)}\n`, 'utf-8');
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
@@ -737,6 +754,18 @@ async function buildGhostPackage(
     };
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
+    const foldedAiIconPath = FORGE_AI_ICON_PATH.toLowerCase();
+    const iconSourceEntry = files.find((file) => file.rel.toLowerCase() === foldedAiIconPath);
+    if (iconPng !== undefined && iconSourceEntry && iconSourceEntry.rel !== FORGE_AI_ICON_PATH) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `AI 图标目标路径与源码中的大小写冲突:${iconSourceEntry.rel}`,
+      };
+    }
+    if (iconPng !== undefined && !iconSourceEntry && files.length + 1 > maxFiles) {
+      return { ok: false, errorCode: 'TOO_LARGE', message: `文件过多(上限 ${maxFiles} 个)` };
+    }
 
     // 5) 生成 zip buffer。文件收集在此之前完成 + shouldSkip 跳过 *.cindy,
     // 产物自身不会进包;写盘位置由调用方决定(packGhostDir 进源码目录,
@@ -751,6 +780,8 @@ async function buildGhostPackage(
       let content: Buffer;
       if (f.rel === GHOST_MANIFEST_FILE) {
         content = manifestBytes;
+      } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
+        content = iconPng;
       } else {
         let bytes: Buffer | null;
         try {
@@ -770,7 +801,25 @@ async function buildGhostPackage(
         content = bytes;
       }
       packedBytes += content.byteLength;
+      if (packedBytes > maxTotalBytes) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `总体积超上限(${maxTotalBytes} 字节)`,
+        };
+      }
       zip.file(f.rel, content);
+    }
+    if (iconPng !== undefined && !iconSourceEntry) {
+      packedBytes += iconPng.byteLength;
+      if (packedBytes > maxTotalBytes) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `总体积超上限(${maxTotalBytes} 字节)`,
+        };
+      }
+      zip.file(FORGE_AI_ICON_PATH, iconPng);
     }
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
@@ -796,8 +845,11 @@ async function buildGhostPackage(
  * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
  * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
  */
-export async function packGhostDir(dir: string): Promise<ForgePackResult> {
-  const built = await buildGhostPackage(dir);
+export async function packGhostDir(
+  dir: string,
+  options?: { iconPng?: Buffer },
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir, undefined, options);
   if (!built.ok) return built;
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
@@ -2959,6 +3011,37 @@ if (r.ok && r.confirmed) {
 - 崩溃只影响自己的面板(错误接管态),反复崩会被熔断。
 
 ## 7. 打包与测试
+
+### 7.1 打包前轻量确认图标
+
+准备调用 \`ghost_forge_pack\` 前检查一次图标。如果清单没有 \`icon\`，或者本次用了
+\`ghost_forge_scaffold\` 且没有明确替换它生成的占位图，就视为图标尚未配置。此时只
+**轻提醒一次**，不要把图标变成验收门槛，也不要擅自开始耗时的图片生成。提示与选项
+使用用户当前对话语言：
+
+- **使用 AI 生成（推荐）**：仅在用户选择后，调用当前可用的图片生成能力；它与当前
+  聊天模型解耦，不要因为用户正在使用 GLM、Claude 等文本模型而切换聊天模型。把插件
+  展示名与一句话用途填入下面模板后原样注入，不要临场追加文字、品牌或复杂场景：
+
+  \`\`\`text
+  Create a polished square app icon for a Cindy plugin named "{{name}}". Purpose: {{one-sentence purpose}}. Show one clear, original visual metaphor for that purpose. Use a clean geometric composition, a restrained natural color palette, high contrast, and a centered subject with generous safe padding so it remains readable at 32–48 px. Use one symbol only on a simple solid or transparent background. No text, letters, numbers, UI mockups, scenes, baked-in rounded corners, trademarks, copied brand shapes, watermarks, heavy gradients, inner shadows, or photorealism. Output a 1024×1024 PNG.
+  \`\`\`
+
+  只尝试一次。图片能力不可用、超时或失败时不要重试，直接调用
+  \`ghost_forge_pack({ dir })\`，保留占位图/宿主默认图标继续打包，不让图标阻塞用户。
+  生成成功且结果带 \`cindy-media://\` 地址时，把该地址原样交给
+  \`ghost_forge_pack({ dir, icon_source: result.url })\`；主机会转成 1024×1024 PNG 并
+  嵌入安装包。icon_source 处理失败时 pack 也会自动回退默认图标，不要再发起第二次生成。
+- **上传图片**：让用户提供图片，保存到 \`assets/icon.png\` 后继续；不要要求用户先
+  把图片处理成圆角，宿主负责最终显示形态。
+- **使用默认图标（跳过）**：立即继续打包；scaffold 项目保留占位图，未使用 scaffold
+  的项目可以省略 \`icon\`，由宿主显示默认图标。跳过与使用默认是同一个选择。
+
+如果插件明确对应现有品牌或服务（如 X/Twitter、Notion），不要用 AI 仿制商标。将推荐
+项改为“使用官方品牌图标”，只从品牌官网、官方开发者文档或官方媒体资源中查询并设置；
+来源不可靠或获取失败时同样回退上传/默认，不延长创建流程。
+
+### 7.2 打包、安装与验证
 
 1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
    一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件；

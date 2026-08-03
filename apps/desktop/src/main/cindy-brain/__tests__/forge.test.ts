@@ -91,6 +91,33 @@ describe('packGhostDir', () => {
     await fs.promises.rm(r.cindyPath, { force: true });
   });
 
+  it('iconPng 仅覆盖包内图标与清单快照，不改写插件源码', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    const iconPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+
+    const packed = await packGhostDir(dir, { iconPng });
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+    expect(JSON.parse(await zip.file('ghost.json')!.async('string'))).toMatchObject({
+      icon: 'assets/icon.png',
+    });
+    expect(await zip.file('assets/icon.png')!.async('nodebuffer')).toEqual(iconPng);
+
+    expect(JSON.parse(await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8'))).not.toHaveProperty(
+      'icon',
+    );
+    await expect(fs.promises.stat(path.join(dir, 'assets/icon.png'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('打包进 zip 的 ghost.json 是校验时的快照,并发改写不生效(防 TOCTOU)', async () => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(GOOD_MANIFEST),
@@ -756,6 +783,32 @@ describe('FORGE_GUIDE', () => {
       'did-approval-{start,end}',
       'did-user-input-{start,end}',
       '不会给 reasoning、工具',
+    ]) {
+      expect(FORGE_GUIDE).toContain(marker);
+    }
+  });
+
+  it('打包前仅轻提醒一次图标选择，AI 生成有固定提示词且失败不阻塞', () => {
+    for (const marker of [
+      '没有明确替换它生成的占位图',
+      '轻提醒一次',
+      '使用用户当前对话语言',
+      '使用 AI 生成（推荐）',
+      '上传图片',
+      '使用默认图标（跳过）',
+      '聊天模型解耦',
+      '不要因为用户正在使用 GLM',
+      'Create a polished square app icon for a Cindy plugin named "{{name}}"',
+      'Purpose: {{one-sentence purpose}}',
+      'No text, letters, numbers',
+      'Output a 1024×1024 PNG',
+      '只尝试一次',
+      '超时或失败时不要重试',
+      'icon_source: result.url',
+      'pack 也会自动回退默认图标',
+      '跳过与使用默认是同一个选择',
+      '不要用 AI 仿制商标',
+      '使用官方品牌图标',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

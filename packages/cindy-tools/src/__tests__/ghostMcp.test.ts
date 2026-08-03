@@ -1066,6 +1066,37 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       errorCode: "MANIFEST_INVALID",
     });
   });
+
+  it("forge_pack 仅在传入时把 icon_source 映射给 host", async () => {
+    const requests: Array<{ dir: string; iconSource?: string }> = [];
+    const deps = fakeDeps({
+      forgePack: async (request) => {
+        requests.push(request);
+        return {
+          ok: true,
+          cindyPath: "/src/my-ghost/my-ghost-1.0.0.cindy",
+          id: "my-ghost",
+          name: "My Ghost",
+          version: "1.0.0",
+          note: "packed",
+        };
+      },
+    });
+
+    await handleForgePack(deps, {
+      dir: "/src/my-ghost",
+      icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+    });
+    await handleForgePack(deps, { dir: "/src/default" });
+
+    expect(requests).toEqual([
+      {
+        dir: "/src/my-ghost",
+        iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+      },
+      { dir: "/src/default" },
+    ]);
+  });
 });
 
 describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
