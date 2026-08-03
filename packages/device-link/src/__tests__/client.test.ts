@@ -3636,5 +3636,64 @@ describe('DeviceLinkClient', () => {
       }
     });
 
+    it('C2:link 恢复即清节流 —— 恢复后 30s 内再次丢 link 时新帧立刻再通知一次', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      let nowMs = 4_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+        const notified: string[] = [];
+        h.client.onReliableFrameBeforeLink((deviceId) => notified.push(deviceId));
+        h.client.start();
+        await makeLinkDownPeer(h, 'dev-r');
+
+        const staleFrame = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-r',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-r',
+          1,
+          1,
+        )[0]!;
+
+        h.current().push({ ...staleFrame, src: 'dev-r' });
+        await tick();
+        expect(notified).toEqual(['dev-r']);
+
+        // host 重开成功(对端重新 link-open,本机 accept)→ link 就绪,节流应复位
+        await establishInboundReliableLink(h, 'stream-dev-r2', 1, 'dev-r');
+        expect(h.client.isLinkReady('dev-r')).toBe(true);
+
+        // 恢复后仍在 30s 节流窗口内(时钟只走 1s)再次丢 link:新帧必须立刻再通知,
+        // 否则 host 的唯一恢复出口最坏被推迟整个窗口。
+        nowMs += 1_000;
+        h.current().emit('close', 1006);
+        await tick(20);
+        h.current().ack();
+        await tick();
+        const staleFrame2 = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-r',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-r2',
+          2,
+          2,
+        )[0]!;
+        h.current().push({ ...staleFrame2, src: 'dev-r' });
+        await tick();
+        expect(notified).toEqual(['dev-r', 'dev-r']);
+        h.client.stop();
+      } finally {
+        clock.mockRestore();
+      }
+    });
   });
 });

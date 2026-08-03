@@ -167,7 +167,7 @@ let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
  */
 const peerLinkReopenQueue = createPeerLinkReopenQueue({
   reopen: (deviceId) => openRemoteLink(deviceId),
-  canEnqueue: (deviceId) => shouldEnqueuePeerLinkReopen({
+  canReopen: (deviceId) => shouldEnqueuePeerLinkReopen({
     // 方向判据:只有本机确实在控制该设备(持有出站订阅)时才重开,否则纯被控端
     // 方向的入站帧会触发反向建链(review P1)。
     hasOutboundSubscriptions: snapshotSubscriptions(deviceId).length > 0,

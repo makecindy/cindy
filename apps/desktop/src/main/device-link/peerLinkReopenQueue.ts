@@ -21,10 +21,10 @@ export interface PeerLinkReopenQueueDeps {
   /** 重开链路(通常是 openRemoteLink;自带同 device in-flight 去重)。 */
   reopen(deviceId: string): Promise<unknown>;
   /**
-   * 入队门禁。返回 false 则丢弃该次触发(不入队、不重试)。
-   * index.ts 接线的判据见 shouldEnqueuePeerLinkReopen。
+   * 该设备当前是否允许重开(授权 + 方向)。**入队时与每次执行前都会复查** ——
+   * 等待重排期间授权可能变化,失格即出队。判据见 shouldEnqueuePeerLinkReopen。
    */
-  canEnqueue(deviceId: string): boolean;
+  canReopen(deviceId: string): boolean;
   /**
    * 本轮是否可以执行(relay 持有权 / teardown)。返回 false 时**保留** pending
    * 集合、只跳过本轮执行 —— 恢复持有权后由下一次触发或重排继续。
@@ -121,6 +121,15 @@ export function createPeerLinkReopenQueue(
     // 快照迭代:reopen 的 then/catch 会改动 pending,直接迭代 Set 有并发修改风险。
     for (const deviceId of [...pending]) {
       if (inFlight.has(deviceId)) continue;
+      // 门禁必须在**每次执行前**复查,不能只在入队时过一次:首次重开失败后、
+      // 等待重排的这段时间里,用户可能关掉最后一个控制窗口 / 退订最后一个 topic /
+      // 关闭对该设备的控制。那之后再 reopen 会在本机毫无出站订阅的情况下建起控制链,
+      // 并让对端显示非用户发起的受控横幅(review P1)。失格即出队。
+      if (!deps.canReopen(deviceId)) {
+        pending.delete(deviceId);
+        if (pending.size === 0) clearRetryTimer();
+        continue;
+      }
       log.debug(`peer link stale-frame recovery for ${deviceId.slice(0, 8)}`);
       // 同步发起;只有同步抛出的实现才需要转成 rejected promise,避免异常逃出
       // flush 打断其它 peer 的这一轮。
@@ -149,7 +158,7 @@ export function createPeerLinkReopenQueue(
   return {
     trigger(deviceId: string): void {
       if (!deps.canRun()) return;
-      if (!deps.canEnqueue(deviceId)) return;
+      if (!deps.canReopen(deviceId)) return;
       pending.add(deviceId);
       flush();
     },

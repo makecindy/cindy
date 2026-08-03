@@ -811,6 +811,10 @@ export class DeviceLinkClient {
     if (peerSupportsReliable) {
       const resumedLink = !peer.linkReady;
       peer.linkReady = true;
+      // link 恢复即清 before-link 通知节流:节流只该覆盖「同一次尚未恢复的中断」,
+      // 否则恢复后 30s 内再次丢 link-accept 时新帧全被节流掉,host 的唯一恢复出口
+      // 不再入队,第二次自愈最坏被推迟整个窗口(review P2)。
+      this.staleLinkNotifiedAt.delete(dst);
       this.resumeReceiveStreams(dst, peer);
       this.replayPending(dst, resumedLink);
     }
@@ -1462,6 +1466,8 @@ export class DeviceLinkClient {
             const resumedLink = !peer.linkReady;
             peer.linkReady = true;
             peer.outboundExplicitlyClosed = false;
+            // 见 sendLinkAccept 同处注释:link 恢复即清 before-link 通知节流。
+            this.staleLinkNotifiedAt.delete(env.src);
             // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向

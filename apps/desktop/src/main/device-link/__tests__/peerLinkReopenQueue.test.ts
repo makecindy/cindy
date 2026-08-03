@@ -43,14 +43,14 @@ function fakeTimers() {
 
 function harness(over?: {
   reopen?: (deviceId: string) => Promise<unknown>;
-  canEnqueue?: (deviceId: string) => boolean;
+  canReopen?: (deviceId: string) => boolean;
   canRun?: () => boolean;
 }) {
   const timers = fakeTimers();
   const reopen = vi.fn(over?.reopen ?? (async () => undefined));
   const queue = createPeerLinkReopenQueue({
     reopen,
-    canEnqueue: over?.canEnqueue ?? (() => true),
+    canReopen: over?.canReopen ?? (() => true),
     canRun: over?.canRun ?? (() => true),
     retryMs: 5_000,
     setTimer: timers.setTimer,
@@ -100,7 +100,7 @@ describe('createPeerLinkReopenQueue', () => {
   });
 
   it('门禁不通过时不重开、不入队', () => {
-    const h = harness({ canEnqueue: () => false });
+    const h = harness({ canReopen: () => false });
     h.queue.trigger('dev-a');
     expect(h.reopen).not.toHaveBeenCalled();
     expect(h.queue.pendingCount()).toBe(0);
@@ -152,6 +152,28 @@ describe('createPeerLinkReopenQueue', () => {
     expect(goodCalls()).toBe(1);
     expect(h.reopen.mock.calls.filter(([id]) => id === 'dev-bad').length).toBeGreaterThan(1);
     h.queue.dispose();
+  });
+
+  it('等待重排期间失去授权(退订最后一个 topic / 关闭控制)→ 重试前复查即出队,不再 reopen', async () => {
+    let authorized = true;
+    const h = harness({
+      reopen: async () => {
+        throw new Error('first attempt fails');
+      },
+      canReopen: () => authorized,
+    });
+    h.queue.trigger('dev-a');
+    await settle();
+    expect(h.reopen).toHaveBeenCalledTimes(1);
+    expect(h.queue.isPending('dev-a')).toBe(true);
+
+    // 用户关掉最后一个控制窗口 / 退订最后一个 topic:重排到点时门禁复查失败
+    authorized = false;
+    await h.timers.fireAll();
+    await settle();
+    expect(h.reopen).toHaveBeenCalledTimes(1); // 没有第二次 reopen
+    expect(h.queue.isPending('dev-a')).toBe(false); // 已出队
+    expect(h.timers.scheduled).toHaveLength(0); // 不再重排
   });
 
   it('canRun=false(待命 / teardown):跳过执行但保留 pending,恢复后继续', async () => {
