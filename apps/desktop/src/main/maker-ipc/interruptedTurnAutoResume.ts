@@ -379,6 +379,22 @@ export class InterruptedTurnAutoResumeGuard {
   }
 
   /**
+   * 自动续跑 turn 到达终态后退休 token owner。
+   *
+   * 首个 token 事件只证明 provider 已接受 attempt，不能在那里清 owner：同一个
+   * turn 后续的 text/tool_use 仍需用该 token 结算。终态之后再清 owner，既拒绝
+   * 迟到的旧 token 事件，也允许后续 scheduler/goal/Orca 等无 token 自动 turn 的
+   * 实质产出重置连续失败计数。
+   */
+  noteAttemptSettled(sessionId: string, attemptToken: number): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.currentAttemptToken !== attemptToken) return false;
+    s.currentAttemptToken = null;
+    s.pendingAttemptToken = null;
+    return true;
+  }
+
+  /**
    * 自动续跑投递失败时清 pending，避免卡死后续决策。
    * 计数不回退（安全方向：宁可少试一次，不可无限试）。
    */

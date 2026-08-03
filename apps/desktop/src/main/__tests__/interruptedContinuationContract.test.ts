@@ -191,6 +191,24 @@ describe('interrupted continuation enqueue contract', () => {
     );
   });
 
+  it('retires an interrupted attempt owner after both done and terminal error settlement', () => {
+    const doneStart = registerSource.indexOf('const doneAttemptToken = event.turnAttemptToken;');
+    const doneEnd = registerSource.indexOf('const isSilentStopDone', doneStart);
+    expect(doneStart).toBeGreaterThan(-1);
+    expect(doneEnd).toBeGreaterThan(doneStart);
+    expect(registerSource.slice(doneStart, doneEnd)).toMatch(
+      /autoResumeBookkeeping\.settleOutcome\(session\.id, doneAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, doneAttemptToken\);/,
+    );
+
+    const errorStart = registerSource.indexOf('const failedAttemptToken = event.turnAttemptToken;');
+    const errorEnd = registerSource.indexOf('// 终止型 error 可能没有后续 status/done', errorStart);
+    expect(errorStart).toBeGreaterThan(-1);
+    expect(errorEnd).toBeGreaterThan(errorStart);
+    expect(registerSource.slice(errorStart, errorEnd)).toMatch(
+      /autoResumeBookkeeping\.settleOutcome\(session\.id, failedAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, failedAttemptToken\);/,
+    );
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);

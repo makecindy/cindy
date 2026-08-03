@@ -3177,6 +3177,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       const doneAttemptToken = event.turnAttemptToken;
       if (typeof doneAttemptToken === 'number') {
         autoResumeBookkeeping.settleOutcome(session.id, doneAttemptToken, 'failed');
+        interruptedTurnAutoResumeGuard.noteAttemptSettled(session.id, doneAttemptToken);
       }
       const isSilentStopDone = (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
       // silent-stop done:自动续跑会在 1.5s 后启动新 turn(或弹耗尽横幅),
@@ -3220,6 +3221,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       const failedAttemptToken = event.turnAttemptToken;
       if (typeof failedAttemptToken === 'number') {
         autoResumeBookkeeping.settleOutcome(session.id, failedAttemptToken, 'failed');
+        interruptedTurnAutoResumeGuard.noteAttemptSettled(session.id, failedAttemptToken);
       }
       // 终止型 error 可能没有后续 status/done（SDK/event loop crash 等），需要在
       // EVENT broadcast 后结束逻辑 turn，并保留 terminal grace 给 renderer 收尾；

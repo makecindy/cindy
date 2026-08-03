@@ -458,6 +458,22 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     if (second.action === 'resume') expect(second.attempt).toBe(2);
   });
 
+  it('retires a settled attempt owner before accepting untagged automatic progress', () => {
+    const g = createGuard();
+    const first = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(first.action).toBe('resume');
+    if (first.action !== 'resume') throw new Error('expected first resume');
+
+    expect(g.guard.noteAttemptEvent(SID, first.attemptToken)).toBe(true);
+    expect(g.guard.noteAttemptSettled(SID, first.attemptToken)).toBe(true);
+    expect(g.guard.noteProgress(SID, first.attemptToken)).toBe(false);
+    expect(g.guard.noteProgress(SID)).toBe(true);
+
+    const next = g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
+    expect(next.action).toBe('resume');
+    if (next.action === 'resume') expect(next.attempt).toBe(1);
+  });
+
   it('allows consecutive terminal-only failures to consume the budget', () => {
     const g = createGuard();
     const attempts: number[] = [];
