@@ -168,6 +168,39 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(container.querySelector('[data-quota-critical-dot]')).toBeNull();
   });
 
+  it('可见窗口利用率 50% 但服务端为 warning 时段显示琥珀色且不重复整 chip 告警', () => {
+    setClaudeUsage(50, 20);
+    mocks.claudeSnapshot!.fiveHour!.severity = 'warning';
+    const { container } = renderClaudeSubscriptionChip();
+
+    const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
+    expect(warningSegment?.textContent).toBe('5小时 剩余 50%');
+    expect(warningSegment?.className).toContain('text-[var(--quota-bar-warn)]');
+    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+      .not.toContain('--error-fg');
+  });
+
+  it('可见窗口利用率 50% 但服务端为 critical 时段显示红色', () => {
+    setClaudeUsage(50, 20);
+    mocks.claudeSnapshot!.fiveHour!.severity = 'critical';
+    const { container } = renderClaudeSubscriptionChip();
+
+    const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
+    expect(criticalSegment?.textContent).toBe('5小时 剩余 50%');
+    expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
+    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+      .not.toContain('--error-fg');
+  });
+
+  it('可见窗口利用率 50% 且服务端等级缺省时保持普通段', () => {
+    setClaudeUsage(50, 20);
+    const { container } = renderClaudeSubscriptionChip();
+
+    const normalSegment = container.querySelector<HTMLElement>('[data-quota-severity="normal"]');
+    expect(normalSegment?.textContent).toBe('5小时 剩余 50%');
+    expect(normalSegment?.getAttribute('class')).toBeNull();
+  });
+
   it('93% 已用量只把对应段染红并显示可降级的 6px 呼吸圆点', () => {
     setClaudeUsage(93, 20);
     const { container } = renderClaudeSubscriptionChip();

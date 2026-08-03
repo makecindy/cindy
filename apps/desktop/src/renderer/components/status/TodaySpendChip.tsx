@@ -112,7 +112,6 @@ import {
 } from './QuotaHoverCard';
 import {
   effectiveQuotaSeverity,
-  quotaSeverity,
   type QuotaSeverity,
 } from './QuotaBar';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
@@ -357,6 +356,8 @@ function toEpochMs(epochSeconds: number | null | undefined): number | null {
  */
 interface ChipWindowSegment extends ChipWindowSlot {
   label: string;
+  /** Claude 窗口的服务端告警级别；Codex 窗口无此信号。 */
+  serverSeverity?: string | null;
   /**
    * 倒计时已过点、快照还停在上个周期 —— 悬念期: 段显示「重置中…」(呼吸省略号)
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
@@ -654,6 +655,7 @@ function getClaudeChipWindows(
       key: 'claude-5h',
       label: countdown ?? '5h',
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
+      serverSeverity: fiveHour.severity,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
     });
@@ -674,6 +676,7 @@ function getClaudeChipWindows(
       key: weekly.modelDisplayName ? `claude-weekly:${weekly.modelDisplayName}` : 'claude-weekly:total',
       label,
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
+      serverSeverity: weekly.window.severity,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
     });
@@ -1027,9 +1030,13 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
   ));
 }
 
-/** Claude 订阅额度段只按本窗口已用比例着色，不影响相邻窗口与会话金额。 */
-function renderClaudeQuotaSegment(content: React.ReactNode, usedPercent: number): React.ReactNode {
-  const severity = quotaSeverity(usedPercent);
+/** Claude 订阅额度段合并本地利用率与服务端等级着色，不影响相邻窗口与会话金额。 */
+function renderClaudeQuotaSegment(
+  content: React.ReactNode,
+  usedPercent: number,
+  serverSeverity: string | null | undefined,
+): React.ReactNode {
+  const severity = effectiveQuotaSeverity(usedPercent, serverSeverity);
   const colorClass = severity === 'warn'
     ? 'text-[var(--quota-bar-warn)]'
     : severity === 'crit'
@@ -1475,7 +1482,11 @@ export function TodaySpendChip({
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
     const renderWindowContent = (content: React.ReactNode) => (
       usesClaudeQuotaChipSegments
-        ? renderClaudeQuotaSegment(content, 100 - window.remainingPercent)
+        ? renderClaudeQuotaSegment(
+            content,
+            100 - window.remainingPercent,
+            window.serverSeverity,
+          )
         : content
     );
     if (window.resetPending) {
@@ -1719,7 +1730,10 @@ export function TodaySpendChip({
     : 'normal';
   const visibleClaudeQuotaSeverity = usesClaudeQuotaChipSegments
     ? chipWindows.reduce<QuotaSeverity>((highestSeverity, window) => {
-        const severity = quotaSeverity(100 - window.remainingPercent);
+        const severity = effectiveQuotaSeverity(
+          100 - window.remainingPercent,
+          window.serverSeverity,
+        );
         return QUOTA_SEVERITY_RANK[severity] > QUOTA_SEVERITY_RANK[highestSeverity]
           ? severity
           : highestSeverity;
