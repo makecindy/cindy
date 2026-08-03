@@ -129,11 +129,22 @@ async function flush(): Promise<void> {
 /** 起一个在 127.0.0.1 随机端口的 echo server, 返回端口与关闭函数。 */
 async function startEchoServer(): Promise<{ port: number; close: () => Promise<void> }> {
   const server = net.createServer((sock) => sock.pipe(sock));
+  // 跟踪存活连接:close() 必须主动销毁它们。否则断言失败时 finally 里的
+  // server.close() 会等残留连接自然关闭而永久挂起,把真实的断言失败掩盖成
+  // 5s 用例超时(CI 实际发生过)。
+  const sockets = new Set<net.Socket>();
+  server.on('connection', (sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as net.AddressInfo).port;
   return {
     port,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () => new Promise<void>((resolve) => {
+      for (const sock of sockets) sock.destroy();
+      server.close(() => resolve());
+    }),
   };
 }
 
@@ -227,10 +238,16 @@ describe('RemoteHost remote forwarding', () => {
         () => { throw new Error('unexpected reject'); },
       );
       fake.fromRemote.write('ping-through-tunnel');
-      await flush();
 
-      // echo server 原样弹回 → 应出现在要送回远端的流里。
-      expect(fake.toRemote.read()?.toString()).toBe('ping-through-tunnel');
+      // echo server 原样弹回 → 应出现在要送回远端的流里。真实 TCP 往返需要
+      // 多个事件循环 + 网络轮次,固定 10ms flush 在慢 CI 上不够(实际误挂过):
+      // 改用有界轮询累积读取,消除调度抖动依赖。
+      let echoed = '';
+      await vi.waitFor(() => {
+        const chunk = fake.toRemote.read();
+        if (chunk) echoed += chunk.toString();
+        expect(echoed).toBe('ping-through-tunnel');
+      });
       fake.channel.close();
     } finally {
       await echo.close();

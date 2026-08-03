@@ -258,6 +258,41 @@ export function reconcileOfflineVerdictAfterResponse(
   return true;
 }
 
+/**
+ * 入站帧直接证据(如 transport-timeout link-close):对端能给本机发帧 = relay
+ * 此刻能从它路由到本机,availability=false 必为 stale(增量 presence 漏掉了
+ * 恢复边,见 resetPresenceAvailabilityForConnection 的背景注释)。
+ *
+ * 与 reconcileOfflineVerdictAfterResponse 的分工:那条链面向**并发窗口内的
+ * 请求回包**(可能早于 verdict 形成,需 epoch 比较且只推翻 offline 推断);
+ * 入站帧没有这种时序歧义——帧到达本身就晚于任何既存判定。故 offline(路由
+ * 推断)与 presence(可能 stale 的中继广播)判定都直接回到 unknown 乐观补齐;
+ * 只有 disabled(被控开关关闭,与可达性无关)仍只能由权威 presence 恢复。
+ *
+ * 返回是否清除了任何阻断状态(调用方据此决定要不要触发 rehydrate 无关紧要,
+ * rehydrate 自带 in-flight 去重,多触发无害)。
+ */
+export function reconcileAvailabilityAfterInboundFrame(
+  availabilityByDevice: Map<string, boolean>,
+  pendingRecoveryDeviceIds: Set<string>,
+  verdicts: Map<string, PresenceUnavailableVerdict>,
+  deviceId: string,
+): boolean {
+  const verdict = verdicts.get(deviceId);
+  if (verdict?.kind === 'disabled') return false;
+  let cleared = false;
+  if (verdict) {
+    verdicts.delete(deviceId);
+    cleared = true;
+  }
+  if (availabilityByDevice.get(deviceId) === false) {
+    availabilityByDevice.delete(deviceId);
+    pendingRecoveryDeviceIds.add(deviceId);
+    cleared = true;
+  }
+  return cleared;
+}
+
 export function isPresenceEligibleForRemoteRequest(
   availabilityByDevice: ReadonlyMap<string, boolean>,
   deviceId: string,

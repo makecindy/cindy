@@ -197,6 +197,57 @@ describe('WorktreePool safety', () => {
     expect(storeMap.has(meta.sessionId)).toBe(true);
   });
 
+  it('bounds the pool-reuse fetch for origin/* sources (real timeout + no terminal prompt)', async () => {
+    const meta = {
+      ...makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z'),
+      sourceBranch: 'origin/main',
+    };
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+
+    const res = await pool.acquireWorktree({
+      sessionId: 'session-2',
+      name: 'reuse-1',
+      baseRepo,
+      sourceBranch: 'origin/main',
+      ephemeral: true,
+    });
+    expect(res.ok).toBe(true);
+    const fetchCall = gitExecMock.mock.calls.find((c) => (c[0] as string[])[0] === 'fetch');
+    expect(fetchCall).toBeTruthy();
+    const opts = fetchCall?.[2] as
+      | { timeoutMs?: number; extraEnv?: Record<string, string> }
+      | undefined;
+    expect(opts?.timeoutMs).toBeGreaterThan(0);
+    expect(opts?.extraEnv?.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
+  it('skips the pool-reuse fetch when caller already attempted the source fetch (even a failed one)', async () => {
+    const meta = {
+      ...makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z'),
+      sourceBranch: 'origin/main',
+    };
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+
+    const res = await pool.acquireWorktree(
+      {
+        sessionId: 'session-2',
+        name: 'reuse-1',
+        baseRepo,
+        sourceBranch: 'origin/main',
+        ephemeral: true,
+      },
+      { sourceFetchAlreadyAttempted: true },
+    );
+    expect(res.ok).toBe(true);
+    expect(gitExecMock.mock.calls.some((c) => (c[0] as string[])[0] === 'fetch')).toBe(false);
+  });
+
   it('preserves dirty worktrees instead of auto-stashing them into the pool', async () => {
     const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
     fsSync.mkdirSync(meta.path, { recursive: true });
