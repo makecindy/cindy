@@ -88,6 +88,20 @@ describe('filterAtResources', () => {
     expect(filterAtResources(providers, '')).toHaveLength(3);
   });
 
+  it('shows browser tabs immediately but searches desktop windows on demand', () => {
+    const contextual = [
+      { type: 'browser-tab' as const, name: 'Docs', relPath: 'cindy://browser-tab/tab-1' },
+      { type: 'desktop-window' as const, name: 'Editor', relPath: 'cindy://desktop-window/1/2' },
+    ];
+
+    expect(filterAtResources(contextual, '').map((item) => item.type)).toEqual([
+      'browser-tab',
+    ]);
+    expect(filterAtResources(contextual, 'editor').map((item) => item.type)).toEqual([
+      'desktop-window',
+    ]);
+  });
+
   it('searches historical tasks after the user types a query', () => {
     expect(filterAtResources(items, 'release').map((item) => item.type)).toEqual([
       'session',
@@ -178,12 +192,20 @@ describe('scanAtResources context providers', () => {
       context: {
         success: true,
         browserTabs: [{ tabId: 'tab-1', title: 'Docs', url: 'https://example.com/docs' }],
-        desktopWindows: [{
-          windowId: 22,
-          pid: 11,
-          appName: 'Code.exe',
-          title: 'Cindy',
-        }],
+        desktopWindows: [
+          {
+            windowId: 21,
+            pid: 10,
+            appName: 'chrome.exe',
+            title: 'Docs - Google Chrome',
+          },
+          {
+            windowId: 22,
+            pid: 11,
+            appName: 'Code.exe',
+            title: 'Cindy',
+          },
+        ],
         unavailable: [],
       },
     });

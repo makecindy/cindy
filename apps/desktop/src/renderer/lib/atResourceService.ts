@@ -70,7 +70,7 @@ const EMPTY_QUERY_SECTION_LIMIT = 3;
 const EMPTY_QUERY_RESULT_LIMIT = 12;
 const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
   new Set(['file-picker']),
-  new Set(['browser-tab', 'desktop-window']),
+  new Set(['browser-tab']),
   new Set(['agent']),
   new Set(['plugin-provider']),
 ];
@@ -102,6 +102,33 @@ function oneLineText(value: unknown, maxLength: number): string {
   return typeof value === 'string'
     ? value.replace(/\s+/g, ' ').trim().slice(0, maxLength)
     : '';
+}
+
+const BROWSER_APP_STEMS = new Set([
+  'arc',
+  'brave',
+  'chrome',
+  'firefox',
+  'msedge',
+  'opera',
+]);
+
+function applicationStem(value: string): string {
+  const basename = value.replace(/\\/g, '/').split('/').pop() ?? value;
+  return basename.replace(/\.(?:exe|app)$/i, '').trim().toLowerCase();
+}
+
+function isBrowserApplication(value: string): boolean {
+  return BROWSER_APP_STEMS.has(applicationStem(value));
+}
+
+function normalizedBrowserPageTitle(value: string): string {
+  return oneLineText(value, 240)
+    .replace(
+      /\s+[-–—]\s+(?:google chrome|chrome|microsoft edge|mozilla firefox|firefox|brave|opera|arc)$/i,
+      '',
+    )
+    .toLowerCase();
 }
 
 /**
@@ -257,8 +284,11 @@ export async function scanAtResources(
   }
 
   const contextual: AtResourceItem[] = [];
+  const browserTabTitleKeys = new Set<string>();
   for (const tab of contextResult?.browserTabs ?? []) {
     const relPath = browserTabReference(tab.tabId, tab.url);
+    const titleKey = normalizedBrowserPageTitle(tab.title);
+    if (titleKey) browserTabTitleKeys.add(titleKey);
     contextual.push({
       type: 'browser-tab',
       name: tab.title,
@@ -268,7 +298,15 @@ export async function scanAtResources(
       _relPathLower: `${tab.url} ${tab.tabId}`.toLowerCase(),
     });
   }
+  const seenDesktopWindows = new Set<string>();
   for (const appWindow of contextResult?.desktopWindows ?? []) {
+    const windowKey = `${appWindow.pid}:${appWindow.windowId}`;
+    if (seenDesktopWindows.has(windowKey)) continue;
+    seenDesktopWindows.add(windowKey);
+    if (
+      isBrowserApplication(appWindow.appName)
+      && browserTabTitleKeys.has(normalizedBrowserPageTitle(appWindow.title))
+    ) continue;
     const relPath = desktopWindowReference(
       appWindow.pid,
       appWindow.windowId,

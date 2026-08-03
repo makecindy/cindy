@@ -5044,7 +5044,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       log.warn('@ context browser-tab catalog failed', err);
     }
 
-    if (getPluginRegistry().isEnabled('computer', request.workingDir)) {
+    if (request.query && getPluginRegistry().isEnabled('computer', request.workingDir)) {
       try {
         desktopWindows = readAtDesktopWindows(
           await listComputerWindowsForAtMention(),

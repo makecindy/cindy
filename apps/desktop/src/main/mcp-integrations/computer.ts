@@ -155,6 +155,8 @@ export function getComputerDriverAppBundlePath(): string | null {
 
 const WINDOWS_WIN32_WINDOW_SNAPSHOT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;

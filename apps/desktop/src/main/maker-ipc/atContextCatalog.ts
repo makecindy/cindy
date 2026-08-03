@@ -1,3 +1,5 @@
+import { BRAND_NAME } from '@cindy/maker-shared/branding';
+
 import type { TabRegistry } from '../rsb-browser-bridge/registry.js';
 
 export interface AtBrowserTabCandidate {
@@ -16,6 +18,28 @@ export interface AtDesktopWindowCandidate {
 function oneLine(value: unknown, maxLength: number): string {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function executableStem(value: string): string {
+  const basename = value.replace(/\\/g, '/').split('/').pop() ?? value;
+  return basename.replace(/\.(?:exe|app)$/i, '').trim().toLowerCase();
+}
+
+const CINDY_APP_STEMS = new Set([
+  executableStem(BRAND_NAME),
+  'cindy',
+  'cindydev',
+  'cindyglobal',
+  'xdmaker',
+  'xdmakerdev',
+]);
+
+function isCindyWindow(appName: string, title: string): boolean {
+  const appStem = executableStem(appName);
+  if (CINDY_APP_STEMS.has(appStem)) return true;
+  if (appStem !== 'electron') return false;
+  const normalizedTitle = title.trim().toLowerCase();
+  return normalizedTitle === BRAND_NAME.toLowerCase() || normalizedTitle === 'cindydev';
 }
 
 function searchable(values: string[], query: string): boolean {
@@ -89,9 +113,15 @@ export function readAtDesktopWindows(
   const root = objectValue(value);
   const rows = root && Array.isArray(root.windows) ? root.windows : [];
   const items: AtDesktopWindowCandidate[] = [];
+  const seenWindows = new Set<string>();
   for (const row of rows) {
     const candidate = objectValue(row);
-    if (!candidate || candidate.is_visible === false) continue;
+    if (
+      !candidate
+      || candidate.is_visible === false
+      || candidate.is_minimized === true
+      || candidate.is_on_screen === false
+    ) continue;
     const windowId = Number(candidate.window_id ?? candidate.hwnd);
     const pid = Number(candidate.pid);
     if (
@@ -102,8 +132,13 @@ export function readAtDesktopWindows(
       || pid === ownPid
     ) continue;
     const appName = oneLine(candidate.app_name, 200) || `PID ${pid}`;
-    const title = oneLine(candidate.title, 200);
+    const rawTitle = oneLine(candidate.title, 200);
+    if (isCindyWindow(appName, rawTitle)) continue;
+    const title = rawTitle.includes('\uFFFD') ? appName : rawTitle;
     if (!title || !searchable([title, appName], query)) continue;
+    const windowKey = `${pid}:${windowId}`;
+    if (seenWindows.has(windowKey)) continue;
+    seenWindows.add(windowKey);
     items.push({ windowId, pid, appName, title });
     if (items.length >= limit) break;
   }

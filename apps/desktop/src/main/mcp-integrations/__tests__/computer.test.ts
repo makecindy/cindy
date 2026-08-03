@@ -526,6 +526,7 @@ describe('computer mcp integration', () => {
     const scriptArgs = spawnMock.mock.calls.find(isWin32FallbackSpawnCall)?.[1] as unknown[] | undefined;
     const script = scriptArgs
       ?.find((part): part is string => typeof part === 'string' && part.includes('XdtWin32WindowSnapshot'));
+    expect(script).toContain('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)');
     expect(script).toContain('$procId');
     expect(script).not.toMatch(/\$pid\b/i);
   });
