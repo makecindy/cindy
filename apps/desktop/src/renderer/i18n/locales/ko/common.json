@@ -5326,6 +5326,12 @@
       "openProviders": "모델 제공자 열기",
       "acknowledge": "확인",
       "separator": ", "
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI 사용이 시작되었습니다",
+      "desc": "프로모션 잔액 {{amount}}이 지급되었으며 {{date}}까지 사용할 수 있습니다. 모두 사용하거나 기간이 지난 뒤에도 언제든 충전할 수 있습니다.",
+      "openBilling": "사용량 보기",
+      "acknowledge": "확인"
     }
   },
   "voiceInputOverlay": {

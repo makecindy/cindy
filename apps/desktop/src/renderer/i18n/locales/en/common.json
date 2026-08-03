@@ -5328,6 +5328,12 @@
       "openProviders": "Open Model Providers",
       "acknowledge": "Got it",
       "separator": ", "
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI is ready",
+      "desc": "A promotional balance of {{amount}} has been added and is valid until {{date}}. You can add funds any time after it runs out or expires.",
+      "openBilling": "View usage",
+      "acknowledge": "Got it"
     }
   },
   "voiceInputOverlay": {

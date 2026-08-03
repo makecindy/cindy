@@ -5326,6 +5326,12 @@
       "openProviders": "打开模型供应商",
       "acknowledge": "知道了",
       "separator": "、"
+    },
+    "promotionalGrant": {
+      "title": "已为你开通 Cindy AI",
+      "desc": "赠送余额 {{amount}} 已到账，有效期至 {{date}}。用完或过期后可随时充值。",
+      "openBilling": "查看用量",
+      "acknowledge": "知道了"
     }
   },
   "voiceInputOverlay": {
