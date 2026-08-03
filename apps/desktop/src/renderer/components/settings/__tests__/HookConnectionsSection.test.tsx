@@ -67,8 +67,10 @@ vi.mock('@/components/ui/switch', () => ({
   ),
 }));
 
+const prefsReload = vi.fn(async () => {});
 vi.mock('../HookWorkspacePrefsEditor', () => ({
   useHookWorkspacePrefs: () => ({
+    reloadImDefaults: prefsReload,
     prefsFor: vi.fn(),
     providerSourceFor: vi.fn(() => null),
     applyProviderSource: vi.fn(),
@@ -156,6 +158,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     // X 用法确认门按 principalId 记账在 localStorage 里, 而 jsdom 的 localStorage
     // 跨用例保留 —— 不清就会被前一条用例的记账吃掉, 后面的用例白绿。
     localStorage.clear();
+    prefsReload.mockClear();
     tCalls.length = 0;
     resetXUsageNoticeMemoryState();
     ipc.onStatusChanged.mockReturnValue(() => {});
@@ -1011,7 +1014,10 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
   });
 
   /** 目录清单 + 两条 provider lane 的 hook 视图(默认目录相关用例共用)。 */
-  function hookWithWorkdirs(telegramDefault: string | null): SlackHookView {
+  function hookWithWorkdirs(
+    telegramDefault: string | null,
+    opts: { telegramEnabled?: boolean } = {},
+  ): SlackHookView {
     const lane = {
       enabled: true,
       url: 'wss://tg-hook.example.test',
@@ -1025,7 +1031,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     return {
       ...BASE_HOOK,
       workspaces: { cindy: '/Users/dash/Code/cindy', blog: '/Users/dash/Code/blog' },
-      telegram: lane,
+      telegram: { ...lane, enabled: opts.telegramEnabled ?? true },
       x: { ...lane, url: 'wss://x-hook.example.test', defaultWorkspace: null },
     };
   }
@@ -1040,9 +1046,8 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     const radios = await screen.findAllByRole('radio');
     expect(radios).toHaveLength(3); // 对话 + cindy + blog
     radios[0].focus();
-    fireEvent.keyDown(radios[0].parentElement!.closest('[role="radiogroup"]')!, {
-      key: 'ArrowDown',
-    });
+    // 从 radio 自身派发(真实路径: 焦点在 radio 上按键), 事件冒泡到组容器。
+    fireEvent.keyDown(radios[0], { key: 'ArrowDown' });
     await waitFor(() =>
       expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
     );
@@ -1077,6 +1082,63 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
       'telegram',
       expect.stringContaining('renamed'),
     );
+  });
+
+  it('别名输入框里的方向键照常移动光标, 不得被单选组劫持', async () => {
+    // 单选组容器同时包着别名输入框: 不做事件目标判定的话, 在输入框里按 ←/→ 会被
+    // 当成"换选项", 焦点跳到相邻 radio 并点击它 —— 用户改个名字就换掉了默认目录。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs('cindy') });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    await screen.findAllByRole('radio');
+
+    const aliasInput = screen.getByDisplayValue('cindy');
+    aliasInput.focus();
+    ipc.setProviderDefaultWorkspace.mockClear();
+    fireEvent.keyDown(aliasInput, { key: 'ArrowRight' });
+    fireEvent.keyDown(aliasInput, { key: 'ArrowDown' });
+
+    expect(ipc.setProviderDefaultWorkspace).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(aliasInput);
+  });
+
+  it('只用 X 的升级用户也能清掉存量 global override', async () => {
+    // global scope 是 Telegram 与 X 共用的那一份(session-runner 对 sourceIm='x' 同样读
+    // readImDefaultSettings(undefined))。入口只挂在 Telegram 上时, 关掉 Telegram 的用户
+    // 就得靠猜"重新打开 Telegram 才能清", 而旧值一直在被 X 任务消费。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null, { telegramEnabled: false }) });
+    ipc.imDefaultSettingsGet.mockResolvedValue({
+      isCustomized: true,
+      agentKind: 'codex',
+      agents: { codex: { model: 'codex/gpt-5.5' } },
+    });
+    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    await screen.findByTestId('hook-legacy-global-defaults');
+    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
+    await waitFor(() => expect(ipc.imDefaultSettingsReset).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
+  });
+
+  it('清掉存量 override 后, Telegram 与 X 两份生效值都重读', async () => {
+    // 两张卡的目录行都以 global scope 为解析源 —— 只刷新当前这张, 另一张会继续显示
+    // 磁盘上已经不存在的旧默认。
+    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
+    ipc.imDefaultSettingsGet.mockResolvedValue({
+      isCustomized: true,
+      agentKind: 'codex',
+      agents: { codex: { model: 'codex/gpt-5.5' } },
+    });
+    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    await screen.findByTestId('hook-legacy-global-defaults');
+    prefsReload.mockClear();
+    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
+    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(2));
   });
 
   it('存量 global override: 露出可恢复入口, 恢复后消失; 从未设过的设备看不到', async () => {

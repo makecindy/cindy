@@ -138,8 +138,17 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
  * 着": 那等于把这次要消除的重叠原样放回来。折中是**仅当确实存在 override 时**露出这
  * 一条: 说清它还在生效、显示它是什么、给一个恢复默认的按钮; 恢复后它永久消失, 从未
  * 设过的用户一次都看不到。
+ *
+ * **两张 provider-neutral 卡都挂**: global scope 是官方 Telegram 与 X 共用的那一份
+ * (`session-runner` 对两者都读 `readImDefaultSettings(undefined)`)。只挂在 Telegram 上,
+ * 曾设过 override 后关掉 Telegram、只用 X 的升级用户就没有入口, 旧值继续被 X 任务消费,
+ * 而他只能猜"要重新打开 Telegram 才能清"(review 指出)。
  */
-function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
+function useLegacyGlobalDefaults(onCleared: () => void): {
+  state: ImDefaultSettingsState | null;
+  pending: boolean;
+  restore: () => Promise<void>;
+} {
   const { t } = useTranslation();
   const [state, setState] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
@@ -162,6 +171,8 @@ function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
     setPending(true);
     try {
       setState(await window.electronAPI.maker.imDefaultSettingsReset());
+      // 两张卡的目录行都以 global scope 为生效值解析源 —— 只刷新当前这张会让另一张
+      // 继续显示磁盘上已经不存在的旧默认(review 指出)。
       onCleared();
       toast.success(t('settings.defaults.restored'));
     } catch (err) {
@@ -171,6 +182,20 @@ function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
     }
   }, [onCleared, pending, t]);
 
+  return { state, pending, restore };
+}
+
+/** 上面那条提示的纯展示部分(状态由 useLegacyGlobalDefaults 单点持有, 两张卡共用)。 */
+function LegacyGlobalDefaultsNotice({
+  state,
+  pending,
+  onRestore,
+}: {
+  state: ImDefaultSettingsState | null;
+  pending: boolean;
+  onRestore: () => void;
+}) {
+  const { t } = useTranslation();
   if (state === null || !state.isCustomized) return null;
   return (
     <div
@@ -189,7 +214,7 @@ function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
       <button
         type="button"
         data-testid="hook-legacy-global-defaults-restore"
-        onClick={() => void restore()}
+        onClick={onRestore}
         disabled={pending}
         className="mt-0.5 flex h-7 w-fit items-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-50"
       >
@@ -207,6 +232,10 @@ function LegacyGlobalDefaultsNotice({ onCleared }: { onCleared: () => void }) {
  * 复用各项自己的 onClick 完成写入, 不在这里重复一条写路径。
  */
 function handleRadioGroupKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+  // 单选组容器同时包着别名输入框与「换目录」按钮 —— 事件不是从 radio 冒上来的就一律
+  // 放行。漏这一步会让在别名输入框里按 ←/→ 移动光标变成"焦点跳到相邻 radio 并点击它",
+  // 于是用户改个名字就把默认工作目录换成了另一个(review 指出)。
+  if ((e.target as HTMLElement).closest('[role="radio"]') === null) return;
   const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight';
   const backward = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
   if (!forward && !backward) return;
@@ -666,6 +695,13 @@ export function HookConnectionsSection() {
   const slackPrefsState = useHookWorkspacePrefs(hook, 'slack');
   const telegramPrefsState = useHookWorkspacePrefs(hook, 'telegram');
   const xPrefsState = useHookWorkspacePrefs(hook, 'x');
+  // 存量 global override(见 useLegacyGlobalDefaults 上方注释): 状态单点持有, 两张
+  // provider-neutral 卡共用同一份; 清掉后两张卡的生效值解析源都要重读。
+  const reloadGlobalDefaults = useCallback(() => {
+    void telegramPrefsState.reloadImDefaults();
+    void xPrefsState.reloadImDefaults();
+  }, [telegramPrefsState, xPrefsState]);
+  const legacyGlobalDefaults = useLegacyGlobalDefaults(reloadGlobalDefaults);
 
   /** 复制授权链接(远程控制兜底: 到本机浏览器打开, 规则 26)。 */
   const handleCopyLink = async () => {
@@ -1335,11 +1371,15 @@ export function HookConnectionsSection() {
                 provider,
               })
             : null}
-          {/* 存量 global override 的收尾入口。刻意不放在 cs.confirmed 里 —— 旧设置在
-              绑定确认之前就已经在盘上影响解析了, 要能看见才谈得上"可管理"。
-              从未改过的设备一次都不会渲染这一条(见组件注释)。 */}
-          {provider === 'telegram' && view.enabled ? (
-            <LegacyGlobalDefaultsNotice onCleared={() => void prefsState.reloadImDefaults()} />
+          {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
+              global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上
+              影响解析了 —— 要能看见才谈得上"可管理"。从未改过的设备一次都不会渲染。 */}
+          {view.enabled ? (
+            <LegacyGlobalDefaultsNotice
+              state={legacyGlobalDefaults.state}
+              pending={legacyGlobalDefaults.pending}
+              onRestore={() => void legacyGlobalDefaults.restore()}
+            />
           ) : null}
           {provider === 'telegram' && cs.confirmed ? (
             <div
