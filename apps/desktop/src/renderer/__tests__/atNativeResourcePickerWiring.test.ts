@@ -20,4 +20,11 @@ describe('@ native resource picker wiring', () => {
     expect(chatInputSource).not.toContain('atFileBrowserScopeFrom');
     expect(chatInputSource).not.toContain('setAtFileBrowserScopeFrom');
   });
+
+  it('drops a late picker result after the composer target changes', () => {
+    expect(chatInputSource).toContain('const originDoc = editor.state.doc;');
+    expect(chatInputSource).toContain('const originStorageKey = storageKey;');
+    expect(chatInputSource).toContain('isAtResourceInsertTargetCurrent(');
+    expect(chatInputSource).toContain('currentStorageKeyRef.current');
+  });
 });

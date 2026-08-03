@@ -205,6 +205,7 @@ import {
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
+import { isAtResourceInsertTargetCurrent } from '@/lib/atResourceInsertionGuard';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -2474,6 +2475,8 @@ export function ChatInput({
   const disableAutofocusRef = useRef(disableAutofocus);
   const focusOnStorageKeyChangeRef = useRef(focusOnStorageKeyChange);
   const latestStorageKeyRef = useRef<string | undefined>(storageKey);
+  const currentStorageKeyRef = useRef<string | undefined>(storageKey);
+  currentStorageKeyRef.current = storageKey;
   const storageKeyTransitionSeqRef = useRef(0);
   const sendButtonRef = useRef<HTMLElement | null>(null);
   const voiceShortcutPressRef = useRef<{
@@ -3683,11 +3686,20 @@ export function ChatInput({
       let selectedItem = item;
       let selectedByNativePicker = false;
       if (selectedItem.type === 'file-picker') {
+        const originDoc = editor.state.doc;
+        const originStorageKey = storageKey;
         try {
           const picked = await window.electronAPI.dialog.showOpenResource(
             workingDir ? { defaultPath: workingDir } : undefined,
           );
-          if (!picked.success || !picked.path || !picked.kind || editor.isDestroyed) return;
+          if (!picked.success || !picked.path || !picked.kind) return;
+          if (!isAtResourceInsertTargetCurrent(
+            editor,
+            editorRef.current,
+            originDoc,
+            originStorageKey,
+            currentStorageKeyRef.current,
+          )) return;
           const nativeResource = createAtResourceFromNativePath(
             picked.path,
             picked.kind,
@@ -3775,7 +3787,7 @@ export function ChatInput({
         .run();
       setAtPluginScope(null);
     },
-    [editor, trigger, activeAtScopeFrom, workingDir],
+    [editor, trigger, activeAtScopeFrom, workingDir, storageKey],
   );
 
   const exitAtPluginScope = useCallback((closePanel: boolean) => {
