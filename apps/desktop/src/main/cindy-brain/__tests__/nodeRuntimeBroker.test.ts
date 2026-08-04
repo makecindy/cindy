@@ -1368,6 +1368,30 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     expect(settled).toBe(true);
   });
 
+  it('正式子进程 error 后仍保留记账，直到真实 exit 或有界失败', async () => {
+    vi.useFakeTimers();
+    const { broker, worker, spawned } = await bootWorker(childSpawnGhost());
+    worker.emitControl({ type: 'spawn-child', reqId: 'r1', entry: 'node/maker.cjs' });
+    await vi.waitFor(() => {
+      expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'r1', ok: true });
+    });
+    const child = spawned[0].child;
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+
+    child.emit('error', new Error('child transport broke'));
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow(
+      '插件 Node 进程停止超时',
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    await stopping;
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
   it('启动中子进程报错时仍保留停止后的 SIGKILL 兜底', async () => {
     vi.useFakeTimers();
     const startingChild = new FakeRawChild();

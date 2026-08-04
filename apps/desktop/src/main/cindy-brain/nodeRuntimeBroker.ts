@@ -818,7 +818,9 @@ export class GhostNodeRuntimeBroker {
       });
     });
     proc.on('exit', (code) => this.handleChildExit(entry, child, code));
-    proc.on('error', () => this.handleChildExit(entry, child, null));
+    // error 只说明进程通道失败，不证明 OS 进程已经退出。开始有界停止，
+    // 但继续保留 children 记账直到真实 exit，供 stopAndWait 快照覆盖。
+    proc.on('error', () => this.stopChild(entry, child, false));
     this.deps.log?.info('ghost node child spawned', {
       ghostId,
       entry: message.entry,
@@ -850,9 +852,10 @@ export class GhostNodeRuntimeBroker {
 
   /** silent = 级联收尾(worker 已死,孩子不必也无法再收到 child-exit)。 */
   private stopChild(entry: WorkerEntry, child: ChildProcEntry, silent: boolean): void {
+    if (child.stopping) return;
+    child.stopping = true;
     if (silent) {
       entry.children.delete(child.childId);
-      child.stopping = true;
     }
     try {
       child.proc.kill('SIGTERM');

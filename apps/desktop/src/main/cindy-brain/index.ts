@@ -3291,11 +3291,13 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
+    // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
+    // 已确认退出、后续目录更新失败时，才恢复原版本。
+    await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
       // 市场更新同样会原位 rename 插件目录。Windows 上不能只发停止信号，
       // 必须确认旧 utilityProcess 已离开，否则入口文件仍可能被占用而报 EPERM。
-      await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);
       getGhostAgentSlot().clearGhost(expected.ghostId);
       getGhostErrandSlot().clearGhost(expected.ghostId);
       // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
@@ -4490,11 +4492,13 @@ export function registerGhostIpc(): void {
     return withGhostInstallLock(inspected.manifest.id, async () => {
       const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
       runtime.stop(inspected.manifest.id);
+      // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
+      // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
+      await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
       let result: Awaited<ReturnType<typeof manager.update>>;
       try {
         // Windows 上 stop() 只是发出终止信号；必须等旧 utilityProcess 真正退出，
         // 否则它还会占用插件目录，接下来的原子 rename 可能报 EPERM。
-        await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
         getGhostAgentSlot().clearGhost(inspected.manifest.id);
         getGhostErrandSlot().clearGhost(inspected.manifest.id);
         result = await manager.update(lizFilePath, { expectedPackageSha256 });

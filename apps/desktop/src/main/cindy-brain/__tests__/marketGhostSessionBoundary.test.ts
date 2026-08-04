@@ -76,10 +76,11 @@ describe('market Ghost session boundary', () => {
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(updateIndex);
-    expect(body.indexOf('spawnIfResident(installed);')).toBeGreaterThan(waitIndex);
+    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
 
-  it('restores a resident local-update plugin if waiting for shutdown fails', () => {
+  it('only restores a resident local-update plugin after shutdown was confirmed', () => {
     const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
     const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
     const body = source.slice(updateStart, updateEnd);
