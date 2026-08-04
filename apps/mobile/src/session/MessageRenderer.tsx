@@ -1738,13 +1738,12 @@ function MessageBubble({
   // hook 来源消息在 RenderItemView 中会降级为左对齐 system kind，避免暴露
   // 本地 user 消息的 fork / rewind / delete 操作；它仍可能携带至多 20k 文本，
   // 因此必须继续复用长消息的有界测量与折叠保护。
-  // 引用 / 粘贴文本 / Slash 等结构化 atom 已由 chip 自带紧凑呈现，不能再走
-  // 纯文本收起分支：后者会把 chip 背后的完整 payload 摊开，造成「收起后反而
-  // 更高」且丢失结构。含 atom 的消息保持结构化渲染；普通长文本继续自动收起。
+  // 引用 / 粘贴文本 / Slash 等结构化 atom 的 displayBubbleBody 已是紧凑投影，
+  // 因此可继续参与同一套长消息判定；真正收起时改用静态结构化 renderer + 整体
+  // 高度裁切，既不把完整 payload 摊开，也不会因含 chip 而永久失去长消息保护。
   const collapseMeasureEnabled = (isUser || hookSource !== undefined)
     && (item.message.kind === 'user' || hookSource !== undefined)
     && !item.message.systemCardType
-    && !rendersSentInlineBody
     && !!displayBubbleBody
     && mayExceedVisualLineThreshold(displayBubbleBody, collapseThreshold);
   // 实测行数与被测 body 绑定存储:FlatList 复用组件实例时 body 可能原地变化
@@ -1941,18 +1940,28 @@ function MessageBubble({
         />
       ) : displayBubbleBody ? (
         longMessageCollapsed ? (
-          // 收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该保留交互),
-          // 展开后恢复 MarkdownBody 的完整渲染。文本选择不因收起而丢失:
-          // 走与正文/secondaryBody 同款的 MarkdownSelectableText(iOS 用
-          // UITextView,原生支持 numberOfLines 截断,长按有系统选择手柄)。
-          <MarkdownSelectableText
-            numberOfLines={collapsedLineCount}
-            selectable={canSelectVisibleText}
-            style={styles.messageText}
-            testID="message.collapsedBody"
-          >
-            {displayBubbleBody}
-          </MarkdownSelectableText>
+          rendersSentInlineBody ? (
+            <SentInlineAtomBody
+              interactiveAtoms={false}
+              maxVisibleLines={collapsedLineCount}
+              numberOfLines={collapsedLineCount}
+              testID="message.collapsedSentInlineAtoms"
+              textStyle={styles.messageText}
+              tokens={sentInlineTokens}
+            />
+          ) : (
+            // 普通长消息收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该
+            // 保留交互),展开后恢复 MarkdownBody。文本选择走与正文同款的
+            // MarkdownSelectableText(iOS UITextView 原生支持 numberOfLines)。
+            <MarkdownSelectableText
+              numberOfLines={collapsedLineCount}
+              selectable={canSelectVisibleText}
+              style={styles.messageText}
+              testID="message.collapsedBody"
+            >
+              {displayBubbleBody}
+            </MarkdownSelectableText>
+          )
         ) : rendersSentInlineBody ? (
           <SentInlineAtomBody
             onOpenPayload={actions.onOpenPayload}

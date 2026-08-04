@@ -236,6 +236,7 @@ export function PendingSendBubble({
           {rendersSentInlineBody ? (
             <SentInlineAtomBody
               interactiveAtoms={false}
+              maxVisibleLines={selected ? undefined : 6}
               numberOfLines={selected ? undefined : 6}
               testID="pendingSend.sentInlineAtoms"
               textStyle={styles.bubbleText}

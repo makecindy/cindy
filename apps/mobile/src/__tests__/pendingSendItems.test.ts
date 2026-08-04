@@ -209,6 +209,7 @@ describe('pending_send 渲染接线', () => {
     );
     expect(bubbleSource).toContain('<SentInlineAtomBody');
     expect(bubbleSource).toContain('interactiveAtoms={false}');
+    expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
     // 粘贴时已上传到媒体总仓的图(cindy-media://blobs/…)本地没有文件,气泡要靠远端取件
     // 才有缩略图 —— 漏传 resolver 就只能画空占位格。
     expect(source).toContain('resolveRemoteMedia={actions.onResolveRemoteMedia}');

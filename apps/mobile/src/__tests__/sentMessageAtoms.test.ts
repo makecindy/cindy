@@ -23,14 +23,17 @@ describe('sent message atoms', () => {
     expect(atomSource).not.toContain('parseMobileMarkdownInlines(part.text)');
   });
 
-  it('keeps atomized messages out of the plain-text long-message collapse path', () => {
+  it('keeps atomized long messages structured while collapsed', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const collapseStart = source.indexOf('const collapseMeasureEnabled =');
     const collapseEnd = source.indexOf(';', collapseStart);
 
     expect(collapseStart).toBeGreaterThan(-1);
     expect(collapseEnd).toBeGreaterThan(collapseStart);
-    expect(source.slice(collapseStart, collapseEnd)).toContain('&& !rendersSentInlineBody');
+    expect(source.slice(collapseStart, collapseEnd)).not.toContain('!rendersSentInlineBody');
+    expect(source).toContain('maxVisibleLines={collapsedLineCount}');
+    expect(source).toContain('testID="message.collapsedSentInlineAtoms"');
+    expect(source).toContain('interactiveAtoms={false}');
   });
 
   it('splits exact pasted-text and slash ranges without guessing', () => {

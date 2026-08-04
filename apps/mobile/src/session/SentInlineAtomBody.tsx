@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import { StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
+import {
+  StyleSheet,
+  View,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from "react-native";
 import { FileText } from "lucide-react-native";
 import { Text } from "@/components/AppText";
 import { InlineQuoteChip } from "@/session/InlineQuoteChip";
@@ -12,6 +18,7 @@ import type { SentInlineToken } from "@/session/sentMessageAtoms";
 import {
   iconSize,
   iconStroke,
+  lineHeight,
   spacing,
   useTheme,
   useThemedStyles,
@@ -28,6 +35,7 @@ import {
  */
 export function SentInlineAtomBody({
   interactiveAtoms = true,
+  maxVisibleLines,
   numberOfLines,
   onOpenPayload,
   renderText,
@@ -36,6 +44,7 @@ export function SentInlineAtomBody({
   tokens,
 }: {
   interactiveAtoms?: boolean;
+  maxVisibleLines?: number;
   numberOfLines?: number;
   onOpenPayload?: (payload: MessagePayload) => void;
   renderText?: (text: string, index: number) => ReactNode;
@@ -45,8 +54,16 @@ export function SentInlineAtomBody({
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const clampStyle: StyleProp<ViewStyle> = maxVisibleLines === undefined
+    ? undefined
+    : {
+        maxHeight:
+          maxVisibleLines * lineHeight.bodyLarge
+          + Math.max(0, maxVisibleLines - 1) * spacing.xs,
+        overflow: "hidden",
+      };
   return (
-    <View style={styles.body} testID={testID}>
+    <View style={[styles.body, clampStyle]} testID={testID}>
       {tokens.map((token, index) => {
         if (token.kind === "quote") {
           return (
