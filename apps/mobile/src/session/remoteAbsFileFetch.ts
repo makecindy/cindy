@@ -24,7 +24,12 @@ import type {
   MobileMakerTransport,
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
-import { remoteFileMediaUrl, type RemoteMediaSshContext } from '@/session/fileBrowserGallery';
+import {
+  effectiveRemoteMediaSshContext,
+  remoteFileMediaUrl,
+  type RemoteMediaFetchConstraints,
+  type RemoteMediaSshContext,
+} from '@/session/fileBrowserGallery';
 import {
   isResolvedRemoteMediaFresh,
   resolveMobileRemoteMedia,
@@ -85,8 +90,12 @@ export async function fetchRemoteAbsFileToUrl(
    */
   ssh?: RemoteMediaSshContext | null,
 ): Promise<string> {
-  const sshKey = ssh
-    ? `${ssh.sessionId}\u0000${ssh.remoteHostId}\u0000${ssh.workdir}`
+  // 缓存键与 URL 必须走**同一份**「有效 SSH 上下文」判定(review P2):只看 `ssh` 对象是否
+  // 存在会让字段为空/带空白的对象把键分叉,而 URL 那边已经退化成不带 SSH 参数(被控端按
+  // 本机路径取件)—— 于是同一次取件永远命中不了缓存,每次都白发一轮请求。
+  const eff = effectiveRemoteMediaSshContext(ssh);
+  const sshKey = eff
+    ? `${eff.sessionId}\u0000${eff.remoteHostId}\u0000${eff.workdir}`
     : '';
   const key = `${deps.deviceId}\u0000${absPath}\u0000${sshKey}`;
   const cached = lookupCache(key, Date.now());
@@ -127,12 +136,18 @@ export async function fetchRemoteAbsFileOnce(
    *    所以只记最后一个同样会漏。
    */
   onOssKey?: (ossKey: string) => void,
+  /**
+   * 服务端强制约束(baseDir / maxBytes)。**必须在这里传**,而不是只在手机侧判:
+   * 手机拿到 `media.size` 时被控端已经上传完 OSS(SSH 场景还先整份拉到 Desktop 磁盘缓存),
+   * 流量与磁盘已经花掉了(review P2)。老被控端忽略这两个参数,故手机侧判断照旧保留。
+   */
+  constraints?: RemoteMediaFetchConstraints | null,
 ): Promise<MobileResolvedRemoteMedia> {
   return withTransientRemoteRetry(async () => {
     await deps.openLink(deps.deviceId);
     // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
     return resolveMobileRemoteMedia(
-      { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh) },
+      { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
       onOssKey ? { onOssKey } : undefined,
     );

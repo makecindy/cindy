@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyHtmlResourceUrls,
+  bytesForDataUriChars,
+  dataUriCharsForBytes,
   htmlResourceMimeFor,
   collectHtmlLocalResourceRefs,
   htmlBaseDirOf,
@@ -392,13 +394,91 @@ describe('整页内联总量预算(不可信产物的 DoS 面)', () => {
       },
       { concurrency: 1, totalBudgetChars: 250 },
     );
-    // 250 字符预算装得下 2 个 100 字符的资源,第 3 个超预算被丢。
+    // 250 字符预算装得下 2 个 100 字符的资源,余下 8 个超预算被丢。
     expect(out.urlByAbsPath.size).toBe(2);
     expect(out.overBudget).toBe(8);
     expect(out.failed).toBe(0);
-    // 预算耗尽后不再下载:第 3 个取回来才知道装不下(它置耗尽标记),之后 7 个直接跳过。
-    // 若只比 usedChars >= budget,usedChars 会永远停在 200、早退从不触发,10 个全下载。
-    expect(calls).toBe(3);
+    // **预留制下连第 3 个都不下载**(review P1 第二轮):开工前先按剩余预算算出这一次的
+    // 字节上限,剩余预算连一个字节都装不下时直接判超预算,不再"取回来才知道装不下"。
+    // 旧实现要多下载一个才发现(calls=3);若只比 usedChars >= budget 则更糟 ——
+    // usedChars 永远停在 200、早退从不触发,10 个全下载。
+    expect(calls).toBe(2);
+  });
+
+  it('并发不再突破总量预算:预留占满时后续 worker 等结算,不先把字节拉下来', async () => {
+    // 旧实现只在**取回之后**结算,4 路并发会全部先进 fetchOne —— 手机同时持有约
+    // 4 × 单资源上限的字节,整页预算形同虚设(review P1)。
+    const targets = Array.from({ length: 4 }, (_, i) => ({
+      absPath: `/a${i}.png`,
+      mimeType: 'image/png',
+      refCount: 1,
+    }));
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const out = await fetchHtmlResourceUrls(
+      targets,
+      async () => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        await new Promise<void>((r) => { setTimeout(r, 0); });
+        inFlight -= 1;
+        return 'x'.repeat(100);
+      },
+      { concurrency: 4, totalBudgetChars: 250 },
+    );
+    // 第一个资源的预留就占掉了几乎整份预算,其余三路在门口等结算 —— 同一时刻只有
+    // 一份字节在途。这正是"预留 / 可取消预算"要的效果。
+    expect(peakInFlight).toBe(1);
+    expect(out.urlByAbsPath.size).toBe(2);
+    expect(out.overBudget).toBe(2);
+    expect(out.failed).toBe(0);
+  });
+
+  it('单资源字节上限按剩余预算收窄,并原样透传给取件方', async () => {
+    // 透传出去的这个数会被被控端在 stat 之后、上传之前强制(review P2)。
+    const seen: Array<{ baseDir: string; maxBytes: number }> = [];
+    await fetchHtmlResourceUrls(
+      [{ absPath: '/a.png', mimeType: 'image/png', refCount: 1 }],
+      async (_target, limits) => { seen.push(limits); return 'x'.repeat(10); },
+      { concurrency: 1, totalBudgetChars: 250, baseDirAbsPath: '/Users/me/drafts' },
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0].baseDir).toBe('/Users/me/drafts');
+    expect(seen[0].maxBytes).toBe(bytesForDataUriChars(250));
+  });
+
+  it('单资源硬上限更小时以它为准(收窄只会更严,不会放宽)', async () => {
+    const seen: number[] = [];
+    await fetchHtmlResourceUrls(
+      [{ absPath: '/a.png', mimeType: 'image/png', refCount: 1 }],
+      async (_target, limits) => { seen.push(limits.maxBytes); return 'x'; },
+      { concurrency: 1, totalBudgetChars: HTML_RESOURCE_TOTAL_MAX_CHARS, perResourceMaxBytes: 1000 },
+    );
+    expect(seen).toEqual([1000]);
+  });
+
+  it('refCount 参与收窄:同一份资源被引用 N 次,预算按 N 份算', async () => {
+    const seen: number[] = [];
+    await fetchHtmlResourceUrls(
+      [{ absPath: '/a.png', mimeType: 'image/png', refCount: 4 }],
+      async (_target, limits) => { seen.push(limits.maxBytes); return 'x'; },
+      { concurrency: 1, totalBudgetChars: 4000 },
+    );
+    // 预算 4000 字符要装 4 处引用 → 每处 1000 字符 → 换算成字节上限。
+    expect(seen).toEqual([bytesForDataUriChars(1000)]);
+  });
+
+  it('字节↔字符换算必须保守:按它算出的字节上限取件,内联后一定装得进预算', () => {
+    // 预留制靠这条不等式保证 reservedChars 永不越过 totalBudget。
+    for (const chars of [100, 250, 1024, 65_536, HTML_RESOURCE_TOTAL_MAX_CHARS]) {
+      const bytes = bytesForDataUriChars(chars);
+      expect(bytes).toBeGreaterThan(0);
+      expect(dataUriCharsForBytes(bytes)).toBeLessThanOrEqual(chars);
+    }
+    // 预算连 data: 前缀都装不下时必须回 0(不能回负数或让调用方去发一次注定失败的取件)。
+    expect(bytesForDataUriChars(64)).toBe(0);
+    expect(bytesForDataUriChars(0)).toBe(0);
+    expect(bytesForDataUriChars(-1)).toBe(0);
   });
 
   it('超预算的那个保留原引用,不占内存也不换错地址', async () => {

@@ -23,7 +23,11 @@
  *    保持原样(渲染成破图),不猜。
  *  - **含 `..` 段的一律拒绝**。想放行就必须定义「逃到哪一层还算安全」,那是独立
  *    的边界决定;这里选最简单且明确安全的口径:引用只能落在 HTML 自己所在目录
- *    的子树内。真实的「单文件 + assets/」产物不受影响。
+ *    的**词法**子树内。真实的「单文件 + assets/」产物不受影响。
+ *    ⚠️ 本文件只能做到「词法子树」—— 产物目录里若有指向目录外的软链,词法路径完全合法。
+ *    真实的目录约束由**被控端**强制:取件 URL 带 `baseDir`,mediaFetch 对资源与 baseDir
+ *    各自 realpath 后判定包含关系(见 mediaFetch 的 PathMediaConstraints)。两层缺一不可,
+ *    这里的拒绝只是第一道、也是唯一能省掉一次 RPC 的那道。
  *  - http(s) / data: / blob: / 协议相对 `//host` / 纯锚点 `#x` 不属于本地资源,
  *    原样保留(它们本来就能加载,或本来就不该加载)。
  *  - `srcset` 不处理(多候选 + 密度描述符,收益低于复杂度),`<style>` 块里的
@@ -78,6 +82,32 @@ export const HTML_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
  * 8 MiB 够装一份带十几张配图的设计稿;超预算的资源不取,保留原引用并如实提示。
  */
 export const HTML_RESOURCE_TOTAL_MAX_CHARS = 8 * 1024 * 1024;
+
+/**
+ * `data:` URI 前缀的字符预算(`data:` + mime + `;base64,`)。表里最长的 mime 是
+ * `application/font-woff2` 一级,连前后缀不到 40 字符;取 64 留余量,**必须偏大** ——
+ * 预算换算里它用于「估算上界」,估小了会让预留不够、实际长度越过预留。
+ */
+const DATA_URI_PREFIX_MAX_CHARS = 64;
+
+/** 原始字节数 → 内联成 `data:` URI 后的字符数上界(base64 4/3 倍 + 前缀)。 */
+export function dataUriCharsForBytes(bytes: number): number {
+  if (!Number.isFinite(bytes) || bytes <= 0) return DATA_URI_PREFIX_MAX_CHARS;
+  return Math.ceil(bytes / 3) * 4 + DATA_URI_PREFIX_MAX_CHARS;
+}
+
+/**
+ * 字符预算 → 这份预算最多能装下多少原始字节(dataUriCharsForBytes 的保守逆运算)。
+ *
+ * 保证 `dataUriCharsForBytes(bytesForDataUriChars(c)) <= c`,即按它换算出的字节上限
+ * 取件、内联后一定装得进 `c` 个字符 —— 预留制靠这条不等式保证「在途也不越总预算」。
+ */
+export function bytesForDataUriChars(chars: number): number {
+  if (!Number.isFinite(chars)) return 0;
+  const payload = Math.floor(chars) - DATA_URI_PREFIX_MAX_CHARS;
+  if (payload <= 0) return 0;
+  return Math.floor(payload / 4) * 3;
+}
 
 /**
  * 资源扩展名 → MIME。**必须给准**:`data:` URI 的类型由它决定,给成
@@ -247,6 +277,8 @@ export function resolveHtmlResourcePath(baseDirAbsPath: string, raw: string): st
   const isWin = isWindowsAbsPath(baseDirAbsPath);
   const segments = decoded.split(/[\\/]/);
   // `..` 逃逸一律拒绝;`.` 段丢掉;空段(`a//b`)丢掉。
+  // 这只是**词法**子树约束(软链绕不掉),真实目录边界由被控端 realpath 包含判定强制,
+  // 见本文件头注与 mediaFetch 的 PathMediaConstraints。
   const kept: string[] = [];
   for (const seg of segments) {
     if (seg === '..') return null;

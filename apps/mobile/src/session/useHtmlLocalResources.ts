@@ -16,8 +16,11 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   applyHtmlResourceUrls,
+  bytesForDataUriChars,
   collectHtmlLocalResourceRefs,
+  dataUriCharsForBytes,
   planHtmlResourceFetches,
+  HTML_RESOURCE_MAX_BYTES,
   HTML_RESOURCE_TOTAL_MAX_CHARS,
   type HtmlResourceFetchTarget,
 } from '@/session/htmlLocalResources';
@@ -43,30 +46,65 @@ export interface HtmlResourceFetchOutcome {
  */
 export async function fetchHtmlResourceUrls(
   targets: readonly HtmlResourceFetchTarget[],
-  /** 取一个资源 → `data:` URI(取不到返回空串或抛错,两者都计入 failed)。 */
-  fetchOne: (target: HtmlResourceFetchTarget) => Promise<string>,
+  /**
+   * 取一个资源 → `data:` URI(取不到返回空串或抛错,两者都计入 failed)。
+   *
+   * `limits.maxBytes` 是**这一次**取件的字节上限,由剩余预算收窄而来(见下面的预留制),
+   * 必须原样交给被控端强制 —— 只在手机侧下载后判断挡不住流量。
+   */
+  fetchOne: (
+    target: HtmlResourceFetchTarget,
+    limits: { baseDir: string; maxBytes: number },
+  ) => Promise<string>,
   options: {
     concurrency?: number;
     isCancelled?: () => boolean;
     /** 整页内联总量预算(data: URI 字符数);缺省 HTML_RESOURCE_TOTAL_MAX_CHARS。 */
     totalBudgetChars?: number;
+    /** 单资源字节上限;缺省 HTML_RESOURCE_MAX_BYTES。 */
+    perResourceMaxBytes?: number;
+    /** HTML 所在目录绝对路径,原样透给 fetchOne 供被控端做 realpath 包含判定。 */
+    baseDirAbsPath?: string;
   } = {},
 ): Promise<HtmlResourceFetchOutcome> {
   const concurrency = Math.max(1, options.concurrency ?? FETCH_CONCURRENCY);
   const isCancelled = options.isCancelled ?? (() => false);
   const totalBudget = options.totalBudgetChars ?? HTML_RESOURCE_TOTAL_MAX_CHARS;
+  const perResourceMaxBytes = options.perResourceMaxBytes ?? HTML_RESOURCE_MAX_BYTES;
+  const baseDir = options.baseDirAbsPath ?? '';
   const urlByAbsPath = new Map<string, string>();
   let failed = 0;
   let overBudget = 0;
-  let usedChars = 0;
   let cursor = 0;
-  // 一旦有资源装不进剩余预算,就视为预算耗尽、后续一律不再取件。
+
+  // ── 预算预留制(review P1:并发取件突破总量预算) ─────────────────────────────
+  // 旧写法只在**取回之后**结算:并发 4 路时四个接近单资源上限的请求会全部先进入 fetchOne,
+  // 手机同时持有约 4 × 2.8 M 字符的字节,整页 8 MiB 预算形同虚设。
   //
-  // **不能只比 `usedChars >= totalBudget`**:资源大小要取回来才知道,而被拒的那个不计入
-  // usedChars —— 于是 usedChars 可能永远到不了预算线,早退分支从不触发,剩下的资源仍会
-  // 被逐个下载完(网络与临时文件全白花),正是这条 review 要防的 DoS。
-  // 代价是偏保守:大资源用尽预算后,后面本可塞进去的小资源也不再取。预览场景下可预测、
-  // 有界比多塞一两个资源重要。
+  // 现在改成开工前先**预留**:
+  //  1. `reservedChars` = 已结算 + 在途预留,恒 ≤ totalBudget;
+  //  2. 每次取件按「剩余预算 ÷ refCount」把这一次的字节上限收窄,并把该上限对应的字符数
+  //     预留下来 —— 于是**在途**的下载量也被总预算约束,而不是只约束落地量;
+  //  3. 取回后按实际长度结算,把没用掉的预留立刻归还给后面的资源。
+  // 收窄后的上限交给被控端强制(fetchOne 的 limits.maxBytes),超限文件根本不会产生流量。
+  //
+  // 预算不足时**不立刻判超预算**:在途预留随时会释放,先等一次结算再判 —— 否则并发满载
+  // 那一刻排到的资源会被误判成超预算(功能回退)。只有「没有在途、预算又确实不够」才是
+  // 真耗尽,此时沿用既有的保守语义:置 budgetExhausted,后续不再**启动**新的取件。
+  let reservedChars = 0;
+  /** 真正在 fetchOne 里跑着的数量(等预算的 worker 不算)——用于判断「等下去有没有意义」。 */
+  let inFlight = 0;
+  let settleGen = 0;
+  let waiters: Array<() => void> = [];
+  const notifySettled = (): void => {
+    settleGen += 1;
+    const woken = waiters;
+    waiters = [];
+    for (const wake of woken) wake();
+  };
+  /** 自 `gen` 之后已有结算就立即返回,否则挂起等下一次结算(闭掉丢唤醒)。 */
+  const waitForSettleSince = (gen: number): Promise<void> =>
+    gen !== settleGen ? Promise.resolve() : new Promise<void>((r) => { waiters.push(r); });
   let budgetExhausted = false;
 
   const worker = async (): Promise<void> => {
@@ -76,38 +114,74 @@ export async function fetchHtmlResourceUrls(
       cursor += 1;
       if (index >= targets.length) return;
       const target = targets[index];
-      if (budgetExhausted) {
+      // 计数必须显式兜底成 1:`Math.max(1, undefined)` 是 **NaN**,而任何
+      // `x > NaN` 恒为 false —— 少一个字段就让整条预算判断变成 fail-open,
+      // 所有资源无条件放行(本仓既有用例实捉)。
+      //
+      // **按 `长度 × refCount` 计费,不是按长度**(review P1 实捉):取件按路径去重,但
+      // applyHtmlResourceUrls 会在**每一处**引用都完整插入这份 data: URI —— 100 个
+      // `<img src="a.png">` 指向同一张 2 MiB 图,只计一次时能通过 8 MiB 预算,回填后却
+      // 生成约 267 MiB 的 HTML,WebView 序列化时 OOM。预算要覆盖的是**最终回填后的增量**。
+      const refCount = Number.isFinite(target.refCount) && target.refCount > 0
+        ? target.refCount
+        : 1;
+
+      let reserveChars = 0;
+      let capBytes = 0;
+      for (;;) {
+        if (isCancelled()) return;
+        if (budgetExhausted) break;
+        const availableChars = totalBudget - reservedChars;
+        capBytes = Math.min(
+          perResourceMaxBytes,
+          bytesForDataUriChars(Math.floor(availableChars / refCount)),
+        );
+        if (capBytes > 0) {
+          // bytesForDataUriChars 的保守性保证 reserveChars <= availableChars,
+          // 即 reservedChars 永不越过 totalBudget。
+          reserveChars = dataUriCharsForBytes(capBytes) * refCount;
+          reservedChars += reserveChars;
+          break;
+        }
+        const gen = settleGen;
+        if (inFlight > 0) {
+          await waitForSettleSince(gen);
+          continue;
+        }
+        budgetExhausted = true;
+        break;
+      }
+      if (reserveChars === 0) {
         overBudget += 1;
         continue;
       }
+
+      inFlight += 1;
       try {
-        const dataUri = await fetchOne(target);
+        const dataUri = await fetchOne(target, { baseDir, maxBytes: capBytes });
         if (!dataUri) {
           failed += 1;
           continue;
         }
-        // 取回来才知道多大;装不进剩余预算就丢掉这一个(保留原引用),不占内存。
-        //
-        // **按 `长度 × refCount` 计费,不是按长度**(review P1 实捉):取件按路径去重,但
-        // applyHtmlResourceUrls 会在**每一处**引用都完整插入这份 data: URI —— 100 个
-        // `<img src="a.png">` 指向同一张 2 MiB 图,只计一次时能通过 8 MiB 预算,回填后却
-        // 生成约 267 MiB 的 HTML,WebView 序列化时 OOM。预算要覆盖的是**最终回填后的增量**。
-        // 计数必须显式兜底成 1:`Math.max(1, undefined)` 是 **NaN**,而
-        // `usedChars + NaN > totalBudget` 恒为 false —— 少一个字段就让整条预算判断变成
-        // fail-open,所有资源无条件放行(本仓既有用例实捉)。
-        const refCount = Number.isFinite(target.refCount) && target.refCount > 0
-          ? target.refCount
-          : 1;
         const inlinedChars = dataUri.length * refCount;
-        if (usedChars + inlinedChars > totalBudget) {
+        if (inlinedChars > reserveChars) {
+          // 越过预留:老被控端不认 maxBytes、或回包比估算上界还长。语义与旧实现一致 ——
+          // 这一个不要(保留原引用),并停掉后续取件。
           budgetExhausted = true;
           overBudget += 1;
           continue;
         }
-        usedChars += inlinedChars;
         urlByAbsPath.set(target.absPath, dataUri);
+        // 只归还没用掉的部分:剩下的 inlinedChars 从预留转为已结算占用。
+        reservedChars -= reserveChars - inlinedChars;
+        reserveChars = 0;
       } catch {
         failed += 1;
+      } finally {
+        inFlight -= 1;
+        // 失败 / 超预留 / 取消:整份预留归还(成功路径已把 reserveChars 归零)。
+        if (reserveChars > 0) reservedChars -= reserveChars;
+        notifySettled();
       }
     }
   };
@@ -143,7 +217,10 @@ export function useHtmlLocalResources(
   html: string,
   /** HTML 文件所在目录的被控端绝对路径;空串表示无法定位(退化为不取件)。 */
   baseDirAbsPath: string,
-  fetchResourceDataUri: (target: HtmlResourceFetchTarget) => Promise<string>,
+  fetchResourceDataUri: (
+    target: HtmlResourceFetchTarget,
+    limits: { baseDir: string; maxBytes: number },
+  ) => Promise<string>,
 ): HtmlLocalResourceState {
   const refs = useMemo(
     () => collectHtmlLocalResourceRefs(html, baseDirAbsPath),
@@ -166,6 +243,7 @@ export function useHtmlLocalResources(
 
     void fetchHtmlResourceUrls(plan.targets, fetchResourceDataUri, {
       isCancelled: () => cancelled,
+      baseDirAbsPath: baseDirAbsPath,
     }).then(({ urlByAbsPath, failed, overBudget }) => {
       if (cancelled) return;
       setOutcome({
@@ -178,7 +256,7 @@ export function useHtmlLocalResources(
     return () => {
       cancelled = true;
     };
-  }, [fetchResourceDataUri, html, plan, refs]);
+  }, [baseDirAbsPath, fetchResourceDataUri, html, plan, refs]);
 
   const needsFetch = plan.targets.length > 0;
   return {

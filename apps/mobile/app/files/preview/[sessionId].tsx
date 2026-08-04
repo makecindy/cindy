@@ -391,14 +391,28 @@ export default function RemoteFilePreviewScreen() {
    * 与 exportToUrl 的区别:后者只服务「当前这个文件」(workdir 内走两段式导出、
    * absPath 模式走单一路径取件);资源透传要取的是**页面引用的其它路径**,所以
    * 统一走 media:fetch 的绝对路径通道 —— 它对 workdir 内外一视同仁,一条路径一条码。
-   * 路径合法性(必须是 HTML 所在目录子树内的相对引用)已在 htmlLocalResources
-   * 里 fail-closed 判定,这里不再重复。
+   *
+   * **两道边界都必须由被控端强制**(review P1/P2),手机侧的判断只能当第二道:
+   *  - `limits.baseDir` → 被控端对资源与 baseDir 各自 realpath 后判包含关系。
+   *    htmlLocalResources 的 `..` 拒绝只保证**词法**子树,产物目录里的软链绕得过去;
+   *  - `limits.maxBytes` → 被控端在 stat 之后、上传 OSS(SSH 还要先拉进 Desktop 缓存)
+   *    之前拒绝。手机拿到 `media.size` 时流量已经花完了。
+   *    该上限由整页剩余预算收窄而来,不是固定的 HTML_RESOURCE_MAX_BYTES。
    *
    * SSH 会话必须带上 sshMediaContext,否则被控端会把 absPath 当本机路径解析
    * (review P2:取件必失败,同名路径还会读到错误来源)。
    */
   const fetchResourceDataUri = useCallback(
-    async (target: HtmlResourceFetchTarget): Promise<string> => {
+    async (
+      target: HtmlResourceFetchTarget,
+      limits: { baseDir: string; maxBytes: number },
+    ): Promise<string> => {
+      // 本次允许的字节上限:取「整页剩余预算收窄出来的值」与单资源硬上限的较小者。
+      // 调度层已经收窄过,这里再夹一次是防调用方传入超大值(fail-closed 不吃亏)。
+      const maxBytes = Math.max(
+        1,
+        Math.min(limits.maxBytes || HTML_RESOURCE_MAX_BYTES, HTML_RESOURCE_MAX_BYTES),
+      );
       // 每个资源都会在 OSS 上新建一个对象;字节一旦进了 data: URI,对象立即无用。
       // 不回收的话一页最多遗留 32 个,反复进出预览还会累积(review P1)。
       //
@@ -415,19 +429,22 @@ export default function RemoteFilePreviewScreen() {
           target.absPath,
           sshMediaContext,
           (ossKey) => uploadedKeys.add(ossKey),
+          // 服务端强制约束:新被控端在上传前就会按这两项拒绝,超限文件不产生任何流量。
+          { ...(limits.baseDir ? { baseDir: limits.baseDir } : {}), maxBytes },
         );
         // **下载之前先按 media.size 拒掉超限资源**(review P1):取件回包已经带了大小,
         // 而 downloadRemoteMediaAsDataUri 是先把整个对象拉到手机缓存、再看 file.size ——
         // media:fetch 上限有 2 GB、批量取件又有 4 路并发,不前置判断的话一份不可信产物
         // 能凭「白名单扩展名的超大文件」打出数 GB 流量与临时磁盘占用,最后才返回空地址。
-        // 下载后的那道判断保留:size 缺失 / 谎报时仍要兜住(fail-closed 的第二道)。
-        if (media.size > HTML_RESOURCE_MAX_BYTES) return '';
+        // **这道判断不能因为被控端也判了就删**:老被控端不认 maxBytes(版本歪斜是 fail-open),
+        // 而 size 缺失 / 谎报同样要兜住 —— 它是 fail-closed 的第二道。
+        if (media.size > maxBytes) return '';
         // 预签名地址只在这里用一次:下载完即转成 data: URI,**绝不回填进页面**
         // (页面里的脚本能读 DOM,凭证进 DOM 等于交给不可信文档,review P1)。
         const dataUri = await downloadRemoteMediaAsDataUri(
           media.url,
           target.mimeType,
-          HTML_RESOURCE_MAX_BYTES,
+          maxBytes,
         );
         return dataUri ?? '';
       } finally {
@@ -692,7 +709,10 @@ function FilePreviewPage({
   absolutePathOf(relPath: string): string;
   active: boolean;
   exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
-  fetchResourceDataUri(target: HtmlResourceFetchTarget): Promise<string>;
+  fetchResourceDataUri(
+    target: HtmlResourceFetchTarget,
+    limits: { baseDir: string; maxBytes: number },
+  ): Promise<string>;
   item: FileBrowserGridItem;
   maker: Pick<MobileMakerTransport, 'fileBrowser'>;
   onDownload(): void;
@@ -909,7 +929,10 @@ function TextPreviewPage({
   absolutePathOf(relPath: string): string;
   active: boolean;
   /** 页面引用的资源 → `data:` URI(签名地址不进页面,见屏级 fetchResourceDataUri)。 */
-  fetchResourceDataUri(target: HtmlResourceFetchTarget): Promise<string>;
+  fetchResourceDataUri(
+    target: HtmlResourceFetchTarget,
+    limits: { baseDir: string; maxBytes: number },
+  ): Promise<string>;
   item: FileBrowserGridItem;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */

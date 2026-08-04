@@ -37,16 +37,62 @@ export interface RemoteMediaSshContext {
   workdir: string;
 }
 
-/** 三项齐备才算有效上下文(与被控端 parseSshMediaOrigin 的完整性要求同口径)。 */
-function sshContextQuery(ssh: RemoteMediaSshContext | null | undefined): string {
-  if (!ssh) return '';
+/**
+ * 三项齐备(trim 后非空)才算有效上下文,与被控端 parseSshMediaOrigin 的完整性要求同口径。
+ *
+ * **URL 构造与取件缓存键必须共用这一份判定**(review P2 实捉):此前 URL 侧要求「三项 trim
+ * 后均非空」,而 fetchRemoteAbsFileToUrl 的缓存键只看 `ssh` 对象是否存在就无条件拼接三个
+ * 字段 —— 调用方误传 `{sessionId:'', …}` 时 URL 退化成不带 SSH 参数(按本机路径取件),
+ * 缓存键却被这些空字段区分开,同一次取件永远命中不了缓存,白发请求。
+ */
+export function effectiveRemoteMediaSshContext(
+  ssh: RemoteMediaSshContext | null | undefined,
+): RemoteMediaSshContext | null {
+  if (!ssh) return null;
   const sessionId = ssh.sessionId.trim();
   const remoteHostId = ssh.remoteHostId.trim();
   const workdir = ssh.workdir.trim();
-  if (!sessionId || !remoteHostId || !workdir) return '';
-  return `&sessionId=${encodeURIComponent(sessionId)}`
-    + `&remoteHostId=${encodeURIComponent(remoteHostId)}`
-    + `&workdir=${encodeURIComponent(workdir)}`;
+  if (!sessionId || !remoteHostId || !workdir) return null;
+  return { sessionId, remoteHostId, workdir };
+}
+
+function sshContextQuery(ssh: RemoteMediaSshContext | null | undefined): string {
+  const eff = effectiveRemoteMediaSshContext(ssh);
+  if (!eff) return '';
+  return `&sessionId=${encodeURIComponent(eff.sessionId)}`
+    + `&remoteHostId=${encodeURIComponent(eff.remoteHostId)}`
+    + `&workdir=${encodeURIComponent(eff.workdir)}`;
+}
+
+/**
+ * 取件的**服务端强制约束**(被控端 mediaFetch 消费,不是手机端的自我约束)。
+ *
+ * 为什么必须由被控端强制:手机侧的词法校验与下载后判断都晚于「被控端 stat → 上传 OSS
+ * (SSH 场景还要先整份拉到 Desktop 磁盘缓存)」,一份不可信 HTML 引用一个 2 GB 的
+ * `.css` 就能在手机看到 `media.size` 之前打出数 GB 的磁盘/网络/OSS 流量(review P2)。
+ *
+ * **版本歪斜是 fail-open**:老被控端不认这两个参数会照旧取件,约束等于不生效。这不构成
+ * 回退(它今天本来就没有这两道校验),但手机侧的既有判断必须全部保留作第二道。
+ */
+export interface RemoteMediaFetchConstraints {
+  /**
+   * 资源必须落在这个目录内。被控端对**资源与该目录双方各自 realpath 后**判定包含关系,
+   * 目的是挡住「产物目录内有一个指向目录外的软链」这条绕过(词法 `..` 校验挡不住它)。
+   */
+  baseDir?: string;
+  /** 字节上限。被控端在 stat 之后、上传/拉取之前拒绝,不让超限文件产生任何流量。 */
+  maxBytes?: number;
+}
+
+function constraintsQuery(c: RemoteMediaFetchConstraints | null | undefined): string {
+  if (!c) return '';
+  let q = '';
+  const baseDir = c.baseDir?.trim();
+  if (baseDir) q += `&baseDir=${encodeURIComponent(baseDir)}`;
+  if (Number.isFinite(c.maxBytes) && (c.maxBytes as number) > 0) {
+    q += `&maxBytes=${Math.floor(c.maxBytes as number)}`;
+  }
+  return q;
 }
 
 export function remoteFileMediaUrl(
@@ -58,9 +104,11 @@ export function remoteFileMediaUrl(
    * 本机会话传 null / 省略。
    */
   ssh?: RemoteMediaSshContext | null,
+  /** 服务端强制约束(HTML 资源透传专用;普通媒体取件省略)。 */
+  constraints?: RemoteMediaFetchConstraints | null,
 ): string {
   const base = `xdt-file://open?path=${encodeURIComponent(absPath)}`;
-  const withSsh = `${base}${sshContextQuery(ssh)}`;
+  const withSsh = `${base}${sshContextQuery(ssh)}${constraintsQuery(constraints)}`;
   return versionMs ? `${withSsh}&v=${versionMs}` : withSsh;
 }
 
