@@ -158,6 +158,26 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[1])[1].tool_use_id).toBe('Bash_5_dup2');
   });
 
+  it('并发 subagent 同 minted id: result 按 parent 身份配对,不 swap(P2: Key subagent tool results by parent)', () => {
+    // subagent A 和 B 各自 mint Bash_1(不同 parent)。若 result 只按全局 lastAssistantBatch
+    // 配对, A 的 assistant 行被 B 顶掉后, A 的 result 会错配给 B 的调用 → swap。
+    // 用 parent 身份(顶层 parentUuid)隔离配对。
+    const text = [
+      assistantEntry('aA', [toolUse('Bash_1')], 'parent-A'), // subagent A 的调用
+      assistantEntry('aB', [toolUse('Bash_1')], 'parent-B'), // subagent B 的调用
+      userEntry('uA', [toolResult('Bash_1', 'A 的结果')], 'parent-A'), // A 的 result(先到)
+      userEntry('uB', [toolResult('Bash_1', 'B 的结果')], 'parent-B'), // B 的 result
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    // 两个调用分别定终
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x1');
+    expect(contentOf(entries[1])[0].id).toBe('Bash_1_dup2');
+    // A 的 result 配 A 的调用(Bash_x1), B 的 result 配 B 的调用(Bash_1_dup2) —— 不 swap
+    expect(contentOf(entries[2])[0].tool_use_id).toBe('Bash_x1');
+    expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_1_dup2');
+  });
+
   it('位置配对: 孤儿 call + 重铸 call 并存时 result 配给真实执行的那次', () => {
     // 孤儿 Bash_5(无 result,中断残留) + 重铸 Bash_5(有 result):
     // 出现序配对会把 result 错配给孤儿,位置配对必须配给重铸 call。
@@ -897,7 +917,7 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
     }
   });
 
-  it('rename 降级也失败时抛错(tmp 被清理,调用方 best-effort 兜底)', async () => {
+  it('rename 降级失败时从 .bak 备份恢复,转录不丢且不抛错(copilot review)', async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'jsonl-normalize-'));
     const filePath = path.join(tmpDir, 'session.jsonl');
     const original = [
@@ -916,9 +936,12 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
       });
 
     try {
-      await expect(normalizeClaudeSessionJsonlToolIds(filePath)).rejects.toThrow('EPERM');
-      // tmp 被清理,原文件未被破坏
+      // rename 全失败:降级路径删除目标后从 .bak 备份恢复 → 不抛错,转录仍在
+      const result = await normalizeClaudeSessionJsonlToolIds(filePath);
+      expect(result.backupPath).toBeDefined();
+      // tmp 被清理
       expect((await readdir(tmpDir)).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+      // 原文件从备份恢复,内容为原文(归一化未生效但转录可被 resume 读取)
       expect(await readFile(filePath, 'utf8')).toBe(original);
     } finally {
       renameSpy.mockRestore();

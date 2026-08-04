@@ -194,9 +194,16 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   let offsetBlockCount = 0;
   let duplicateIdCount = 0;
   const callSeen = new Map<string, number>();
+  // 提取条目所属 subagent/child 身份(顶层 parentUuid 或 parent_tool_use_id):
+  // 并发 subagent 可能 mint 相同 tool id, result 需按 parent 配对避免 swap
+  // (codex-connector P2: Key subagent tool results by parent)。
+  const parentKeyOf = (entry: JsonObject): string | undefined => {
+    const p = entry.parent_tool_use_id ?? entry.parentUuid;
+    return typeof p === 'string' && p ? p : undefined;
+  };
   // openCalls[originalId] = 该 id 尚未配对的 call,按出现顺序;每项带所在
-  // assistant 消息 index(batch)用于「同批内顺序配对」。
-  const openCalls = new Map<string, Array<{ originalId: string; finalId: string; batch: number }>>();
+  // assistant 消息 index(batch)与 parent 身份,用于「同批同 parent 内顺序配对」。
+  const openCalls = new Map<string, Array<{ originalId: string; finalId: string; batch: number; parentKey?: string }>>();
   // 最近一次 assistant 消息的 index —— result 的「同批」= 紧跟的那个 assistant 批。
   let lastAssistantBatch = -1;
   const firstFinalByOriginal = new Map<string, string>();
@@ -246,7 +253,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           stack = [];
           openCalls.set(originalId, stack);
         }
-        stack.push({ originalId, finalId, batch: index });
+        stack.push({ originalId, finalId, batch: index, parentKey: parentKeyOf(entry) });
       } else if (role === 'user' && isToolResultBlock(block)) {
         const originalId = block.tool_use_id;
         // 配对顺序(同批 FIFO, 跨批 LIFO):
@@ -257,10 +264,19 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         //   - 跨批(孤儿 call + 重铸 call)时,重铸 call 在孤儿之后,result 属于
         //     最近发出的那个 → 配数组尾部(最近)。先找同批最前,找不到回退最近。
         const stack = openCalls.get(originalId);
-        let matched: { originalId: string; finalId: string; batch: number } | undefined;
+        let matched: { originalId: string; finalId: string; batch: number; parentKey?: string } | undefined;
         if (stack) {
-          const batchMatch = stack.find((c) => c.batch === lastAssistantBatch);
-          matched = batchMatch ?? stack[stack.length - 1];
+          // 优先配「同 parent 的最近批」: 并发 subagent mint 相同 tool id 时, result
+          // 属于哪个 subagent 由 parent 身份决定 —— 若只用全局 lastAssistantBatch,
+          // subagent A 的 assistant 行被 B 的顶掉后, A 的 result 会错配给 B 的调用,
+          // 转录 replays/imports swap 子 agent 的输出(codex-connector P2)。
+          const resultParent = parentKeyOf(entry);
+          const sameParent = resultParent !== undefined
+            ? stack.filter((c) => c.parentKey === resultParent)
+            : stack;
+          const candidates = sameParent.length > 0 ? sameParent : stack;
+          const batchMatch = candidates.find((c) => c.batch === lastAssistantBatch);
+          matched = batchMatch ?? candidates[candidates.length - 1];
           stack.splice(stack.indexOf(matched), 1);
         }
         const inherited = matched?.finalId ?? firstFinalByOriginal.get(originalId);
@@ -572,6 +588,8 @@ export async function normalizeClaudeSessionJsonlToolIds(
   const original = await fs.readFile(filePath, 'utf8');
   const normalized = normalizeClaudeJsonlToolIdsText(original);
   let backupPath: string | undefined;
+  // rename 降级失败时从 .bak 备份恢复成功 → 归一化未生效但转录仍在(见下)。
+  let recoveredFromBackup = false;
   if (normalized.changed) {
     // 保留原文件权限:转录可能含用户敏感内容,若原文件是 0600,重写后(tmp 默认
     // 0666 & umask)会把提示词/工具输出/粘贴的密钥暴露给同机其它用户
@@ -603,18 +621,38 @@ export async function normalizeClaudeSessionJsonlToolIds(
           await fs.rm(filePath, { force: true });
           await fs.rename(tmpPath, filePath);
         } catch (fallbackErr) {
-          await fs
-            .writeFile(filePath, original, { encoding: 'utf8', mode: originalMode })
-            .catch(() => undefined);
-          await fs.chmod(filePath, originalMode).catch(() => undefined);
+          // writeFile 写回失败不能静默吞掉 —— 原文件已被删除、转录缺失会阻断
+          // resume。备份 .bak 已就位:优先从备份恢复(copyFile),保证 filePath 仍可
+          // 被 resume 读取(copilot review);备份恢复也失败时,保留 writeFile 尝试
+          // 并暴露 fallbackErr(调用方 best-effort 兜底继续)。
           await fs.rm(tmpPath, { force: true }).catch(() => undefined);
-          throw fallbackErr;
+          if (backupPath) {
+            try {
+              await fs.copyFile(backupPath, filePath);
+              await fs.chmod(filePath, originalMode).catch(() => undefined);
+              recoveredFromBackup = true; // 备份恢复成功 → 归一化未生效但转录仍在
+            } catch {
+              // 备份恢复失败:落 writeFile 兜底(也失败则抛 fallbackErr)。
+            }
+          }
+          if (!recoveredFromBackup) {
+            await fs
+              .writeFile(filePath, original, { encoding: 'utf8', mode: originalMode })
+              .catch(() => undefined);
+            await fs.chmod(filePath, originalMode).catch(() => undefined);
+            throw fallbackErr;
+          }
         }
       } else {
         await fs.rm(tmpPath, { force: true }).catch(() => undefined);
         throw renameErr;
       }
     }
+  }
+  if (recoveredFromBackup) {
+    // 归一化未生效(rename 降级失败,从备份恢复原文):返回 changed=false,
+    // 与「无改动」同语义,不误导调用方以为已归一化。
+    return { filePath, changed: false, backupPath };
   }
   const { text: _, ...rest } = normalized;
   return { filePath, ...rest, ...(backupPath ? { backupPath } : {}) };
