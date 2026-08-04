@@ -66,6 +66,7 @@ import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { getBranchName } from '../../../shared/managedWorktreeBranches';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -2629,7 +2630,7 @@ export function NewMakerDraftRoute() {
             }
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
 
-            const branchName = `xdt/${name}`;
+            let branchName = getBranchName(name);
             const newSession = await createSession({
               id: sessionId,
               agentKind: persistedAgentKind,
@@ -2727,6 +2728,13 @@ export function NewMakerDraftRoute() {
                   return;
                 }
 
+                // Main 会在创建时再做一次分支/路径冲突避让，因此回包里的
+                // meta.branch 才是权威名字。立即替换预估值，避免 UI 继续显示未实际创建的分支。
+                branchName = resp.meta.branch;
+                worktreeCreationStore.set(newSession.id, {
+                  status: 'creating',
+                  name: branchName,
+                });
                 const newDir = resp.meta.path;
                 const latestSession = await sessionService.get(newSession.id).catch((err) => {
                   log.warn('[draft worktree send] get latest session failed', err);

@@ -25,7 +25,7 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **结束前必须 commit**：会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
-  cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `xdt/*` 分支，交给
+  cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
   用户显式归档／删除会话时回收；禁止手动 `git worktree remove` 造成 active session 的 cwd
   悬空。手动干活时可放 `.worktree-keep` 哨兵文件豁免自动回收。
 - **stale prebundle 白屏**：给带依赖的内部包新增 export 后，运行中实例可能因 stale Vite

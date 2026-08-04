@@ -6,25 +6,111 @@
  */
 
 const ADJECTIVES: readonly string[] = [
-  'pensive', 'eager', 'jolly', 'silly', 'epic', 'brave', 'calm', 'clever',
-  'curious', 'dazzling', 'earnest', 'elegant', 'fierce', 'gentle', 'happy',
-  'humble', 'inspiring', 'keen', 'lively', 'loyal', 'merry', 'noble',
-  'optimistic', 'peaceful', 'proud', 'quirky', 'radiant', 'serene', 'sharp',
-  'silent', 'sincere', 'steady', 'stoic', 'sturdy', 'sweet', 'swift', 'tender',
-  'thoughtful', 'tranquil', 'trusty', 'upbeat', 'vibrant', 'vigilant', 'warm',
-  'wise', 'witty', 'zealous', 'amazing', 'bold', 'cheerful',
+  'pensive',
+  'eager',
+  'jolly',
+  'silly',
+  'epic',
+  'brave',
+  'calm',
+  'clever',
+  'curious',
+  'dazzling',
+  'earnest',
+  'elegant',
+  'fierce',
+  'gentle',
+  'happy',
+  'humble',
+  'inspiring',
+  'keen',
+  'lively',
+  'loyal',
+  'merry',
+  'noble',
+  'optimistic',
+  'peaceful',
+  'proud',
+  'quirky',
+  'radiant',
+  'serene',
+  'sharp',
+  'silent',
+  'sincere',
+  'steady',
+  'stoic',
+  'sturdy',
+  'sweet',
+  'swift',
+  'tender',
+  'thoughtful',
+  'tranquil',
+  'trusty',
+  'upbeat',
+  'vibrant',
+  'vigilant',
+  'warm',
+  'wise',
+  'witty',
+  'zealous',
+  'amazing',
+  'bold',
+  'cheerful',
 ];
 
 // 取自计算机/科学史上的名人, 避免争议性人物。
 const SURNAMES: readonly string[] = [
-  'lederberg', 'turing', 'lovelace', 'hopper', 'knuth', 'dijkstra', 'ritchie',
-  'thompson', 'kernighan', 'torvalds', 'stallman', 'wozniak', 'curie', 'darwin',
-  'einstein', 'feynman', 'galileo', 'hawking', 'newton', 'pasteur', 'tesla',
-  'archimedes', 'babbage', 'bohr', 'borg', 'cohen', 'colden', 'edison',
-  'engelbart', 'euclid', 'fermi', 'goldberg', 'goodall', 'hamilton', 'hertz',
-  'hodgkin', 'jang', 'jepsen', 'kalam', 'kapitsa', 'kepler', 'lamarr',
-  'leakey', 'liskov', 'mclean', 'mendel', 'mendeleev', 'mirzakhani', 'morse',
-  'noether', 'panini',
+  'lederberg',
+  'turing',
+  'lovelace',
+  'hopper',
+  'knuth',
+  'dijkstra',
+  'ritchie',
+  'thompson',
+  'kernighan',
+  'torvalds',
+  'stallman',
+  'wozniak',
+  'curie',
+  'darwin',
+  'einstein',
+  'feynman',
+  'galileo',
+  'hawking',
+  'newton',
+  'pasteur',
+  'tesla',
+  'archimedes',
+  'babbage',
+  'bohr',
+  'borg',
+  'cohen',
+  'colden',
+  'edison',
+  'engelbart',
+  'euclid',
+  'fermi',
+  'goldberg',
+  'goodall',
+  'hamilton',
+  'hertz',
+  'hodgkin',
+  'jang',
+  'jepsen',
+  'kalam',
+  'kapitsa',
+  'kepler',
+  'lamarr',
+  'leakey',
+  'liskov',
+  'mclean',
+  'mendel',
+  'mendeleev',
+  'mirzakhani',
+  'morse',
+  'noether',
+  'panini',
 ];
 
 function pick<T>(arr: readonly T[]): T {
@@ -79,10 +165,7 @@ export function generateRawName(): string {
  *
  * 注意: 大小写敏感比对在 Windows 下不安全(路径不分大小写), 因此比对时 toLowerCase。
  */
-export function avoidCollision(
-  name: string,
-  taken: readonly string[],
-): string {
+export function avoidCollision(name: string, taken: readonly string[]): string {
   const takenSet = new Set(taken.map((t) => t.toLowerCase()));
   if (!takenSet.has(name.toLowerCase())) return name;
   let n = 2;
@@ -102,10 +185,7 @@ export function avoidCollision(
  * 调用方传入"已用名字列表"(store + git branch 的 union), avoidCollision 用 -2/-3 后缀
  * 兜住所有冲突, 所以实际只需要 1 次随机就够; maxAttempts > 1 仅在希望尽量避免数字后缀时有用。
  */
-export function generateUniqueName(
-  taken: readonly string[],
-  maxAttempts = 5,
-): string {
+export function generateUniqueName(taken: readonly string[], maxAttempts = 5): string {
   for (let i = 0; i < maxAttempts; i += 1) {
     const raw = generateRawName();
     const takenSet = new Set(taken.map((t) => t.toLowerCase()));
@@ -115,9 +195,11 @@ export function generateUniqueName(
   return avoidCollision(generateRawName(), taken);
 }
 
-/**
- * 把 name → 分支名: `xdt/<name>`。纯函数, 没有副作用。
- */
-export function getBranchName(name: string): string {
-  return `xdt/${name}`;
-}
+export {
+  blocksManagedWorktreeBranchNamespace,
+  getBranchName,
+  getManagedWorktreeBranchCandidates,
+  getManagedWorktreeNameFromBranch,
+  getManagedWorktreeReservedName,
+  isManagedWorktreeBranchForName,
+} from '../../shared/managedWorktreeBranches';
