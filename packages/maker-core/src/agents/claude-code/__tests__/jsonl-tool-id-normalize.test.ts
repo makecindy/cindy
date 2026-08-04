@@ -178,6 +178,35 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_1_dup2');
   });
 
+  it('并发 subagent 同重铸 parent id: parent key 解析到终 id 后配对,不 swap(P2: Use normalized parent IDs)', () => {
+    // 两个 subagent 的 parent_tool_use_id 都是重铸的 Task_1(父 Agent/Task 调用重铸两次)。
+    // 若 parent key 用原始 Task_1, sameParent 全匹配、batchMatch 选最近 → A 的 result swap
+    // 到 B。parent key 必须解析到归一化终 id(Task_x1 / Task_1_dup2)才能正确配对。
+    const text = [
+      assistantEntry('aParent1', [toolUse('Task_1')], 'parent-task'), // 父调用 1 → Task_x1
+      assistantEntry('aParent2', [toolUse('Task_1')], 'parent-task'), // 父调用 2 → Task_1_dup2
+      // subagent A 的 child 调用(父 = 重铸 Task_1,归一化后 Task_x1)
+      assistantEntry('aA', [toolUse('Bash_1')], 'Task_1'),
+      // subagent B 的 child 调用(父 = 重铸 Task_1,归一化后 Task_1_dup2)
+      assistantEntry('aB', [toolUse('Bash_1')], 'Task_1'),
+      // A 的 result 先到 —— 父解析到 Task_x1,应配 A 的调用
+      userEntry('uA', [toolResult('Bash_1', 'A 的结果')], 'Task_1'),
+      // B 的 result —— 父解析到 Task_1_dup2,应配 B 的调用
+      userEntry('uB', [toolResult('Bash_1', 'B 的结果')], 'Task_1'),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    // 父调用定终
+    expect(contentOf(entries[0])[0].id).toBe('Task_x1');
+    expect(contentOf(entries[1])[0].id).toBe('Task_1_dup2');
+    // 子调用定终
+    expect(contentOf(entries[2])[0].id).toBe('Bash_x1');
+    expect(contentOf(entries[3])[0].id).toBe('Bash_1_dup2');
+    // A 的 result 配 A 的调用(Bash_x1), B 的配 B 的(Bash_1_dup2) —— 不 swap
+    expect(contentOf(entries[4])[0].tool_use_id).toBe('Bash_x1');
+    expect(contentOf(entries[5])[0].tool_use_id).toBe('Bash_1_dup2');
+  });
+
   it('位置配对: 孤儿 call + 重铸 call 并存时 result 配给真实执行的那次', () => {
     // 孤儿 Bash_5(无 result,中断残留) + 重铸 Bash_5(有 result):
     // 出现序配对会把 result 错配给孤儿,位置配对必须配给重铸 call。

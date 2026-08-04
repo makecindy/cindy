@@ -197,6 +197,10 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // 提取条目所属 subagent/child 身份(顶层 parentUuid 或 parent_tool_use_id):
   // 并发 subagent 可能 mint 相同 tool id, result 需按 parent 配对避免 swap
   // (codex-connector P2: Key subagent tool results by parent)。
+  // 用**原始** parent id 做配对 key: result 行的原始 parent 与对应 child call 的
+  // 原始 parent 相同(即使该 parent 是重铸的 Kimi id, 两个 subagent 都带 Task_1),
+  // 按「同 rawParent 的 FIFO」配对 —— 而不是终 id(终 id 化后 Task_x1 / Task_1_dup2
+  // 反而无法用原始 Task_1 关联), 也不是全局 batch(交错时 lastAssistantBatch 错配)。
   const parentKeyOf = (entry: JsonObject): string | undefined => {
     const p = entry.parent_tool_use_id ?? entry.parentUuid;
     return typeof p === 'string' && p ? p : undefined;
@@ -266,17 +270,27 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         const stack = openCalls.get(originalId);
         let matched: { originalId: string; finalId: string; batch: number; parentKey?: string } | undefined;
         if (stack) {
-          // 优先配「同 parent 的最近批」: 并发 subagent mint 相同 tool id 时, result
-          // 属于哪个 subagent 由 parent 身份决定 —— 若只用全局 lastAssistantBatch,
-          // subagent A 的 assistant 行被 B 的顶掉后, A 的 result 会错配给 B 的调用,
-          // 转录 replays/imports swap 子 agent 的输出(codex-connector P2)。
+          // 优先配「同 rawParent 的 FIFO」: 并发 subagent mint 相同 tool id 时, result
+          // 属于哪个 subagent 由 parent 身份决定 —— 用原始 parent id 分组, 组内按
+          // 出现序 FIFO 配对(第一个 result 配第一个同 parent 调用)。
+          // 不能用全局 lastAssistantBatch(交错时 A 的 assistant 行被 B 顶掉, A 的
+          // result 错配给 B), 也不能用终 id 化 parent(同原始 Task_1 归一化后变成
+          // Task_x1 / Task_1_dup2, 无法用原始 Task_1 关联回)。
+          // (codex-connector P2: Key subagent tool results by parent / Use normalized
+          // parent IDs)。
           const resultParent = parentKeyOf(entry);
           const sameParent = resultParent !== undefined
             ? stack.filter((c) => c.parentKey === resultParent)
             : stack;
           const candidates = sameParent.length > 0 ? sameParent : stack;
-          const batchMatch = candidates.find((c) => c.batch === lastAssistantBatch);
-          matched = batchMatch ?? candidates[candidates.length - 1];
+          // 同 rawParent 组内 FIFO: 配出现序最前的未配对 call。
+          // 无 parent 时回退既有语义: 同批 FIFO → 最近(batch 优先, 最后 fallback)。
+          if (resultParent !== undefined && sameParent.length > 0) {
+            matched = sameParent[0];
+          } else {
+            const batchMatch = candidates.find((c) => c.batch === lastAssistantBatch);
+            matched = batchMatch ?? candidates[candidates.length - 1];
+          }
           stack.splice(stack.indexOf(matched), 1);
         }
         const inherited = matched?.finalId ?? firstFinalByOriginal.get(originalId);
@@ -650,9 +664,11 @@ export async function normalizeClaudeSessionJsonlToolIds(
     }
   }
   if (recoveredFromBackup) {
-    // 归一化未生效(rename 降级失败,从备份恢复原文):返回 changed=false,
-    // 与「无改动」同语义,不误导调用方以为已归一化。
-    return { filePath, changed: false, backupPath };
+    // 归一化未生效(rename 降级失败,从备份恢复原文):复用 normalized 的全部统计
+    // 字段, 仅把 changed 覆盖为 false —— 不误导调用方以为已归一化, 也满足返回
+    // 类型的必填字段(lineCount / skipped / dedupedBlockCount 等, copilot review)。
+    const { text: _, ...rest } = normalized;
+    return { filePath, ...rest, changed: false, ...(backupPath ? { backupPath } : {}) };
   }
   const { text: _, ...rest } = normalized;
   return { filePath, ...rest, ...(backupPath ? { backupPath } : {}) };
