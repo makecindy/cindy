@@ -62,10 +62,19 @@ function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   void opResult.catch(() => undefined);
   const chainNext = opResult.catch(() => undefined).finally(() => {
     if (_writeChains.get(sessionId) === chainNext) _writeChains.delete(sessionId);
-    if (_latestWriteResults.get(sessionId) === opResult) {
-      _latestWriteResults.delete(sessionId);
-    }
   });
+  // Keep a settled failure visible to the next durable-boundary waiter until
+  // a later successful write replaces it.  Treating a rejected write as
+  // "nothing pending" would let attachment ownership advance past a snapshot
+  // that never became crash-recoverable.
+  void opResult.then(
+    () => {
+      if (_latestWriteResults.get(sessionId) === opResult) {
+        _latestWriteResults.delete(sessionId);
+      }
+    },
+    () => undefined,
+  );
   _writeChains.set(sessionId, chainNext);
   _latestWriteResults.set(sessionId, opResult);
   return opResult;

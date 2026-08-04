@@ -97,6 +97,7 @@ describe('agent input queue snapshot durability boundary', () => {
     const failedFlush = awaitAgentInputQueueSnapshotPersistence('snapshot-retry');
     await expect(failedFlush).rejects.toBe(failure);
     await expect(failedSave).rejects.toBe(failure);
+    await expect(awaitAgentInputQueueSnapshotPersistence('snapshot-retry')).rejects.toBe(failure);
 
     const retrySave = saveAgentInputQueueSnapshot('snapshot-retry', [queued('second')]);
     const retryFlush = awaitAgentInputQueueSnapshotPersistence('snapshot-retry');
