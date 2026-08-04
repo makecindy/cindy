@@ -14,6 +14,14 @@
  *                 直写、逐条模式弹 fs_write 确认卡、plan 拒);远程工作区
  *                 (remoteHostId 非空)明确拒——路径在远端机器,本地代写
  *                 写不到(规则 26,首期不支持不静默坏)。
+ *                 例外分支(2026-08-04):callId 属于「仅运行脚本」通道的
+ *                 调用时(无会话,cardService 条目带 scriptWorkdir =
+ *                 schedule.workingDir),以该目录为写入根直写——无会话就
+ *                 没有 permission 模式可跟随、也无人在场可弹确认卡;
+ *                 授权来源是 schedule 自身的工作目录配置(script-runner
+ *                 本就以此目录 spawn 用户配置的命令,脚本进程对该目录
+ *                 有完整写权,意识代写不扩大写面),callId 经同一本
+ *                 cardService 账 finalize/清扫,用完即废。
  *       'save'    主 agent 过户的 save 票据目录——仅 write;复用
  *                 saveDeposit 票据库的 TTL/次数/字节预算与文件名消毒去重
  *                 (与 fetch as:'file' 下载落盘同一本账)。
@@ -68,8 +76,9 @@ export interface FsSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 私有数据目录根(生产 = userData/ghost-fs;意识各占 <root>/<ghostId>)。 */
   dataRootDir(): string;
-  /** callId → 归属反查(生产 = cardService.callInfoOf;不信意识自报)。 */
-  callInfo(callId: string): { ghostId: string; sessionId: string | null } | null;
+  /** callId → 归属反查(生产 = cardService.callInfoOf;不信意识自报)。
+   *  scriptWorkdir 仅脚本通道条目带(schedule.workingDir),会话调用为 null。 */
+  callInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir?: string | null } | null;
   /** sessionId → 会话快照(生产查 localDb sessions 行;查无返回 null)。 */
   getSessionSnapshot(sessionId: string): Promise<FsSessionSnapshot | null>;
   /**
@@ -458,7 +467,7 @@ export class GhostFsSlot {
     return { ok: true, op: 'write', path: written.fileName, bytes: decoded.bytes.byteLength };
   }
 
-  /* ── root:'workdir' 会话工作目录(跟随会话 permission)──────────────── */
+  /* ── root:'workdir' 会话工作目录(跟随会话 permission;脚本通道例外直写)── */
 
   private async handleWorkdirWrite(
     ghostId: string,
@@ -471,15 +480,32 @@ export class GhostFsSlot {
     }
     const info = this.deps.callInfo(callId);
     if (!info || info.ghostId !== ghostId) return fail('callId 无效或不属于本意识');
-    if (!info.sessionId) return fail('本次调用无会话上下文,无法定位工作目录');
-    const session = await this.deps.getSessionSnapshot(info.sessionId);
-    if (!session) return fail('会话不存在,无法定位工作目录');
-    if (session.remoteHostId) {
-      return fail('当前会话是 SSH 远程工作区,工作目录在远端机器,意识写文件暂不支持(请改用 root:"data" 私有目录)');
+
+    // 写入根两个来源(同一 callId 账本反查,都不信意识自报):
+    // - 会话通道:session 快照的 workingDir,放行与否跟随会话 permission 模式;
+    // - 脚本通道:登记时的 scriptWorkdir(schedule.workingDir),无会话可裁、
+    //   无人可弹确认卡——直写(schedule 配置即授权,见文件头例外分支注释)。
+    let workdirSource: 'session' | 'script';
+    let session: FsSessionSnapshot | null = null;
+    let workingDir: string;
+    if (info.sessionId) {
+      workdirSource = 'session';
+      session = await this.deps.getSessionSnapshot(info.sessionId);
+      if (!session) return fail('会话不存在,无法定位工作目录');
+      if (session.remoteHostId) {
+        return fail('当前会话是 SSH 远程工作区,工作目录在远端机器,意识写文件暂不支持(请改用 root:"data" 私有目录)');
+      }
+      if (!session.workingDir || !path.isAbsolute(session.workingDir)) {
+        return fail('当前会话没有本地工作目录');
+      }
+      workingDir = session.workingDir;
+    } else if (info.scriptWorkdir && path.isAbsolute(info.scriptWorkdir)) {
+      workdirSource = 'script';
+      workingDir = info.scriptWorkdir;
+    } else {
+      return fail('本次调用无会话上下文,无法定位工作目录');
     }
-    if (!session.workingDir || !path.isAbsolute(session.workingDir)) {
-      return fail('当前会话没有本地工作目录');
-    }
+
     const reason = validateFsRelPath(req.path);
     if (reason) return fail(reason);
     const relPath = req.path as string;
@@ -488,9 +514,9 @@ export class GhostFsSlot {
 
     let realWorkdir: string;
     try {
-      realWorkdir = await fs.promises.realpath(session.workingDir);
+      realWorkdir = await fs.promises.realpath(workingDir);
     } catch {
-      return fail('工作目录不存在');
+      return fail(workdirSource === 'script' ? '脚本工作目录不存在' : '工作目录不存在');
     }
     const target = path.join(realWorkdir, ...relPath.split('/'));
     if (!isInsideDir(realWorkdir, target)) return fail('path 越界');
@@ -502,6 +528,23 @@ export class GhostFsSlot {
     } catch {
       /* 不存在 = 新建 */
     }
+
+    // 脚本通道直写:无会话可裁、无人可弹确认卡——schedule 配置即授权
+    // (script-runner 本就以此目录 spawn 用户配置的命令,脚本进程对该目录有
+    // 完整写权,意识代写不扩大写面);日志标明 channel 供事后分辨。
+    if (workdirSource === 'script') {
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, decoded.bytes);
+      this.deps.log?.info('ghost fs write (workdir)', {
+        ghostId,
+        channel: 'script',
+        relPath,
+        bytes: decoded.bytes.byteLength,
+      });
+      return { ok: true, op: 'write', path: relPath, bytes: decoded.bytes.byteLength };
+    }
+    // 会话通道继续往下(session 与 sessionId 在上方分支均已判空;此守卫只做类型收窄与防御)。
+    if (!session || !info.sessionId) return fail('本次调用无会话上下文,无法定位工作目录');
 
     const verdict = workdirWriteVerdict(session.permissionMode, session.planModeEnabled);
     if (verdict === 'deny') {

@@ -1,6 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import type { Schedule } from '@cindy/maker-scheduler';
+import { GhostCardService } from '../../cindy-brain/cardService.js';
+import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
+import type { InstalledGhost } from '../../../shared/ghost.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
@@ -16,9 +23,13 @@ const callGhostToolMock = vi.hoisted(() =>
     }),
   ),
 );
+// cardService 账本:缺省 void spy(生命周期断言用);端到端用例转发到真实实例。
+const registerCallMock = vi.hoisted(() => vi.fn());
+const finalizeCallMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostPipeDispatcher: () => ({ callGhostTool: callGhostToolMock }),
+  getGhostCardService: () => ({ registerCall: registerCallMock, finalizeCall: finalizeCallMock }),
 }));
 
 vi.mock('../../maker-ipc/register.js', () => ({
@@ -63,6 +74,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
     sendToSessionMock.mockReset();
     callGhostToolMock.mockReset();
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
+    registerCallMock.mockReset();
+    finalizeCallMock.mockReset();
   });
 
   it('maps Jira reads to the current xd-atlassian argument contract', async () => {
@@ -113,6 +126,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       ghostId: 'xd-feishu',
       tool: 'call_tool',
       args: { name: 'im_list_chats', args: { sort_type: 'ByActiveTimeDesc', page_size: 15 } },
+      callId: expect.any(String),
     });
 
     callGhostToolMock.mockClear();
@@ -125,6 +139,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       ghostId: 'xd-feishu',
       tool: 'call_tool',
       args: { name: 'im_read_messages', args: { container_id: 'oc_1', start_time: '1710000000' } },
+      callId: expect.any(String),
     });
 
     await expect(
@@ -153,6 +168,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       ghostId: 'xd-feishu',
       tool: 'call_tool',
       args: { name: 'im_read_messages', args: { container_id: 'oc_123', page_size: 10 } },
+      callId: expect.any(String),
     });
     expect(result).toMatchObject({ ok: true, messages: [{ message_id: 'om_1' }] });
 
@@ -315,8 +331,136 @@ describe('SchedulerScriptCapabilityBroker', () => {
     ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
     expect(sendToSessionMock).not.toHaveBeenCalled();
   });
+
+  it('forwards out_file to xd-atlassian and rejects unsafe paths', async () => {
+    const broker = new SchedulerScriptCapabilityBroker();
+    const searched = await broker.call(
+      { method: 'jira.search_jql', params: { jql: 'project = DING', out_file: 'reports/r.json' } },
+      new Set(['jira.read']),
+      { schedule: schedule() },
+    );
+    expect(searched).toMatchObject({ args: { action: 'search_jql', out_file: 'reports/r.json' } });
+    const got = await broker.call(
+      { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'issue.json' } },
+      new Set(['jira.read']),
+      { schedule: schedule() },
+    );
+    expect(got).toMatchObject({ args: { action: 'get', out_file: 'issue.json' } });
+    // 与 fs 槽同一口径(validateFsRelPath):穿越/绝对/反斜杠/空白一律 INVALID_ARGS。
+    for (const bad of ['../escape.json', '/abs/x.json', 'a\\b.json', '', '   ']) {
+      await expect(
+        broker.call(
+          { method: 'jira.search_jql', params: { jql: 'x', out_file: bad } },
+          new Set(['jira.read']),
+          { schedule: schedule() },
+        ),
+      ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    }
+  });
+
+  it('registers script-channel callId before dispatch and finalizes it on success and failure', async () => {
+    const broker = new SchedulerScriptCapabilityBroker();
+    await broker.call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']),
+      { schedule: schedule() },
+    );
+    // 登记形状:无会话、带 schedule.workingDir 作为脚本通道落盘根。
+    expect(registerCallMock).toHaveBeenCalledTimes(1);
+    const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(info).toEqual({
+      ghostId: 'xd-atlassian', toolUseId: null, sessionId: null, scriptWorkdir: 'C:\\project',
+    });
+    // 同一 callId 下行给意识;顺序:register → dispatch → finalize。
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ callId }));
+    expect(finalizeCallMock).toHaveBeenCalledWith(callId);
+    expect(registerCallMock.mock.invocationCallOrder[0]).toBeLessThan(
+      callGhostToolMock.mock.invocationCallOrder[0],
+    );
+    expect(finalizeCallMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      callGhostToolMock.mock.invocationCallOrder[0],
+    );
+
+    // 失败路径同样 finalize——不 finalize 条目永驻,callId 永久有效(破"用完即废")。
+    registerCallMock.mockClear();
+    finalizeCallMock.mockClear();
+    callGhostToolMock.mockResolvedValueOnce({ ok: false, errorCode: 'GHOST_ASLEEP', message: 'x' });
+    await expect(
+      broker.call(
+        { method: 'jira.get', params: { issue_key: 'DING-1' } },
+        new Set(['jira.read']),
+        { schedule: schedule() },
+      ),
+    ).rejects.toMatchObject({ code: 'GHOST_ASLEEP' });
+    expect(finalizeCallMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('端到端:脚本通道 out_file 经真实 cardService + fs 槽落进 schedule 工作目录', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-e2e-'));
+    try {
+      const cardService = new GhostCardService({
+        hasCardSlot: () => false,
+        sanitize: (html: string) => ({ ok: true, html }),
+        persist: async () => {},
+        broadcast: () => {},
+      });
+      const fsSlot = new GhostFsSlot({
+        getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
+        dataRootDir: () => path.join(tmp, 'ghost-fs'),
+        callInfo: (callId) => cardService.callInfoOf(callId),
+        getSessionSnapshot: async () => null,
+        requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' as const }),
+        writeSaveDeposit: async () => null,
+      });
+      registerCallMock.mockImplementation((callId: string, info: never) =>
+        cardService.registerCall(callId, info),
+      );
+      finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
+      // 模拟意识行为(xd-atlassian 的 deliver 路径):收到 tool-call 后按 out_file
+      // 经 fs 槽 root:'workdir' 泄洪写盘,回 saved_to 相对路径。
+      callGhostToolMock.mockImplementation(async (request: unknown) => {
+        const { callId, args } = request as { callId: string; args: Record<string, unknown> };
+        const outFile = args.out_file as string;
+        const w = await fsSlot.handleFsRequest('xd-atlassian', {
+          op: 'write', root: 'workdir', callId, path: outFile, content: '{"issues":[1,2,3]}',
+        });
+        if (!w.ok) return { ok: false, errorCode: 'INTERNAL', message: w.message ?? 'write failed' };
+        return { ok: true, result: { saved_to: outFile } };
+      });
+
+      const result = await new SchedulerScriptCapabilityBroker().call(
+        { method: 'jira.search_jql', params: { jql: 'project = DING', out_file: 'reports/jira.json' } },
+        new Set(['jira.read']),
+        { schedule: schedule({ workingDir: tmp }) },
+      );
+      expect(result).toMatchObject({ saved_to: 'reports/jira.json' });
+      // 字节真身落在 schedule 工作目录内,脚本可按相对路径从自己 cwd 读回。
+      expect(await fs.promises.readFile(path.join(tmp, 'reports', 'jira.json'), 'utf8')).toBe('{"issues":[1,2,3]}');
+      // 交卷后条目已 settle:宽限窗外这个 callId 不再能写(账本生命周期兜底)。
+      expect(cardService.inFlightCallInfoOf('nope')).toBeNull();
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 // Compile-time fixture: legacy schedules may omit executionMode.
 const _legacySchedule: Partial<Schedule> = { prompt: 'legacy' };
 void _legacySchedule;
+
+/** 端到端用例的已装意识(fixture):声明 fs 槽,好让 fs 槽资格审通过。 */
+function makeInstalledGhost(id: string): InstalledGhost {
+  return {
+    manifest: {
+      schemaVersion: 2,
+      id,
+      name: id,
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['fs'],
+    } as InstalledGhost['manifest'],
+    dir: '/tmp/fake-install-dir',
+    enabled: true,
+  };
+}

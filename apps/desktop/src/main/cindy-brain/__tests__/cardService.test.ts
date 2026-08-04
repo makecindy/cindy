@@ -316,6 +316,25 @@ describe('withCardToken(令牌注入纯函数)', () => {
     expect(svc.inFlightCallInfoOf('c1')).toBeNull();
     expect(svc.inFlightCallInfoOf('nope')).toBeNull();
   });
+
+  it('脚本通道条目:callInfoOf 带出 scriptWorkdir;供片拒绝;finalize 后随同一节奏回收', () => {
+    const { svc, broadcast, advance } = makeService();
+    svc.registerCall('c1', { ghostId: 'g1', toolUseId: null, sessionId: null, scriptWorkdir: 'D:\\proj' });
+    // fs 槽 workdir 档凭 scriptWorkdir 定位脚本通道的写入根。
+    expect(svc.callInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: null, scriptWorkdir: 'D:\\proj' });
+    // 脚本通道无 sessionId/toolUseId 锚点:供片拒,broadcast 不发生。
+    const r = svc.handleCardUpdate('g1', update('c1'));
+    expect(r.accepted).toBe(false);
+    expect(r.reason).toBe('script-call-no-card');
+    expect(broadcast).not.toHaveBeenCalled();
+    // 用完即废:finalize + 宽限窗过后,懒清扫在下一次写操作时回收条目,
+    // 旧 callId 不再能定位任何写入根。
+    svc.finalizeCall('c1');
+    expect(svc.callInfoOf('c1')).not.toBeNull();
+    advance(31_000); // > SWEEP_MIN_INTERVAL_MS(30s) 且 > GRACE_MS(10s)
+    svc.registerCall('c2', { ghostId: 'g1', toolUseId: null, sessionId: null, scriptWorkdir: 'D:\\proj' });
+    expect(svc.callInfoOf('c1')).toBeNull();
+  });
 });
 
 describe('parseCardHeightReport(report-height IPC 校验 + clamp 纯函数)', () => {

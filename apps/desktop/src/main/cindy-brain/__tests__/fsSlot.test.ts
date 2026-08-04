@@ -36,6 +36,8 @@ interface HarnessOverrides {
   saveWrite?: FsSlotDeps['writeSaveDeposit'];
   callSessionId?: string | null;
   callGhostId?: string;
+  /** 脚本通道条目的落盘根(schedule.workingDir);undefined = 会话调用不带。 */
+  callScriptWorkdir?: string | null;
 }
 
 function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
@@ -48,6 +50,7 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
         ? {
             ghostId: overrides.callGhostId ?? GHOST_ID,
             sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
+            scriptWorkdir: overrides.callScriptWorkdir ?? null,
           }
         : null,
     getSessionSnapshot: async () => (overrides.session === undefined ? null : overrides.session),
@@ -349,5 +352,52 @@ describe('GhostFsSlot', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect(fs.existsSync(path.join(outside, 'escape.txt'))).toBe(false);
+  });
+
+  it('workdir(脚本通道):无会话但带 scriptWorkdir 的调用直写落盘、不弹确认卡', async () => {
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+    });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'reports/result.json', content: '{"n":1}', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: true, op: 'write', path: 'reports/result.json' });
+    // 脚本通道无会话可弹确认卡:直写,确认桥零调用。
+    expect(confirmCalls).toHaveLength(0);
+    expect(await fs.promises.readFile(path.join(workdir, 'reports', 'result.json'), 'utf8')).toBe('{"n":1}');
+  });
+
+  it('workdir(脚本通道):无会话且无 scriptWorkdir 仍拒(无上下文不落盘的回归)', async () => {
+    const { slot } = makeHarness(dataRoot, { callSessionId: null });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('无会话上下文');
+  });
+
+  it('workdir(脚本通道):越界路径/不存在的根/非绝对根都拒', async () => {
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: workdir });
+    // 越界相对路径:全套路径纪律对脚本通道同样生效。
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: '../escape.txt', content: 'x', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(tmpRoot, 'escape.txt'))).toBe(false);
+    // 根不存在:fail-closed,不为脚本通道自动 mkdir 根目录。
+    const missing = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: path.join(tmpRoot, 'no-such-dir'),
+    });
+    const rMissing = await missing.slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(rMissing).toMatchObject({ ok: false });
+    expect((rMissing as { message: string }).message).toContain('脚本工作目录不存在');
+    // 非绝对根:登记侧只应放绝对路径,这里防御性拒。
+    const relative = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: 'relative/dir' });
+    expect(await relative.slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    })).toMatchObject({ ok: false });
   });
 });
