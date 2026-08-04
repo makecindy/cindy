@@ -944,6 +944,34 @@ describe('对外模型代理 — resolveExternalModelRouteDecision（无会话�
       headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
     });
   });
+
+  it('自定义 requestPath 供应商:pathOverride 随决策带上(与会话路由一致)', async () => {
+    // 精确端点供应商(如 /tenant/acme/infer):外部路由必须把 pathOverride 带出去,
+    // 否则请求会被转发到客户端传入的 /v1/messages 而打不中该端点。
+    setCustomProviders([
+      buildUserProvider({
+        id: 'exact-claude',
+        name: 'Exact Claude',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://gateway.example/api',
+            requestPath: '/tenant/acme/infer?stream=1',
+            models: [{ id: 'exact-house-claude', name: 'Exact House Claude' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'exact-claude' && agent === 'claude-code' ? 'sk-exact' : null,
+    );
+
+    const decision = await resolveExternalModelRouteDecision('exact-house-claude', KEY, '');
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-exact', authorization: 'Bearer sk-exact' },
+      upstreamOverride: 'https://gateway.example/api',
+      pathOverride: '/tenant/acme/infer?stream=1',
+    });
+  });
 });
 
 describe('对外模型代理 — listExternalRoutableProviders（下拉候选）', () => {

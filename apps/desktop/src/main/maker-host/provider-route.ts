@@ -647,7 +647,15 @@ export async function resolveExternalModelRouteDecision(
   const providerId = inferred ?? (defaultProviderId?.trim() || null);
   if (!providerId) return null;
   const resolved = await resolveProviderRouteDecision(providerId, 'claude-code', gatewayKey);
-  return resolved?.decision ?? null;
+  if (!resolved?.decision) return null;
+  // 与会话路由(resolveSessionRouteDecision 的 withRequestPath)一致:自定义 requestPath 的
+  // 供应商必须把 pathOverride 带上。否则外部请求会被 compat-proxy 转发到客户端传入的
+  // Anthropic 路径(/v1/messages),命中 /tenant/acme/infer 这类精确端点的供应商就会失败。
+  // (resolveProviderRouteDecision 本身不套 requestPath,是因为其另一消费者 remote-claude-route
+  //  对自定义 requestPath 直接判不支持;compat-proxy 支持 pathOverride,故这里补上。)
+  return resolved.routing.requestPath
+    ? { ...resolved.decision, pathOverride: resolved.routing.requestPath }
+    : resolved.decision;
 }
 
 /**
