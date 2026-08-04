@@ -85,6 +85,8 @@ export interface BrowserChromeProps {
   onOpenInSystemBrowser: () => void;
   /** 「更多」菜单项:复制当前页链接到剪贴板(反馈 toast 由 TabBody 做)。 */
   onCopyLink: () => void;
+  /** 原生 popup view 必须在 renderer portal 打开时暂时让出层叠空间。 */
+  onOverlayOpenChange?: (open: boolean) => void;
 }
 
 /** Imperative ref —— 父组件(BrowserTabBody)用 keydown 监听 Cmd/Ctrl+L,调
@@ -112,6 +114,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       canOpenInSystemBrowser,
       onOpenInSystemBrowser,
       onCopyLink,
+      onOverlayOpenChange,
     },
     ref,
   ) {
@@ -292,7 +295,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       )}
       {/* 更多菜单:trigger 复用 chrome 图标按钮视觉(默认态 + 菜单打开时 active 高亮,
           走 data-[state=open])。菜单项在无有效链接(新标签空白态)时置灰。 */}
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={onOverlayOpenChange}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

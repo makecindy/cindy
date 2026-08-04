@@ -21,9 +21,10 @@
 
 import { createLogger } from '@/lib/logger';
 
-import { addTab, ensureHydrated, getBucket } from '../store';
+import { addTab, closeTab, ensureHydrated, getBucket } from '../store';
 import { eagerSpawnAndReport } from './rsbBrowserBridge';
 import { markPopupSpawnedTab } from './popupTabs';
+import { findNativePopupTabBySurface, registerNativePopupTab } from './nativePopupTabs';
 import { requestRightSidebarVisibility } from './sidebarCommands';
 
 const log = createLogger('rightSidebar.popupRouter');
@@ -59,11 +60,14 @@ export function initPopupRouter(): () => void {
   }
   initialized = true;
 
-  const off = api.onRsbBrowserPopup(({ url, openerSessionId }) => {
+  const offPopup = api.onRsbBrowserPopup(({ url, openerSessionId, nativePopupSurfaceId }) => {
     const targetSessionId = openerSessionId ?? fallbackSessionId;
     if (!targetSessionId) {
       // 既无 opener 归属也无任何已知 session(冷启动即触发)——丢弃优于瞎猜。
       log.warn('popup dropped: no opener attribution and no known session', { url });
+      if (nativePopupSurfaceId) {
+        void api.rsbNativePopup.close({ surfaceId: nativePopupSurfaceId }).catch(() => undefined);
+      }
       return;
     }
     // 给新 tab 一份完整 default state,只把 url 替换成 popup URL;hydrateState
@@ -74,6 +78,7 @@ export function initPopupRouter(): () => void {
       title: '',
       favicon: null,
       isAudible: false,
+      ...(nativePopupSurfaceId ? { nativePopupSurfaceId } : {}),
     };
     void (async () => {
       // 写 bucket 前一律先水合(含当前 session):store 契约要求先 hydrated 再写 ——
@@ -86,12 +91,33 @@ export function initPopupRouter(): () => void {
       // addTab resolve:持久化 IPC 在途期间 React 已可能 mount webview 并加载完
       // callback 页,快速 window.close 会赶在登记前到达且 close 事件不重发。
       const newTab = await addTab(targetSessionId, 'web-browser', initialState, {
-        onOptimisticAdd: markPopupSpawnedTab,
+        onOptimisticAdd: (tabId) => {
+          markPopupSpawnedTab(tabId);
+          if (nativePopupSurfaceId) {
+            registerNativePopupTab(tabId, targetSessionId, nativePopupSurfaceId);
+          }
+        },
       });
       // addTab IPC(upsert/setActive)在途期间用户可能已关闭该 tab —— closeTab
       // 乐观移除 + ipc.close 落库后,tab 已不在 bucket 里。若此时仍 eagerSpawn,
       // 会在 pool/Main registry 里留下孤立入口并重新加载 OAuth URL(Codex P1)。
       if (!getBucket(targetSessionId).tabs.some((t) => t.id === newTab.id)) return;
+      if (nativePopupSurfaceId) {
+        // Claim immediately so main can register the exact popup WebContents,
+        // deliver self-close, and pin both popup + ordinary webview opener.
+        const claimed = await api.rsbNativePopup.claim({
+          surfaceId: nativePopupSurfaceId,
+          sessionId: targetSessionId,
+          tabId: newTab.id,
+        });
+        if (!claimed.alive) {
+          await closeTab(targetSessionId, newTab.id);
+          return;
+        }
+      } else {
+        // Legacy/non-native payloads still materialize an ordinary webview.
+        await eagerSpawnAndReport(targetSessionId, newTab.id, url);
+      }
       // 一律离屏物化,不区分目标 session 是否当前:
       // - 跨 session / Shell 已卸载:没有 BrowserTabBody 去出生 webview;
       // - 同 session 但侧栏折叠:Shell 挂着但 shellVisible=false,#700 之后隐藏
@@ -99,7 +125,6 @@ export function initPopupRouter(): () => void {
       // 各形态都没有别的物化路径(与 main 端 open tab-op 的 eagerSpawnAndReport
       // 同理);侧栏可见时 TabBody 会 acquire 同一个 pool entry,eagerSpawn 幂等
       // 复用,无副作用。
-      await eagerSpawnAndReport(targetSessionId, newTab.id, url);
       // 物化期间 tab 可能已经没了:OAuth callback 页在 dom-ready 前就
       // window.close()(guest 自关路径会把最后一个 tab 关掉并请求收起侧栏),
       // 或用户手动关了它。此时再无条件请求 'open' 会把刚写的"收起"存档翻回
@@ -115,11 +140,26 @@ export function initPopupRouter(): () => void {
       });
     })().catch((err) => {
       log.error('rsb popup → addTab failed', { sessionId: targetSessionId, url, err });
+      if (nativePopupSurfaceId) {
+        void api.rsbNativePopup.close({ surfaceId: nativePopupSurfaceId }).catch(() => undefined);
+      }
     });
   });
 
+  const offNative = api.rsbNativePopup
+    ? api.rsbNativePopup.onEvent((event) => {
+        if (event.type !== 'closed') return;
+        const tab = findNativePopupTabBySurface(event.surfaceId);
+        if (!tab) return;
+        void closeTab(tab.sessionId, tab.tabId).catch((err) => {
+          log.warn('native popup self-close → closeTab failed', { ...tab, err });
+        });
+      })
+    : () => undefined;
+
   teardown = () => {
-    off();
+    offPopup();
+    offNative();
   };
   return teardown;
 }

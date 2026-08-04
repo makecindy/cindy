@@ -181,7 +181,7 @@ describe('useBrowserWebview', () => {
     expect(result!.webview).toBe(mockWebview);
   });
 
-  it('touches an existing entry through acquire when it becomes visible', async () => {
+  it('keeps an existing wrapper stable when a visible tab becomes hidden', async () => {
     const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
     const existing: MockPoolEntry = {
       wrapper: document.createElement('div'),
@@ -191,12 +191,20 @@ describe('useBrowserWebview', () => {
     poolMocks.currentEntry = existing;
     let result: UseBrowserWebviewResult | null = null;
 
-    render(createElement(HookProbe, {
+    const view = render(createElement(HookProbe, {
       visible: true,
       onResult: (next) => { result = next; },
     }));
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
+    expect(result!.wrapper).toBe(existing.wrapper);
+    expect(result!.webview).toBe(mockWebview);
+
+    view.rerender(createElement(HookProbe, {
+      visible: false,
+      onResult: (next) => { result = next; },
+    }));
+
     expect(result!.wrapper).toBe(existing.wrapper);
     expect(result!.webview).toBe(mockWebview);
   });
@@ -214,7 +222,7 @@ describe('useBrowserWebview', () => {
     });
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
-    expect(result!.wrapper).toBeNull();
+    expect(result!.wrapper).not.toBeNull();
     expect(result!.webview).toBe(mockWebview);
     expect(mockWebview.addEventListener).toHaveBeenCalledWith(
       'render-process-gone',

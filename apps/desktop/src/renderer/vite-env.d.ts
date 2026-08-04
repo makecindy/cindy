@@ -2296,8 +2296,28 @@ interface ElectronAPI {
       disposition: string;
       openerTabId?: string;
       openerSessionId?: string;
+      nativePopupSurfaceId?: string;
     }) => void,
   ) => () => void;
+
+  /** Main-owned WebContentsView used only for Chromium-created popup contexts. */
+  rsbNativePopup: {
+    claim: (
+      input: import('../shared/rsbNativePopup').RsbNativePopupClaimInput,
+    ) => Promise<import('../shared/rsbNativePopup').RsbNativePopupClaimResult>;
+    setBounds: (input: {
+      surfaceId: string;
+      bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
+      visible: boolean;
+    }) => Promise<{ ok: true }>;
+    command: (
+      input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,
+    ) => Promise<{ ok: true }>;
+    close: (input: { surfaceId: string }) => Promise<{ ok: true }>;
+    onEvent: (
+      callback: (event: import('../shared/rsbNativePopup').RsbNativePopupEvent) => void,
+    ) => () => void;
+  };
 
   /**
    * RSB web-browser plugin:guest webview 内按下 Cmd/Ctrl+L 时,main 端
