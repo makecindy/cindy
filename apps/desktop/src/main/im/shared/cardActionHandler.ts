@@ -1275,14 +1275,19 @@ export function createCardActionHandler(
     }
   }
 
-  async function patchExpiredInteractionCard(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function patchExpiredInteractionCard(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+  ): Promise<boolean> {
     const notice = adapter.interactionExpiredNotice;
-    if (!notice) return;
+    if (!notice) return true;
     try {
       await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(notice));
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`expired interaction card cleanup failed (non-fatal): ${msg}`);
+      return false;
     }
   }
 
@@ -1373,15 +1378,13 @@ export function createCardActionHandler(
           const decision = decisionFromPress(event);
           if (!decision) {
             log.warn(`unknown buttonId=${event.buttonId} — ignoring`);
-            await patchExpiredInteractionCard(im, event);
-            return;
+            return patchExpiredInteractionCard(im, event);
           }
 
           const requestId = String(event.payload.requestId ?? '');
           if (!requestId) {
             log.warn('no requestId in payload — ignoring');
-            await patchExpiredInteractionCard(im, event);
-            return;
+            return patchExpiredInteractionCard(im, event);
           }
 
           const resolved = resolvePending(requestId, decision);
@@ -1389,8 +1392,7 @@ export function createCardActionHandler(
             log.warn(
               `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
             );
-            await patchExpiredInteractionCard(im, event);
-            return;
+            return patchExpiredInteractionCard(im, event);
           }
 
           // Patch the card to a resolved state so the user sees their choice took.

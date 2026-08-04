@@ -516,6 +516,34 @@ describe('Telegram 失效交互卡', () => {
     );
   });
 
+  it('过期卡收口失败时返回可重试结果', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const result = await registeredHandler(handler)({
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'permission:allow:once',
+      payload: { requestId: 'already-resolved' },
+    });
+
+    expect(result).toBe(false);
+  });
+
   it('project:cancel 在卡片收口失败时返回可重试结果', async () => {
     const im = makeIm();
     im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
