@@ -178,6 +178,7 @@ describe('local-db:sessions:update handler wiring', () => {
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
     const pinnedAt = '2026-08-03T04:08:26.000Z';
     await invokeUpdate('codex-local', { pinnedAt });
+    await vi.dynamicImportSettled();
 
     const pinned = h
       .sqlite!.prepare('SELECT pinned_at AS pinnedAt FROM sessions WHERE id = ?')
@@ -185,10 +186,12 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(pinned.pinnedAt).toBe(Date.parse(pinnedAt));
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { pinnedAt },
+      patch: { pinnedAt, status: 'active' },
     });
+    expect(h.summarizeSession).toHaveBeenCalledWith('codex-local');
 
     h.tapWindowBroadcast.mockClear();
+    h.summarizeSession.mockClear();
     await invokeUpdate('codex-local', { pinnedAt: null });
 
     const unpinned = h
@@ -199,6 +202,7 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { pinnedAt: null },
     });
+    expect(h.summarizeSession).not.toHaveBeenCalled();
   });
 
   it('broadcasts the stored value and skips summary generation for an invalid pin date', async () => {

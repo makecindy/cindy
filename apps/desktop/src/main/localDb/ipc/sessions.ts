@@ -1184,7 +1184,13 @@ export function registerSessionIpc(
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     const updated = sessionToCamel(row);
     const broadcastPatch =
-      p.pinnedAt === undefined ? p : { ...p, pinnedAt: updated.pinnedAt };
+      p.pinnedAt === undefined
+        ? p
+        : {
+            ...p,
+            pinnedAt: updated.pinnedAt,
+            ...(updated.pinnedAt === null ? {} : { status: updated.status }),
+          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
