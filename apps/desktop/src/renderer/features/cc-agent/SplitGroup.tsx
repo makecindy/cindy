@@ -221,7 +221,8 @@ function SplitBranchView({ branch, ...childProps }: Omit<SplitNodeViewProps, 'no
     [],
   );
 
-    (event: ReactPointerEvent) => {
+  const handleGutterPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
       event.preventDefault();
       const container = containerRef.current;
