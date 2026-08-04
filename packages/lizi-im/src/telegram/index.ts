@@ -821,15 +821,20 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
     return startTelegramStreaming(
       {
+        // 本轮的**每一条**新消息出站都先核验回合身份。逐条核验不可省成"补送时查
+        // 一次": 换 owner 完全可能发生在补送成功之后, 那时 finalize 还要继续发
+        // 剩余分段、上传图片 —— 这些出站若不各自核验, 旧回合的剩余内容照样会落到
+        // 已失权的旧 userId 手里。核验只在真的换代/换主人/取消时才失败, 正常轮次
+        // 恒为空操作。
         send: async (markdown) => {
+          this.assertRoundStillLive(round);
           const { messageId } = await this.sendRenderedChunk(userId, markdown);
           return messageId;
         },
         repost: async (markdown) => {
           // 核验必须在发之前: 补送是全新的 callSend, 按当前世代重新取 api —— 换
           // owner 那条分支不 stopPolling、api 对象不变, 于是旧回合的答案会照发给
-          // **已失去授权的旧 userId**。核验失败就抛, 由 finalize 抛回原始编辑错误,
-          // 顺带把后续分段与图片一并挡在门外(它们同属这个已死的回合)。
+          // **已失去授权的旧 userId**。核验失败就抛, 由 finalize 抛回原始编辑错误。
           this.assertRoundStillLive(round);
           const { messageId } = await this.sendRenderedChunk(
             userId,
@@ -843,7 +848,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           const { html } = markdownToTelegramHtml(markdown);
           await this.editHtml(chatId, nativeId, html, undefined);
         },
-        uploadImages: (messageId, imageUrls) => this.uploadImages(messageId, imageUrls),
+        uploadImages: async (messageId, imageUrls) => {
+          // 图片同样是新消息出站(sendPhoto / sendMediaGroup), 与分段同一条纪律。
+          this.assertRoundStillLive(round);
+          await this.uploadImages(messageId, imageUrls);
+        },
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
         editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),

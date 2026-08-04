@@ -1747,6 +1747,89 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(sendAttempts).toBe(1));
   });
 
+  it('补送成功后才换 owner: 剩余分段与图片同样不再发给旧 userId', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let ownerSwitched = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      const result = await originalCall(method, params, signal);
+      // 首段补送刚落地就换主人 —— 此刻 assertRoundStillLive 已经放行过一次,
+      // 剩余分段与图片若不各自核验就会继续发给已失权的旧 userId。
+      if (
+        method === 'sendMessage' &&
+        String(params?.text ?? '').includes('第一段') &&
+        !ownerSwitched
+      ) {
+        ownerSwitched = true;
+        await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '444555' });
+      }
+      return result;
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 7m');
+    vi.useFakeTimers();
+    try {
+      // chunkTelegramSource 不会按 | 分段, 用一段超长正文迫使终稿分片。
+      const long = `第一段${'甲'.repeat(4200)}\n\n第二段尾巴`;
+      const finalized = handle.finalize(long).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(ownerSwitched).toBe(true);
+    // 首段已经发出(那时回合还有效), 但换主人之后的剩余分段一律不许再出站。
+    const tailSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('第二段尾巴'),
+    );
+    expect(tailSends).toEqual([]);
+    // 也不许对新主人产生任何出站。
+    expect(
+      api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '444555'),
+    ).toEqual([]);
+  });
+
+  it('补送成功后换 owner: 受管图片不再上传(sendPhoto / sendMediaGroup 都不发)', async () => {
+    await connect();
+    const imgPath = path.join(tmpDir, 'shot.png');
+    fs.writeFileSync(imgPath, 'fake-png');
+    const originalCall = api.call.bind(api);
+    let ownerSwitched = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      const result = await originalCall(method, params, signal);
+      // 补送刚落地就换主人 —— 图片上传排在它后面, 若不各自核验就会照传。
+      if (method === 'sendMessage' && String(params?.text ?? '').includes('带图答案')) {
+        ownerSwitched = true;
+        await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '444556' });
+      }
+      return result;
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 4m');
+    // 走 abs: 旁路(与既有相册用例同一搭法), 不依赖 resolveImageUrl 注入。
+    handle.addExtraImageAbsPath?.(imgPath);
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('带图答案').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(ownerSwitched).toBe(true);
+    expect(
+      api.calls.filter((c) => c.method === 'sendPhoto' || c.method === 'sendMediaGroup'),
+    ).toEqual([]);
+  });
+
   it('退避期间只换 owner(api 对象不变): 旧回合的答案不发给已失权的旧 userId', async () => {
     await connect();
     const originalCall = api.call.bind(api);
