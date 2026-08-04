@@ -810,3 +810,150 @@ describe('EmbeddingClient · 全命中批次同样复查自洽', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('EmbeddingClient · 空向量一律拒绝', () => {
+  /**
+   * 缺省维度那条路径上,"全批与首条一致"对一批空数组是成立的(expected 取到 0),
+   * 整批会通过校验、进缓存,slot 随后回一个 dim: 0 —— 插件把空向量写进索引,之后的
+   * 缓存命中继续"成功"(PR #1707 review 第十轮)。默认维度允许变,但合法 embedding
+   * 的长度必须为正,这条与维度无关。
+   */
+  it('不传 dimensions 且上游 200 回空数组 → SERVER_ERROR,且一条都不入缓存', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [
+        { object: 'embedding', index: 0, embedding: [] },
+        { object: 'embedding', index: 1, embedding: [] },
+      ],
+      usage: { prompt_tokens: 2 },
+    });
+    const client = clientWith(fetchImpl);
+    const req = { texts: ['a', 'b'], model: 'voyage/voyage-4' as const };
+
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    await expect(client.embed(req)).rejects.toThrow(/empty embedding at index 0/);
+    // 没入缓存 ⇒ 第二次仍然真的打了网络(否则会走全命中分支静默返回空向量)
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('只有其中一条为空也要拒绝(首条正常时不能被首条基准放过)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [
+        { object: 'embedding', index: 0, embedding: [1, 2] },
+        { object: 'embedding', index: 1, embedding: [] },
+      ],
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' }),
+    ).rejects.toThrow(/empty embedding at index 1/);
+  });
+
+  it('上下文化路径同样拒绝空向量', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ data: [{ embedding: [1, 2] }, { embedding: [] }] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a', 'b']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/empty embedding at group 0 index 1/);
+  });
+});
+
+describe('EmbeddingClient · 缓存项记住上游实际型号', () => {
+  /** 造一个"上游实际型号可切换"的网关:每次按当前 model 名回定宽向量。 */
+  function switchableGateway(state: { model: string; width: number }) {
+    const inputs: string[][] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: string[] };
+      inputs.push(body.input);
+      return new Response(
+        JSON.stringify({
+          object: 'list',
+          model: state.model,
+          data: body.input.map((_t, index) => ({
+            object: 'embedding',
+            index,
+            embedding: Array.from({ length: state.width }, (_v, i) => i),
+          })),
+          usage: { prompt_tokens: 1 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    return { fetchImpl, inputs };
+  }
+
+  /**
+   * 只存向量的话:首次未命中回网关型号(带版本号),第二次全命中回请求别名 ——
+   * 同一段文本的 model 元数据凭空变了一次,插件会据此误判索引需要重建。
+   */
+  it('全命中时回缓存里记的实际型号,不回请求别名', async () => {
+    const state = { model: 'voyage/voyage-4-20250101', width: 2 };
+    const { fetchImpl } = switchableGateway(state);
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+
+    const first = await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+    const second = await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+
+    expect(first.modelUsed).toBe('voyage/voyage-4-20250101');
+    expect(second.cacheHits).toBe(1);
+    expect(second.modelUsed).toBe(first.modelUsed);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 别名换后端**而维度恰好相同**时最危险:长度检查一律放行,旧缓存向量与新取回向量
+   * 会被混在一批里、统一标成新型号。两个模型的向量不可比,而形状完全正常。
+   */
+  it('别名换了后端(维度相同)→ 清缓存整批重取,交付的一批同源', async () => {
+    const state = { model: 'voyage/voyage-4-20250101', width: 2 };
+    const { fetchImpl, inputs } = switchableGateway(state);
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+
+    await client.embed({ texts: ['a'], model: 'voyage/voyage-4' }); // a → 旧后端
+    state.model = 'voyage/voyage-4-20260801'; // 服务端换后端,维度不变
+    const mixed = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+
+    // a 命中旧型号、b 取回新型号 ⇒ 判为不同源,清缓存后整批重取
+    expect(mixed.modelUsed).toBe('voyage/voyage-4-20260801');
+    expect(mixed.cacheHits).toBe(0);
+    expect(inputs[inputs.length - 1]).toEqual(['a', 'b']);
+    expect(mixed.embeddings.map((v) => v.length)).toEqual([2, 2]);
+  });
+
+  it('全命中但缓存跨两个型号 → 同样重取(不打网络就交付混合结果是不行的)', async () => {
+    const state = { model: 'voyage/voyage-4-20250101', width: 2 };
+    const { fetchImpl, inputs } = switchableGateway(state);
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+
+    await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+    state.model = 'voyage/voyage-4-20260801';
+    await client.embed({ texts: ['b'], model: 'voyage/voyage-4' }); // 零命中,自己内部自洽
+    // 此刻缓存里 a=旧型号、b=新型号,下面这次两条都命中
+    const both = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+
+    expect(both.cacheHits).toBe(0);
+    expect(inputs[inputs.length - 1]).toEqual(['a', 'b']);
+    expect(both.modelUsed).toBe('voyage/voyage-4-20260801');
+  });
+
+  it('上游不回 model 字段时退回请求别名,且不会因此反复重取', async () => {
+    const fetchImpl = respond({
+      data: [{ object: 'embedding', index: 0, embedding: [1, 2] }],
+      usage: { prompt_tokens: 1 },
+    });
+    const client = clientWith(fetchImpl);
+
+    const first = await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+    const second = await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+
+    expect(first.modelUsed).toBe('voyage/voyage-4');
+    expect(second.modelUsed).toBe('voyage/voyage-4');
+    expect(second.cacheHits).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});

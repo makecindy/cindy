@@ -208,8 +208,13 @@ function mixedLengthAt(vectors: readonly number[][]): number | null {
   return null;
 }
 
+/** 报错里的位置描述; 扁平路径每组恒 1 条, 组下标即文本下标。 */
+function positionLabel(mode: 'flat' | 'grouped', group: number, chunk: number): string {
+  return mode === 'flat' ? `index ${group}` : `group ${group} index ${chunk}`;
+}
+
 /**
- * 校验**批内每一条**向量的长度都一致, 且(显式请求了维度时)等于请求值。
+ * 校验**批内每一条**向量的长度都一致、非空, 且(显式请求了维度时)等于请求值。
  *
  * 两件事分开说:
  *
@@ -223,8 +228,13 @@ function mixedLengthAt(vectors: readonly number[][]): number | null {
  *    上游改默认时拿它硬判会把本来正常的响应全判失败;而"批内不等长"无论默认值是多少
  *    都一定是坏数据。
  *
+ * 3. **零长度一律非法**(同 review 第十轮):缺省维度那条路径上, 上游以 200 回一批空
+ *    数组时"全批与首条一致"是成立的(expected 取到 0), 整批会通过校验、进缓存、
+ *    并让 slot 回一个 `dim: 0` 给插件 —— 插件把空向量写进索引, 之后的缓存命中继续
+ *    "成功"。默认维度允许变, 但合法 embedding 的长度必须为正, 这条与维度无关。
+ *
  * 上游对不支持的维度行为不统一(可能 400, 也可能静默回默认长度), 这里是最后一道
- * 能看见长度的地方。
+ * 能看见长度的地方; 也是**每条向量进缓存前的唯一关口**(见 embed() 的调用位置)。
  *
  * `mode` 只影响报错里的位置描述:扁平路径每组恒为 1 条(组下标 = 文本下标),报
  * "group 3 index 0" 只会让调方困惑。
@@ -242,13 +252,21 @@ function assertBatchDimensions(
     for (let c = 0; c < group.length; c++) {
       const got = group[c]?.length;
       if (got === undefined) continue;
+      // 空向量:没有任何维度约定能让它合法。先判它, 否则缺省路径上首条为空时
+      // expected 会被定成 0, 整批"自洽通过"。
+      if (got === 0) {
+        throw new EmbeddingError(
+          `model '${model}' returned an empty embedding at ${positionLabel(mode, d, c)}`,
+          'SERVER_ERROR',
+        );
+      }
       if (expected === undefined) {
         expected = got;
         continue;
       }
       if (got !== expected) {
         // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
-        const at = mode === 'flat' ? `index ${d}` : `group ${d} index ${c}`;
+        const at = positionLabel(mode, d, c);
         // 错误码要分清**是谁错了**(PR #1707 review 第八轮):
         //   - 显式传了 dimensions 而上游给了别的长度 = 这个型号不支持你要的维度,
         //     调方改参数才有救 → INVALID_MODEL(slot 层译成 INVALID_PARAMS);
@@ -270,11 +288,27 @@ function assertBatchDimensions(
   }
 }
 
+/**
+ * 缓存项 = 向量 + **产出它的上游实际型号**。
+ *
+ * 为什么必须连型号一起存(PR #1707 review 第十轮):请求里给的是别名, 上游返的
+ * `model` 才是实际型号(可能带版本号, 也可能在服务端换后端时变)。只存向量的话:
+ *   - 全命中时只能回别名, 同一段文本第二次调用的 `model` 元数据凭空变了一次,
+ *     插件会据此误判索引需要重建;
+ *   - 别名换后端而维度恰好相同时, 旧缓存向量与新取回向量会被混在一批里、统一
+ *     标成新型号 —— 两个模型的向量不可比, 而形状完全正常, 没有任何报错。
+ */
+interface CachedVector {
+  readonly vector: number[];
+  /** 写入这条缓存时上游回的 `model`(缺省则为请求别名)。 */
+  readonly model: string;
+}
+
 export class EmbeddingClient {
   private readonly resolveBaseUrl: () => string;
   private readonly getApiKey: () => string | undefined | null;
   private readonly fetchImpl: typeof fetch;
-  private readonly cache: LruCache<string, number[]>;
+  private readonly cache: LruCache<string, CachedVector>;
   private readonly log: EmbeddingLogger;
 
   constructor(opts: EmbeddingClientOptions) {
@@ -290,7 +324,7 @@ export class EmbeddingClient {
       typeof rawBaseUrl === 'function' ? () => normalize(rawBaseUrl()) : () => normalize(rawBaseUrl);
     this.getApiKey = opts.getApiKey;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-    this.cache = new LruCache<string, number[]>(opts.cacheSize ?? DEFAULT_CACHE_SIZE);
+    this.cache = new LruCache<string, CachedVector>(opts.cacheSize ?? DEFAULT_CACHE_SIZE);
     this.log = opts.logger ?? {};
     if (typeof this.fetchImpl !== 'function') {
       throw new Error('EmbeddingClient: global fetch not available; pass fetchImpl');
@@ -329,11 +363,14 @@ export class EmbeddingClient {
     // 两个不同的向量(上游加了不同前缀), 维度不同更是长度都不一样。漏计 = 后到的
     // 请求静默拿到前一档的向量, 而且因为形状看起来正常, 排查时毫无线索。
     const variant = cacheVariant(req.inputType, req.dimensions);
+    // 命中项各自来自哪个上游型号 —— 交付前要求整批同源(见下面两处判据)。
+    const hitModels = new Set<string>();
     for (let i = 0; i < req.texts.length; i++) {
       const key = cacheKey(req.model, req.texts[i], variant);
       const cached = this.cache.get(key);
       if (cached) {
-        result[i] = cached;
+        result[i] = cached.vector;
+        hitModels.add(cached.model);
         cacheHits++;
       } else {
         missIdx.push(i);
@@ -348,9 +385,25 @@ export class EmbeddingClient {
     // 返回一批混合长度的向量。
     if (missTexts.length === 0) {
       if (mixedLengthAt(result) !== null) {
-        return this.refetchAfterCacheReset(req, startedAt, 'all-cache-hit batch');
+        return this.refetchAfterCacheReset(req, startedAt, 'all-cache-hit batch mixes dimensions');
       }
-      return { embeddings: result, modelUsed: req.model, tokensUsed: 0, cacheHits };
+      // 命中项跨了两个上游型号(别名在中途被换了后端, 且维度恰好相同)—— 两个模型的
+      // 向量不可比, 清缓存重取一批同源的。
+      if (hitModels.size > 1) {
+        return this.refetchAfterCacheReset(
+          req,
+          startedAt,
+          `all-cache-hit batch spans models ${[...hitModels].join(' / ')}`,
+        );
+      }
+      return {
+        embeddings: result,
+        // 回**缓存里记的实际型号**而不是请求别名:同一段文本第二次调用时 model 元数据
+        // 不能凭空变一次, 否则插件会误判索引要重建 (review 第十轮)。
+        modelUsed: hitModels.values().next().value ?? req.model,
+        tokensUsed: 0,
+        cacheHits,
+      };
     }
 
     // 2. 调 XD Gateway
@@ -383,6 +436,9 @@ export class EmbeddingClient {
     // 非法向量当成功交付出去。判在前面 = 非法响应一条都不入缓存。
     assertBatchDimensions(grouped, req.model, req.dimensions, 'flat');
 
+    // 本批新向量的实际型号:上游回的 `model` 优先, 缺省退回请求别名。缓存项跟着记它。
+    const freshModel = apiResponse.model || req.model;
+
     for (let j = 0; j < missTexts.length; j++) {
       const vec = grouped[j]?.[0];
       if (!vec) {
@@ -393,7 +449,7 @@ export class EmbeddingClient {
       }
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
-      this.cache.set(cacheKey(req.model, missTexts[j], variant), vec);
+      this.cache.set(cacheKey(req.model, missTexts[j], variant), { vector: vec, model: freshModel });
     }
 
     // 组装后再校验一次"整批自洽" —— 上面那次只看了**新取回的**那部分。
@@ -414,26 +470,40 @@ export class EmbeddingClient {
       return this.refetchAfterCacheReset(req, startedAt, 'cache hits mixed with fresh results');
     }
 
+    // 同理的另一半:命中项与新取回项来自**不同型号**。别名换了后端而维度恰好相同时,
+    // 长度检查一律放行, 而下面会把整批统一标成 freshModel —— 一批里混着两个模型的
+    // 向量、却声称同一个型号, 是"不报错只是悄悄错"里最难查的一种 (review 第十轮)。
+    if (cacheHits > 0 && [...hitModels].some((m) => m !== freshModel)) {
+      return this.refetchAfterCacheReset(
+        req,
+        startedAt,
+        `cached model ${[...hitModels].join(' / ')} != upstream model ${freshModel}`,
+      );
+    }
+
     return {
       embeddings: result,
-      modelUsed: apiResponse.model || req.model,
+      modelUsed: freshModel,
       tokensUsed: apiResponse.usage?.prompt_tokens ?? apiResponse.usage?.total_tokens ?? 0,
       cacheHits,
     };
   }
 
   /**
-   * 发现缓存里存着不同维度的向量时:清空缓存,整批重取一次。
+   * 发现缓存与本批**不同源**时(维度不一致 / 上游型号不一致):清空缓存,整批重取一次。
    *
-   * 清得比必要范围大(其它型号的条目也没了)是有意的 —— 默认维度一变,该型号所有缓存
-   * 向量都已过期,而缓存只是内存里的性能优化,重取的代价远小于交付错数据。
+   * 两种不同源用同一个处置,因为它们坏的是同一件事:一批向量必须来自同一个模型的
+   * 同一个维度档,否则相似度比较无意义 —— 而两种情况下形状都可能完全正常。
+   *
+   * 清得比必要范围大(其它型号的条目也没了)是有意的 —— 默认维度或后端一变,该型号所有
+   * 缓存向量都已过期,而缓存只是内存里的性能优化,重取的代价远小于交付错数据。
    *
    * 重取吃**同一份**预算的剩余量:`timeoutMs` 是时长而不是绝对截止点,原样递下去等于
    * 重新计时 —— 第一次已经花掉 55 秒时重取还能再等 60 秒,插件那一次 await 最长接近
    * 120 秒,在途额度也一直占着,与手册承诺的"单次请求 60 秒"直接矛盾。
    *
-   * 递归至多一次:清空后本批全是 miss,两处调用点(全命中分支 / 命中与新取回混合)都
-   * 进不来。
+   * 递归至多一次:清空后本批全是 miss,四处调用点都以"有命中"为前提(全命中分支进不来,
+   * 混合分支的 `cacheHits > 0` 也不成立)。
    */
   private async refetchAfterCacheReset(
     req: EmbedRequest,
@@ -441,7 +511,7 @@ export class EmbeddingClient {
     why: string,
   ): Promise<EmbedResponse> {
     this.log.warn?.(
-      `[embedding-client] mixed vector lengths (${why}) for '${req.model}'; upstream default dimension likely changed — clearing cache and refetching`,
+      `[embedding-client] inconsistent batch (${why}) for '${req.model}'; upstream default dimension or backend model likely changed — clearing cache and refetching`,
     );
     this.cache.clear();
     let remaining: number | undefined;
