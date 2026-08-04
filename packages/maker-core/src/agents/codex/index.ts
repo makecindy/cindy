@@ -2479,8 +2479,14 @@ export class CodexAgent extends BaseAgent {
     /**
      * 会话中途切过模型的记录 (from = 本会话最初那个模型)。只服务压缩风暴的诊断
      * 消息 —— 它是这个故障唯一已知的触发路径, 也是用户唯一能自己动手绕开的。
+     *
      * `from` 一旦记下就不再更新: 多次切换后要提示的仍是那个「codex 还在按它算窗口」
-     * 的最初模型, 而不是中间某一跳。
+     * 的最初模型, 而不是中间某一跳 (A→B→C 得 {from:A, to:C})。
+     *
+     * **切回 from 时整条记录清空** (A→B→A): 那时当前模型与 codex 拿来算窗口的模型
+     * 又一致了, 窗口失配这个诱因已经消失, 再提示"切回 A"是让用户去做他刚做过的事。
+     * 留着记录还会写出 {from:A, to:A} 这种自相矛盾的文案。清空后若仍压不动, 走的是
+     * 不点名原因的那条兜底文案 —— 那时确实不知道原因, 不猜比猜错强。
      */
     let modelSwitchRecord: { from: string; to: string } | null = null;
     /**
@@ -8921,9 +8927,11 @@ export class CodexAgent extends BaseAgent {
         const prevCatalogModel = mutableCatalogModel;
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         // 压缩风暴诊断用 (见 modelSwitchRecord): 首个 from 是 codex 一直拿来算窗口
-        // 的那个模型, 后续切换只更新 to。
+        // 的那个模型, 后续切换只更新 to; 切回 from 则整条清空 (诱因已消失)。
         const prevSwitchRecord = modelSwitchRecord;
-        modelSwitchRecord = { from: modelSwitchRecord?.from ?? prevModel, to: newModel };
+        const switchOrigin = modelSwitchRecord?.from ?? prevModel;
+        modelSwitchRecord =
+          newModel === switchOrigin ? null : { from: switchOrigin, to: newModel };
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。

@@ -18475,6 +18475,49 @@ describe('CodexAgent compaction storm escalation', () => {
     await handle.close();
   });
 
+  /** 跑到熔断, 返回终态错误消息正文 (诊断文案由 modelSwitchRecord 决定)。 */
+  async function stormMessageAfterSwitches(
+    sessionId: string,
+    switches: readonly string[],
+  ): Promise<string> {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({ sessionId, model: 'model-a', workingDir: '/repo' });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    for (const m of switches) await handle.setModel(m);
+
+    for (const [i, tokens] of [326_503, 325_868, 325_922, 327_909].entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, tokens);
+    }
+    await flushEvents();
+    const terminal = findStormError(seen);
+    expect(terminal).toBeDefined();
+    await handle.close();
+    return (terminal!.data as { message: string }).message;
+  }
+
+  // Codex review: A→B→A 原先会记成 {from:A,to:A}, 文案变成"从 A 切到 A, 请切回 A"。
+  it('A→B→A 切回原模型后不再点名模型(诱因已消失)', async () => {
+    const msg = await stormMessageAfterSwitches('session-storm-aba', ['model-b', 'model-a']);
+    expect(msg).not.toContain('switched model');
+    // 落到不猜原因的兜底文案。
+    expect(msg).toContain('system prompt and tool definitions');
+  });
+
+  // A→B→C: from 保持最初的 A(codex 一直按它算窗口), to 是最新的 C。
+  it('A→B→C 保留最初来源与最新目标', async () => {
+    const msg = await stormMessageAfterSwitches('session-storm-abc', ['model-b', 'model-c']);
+    expect(msg).toContain('switched model from "model-a" to "model-c"');
+    expect(msg).toContain('Switch back to "model-a"');
+    expect(msg).not.toContain('model-b');
+  });
+
   it('开着 Maker Memory 时同样熔断(改成无条件回调没打断 flush 路径)', async () => {
     // 上面两条用例走的是默认的 makerMemory 关闭态 —— 那正是改动前的空洞:
     // onCompactBoundary 只在 memoryFlushController 存在时注册, 关掉 Maker Memory

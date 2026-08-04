@@ -71,12 +71,26 @@ export class CompactionStormTracker {
    * 喂入一条 usage。只有紧跟压缩边界的那一条参与判定, 其余直接忽略 —— turn 中途
    * 的 usage 反映的是压缩后又累积上去的内容, 拿它比较会把正常增长误判成"没压动"。
    *
+   * `contextTokens` 必须传 `tokenUsage.last.inputTokens`, 也就是**本次 API 请求的
+   * 完整 prompt token 数** —— 它就是该次请求的绝对上下文水位, 正是判据要比的东西。
+   * protocol.ts 把 `last` 描述成「上次 turn 的增量」, 那指的是相对 `total` 累计的
+   * 本次增量, 不是"上下文水位的增量"; 两条实测证据 (rollout 019fcd52):
+   *   - `total[n] - total[n-1] === last[n]` 精确成立 → total 是 last 的累加;
+   *   - `cached[n] ≈ last[n-1]` (28288 vs 28610 / 39552 vs 39722 / 76416 vs 76963)
+   *     → 本次 prompt 的前一大段命中上次请求建立的 cache, 这只有在 last 是**完整
+   *     prompt 量**时才成立; 若 last 只是"比上次多出来的部分", cached 不可能等于
+   *     上一条的完整 input。
+   * 传 `total` 会拿到单调累加的天文数字, 判据直接失效 —— 见同名单测。
+   *
    * 返回 null 表示这条 usage 不参与判定。
    */
   noteUsage(contextTokens: number, now: number): CompactionStormDecision | null {
     if (!this.awaitingUsage) return null;
-    if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
+    // **先消费 flag 再校验取值**: 压缩边界后的第一条 usage 无论有没有可用数字都
+    // 已经"用掉"了这次机会。留着 flag 会让紧随其后的普通 usage(turn 中途累积上去
+    // 的水位)被当成压缩后水位, 既可能凭空熔断, 也可能把真正的压后水位挤掉而漏判。
     this.awaitingUsage = false;
+    if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
 
     const previous = this.lastPostCompactionTokens;
     this.lastPostCompactionTokens = contextTokens;
@@ -126,8 +140,8 @@ export function buildCompactionStormMessage(opts: {
   const elapsedS = Math.round(opts.elapsedMs / 1000);
   const head =
     `Codex kept compacting the context without making progress — ` +
-    `${opts.ineffectiveCount} compactions over ${elapsedS}s each left about ` +
-    `${opts.contextTokens} input tokens, so compaction cannot recover this turn. ` +
+    `${opts.ineffectiveCount} compactions over ${elapsedS}s, each leaving about ` +
+    `${opts.contextTokens} input tokens behind, so compaction cannot recover this turn. ` +
     `It was interrupted automatically to stop the loop.`;
   if (opts.switchedModel) {
     return (
