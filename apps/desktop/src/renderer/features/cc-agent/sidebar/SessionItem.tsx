@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { SessionRenameInput } from '../SessionRenameInput';
@@ -90,6 +91,7 @@ import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -610,6 +612,11 @@ export const SessionItem = memo(function SessionItem({
       data-sidebar-session-row="true"
       role="button"
       tabIndex={0}
+      onPointerDown={(e) => {
+        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+          makerChatStore.ensureInitialMessages(session.id);
+        }
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
