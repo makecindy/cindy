@@ -343,6 +343,9 @@ export function PendingQueuePanel({
             const base = t(turnRunning ? 'newChat.pendingQueue.steerRunningTip' : 'newChat.pendingQueue.steerPausedTip');
             return steerShortcutLabel ? `${base} · ${steerShortcutLabel}` : base;
           })();
+          // The surrounding <p> owns the queue row's single-line nowrap +
+          // ellipsis contract. Do not override white-space in the structured
+          // body or multiline text islands can expand the row.
           const pendingRowContent = rowPresentation.isSyntheticTrigger
             ? t(rowPresentation.syntheticKind === 'continue'
                 ? 'newChat.pendingQueue.syntheticContinueLabel'
@@ -350,7 +353,7 @@ export function PendingQueuePanel({
             : hasStructuredAtoms ? (
                 <SentInlineAtomBody
                   agentReferences={agentReferences}
-                  className="relative top-px inline-flex min-w-0 max-w-full items-center gap-1 truncate whitespace-pre-wrap text-[13px] leading-[1.25]"
+                  className="relative top-px inline-flex min-w-0 max-w-full items-center gap-1 text-[13px] leading-[1.25]"
                   content={chatMessageContent}
                   pastedTextRanges={entry.chatMessage.pastedTextRanges}
                   quotesEncoded={entry.chatMessage.quotesEncoded}

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +15,11 @@ vi.mock('react-i18next', async (importOriginal) => {
 
 import { formatQuoteForSend } from '@/lib/chatQuotes';
 import { SentInlineAtomBody } from '@/components/chat/SentInlineAtomBody';
+
+const pendingQueueSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'new-chat', 'PendingQueuePanel.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 describe('SentInlineAtomBody', () => {
   it('keeps the same atom shapes in static queue/collapse projections without focus targets', () => {
@@ -55,5 +62,19 @@ describe('SentInlineAtomBody', () => {
     expect(screen.queryByRole('button')).toBeNull();
     expect(document.querySelector('button')).toBeNull();
     expect(document.querySelector('[tabindex]')).toBeNull();
+  });
+
+  it('leaves the pending queue single-line truncation contract to the row container', () => {
+    const bodyStart = pendingQueueSource.indexOf('<SentInlineAtomBody');
+    const bodyEnd = pendingQueueSource.indexOf('/>', bodyStart);
+
+    expect(bodyStart).toBeGreaterThanOrEqual(0);
+    expect(bodyEnd).toBeGreaterThan(bodyStart);
+    const bodyBlock = pendingQueueSource.slice(bodyStart, bodyEnd);
+    expect(bodyBlock).not.toContain('whitespace-pre-wrap');
+    expect(bodyBlock).not.toContain('truncate');
+    expect(pendingQueueSource).toContain(
+      "'relative top-px min-w-0 flex-1 truncate text-[13px] leading-[1.25]'",
+    );
   });
 });
