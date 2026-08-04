@@ -11,20 +11,24 @@ import {
   GHOST_CARD_HEIGHT_DEFAULT,
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
+  GHOST_MANIFEST_FILE,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
-  diffGhostPermissionItems,
   ghostPermissionBaselineKey,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
   isValidGhostId,
   layoutWithGhostPanel,
+  validateGhostManifest,
   type GhostHostNoticeKey,
   type GhostImageAspectRatio,
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -85,6 +89,7 @@ import {
 import {
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
+  parseOauthConnectSecretKey,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
@@ -95,6 +100,10 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import {
+  appendReadyGhostOauthReauthSuggest,
+  findGhostOauthReauthSuggest,
+} from './ghostOauthScopeStaleness.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
@@ -135,12 +144,6 @@ import {
 } from './gitlabAccountsMigration.js';
 import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
-import {
-  GhostAtResourceQueryScheduler,
-  listGhostAtResourceProviders,
-  resolveGhostAtResourceWorkingDir,
-  type GhostAtResourceProviderDeps,
-} from './atResourceProvider.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
 import { GhostCardActionDispatcher } from './cardActionDispatch.js';
 import { GhostSessionActivityTracker } from './ghostSessionActivity.js';
@@ -186,10 +189,22 @@ import {
   initGhostConfirmDialogBridge,
 } from './ghostConfirmDialogBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
+import {
+  type ConnectionAudienceResolution,
+  isConnectionSecretReady,
+  loadConnectionAudienceResolver,
+  type ConnectionAudienceResolver,
+} from './connectionAudienceResolver.js';
+import {
+  ConnectionTokenProvider,
+  type IssuedConnectionToken,
+} from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
+import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { ghostManifestDigest, PluginMarketLedger } from '../plugin-market/ledger.js';
 import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
@@ -585,6 +600,30 @@ function availableGhosts(): InstalledGhost[] {
   return getGhostManager().list().filter((ghost) =>
     isGhostAvailableForActiveSession(ghost.manifest.id),
   );
+}
+
+function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
+  try {
+    const suggest = getGhostOauthReauthSuggest(withRuntimeFiloGoogleClient(ghost.manifest));
+    return {
+      ...ghost,
+      ...(suggest
+        ? {
+            oauthScopeStale: {
+              secretKey: suggest.secretKey,
+              missingScopeCount: suggest.missingScopeCount,
+            },
+          }
+        : {}),
+    };
+  } catch (error) {
+    // 详情页角标是提示面，保险库异常不能让插件清单整体消失。
+    log.warn('ghost oauth scope stale projection omitted', {
+      ghostId: ghost.manifest.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return ghost;
+  }
 }
 
 function findAvailableGhost(id: string): InstalledGhost | null {
@@ -1649,6 +1688,82 @@ export function noteGhostSessionFocused(sessionId: string | null): void {
 let cindySlotSingleton: GhostCindySlot | null = null;
 let networkSlotSingleton: GhostNetworkSlot | null = null;
 let notifySlotSingleton: GhostNotifySlot | null = null;
+let connectionAudienceResolverSingleton: ConnectionAudienceResolver | null = null;
+let connectionTokenProviderSingleton: ConnectionTokenProvider | null = null;
+let pluginMarketLedgerSingleton: PluginMarketLedger | null = null;
+
+function getPluginMarketLedger(): PluginMarketLedger {
+  if (!pluginMarketLedgerSingleton) {
+    pluginMarketLedgerSingleton = new PluginMarketLedger(() =>
+      ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
+    );
+  }
+  return pluginMarketLedgerSingleton;
+}
+
+/** Read the locale-independent manifest digest from the installed package. */
+function readInstalledGhostManifestDigest(ghostId: string): string | null {
+  const ghost = getGhostManager().list().find((candidate) => candidate.manifest.id === ghostId);
+  if (!ghost) return null;
+  try {
+    const bytes = readBoundedFileNoFollowSync(
+      path.join(ghost.dir, GHOST_MANIFEST_FILE),
+      GHOST_INSTALL_MANIFEST_MAX_BYTES,
+    );
+    if (bytes === null) return null;
+    const validated = validateGhostManifest(JSON.parse(bytes.toString('utf8')) as unknown);
+    return validated.ok ? ghostManifestDigest(validated.manifest) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve Connection metadata only from a trusted organization market install. */
+function getConnectionAudienceResolver(): ConnectionAudienceResolver {
+  if (!connectionAudienceResolverSingleton) {
+    connectionAudienceResolverSingleton = loadConnectionAudienceResolver({
+      readInstalledManifest: (ghostId) =>
+        getGhostManager()
+          .list()
+          .find((candidate) => candidate.manifest.id === ghostId)?.manifest ?? null,
+      readInstalledManifestDigest: readInstalledGhostManifestDigest,
+      readMarketInstallation: (ghostId) => getPluginMarketLedger().installationForGhost(ghostId),
+      log,
+    });
+  }
+  return connectionAudienceResolverSingleton;
+}
+
+function resolveConnectionAudienceForGhost(
+  ghostId: string,
+): ConnectionAudienceResolution | null {
+  const state = getAuthState();
+  const user = state.isAuthenticated ? state.user : null;
+  if (!user) return null;
+  return getConnectionAudienceResolver().resolve(ghostId, {
+    membershipId: user.id,
+    membershipKind: user.membershipKind,
+    orgId: user.orgId,
+    orgSlug: user.orgSlug,
+  });
+}
+
+/** Main-memory-only Connection token issuer/cache. */
+function getConnectionTokenProvider(): ConnectionTokenProvider {
+  if (!connectionTokenProviderSingleton) {
+    connectionTokenProviderSingleton = new ConnectionTokenProvider({
+      issue: (audience) =>
+        serverApiFetch<IssuedConnectionToken>('/api/auth/connections/token', {
+          method: 'POST',
+          body: { audience },
+          baseUrl: () => getClientEndpoint('authApiBaseUrl'),
+          timeoutMs: 15_000,
+          redactErrorDetails: true,
+        }),
+    });
+  }
+  return connectionTokenProviderSingleton;
+}
 
 /** 意识系统提示通道(main → 全窗口 renderer;宿主 Toast 渲染,带意识身份头)。 */
 export const GHOST_NOTIFY_CHANNEL = 'ghosts:notify';
@@ -2718,6 +2833,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth' });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
         broadcastGhostHostNotice(
           ghostId,
           label
@@ -2730,6 +2846,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           source: 'oauth',
           ref: secretKey,
         });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       isConnectTargetCurrent: (ghostId, secretKey, decl) => {
         const ghost = findAvailableGhost(ghostId);
@@ -2768,6 +2885,14 @@ function getGhostConnectionManager(): GhostConnectionManager {
 
 let ghostSetupKvStore: GhostKvStore | null = null;
 
+/** 默认 OAuth 账号的授权面陈旧建议；只返回首个凭证槽，保持 envelope 有界。 */
+function getGhostOauthReauthSuggest(runtimeManifest: GhostManifest): GhostSetupReauthSuggest | undefined {
+  const oauthManager = getGhostOauthAccountManager();
+  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) =>
+    oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl),
+  );
+}
+
 /**
  * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
  * Unlike the legacy plugin-page projection this path is strict: storage or
@@ -2782,7 +2907,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  return evaluateGhostSetupAssessment(
+  const assessment = evaluateGhostSetupAssessment(
     runtimeManifest,
     {
       secretSaved: (key) => ghostSecretSaved(ghostId, key),
@@ -2810,6 +2935,13 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       }),
     },
   );
+  // 性能短路:required 时建议注定被丢弃,不再为它读保险库。
+  // "required 绝不带建议"的契约不变量仍由 appendReadyGhostOauthReauthSuggest 守着。
+  if (assessment.state !== 'ready') return assessment;
+  return appendReadyGhostOauthReauthSuggest(
+    assessment,
+    getGhostOauthReauthSuggest(runtimeManifest),
+  );
 }
 
 /**
@@ -2831,11 +2963,10 @@ export async function executeGhostSetupAction(args: {
     };
   }
   if (args.action.kind === 'oauth_connect') {
-    const prefix = 'oauth_connect:secret:';
-    if (!args.action.id.startsWith(prefix)) {
+    const secretKey = parseOauthConnectSecretKey(args.action.id);
+    if (!secretKey) {
       return { ok: false, errorCode: 'ACTION_STALE', message: '授权动作已失效' };
     }
-    const secretKey = args.action.id.slice(prefix.length);
     const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
     const decl = runtimeManifest.network?.secrets?.find(
       (secret) => secret.key === secretKey && secret.source === 'oauth',
@@ -2994,6 +3125,13 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
           getGhostOauthAccountManager().getFreshAccessToken(ghostId, secretKey, decl, accountId),
         invalidateAccessToken: (ghostId, secretKey, accountId) =>
           getGhostOauthAccountManager().invalidateAccessToken(ghostId, secretKey, accountId),
+      },
+      // Cindy Connection JWT:audience 只由 Host 根据组织和插件 id 推导，令牌只留在
+      // Main 内存并由 networkSlot 直接注入，插件与 Node Worker 都拿不到。
+      connectionTokens: {
+        resolve: resolveConnectionAudienceForGhost,
+        getToken: (input) => getConnectionTokenProvider().getToken(input),
+        invalidate: (input) => getConnectionTokenProvider().invalidate(input),
       },
       // 多连接凭证(network.connections):按在装清单逐 decl 查连接管理器——
       // 用户添加的地址并入动态白名单(hostsFor),出网时按 hostname 精确
@@ -3205,6 +3343,11 @@ export async function installOrUpdateMarketGhostPackage(
      * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
      */
     reviewedManifest?: GhostManifest;
+    /**
+     * 经市场账本摘要认证的旧版已安装清单。历史详情投影漏掉、但用户此前
+     * 已批准的权限可继续作为基线；未被该基线覆盖的真实包权限仍走复核。
+     */
+    previouslyInstalledManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
@@ -3224,6 +3367,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     ghostId: string;
     version: string;
     reviewedManifest?: GhostManifest;
+    previouslyInstalledManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
   },
@@ -3276,10 +3420,11 @@ async function installOrUpdateMarketGhostPackageLocked(
           'Downloaded Plugin package changed after permission review',
         );
       }
-      const added = diffGhostPermissionItems(
+      const added = unreviewedGhostPermissionItems(
         expected.reviewedManifest,
+        expected.previouslyInstalledManifest,
         inspected.canonicalManifest,
-      ).added;
+      );
       if (added.length > 0) {
         const review: PluginMarketPackageReview = {
           manifest: inspected.manifest,
@@ -3579,9 +3724,14 @@ export function registerGhostIpc(): void {
     const networkSecretDecls = ghost.manifest.network?.secrets ?? [];
     const nodeSecretDecls = ghost.manifest.node?.secretBindings ?? [];
     const userSecretKeys = networkSecretDecls
-      // login-email(派生)与 oauth(主机托管授权)都没有"用户填值"这回事,
+      // Host 派生与 oauth(主机托管授权)都没有"用户填值"这回事,
       // 不进 /secrets 收单键集(oauth 的 client 凭证走 /oauth 端点)。
-      .filter((s) => s.source !== 'login-email' && s.source !== 'oauth')
+      .filter(
+        (s) =>
+          s.source !== 'login-email'
+          && s.source !== 'oauth'
+          && s.source !== 'oidc-token',
+      )
       .map((s) => s.key)
       .concat(nodeSecretDecls.map((s) => s.key));
     // login-email 派生身份:GET 状态回查附 identity(= 当前登录邮箱,设置页
@@ -3590,12 +3740,30 @@ export function registerGhostIpc(): void {
     const identitySecretKeys = networkSecretDecls
       .filter((s) => s.source === 'login-email')
       .map((s) => s.key);
+    const managedSecretDecls = networkSecretDecls.filter(
+      (s) => s.source === 'oidc-token',
+    );
+    const connectionResolution =
+      managedSecretDecls.length > 0
+        ? (() => {
+            try {
+              return resolveConnectionAudienceForGhost(ghostId);
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+    const managedSecretStates = managedSecretDecls.map((s) => ({
+      key: s.key,
+      saved: isConnectionSecretReady(s.inject.hosts ?? [], connectionResolution),
+    }));
     return handleGhostSecretsRequest({
       method,
       pathname,
       readBodyText,
       userSecretKeys,
       identitySecretKeys,
+      managedSecretStates,
       getLoginEmail: () => getAuthState().user?.email ?? null,
       ghostId,
       vault: {
@@ -3644,6 +3812,7 @@ export function registerGhostIpc(): void {
       ghostId,
       onChanged: (secretKey) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       log,
     });
@@ -3936,6 +4105,10 @@ export function registerGhostIpc(): void {
       activateGhostsAndMigrateLegacyAccounts,
     );
     onAuthStateChange(() => {
+      // Login/logout, Membership switches, and refresh integration all cross
+      // an auth notification boundary. Discard every short-lived Connection
+      // assertion so a late request can never reuse the previous identity.
+      connectionTokenProviderSingleton?.clearAll();
       if (!getAppCapabilities().canUseCindyAccountServices) suspendCindyAccountGhosts();
       // Even when provisioning itself is a no-op, the renderer and agent
       // roster must immediately reflect the new session capability set.
@@ -4159,57 +4332,7 @@ export function registerGhostIpc(): void {
   });
 
   ipcMain.on('ghosts:list', (event) => {
-    event.returnValue = { ghosts: availableGhosts() };
-  });
-
-  const atResourceProviderDeps: GhostAtResourceProviderDeps = {
-    listGhosts: () => manager.list(),
-    isAvailable: isGhostAvailableForActiveSession,
-    isDisabledForWorkdir: (ghostId, workingDir) =>
-      isGhostDisabledForWorkdir(ghostId, workingDir),
-    getSetupAssessment: getGhostSetupAssessment,
-    callTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
-  };
-  const atResourceQueryScheduler = new GhostAtResourceQueryScheduler(atResourceProviderDeps);
-  ipcMain.handle('ghosts:at-resource-providers:list', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const request = raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? raw as Record<string, unknown>
-      : {};
-    const scope = await resolveGhostAtResourceWorkingDir(request, getSessionFsSnapshot);
-    return {
-      items: scope.allowed
-        ? listGhostAtResourceProviders(atResourceProviderDeps, scope.workingDir)
-        : [],
-    };
-  });
-  ipcMain.handle('ghosts:at-resources:query', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throwIpcError('INVALID_PARAMS', 'Plugin resource query must be an object');
-    }
-    const request = raw as Record<string, unknown>;
-    if (typeof request.ghostId !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'ghostId is required');
-    }
-    const scope = await resolveGhostAtResourceWorkingDir(request, getSessionFsSnapshot);
-    if (!scope.allowed) {
-      return {
-        success: false,
-        error: 'Plugin resource provider unavailable',
-        items: [],
-        truncated: false,
-      };
-    }
-    const requestScope = typeof request.sessionId === 'string' && request.sessionId.length > 0
-      ? `session:${request.sessionId.slice(0, 256)}`
-      : `draft:${scope.workingDir ?? ''}`;
-    return atResourceQueryScheduler.query(`${event.sender.id}:${requestScope}`, {
-      ghostId: request.ghostId,
-      ...(scope.workingDir ? { workingDir: scope.workingDir } : {}),
-      ...(typeof request.query === 'string' ? { query: request.query } : {}),
-      ...(typeof request.limit === 'number' ? { limit: request.limit } : {}),
-    });
+    event.returnValue = { ghosts: availableGhosts().map(projectGhostForRenderer) };
   });
 
   // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入
@@ -4759,7 +4882,8 @@ export function registerGhostIpc(): void {
   // dev-only 运行时控制通道(QA:能起 / 能停 / 能崩 / 能看状态)。
   // packaged 版不注册;正式的按需拉起 / 闲置熄灯由上层自动策略负责。
   if (!app.isPackaged) {
-    ipcMain.handle('ghosts:dev-runtime', async (_event, action: unknown, id: unknown) => {
+    ipcMain.handle('ghosts:dev-runtime', async (event, action: unknown, id: unknown, payload: unknown) => {
+      assertTrustedAppRendererEvent(event);
       if (action === 'status') return { states: runtime.listStates() };
       if (typeof id !== 'string' || id.trim().length === 0) {
         throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
@@ -4780,6 +4904,37 @@ export function registerGhostIpc(): void {
         case 'crash':
           if (!runtime.crashForTest(id)) throwIpcError('INVALID_PARAMS', `意识 ${id} 不在运行中`);
           return { state: runtime.stateOf(id) };
+        case 'call': {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            throwIpcError('INVALID_PARAMS', 'call payload must be an object');
+          }
+          const request = payload as { tool?: unknown; args?: unknown };
+          if (
+            typeof request.tool !== 'string' ||
+            !/^[a-z][a-z0-9_-]{0,63}$/.test(request.tool)
+          ) {
+            throwIpcError('INVALID_PARAMS', 'tool must be a valid plugin tool name');
+          }
+          const args = request.args ?? {};
+          if (!args || typeof args !== 'object' || Array.isArray(args)) {
+            throwIpcError('INVALID_PARAMS', 'args must be an object');
+          }
+          let encodedArgs: string;
+          try {
+            encodedArgs = JSON.stringify(args);
+          } catch {
+            throwIpcError('INVALID_PARAMS', 'args must be JSON serializable');
+          }
+          if (encodedArgs.length > 256 * 1024) {
+            throwIpcError('INVALID_PARAMS', 'args are too large');
+          }
+          requireGhostAvailableForActiveSession(id);
+          return getGhostPipeDispatcher().callGhostTool({
+            ghostId: id,
+            tool: request.tool,
+            args: args as Record<string, unknown>,
+          });
+        }
         default:
           throwIpcError('INVALID_PARAMS', `未知 action ${JSON.stringify(action)}`);
       }
@@ -4924,10 +5079,22 @@ function broadcastGhostProvisioning(active: boolean): void {
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,
+  opts?: {
+    /**
+     * true = 花名册没变,只是 renderer 投影字段(OAuth 陈旧角标)需要刷新。
+     * 跳过清单指纹、未读扫尾与 skill 链接对账这些只对装/卸/启停/换版有
+     * 意义的花名册侧效应,OAuth 账号操作不再连带两趟全量磁盘扫描。
+     */
+    projectionOnly?: boolean;
+  },
 ): void {
-  getGhostSetupManifestTracker().note(ghosts);
-  sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
-  const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  if (!opts?.projectionOnly) {
+    getGhostSetupManifestTracker().note(ghosts);
+    sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
+  }
+  const visible = ghosts
+    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id))
+    .map(projectGhostForRenderer);
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
     window.webContents.send('ghosts:changed', { ghosts: visible });
@@ -4946,7 +5113,7 @@ function broadcastGhostsChanged(
   // skill 槽共享链接对账:装/卸/启停/换版全走本广播,一处挂接全覆盖。
   // 异步合并执行,不阻塞广播;用全量 list() 而非 per-session 过滤后的 visible
   // (链接对账关心"装了什么",与当前会话可见性无关)。
-  scheduleGhostSkillReconcile();
+  if (!opts?.projectionOnly) scheduleGhostSkillReconcile();
 }
 
 // —— skill 槽链接对账调度:合并突发广播(in-flight + pending 双标志),

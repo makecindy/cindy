@@ -11,7 +11,6 @@ import {
   getAtDirectoryCompletionQuery,
   mergeAtResourceItems,
   scanAtResources,
-  scanPluginAtResources,
 } from '@/lib/atResourceService';
 
 function stubApi(options: {
@@ -25,8 +24,6 @@ function stubApi(options: {
   workspaceError?: Error;
   contextError?: Error;
   taskError?: Error;
-  pluginProviders?: unknown;
-  pluginResources?: unknown;
 }) {
   vi.stubGlobal('window', {
     electronAPI: {
@@ -60,14 +57,6 @@ function stubApi(options: {
             : vi.fn().mockResolvedValue(options.taskSearch),
         },
       },
-      ghosts: {
-        listAtResourceProviders: vi.fn().mockResolvedValue(
-          options.pluginProviders ?? { items: [] },
-        ),
-        queryAtResources: vi.fn().mockResolvedValue(
-          options.pluginResources ?? { success: true, items: [], truncated: false },
-        ),
-      },
     },
   });
 }
@@ -93,20 +82,20 @@ describe('filterAtResources', () => {
     { type: 'dir' as const, name: 'apps', relPath: 'apps' },
     { type: 'session' as const, name: 'Release planning', relPath: 'cindy://session/1' },
     { type: 'agent' as const, name: 'reviewer', relPath: '.claude/agents/reviewer.md' },
-    { type: 'plugin-provider' as const, name: 'Issues', relPath: 'issues' },
+    { type: 'plugin-command' as const, name: 'Issues', relPath: 'issues' },
   ];
 
   it('hides files and directories until the user types a query', () => {
     expect(filterAtResources(items, '').map((item) => item.type)).toEqual([
       'file-picker',
       'agent',
-      'plugin-provider',
+      'plugin-command',
     ]);
   });
 
   it('keeps each empty-query source compact', () => {
     const providers = Array.from({ length: 5 }, (_, index) => ({
-      type: 'plugin-provider' as const,
+      type: 'plugin-command' as const,
       name: `Provider ${index}`,
       relPath: `provider-${index}`,
     }));
@@ -569,57 +558,4 @@ describe('scanAtResources context providers', () => {
     );
   });
 
-  it('lists Plugin entries without running them, then searches only the selected provider', async () => {
-    stubApi({
-      workspace: { success: true, items: [] },
-      pluginProviders: {
-        items: [{ ghostId: 'issues', name: 'Issue Tracker', description: 'Project issues' }],
-      },
-      pluginResources: {
-        success: true,
-        pluginName: 'Issue Tracker',
-        items: [{
-          id: 'ISSUE-1',
-          label: 'Fix login',
-          description: 'Open issue',
-          href: 'cindy://plugin-resource/issues/search_issues/ISSUE-1',
-        }],
-        truncated: false,
-      },
-    });
-
-    const catalog = await scanAtResources(
-      'D:\\repo',
-      'codex',
-      2000,
-      undefined,
-      undefined,
-      { sessionId: 'session-1' },
-    );
-    expect(catalog.items).toMatchObject([{
-      type: 'plugin-provider',
-      name: 'Issue Tracker',
-      pluginId: 'issues',
-    }]);
-    expect(window.electronAPI.ghosts.queryAtResources).not.toHaveBeenCalled();
-
-    const searched = await scanPluginAtResources(
-      catalog.items[0],
-      'login',
-      'D:\\repo',
-      'session-1',
-    );
-    expect(window.electronAPI.ghosts.queryAtResources).toHaveBeenCalledWith({
-      ghostId: 'issues',
-      sessionId: 'session-1',
-      workingDir: 'D:\\repo',
-      query: 'login',
-      limit: 20,
-    });
-    expect(searched.items).toMatchObject([{
-      type: 'plugin-resource',
-      name: 'Fix login',
-      sourceLabel: 'Issue Tracker',
-    }]);
-  });
 });

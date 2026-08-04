@@ -26,7 +26,10 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
-import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  isCodexResumeNotReadyProjectionError,
+  type AgentInputReference,
+} from '@cindy/maker-shared/agent-input-projection';
 import {
   connectedProvidersForAgent,
   providerOffersModel,
@@ -2737,10 +2740,13 @@ export function CCAgentSessionView({
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const ipcError = extractIpcError(err);
+      const detail = ipcError?.message || (err instanceof Error ? err.message : String(err));
       toast.error(
-        ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
+        isCodexResumeNotReadyProjectionError(detail)
+          ? t('chat.errorBanner.codexResumeNotReady')
+          : ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
           ? t('chat.userMessage.forkErrors.unsupportedHistory')
-          : ipcError?.message || (err instanceof Error ? err.message : String(err)),
+          : detail,
       );
     } finally {
       setForkStripEncryptedRunning(false);

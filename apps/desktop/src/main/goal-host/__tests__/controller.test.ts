@@ -223,10 +223,11 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string } },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void; signal?: AbortSignal },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
+    opts?.onDispatching?.();
     return { accepted: true };
   }
 
@@ -331,6 +332,7 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     getSession: (id) => (id === 's1' ? session : undefined),
     ensureSession: async (id) => (hydratable && id === 's1' ? session : undefined),
     isSessionInTurn: () => false,
+    stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
@@ -530,6 +532,7 @@ describe('GoalController', () => {
       getSession: () => undefined, // dormant:此刻没有 live session
       ensureSession: async () => codexSession, // resume 出真正的 Codex 会话
       isSessionInTurn: () => false,
+      stopActiveGoalTurn: () => {},
       emitStatus: () => {},
       getDefaults: () => ({ ...DEFAULT_LIMITS }),
       persistGoalSettingsOverride: () => {},
@@ -1453,6 +1456,7 @@ describe('GoalController', () => {
     const internals = local.controller as unknown as {
       fireTurn(sessionId: string): Promise<void>;
       firing: Map<string, object>;
+      goalDispatchAbortControllers: Map<string, { owner: object; controller: AbortController }>;
     };
 
     const oldFire = internals.fireTurn('s1');
@@ -1462,10 +1466,13 @@ describe('GoalController', () => {
     const resumePromise = local.controller.resumeGoal('s1');
     await vi.waitFor(() => expect(acquireCalls).toBe(3));
     expect(internals.firing.has('s1')).toBe(true);
+    const resumedDispatchCancellation = internals.goalDispatchAbortControllers.get('s1');
+    expect(resumedDispatchCancellation).toBeDefined();
 
     releaseOldAcquire(() => {});
     await oldFire;
     expect(internals.firing.has('s1')).toBe(true);
+    expect(internals.goalDispatchAbortControllers.get('s1')).toBe(resumedDispatchCancellation);
 
     releaseNewAcquire(() => {});
     await resumePromise;
@@ -1485,6 +1492,7 @@ describe('GoalController', () => {
     ): Promise<SessionSendResult> => {
       const content = typeof message === 'string' ? message : message.content;
       local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
       sendCalls += 1;
       return sendCalls === 2 ? blockedOldSend : { accepted: true };
     });
@@ -2211,6 +2219,215 @@ describe('GoalController', () => {
     await h.controller.clearGoal('s1');
     expect(await h.storage.get('s1')).toBeNull();
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
+  it('clearGoal interrupts the in-flight goal turn before removing the goal', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    await startGoal(local);
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).toHaveBeenCalledOnce();
+    expect(stopActiveGoalTurn).toHaveBeenCalledWith('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
+  it('clearGoal interrupts a goal turn after vendor dispatch starts but before send resolves', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releaseSend!: () => void;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      await sendPending;
+      return { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).toHaveBeenCalledOnce();
+    releaseSend();
+    await setPromise;
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal cancels a goal send waiting before vendor dispatch', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releasePreDispatchGate!: () => void;
+    const preDispatchGate = new Promise<void>((resolve) => {
+      releasePreDispatchGate = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    let vendorDispatches = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      signal = opts?.signal;
+      await preDispatchGate;
+      if (signal?.aborted) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+      opts?.onDispatching?.();
+      vendorDispatches += 1;
+      return { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.clearGoal('s1');
+    releasePreDispatchGate();
+    await setPromise;
+
+    expect(signal?.aborted).toBe(true);
+    expect(vendorDispatches).toBe(0);
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal does not interrupt a non-goal turn', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    await local.storage.set(seededGoal());
+    local.session.running = true;
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it.each(['done', 'error'] as const)(
+    'clearGoal does not interrupt a queued user turn after the goal %s terminal event',
+    async (terminalEvent) => {
+      const stopActiveGoalTurn = vi.fn();
+      const local = makeController({ stopActiveGoalTurn });
+      await startGoal(local);
+      const active = await local.storage.get('s1');
+      let releaseFinalizeGet!: (state: GoalState | null) => void;
+      const blockedFinalizeGet = new Promise<GoalState | null>((resolve) => {
+        releaseFinalizeGet = resolve;
+      });
+      vi.spyOn(local.storage, 'get').mockImplementationOnce(() => blockedFinalizeGet);
+
+      // The input coordinator can start the queued user turn as soon as it observes this
+      // terminal event, while GoalController's async persistence finalization is still pending.
+      if (terminalEvent === 'done') {
+        local.session.emitGoalTurn({
+          toolUse: true,
+          verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
+          origin: 'goal',
+        });
+      } else {
+        local.session.emitErrorTurn({ message: 'goal turn failed' });
+      }
+      local.session.running = true;
+
+      await local.controller.clearGoal('s1');
+
+      expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+      expect(await local.storage.get('s1')).toBeNull();
+      releaseFinalizeGet(active);
+      await tick();
+    },
+  );
+
+  it('does not re-mark a goal turn when its terminal event arrives before send resolves', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releaseFinalizeGet!: (state: GoalState | null) => void;
+    const blockedFinalizeGet = new Promise<GoalState | null>((resolve) => {
+      releaseFinalizeGet = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      vi.spyOn(local.storage, 'get').mockImplementationOnce(() => blockedFinalizeGet);
+      local.session.emitGoalTurn({
+        toolUse: true,
+        verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
+        origin: 'goal',
+      });
+      return { accepted: true };
+    });
+
+    await startGoal(local);
+    const active = seededGoal({ objective: 'make tests pass' });
+    local.session.running = true;
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toBeNull();
+    releaseFinalizeGet(active);
+    await tick();
+  });
+
+  it('does not cancel the send signal after the goal crosses the dispatch boundary', async () => {
+    const local = makeController();
+    let releaseSend!: () => void;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      signal = opts?.signal;
+      opts?.onDispatching?.();
+      local.session.emitGoalTurn({
+        toolUse: true,
+        verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+        origin: 'goal',
+      });
+      await sendPending;
+      return signal?.aborted
+        ? { accepted: false, reason: 'cancelled-before-dispatch' }
+        : { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.completions).toHaveLength(1));
+
+    expect(signal?.aborted).toBe(false);
+    releaseSend();
+    await setPromise;
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal still removes persisted state when stopping the goal turn throws', async () => {
+    const local = makeController({
+      stopActiveGoalTurn: () => {
+        throw new Error('stop coordinator unavailable');
+      },
+    });
+    await startGoal(local);
+
+    await expect(local.controller.clearGoal('s1')).resolves.toBeUndefined();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
   // ── updateGoal(纯代码改目标 / 上限,不写默认 override) ──

@@ -24,7 +24,7 @@ import { Text } from '@/components/AppText';
 import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
-import { isPiImageInputUnsupportedProjectionError } from '@/session/inputProjectionError';
+import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
 import {
   fontWeight,
   iconSize,
@@ -64,9 +64,12 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
+  const projectionErrorKey = projection.error
+    ? inputProjectionErrorI18nKey(projection.error)
+    : null;
   const projectionError = projection.error
-    ? isPiImageInputUnsupportedProjectionError(projection.error)
-      ? t('message.queue.piImageInputUnsupported')
+    ? projectionErrorKey
+      ? t(projectionErrorKey)
       : (describeAgentAuthError(projection.error) ?? projection.error)
     : null;
 

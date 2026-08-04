@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SortableList } from '@/components/sidebar/SortableList';
+import { SentInlineAtomBody } from '@/components/chat/SentInlineAtomBody';
 import { ListComposerTextarea } from './ListComposerTextarea';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -321,6 +322,18 @@ export function PendingQueuePanel({
           const showActions = isRowActive || isSteering || isRowEditing;
           const canSteerRow = Boolean(onSteer) && rowPresentation.canSteer;
           const canEditRow = Boolean(onEdit) && rowPresentation.canEdit;
+          const chatMessageContent = entry.chatMessage.content ?? entry.text;
+          const agentReferences =
+            entry.chatMessage.agentReferences?.length
+              ? entry.chatMessage.agentReferences
+              : (entry.agentReferences ?? []);
+          const hasStructuredAtoms =
+            !rowPresentation.isSyntheticTrigger &&
+            (entry.chatMessage.quotesEncoded === true ||
+              (entry.chatMessage.pastedTextRanges?.length ?? 0) > 0 ||
+              (entry.chatMessage.slashCommandRanges?.length ?? 0) > 0 ||
+              agentReferences.length > 0 ||
+              (entry.mentions?.length ?? 0) > 0);
           const actionSlotWidth = canSteerRow
             ? (canEditRow ? 'w-[68px]' : 'w-[44px]')
             : (canEditRow ? 'w-[44px]' : 'w-5');
@@ -330,6 +343,25 @@ export function PendingQueuePanel({
             const base = t(turnRunning ? 'newChat.pendingQueue.steerRunningTip' : 'newChat.pendingQueue.steerPausedTip');
             return steerShortcutLabel ? `${base} · ${steerShortcutLabel}` : base;
           })();
+          // The surrounding <p> owns the queue row's single-line nowrap +
+          // ellipsis contract. Do not override white-space in the structured
+          // body or multiline text islands can expand the row.
+          const pendingRowContent = rowPresentation.isSyntheticTrigger
+            ? t(rowPresentation.syntheticKind === 'continue'
+                ? 'newChat.pendingQueue.syntheticContinueLabel'
+                : 'newChat.pendingQueue.syntheticTriggerLabel')
+            : hasStructuredAtoms ? (
+                <SentInlineAtomBody
+                  agentReferences={agentReferences}
+                  className="relative top-px inline-flex min-w-0 max-w-full items-center gap-1 text-[13px] leading-[1.25]"
+                  content={chatMessageContent}
+                  pastedTextRanges={entry.chatMessage.pastedTextRanges}
+                  quotesEncoded={entry.chatMessage.quotesEncoded}
+                  slashCommandRanges={entry.chatMessage.slashCommandRanges}
+                  workingDir={entry.createOpts.workingDir}
+                />
+              )
+            : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent');
           const handleRowKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
             if (!isPendingQueueSteerShortcut(e)) return;
             if (!canSteerRow || !onSteer || isSteering || isRowEditing) return;
@@ -501,7 +533,7 @@ export function PendingQueuePanel({
                       ? t(rowPresentation.syntheticKind === 'continue'
                           ? 'newChat.pendingQueue.syntheticContinueLabel'
                           : 'newChat.pendingQueue.syntheticTriggerLabel')
-                      : (rowPresentation.displayText || t('newChat.pendingQueue.noTextContent'))}
+                      : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
                   </span>
                 </div>
               ) : (
@@ -514,11 +546,7 @@ export function PendingQueuePanel({
                       : 'text-[var(--settings-section-desc)]',
                   )}
                 >
-                  {rowPresentation.isSyntheticTrigger
-                      ? t(rowPresentation.syntheticKind === 'continue'
-                          ? 'newChat.pendingQueue.syntheticContinueLabel'
-                          : 'newChat.pendingQueue.syntheticTriggerLabel')
-                      : (rowPresentation.displayText || t('newChat.pendingQueue.noTextContent'))}
+                  {pendingRowContent}
                 </p>
               )}
 

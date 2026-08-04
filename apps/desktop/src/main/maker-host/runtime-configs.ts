@@ -19,15 +19,16 @@ import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 
-// host 层 system prompt 拼接：先 host 共用段 (host-system-prompt.md)，再 agent 专属段
-// (claude-system-prompt.md / codex-system-prompt.md)。空段被过滤，避免出现孤零零的 \n\n。
+// Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
+// Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, agentSpecific]
+  return [hostSystemPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
@@ -138,8 +139,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
       ...(ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
     }),
-    // xdt-maker 产品级 system prompt 注入：host 共用段 (host-system-prompt.md)
-    // + Claude 专属段 (claude-system-prompt.md)，按顺序拼接后给 maker-core append。
+    // 产品身份 + Skill 来源优先级 + Claude 专属段，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),
     // Maker Memory 需要的 user-data 绝对路径 (maker-core 没 Electron 依赖, 必须 host 注入)。
     userDataPath: app.getPath('userData'),
@@ -237,7 +237,7 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // 附近注释),所以这里仍按 spawnMode 分流让代码自证,不依赖"远端不走本函数"
   // 这种会过期的假设(对抗式预审发现)。
   behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
-  // host 共用段 (host-system-prompt.md) + Codex 专属段 (codex-system-prompt.md)。
+  // 产品身份 + Skill 来源优先级 + Codex 专属段。
   systemPrompt: composeHostPrompt(codexSystemPrompt),
   pathPrepends: [bundledRipgrepDir()],
   userDataPath: app.getPath('userData'),

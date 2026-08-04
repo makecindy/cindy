@@ -187,6 +187,11 @@ import {
   registerRsbBrowserBridgeIpc,
   registerTabOpResultHandler,
 } from './rsb-browser-bridge';
+import {
+  getRsbNativePopupOwnerWebContents,
+  hasActiveRsbNativePopupSurfaces,
+  registerRsbNativePopupSurfaceIpc,
+} from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
@@ -1172,6 +1177,7 @@ const rsbWindowController = new RsbWindowController({
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
   isQuitting: () => isQuitting,
+  canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   log: createLogger('right-sidebar-window-controller'),
 });
 registerRsbWindowIpc({
@@ -1225,9 +1231,12 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 setGhostsChangedObserver((ghosts) => ghostPanelWindowsController.reconcile(ghosts));
 
+const rsbBrowserRegistry = getRsbBrowserBridge();
+registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
 registerRsbBrowserBridgeIpc({
-  registry: getRsbBrowserBridge(),
+  registry: rsbBrowserRegistry,
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
+  getNativePopupOwnerWebContents: getRsbNativePopupOwnerWebContents,
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
 // popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标

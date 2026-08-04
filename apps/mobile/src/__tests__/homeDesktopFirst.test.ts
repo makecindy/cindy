@@ -1,11 +1,49 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
+
+describe('mobile Home startup reads', () => {
+  it('returns the local value when the read settles in time', async () => {
+    const read = startBoundedStartupRead(Promise.resolve('cached'), 'fallback', 100);
+
+    await expect(read.initial).resolves.toEqual({ timedOut: false, value: 'cached' });
+  });
+
+  it('falls back on read failure', async () => {
+    const read = startBoundedStartupRead(Promise.reject(new Error('read failed')), 'fallback', 100);
+
+    await expect(
+      read.initial,
+    ).resolves.toEqual({ timedOut: false, value: 'fallback' });
+    await expect(read.completion).resolves.toEqual({ ok: false, value: 'fallback' });
+  });
+
+  it('falls back on timeout while preserving a late local value', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishRead: ((value: string) => void) | undefined;
+      const pendingRead = new Promise<string>((resolveRead) => {
+        finishRead = resolveRead;
+      });
+      const read = startBoundedStartupRead(pendingRead, 'fallback', 100);
+
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(read.initial).resolves.toEqual({ timedOut: true, value: 'fallback' });
+
+      finishRead?.('late-cache');
+      await Promise.resolve();
+      await expect(read.completion).resolves.toEqual({ ok: true, value: 'late-cache' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('mobile home desktop-first surface', () => {
   it('uses the desktop-sidebar Home as the authenticated root instead of a device picker route', () => {
@@ -343,6 +381,10 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
+    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
+    expect(source).toContain('await syncInFlightRef.current;');
+    expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
+    expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
     // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
     // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),

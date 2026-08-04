@@ -6,7 +6,12 @@ import { promises as fs } from 'node:fs';
 import { CodexAgent } from './index.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
-import type { AgentDeps, AgentSessionHandle, TurnPermissionPolicy } from '../base-agent.js';
+import {
+  CodexResumePreparationBlockedError,
+  type AgentDeps,
+  type AgentSessionHandle,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -12391,6 +12396,68 @@ describe('CodexAgent steer', () => {
     } finally {
       vi.useRealTimers();
     }
+    await handle.close();
+  });
+});
+
+describe('CodexAgent resume preparation', () => {
+  const resumeSessionId = '123e4567-e89b-12d3-a456-426614174000';
+
+  it('does not call thread/resume when the host identifies an unsafe rollout', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new CodexResumePreparationBlockedError('rollout may still have a live writer');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    await expect(agent.startSession({
+      sessionId: 'session-blocked-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+    })).rejects.toThrow('rollout may still have a live writer');
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect((
+      agent as unknown as { hostSessionBindingLeases: Map<string, number> }
+    ).hostSessionBindingLeases.size).toBe(0);
+  });
+
+  it('preserves the existing best-effort resume behavior for incidental preparation errors', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new Error('diagnostic read failed');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-best-effort-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+    });
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not apply local rollout preparation to a remote Codex resume', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new CodexResumePreparationBlockedError('local rollout is empty');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-host',
+      resumeSessionId,
+    });
+
+    expect(prepareCodexResumeSession).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     await handle.close();
   });
 });

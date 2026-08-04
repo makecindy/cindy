@@ -352,6 +352,14 @@ export class GhostPipeDispatcher {
     if (!entry) return;
     this.pending.delete(callId);
     (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
+    this.deps.log?.info('ghost tool call completed', {
+      ghostId: entry.ghostId,
+      tool: entry.tool,
+      callId,
+      ok: result.ok,
+      ...(result.ok ? {} : { errorCode: result.errorCode }),
+      totalMs: Date.now() - entry.startedAt,
+    });
     entry.resolve(result);
   }
 }

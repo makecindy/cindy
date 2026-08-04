@@ -95,6 +95,18 @@ import type {
   RsbWindowCommandRouteRequest,
   RsbWindowCommandRouteResult,
 } from '../shared/rightSidebarWindow';
+import {
+  RSB_NATIVE_POPUP_CLAIM_CHANNEL,
+  RSB_NATIVE_POPUP_CLOSE_CHANNEL,
+  RSB_NATIVE_POPUP_COMMAND_CHANNEL,
+  RSB_NATIVE_POPUP_EVENT_CHANNEL,
+  RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL,
+  type RsbNativePopupBounds,
+  type RsbNativePopupClaimInput,
+  type RsbNativePopupClaimResult,
+  type RsbNativePopupCommand,
+  type RsbNativePopupEvent,
+} from '../shared/rsbNativePopup';
 import type {
   DesktopAccountDeletionAvailabilityResult,
   DesktopAccountDeletionChallengeResult,
@@ -363,6 +375,7 @@ const fanOutDeepLinkNavigate = createIpcFanOut('deep-link:navigate');
 // main 端 webview-security setWindowOpenHandler 把 popup URL 推到这里,renderer
 // 端 RightSidebarShell 订阅 → store.addTab 开新 web-browser tab。
 const fanOutRsbBrowserPopup = createIpcFanOut('rsb:browser-popup');
+const fanOutRsbNativePopupEvent = createIpcFanOut(RSB_NATIVE_POPUP_EVENT_CHANNEL);
 // RSB terminal plugin: main 端 PTY onData / onExit 推过来,renderer 按 id filter。
 // 每个 tab 自己订阅,fanOut 内部去重 ipcRenderer.on 绑定。
 const fanOutTerminalData = createIpcFanOut('terminal:data');
@@ -917,22 +930,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
-    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }): Promise<{
-      items: Array<{ ghostId: string; name: string; description?: string }>;
-    }> => ipcRenderer.invoke('ghosts:at-resource-providers:list', params),
-    queryAtResources: (params: {
-      ghostId: string;
-      sessionId?: string;
-      workingDir?: string;
-      query?: string;
-      limit?: number;
-    }): Promise<{
-      success: boolean;
-      error?: string;
-      pluginName?: string;
-      items: Array<{ id: string; label: string; description?: string; href: string }>;
-      truncated: boolean;
-    }> => ipcRenderer.invoke('ghosts:at-resources:query', params),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },
@@ -1075,6 +1072,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // dev-only 运行时控制(packaged 版 main 侧不注册该 channel)。
     devRuntime: (action: 'status' | 'spawn' | 'stop' | 'crash', id?: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:dev-runtime', action, id),
+    devCall: (id: string, tool: string, args: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghosts:dev-runtime', 'call', id, { tool, args }),
   },
 
   pluginMarket: {
@@ -2754,6 +2753,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       disposition: string;
       openerTabId?: string;
       openerSessionId?: string;
+      nativePopupSurfaceId?: string;
     }) => void,
   ): (() => void) =>
     fanOutRsbBrowserPopup((payload) => {
@@ -2765,16 +2765,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
         disposition?: unknown;
         openerTabId?: unknown;
         openerSessionId?: unknown;
+        nativePopupSurfaceId?: unknown;
       };
       if (typeof p.url !== 'string' || typeof p.disposition !== 'string') return;
       if (p.openerTabId !== undefined && typeof p.openerTabId !== 'string') return;
       if (p.openerSessionId !== undefined && typeof p.openerSessionId !== 'string') return;
+      if (p.nativePopupSurfaceId !== undefined && typeof p.nativePopupSurfaceId !== 'string')
+        return;
       callback(
         p as {
           url: string;
           disposition: string;
           openerTabId?: string;
           openerSessionId?: string;
+          nativePopupSurfaceId?: string;
         },
       );
     }),
@@ -4240,6 +4244,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** main → renderer 资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
     onResourceEvent: (cb: (event: unknown) => void) =>
       fanOutRsbBrowserBridgeResourceEvent(cb as IpcCallback),
+  },
+
+  rsbNativePopup: {
+    claim: (input: RsbNativePopupClaimInput): Promise<RsbNativePopupClaimResult> =>
+      ipcRenderer.invoke(RSB_NATIVE_POPUP_CLAIM_CHANNEL, input),
+    setBounds: (input: {
+      surfaceId: string;
+      bounds: RsbNativePopupBounds;
+      visible: boolean;
+    }): Promise<{ ok: true }> => ipcRenderer.invoke(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL, input),
+    command: (input: { surfaceId: string } & RsbNativePopupCommand): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(RSB_NATIVE_POPUP_COMMAND_CHANNEL, input),
+    close: (input: { surfaceId: string }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(RSB_NATIVE_POPUP_CLOSE_CHANNEL, input),
+    onEvent: (callback: (event: RsbNativePopupEvent) => void): (() => void) =>
+      fanOutRsbNativePopupEvent((payload) => {
+        if (!payload || typeof payload !== 'object') return;
+        const event = payload as Partial<RsbNativePopupEvent>;
+        if (typeof event.surfaceId !== 'string') return;
+        if (event.type === 'closed') {
+          callback(event as RsbNativePopupEvent);
+          return;
+        }
+        if (event.type === 'state' && event.snapshot && typeof event.snapshot === 'object') {
+          callback(event as RsbNativePopupEvent);
+        }
+      }),
   },
 
   // ── Browser backend toggle (Phase 5) ─────────────────────────────────────

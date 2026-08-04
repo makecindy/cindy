@@ -26,10 +26,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
-import {
-  GHOST_MANIFEST_MAX_BYTES,
-  readBoundedFileNoFollow,
-} from '../utils/readBoundedFile.js';
+import { GHOST_MANIFEST_MAX_BYTES, readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
@@ -426,7 +423,11 @@ export async function scaffoldGhostDir(
   const resolved = path.resolve(input.dir);
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '没有会话工作目录,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '没有会话工作目录,无法确定骨架输出位置',
+    };
   }
   // 字面 startsWith 不设防软链:工作目录里若有 out -> /tmp/out 之类的
   // 软链祖先,字面在内、实际在外。两边都按 realpath 对账——目标还不存在,
@@ -435,7 +436,11 @@ export async function scaffoldGhostDir(
   try {
     realWorkdir = await fs.promises.realpath(path.resolve(workdir));
   } catch {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '会话工作目录不存在,无法确定骨架输出位置',
+    };
   }
   let realAncestor = resolved;
   const pendingSegments: string[] = [];
@@ -725,7 +730,10 @@ async function buildGhostPackage(
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
     const seenPackPaths = new Set<string>();
-    const walk = async (cur: string, relBase: string): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
+    const walk = async (
+      cur: string,
+      relBase: string,
+    ): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
@@ -780,7 +788,8 @@ async function buildGhostPackage(
       return {
         ok: false,
         errorCode: 'MANIFEST_INVALID',
-        message: '已签名插件不能使用 AI 图标覆盖；请保留原图标，或先修改源码图标再由正式发布流水线重新签名',
+        message:
+          '已签名插件不能使用 AI 图标覆盖；请保留原图标，或先修改源码图标再由正式发布流水线重新签名',
       };
     }
     const foldedAiIconPath = FORGE_AI_ICON_PATH.toLowerCase();
@@ -1064,7 +1073,6 @@ my-ghost/
   // (仅检查插件启用状态与 tools 声明)。除非你的插件完全靠 panel 或 subscribe 驱动,
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
-  "atResourceProvider": { "tool": "search_resources" }, // 可选:把一个已声明、无副作用的搜索工具接入 @,见 §3.1
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
   // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
   // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
@@ -1241,7 +1249,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
     "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
@@ -1262,7 +1270,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
-      "scopes": ["read.a", "write.b"],              // 可选 ≤32 条:申请的权限范围(确认框逐条展示给用户)
+      "scopes": ["read.a", "write.b"],              // 可选 ≤48 条:申请的权限范围(确认框逐条展示给用户)
       "scopeDelimiter": ",",                        // 可选:authorize URL 的 scope 拼接分隔符;缺省空格(OAuth 标准),Slack 这类逗号分隔的服务商声明 ","(目前只认这一个值)
       "pkce": true,                                 // 可选:PKCE(S256)开关,缺省 true
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
@@ -1331,41 +1339,10 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 写行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——AI 会照做。
 这是你影响 AI 行为的**唯一合法通道**,不要试图在别处塞指令。
 
-### 3.1 可选:接入 @ 业务资源搜索
+### 3.1 @ 插件入口
 
-插件可把一个**已经声明并经过权限确认**的工具接到 Composer 的 \`@\` 面板：
-
-\`\`\`json
-"atResourceProvider": { "tool": "search_resources" }
-\`\`\`
-
-本入口复用已有的 \`"tool"\` 槽，不新增 slot；\`tool\` 必须逐字引用 \`tools[].name\`。这不会增加
-底层工具权限，但新增了一个明确的调用入口，因此会在安装/更新确认中单独披露。裸 \`@\` 只展示插件入口，
-不会调用工具。用户明确选中你的插件后，宿主才只向这个工具发送：
-
-\`\`\`json
-{ "query": "用户输入", "limit": 20 }
-\`\`\`
-
-工具必须无副作用，并在 4 秒内返回固定摘要结构：
-
-\`\`\`json
-{
-  "items": [{
-    "id": "业务对象的不透明稳定 ID",
-    "label": "单行展示名",
-    "description": "可选的单行摘要"
-  }]
-}
-\`\`\`
-
-同一个工具还必须支持把某条返回项的完整 \`id\` 作为 \`query\` 精确解析，并把
-该对象放在结果首项；这样 Agent 收到不透明 ID 后可以按需读取最新信息。
-
-最多返回 20 项；\`id\` 最长 256 字符，\`label\` 最长 128 字符，
-\`description\` 最长 256 字符。不要返回正文、凭证、HTML、指令或自定义调用参数；
-宿主只保留 ID 和可读摘要，并用固定格式投影给 Agent。插件 locale 不增加本字段的
-翻译，入口展示名直接复用已本地化的插件 \`name\`。
+Composer 的 \`@\` 面板只展示已安装且可用的插件入口；插件作者无需声明资源搜索字段。
+历史的 \`manifest.atResourceProvider\` 已移除且不再生效，不能通过该字段接入资源搜索。
 
 ## 3.5 工具面设计:直接声明,还是两段式目录
 
@@ -2113,6 +2090,21 @@ BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注�
 照"请重新登录"画)——确认框已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
 
+**Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
+Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
+Plugin Market organization 安装记录、安装 manifest digest 未被篡改并声明了目标服务域名时,
+按需向 auth-server 换取短时 Connection JWT;audience 与组织身份由主机推导,插件清单和
+运行时代码都不能选择、读取或保存 audience/token。该凭证必须固定声明
+\`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
+且 \`hosts\` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
+\`oidc-token\` 的 \`inject.hosts\` 只接受精确域名,不允许 \`*.example.com\` 通配；Host
+会从通过 digest 校验的市场 manifest 读取这些声明,目标请求必须精确命中声明域名才会签发并注入。
+它没有用户输入、\`url\`、\`exchange\` 或 \`oauth\` 详单,也不要放进 \`setup.requires\`;没有企业
+身份时 cindy.fetch 会 fail-closed 并返回结构化错误。企业服务应使用 Connection JWT
+中的 \`sub\`、\`email\` 或 \`identities\` 等声明自行选择业务身份,不要要求 Cindy 客户端先把
+令牌交给插件代码。上游返回 401 时,Host 只对 GET / HEAD / OPTIONS 自动换令牌重试一次；
+POST / PUT / PATCH / DELETE 和上传请求只作废令牌缓存、不自动重放,避免重复业务写入。
+
 **key 换令牌二段式(exchange,可选)**:有些服务的 API key 不直接当请求凭证,要先
 POST 一个交换端点换临时令牌(令牌才进 Authorization)。在凭证上声明 \`exchange\`
 (字段见 §2),主机就照单代办整个流程:换取 → 按 ttlSeconds 缓存 → \`inject.format\`
@@ -2139,8 +2131,9 @@ settingsHtml 里自填**(用户用自己注册的 OAuth 应用,配额风控归�
 \`\`\`js
 // 状态回查(哪些 oauth 凭证槽、client 配没配、连了哪些账号;零令牌字节):
 const list = await (await fetch('/oauth')).json();
-// → [{ key:'acct', clientConfigured:true, clientCustom:false, accounts:[{ id, label, status:'connected'|'expired', isDefault, createdAt, avatarDataUrl }] }]
+// → [{ key:'acct', clientConfigured:true, clientCustom:false, accounts:[{ id, label, status:'connected'|'expired', isDefault, createdAt, avatarDataUrl, scopeStale }] }]
 // avatarDataUrl = 头像 data URL(声明了 identity.avatarPath 且主机下载成功才有,否则 null;<img src> 直接用)
+// scopeStale = true 表示该账号有真实权限错误证据,或其全量授权快照未包含插件后来新增的 scope;账号仍可用,设置页应显示非阻塞提示并复用现有重新连接动作
 // clientConfigured = 自填或内置任一在场;clientCustom = 用户自填过(UI 显示"内置应用身份/已自定义")
 // client 凭证只写入库(和 /secrets 同纪律,存入后拿不回;clientSecret 可省略 = 纯 PKCE):
 await fetch('/oauth/acct/client', { method:'PUT', body: JSON.stringify({ clientId, clientSecret }) });  // 204 即入库
@@ -2158,6 +2151,11 @@ const r = await (await fetch('/oauth/acct/connect', connectInit)).json();
 // 断开账号 / 设默认账号:
 await fetch('/oauth/acct/accounts/<accountId>', { method:'DELETE' });          // 204(幂等)
 await fetch('/oauth/acct/default', { method:'POST', body: JSON.stringify({ accountId }) });  // 204
+// 真实 API 返回缺失 scope 时可 fire-and-forget 上报；只接受清单 oauth.scopes 内的值,
+// 任一越界整包 400 拒绝。主机会据此在对话流与详情页非阻塞引导用户重新连接。
+// 证据只记默认账号:带 authAccount 指定非默认账号的调用报错时不要上报,
+// 否则会引导用户重连错账号:
+await fetch('/oauth/acct/insufficient-scopes', { method:'POST', body: JSON.stringify({ scopes:['write.b'] }) });  // 204
 \`\`\`
 
 多账号:每个 oauth 凭证槽最多 8 个账号;cindy.fetch 可带 \`authAccount: '<账号id>'\`
@@ -3332,8 +3330,8 @@ if (r.ok && r.confirmed) {
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、
   inject.hosts 不是 hosts 声明条目的子集、有详单但 slots 没有 "network"、
-  secret.source 不是 "user"/"login-email"/"oauth"、
-  source:"login-email" 还声明了 url 或 exchange、
+  secret.source 不是 "user"/"login-email"/"oauth"/"oidc-token"、
+  source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个
   {value}、contentType 不在白名单、tokenPath 不是点分路径、ttlSeconds 越界)

@@ -53,6 +53,11 @@ export type BillingCatalogOfferUnavailableReason =
 export type BillingCatalogOffer = {
   code: string;
   /**
+   * Operator-managed display name from the server. When omitted, Desktop does
+   * not render an offer name or fall back to the internal offer code.
+   */
+  name?: string;
+  /**
    * Optional only while Desktop remains compatible with older Model Access
    * servers. New servers always send the three availability fields together.
    */

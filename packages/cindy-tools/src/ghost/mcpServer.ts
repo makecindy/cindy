@@ -113,8 +113,9 @@ const SETUP_PLAN_MAX_TITLE_LENGTH = 120;
 const SETUP_PLAN_MAX_DESCRIPTION_LENGTH = 500;
 
 /**
- * ghost_call 顶层 setup_plan schema。snake_case 仅存在于 Agent/MCP 边界；
- * handleGhostCall 会转成 camelCase 后单独交给 Host，绝不混入插件 args。
+ * ghost_call 顶层 setup_plan schema。required 配置卡与 ready 态 reauthSuggest
+ * 重连卡共用该形状；snake_case 仅存在于 Agent/MCP 边界，handleGhostCall
+ * 会转成 camelCase 后单独交给 Host，绝不混入插件 args。
  * 导出仅供边界单测，未从 package root 暴露。
  */
 export const ghostSetupPlanInputSchema = z
@@ -216,6 +217,9 @@ const SETUP_REQUIREMENT_KINDS = new Set([
   "client_config",
 ]);
 const SETUP_REQUIREMENT_STATES = new Set(["missing", "expired", "satisfied"]);
+// 对主机声明上限 GHOST_OAUTH_SCOPES_MAX(desktop shared/ghost.ts,当前 48;包依赖
+// 方向不允许引用)只留防御余量;该值涨过 64 时必须同步,否则整份 assessment 判废。
+const SETUP_REAUTH_SCOPE_MAX = 64;
 
 function sanitizeSetupAction(
   raw: unknown,
@@ -352,10 +356,68 @@ export function sanitizeGhostSetupAssessment(
     }
     groups.push({ id: group.id, mode: "any_of", items });
   }
+  let reauthSuggest: CindyGhostSetupAssessment["reauthSuggest"];
+  if (value.reauthSuggest !== undefined) {
+    // 在场即严:非法 reauthSuggest 判废整份 assessment,与缺省合法互补。
+    reauthSuggest = sanitizeSetupReauthSuggest(value.reauthSuggest) ?? undefined;
+    if (!reauthSuggest) return null;
+  }
   return {
     state: value.state as CindyGhostSetupAssessment["state"],
     revision: value.revision as number,
     groups,
+    ...(reauthSuggest ? { reauthSuggest } : {}),
+  };
+}
+
+/**
+ * reauthSuggest 的独立 sanitize(与 sanitizeSetupAction 等"一形状一函数"
+ * 同款)。action 部分复用 sanitizeSetupAction —— 由它统一收 id 非空 + 256
+ * 上界与 kind 白名单,再钉死本形状只认 oauth_connect。
+ */
+function sanitizeSetupReauthSuggest(
+  raw: unknown,
+): NonNullable<CindyGhostSetupAssessment["reauthSuggest"]> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const suggest = raw as Record<string, unknown>;
+  const requirement = suggest.requirement;
+  if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return null;
+  const req = requirement as Record<string, unknown>;
+  const action = sanitizeSetupAction(req.action);
+  if (!action || action.kind !== "oauth_connect") return null;
+  if (
+    typeof suggest.ghostId !== "string" ||
+    suggest.ghostId.length === 0 ||
+    suggest.ghostId.length > 128 ||
+    typeof suggest.secretKey !== "string" ||
+    suggest.secretKey.length === 0 ||
+    suggest.secretKey.length > 128 ||
+    !Array.isArray(suggest.missingScopes) ||
+    suggest.missingScopes.length === 0 ||
+    suggest.missingScopes.length > SETUP_REAUTH_SCOPE_MAX ||
+    !suggest.missingScopes.every(
+      (scope) => typeof scope === "string" && scope.length > 0 && scope.length <= 256,
+    ) ||
+    suggest.missingScopeCount !== suggest.missingScopes.length ||
+    typeof req.ref !== "string" ||
+    req.ref.length === 0 ||
+    req.kind !== "oauth" ||
+    typeof req.label !== "string" ||
+    req.label.length === 0
+  ) {
+    return null;
+  }
+  return {
+    ghostId: suggest.ghostId,
+    secretKey: suggest.secretKey,
+    missingScopes: [...suggest.missingScopes] as string[],
+    missingScopeCount: suggest.missingScopes.length,
+    requirement: {
+      ref: req.ref,
+      kind: "oauth",
+      label: req.label,
+      action: { id: action.id, kind: "oauth_connect" },
+    },
   };
 }
 
@@ -570,7 +632,9 @@ export async function handleGhostCall(
     // IM/hook 出站消费它,保证"意识画卡后删字段"也不影响媒体送达 IM 用户。
     // 声明了媒体字段(含 xdt_audio_tracks)时以声明为准,账本不注入
     // (声明是意图表达,能覆盖 render:false 抑制等语义)。
-    const { producedMedia, ...resultForModel } = result;
+    const { producedMedia, setup: unsafeSetup, ...resultForModel } = result;
+    const setup = sanitizeGhostSetupAssessment(unsafeSetup);
+    const advisory = setup?.state === "ready" && setup.reauthSuggest ? { setup } : {};
     const declaredMedia = [
       "xdt_image_urls",
       "xdt_video_urls",
@@ -611,6 +675,7 @@ export async function handleGhostCall(
           : {};
     return textResult({
       ...resultForModel,
+      ...advisory,
       ...hoisted,
       ...producedFallback,
       ...mediaHint,
@@ -789,7 +854,7 @@ export function createCindyGhostsMcpServer(
       setup_plan: ghostSetupPlanInputSchema
         .optional()
         .describe(
-          "可选:当 ghost_list 对目标插件返回 setup.state=required 时,基于该 assessment 编排 Ask 风格配置卡。assessment_revision 必须原样带回;requirement_refs 与 action_id 只能选 Host 给出的引用和动作。每个未满足 any_of 组里的所有可执行选项都必须保留为独立 step,让用户看到完整选择;Host 会拒绝隐藏任一合法配置路径的 plan。文案保持克制:单字段配置只写一句必要说明,不要在 intro、step title、description 中重复插件名、字段 label 或 Host hint。Host 会校验并执行动作,配置完成后继续本次 ghost_call;本字段不会进入插件 args。不要提供插件名、icon、URL、凭证值或完成状态。用户取消会返回 SETUP_CANCELLED;无交互面返回 SETUP_REQUIRED + 脱敏 setup,都不要自动重试。",
+          "可选:当 ghost_list 对目标插件返回 setup.state=required 时,基于该 assessment 编排 Ask 风格配置卡。assessment_revision 必须原样带回;requirement_refs 与 action_id 只能选 Host 给出的引用和动作。每个未满足 any_of 组里的所有可执行选项都必须保留为独立 step,让用户看到完整选择;Host 会拒绝隐藏任一合法配置路径的 plan。成功结果若带 setup.reauthSuggest,插件仍可用,但当前授权未含插件新增权限;通常只在插件返回权限或 scope 错误后,下一次 ghost_call 可携带只引用该 requirement 的单步 setup_plan 弹出重新连接卡,未报错时不要主动打断用户。文案保持克制:单字段配置只写一句必要说明,不要在 intro、step title、description 中重复插件名、字段 label 或 Host hint。Host 会校验并执行动作,配置完成后继续本次 ghost_call;本字段不会进入插件 args。不要提供插件名、icon、URL、凭证值或完成状态。用户取消会返回 SETUP_CANCELLED;无交互面返回 SETUP_REQUIRED + 脱敏 setup,都不要自动重试。",
         ),
     },
     async (input, extra) =>

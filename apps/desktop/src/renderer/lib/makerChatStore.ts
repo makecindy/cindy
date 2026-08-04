@@ -1544,7 +1544,7 @@ function _trimMessagesIfNeeded(sessionId: string): void {
 // ensureInitialMessages to reload from DB.
 // ---------------------------------------------------------------------------
 
-const DEMOTE_IDLE_MS = 60_000;
+const DEMOTE_IDLE_MS = 5 * 60_000;
 const DEMOTE_CHECK_INTERVAL_MS = 30_000;
 
 const _lastViewedAt = new Map<string, number>();
@@ -5907,6 +5907,13 @@ function releaseCacheHydrationAfterFailure(sessionId: string): void {
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
   requestInputProjection(sessionId);
+  // Prefetch and other non-mounted callers still create a cache entry. Give
+  // that entry the same bounded lifetime as a viewed session so a cancelled
+  // navigation cannot leave messages permanently exempt from soft eviction.
+  if (!_activeViewSessions.has(sessionId)) {
+    _lastViewedAt.set(sessionId, Date.now());
+    _ensureDemoteTimer();
+  }
   if (state.historyLoaded) return;
   if (_historyFetchInFlight.has(sessionId)) return;
   // 行水合并行异步读的陈旧性守卫: fetch 启动时定格 rev, 应用时比对(见 planModeRev)。
@@ -6082,6 +6089,56 @@ function ensureInitialMessages(sessionId: string): void {
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
       const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
       const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
+
+      // Make the newest page visible as soon as it arrives. `historyLoaded`
+      // deliberately remains false until the optional anchor/plan backfill is
+      // complete: several consumers use that flag to gate remote reconciliation
+      // and resume/restore side effects. `isLoadingMore` is the shared lock that
+      // keeps user-triggered pagination from racing this background backfill.
+      const initialHasVisibleAnchor = existing.some((row) => !isNonAnchorHistoryRow(row));
+      const initialPlanState = historyRowsPlanBackfillState(existing, hasMore);
+      const initialNeedsBackfill =
+        hasMore &&
+        (existing.every(isNonAnchorHistoryRow) ||
+          !initialPlanState.hasPlanEvent ||
+          !initialPlanState.isResolved);
+      if (initialHasVisibleAnchor) {
+        const initialMapped = mapServerMessages(existing);
+        const initialOldestId = oldestRow.id;
+        settleCacheHydration(sessionId);
+        setState(sessionId, (s) => ({
+          ...s,
+          // Keep historyLoaded=false until the full initial window is ready;
+          // MessageStream renders this fresh page directly from `messages`.
+          historyLoaded: false,
+          messages: mergeMessages(
+            initialMapped,
+            s.messages.some((m) => m.cacheHydrated === true)
+              ? s.messages.filter((m) => m.cacheHydrated !== true)
+              : s.messages,
+            {},
+            'newest-first',
+          ),
+          isFirstMessage: false,
+          oldestMessageId:
+            s.historyWindowHasIsland === true
+              ? initialOldestId
+              : (oldestServerMessageIdForWindow(
+                  existing,
+                  s.messages,
+                  s.oldestMessageId,
+                  'newest-first',
+                ) ?? initialOldestId),
+          hasMoreMessages: hasMore,
+          isLoadingMore: initialNeedsBackfill,
+        }));
+      } else if (initialNeedsBackfill) {
+        // The newest page has no renderable anchor, so there is nothing useful
+        // to publish yet. Still acquire the shared pagination lock before the
+        // first background await: a stale/local-only row may already give
+        // loadOlderMessages a cursor, and it must not race this backfill.
+        setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
+      }
       let pagesFetched = 0;
       let planResolutionPagesFetched = 0;
       while (hasMore) {
@@ -6179,6 +6236,7 @@ function ensureInitialMessages(sessionId: string): void {
                 'newest-first',
               ) ?? oldestId),
         hasMoreMessages: hasMore,
+        isLoadingMore: false,
       }));
       if (import.meta.env.DEV) {
         const ingestDurMs = performance.now() - ingestStartMs;

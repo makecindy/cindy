@@ -26,6 +26,22 @@ const log = createLogger('orca-stale-index-cleanup');
 const STALE_INDEX_NAME = 'uniq_orca_workflows_lead_session_id';
 const MIN_SCHEMA_VERSION = 36;
 
+export function hasStaleOrcaLeadIndex(db: Database.Database): boolean {
+  try {
+    const versionRow = db
+      .prepare(`SELECT value FROM migration_meta WHERE key='schema_version'`)
+      .get() as { value: string } | undefined;
+    const version = versionRow ? parseInt(versionRow.value, 10) : -1;
+    if (!Number.isFinite(version) || version < MIN_SCHEMA_VERSION) return false;
+    return Boolean(
+      db.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name=?`).get(STALE_INDEX_NAME),
+    );
+  } catch {
+    // Read-only startup cannot repair this invariant, so an unreadable catalog is unsafe.
+    return true;
+  }
+}
+
 /**
  * 同步执行:在 `ensureReady` 的 runMigrations + schemaDriftRepair 之后调用。
  * 不抛错 —— 任何异常都被吞掉记日志,不让兜底清理把启动卡死。
