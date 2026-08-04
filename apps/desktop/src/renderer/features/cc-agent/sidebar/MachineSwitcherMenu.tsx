@@ -45,6 +45,7 @@ import {
   Check,
   ChevronDown,
   EllipsisVertical,
+  Loader2,
   Monitor,
   MonitorSmartphone,
 } from 'lucide-react';
@@ -66,7 +67,10 @@ import {
   MACHINE_ALL,
   MACHINE_LOCAL,
 } from '@/features/device-link/selectedMachineStore';
-import { useMachineSwitcher } from '@/features/device-link/useMachineSwitcher';
+import {
+  useMachineSwitcher,
+  useRemoteSessionBootstrapLoading,
+} from '@/features/device-link/useMachineSwitcher';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
 import { useHoverOpenMenu } from './useHoverOpenMenu';
 
@@ -74,6 +78,9 @@ export function MachineSwitcherMenu(): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { devices, selectedDeviceId, hasRemote, select, toggle } = useMachineSwitcher();
+  // 机器栏是远程任务读取状态的固定承载点。后台 bootstrap 时只更新这一行，
+  // 不再把 loading 提示插入下方会话列表，避免列表整体上下跳动。
+  const remoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedDeviceId);
   // 「鼠标移上去就展开」:hover 触发行即开、移开即关(受控开合,详见 useHoverOpenMenu;
   // 2026-07-12 产品确认要 hover 展开,恢复 d5a8d77c9 之前的交互)。
   const { open, onOpenChange, triggerRef, triggerProps, contentProps } = useHoverOpenMenu();
@@ -138,6 +145,7 @@ export function MachineSwitcherMenu(): ReactNode {
           ref={triggerRef as Ref<HTMLButtonElement>}
           {...triggerProps}
           aria-label={`${triggerLabel}: ${triggerText}`}
+          aria-busy={remoteSessionBootstrapLoading}
           className={cn(
             // 与 SidebarTopNav 的 ROW_CLASS 同款 pill 行:h-8 全宽、图标 meta 灰、
             // 文字 foreground、hover 灰底;truncate 兜住过长设备名。
@@ -160,6 +168,16 @@ export function MachineSwitcherMenu(): ReactNode {
             strokeWidth={1.8}
             className="shrink-0 text-[var(--sidebar-nav-text)]"
           />
+          <span
+            aria-hidden="true"
+            className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center"
+          >
+            {remoteSessionBootstrapLoading && (
+              <span className="inline-flex animate-spinner motion-reduce:animate-none">
+                <Loader2 size={14} strokeWidth={1.8} />
+              </span>
+            )}
+          </span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

@@ -39,6 +39,11 @@ function wrap<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+// Session metadata is read by both the session view and the message bootstrap
+// path during a task switch. Share only requests that are currently in flight:
+// settled rows must not become a stale renderer cache.
+const getInFlight = new Map<string, Promise<Session>>();
+
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
@@ -73,8 +78,23 @@ export async function create(body?: {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
 
-export async function get(id: string): Promise<Session> {
-  return wrap(window.electronAPI.localDb.sessions.get(id));
+export function get(id: string): Promise<Session> {
+  const existing = getInFlight.get(id);
+  if (existing) return existing;
+
+  const request = wrap(window.electronAPI.localDb.sessions.get(id));
+  getInFlight.set(id, request);
+  // Use both fulfillment and rejection handlers so the cleanup promise cannot
+  // become an unhandled rejection when the IPC request fails.
+  void request.then(
+    () => {
+      if (getInFlight.get(id) === request) getInFlight.delete(id);
+    },
+    () => {
+      if (getInFlight.get(id) === request) getInFlight.delete(id);
+    },
+  );
+  return request;
 }
 
 /** Resolve scheduler-held ids against live, archived, deleted, and missing rows. */

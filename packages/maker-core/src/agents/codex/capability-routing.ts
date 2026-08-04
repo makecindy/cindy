@@ -5,6 +5,22 @@ import type {
 
 const CODEX_HARNESS_ID = 'codex';
 
+interface CodexSkillState {
+  path: string;
+  enabled: boolean;
+}
+
+interface CodexPluginCacheIdentity {
+  pluginName: string;
+  marketplace: string;
+}
+
+interface CodexSkillDisableTarget {
+  plugin: CodexPluginCacheIdentity;
+  /** Undefined means every Skill contributed by the plugin. */
+  skillArtifactId?: string;
+}
+
 export interface CodexCapabilityRoutingOptions {
   /**
    * Whether the host prepared a provenance-preserving plugin overlay for this
@@ -16,6 +32,11 @@ export interface CodexCapabilityRoutingOptions {
    * renamed MCP and non-implicit Skill are available.
    */
   isolatedPluginOverlays?: boolean;
+}
+
+export interface CodexSessionCapabilityRoutingOptions {
+  /** Whether this Codex host can invoke replacements served by Cindy itself. */
+  cindyHostReplacementsAvailable: boolean;
 }
 
 /**
@@ -33,6 +54,160 @@ function isCodexHarnessPluginDirective(
     directive.source.kind === 'harness-plugin' &&
     directive.source.harness === CODEX_HARNESS_ID
   );
+}
+
+function isDisabledCodexSkillSourceDirective(
+  directive: CapabilityRouteOverride,
+): boolean {
+  return (
+    isCodexHarnessPluginDirective(directive) &&
+    (directive.source.surface === 'plugin' ||
+      directive.source.surface === 'skill') &&
+    directive.invocation === 'disabled'
+  );
+}
+
+function parseCodexPluginCacheIdentity(
+  pluginId: string,
+): CodexPluginCacheIdentity | null {
+  const separator = pluginId.lastIndexOf('@');
+  if (separator <= 0 || separator === pluginId.length - 1) return null;
+  return {
+    pluginName: pluginId.slice(0, separator),
+    marketplace: pluginId.slice(separator + 1),
+  };
+}
+
+function isSkillFromPluginDistribution(
+  skillPath: string,
+  target: CodexSkillDisableTarget,
+): boolean {
+  const segments = skillPath.replace(/\\/g, '/').split('/');
+  for (let index = 0; index < segments.length; index += 1) {
+    if (
+      index + 6 < segments.length &&
+      segments[index] === 'plugins' &&
+      segments[index + 1] === 'cache' &&
+      segments[index + 2] === target.plugin.marketplace &&
+      segments[index + 3] === target.plugin.pluginName &&
+      segments[index + 4] !== '' &&
+      segments[index + 5] === 'skills' &&
+      (target.skillArtifactId === undefined ||
+        segments[index + 6] === target.skillArtifactId)
+    ) {
+      return true;
+    }
+    const bundledMarketplace = segments[index + 1];
+    if (
+      index + 5 < segments.length &&
+      segments[index] === 'bundled-marketplaces' &&
+      (bundledMarketplace === target.plugin.marketplace ||
+        bundledMarketplace?.startsWith(
+          `${target.plugin.marketplace}.staging-`,
+        )) &&
+      segments[index + 2] === 'plugins' &&
+      segments[index + 3] === target.plugin.pluginName &&
+      segments[index + 4] === 'skills' &&
+      (target.skillArtifactId === undefined ||
+        segments[index + 5] === target.skillArtifactId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Remove replacement-arbitration routes that the selected Codex host cannot
+ * satisfy. Compatibility-only restrictions without a replacement remain in
+ * force, so remote sessions still hide Skills that depend on unavailable APIs.
+ */
+export function buildCodexSessionCapabilityRoutingPolicy(
+  policy: CapabilityRoutingPolicy | undefined,
+  opts: CodexSessionCapabilityRoutingOptions,
+): CapabilityRoutingPolicy | undefined {
+  if (opts.cindyHostReplacementsAvailable || !policy) return policy;
+  const overrides = policy.overrides.filter(
+    (directive) => directive.replacement?.kind !== 'cindy-host',
+  );
+  return overrides.length === policy.overrides.length ? policy : { overrides };
+}
+
+/** Whether a session must inspect Codex's effective Skill catalog before start. */
+export function requiresCodexCapabilitySkillDiscovery(
+  policy: CapabilityRoutingPolicy | undefined,
+): boolean {
+  return policy?.overrides.some(isDisabledCodexSkillSourceDirective) ?? false;
+}
+
+/**
+ * Hide a selected plugin Skill, or every Skill from a disabled plugin.
+ *
+ * Codex 0.145 keeps plugin Skills enabled in the model-facing catalog even
+ * when the plugin-wide `enabled` override is false. `skills.config` is the
+ * supported per-Skill control. Cindy also uses the same narrow control when a
+ * specific downstream Skill depends on a host interface that is unavailable.
+ * Derive paths from app-server's own catalog rather than guessing local or
+ * remote homes. Existing disabled Skills in this cwd are carried forward
+ * because the per-thread array may replace the base array.
+ */
+export function buildCodexCapabilitySkillConfigOverrides(
+  policy: CapabilityRoutingPolicy | undefined,
+  skills: readonly CodexSkillState[],
+): Record<string, unknown> {
+  const targets: CodexSkillDisableTarget[] = [];
+  for (const directive of policy?.overrides ?? []) {
+    if (!isDisabledCodexSkillSourceDirective(directive)) continue;
+    const pluginId = directive.source.surface === 'plugin'
+      ? directive.source.id
+      : directive.source.containerId;
+    if (!pluginId) {
+      const requiredField = directive.source.surface === 'plugin'
+        ? 'source.id'
+        : 'source.containerId';
+      throw new Error(
+        `Cannot disable Codex Skill ${directive.source.id}: ${requiredField} is required`,
+      );
+    }
+    const plugin = parseCodexPluginCacheIdentity(pluginId);
+    if (!plugin) {
+      throw new Error(
+        `Cannot enforce disabled Codex Skill routing for ${directive.source.id}: expected plugin id in <name>@<marketplace> form`,
+      );
+    }
+    const skillArtifactId = directive.source.surface === 'skill'
+      ? directive.source.artifactId
+      : undefined;
+    if (directive.source.surface === 'skill' && !skillArtifactId) {
+      throw new Error(
+        `Cannot disable Codex Skill ${directive.source.id}: source.artifactId is required`,
+      );
+    }
+    targets.push({
+      plugin,
+      ...(skillArtifactId ? { skillArtifactId } : {}),
+    });
+  }
+  if (targets.length === 0) return {};
+
+  const routedSkillPaths = skills
+    .filter((skill) =>
+      targets.some((target) =>
+        isSkillFromPluginDistribution(skill.path, target),
+      ),
+    )
+    .map((skill) => skill.path);
+  if (routedSkillPaths.length === 0) return {};
+
+  const disabledPaths = new Set([
+    ...skills.filter((skill) => !skill.enabled).map((skill) => skill.path),
+    ...routedSkillPaths,
+  ]);
+  return {
+    'skills.config': [...disabledPaths]
+      .sort()
+      .map((skillPath) => ({ path: skillPath, enabled: false })),
+  };
 }
 
 /**

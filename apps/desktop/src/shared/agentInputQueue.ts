@@ -485,6 +485,7 @@ export function updateQueuedMessageText(
   };
   if (!hasEncodedQuoteMarker) delete nextChatMessage.quotesEncoded;
   delete nextChatMessage.pastedTextRanges;
+  delete nextChatMessage.agentReferences;
   nextChatMessage.slashCommandRanges = [];
   const updated: AgentInputQueuedMessage = {
     ...entry,

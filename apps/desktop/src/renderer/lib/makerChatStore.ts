@@ -1001,7 +1001,11 @@ interface RemoteClearFence {
   deviceId: string;
   dataOwner: DataOwnerGeneration;
   clearedAt: string;
+  /** Host-owned boundary observed before this clear request was dispatched. */
+  clearBoundaryBeforeRequest: number | null | undefined;
   clearGeneration: number;
+  /** The last clear invoke may have reached the host but lost its response. */
+  deliveryUncertain: boolean;
   dispatching: boolean;
 }
 
@@ -1064,9 +1068,29 @@ function armRemoteClearFence(sessionId: string, deviceId: string, clearedAt: str
     deviceId,
     dataOwner,
     clearedAt,
+    clearBoundaryBeforeRequest: getKnownRemoteInputClearBoundary(sessionId),
     clearGeneration,
+    deliveryUncertain: true,
     dispatching: false,
   });
+}
+
+function noteRemoteClearDispatchError(
+  sessionId: string,
+  deviceId: string,
+  clearedAt: string,
+  error: unknown,
+): void {
+  const fence = remoteClearFences.get(sessionId);
+  if (
+    !fence ||
+    fence.deviceId !== deviceId ||
+    fence.clearedAt !== clearedAt ||
+    !isRemoteClearFenceCurrent(sessionId, fence)
+  ) {
+    return;
+  }
+  fence.deliveryUncertain = !isDefinitelyUndeliveredRemoteMutationError(error);
 }
 
 function clearRemoteClearFence(sessionId: string, opts: { pump?: boolean } = {}): void {
@@ -1075,12 +1099,41 @@ function clearRemoteClearFence(sessionId: string, opts: { pump?: boolean } = {})
   if (opts.pump !== false) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
 }
 
+type RemoteClearProbeAssessment = 'applied' | 'not-applied' | 'inconclusive';
+
+function assessRemoteClearProbe(
+  fence: RemoteClearFence,
+  projection: AgentInputProjection,
+): RemoteClearProbeAssessment {
+  if (!Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')) {
+    // Legacy hosts cannot prove the clear through a projection. Preserve their
+    // existing retry behavior after a successful round trip confirms the host
+    // is reachable again.
+    return 'not-applied';
+  }
+  const observed = normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs);
+  if (observed === undefined) return 'inconclusive';
+  const baseline = fence.clearBoundaryBeforeRequest;
+  if (baseline === undefined) {
+    // A current authoritative numeric projection is safer to treat as the lost
+    // clear ACK than to risk destructively clearing post-request messages a
+    // second time. Normal hydrated sessions always have a null/numeric baseline;
+    // this is only the legacy/incomplete-hydration edge.
+    return typeof observed === 'number' ? 'applied' : 'not-applied';
+  }
+  if (baseline === null) {
+    return typeof observed === 'number' ? 'applied' : 'not-applied';
+  }
+  if (typeof observed !== 'number' || observed < baseline) return 'inconclusive';
+  return observed > baseline ? 'applied' : 'not-applied';
+}
+
 function resolveRemoteClearFenceFromProjection(
   sessionId: string,
   deviceId: string,
   clearedAt: string,
   projection: AgentInputProjection,
-  opts: { pump?: boolean } = {},
+  opts: { pump?: boolean; acknowledgment?: 'direct' | 'probe' } = {},
 ): boolean {
   const fence = remoteClearFences.get(sessionId);
   if (
@@ -1089,6 +1142,9 @@ function resolveRemoteClearFenceFromProjection(
     fence.clearedAt !== clearedAt ||
     !isRemoteClearFenceCurrent(sessionId, fence)
   ) {
+    return false;
+  }
+  if (opts.acknowledgment === 'probe' && assessRemoteClearProbe(fence, projection) !== 'applied') {
     return false;
   }
   const hasAuthoritativeBoundary = Object.prototype.hasOwnProperty.call(
@@ -1115,11 +1171,35 @@ function resolveRemoteClearFenceFromProjection(
   // drops the rest of the projection as stale. Legacy projections omit the
   // field, so resolve immediately for compatibility.
   if (hasAuthoritativeBoundary) {
-    observeRemoteInputClearBoundary(sessionId, projection.clearBoundaryMs);
+    observeRemoteInputClearBoundary(sessionId, projection.clearBoundaryMs, {
+      acknowledgePendingFence: true,
+    });
   } else {
     clearRemoteClearFence(sessionId, opts);
   }
   return true;
+}
+
+type RemoteClearOperationResult<T> =
+  | { kind: 'value'; value: T }
+  | { kind: 'error'; error: unknown }
+  | { kind: 'timeout' };
+
+async function awaitRemoteClearOperation<T>(promise: Promise<T>): Promise<RemoteClearOperationResult<T>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        (value) => ({ kind: 'value' as const, value }),
+        (error) => ({ kind: 'error' as const, error }),
+      ),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        timeoutId = setTimeout(() => resolve({ kind: 'timeout' }), CLEAR_SESSION_GUARD_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 async function retryRemoteClearFence(sessionId: string): Promise<void> {
@@ -1127,31 +1207,65 @@ async function retryRemoteClearFence(sessionId: string): Promise<void> {
   if (!isRemoteClearFenceCurrent(sessionId, fence) || fence!.dispatching) return;
   const current = fence!;
   current.dispatching = true;
-  const operation = beginInputProjectionOperation(sessionId, current.deviceId);
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await Promise.race([
-      operation.api.input.clearSession(sessionId, current.clearedAt).then(
-        (projection) => ({ kind: 'projection' as const, projection }),
-        (error) => ({ kind: 'error' as const, error }),
-      ),
-      new Promise<{ kind: 'timeout' }>((resolve) => {
-        timeoutId = setTimeout(() => resolve({ kind: 'timeout' }), CLEAR_SESSION_GUARD_TIMEOUT_MS);
-      }),
-    ]);
+    if (current.deliveryUncertain) {
+      const probeOperation = beginInputProjectionOperation(sessionId, current.deviceId);
+      const probeResult = await awaitRemoteClearOperation(
+        probeOperation.api.input.getProjection(sessionId),
+      );
+      if (!isRemoteClearFenceCurrent(sessionId, current)) return;
+      if (probeResult.kind !== 'value') {
+        scheduleRemoteClearRetry(sessionId);
+        return;
+      }
+      const assessment = assessRemoteClearProbe(current, probeResult.value);
+      if (assessment === 'applied') {
+        const resolved = resolveRemoteClearFenceFromProjection(
+          sessionId,
+          current.deviceId,
+          current.clearedAt,
+          probeResult.value,
+          { pump: false, acknowledgment: 'probe' },
+        );
+        applyInputProjectionOperationResponse(sessionId, probeOperation, probeResult.value);
+        if (resolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+        else scheduleRemoteClearRetry(sessionId);
+        return;
+      }
+      const applied = applyInputProjectionOperationResponse(
+        sessionId,
+        probeOperation,
+        probeResult.value,
+      );
+      if (!applied || assessment === 'inconclusive') {
+        scheduleRemoteClearRetry(sessionId);
+        return;
+      }
+      current.deliveryUncertain = false;
+    }
+
     if (!isRemoteClearFenceCurrent(sessionId, current)) return;
-    if (result.kind === 'projection') {
+    const operation = beginInputProjectionOperation(sessionId, current.deviceId);
+    current.deliveryUncertain = true;
+    const result = await awaitRemoteClearOperation(
+      operation.api.input.clearSession(sessionId, current.clearedAt),
+    );
+    if (!isRemoteClearFenceCurrent(sessionId, current)) return;
+    if (result.kind === 'value') {
       const resolved = resolveRemoteClearFenceFromProjection(
         sessionId,
         current.deviceId,
         current.clearedAt,
-        result.projection,
+        result.value,
         { pump: false },
       );
-      applyInputProjectionOperationResponse(sessionId, operation, result.projection);
+      applyInputProjectionOperationResponse(sessionId, operation, result.value);
       if (resolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
       else scheduleRemoteClearRetry(sessionId);
     } else {
+      if (result.kind === 'error') {
+        current.deliveryUncertain = !isDefinitelyUndeliveredRemoteMutationError(result.error);
+      }
       scheduleRemoteClearRetry(sessionId);
     }
   } catch (error) {
@@ -1160,7 +1274,6 @@ async function retryRemoteClearFence(sessionId: string): Promise<void> {
       scheduleRemoteClearRetry(sessionId);
     }
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
     if (remoteClearFences.get(sessionId) === current) current.dispatching = false;
   }
 }
@@ -1527,9 +1640,13 @@ function isRemoteInputClearBoundaryError(error: unknown): boolean {
  * local NOT_CONNECTED/LINK_NOT_OPEN/BACKPRESSURE and an in-flight disconnect
  * into that one code, so retrying it could duplicate a steer that already ran.
  */
-function isDefinitelyUndeliveredRemoteSteerError(error: unknown): boolean {
+function isDefinitelyUndeliveredRemoteMutationError(error: unknown): boolean {
   const formatted = formatRemoteError(error);
   return DEFINITELY_UNDELIVERED_REMOTE_STEER_MARKERS.some((marker) => formatted.includes(marker));
+}
+
+function isDefinitelyUndeliveredRemoteSteerError(error: unknown): boolean {
+  return isDefinitelyUndeliveredRemoteMutationError(error);
 }
 
 function isAmbiguousRemoteSteerError(error: unknown): boolean {
@@ -2690,6 +2807,7 @@ type RemoteInputClearBoundary = number | null | undefined;
 function observeRemoteInputClearBoundary(
   sessionId: string,
   rawBoundary: unknown,
+  opts: { acknowledgePendingFence?: boolean } = {},
 ): RemoteInputClearBoundary {
   const normalized = normalizeAgentInputClearBoundaryMs(rawBoundary);
   if (normalized === undefined) {
@@ -2701,14 +2819,16 @@ function observeRemoteInputClearBoundary(
   const hadPrevious = remoteInputClearBoundaryBySession.has(sessionId);
   const previous = remoteInputClearBoundaryBySession.get(sessionId);
   const pendingFence = remoteClearFences.get(sessionId);
-  const knownBoundary = remoteInputClearBoundaryBySession.get(sessionId);
+  const pendingFenceIsCurrent = Boolean(
+    pendingFence && isRemoteClearFenceCurrent(sessionId, pendingFence),
+  );
   const acknowledgesPendingFence = Boolean(
-    pendingFence &&
-      isRemoteClearFenceCurrent(sessionId, pendingFence) &&
+    pendingFenceIsCurrent &&
       typeof normalized === 'number' &&
-      (knownBoundary === undefined ||
-        knownBoundary === null ||
-        (typeof knownBoundary === 'number' && normalized >= knownBoundary)),
+      (opts.acknowledgePendingFence === true ||
+        pendingFence!.clearBoundaryBeforeRequest === null ||
+        (typeof pendingFence!.clearBoundaryBeforeRequest === 'number' &&
+          normalized > pendingFence!.clearBoundaryBeforeRequest)),
   );
   let advanced = false;
   if (!hadPrevious) {
@@ -2719,7 +2839,7 @@ function observeRemoteInputClearBoundary(
     // ordering here. Retire every record/recovery that has not already captured
     // an authoritative token; a record created after hydration captures the
     // known token synchronously and is therefore preserved.
-    if (typeof normalized === 'number' && !acknowledgesPendingFence) {
+    if (typeof normalized === 'number' && !acknowledgesPendingFence && !pendingFenceIsCurrent) {
       cancelRemoteOptimisticSendsForRemoteClear(sessionId, normalized, {
         historicalHydration: true,
       });
@@ -2742,9 +2862,10 @@ function observeRemoteInputClearBoundary(
     }
   }
 
-  // A projection/session patch carrying the boundary requested by this
-  // renderer is the remote clear ACK. Resolve the fence before the generic
-  // "new boundary" path can invalidate messages created after the local clear.
+  // A generic projection/session patch only acknowledges the pending clear
+  // when it strictly advances the host boundary captured before dispatch. A
+  // direct clear response passes the explicit option above because the response
+  // itself proves execution even if two host events share one millisecond.
   if (acknowledgesPendingFence) {
     clearRemoteClearFence(sessionId, { pump: false });
   }
@@ -3071,7 +3192,7 @@ function _trimMessagesIfNeeded(sessionId: string): void {
 // ensureInitialMessages to reload from DB.
 // ---------------------------------------------------------------------------
 
-const DEMOTE_IDLE_MS = 60_000;
+const DEMOTE_IDLE_MS = 5 * 60_000;
 const DEMOTE_CHECK_INTERVAL_MS = 30_000;
 
 const _lastViewedAt = new Map<string, number>();
@@ -7535,9 +7656,6 @@ function reconcilePendingInteractions(
   const interactionReconcileEpochAtStart = beginInteractionReconcile(sessionId);
   const interactionOriginAtStart = remoteProjectsStore.getSessionDeviceId(sessionId);
   const stickyDeviceAtStart = getStickySessionDeviceId(sessionId);
-  const interactionApi = stickyDeviceAtStart
-    ? makerApiForDevice(stickyDeviceAtStart)
-    : makerApiFor(sessionId);
   const isCurrentInteractionReconcile = () =>
     isDataOwnerGenerationCurrent(interactionDataOwnerAtStart) &&
     (_messagesEpoch.get(sessionId) ?? 0) === interactionEpochAtStart &&
@@ -7556,6 +7674,9 @@ function reconcilePendingInteractions(
   // 语义——needs-interaction 未读的 passive 远程回执必须等交互面板真实重建后才放行,
   // 且守卫早退路径只在真有提示(count>0)时才算一代完成。
   try {
+    const interactionApi = stickyDeviceAtStart
+      ? makerApiForDevice(stickyDeviceAtStart)
+      : makerApiFor(sessionId);
     const run = interactionApi.getPendingInteractions(sessionId).then((list) => {
       if (!isCurrentInteractionReconcile()) return 0;
       if (!Array.isArray(list)) return 0;
@@ -8523,6 +8644,13 @@ function releaseCacheHydrationAfterFailure(sessionId: string): void {
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
   requestInputProjection(sessionId);
+  // Prefetch and other non-mounted callers still create a cache entry. Give
+  // that entry the same bounded lifetime as a viewed session so a cancelled
+  // navigation cannot leave messages permanently exempt from soft eviction.
+  if (!_activeViewSessions.has(sessionId)) {
+    _lastViewedAt.set(sessionId, Date.now());
+    _ensureDemoteTimer();
+  }
   if (state.historyLoaded) return;
   if (_historyFetchInFlight.has(sessionId)) return;
   const historyEpochAtStart = _messagesEpoch.get(sessionId) ?? 0;
@@ -8655,7 +8783,7 @@ function ensureInitialMessages(sessionId: string): void {
         }));
         _historyFetchInFlight.delete(sessionId);
         // 历史加载完 → 重建当前挂起交互(新窗口/重连/刷新打开时面板才会出现)。
-        reconcilePendingInteractions(sessionId, isCurrentHistoryLoad);
+        void reconcilePendingInteractions(sessionId, isCurrentHistoryLoad).catch(() => undefined);
         return;
       }
 
@@ -8694,13 +8822,63 @@ function ensureInitialMessages(sessionId: string): void {
           hasMoreMessages: false,
         }));
         _historyFetchInFlight.delete(sessionId);
-        reconcilePendingInteractions(sessionId);
+        void reconcilePendingInteractions(sessionId).catch(() => undefined);
         return;
       }
       let hasMore = serverMessagePageHasMore(existing);
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
       const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
       const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
+
+      // Make the newest page visible as soon as it arrives. `historyLoaded`
+      // deliberately remains false until the optional anchor/plan backfill is
+      // complete: several consumers use that flag to gate remote reconciliation
+      // and resume/restore side effects. `isLoadingMore` is the shared lock that
+      // keeps user-triggered pagination from racing this background backfill.
+      const initialHasVisibleAnchor = existing.some((row) => !isNonAnchorHistoryRow(row));
+      const initialPlanState = historyRowsPlanBackfillState(existing, hasMore);
+      const initialNeedsBackfill =
+        hasMore &&
+        (existing.every(isNonAnchorHistoryRow) ||
+          !initialPlanState.hasPlanEvent ||
+          !initialPlanState.isResolved);
+      if (initialHasVisibleAnchor) {
+        const initialMapped = mapServerMessages(existing);
+        const initialOldestId = oldestRow.id;
+        settleCacheHydration(sessionId);
+        setState(sessionId, (s) => ({
+          ...s,
+          // Keep historyLoaded=false until the full initial window is ready;
+          // MessageStream renders this fresh page directly from `messages`.
+          historyLoaded: false,
+          messages: mergeMessages(
+            initialMapped,
+            s.messages.some((m) => m.cacheHydrated === true)
+              ? s.messages.filter((m) => m.cacheHydrated !== true)
+              : s.messages,
+            {},
+            'newest-first',
+          ),
+          isFirstMessage: false,
+          oldestMessageId:
+            s.historyWindowHasIsland === true
+              ? initialOldestId
+              : (oldestServerMessageIdForWindow(
+                  existing,
+                  s.messages,
+                  s.oldestMessageId,
+                  'newest-first',
+                ) ?? initialOldestId),
+          hasMoreMessages: hasMore,
+          isLoadingMore: initialNeedsBackfill,
+        }));
+      } else if (initialNeedsBackfill) {
+        // The newest page has no renderable anchor, so there is nothing useful
+        // to publish yet. Still acquire the shared pagination lock before the
+        // first background await: a stale/local-only row may already give
+        // loadOlderMessages a cursor, and it must not race this backfill.
+        setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
+      }
       let pagesFetched = 0;
       let planResolutionPagesFetched = 0;
       while (hasMore) {
@@ -8800,6 +8978,7 @@ function ensureInitialMessages(sessionId: string): void {
                 'newest-first',
               ) ?? oldestId),
         hasMoreMessages: hasMore,
+        isLoadingMore: false,
       }));
       if (import.meta.env.DEV) {
         const ingestDurMs = performance.now() - ingestStartMs;
@@ -8812,7 +8991,7 @@ function ensureInitialMessages(sessionId: string): void {
       _historyFetchInFlight.delete(sessionId);
       // 历史加载完 → 重建当前挂起交互:历史里被转 expired 的 ask/plan 在此翻回 pending
       // (按 requestId 去重,不重复),permission 重新置 pendingPermission。
-      reconcilePendingInteractions(sessionId, isCurrentHistoryLoad);
+      void reconcilePendingInteractions(sessionId, isCurrentHistoryLoad).catch(() => undefined);
     })
     .catch(() => {
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
@@ -11708,7 +11887,10 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
-    if (remoteDeviceId) scheduleRemoteClearRetry(sessionId);
+    if (remoteDeviceId) {
+      noteRemoteClearDispatchError(sessionId, remoteDeviceId, clearedAt, err);
+      scheduleRemoteClearRetry(sessionId);
+    }
   } else {
     log.warn('maker.input.clearSession timed out; continuing local clear', { sessionId });
     if (remoteDeviceId) scheduleRemoteClearRetry(sessionId);

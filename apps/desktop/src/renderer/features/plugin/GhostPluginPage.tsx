@@ -68,9 +68,11 @@ import {
   ghostPermissionItems,
   isOfficialGhostId,
   type GhostSetupStatus,
+  type InstalledGhost,
 } from '../../../shared/ghost';
 import type {
   PluginMarketDetail,
+  PluginMarketInstallOptions,
   PluginMarketItem,
   PluginMarketSnapshot,
 } from '../../../shared/pluginMarket';
@@ -652,6 +654,57 @@ export function GhostPluginPage() {
     [t],
   );
 
+  /**
+   * 市场详情与真实下载包权限不一致时，展示 Main 验证后的真实权限并绑定重试。
+   * Renderer 只负责确认；包 SHA 和已装权限基线均由 Main 重新核对。
+   */
+  const installReviewedMarketPackage = useCallback(
+    async (input: {
+      detail: PluginMarketDetail;
+      lease: { pluginId: string };
+      options: PluginMarketInstallOptions;
+    }): Promise<InstalledGhost | null> => {
+      const initial = await window.electronAPI.pluginMarket.install(
+        input.detail.pluginId,
+        input.options,
+      );
+      if (initial.ghost !== undefined) return initial.ghost;
+      if (!isMarketBusyLeaseActive(input.lease)) return null;
+
+      const review = initial.reviewRequired;
+      if (!review) return null;
+      const approved = await confirm({
+        title: t('settings.ghosts.market.installConfirmTitle', {
+          name: input.detail.name,
+        }),
+        description: t('settings.ghosts.market.installConfirmDescription'),
+        content: <GhostPermissionList items={ghostPermissionItems(review.manifest)} />,
+        maxWidth: 520,
+        confirmText: t('settings.ghosts.market.install'),
+        cancelText: t('settings.ghosts.installConfirm.cancel'),
+        autoFocusConfirm: true,
+      });
+      if (!approved || !isMarketBusyLeaseActive(input.lease)) return null;
+
+      const retried = await window.electronAPI.pluginMarket.install(
+        input.detail.pluginId,
+        {
+          ...input.options,
+          allowPermissionExpansion: review.installedBaseline !== null,
+          reviewedBaseline: review.installedBaseline ?? undefined,
+          approvedPackageSha256: review.packageSha256,
+        },
+      );
+      if (retried.ghost !== undefined) return retried.ghost;
+
+      // 同一 release 的真实包不应漂移；再次要求复核说明已装基线在往返窗口内变化。
+      toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      await refreshMarket();
+      return null;
+    },
+    [confirm, isMarketBusyLeaseActive, refreshMarket, t],
+  );
+
   // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
   // 权限 diff,经用户确认后才安装,不做静默升级。
   const handleMarketUpdate = useCallback(
@@ -681,21 +734,26 @@ export function GhostPluginPage() {
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
-          expectedReleaseId: next.releaseId,
-          ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
-          allowPermissionExpansion: diff.added.length > 0,
-          // 用户看确认框这段时间里已装 manifest 可能被换掉(如从文件更新);
-          // 把审阅基线交给 Main,在安装锁内复核后才放行扩权。
-          ...(installedGhost
-            ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-            : {}),
+        const ghost = await installReviewedMarketPackage({
+          detail: next,
+          lease: marketBusyLease,
+          options: {
+            expectedReleaseId: next.releaseId,
+            ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
+            allowPermissionExpansion: diff.added.length > 0,
+            // 用户看确认框这段时间里已装 manifest 可能被换掉(如从文件更新);
+            // 把审阅基线交给 Main,在安装锁内复核后才放行扩权。
+            ...(installedGhost
+              ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+              : {}),
+          },
         });
+        if (!ghost) return;
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
-            name: result.ghost.manifest.name,
-            version: result.ghost.manifest.version,
+            name: ghost.manifest.name,
+            version: ghost.manifest.version,
           }),
         );
         await refreshMarket();
@@ -712,6 +770,7 @@ export function GhostPluginPage() {
       confirm,
       ghosts,
       isMarketBusyLeaseActive,
+      installReviewedMarketPackage,
       marketByGhostId,
       refreshMarket,
       releaseMarketBusy,
@@ -1056,39 +1115,44 @@ export function GhostPluginPage() {
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
-        expectedReleaseId: marketDetail.releaseId,
-        ...(marketDetail.sourceType !== 'server'
-          ? { expectedManifest: marketDetail.manifest }
-          : {}),
-        ...(isUpdate && diff!.added.length > 0
-          ? {
-              allowPermissionExpansion: true,
-              // 确认框展示期间已装 manifest 可能被换掉;基线交由 Main 在
-              // 安装锁内复核,不一致就拒绝这次批准而不是沿用旧同意。
-              ...(installedGhost
-                ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                : {}),
-            }
-          : {}),
+      const ghost = await installReviewedMarketPackage({
+        detail: marketDetail,
+        lease: marketBusyLease,
+        options: {
+          expectedReleaseId: marketDetail.releaseId,
+          ...(marketDetail.sourceType !== 'server'
+            ? { expectedManifest: marketDetail.manifest }
+            : {}),
+          ...(isUpdate && diff!.added.length > 0
+            ? {
+                allowPermissionExpansion: true,
+                // 确认框展示期间已装 manifest 可能被换掉;基线交由 Main 在
+                // 安装锁内复核,不一致就拒绝这次批准而不是沿用旧同意。
+                ...(installedGhost
+                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                  : {}),
+              }
+            : {}),
+        },
       });
+      if (!ghost) return;
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
       // 用"已更新"(生效状态未被改变)。
       toast.success(
         isUpdate
           ? t('settings.ghosts.toast.updated', {
-              name: result.ghost.manifest.name,
-              version: result.ghost.manifest.version,
+              name: ghost.manifest.name,
+              version: ghost.manifest.version,
             })
           : t('settings.ghosts.toast.installed', {
-              name: result.ghost.manifest.name,
+              name: ghost.manifest.name,
             }),
       );
       setMarketDetail((current) =>
         current?.pluginId === marketDetail.pluginId ? null : current,
       );
-      setSelectedId(result.ghost.manifest.id);
+      setSelectedId(ghost.manifest.id);
       await refreshMarket();
     } catch (error) {
       if (isMarketBusyLeaseActive(marketBusyLease)) {
@@ -1102,6 +1166,7 @@ export function GhostPluginPage() {
     confirm,
     ghosts,
     isMarketBusyLeaseActive,
+    installReviewedMarketPackage,
     refreshMarket,
     releaseMarketBusy,
     t,

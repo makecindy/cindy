@@ -35,6 +35,10 @@ interface Harness {
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
     sendToGhost: ReturnType<typeof vi.fn>;
+    log: {
+      info: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
   };
   sent: GhostPipeToolCall[];
 }
@@ -53,6 +57,10 @@ function makeHarness(opts: {
       sent.push(payload);
       return true;
     }),
+    log: {
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
@@ -187,6 +195,37 @@ describe('配对交卷', () => {
     expect(outcome.accepted).toBe(true);
     await expect(p).resolves.toEqual({ ok: true, result: { url: 'cindy-media://blobs/x.png' } });
     expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('完成日志只含元数据，不记录参数或返回内容', async () => {
+    const h = makeHarness();
+    const secretArg = 'must-not-log-argument';
+    const secretResult = 'must-not-log-result';
+    const p = h.dispatcher.callGhostTool({
+      ...CALL,
+      args: { prompt: secretArg },
+      callId: 'observable-call',
+    });
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId: 'observable-call',
+      ok: true,
+      result: { value: secretResult },
+    });
+    await expect(p).resolves.toMatchObject({ ok: true });
+
+    expect(h.deps.log.info).toHaveBeenCalledTimes(1);
+    expect(h.deps.log.info).toHaveBeenCalledWith('ghost tool call completed', {
+      ghostId: 'art',
+      tool: 'gen_image',
+      callId: 'observable-call',
+      ok: true,
+      totalMs: expect.any(Number),
+    });
+    const logs = JSON.stringify(h.deps.log.info.mock.calls);
+    expect(logs).not.toContain(secretArg);
+    expect(logs).not.toContain(secretResult);
   });
 
   it('意识侧报错 → INTERNAL 透传 message', async () => {

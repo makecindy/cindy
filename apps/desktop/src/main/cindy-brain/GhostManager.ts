@@ -49,6 +49,7 @@ const TRUST_METADATA_FILE = '.cindy-trust.json';
 
 interface GhostInstalledHostMetadata {
   trust: GhostTrustInfo;
+  /** Legacy receipt retained only for backward-compatible metadata reads. */
   approvedAtResourceProviderTool?: string;
 }
 
@@ -144,17 +145,9 @@ export class GhostManager {
         continue;
       }
       const hostMetadata = this.readInstalledHostMetadata(dir);
-      // atResourceProvider 在旧版宿主里只是未知顶层元数据。只有新版宿主在
-      // install/update 审阅后写下的精确 receipt 才把它提升为运行时入口；旧安装
-      // 没 receipt 时 fail closed，但插件本体与已批准 tool 仍照旧可用。
-      const manifest =
-        v.manifest.atResourceProvider
-        && hostMetadata?.approvedAtResourceProviderTool !== v.manifest.atResourceProvider.tool
-          ? (() => {
-              const { atResourceProvider: _ignored, ...rest } = v.manifest;
-              return rest;
-            })()
-          : v.manifest;
+      // 历史 manifest / receipt 中可能保留已移除的资源搜索元数据；它不参与当前
+      // 运行时入口，插件本体与已批准的其它能力仍按现有授权照常可用。
+      const manifest = v.manifest;
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       const iconDataUrl = this.readInstalledIconDataUrl(dir, manifest);
       const localizedManifest = this.readInstalledLocalizedManifest(dir, manifest);
@@ -316,6 +309,8 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        /** 包内原始清单，仅供 Main 安全比较。 */
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -326,6 +321,7 @@ export class GhostManager {
     if ('rejection' in parsed) return parsed;
     return {
       manifest: parsed.manifest,
+      canonicalManifest: parsed.canonicalManifest,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
@@ -338,6 +334,7 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -614,6 +611,7 @@ export class GhostManager {
 
     return {
       manifest: localizedManifest,
+      canonicalManifest: v.manifest,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
@@ -681,9 +679,6 @@ export class GhostManager {
           ? MAX_NODE_UNCOMPRESSED_BYTES
           : MAX_BASIC_UNCOMPRESSED_BYTES,
         trust,
-        ...(manifest.atResourceProvider
-          ? { approvedAtResourceProviderTool: manifest.atResourceProvider.tool }
-          : {}),
       });
       await fs.promises.rename(stagingDir, finalDir);
     } catch (err) {
@@ -771,9 +766,6 @@ export class GhostManager {
           ? MAX_NODE_UNCOMPRESSED_BYTES
           : MAX_BASIC_UNCOMPRESSED_BYTES,
         trust,
-        ...(manifest.atResourceProvider
-          ? { approvedAtResourceProviderTool: manifest.atResourceProvider.tool }
-          : {}),
       });
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
@@ -820,7 +812,6 @@ export class GhostManager {
       disabled: boolean;
       maxUncompressedBytes: number;
       trust: GhostTrustInfo;
-      approvedAtResourceProviderTool?: string;
     },
   ): Promise<void> {
     await fs.promises.mkdir(stagingDir, { recursive: true });
@@ -849,9 +840,6 @@ export class GhostManager {
       path.join(stagingDir, TRUST_METADATA_FILE),
       `${JSON.stringify({
         ...opts.trust,
-        ...(opts.approvedAtResourceProviderTool
-          ? { approvedAtResourceProvider: { tool: opts.approvedAtResourceProviderTool } }
-          : {}),
       }, null, 2)}\n`,
     );
   }

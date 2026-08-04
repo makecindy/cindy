@@ -86,9 +86,14 @@ import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
-import { MessageRenderer, type MobileMessageDraft } from '@/session/MessageRenderer';
+import {
+  MessageRenderer,
+  type MobileMessageActionBusyKind,
+  type MobileMessageDraft,
+} from '@/session/MessageRenderer';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
+import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
@@ -1116,7 +1121,10 @@ export default function SessionScreen() {
   const lastPendingPlanRequestIdRef = useRef<string | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
-  const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
+  const [messageActionBusy, setMessageActionBusy] = useState<{
+    clientId: string;
+    kind: MobileMessageActionBusyKind;
+  } | null>(null);
   const [rewindState, setRewindState] = useState<RewindPreviewState>({ kind: 'idle' });
   // 切 session 时同步(render 阶段)重置回撤确认框 / busy / loading 态并递增「请求代际」。SessionScreen 切
   // session 复用实例、不 remount,这些本地 UI state 不会自动重置,残留会让确认框跨 session 出现且
@@ -7378,7 +7386,7 @@ export default function SessionScreen() {
   const previewRewindAtMessage = useCallback(async (clientId: string, draft: MobileMessageDraft) => {
     if (messageActionBusy) return;
     const seq = ++rewindRequestSeqRef.current;
-    setMessageActionBusy(clientId);
+    setMessageActionBusy({ clientId, kind: 'rewind' });
     setError(null);
     setRewindState({
       kind: 'loading',
@@ -7420,7 +7428,7 @@ export default function SessionScreen() {
 
   const performForkAtMessage = useCallback(async (clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
-    setMessageActionBusy(clientId);
+    setMessageActionBusy({ clientId, kind: 'fork' });
     setError(null);
     try {
       const forked = await maker.fork(sessionId, clientId);
@@ -7438,11 +7446,13 @@ export default function SessionScreen() {
         params: { sessionId: forked.id, deviceId, deviceName },
       });
     } catch (err) {
-      setError(formatRemoteError(err));
+      const detail = formatRemoteError(err);
+      const projectionKey = inputProjectionErrorI18nKey(detail);
+      setError(projectionKey ? t(projectionKey) : detail);
     } finally {
       setMessageActionBusy(null);
     }
-  }, [deviceId, deviceName, maker, messageActionBusy, router, sessionId]);
+  }, [deviceId, deviceName, maker, messageActionBusy, router, sessionId, t]);
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
@@ -7612,7 +7622,7 @@ export default function SessionScreen() {
         style: 'destructive',
         onPress: () => {
           void (async () => {
-            setMessageActionBusy(clientId);
+            setMessageActionBusy({ clientId, kind: 'delete' });
             setError(null);
             try {
               const result = await maker.deleteMessage(sessionId, clientId);
@@ -7641,7 +7651,7 @@ export default function SessionScreen() {
     if (!deviceId || messageActionBusy || !isCommitReadyRewindState(rewindState)) return;
     const state = rewindState;
     const seq = ++rewindRequestSeqRef.current;
-    setMessageActionBusy(state.clientId);
+    setMessageActionBusy({ clientId: state.clientId, kind: 'rewind' });
     setError(null);
     try {
       const updated = await maker.rewindCommit(sessionId, state.clientId);
@@ -8078,7 +8088,8 @@ export default function SessionScreen() {
                   <MessageRenderer
                     bottomOverlayHeight={bottomOverlayHeight}
                     topOverlayHeight={topOverlayHeight}
-                    busyClientId={messageActionBusy}
+                    busyAction={messageActionBusy?.kind ?? null}
+                    busyClientId={messageActionBusy?.clientId ?? null}
                     canLoadEarlier={hasOlderMessages && messages.length > 0}
                     emptyTestID="session.messageList.empty"
                     focusedItemKey={focusedMessageItemKey ?? null}

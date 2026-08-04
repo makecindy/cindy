@@ -8,7 +8,10 @@
  */
 
 import type { GhostManifest, GhostPermissionDiff } from '../../../../shared/ghost';
-import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import type {
+  PluginMarketItem,
+  PluginMarketPackageReview,
+} from '../../../../shared/pluginMarket';
 
 /**
  * 批量更新策略(设计定稿):权限无变化的自动串行完成;权限有扩张的
@@ -51,6 +54,8 @@ export interface UpdateAllRow {
    * 传回同一份 reviewed manifest,approve 必须原样带上,否则 INVALID_PARAMS。
    */
   expectedManifest?: GhostManifest;
+  /** 实际下载包等待用户确认的权限事实。 */
+  packageReview?: PluginMarketPackageReview;
   /** status 为 failed 时的用户可读错误(已经过 i18n 映射)。 */
   errorText?: string;
 }

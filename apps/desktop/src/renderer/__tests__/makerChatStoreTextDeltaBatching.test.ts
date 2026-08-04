@@ -4306,6 +4306,7 @@ describe('makerChatStore text delta batching', () => {
   it('keeps a clear-fenced send local after invoke rejection and dispatches it on reconnect ACK', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     let clearAttempts = 0;
+    let online = false;
     let clearedAt: string | undefined;
     let enqueueCalls = 0;
     let enqueueOpts: unknown;
@@ -4315,6 +4316,7 @@ describe('makerChatStore text delta batching', () => {
         clearAttempts += 1;
         clearedAt = args[1] as string;
         if (clearAttempts === 1) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] offline');
+        if (!online) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] offline');
         // The controller and controlled host may have skewed clocks. The
         // host-owned boundary is still authoritative even when it is earlier
         // than the controller's request timestamp.
@@ -4355,16 +4357,279 @@ describe('makerChatStore text delta batching', () => {
       expect.objectContaining({ content: 'send after offline clear', isPendingPersist: true }),
     ]);
 
+    online = true;
     onPresenceChanged?.({ deviceId: 'device-1', online: true });
     await flushPromises();
     await flushPromises();
 
-    expect(clearAttempts).toBe(2);
+    // Presence and projection-reseed callbacks may race and request the same
+    // definitely-undelivered clear more than once; the send must still settle
+    // only after an ACK, regardless of that duplicate retry trigger.
+    expect(clearAttempts).toBeGreaterThanOrEqual(2);
     expect(enqueueCalls).toBe(1);
     expect(enqueueOpts).toEqual({
       sendAtMs: expect.any(Number),
       expectedClearBoundaryMs: Date.parse(clearedAt!) - 10_000,
     });
+  });
+
+  it('reconciles an ambiguous clear response loss before retrying the destructive clear', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const baselineBoundary = Date.parse('2026-08-03T00:00:00.000Z');
+    const appliedBoundary = baselineBoundary + 1_000;
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    let online = false;
+    let clearAttempts = 0;
+    let projectionProbes = 0;
+    let enqueueCalls = 0;
+    let enqueueOpts: unknown;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:clear-session') {
+        clearAttempts += 1;
+        if (clearAttempts === 1) {
+          throw new Error('[DEVICE_LINK_NOT_CONNECTED] response lost after host clear');
+        }
+        return projection(SESSION_ID, { clearBoundaryMs: appliedBoundary + clearAttempts });
+      }
+      if (channel === 'maker:input:get-projection') {
+        projectionProbes += 1;
+        if (!online) throw new Error('[DEVICE_LINK_NOT_CONNECTED] host still offline');
+        return projection(SESSION_ID, { clearBoundaryMs: appliedBoundary });
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        enqueueOpts = args[2];
+        return projection(SESSION_ID, {
+          clearBoundaryMs: appliedBoundary,
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'send after lost clear ACK',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    expect(enqueueCalls).toBe(0);
+
+    await flushPromises();
+    projectionProbes = 0;
+    online = true;
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(projectionProbes).toBe(1);
+    expect(clearAttempts).toBe(1);
+    expect(enqueueCalls).toBe(1);
+    expect(enqueueOpts).toEqual({
+      sendAtMs: expect.any(Number),
+      // The queued item captured the pre-clear token. If the host rejects it,
+      // the normal send path re-probes and refreshes the token before retrying.
+      expectedClearBoundaryMs: baselineBoundary,
+    });
+  });
+
+  it('does not acknowledge a pending clear from an equal stale boundary replay', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const baselineBoundary = Date.parse('2026-08-03T00:00:00.000Z');
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    let clearAttempts = 0;
+    let enqueueCalls = 0;
+    let online = false;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:clear-session') {
+        clearAttempts += 1;
+        throw new Error('[DEVICE_LINK_NOT_CONNECTED] response lost after host clear');
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, {
+          clearBoundaryMs: baselineBoundary,
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      if (channel === 'maker:input:get-projection') {
+        if (!online) throw new Error('[DEVICE_LINK_NOT_CONNECTED] host still offline');
+        return projection(SESSION_ID, { clearBoundaryMs: baselineBoundary });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'still fenced after stale replay',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    await flushPromises();
+
+    expect(clearAttempts).toBe(1);
+    expect(enqueueCalls).toBe(0);
+  });
+
+  it('retries clear only after a projection proves the first attempt was not applied', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const baselineBoundary = Date.parse('2026-08-03T00:00:00.000Z');
+    const appliedBoundary = baselineBoundary + 1_000;
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    let clearAttempts = 0;
+    let projectionProbes = 0;
+    let enqueueCalls = 0;
+    let online = false;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:clear-session') {
+        clearAttempts += 1;
+        if (clearAttempts === 1) {
+          throw new Error('[DEVICE_LINK_NOT_CONNECTED] request delivery uncertain');
+        }
+        return projection(SESSION_ID, { clearBoundaryMs: appliedBoundary });
+      }
+      if (channel === 'maker:input:get-projection') {
+        projectionProbes += 1;
+        if (!online) throw new Error('[DEVICE_LINK_NOT_CONNECTED] host still offline');
+        return projection(SESSION_ID, { clearBoundaryMs: baselineBoundary });
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, {
+          clearBoundaryMs: appliedBoundary,
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'send after proved retry',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+
+    await flushPromises();
+    projectionProbes = 0;
+    online = true;
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    expect(projectionProbes).toBe(1);
+    expect(clearAttempts).toBe(2);
+    expect(enqueueCalls).toBe(1);
+  });
+
+  it('keeps an ambiguous clear fenced when the reconciliation projection also fails', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const baselineBoundary = Date.parse('2026-08-03T00:00:00.000Z');
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    let clearAttempts = 0;
+    let projectionProbes = 0;
+    let enqueueCalls = 0;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:clear-session') {
+        clearAttempts += 1;
+        if (clearAttempts === 1) {
+          throw new Error('[DEVICE_LINK_NOT_CONNECTED] request delivery uncertain');
+        }
+        return projection(SESSION_ID, { clearBoundaryMs: baselineBoundary + 1_000 });
+      }
+      if (channel === 'maker:input:get-projection') {
+        projectionProbes += 1;
+        throw new Error('[DEVICE_LINK_NOT_CONNECTED] projection unavailable');
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, {
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'still fenced after failed probe',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(projectionProbes).toBeGreaterThanOrEqual(1);
+    expect(clearAttempts).toBe(1);
+    expect(enqueueCalls).toBe(0);
+  });
+
+  it('accepts a direct clear response even when the host boundary equals the baseline', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const baselineBoundary = Date.parse('2026-08-03T00:00:00.000Z');
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs: baselineBoundary }));
+    let enqueueCalls = 0;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:clear-session') {
+        return projection(SESSION_ID, { clearBoundaryMs: baselineBoundary });
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, {
+          clearBoundaryMs: baselineBoundary,
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      if (channel === 'maker:input:get-projection') {
+        return projection(SESSION_ID, { clearBoundaryMs: baselineBoundary });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'send after same-millisecond clear',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+
+    expect(enqueueCalls).toBe(1);
   });
 
   it('does not reset a remote owner fence for repeated online presence updates', () => {

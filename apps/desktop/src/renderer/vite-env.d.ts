@@ -1136,23 +1136,7 @@ interface ElectronAPI {
      */
     setupStatus: (id: string) => Promise<import('../shared/ghost').GhostSetupStatus>;
     /** 只列入口元数据，不运行插件工具；远程/device-link 不暴露。 */
-    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }) => Promise<{
-      items: Array<{ ghostId: string; name: string; description?: string }>;
-    }>;
     /** 用户选定一个入口后，按固定只读摘要契约搜索该插件。 */
-    queryAtResources: (params: {
-      ghostId: string;
-      sessionId?: string;
-      workingDir?: string;
-      query?: string;
-      limit?: number;
-    }) => Promise<{
-      success: boolean;
-      error?: string;
-      pluginName?: string;
-      items: Array<{ id: string; label: string; description?: string; href: string }>;
-      truncated: boolean;
-    }>;
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */
     onRecentUsageChanged: (callback: (payload: { ids: string[] }) => void) => () => void;
     install: (
@@ -1434,6 +1418,12 @@ interface ElectronAPI {
       action: 'status' | 'spawn' | 'stop' | 'crash',
       id?: string,
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
+    /** dev-only：经正式插件派发/权限链调用一个已声明工具。 */
+    devCall: (
+      id: string,
+      tool: string,
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
   };
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
@@ -1442,12 +1432,8 @@ interface ElectronAPI {
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     install: (
       pluginId: string,
-      options: {
-        expectedReleaseId: string;
-        expectedManifest?: import('../shared/ghost').GhostManifest;
-        allowPermissionExpansion?: boolean;
-      },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+      options: import('../shared/pluginMarket').PluginMarketInstallOptions,
+    ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
@@ -2424,8 +2410,28 @@ interface ElectronAPI {
       disposition: string;
       openerTabId?: string;
       openerSessionId?: string;
+      nativePopupSurfaceId?: string;
     }) => void,
   ) => () => void;
+
+  /** Main-owned WebContentsView used only for Chromium-created popup contexts. */
+  rsbNativePopup: {
+    claim: (
+      input: import('../shared/rsbNativePopup').RsbNativePopupClaimInput,
+    ) => Promise<import('../shared/rsbNativePopup').RsbNativePopupClaimResult>;
+    setBounds: (input: {
+      surfaceId: string;
+      bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
+      visible: boolean;
+    }) => Promise<{ ok: true }>;
+    command: (
+      input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,
+    ) => Promise<{ ok: true }>;
+    close: (input: { surfaceId: string }) => Promise<{ ok: true }>;
+    onEvent: (
+      callback: (event: import('../shared/rsbNativePopup').RsbNativePopupEvent) => void,
+    ) => () => void;
+  };
 
   /**
    * RSB web-browser plugin:guest webview 内按下 Cmd/Ctrl+L 时,main 端

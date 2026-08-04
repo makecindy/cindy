@@ -144,6 +144,7 @@ import {
 import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
 import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
+  getActiveCodexBridgeServerNames,
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
   setCodexEnvironmentShutdownHook,
@@ -185,7 +186,10 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
-import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
+import {
+  buildDesktopCapabilityRoutingPolicy,
+  DESKTOP_CAPABILITY_ROUTING_POLICY,
+} from './capability-routing.js';
 export { withRehydrateCloseSuppressed };
 
 type RemoteCcQuery = Awaited<
@@ -980,7 +984,15 @@ export function getMaker(): Maker {
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
-      capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+      // Evaluate after app-server startup prepared (or reused) the MCP bridge.
+      // The bridge snapshot is the applied capability surface; the preference
+      // alone can be ahead of it while a busy Codex turn defers refresh.
+      get capabilityRouting() {
+        return buildDesktopCapabilityRoutingPolicy({
+          cindyComputerAvailable:
+            getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
+        });
+      },
       makerMemory: makerMemoryManager,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,

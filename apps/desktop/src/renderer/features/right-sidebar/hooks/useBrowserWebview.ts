@@ -112,6 +112,7 @@ export function useBrowserWebview(
   tabId: string,
   sessionId?: string,
   visible?: boolean,
+  enabled = true,
 ): UseBrowserWebviewResult {
   // pool entry 引用 + 反应式 state。entry 本身在 pool 模块管;hook 只观察。
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
@@ -143,6 +144,7 @@ export function useBrowserWebview(
   visibleRef.current = visible === true;
 
   useEffect(() => {
+    if (!enabled) return;
     const unsubRelease = browserWebviewPool.onRelease((releasedTabId) => {
       if (releasedTabId !== tabId) return;
       // 已释放的 wrapper 不再属于 Pool，先撤销发布，避免下一次渲染把旧代际
@@ -164,7 +166,7 @@ export function useBrowserWebview(
       unsubRelease();
       unsubEntryCreated();
     };
-  }, [tabId]);
+  }, [enabled, tabId]);
 
   const setObservedUrl = useCallback((nextUrl: string) => {
     const suppress = suppressStaleUrlRef.current;
@@ -184,6 +186,7 @@ export function useBrowserWebview(
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     // Shell 会常驻挂载所有 TabBody；没有明确可见时，只复用已有 entry，不首次
     // 物化 webview，避免恢复会话就在后台加载持久化 URL。
     const existing = browserWebviewPool.peek(tabId);
@@ -427,7 +430,7 @@ export function useBrowserWebview(
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
-  }, [tabId, sessionId, setObservedUrl, entryEpoch, visible]);
+  }, [enabled, tabId, sessionId, setObservedUrl, entryEpoch, visible]);
 
   const navigate = useCallback((nextUrl: string) => {
     const wv = webviewRef.current;
@@ -506,13 +509,16 @@ export function useBrowserWebview(
     }
   }, []);
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
-  const currentEntry = browserWebviewPool.peek(tabId);
+  const currentEntry = enabled ? browserWebviewPool.peek(tabId) : undefined;
   const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
 
   return {
-    // 隐藏时仍观察已有 entry 的 guest 生命周期，但不把 wrapper 交给 caller，
-    // 避免隐藏 Body 把它移出停车区并触发首次导航。
-    wrapper: visible === true ? wrapper : null,
+    // 隐藏 tab 不首次 acquire（见上方 existing/visible 守门），也不会触发首次导航；
+    // 但已经存在的 wrapper 必须持续交给常驻 TabBody，让它留在自己的 hidden slot。
+    // 若这里因 visible=false 返回 null，BrowserTabBody 会执行 layout cleanup，把
+    // webview reparent 到 parking；Electron 会因此重建 guest WebContents，破坏
+    // window.open 的 opener browsing context 与 WindowProxy 身份。
+    wrapper: enabled ? wrapper : null,
     webview: currentWebview,
     url,
     title,

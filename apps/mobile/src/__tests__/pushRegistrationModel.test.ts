@@ -6,10 +6,10 @@ import {
 } from '@/notifications/pushRegistrationModel';
 
 describe('resolvePushAppVariant', () => {
-  it('cn / global 直通,dev 身份不注册', () => {
+  it('cn / global 直通,dev 身份归 cn 推送构建线', () => {
     expect(resolvePushAppVariant('cn')).toBe('cn');
     expect(resolvePushAppVariant('global')).toBe('global');
-    expect(resolvePushAppVariant('dev')).toBeNull();
+    expect(resolvePushAppVariant('dev')).toBe('cn');
   });
 });
 
@@ -27,10 +27,12 @@ describe('buildPushTokenRegistrationBody', () => {
     expect(
       buildPushTokenRegistrationBody({ token: 'abc123', region: 'global', isDevBuild: false }),
     ).toMatchObject({ appVariant: 'global', apnsEnv: 'prod' });
+    expect(
+      buildPushTokenRegistrationBody({ token: 'dev-token', region: 'dev', isDevBuild: true }),
+    ).toMatchObject({ appVariant: 'cn', apnsEnv: 'sandbox' });
   });
 
-  it('dev 身份 / 空 token 返回 null', () => {
-    expect(buildPushTokenRegistrationBody({ token: 'abc', region: 'dev', isDevBuild: true })).toBeNull();
+  it('空 token 返回 null', () => {
     expect(buildPushTokenRegistrationBody({ token: '   ', region: 'cn', isDevBuild: true })).toBeNull();
   });
 });

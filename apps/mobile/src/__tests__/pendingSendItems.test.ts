@@ -7,6 +7,7 @@
  * 已回流的 clientId 立刻不再产出气泡(避免同一句话双显)。
  */
 import { describe, expect, it } from 'vitest';
+import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
   buildPendingSendItems,
   pendingSendItemKey,
@@ -143,6 +144,45 @@ describe('buildPendingSendItems', () => {
     expect(settling.actions).toBeNull();
     expect(settling.queueIndex).toBeNull();
   });
+
+  it('keeps queue atom metadata for the optimistic chip renderer', () => {
+    const quote = formatQuoteForSend({ text: 'quoted context' });
+    const text = `${quote}\n\n/help\n\nfull pasted payload`;
+    const slashStart = text.indexOf('/help');
+    const pastedStart = text.indexOf('full pasted payload');
+    const queuedItem = queued('atoms', text);
+    queuedItem.chatMessage.quotesEncoded = true;
+    queuedItem.chatMessage.slashCommandRanges = [{ start: slashStart, end: slashStart + 5 }];
+    queuedItem.chatMessage.pastedTextRanges = [{
+      start: pastedStart,
+      end: text.length,
+      display: 'Pasted text (1 line)',
+    }];
+
+    const [item] = build({ queue: [queuedItem] });
+    expect(item.sentInlineTokens.map((token) => token.kind)).toEqual([
+      'quote',
+      'slash',
+      'text',
+      'pasted',
+    ]);
+  });
+
+  it('keeps outbox atom metadata while attachments are still uploading', () => {
+    const text = '/help full pasted payload';
+    const outbox = outboxItem('outbox-atoms', {
+      text,
+      quotesEncoded: false,
+      slashCommandRanges: [{ start: 0, end: 5 }],
+      pastedTextRanges: [{ start: 6, end: text.length, display: 'Pasted text (1 line)' }],
+      attachmentCount: 1,
+      uploadedCount: 0,
+    });
+
+    const [item] = build({ outbox: [outbox] });
+    expect(item.phase).toBe('uploading');
+    expect(item.sentInlineTokens.map((token) => token.kind)).toEqual(['slash', 'text', 'pasted']);
+  });
 });
 
 describe('pending_send 渲染接线', () => {
@@ -163,6 +203,13 @@ describe('pending_send 渲染接线', () => {
     // 渲染分支存在,且 items 的联合类型里有这一支。
     expect(source).toContain("case 'pending_send':");
     expect(source).toContain('actions={actions.pendingSend}');
+    const bubbleSource = readFileSync(
+      resolvePath(process.cwd(), 'src/session/PendingSendBubble.tsx'),
+      'utf8',
+    );
+    expect(bubbleSource).toContain('<SentInlineAtomBody');
+    expect(bubbleSource).toContain('interactiveAtoms={false}');
+    expect(bubbleSource).toContain('maxVisibleLines={selected ? undefined : 6}');
     // 粘贴时已上传到媒体总仓的图(cindy-media://blobs/…)本地没有文件,气泡要靠远端取件
     // 才有缩略图 —— 漏传 resolver 就只能画空占位格。
     expect(source).toContain('resolveRemoteMedia={actions.onResolveRemoteMedia}');

@@ -1,6 +1,18 @@
 import { stripChatQuoteMarkerLines } from './chatQuotes.js';
 import { allDeepLinkSchemes } from './brandIdentity.js';
 
+/** Stable cross-client marker for a retryable local Codex resume preflight. */
+export const CODEX_RESUME_NOT_READY_MARKER = '[CODEX_RESUME_NOT_READY]';
+
+/** Readable fallback for older clients that do not yet localize the marker. */
+export const CODEX_RESUME_NOT_READY_WIRE_MESSAGE =
+  `${CODEX_RESUME_NOT_READY_MARKER} Codex can't resume this task right now. Try again shortly.`;
+
+/** Keep host diagnostics out of projections while letting each client localize the error. */
+export function isCodexResumeNotReadyProjectionError(error: string): boolean {
+  return error.includes(CODEX_RESUME_NOT_READY_MARKER);
+}
+
 /** Maximum copied target-message text kept in one Composer reference. */
 export const AGENT_MESSAGE_REFERENCE_MAX_CHARS = 12_000;
 

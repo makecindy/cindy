@@ -85,6 +85,7 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -119,6 +120,8 @@ import {
 } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
+import { findClaudeSessionJsonl } from './claude-projects-fs.js';
+import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
@@ -251,34 +254,6 @@ const READ_ONLY_CLAUDE_TOOLS: ReadonlySet<string> = new Set([
 /** canUseTool fail-closed 分支用: 判断工具是否属于已知只读工具(见上方白名单注释)。 */
 function isReadOnlyClaudeTool(toolName: string): boolean {
   return READ_ONLY_CLAUDE_TOOLS.has(toolName);
-}
-
-/**
- * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
- *
- * SDK 命名格式为 `mcp__<server>__<tool>`, 但**不能**按 `__` 盲切首段当 server ——
- * server 名自身可以含 `__`(自定义 MCP 的 id 正则是 `/^[a-z0-9_-]+$/`, 下划线合法)。
- * 盲切会让 id 为 `cindy_browser__evil` 的第三方 server 被识别成第一方 `cindy_browser`,
- * 直接继承信任表里的静默放行 —— 这是一条实打实的提权路径。
- *
- * 因此只在**本 session 实际注册过**的 server 名里做前缀匹配, 命中多个时取最长者
- * (`cindy_browser__evil` 胜过 `cindy_browser`), 保证归属唯一。名字对不上任何已注册
- * server 时返回 null, 调用方按"不查策略"处理 —— 走原有权限链, 不放行。
- */
-function resolveMcpToolTarget(
-  toolName: string,
-  registeredServerNames: ReadonlySet<string>,
-): { serverName: string; toolName: string } | null {
-  if (!toolName.startsWith('mcp__')) return null;
-  let best: { serverName: string; toolName: string } | null = null;
-  for (const serverName of registeredServerNames) {
-    const prefix = `mcp__${serverName}__`;
-    if (!toolName.startsWith(prefix) || toolName.length <= prefix.length) continue;
-    if (!best || serverName.length > best.serverName.length) {
-      best = { serverName, toolName: toolName.slice(prefix.length) };
-    }
-  }
-  return best;
 }
 
 /**
@@ -2235,6 +2210,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
         });
+        // 已知覆盖缺口(codex-connector review P1):远端会话的转录在远端 daemon
+        // 磁盘、CLI 流量直连远端 endpoint(remoteEnv.ANTHROPIC_BASE_URL),本地
+        // jsonl 归一化钩子与本地 compat-proxy 响应流改写都拦不到。remote cc 是
+        // MVP(rewind/fork 均 throw,撞车主触发路径在远端不可用),但远端 kimi
+        // 会话一旦撞车(如中断后可见数回落)将无法自愈,持续腐蚀到会话结束。
+        // 修复需扩展 cc-mgr wire protocol + 跨包共享归一化逻辑,列为 follow-up。
+        if (resumeSdkSid) {
+          log.warn(
+            'claude-code: remote cc session not covered by kimi tool-id normalize/rewrite defenses (transcript on remote daemon, CLI bypasses local proxy); a kimi mint collision on this session cannot self-heal',
+            { remoteHostId: opts.remoteHostId, sessionId: opts.sessionId, resumeSdkSid },
+          );
+        }
         // 网关路径(remoteRoute 为 null,即会话有效路由是 XD 网关)才依赖
         // runtimeConfig.remoteEndpoint:host 定义了该字段但值为空 = 网关凭据尚未就绪 /
         // 已失效,env-builder 会回落到本地 endpoint(下面 loopback guard 虽能拦,但错误
@@ -2670,7 +2657,36 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeSdkSid,
               workingDir: opts.workingDir,
             });
-          } else if (outcome === 'missing') {
+          }
+          // kimi 系 tool_call id 归一化: moonshot 按可见历史铸造 `${name}_${index}`
+          // id, rewind/中断造成的可见数回落会让新铸 id 与历史撞车, CLI 的
+          // ensureToolResultPairing 随即将重复 id 的 tool exchange 整段丢弃并以
+          // "(no content)" 占位 user 消息 —— 模型看到"自己的工具调用被阻止 +
+          // 用户连发空消息"进入空转(2026-07-31 kimi-k3 实测)。转录就位后、spawn
+          // 前做一次幂等归一化(重复 id 去重 + 数字后缀移出铸造空间), 纯 Anthropic
+          // 会话预扫不命中、零解析开销。详见 jsonl-tool-id-normalize.ts 头注。
+          // 'target-key-inexact' 时 relocation 无法定位 CLI 转码目录, 但全局扫描
+          // 找到的最新副本大概率正是 CLI 要读的转录, 归一化它同样是正收益。
+          if (outcome !== 'missing' && resumeSdkSid) {
+            const transcriptFile = await findClaudeSessionJsonl(
+              resumeSdkSid,
+              opts.workingDir,
+              path.join(claudeConfigDir, 'projects'),
+            );
+            if (transcriptFile) {
+              const normalized = await normalizeClaudeSessionJsonlToolIds(transcriptFile);
+              if (normalized.changed) {
+                log.info('resume transcript tool ids normalized', {
+                  resumeSdkSid,
+                  dedupedBlocks: normalized.dedupedBlockCount,
+                  offsetBlocks: normalized.offsetBlockCount,
+                  duplicateIds: normalized.duplicateIdCount,
+                  backupPath: normalized.backupPath,
+                });
+              }
+            }
+          }
+          if (outcome === 'missing') {
             const cleared = await clearInvalidResumeSession(resumeSdkSid, 'transcript_preflight');
             if (cleared) {
               // 本地 CLI 没有转录就不可能恢复。spawn 前转 fresh，当前用户消息尚未

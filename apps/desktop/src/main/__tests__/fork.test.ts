@@ -16,6 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -349,6 +351,27 @@ describe('forkSessionAtMessage', () => {
     ).rejects.toMatchObject({
       code: 'CODEX_FORK_STATE_UNAVAILABLE',
       message: 'thread not found in current Codex home',
+    });
+    expect(txCalls).toHaveLength(0);
+  });
+
+  it('codex path: projects a blocked resume preparation without exposing diagnostics', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    selectQueue.push([makeSourceRow({
+      agentKind: 'codex',
+      sdkSessionId: 'imported-codex-thread',
+    })]);
+    selectQueue.push([target]);
+    queryMock.mockResolvedValue([{ role: 'user', content: '"target"' }]);
+    forkSdkSessionMock.mockRejectedValueOnce(
+      new CodexResumePreparationBlockedError('live writer at /private/codex/rollout.jsonl'),
+    );
+
+    await expect(
+      forkSessionAtMessage('src-session', 'target-user'),
+    ).rejects.toMatchObject({
+      code: 'CODEX_FORK_STATE_UNAVAILABLE',
+      message: CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
     });
     expect(txCalls).toHaveLength(0);
   });

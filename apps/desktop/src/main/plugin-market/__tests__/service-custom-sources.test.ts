@@ -412,7 +412,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
       expectedManifest: reviewed.manifest,
     });
-    expect(result.ghost.manifest.id).toBe('alpha');
+    expect(result.ghost?.manifest.id).toBe('alpha');
     expect(runtime.install).toHaveBeenCalledTimes(1);
     // 打包产物是临时文件，装完即删
     expect(runtime.install.mock.calls[0]?.[0]).toMatch(/cindy-custom-market-alpha-.*\.cindy$/);
