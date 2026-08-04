@@ -282,3 +282,42 @@ describe('deriveCindyMediaConfig — 向量类目(embed)', () => {
     });
   });
 });
+
+describe('deriveCindyMediaConfig — 向量只认 XD(派单还不是 provider-aware)', () => {
+  /**
+   * 图像已经是多来源(imageChannelRegistry 按 providerId 取执行通道),向量还没有
+   * 对应的分流层:执行端是单例 EmbeddingService,只握着 XD Gateway 一个 baseUrl +
+   * 一把 key。远端目录能给**任何** provider 加 embeddingModels,一旦放进白名单,
+   * 用户会看到"可选"的型号、以为用的是自己填的 key,实际拿 XD 的凭证去计费
+   * (PR #1707 review)。
+   */
+  const GEMINI: CindyMediaProviderSlice = {
+    id: 'gemini',
+    embeddingModels: [{ id: 'gemini-embedding-2-preview', name: 'Gemini Embedding 2' }],
+    embeddingDefaults: { standard: 'gemini-embedding-2-preview' },
+  };
+
+  it('非 XD 供应商声明的向量清单不进白名单', () => {
+    expect(deriveCindyMediaConfig([GEMINI], 'embed')).toEqual({ models: [], defaults: null });
+  });
+
+  it('非 XD 的向量默认段也不生效(不能顶掉 XD 的默认)', () => {
+    const cfg = deriveCindyMediaConfig([GEMINI, XD], 'embed');
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4');
+  });
+
+  it('图像 / 视频不受此限(它们本来就是多来源)', () => {
+    const gemImage: CindyMediaProviderSlice = {
+      id: 'gemini',
+      imageModels: [{ id: 'gemini-own-image', name: 'Gemini 自有图像' }],
+    };
+    expect(deriveCindyMediaConfig([gemImage], 'image').models.map((m) => m.id)).toEqual([
+      'gemini-own-image',
+    ]);
+  });
+});

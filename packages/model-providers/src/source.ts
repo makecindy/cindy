@@ -213,7 +213,25 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       bundled.imageModels !== undefined &&
       bundledAccess !== undefined &&
       allowsBundledImageInheritance(p.access, bundledAccess);
-    if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
+    // 向量清单与 xai 的图像清单同一个道理(PR #1707 review):xd 段的向量能力是
+    // 客户端新增的 bundled 元数据,而远端 / 本地目录里同 id 的 xd 可能还是升级前
+    // 的结构、根本没有 embeddingModels 这个字段。primary 整体优先的规则会让那份
+    // 旧结构把 bundled 的新字段整段遮掉 —— 结果是目录派生出空清单,设置页显示
+    // "无可用模型",所有 embed_text 直接 NO_CANDIDATE,能力等于没上线。
+    //
+    // 只在字段**缺席**时补,显式 `[]` 仍然是"这个供应商不提供向量"的停用语义,
+    // 与图像清单的既有契约一致。
+    const inheritEmbedding =
+      p.id === 'xd' &&
+      p.embeddingModels === undefined &&
+      bundled.embeddingModels !== undefined &&
+      bundledAccess !== undefined &&
+      allowsBundledImageInheritance(p.access, bundledAccess);
+    if (
+      !(p.access === undefined && bundledAccess !== undefined) &&
+      !inheritImage &&
+      !inheritEmbedding
+    ) {
       return p;
     }
     return {
@@ -224,6 +242,14 @@ export function mergeWithBundled(primary: Catalog): Catalog {
             imageModels: bundled.imageModels,
             ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
               ? { imageDefaults: bundled.imageDefaults }
+              : {}),
+          }
+        : {}),
+      ...(inheritEmbedding
+        ? {
+            embeddingModels: bundled.embeddingModels,
+            ...(p.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
+              ? { embeddingDefaults: bundled.embeddingDefaults }
               : {}),
           }
         : {}),

@@ -57,6 +57,13 @@ export interface CindyMediaCatalogConfig {
 }
 
 /**
+ * 向量派单唯一的执行来源。图像已经是多来源(imageChannelRegistry 按 providerId
+ * 取通道),向量还没有对应的分流层,所以这里必须写死。
+ * 加 provider-aware 路由时,把这个常量连同下面的 `kind === 'embed'` 守卫一起去掉。
+ */
+const EMBED_DISPATCH_PROVIDER_ID = 'xd';
+
+/**
  * 从目录供应商数组派生某一类目(image / video / embed)的 cindy 能力配置。
  *
  * - 清单:按供应商出现序拼接、按 id 去重(first-wins),`label` 取目录 `name`。
@@ -84,6 +91,14 @@ export function deriveCindyMediaConfig(
   let rawDefaults: { standard: string; draft?: string; best?: string } | undefined;
   for (const p of providers) {
     if (isProviderReady && !isProviderReady(p.id)) continue;
+    // 向量派单**还不是 provider-aware**:执行端是单例 EmbeddingService,只握着
+    // XD Gateway 的一个 baseUrl + 一把 key,没有按 provider 分流的通道。所以只认
+    // XD 声明的向量清单 —— 非 XD 供应商(远端目录可以给任何 provider 加这个字段)
+    // 声明了也不能进白名单,否则会长出"界面可选、实际拿 XD 的凭证去计费"的型号,
+    // 用户以为用的是自己填的 key(PR #1707 review)。
+    // 视频出于同一原因在非 Global 构建里整段隐藏;向量这条更严:任何区域都只认 XD,
+    // 因为它连"本区域能不能路由"都还谈不上。provider-aware 路由落地后再放开。
+    if (kind === 'embed' && p.id !== EMBED_DISPATCH_PROVIDER_ID) continue;
     const list =
       kind === 'image' ? p.imageModels : kind === 'video' ? p.videoModels : p.embeddingModels;
     for (const m of list ?? []) {

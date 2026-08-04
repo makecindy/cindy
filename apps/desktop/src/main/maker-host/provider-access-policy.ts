@@ -42,12 +42,19 @@ function projectVideoDefaults(
  * build. Video dispatch is not provider-aware yet, so non-XD video capabilities
  * stay hidden outside Global until the runtime can route them by provider.
  *
- * Embedding follows the image rule verbatim: Cindy-managed embedding models are
- * cleared for Mainland China builds, because every model behind that endpoint is
- * an overseas one. Non-XD providers keep whatever they declare — that is the
- * user's own key, not a Cindy-operated service. Clearing the list (rather than
- * leaving it and failing at dispatch) is what makes the plugin capability report
- * "unavailable" instead of offering models that are guaranteed to fail.
+ * Embedding clears the Cindy-managed list for Mainland China builds, because
+ * every model behind that endpoint is an overseas one. Clearing the list (rather
+ * than leaving it and failing at dispatch) is what makes the plugin capability
+ * report "unavailable" instead of offering models that are guaranteed to fail.
+ *
+ * Non-XD providers are left untouched *here* on purpose, but that is not the
+ * same as exposing them: unlike image, embedding dispatch is not provider-aware
+ * yet (one EmbeddingService holding a single XD Gateway base URL and key), so a
+ * non-XD `embeddingModels` list would be dispatched with Cindy's credential
+ * rather than the user's own. `deriveCindyMediaConfig` therefore drops non-XD
+ * embedding lists in *every* region — see the `kind === 'embed'` guard there.
+ * This projection stays region-only; the routing constraint lives with the
+ * derivation so both builds get it (PR #1707 review).
  */
 export function projectProviderCatalogForBuildRegion(
   catalog: Catalog,

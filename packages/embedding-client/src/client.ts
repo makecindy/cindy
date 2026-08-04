@@ -478,7 +478,17 @@ export class EmbeddingClient {
       }
 
       if (!res.ok) {
-        const text = await res.text().catch(() => '');
+        // 读错误响应体时也可能撞上预算(网关先回了 400 的头,body 却挂住或断流)。
+        // 这里若把 AbortError 一并吞成空串,下面就会按 HTTP 状态抛 INVALID_MODEL /
+        // AUTH_FAILED,而外层看到的是 EmbeddingError 也不会再改判 —— 一次实打实
+        // 耗尽预算的请求就被报成"你该改参数",与结构化错误契约矛盾
+        // (PR #1707 review)。所以吞之前先看 signal。
+        const text = await res.text().catch(() => {
+          if (timedOut()) {
+            throw new EmbeddingError(`request aborted after ${budgetMs}ms budget`, 'TIMEOUT');
+          }
+          return '';
+        });
         let parsedMsg = '';
         try {
           const parsed = JSON.parse(text) as OpenAiErrorResponse;
