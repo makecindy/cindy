@@ -6,13 +6,16 @@ import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import {
   appendBrowserCommentToDraft,
   appendQuoteToDraft,
+  captureDraftDiscardToken,
   clearDraft,
   clearDraftAndNotify,
+  discardDraft,
   draftHasContent,
   getAllDraftAttachmentUrls,
   getDraft,
   getDraftPresence,
   getOrCreateRemoteOptimisticTransitionCheckpoint,
+  isDraftDiscardTokenCurrent,
   plainTextToTiptapDoc,
   quickStartTextToTiptapDoc,
   removeRemoteOptimisticDraftFragment,
@@ -242,24 +245,14 @@ describe('owner isolation', () => {
       );
       setRemoteOptimisticAttachmentUrls([pendingUrl, pendingUrl]);
 
-      const expectedUrls = [
-        pendingUrl,
-        sharedUrl,
-        sharedSourceUrl,
-        commentUrl,
-        commentSourceUrl,
-      ];
+      const expectedUrls = [pendingUrl, sharedUrl, sharedSourceUrl, commentUrl, commentSourceUrl];
       expect(getAllDraftAttachmentUrls().sort()).toEqual(expectedUrls.sort());
-      expect(reportDraftUrls).toHaveBeenLastCalledWith(
-        expect.arrayContaining(expectedUrls),
-      );
+      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
 
       setComposerDraftOwner('owner-b');
       saveDraft(otherOwnerKey, draft({ text: textDoc }));
       expect(getAllDraftAttachmentUrls().sort()).toEqual(expectedUrls.sort());
-      expect(reportDraftUrls).toHaveBeenLastCalledWith(
-        expect.arrayContaining(expectedUrls),
-      );
+      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
     } finally {
       setRemoteOptimisticAttachmentUrls([]);
       setComposerDraftOwner('owner-b');
@@ -276,6 +269,26 @@ describe('owner isolation', () => {
         });
       }
     }
+  });
+});
+
+describe('draft discard lifecycle', () => {
+  it('invalidates async work only for explicit discard and not an ordinary clear', () => {
+    const key = 'session-draft-discard-generation';
+    const beforeClear = captureDraftDiscardToken(key);
+    clearDraft(key);
+    expect(isDraftDiscardTokenCurrent(beforeClear)).toBe(true);
+
+    saveDraft(key, draft({ text: textDoc }));
+    const beforeDiscard = captureDraftDiscardToken(key);
+    const notifiedDrafts: Array<ComposerDraft | undefined> = [];
+    const unsubscribe = subscribeDraft(key, () => notifiedDrafts.push(getDraft(key)));
+    discardDraft(key);
+    unsubscribe();
+
+    expect(isDraftDiscardTokenCurrent(beforeDiscard)).toBe(false);
+    expect(notifiedDrafts).toEqual([{ text: null, attachments: [] }]);
+    expect(getDraft(key)).toBeUndefined();
   });
 });
 

@@ -14,7 +14,7 @@
  *     is used for the input-area chip and persistent message rendering).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
@@ -33,9 +33,12 @@ import {
 } from '@/lib/fileTypes';
 import { inferFileType, base64ToUint8Array, PEEK_BYTES } from '@/lib/fileTypeInference';
 import {
+  captureDraftDiscardToken,
   getDraft as getComposerDraft,
+  isDraftDiscardTokenCurrent,
   saveDraft as saveComposerDraft,
   subscribeDraft as subscribeComposerDraft,
+  type ComposerDraftDiscardToken,
 } from '@/lib/composerDraftStore';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import {
@@ -96,6 +99,7 @@ export interface UseAttachmentsReturn {
 interface AttachmentDraftScope {
   storageKey: string | undefined;
   dataOwner: DataOwnerGeneration;
+  discardToken: ComposerDraftDiscardToken | undefined;
 }
 
 interface AttachmentOperationScope extends AttachmentDraftScope {
@@ -110,7 +114,16 @@ function isSameAttachmentDraftScope(
     left !== undefined &&
     left.storageKey === right.storageKey &&
     left.dataOwner.dataOwnerId === right.dataOwner.dataOwnerId &&
-    left.dataOwner.generation === right.dataOwner.generation
+    left.dataOwner.generation === right.dataOwner.generation &&
+    left.discardToken?.ownerScopedKey === right.discardToken?.ownerScopedKey &&
+    left.discardToken?.generation === right.discardToken?.generation
+  );
+}
+
+function isAttachmentDraftScopeActive(scope: AttachmentDraftScope): boolean {
+  return (
+    isDataOwnerGenerationCurrent(scope.dataOwner) &&
+    (scope.discardToken === undefined || isDraftDiscardTokenCurrent(scope.discardToken))
   );
 }
 
@@ -176,12 +189,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   // The persistence layer is keyed by draftKey when provided, else sessionId.
   const storageKey = draftKey ?? sessionId;
   const dataOwner = getDataOwnerGeneration();
+  const discardToken = useMemo(
+    () => (storageKey ? captureDraftDiscardToken(storageKey) : undefined),
+    [dataOwner, storageKey],
+  );
   const attachmentOperationScopeRef = useRef<AttachmentOperationScope>({
     sessionId,
     storageKey,
     dataOwner,
+    discardToken,
   });
-  attachmentOperationScopeRef.current = { sessionId, storageKey, dataOwner };
+  attachmentOperationScopeRef.current = { sessionId, storageKey, dataOwner, discardToken };
 
   // Inline rejections (file-too-large etc.). Surfaced in the composer instead
   // of a transient top-center toast, which was easy to miss. Transient UI only
@@ -222,7 +240,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
   const isAttachmentOperationScopeCurrent = useCallback(
     (scope: AttachmentOperationScope): boolean =>
-      isDataOwnerGenerationCurrent(scope.dataOwner) &&
+      isAttachmentDraftScopeActive(scope) &&
       isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope),
     [],
   );
@@ -238,7 +256,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const settleAttachmentsForScope = useCallback(
     (scope: AttachmentOperationScope, items: readonly AttachedFile[]) => {
       if (items.length === 0) return;
-      if (!isDataOwnerGenerationCurrent(scope.dataOwner)) {
+      if (!isAttachmentDraftScopeActive(scope)) {
         for (const item of items) cleanupRemovedCachedImage(item);
         cleanupStagedChatAttachmentFiles(items);
         return;
@@ -290,7 +308,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const previousDraftScopeRef = useRef<AttachmentDraftScope | undefined>(undefined);
   useEffect(() => {
     if (!isDataOwnerGenerationCurrent(dataOwner)) return;
-    const draftScope: AttachmentDraftScope = { storageKey, dataOwner };
+    const draftScope: AttachmentDraftScope = { storageKey, dataOwner, discardToken };
     if (storageKey === undefined) {
       previousDraftScopeRef.current = draftScope;
       return;
@@ -321,7 +339,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     previousDraftScopeRef.current = draftScope;
 
     return () => {
-      if (!isDataOwnerGenerationCurrent(dataOwner)) return;
+      if (!isAttachmentDraftScopeActive(draftScope)) return;
       // Snapshot current attachments under the storageKey we were associated
       // with at this render. Closure captures the right key for both
       // unmount and dep-change paths. Preserve any text the ChatInput
@@ -367,12 +385,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const lastSyncedDraftScopeRef = useRef<AttachmentDraftScope | undefined>(undefined);
   useEffect(() => {
     if (storageKey === undefined || !isDataOwnerGenerationCurrent(dataOwner)) return;
-    const draftScope: AttachmentDraftScope = { storageKey, dataOwner };
+    const draftScope: AttachmentDraftScope = { storageKey, dataOwner, discardToken };
+    if (!isAttachmentDraftScopeActive(draftScope)) return;
     if (!isSameAttachmentDraftScope(lastSyncedDraftScopeRef.current, draftScope)) {
       lastSyncedDraftScopeRef.current = draftScope;
       return;
     }
     const existing = getComposerDraft(storageKey);
+    // `discardDraft` synchronously clears mounted attachment state. Its state
+    // update may render once before navigation; do not recreate an empty Map
+    // entry after the explicit discard boundary.
+    if (!existing && attachments.length === 0) return;
     saveComposerDraft(
       storageKey,
       // saveDraft 是整对象替换:text / quotes / browserComments 都必须从

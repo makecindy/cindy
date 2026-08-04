@@ -30,7 +30,12 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { useAttachments } from '@/hooks/useAttachments';
-import { clearDraft, getDraft, setComposerDraftOwner } from '@/lib/composerDraftStore';
+import {
+  clearDraft,
+  discardDraft,
+  getDraft,
+  setComposerDraftOwner,
+} from '@/lib/composerDraftStore';
 import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
@@ -289,6 +294,60 @@ describe('useAttachments inline rejections', () => {
     unmount();
     clearDraft('attachment-session-A');
     clearDraft('attachment-session-B');
+  });
+
+  it('does not recreate an attachment draft when the session draft is discarded before unmount', async () => {
+    const sessionId = 'discarded-attachment-session';
+    const { result, unmount } = renderHook(() => useAttachments(sessionId));
+
+    await act(async () => {
+      await result.current.addFiles(fileListOf([{ name: 'discard-me.pdf', size: 128 }]));
+    });
+    expect(getDraft(sessionId)?.attachments).toEqual([
+      expect.objectContaining({ name: 'discard-me.pdf' }),
+    ]);
+
+    act(() => discardDraft(sessionId));
+    expect(result.current.attachments).toEqual([]);
+    expect(getDraft(sessionId)).toBeUndefined();
+
+    unmount();
+    expect(getDraft(sessionId)).toBeUndefined();
+  });
+
+  it('recycles a delayed clipboard cache instead of restoring a discarded session draft', async () => {
+    const sessionId = 'discarded-delayed-attachment-session';
+    const cached = deferred<{ url: string }>();
+    const cleanupCachedImages = vi.fn(async () => undefined);
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      getFilePath: (file: { name: string }) => `/tmp/${file.name}`,
+      cacheImageFromBuffer: vi.fn(() => cached.promise),
+      cleanupCachedImages,
+    };
+    const clipboardBlob = {
+      type: 'image/png',
+      size: 1,
+      arrayBuffer: async () => new Uint8Array([1]).buffer,
+    } as Blob;
+    const { result, unmount } = renderHook(() => useAttachments(sessionId));
+
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = result.current.addClipboardImage(clipboardBlob);
+      await Promise.resolve();
+    });
+    act(() => discardDraft(sessionId));
+    await act(async () => {
+      cached.resolve({ url: `xdt-image://${sessionId}/late.png` });
+      await pending;
+    });
+
+    expect(result.current.attachments).toEqual([]);
+    expect(getDraft(sessionId)).toBeUndefined();
+    expect(cleanupCachedImages).toHaveBeenCalledWith([`xdt-image://${sessionId}/late.png`]);
+
+    unmount();
+    expect(getDraft(sessionId)).toBeUndefined();
   });
 
   it('drops and cleans a cached image when the data owner changes before completion', async () => {

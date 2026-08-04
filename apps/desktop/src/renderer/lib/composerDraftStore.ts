@@ -88,6 +88,18 @@ export interface RemoteOptimisticDraftSnapshot {
   browserComments: readonly BrowserCommentDraftItem[];
 }
 
+/**
+ * Process-local discard boundary captured by async composer work. A successful
+ * send uses `clearDraft` and deliberately does not invalidate this token:
+ * files added while the send is settling are newer composer input. Explicit
+ * discard (session delete/archive) advances the generation so late work can
+ * recycle its files instead of resurrecting the removed draft.
+ */
+export interface ComposerDraftDiscardToken {
+  ownerScopedKey: string;
+  generation: number;
+}
+
 const ATTACHED_FILE_SNAPSHOT_KEYS = [
   'id',
   'name',
@@ -195,6 +207,7 @@ interface RemoteOptimisticRecoveryState {
 }
 
 const drafts = new Map<string, ComposerDraft>();
+const draftDiscardGenerations = new Map<string, number>();
 const remoteOptimisticRecoveries = new Map<string, RemoteOptimisticRecoveryState>();
 const remoteOptimisticRecoveryBatchSnapshots = new WeakMap<
   object,
@@ -325,6 +338,20 @@ export function getDraft(sessionId: string): ComposerDraft | undefined {
   return drafts.get(draftKey(sessionId));
 }
 
+/** Capture the current process-local discard generation for async draft work. */
+export function captureDraftDiscardToken(sessionId: string): ComposerDraftDiscardToken {
+  const ownerScopedKey = draftKey(sessionId);
+  return {
+    ownerScopedKey,
+    generation: draftDiscardGenerations.get(ownerScopedKey) ?? 0,
+  };
+}
+
+/** Whether a captured draft scope has not been explicitly discarded. */
+export function isDraftDiscardTokenCurrent(token: ComposerDraftDiscardToken): boolean {
+  return (draftDiscardGenerations.get(token.ownerScopedKey) ?? 0) === token.generation;
+}
+
 /**
  * Whether `sessionId` currently has a non-empty draft (text or attachments).
  * Computed fresh on each call so it never drifts from the Map — cheap because
@@ -425,9 +452,15 @@ export function clearDraft(sessionId: string): void {
  * the attachment paths.
  */
 export function discardDraft(sessionId: string): void {
-  const draft = drafts.get(draftKey(sessionId));
+  const key = draftKey(sessionId);
+  const draft = drafts.get(key);
   if (draft) cleanupStagedChatAttachmentFiles(draft.attachments);
-  clearDraft(sessionId);
+  draftDiscardGenerations.set(key, (draftDiscardGenerations.get(key) ?? 0) + 1);
+  // Empty mounted editors/attachment trays before deleting the Map entry. This
+  // mirrors a Mobile attachment controller dispose: unmount snapshots cannot
+  // recreate the discarded draft, while late async files are fenced by the
+  // generation above and recycled by their owner.
+  clearDraftAndNotify(sessionId);
 }
 
 /**
