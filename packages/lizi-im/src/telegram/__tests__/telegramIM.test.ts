@@ -1747,6 +1747,52 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(sendAttempts).toBe(1));
   });
 
+  it('退避期间只换 owner(api 对象不变): 旧回合的答案不发给已失权的旧 userId', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 9m');
+    const progressMessageId = handle.messageId;
+    const answer = '旧 owner 那一轮的完整答案';
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize(answer).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // 只换 ownerUserId、不带 token: 这条分支不 stopPolling, this.api 完全不变,
+      // 只有 configVersion / ownerUserId 变了 —— 补送若按当前世代重新取 api 就会
+      // 把这轮答案照发给已经失去授权的旧主人。
+      await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '222333' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      const outcome = await finalized;
+      // 先断言泄露本身: 一个字都不许发出去(未修时补送会成功, 这条先红)。
+      expect(
+        api.calls
+          .filter((c) => c.method === 'sendMessage')
+          .map((c) => String(c.params.text ?? ''))
+          .filter((text) => text.includes('完整答案')),
+      ).toEqual([]);
+      // 生命周期失效不能被当成普通编辑失败: 放弃补送并抛回原始编辑错误。
+      expect(outcome).toBeInstanceOf(TelegramApiError);
+      expect((outcome as TelegramApiError).errorCode).toBe(429);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 过程消息保留(没有补送成功就不该删), 也没有对新主人产生任何出站。
+    expect(api.calls.filter((c) => c.method === 'deleteMessage')).toEqual([]);
+    expect(progressMessageId).not.toBe('');
+    expect(
+      api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222333'),
+    ).toEqual([]);
+  });
+
   it('dispose() 后重新 init(): 退避重试在新世代恢复可用', async () => {
     await connect();
     // 退出登录 → 再登录(同一实例复用; init 里就有 this.disposing = false)。

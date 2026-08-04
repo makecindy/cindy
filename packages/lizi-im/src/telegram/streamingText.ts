@@ -41,9 +41,14 @@ export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
   /**
-   * 终稿补送专用的发送(见 finalizeInPlaceOrRepost): 与 send 的区别是它必须沿用
-   * **本轮原始的回挂目标** —— 补送替换的是那条已经消耗掉目标的过程消息, 重新领取
-   * 只会拿到空目标, 群里的答案就此脱离提问脉络。未提供时回落 send。
+   * 终稿补送专用的发送(见 finalizeInPlaceOrRepost)。与 send 有两点不同, 都由实现方
+   * (index.ts)负责, 本模块只负责在编辑失败时调用它:
+   *   1. 沿用**本轮原始的回挂目标** —— 补送替换的是那条已经消耗掉目标的过程消息,
+   *      重新领取只会拿到空目标, 群里的答案就此脱离提问脉络;
+   *   2. 先核验**本轮身份仍然有效**(配置世代/api 客户端/主人未变、未被取消)。补送是
+   *      一次全新的出站, 会按"当前"状态取连接 —— 换主人之后旧回合的答案绝不能照发。
+   * 身份失效时本函数应当抛错: finalize 会据此抛回原始编辑错误并放弃整个收口, 后续
+   * 分段与图片一并不发。未提供时回落 send。
    */
   repost?: (markdown: string) => Promise<string>;
   /** 用 markdown 渲染结果覆盖既有消息。 */
@@ -217,6 +222,10 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
    *
    * 补送走 deps.repost(而非 send): 它替换的是那条已经消耗掉本轮回挂目标的过程
    * 消息, 必须沿用同一个 reply 目标, 否则群里的答案会脱离提问脉络。
+   *
+   * repost 抛错(含"本轮身份已失效"——被取消/换主人/换代)一律按**放弃收口**处理:
+   * 抛回原始编辑错误, 且因为本函数抛出, finalize 后面的分段补发与图片上传都不会
+   * 执行 —— 它们同属这个已经作废的回合。生命周期取消不能被当成普通编辑失败。
    */
   private async finalizeInPlaceOrRepost(text: string): Promise<void> {
     const staleMessageId = this.messageIdValue;

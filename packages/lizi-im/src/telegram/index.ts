@@ -122,6 +122,25 @@ type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
  */
 type ReplyTargetLease = { userId: string; messageId: string } | null;
 
+/**
+ * 流式回合的身份快照(建 handle 时拍下)。终稿补送必须绑定它 —— 补送是一次**全新**
+ * 的 callSend, 会按"当前"世代重新取 api, 所以旧回合的 429 退避即使正确放弃了,
+ * 补送仍可能把旧回合的完整答案发出去。
+ */
+interface StreamRoundIdentity {
+  /** 配置世代(换 token / 换 owner / disconnect / dispose 都会 +1)。 */
+  generation: number;
+  /** 建 handle 时的 api 客户端身份 —— 重连换了客户端就不是同一回合。 */
+  api: TelegramApiClient | null;
+  /**
+   * 建 handle 时的主人。只换 owner 不换 token 的那条分支不会 stopPolling,
+   * **api 对象完全不变**, 只有这个字段(与 generation)能识别出授权已经易主。
+   */
+  ownerUserId: string;
+  /** 本轮回挂目标(此刻还没被任何出站消耗)。 */
+  replyTargetId: string | null;
+}
+
 type TelegramReplyParams =
   | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
   | Record<string, never>;
@@ -791,10 +810,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     userId: string,
     initial?: string,
   ): Promise<StreamingTextHandle> {
-    // 本轮的回挂目标在此刻还没被任何出站消耗(claimTurnReplyTarget 刚领完) —— 记下来
-    // 给终稿补送用: 'first' 档下过程消息一发就把槽位耗掉了, 补送若重新 lease 会拿到
-    // 空目标, 于是那条答案在群里脱离提问脉络(旧过程消息随后还会被删)。
-    const roundReplyTargetId = this.turnReplyTargets.get(userId) ?? null;
+    // 建 handle 时拍下本轮身份。回挂目标此刻还没被任何出站消耗
+    // (claimTurnReplyTarget 刚领完) —— 'first' 档下过程消息一发就把槽位耗掉了,
+    // 补送若重新 lease 会拿到空目标, 那条答案在群里就脱离了提问脉络。
+    const round: StreamRoundIdentity = {
+      generation: this.configVersion,
+      api: this.api,
+      ownerUserId: this.ownerUserId,
+      replyTargetId: this.turnReplyTargets.get(userId) ?? null,
+    };
     return startTelegramStreaming(
       {
         send: async (markdown) => {
@@ -802,7 +826,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           return messageId;
         },
         repost: async (markdown) => {
-          const { messageId } = await this.sendRenderedChunk(userId, markdown, roundReplyTargetId);
+          // 核验必须在发之前: 补送是全新的 callSend, 按当前世代重新取 api —— 换
+          // owner 那条分支不 stopPolling、api 对象不变, 于是旧回合的答案会照发给
+          // **已失去授权的旧 userId**。核验失败就抛, 由 finalize 抛回原始编辑错误,
+          // 顺带把后续分段与图片一并挡在门外(它们同属这个已死的回合)。
+          this.assertRoundStillLive(round);
+          const { messageId } = await this.sendRenderedChunk(
+            userId,
+            markdown,
+            round.replyTargetId,
+          );
           return messageId;
         },
         edit: async (messageId, markdown) => {
@@ -1584,6 +1617,28 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         return api.call<T>(method, params);
       }
       throw err;
+    }
+  }
+
+  /**
+   * 旧回合还有权发新消息吗。生命周期取消(dispose)、配置换代、重连换客户端、
+   * 换主人 —— 任一命中即判这个回合已死, 不得再以它的名义出站。
+   *
+   * `ownerUserId` 与 `generation` 都查: 换 owner 的分支两者一起变, 但显式写出
+   * 主人这条能让"授权易主 → 旧内容不许再发"的意图留在代码里, 也兜住将来某条
+   * 路径改了 owner 却忘了升世代。
+   */
+  private assertRoundStillLive(round: StreamRoundIdentity): void {
+    if (this.disposing) throw new Error('telegram round abandoned: instance disposing');
+    if (this.configVersion !== round.generation) {
+      throw new Error('telegram round abandoned: config generation superseded');
+    }
+    if (this.api !== round.api) throw new Error('telegram round abandoned: api client replaced');
+    if (this.ownerUserId !== round.ownerUserId) {
+      throw new Error('telegram round abandoned: owner changed');
+    }
+    if (this.lifetimeAbort.signal.aborted) {
+      throw new Error('telegram round abandoned: lifetime cancelled');
     }
   }
 
