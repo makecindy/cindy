@@ -183,9 +183,9 @@ const XD_PROVIDER: Provider = {
   // 向量模型:id 必须与 @cindy/embedding-client 的 EmbeddingModelId 逐字一致
   // (执行侧按 id 查 catalog 拿 provider 做 input_type 值域翻译,对不上就翻译不了)。
   // 只列 2026-08-04 经网关实测确认可用的型号 + 同族高置信的 3-large。
-  // voyage-context-4 经同一 OpenAI 形态端点支持(索引侧把 input 传二维数组);
-  // 当前客户端只发一维,所以它暂时等价于一个普通检索型号 —— 列出来是为了让
-  // 用户/插件可以选,拿到 chunk 上下文的好处要等客户端支持二维 input。
+  // voyage-context-4 经同一 OpenAI 形态端点支持:索引侧把 input 传二维数组
+  // (客户端 embedDocuments,按文档分组),查询侧仍传一维。注意它的响应形状由
+  // **型号**决定而不是请求维度 —— 两侧都返两层嵌套 data,解析走同一个 parser。
   embeddingModels: [
     { id: 'voyage/voyage-4', name: 'Voyage 4' },
     { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large' },

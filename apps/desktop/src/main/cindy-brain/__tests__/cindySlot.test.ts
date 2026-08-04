@@ -14,6 +14,7 @@ import {
   GHOST_CINDY_DEPOSIT_BURST,
   GHOST_CINDY_DEPOSIT_MAX_BYTES,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_CINDY_EMBED_TIMEOUT_MS,
 } from '../../../shared/ghost';
 import type { InstalledGhost } from '../../../shared/ghost';
 
@@ -2000,5 +2001,115 @@ describe('文本转向量 · 上下文化(documents)', () => {
       errorCode: 'INTERNAL',
     });
     expect(embedText).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * embed_text 的失败面与时间预算(PR #1707 review)。
+ *
+ * 两条都不是"崩没崩"的问题,而是"插件能不能判断下一步该干什么":
+ *   - 执行层的结构化 code 被一律压成 INTERNAL,则"改参数"与"退避重试"在协议上
+ *     长得一样,插件只能瞎猜;
+ *   - 不给时间预算,网关连上却不返数据时 await 永不落地,该意识的在途额度被永久
+ *     占掉一格,配了并发上限的插件从此单单被拒。
+ */
+describe('文本转向量(embed_text)· 失败码与时间预算', () => {
+  const EMBED = { type: 'cindy-request', kind: 'embed_text', texts: ['一段内容'] };
+  const embedCfg = () => ({
+    models: [{ id: 'voyage/voyage-4', label: 'Voyage 4' }],
+    defaults: {
+      standard: 'voyage/voyage-4',
+      draft: 'voyage/voyage-4',
+      best: 'voyage/voyage-4',
+    },
+  });
+  /** 让注入的执行实现抛某个 EmbeddingError 形状(鸭子判型只看 .code)。 */
+  const throwingSlot = (code: string | undefined) =>
+    makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(embedCfg),
+      embedText: vi.fn(async () => {
+        const err = new Error(`upstream said no (${String(code)})`) as Error & { code?: string };
+        if (code !== undefined) err.code = code;
+        throw err;
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+  it.each([
+    ['INVALID_MODEL', 'INVALID_PARAMS'],
+    ['RATE_LIMITED', 'RATE_LIMITED'],
+    ['TIMEOUT', 'TIMEOUT'],
+    ['AUTH_FAILED', 'NO_CANDIDATE'],
+    ['NETWORK_ERROR', 'INTERNAL'],
+    ['SERVER_ERROR', 'INTERNAL'],
+  ])('执行层 %s → 协议 %s', async (upstream, expected) => {
+    const { slot } = throwingSlot(upstream);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: expected,
+    });
+  });
+
+  it('不带 code 的普通异常仍是 INTERNAL(鸭子判型不能把任何 Error 都当结构化失败)', async () => {
+    const { slot } = throwingSlot(undefined);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('失败后在途额度必须归还:同一插件下一单不会被并发上限拒掉', async () => {
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(embedCfg),
+      getInflightLimit: () => 1,
+      embedText: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('boom'), { code: 'SERVER_ERROR' }))
+        .mockResolvedValueOnce({ embeddings: [[1, 2, 3]], modelUsed: 'voyage/voyage-4' }),
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({ ok: false });
+    // 额度没归还的实现在这里会回 RATE_LIMITED 而不是成功。
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({ ok: true });
+  });
+
+  it('两条路径都把时间预算递给执行层(缺了就等于没有超时)', async () => {
+    const embedText = vi.fn(async (_p: { timeoutMs?: number }) => ({
+      embeddings: [[1]],
+      modelUsed: 'voyage/voyage-4',
+    }));
+    const embedDocuments = vi.fn(async (_p: { timeoutMs?: number }) => ({
+      embeddings: [[[1]]],
+      modelUsed: 'voyage/voyage-context-4',
+    }));
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(() => ({
+        models: [
+          { id: 'voyage/voyage-4', label: 'Voyage 4' },
+          { id: 'voyage/voyage-context-4', label: 'Voyage Context 4' },
+        ],
+        defaults: {
+          standard: 'voyage/voyage-4',
+          draft: 'voyage/voyage-4',
+          best: 'voyage/voyage-4',
+        },
+      })),
+      embedText,
+      embedDocuments,
+    } as unknown as Partial<CindySlotDeps>);
+    await slot.handleModelRequest('art', EMBED);
+    await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'embed_text',
+      model: 'voyage/voyage-context-4',
+      documents: [['chunk']],
+    });
+    expect(embedText.mock.calls[0][0]).toMatchObject({
+      timeoutMs: GHOST_CINDY_EMBED_TIMEOUT_MS,
+    });
+    expect(embedDocuments.mock.calls[0][0]).toMatchObject({
+      timeoutMs: GHOST_CINDY_EMBED_TIMEOUT_MS,
+    });
   });
 });

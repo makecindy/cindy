@@ -254,6 +254,23 @@ export class EmbeddingClient {
       apiResponse as unknown as ContextualizedResponse,
       missTexts.map(() => 1),
     );
+    // 维度自检:显式请求了维度就必须兑现。上游对"不支持的维度"行为不统一(可能
+    // 400, 也可能静默回默认长度), 静默那条最危险 —— 调方按请求值建索引 / 预分配,
+    // 拿到的却是另一个长度, 而报错点会漂到很远的地方。
+    //
+    // **必须在写缓存之前判**(PR #1707 review):先写后判会让本次抛错、缓存里却留下
+    // 那批错长度的向量 —— 下一次同参请求全命中缓存直接 return, 绕过这里的自检把
+    // 非法向量当成功交付出去。判在前面 = 非法响应一条都不入缓存。
+    if (req.dimensions !== undefined) {
+      const got = grouped[0]?.[0]?.length;
+      if (got !== undefined && got !== req.dimensions) {
+        throw new EmbeddingError(
+          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
+          'INVALID_MODEL',
+        );
+      }
+    }
+
     for (let j = 0; j < missTexts.length; j++) {
       const vec = grouped[j]?.[0];
       if (!vec) {
@@ -265,19 +282,6 @@ export class EmbeddingClient {
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
       this.cache.set(cacheKey(req.model, missTexts[j], variant), vec);
-    }
-
-    // 维度自检:显式请求了维度就必须兑现。上游对"不支持的维度"行为不统一(可能
-    // 400, 也可能静默回默认长度), 静默那条最危险 —— 调方按请求值建索引 / 预分配,
-    // 拿到的却是另一个长度, 而报错点会漂到很远的地方。
-    if (req.dimensions !== undefined) {
-      const got = result[missIdx[0]]?.length;
-      if (got !== undefined && got !== req.dimensions) {
-        throw new EmbeddingError(
-          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
-          'INVALID_MODEL',
-        );
-      }
     }
 
     return {
@@ -338,23 +342,38 @@ export class EmbeddingClient {
   /**
    * 带重试的 POST /v1/embeddings。重试条件:
    *   - 5xx / 429 / NETWORK_ERROR → 退避后重试 (最多 RETRY_DELAYS_MS.length 次)
-   *   - 401/403 (AUTH_FAILED) / 400 (INVALID_MODEL) → 立即抛
+   *   - 401/403 (AUTH_FAILED) / 400 (INVALID_MODEL) / TIMEOUT → 立即抛
+   *
+   * `opts.timeoutMs` 是**整条链**(含所有重试与退避睡眠)的预算, 不是单次 HTTP 的:
+   * 每次尝试只拿剩余额度, 退避前先看剩余额度够不够, 不够就直接抛 TIMEOUT 而不是
+   * 白睡一觉。否则 n 次重试会把调方看到的最坏等待放大成 n 倍预算。
    */
   private async callWithRetry(
     apiKey: string,
     model: string,
     // string[][] = 上下文化的按文档分组输入(见 embedDocuments);wire 上原样发。
     inputs: string[] | string[][],
-    opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
+    opts: Pick<EmbedRequest, 'inputType' | 'dimensions' | 'timeoutMs'>,
   ): Promise<OpenAiEmbeddingsResponse> {
     let attempt = 0;
     // initial + retries
     const maxAttempts = RETRY_DELAYS_MS.length + 1;
     let lastErr: EmbeddingError | null = null;
+    const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : null;
 
     while (attempt < maxAttempts) {
       try {
-        return await this.callOnce(apiKey, model, inputs, opts);
+        let remaining: number | undefined;
+        if (deadline !== null) {
+          remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            throw new EmbeddingError(
+              `embed: timed out after ${opts.timeoutMs}ms (budget exhausted before attempt ${attempt + 1})`,
+              'TIMEOUT',
+            );
+          }
+        }
+        return await this.callOnce(apiKey, model, inputs, opts, remaining);
       } catch (err) {
         if (!(err instanceof EmbeddingError)) {
           // 防御性: 任何非 EmbeddingError 都视作 SERVER_ERROR 走重试
@@ -373,6 +392,14 @@ export class EmbeddingClient {
           throw lastErr;
         }
         const delay = RETRY_DELAYS_MS[attempt];
+        // 退避前先看预算:睡完必然过期就别睡了,把原始失败原因换成 TIMEOUT 抛出去
+        // (调方等的是"最多 timeoutMs",不是"最多 timeoutMs + 所有退避时间")。
+        if (deadline !== null && Date.now() + delay >= deadline) {
+          throw new EmbeddingError(
+            `embed: timed out after ${opts.timeoutMs}ms (last failure: ${lastErr.code})`,
+            'TIMEOUT',
+          );
+        }
         this.log.warn?.(
           `[embedding-client] attempt ${attempt + 1}/${maxAttempts} failed (${lastErr.code}); retry in ${delay}ms`,
         );
@@ -387,12 +414,18 @@ export class EmbeddingClient {
   /**
    * 单次 HTTP 调用, 不重试。
    * fetch 抛错 → NETWORK_ERROR; 非 2xx → 按 status 映射 code。
+   *
+   * `budgetMs` = 本次尝试可用的剩余时间(由 callWithRetry 从整体预算里切出来)。
+   * 用自建 AbortController 而不是 `AbortSignal.timeout()`:定时器要能在正常返回后
+   * 立刻 clear 掉, 不让它空转到超时点(每次调用留一个活定时器会拖住事件循环退出)。
+   * 计时覆盖到读完 body 为止 —— 响应头很快、body 迟迟不来也算超时。
    */
   private async callOnce(
     apiKey: string,
     model: string,
     inputs: string[] | string[][],
     opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
+    budgetMs?: number,
   ): Promise<OpenAiEmbeddingsResponse> {
     const url = `${this.resolveBaseUrl()}/v1/embeddings`;
     // inputType 按 provider 翻成该家的 wire 值(不支持的家不发这个字段);
@@ -401,48 +434,77 @@ export class EmbeddingClient {
     const provider = getEmbeddingModel(model)?.provider;
     const wireInputType =
       opts.inputType && provider ? INPUT_TYPE_WIRE[provider]?.[opts.inputType] : undefined;
-    let res: Response;
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (budgetMs !== undefined) {
+      const c = new AbortController();
+      controller = c;
+      timer = setTimeout(() => c.abort(), Math.max(1, budgetMs));
+    }
+    // abort 之后 fetch 抛的是 AbortError,与真正的网络故障混在一起 —— 但两者的
+    // 重试语义相反(网络错该重试、超时不该),所以靠 signal.aborted 而不是错误
+    // 消息来区分。注入的 fetchImpl 若无视 signal(测试替身常见),超时判定仍然
+    // 成立:抛出点变成下面的 aborted 复查。
+    const timedOut = (): boolean => controller?.signal.aborted === true;
     try {
-      res = await this.fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          input: inputs,
-          ...(wireInputType ? { input_type: wireInputType } : {}),
-          ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
-        }),
-      });
-    } catch (err) {
-      // DNS / socket reset / fetch abort 都走这里
-      throw new EmbeddingError(
-        `network error: ${err instanceof Error ? err.message : String(err)}`,
-        'NETWORK_ERROR',
-      );
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      let parsedMsg = '';
+      let res: Response;
       try {
-        const parsed = JSON.parse(text) as OpenAiErrorResponse;
-        parsedMsg = parsed.error?.message ?? '';
-      } catch {
-        /* not JSON */
+        res = await this.fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            input: inputs,
+            ...(wireInputType ? { input_type: wireInputType } : {}),
+            ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+          }),
+          ...(controller !== null ? { signal: controller.signal } : {}),
+        });
+      } catch (err) {
+        if (timedOut()) {
+          throw new EmbeddingError(`request aborted after ${budgetMs}ms budget`, 'TIMEOUT');
+        }
+        // DNS / socket reset 走这里
+        throw new EmbeddingError(
+          `network error: ${err instanceof Error ? err.message : String(err)}`,
+          'NETWORK_ERROR',
+        );
       }
-      const code = mapStatusToCode(res.status);
-      throw new EmbeddingError(
-        `XD Gateway /v1/embeddings ${res.status}: ${parsedMsg || text || res.statusText}`,
-        code,
-        res.status,
-        text,
-      );
-    }
 
-    return (await res.json()) as OpenAiEmbeddingsResponse;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        let parsedMsg = '';
+        try {
+          const parsed = JSON.parse(text) as OpenAiErrorResponse;
+          parsedMsg = parsed.error?.message ?? '';
+        } catch {
+          /* not JSON */
+        }
+        const code = mapStatusToCode(res.status);
+        throw new EmbeddingError(
+          `XD Gateway /v1/embeddings ${res.status}: ${parsedMsg || text || res.statusText}`,
+          code,
+          res.status,
+          text,
+        );
+      }
+
+      // body 读到一半被 abort → json() 抛错, 由下面的 catch 归成 TIMEOUT。
+      // 抢在定时器前读完就照常返回:手里已经是一份合法响应, 不为了"时间刚好到了"
+      // 把它丢掉再让调方失败。
+      return (await res.json()) as OpenAiEmbeddingsResponse;
+    } catch (err) {
+      // json() / text() 在 abort 后抛的也要归到 TIMEOUT,别伪装成解析失败。
+      if (timedOut() && !(err instanceof EmbeddingError)) {
+        throw new EmbeddingError(`request aborted after ${budgetMs}ms budget`, 'TIMEOUT');
+      }
+      throw err;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 }
 

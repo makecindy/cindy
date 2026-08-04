@@ -49,6 +49,7 @@ import {
   GHOST_CINDY_EMBED_MAX_CHARS_PER_TEXT,
   GHOST_CINDY_EMBED_MAX_TEXTS,
   GHOST_CINDY_EMBED_MAX_TOTAL_CHARS,
+  GHOST_CINDY_EMBED_TIMEOUT_MS,
   GHOST_CINDY_JOB_TTL_MS,
   GHOST_CINDY_MAX_ASYNC_JOBS,
   GHOST_IMAGE_ASPECT_RATIOS,
@@ -217,6 +218,8 @@ export interface CindySlotDeps {
     model: string;
     inputType?: 'query' | 'document';
     dimensions?: number;
+    /** 整体时间预算(含重试)。必须兑现:超时要 abort 在途请求并抛错,不能挂起。 */
+    timeoutMs?: number;
   }): Promise<{ embeddings: number[][]; modelUsed: string }>;
   /**
    * 上下文化嵌入执行(按文档分组;同文档 chunk 互为上下文)。
@@ -227,6 +230,7 @@ export interface CindySlotDeps {
     model: string;
     inputType?: 'query' | 'document';
     dimensions?: number;
+    timeoutMs?: number;
   }): Promise<{ embeddings: number[][][]; modelUsed: string }>;
   /**
    * 该意识的在途代办并发上限(用户配置,隐藏配置层级);null = 未配置 =
@@ -335,6 +339,39 @@ const MAX_EMBED_DIMENSIONS = 4096;
  */
 function supportsContextualEmbedding(model: string): boolean {
   return /(^|\/)voyage-context-/.test(model);
+}
+
+/**
+ * 把执行层的 embedding 失败翻成插件协议的 errorCode。
+ *
+ * 鸭子判型(读 `.code` 字符串)而不是 `instanceof EmbeddingError`:@cindy/embedding-client
+ * 在本进程是**按需 dynamic import** 的(向量能力没接线的构建里根本不该加载它),
+ * 为了一个 instanceof 把它拉进 slot 的静态模块图会破坏这条边界。
+ *
+ * 映射口径 = "插件拿到这个码该做什么":
+ *   - INVALID_MODEL(本地白名单外 / 上游 400,含"该型号不支持这个维度")→ INVALID_PARAMS:
+ *     改参数再来,重试同样的请求永远失败;
+ *   - RATE_LIMITED(429)→ 同名:退避后可重试;
+ *   - TIMEOUT(预算耗尽)→ 同名:可重试,但要考虑减小批量;
+ *   - AUTH_FAILED(未登录 / 凭证不可用)→ NO_CANDIDATE:与"目录里没有可用型号"同一
+ *     语义面 —— 插件改什么都没用,是主机侧条件不满足,应如实告诉用户而不是重试轰炸;
+ *   - NETWORK_ERROR / SERVER_ERROR / 其它 → INTERNAL:主机侧故障,重试由调方决定。
+ */
+function embeddingErrorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string') return 'INTERNAL';
+  switch (code) {
+    case 'INVALID_MODEL':
+      return 'INVALID_PARAMS';
+    case 'RATE_LIMITED':
+      return 'RATE_LIMITED';
+    case 'TIMEOUT':
+      return 'TIMEOUT';
+    case 'AUTH_FAILED':
+      return 'NO_CANDIDATE';
+    default:
+      return 'INTERNAL';
+  }
 }
 
 /** 视频预期耗时缺省(秒;与 video/run.ts 的缺省同口径)。 */
@@ -562,11 +599,17 @@ export class GhostCindySlot {
         return await this.handleEmbedText(ghostId, payload);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // 执行层(embedding-client)抛的 EmbeddingError 带结构化 code,必须翻译过来
+        // 而不是一律压成 INTERNAL(PR #1707 review):INTERNAL 对插件的含义是"主机
+        // 内部炸了,你改参数也没用",可 400 维度不支持要它改参数、429 要它退避重试。
+        // 压平之后这三种在协议上长得一模一样,插件只能瞎猜。
+        const errorCode = embeddingErrorCode(err);
         this.deps.log?.warn('ghost cindy-request embed_text unexpected failure', {
           ghostId,
           error: message,
+          errorCode,
         });
-        return { ok: false, message: `文本转向量失败:${message}`, errorCode: 'INTERNAL' };
+        return { ok: false, message: `文本转向量失败:${message}`, errorCode };
       }
     }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
@@ -1437,6 +1480,10 @@ export class GhostCindySlot {
         model,
         ...(p.inputType !== undefined ? { inputType: p.inputType as GhostCindyEmbedInputType } : {}),
         ...(p.dimensions !== undefined ? { dimensions: p.dimensions as number } : {}),
+        // 时间预算必传(PR #1707 review):网关连上却不返数据时,没有预算 =
+        // 这个 await 永不落地 = 下面的 finally 永不执行 = 该意识的在途额度被
+        // 永久占掉一格,配了并发上限的插件从此单单被拒。
+        timeoutMs: GHOST_CINDY_EMBED_TIMEOUT_MS,
       };
       this.deps.log?.info('ghost cindy-request embed_text start', {
         ghostId,

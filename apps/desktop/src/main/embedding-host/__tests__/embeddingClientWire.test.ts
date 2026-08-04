@@ -326,3 +326,113 @@ describe('EmbeddingClient · 响应形态', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * 时间预算与缓存写入时机 —— 两条都来自 PR #1707 review,都是"错了不报错"的类型:
+ *   - 没有预算:网关连上却不返数据时 await 永不落地,调方的并发额度被永久占住;
+ *   - 先写缓存后校验维度:第一次调用正确抛错,第二次同参请求全命中缓存直接返回,
+ *     把第一次已判定非法的向量当成功交付出去。
+ */
+describe('EmbeddingClient · 时间预算', () => {
+  it('timeoutMs 到点 abort 在途请求,抛 TIMEOUT 而不是挂死', async () => {
+    // 尊重 signal 的假 fetch(真 fetch / undici 的契约)。不给 signal 就永不 settle,
+    // 正是 review 指出的挂起场景。
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+            once: true,
+          });
+        }),
+    );
+    await expect(
+      clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>).embed({
+        texts: ['x'],
+        model: 'voyage/voyage-4',
+        timeoutMs: 30,
+      }),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('不传 timeoutMs 时不带 signal(不给未声明预算的调方强加超时)', async () => {
+    const inits: Array<RequestInit | undefined> = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init);
+      return new Response(
+        JSON.stringify({ model: 'voyage/voyage-4', data: [{ index: 0, embedding: [1, 2] }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    await clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>).embed({
+      texts: ['x'],
+      model: 'voyage/voyage-4',
+    });
+    expect(inits[0]?.signal).toBeUndefined();
+  });
+
+  it('预算是整条链的:重试不会把最坏等待放大成 n 倍预算', async () => {
+    // 每次都 500(可重试)。预算 60ms 远小于退避总和,应在退避前就抛 TIMEOUT,
+    // 而不是把 RETRY_DELAYS_MS 全睡一遍。
+    const fetchImpl = vi.fn(async () => new Response('boom', { status: 500 }));
+    const started = Date.now();
+    await expect(
+      clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>).embed({
+        texts: ['x'],
+        model: 'voyage/voyage-4',
+        timeoutMs: 60,
+      }),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+    // 上限给得宽松(CI 机器抖动),关键是它没有跑完全部退避(那要数秒)。
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it('上下文化路径同样受预算约束', async () => {
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+            once: true,
+          });
+        }),
+    );
+    await expect(
+      clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>).embedDocuments({
+        documents: [['a', 'b']],
+        model: 'voyage/voyage-context-4',
+        timeoutMs: 30,
+      }),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+  });
+});
+
+describe('EmbeddingClient · 非法响应不入缓存', () => {
+  it('维度不符抛错后缓存为空:第二次同参请求仍出网并仍然抛错', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            model: 'text-embedding-3-small',
+            data: [{ object: 'embedding', index: 0, embedding: [1, 2, 3] }],
+            usage: { prompt_tokens: 1 },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    );
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+    const req = { texts: ['a'], model: 'text-embedding-3-small' as const, dimensions: 512 };
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    // 先写后判的实现会在这里全缓存命中、静默返回那条长度 3 的向量。
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('维度相符时照常入缓存(自检不该顺手废掉缓存)', async () => {
+    const { client, fetchImpl } = harness();
+    const req = { texts: ['a'], model: 'voyage/voyage-4' as const, dimensions: 8 };
+    await client.embed(req);
+    const second = await client.embed(req);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(second.cacheHits).toBe(1);
+  });
+});

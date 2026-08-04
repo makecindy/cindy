@@ -168,6 +168,8 @@ export class EmbeddingService {
       inputType?: EmbeddingInputType;
       /** 期望维度(缺省 = 上游默认;client 会按返回长度自检)。 */
       dimensions?: number;
+      /** 整体时间预算(含重试);缺省 = 不设限。有并发额度或在等用户时必须传。 */
+      timeoutMs?: number;
     },
   ): Promise<EmbedResponse> {
     // 停用轴(PR #744 review 第十七轮):查询向量与后台批同为经 XD 网关的新付费
@@ -181,6 +183,7 @@ export class EmbeddingService {
       model: opts.modelId,
       ...(opts.inputType !== undefined ? { inputType: opts.inputType } : {}),
       ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
   }
 
@@ -194,6 +197,7 @@ export class EmbeddingService {
       modelId: EmbeddingModelId;
       inputType?: EmbeddingInputType;
       dimensions?: number;
+      timeoutMs?: number;
     },
   ): Promise<EmbedDocumentsResponse> {
     if (isProviderModelRouteDisabled('xd', opts.modelId)) {
@@ -204,6 +208,7 @@ export class EmbeddingService {
       model: opts.modelId,
       ...(opts.inputType !== undefined ? { inputType: opts.inputType } : {}),
       ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
   }
 

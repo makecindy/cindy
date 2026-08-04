@@ -95,6 +95,14 @@ export interface EmbedRequest {
    * `output_dimension` 只对 voyage 生效, 对另两家被吞。
    */
   dimensions?: number;
+  /**
+   * 整次调用的时间预算 (毫秒, 可选)。缺省 = 不设限 (由 fetch 自己的默认行为决定)。
+   *
+   * 覆盖**含重试的整条链**而不是单次 HTTP:预算耗尽即 abort 在途请求并抛
+   * `TIMEOUT`, 不会被"每次重试各给一份超时"放大成数倍等待。调方有并发额度或在
+   * 等用户时必须传 —— 网关连上后不返数据的情况下, 没有这个预算就是无限期挂起。
+   */
+  timeoutMs?: number;
 }
 
 export interface EmbedResponse {
@@ -134,6 +142,8 @@ export interface EmbedDocumentsRequest {
    */
   inputType?: EmbeddingInputType;
   dimensions?: number;
+  /** 同 `EmbedRequest.timeoutMs`:含重试的整体时间预算。 */
+  timeoutMs?: number;
 }
 
 export interface EmbedDocumentsResponse {
@@ -150,8 +160,10 @@ export interface EmbedDocumentsResponse {
  *   - AUTH_FAILED   : 没拿到 api key, 或 XD Gateway 返 401/403。不重试。
  *   - RATE_LIMITED  : 429。Worker 走 backoff 重试。
  *   - INVALID_MODEL : 调方传了 catalog 里没有的 model id (本地校验), 或 XD Gateway 返 400。不重试。
- *   - NETWORK_ERROR : fetch 抛错 (DNS/socket reset/timeout)。Worker 走 backoff 重试。
+ *   - NETWORK_ERROR : fetch 抛错 (DNS/socket reset)。Worker 走 backoff 重试。
  *   - SERVER_ERROR  : 5xx。Worker 走 backoff 重试。
+ *   - TIMEOUT       : 调方给的 timeoutMs 预算耗尽 (在途请求已 abort)。**不重试** ——
+ *                     预算是整条链的, 已经过期, 再试一次只会立刻又超时。
  */
 export class EmbeddingError extends Error {
   constructor(
@@ -161,7 +173,8 @@ export class EmbeddingError extends Error {
       | 'RATE_LIMITED'
       | 'INVALID_MODEL'
       | 'NETWORK_ERROR'
-      | 'SERVER_ERROR',
+      | 'SERVER_ERROR'
+      | 'TIMEOUT',
     public readonly status?: number,
     public readonly body?: string,
   ) {

@@ -1651,6 +1651,7 @@ const doc = await cindy.send({
 });
 // 成功:{ ok:true, embeddings:[[…],[…]], model:'…', dim:1024, modelLabel:'…' }
 // 把 embeddings 连同 model + dim 一起存进你自己的 kv / 文件
+// (下面检索时要用这两个值,记作 storedModel / storedDim)
 
 // 2) 检索:把用户的问题算成向量,和存量向量算余弦相似度,取最近的几条
 const q = await cindy.send({
@@ -1659,6 +1660,10 @@ const q = await cindy.send({
   texts: [userQuestion],
   inputType: 'query',      // 可选:这条是"用来检索的提问"
   model: storedModel,      // 必须与入库时同一型号!
+  // 入库时传过 dimensions 就必须**原样再传一次**:不传等于要该型号的默认维度,
+  // 默认值往往不是你入库时那个,拿到的查询向量和存量长度都不一样,没法比。
+  // 入库时没传过,这里也别传(两边都用默认)。
+  ...(storedDim !== undefined ? { dimensions: storedDim } : {}),
   callId: msg.callId,
 });
 \`\`\`
@@ -1712,8 +1717,16 @@ const r = await cindy.send({
   不会报错,只是召回悄悄变差;
 - \`dimensions\` 该型号不支持时按 \`errorCode:'INVALID_PARAMS'\` 明拒,不会静默
   给你另一个长度;
-- \`errorCode:'NO_CANDIDATE'\` = 当前没有可用的向量型号(用户在设置里停用了,
-  或该版本/该区域不提供)。**这是正常失败面**,如实提示,别重试轰炸;
+- \`errorCode:'NO_CANDIDATE'\` = 当前没有可用的向量型号(用户在设置里停用了、
+  该版本/该区域不提供,或主机侧凭证不可用)。**这是正常失败面**,如实提示,别
+  重试轰炸;
+- 失败码是分档的,按它决定下一步,别一律重试:\`'INVALID_PARAMS'\` = 你的请求
+  本身要改(型号不在白名单、维度不支持、texts/documents 同时传、不支持上下文化
+  的型号收到 documents),原样重试永远失败;\`'RATE_LIMITED'\` = 退避后可再来;
+  \`'TIMEOUT'\` = 可再来,但建议同时减小批量;\`'NO_CANDIDATE'\` 见上;
+  \`'INTERNAL'\` = 主机侧故障,重试与否你自己判断;
+- 单次请求有 60 秒时间预算(含主机侧重试),到点即中断并返回 \`'TIMEOUT'\` ——
+  不会让你的 \`await\` 永久悬着;
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;装入确认框会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
 

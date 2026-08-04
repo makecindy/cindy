@@ -244,6 +244,7 @@ import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelec
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
   CINDY_CAPABILITY_KEYS,
+  cindyCapabilityValueDomain,
   readGhostCindyOverrides,
   readGhostCindyInflightLimit,
   writeGhostCindyOverride,
@@ -2736,7 +2737,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 同一条付费链路)。只生成不存储 —— embedSync 明确不入队、不写 vec 表,
       // 向量原样返回给意识自己保管。动态 import 同 oneshotText:embedding-host
       // 的传递依赖会拽起 localDb,静态引入会污染所有 import 本模块的单测。
-      embedText: async ({ texts, model, inputType, dimensions }) => {
+      embedText: async ({ texts, model, inputType, dimensions, timeoutMs }) => {
         const [{ getEmbeddingService }, { isKnownEmbeddingModel }] = await Promise.all([
           import('../embedding-host/index.js'),
           import('@cindy/embedding-client'),
@@ -2750,11 +2751,14 @@ export function getGhostCindySlot(): GhostCindySlot {
           modelId: model,
           ...(inputType !== undefined ? { inputType } : {}),
           ...(dimensions !== undefined ? { dimensions } : {}),
+          // slot 层给的时间预算必须原样递到 client —— 中间任何一层吞掉它,
+          // 插件那侧就又变成"网关不返数据即永久挂住一格在途额度"。
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         });
         return { embeddings: res.embeddings, modelUsed: res.modelUsed };
       },
       // 上下文化嵌入(voyage-context-* 索引侧):同上,只是 input 按文档分组。
-      embedDocuments: async ({ documents, model, inputType, dimensions }) => {
+      embedDocuments: async ({ documents, model, inputType, dimensions, timeoutMs }) => {
         const [{ getEmbeddingService }, { isKnownEmbeddingModel }] = await Promise.all([
           import('../embedding-host/index.js'),
           import('@cindy/embedding-client'),
@@ -2766,6 +2770,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           modelId: model,
           ...(inputType !== undefined ? { inputType } : {}),
           ...(dimensions !== undefined ? { dimensions } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         });
         return { embeddings: res.embeddings, modelUsed: res.modelUsed };
       },
@@ -4698,10 +4703,22 @@ export function registerGhostIpc(): void {
     if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
       throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
     }
-    // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
-    const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    const isEditCap = capability === 'image.edit';
-    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
+    // 白名单按能力键的**取值域**取,映射由 cindyCapabilityValueDomain 穷举
+    // (漏一个类目 = 该类目的下拉界面上能选、一选就被别人的白名单拒掉、回滚成
+    // 一句通用 toast;PR #1707 review)。text.oneshot 的取值是轻量链档位键,
+    // 不在任何媒体目录里,必须对着 pin 选项校验。
+    const capKey = capability as CindyCapabilityKey;
+    const domain = cindyCapabilityValueDomain(capKey);
+    const allowed: ReadonlyArray<{ id: string; supportsEdit?: boolean }> =
+      domain === 'utilityChain'
+        ? utilityModelPinOptions()
+        : domain === 'video'
+          ? getCatalogVideoConfig().models
+          : domain === 'embed'
+            ? getCatalogEmbedConfig().models
+            : getCatalogImageConfig().models;
+    const isEditCap = capKey === 'image.edit';
+    if (model !== null && !allowed.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(
