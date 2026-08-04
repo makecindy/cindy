@@ -31,7 +31,10 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
+import {
+  deriveAgentTaskStatus,
+  subagentSpawnReceiptName,
+} from '@cindy/maker-shared/agent-task';
 import {
   isAgentPlanToolName,
   isDeliveryProseText,
@@ -1423,7 +1426,10 @@ function isWorkChild(it: RenderItem): it is WorkChildItem {
 // A paired final result closes a stale running update; this must match AgentTaskCard.
 function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
-  const status = deriveAgentTaskStatus(it.update?.status, it.result);
+  const status = deriveAgentTaskStatus(it.update?.status, it.result, {
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined,
+  });
   return status === 'running';
 }
 

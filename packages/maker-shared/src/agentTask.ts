@@ -160,9 +160,10 @@ export interface AgentTaskUpdate {
 export function deriveAgentTaskStatus(
   updateStatus: AgentTaskStatus | undefined,
   result?: string,
+  options?: { resultIsLaunchReceipt?: boolean },
 ): AgentTaskStatus {
   const hasResult = typeof result === 'string' && result.trim().length > 0;
-  if (updateStatus === 'running' && hasResult) return 'completed';
+  if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
 }
 
@@ -376,7 +377,9 @@ export function buildAgentTaskCardModel(input: {
   result?: string;
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
-  const status = deriveAgentTaskStatus(update?.status, result);
+  const status = deriveAgentTaskStatus(update?.status, result, {
+    resultIsLaunchReceipt: subagentSpawnReceiptName(toolName, toolInput, result) !== undefined,
+  });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider
     ?? (toolName?.startsWith('collab:')

@@ -184,7 +184,9 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
 
   const status = isWorkflow
     ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
-    : deriveAgentTaskStatus(update?.status, result);
+    : deriveAgentTaskStatus(update?.status, result, {
+        resultIsLaunchReceipt: subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined,
+      });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(
     'text-[var(--text-secondary)]',

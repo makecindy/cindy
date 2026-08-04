@@ -3,6 +3,7 @@ import {
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  subagentSpawnReceiptName,
 } from './agentTask';
 import { HISTORY_GAP_SPLIT_MS } from './historyGap';
 
@@ -1383,7 +1384,15 @@ function isRunningAgentTaskItem<
   TMessage extends MessageRenderNormalizedMessage,
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
-  const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody);
+  const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    resultIsLaunchReceipt:
+      item.toolCall !== undefined &&
+      subagentSpawnReceiptName(
+        toolNameOf(item.toolCall.source),
+        toolInputOf(item.toolCall.source),
+        item.toolCall.secondaryBody,
+      ) !== undefined,
+  });
   return status === 'running';
 }
 

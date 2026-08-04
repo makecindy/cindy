@@ -7693,10 +7693,12 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
         })) return;
+        let isLateCollabTerminal = false;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) {
           const lateKey = lateCollabTerminalItemKey(params.turnId, params.item);
           if (!lateKey || lateCollabTerminalItemIds.has(lateKey)) return;
           lateCollabTerminalItemIds.add(lateKey);
+          isLateCollabTerminal = true;
         }
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
@@ -7709,7 +7711,11 @@ export class CodexAgent extends BaseAgent {
           log,
           onCompactBoundary: handleCompactBoundary,
         });
-        emitReplayedSubagentUpdateOnCompleted?.();
+        // The one-shot late parent-turn carve-out is already represented by the
+        // translator's terminal update above. Replaying a live-card snapshot here
+        // would enqueue a second `running` frame for the same stale item when the
+        // child thread has not emitted its own terminal notification yet.
+        if (!isLateCollabTerminal) emitReplayedSubagentUpdateOnCompleted?.();
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         if (isTurnInFlight) pushStatus('Generating...');
