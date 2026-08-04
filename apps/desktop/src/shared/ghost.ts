@@ -4860,6 +4860,26 @@ export type GhostPipePreviewResult =
     };
 
 /**
+ * schedule-request(agent.schedule 加档)的上行载荷。
+ *
+ * 与本文件里其它上行请求(PickRequest / PreviewRequest / WorkspaceRequest …)同规格:
+ * 只描述**形状**,不代表已通过校验 —— 资格审、文本净化截断、频率钳制与限速都在主机侧
+ * scheduleSlot 完成,沙箱给什么都要重新过一遍。
+ */
+export interface GhostPipeScheduleDraftRequest {
+  type: 'schedule-request';
+  /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
+  name: string;
+  /** 预填提示词:这条自动化到点要干什么(净化后按 …PROMPT_MAX_CHARS 截断)。 */
+  prompt: string;
+  /**
+   * 建议触发间隔(毫秒)。低于 GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS
+   * 会被主机上调;缺省 = 不建议频率,面板用自己的默认值。
+   */
+  intervalMs?: number;
+}
+
+/**
  * schedule-request(agent.schedule 加档)的返回形态。
  *
  * ok:true 的语义严格是「**面板已打开**」,不是「任务已创建」——插件永远拿不到

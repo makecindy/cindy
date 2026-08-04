@@ -14,7 +14,7 @@ import {
   type GhostScheduleDraftPush,
   type InstalledGhost,
 } from '../../../shared/ghost';
-import { GhostScheduleSlot, type ScheduleSlotDeps } from '../scheduleSlot';
+import { GhostScheduleSlot, isMainShellWindowUrl, type ScheduleSlotDeps } from '../scheduleSlot';
 
 function scheduleGhost(
   options: {
@@ -52,7 +52,7 @@ function makeSlot(overrides: Partial<ScheduleSlotDeps> = {}) {
   let seq = 0;
   const deps: ScheduleSlotDeps = {
     getGhost: () => scheduleGhost(),
-    broadcast: vi.fn((payload: GhostScheduleDraftPush) => {
+    sendToWindow: vi.fn((payload: GhostScheduleDraftPush) => {
       pushes.push(payload);
       return true;
     }),
@@ -228,7 +228,7 @@ describe('GhostScheduleSlot 推送内容', () => {
   });
 
   it('没有宿主窗口 → HOST_NOT_READY', () => {
-    const { slot } = makeSlot({ broadcast: () => false });
+    const { slot } = makeSlot({ sendToWindow: () => false });
     expect(slot.handleRequest('sched-ghost', validReq)).toMatchObject({
       ok: false,
       errorCode: 'HOST_NOT_READY',
@@ -254,17 +254,46 @@ describe('GhostScheduleSlot 硬约束:只能开面板,不能建任务', () => {
   it('deps 里不存在任何创建/写调度的能力', () => {
     const { deps } = makeSlot();
     const keys = Object.keys(deps);
-    expect(keys.sort()).toEqual(['broadcast', 'getGhost', 'newRequestId', 'now'].sort());
+    expect(keys.sort()).toEqual(['getGhost', 'newRequestId', 'now', 'sendToWindow'].sort());
     for (const key of keys) {
       expect(key).not.toMatch(/creat|schedul|storage|insert|save|persist|write/i);
     }
   });
 
-  it('放行时唯一的副作用就是一次广播', () => {
-    const broadcast = vi.fn(() => true);
-    const { slot } = makeSlot({ broadcast });
+  it('放行时唯一的副作用就是投给一个窗口(不是广播)', () => {
+    const sendToWindow = vi.fn(() => true);
+    const { slot } = makeSlot({ sendToWindow });
     expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
-    expect(broadcast).toHaveBeenCalledTimes(1);
+    // 恰好一次:打断式入口绝不能投多个窗口(#1715 review 同根因三条意见)。
+    expect(sendToWindow).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * #1715 review 同根因三条意见(Greptile P1 / Codex P2 / Copilot)的回归:
+   * 打断式入口**只能投一个窗口**。装配处的选窗逻辑在 index.ts,这里钉住槽这一侧的
+   * 契约——它只调一次 sendToWindow,把"投给谁"整个交给装配处,自己不做任何扇出。
+   * 如果将来有人把 deps 改回 broadcast 语义(在一次调用里投多个窗口),
+   * 上面「deps 里不存在任何创建/写调度的能力」的键集合断言会先失败。
+   */
+  it('多窗口场景:一次请求只投递一次,不对窗口做扇出', () => {
+    // 假装装配处后面挂着 3 个窗口:槽不该知道、也不该关心有几个。
+    const delivered: GhostScheduleDraftPush[] = [];
+    const { slot } = makeSlot({
+      sendToWindow: (payload) => {
+        delivered.push(payload);
+        return true;
+      },
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('没有可投窗口(全部销毁)→ HOST_NOT_READY,不静默丢弃', () => {
+    const { slot } = makeSlot({ sendToWindow: () => false });
+    expect(slot.handleRequest('sched-ghost', validReq)).toMatchObject({
+      ok: false,
+      errorCode: 'HOST_NOT_READY',
+    });
   });
 
   it('返回值不携带任何"任务已创建"的信息(拿不到 scheduleId)', () => {
@@ -272,5 +301,37 @@ describe('GhostScheduleSlot 硬约束:只能开面板,不能建任务', () => {
     const res = slot.handleRequest('sched-ghost', validReq);
     expect(res).toEqual({ ok: true });
     expect(JSON.stringify(res)).not.toMatch(/scheduleId|created|saved/i);
+  });
+});
+
+describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
+  it.each([
+    ['主窗口', 'file:///app/index.html#/cc-agent'],
+    ['主窗口带其它 query', 'file:///app/index.html?foo=1#/cc-agent/scheduled'],
+    ['dev server', 'http://localhost:5173/#/cc-agent'],
+  ])('%s → 是主壳窗', (_label, url) => {
+    expect(isMainShellWindowUrl(url)).toBe(true);
+  });
+
+  it.each([
+    // 这两类窗口与 MainLayout 平级,没有草稿订阅、也去不了自动化页。
+    ['插件面板独立窗(query)', 'file:///app/index.html?ghostPanelWindow=sign#/ghost-panel-window'],
+    ['插件面板独立窗(仅 hash)', 'file:///app/index.html#/ghost-panel-window'],
+    ['右侧栏独立窗(query)', 'file:///app/index.html?sidebarWindow=1#/sidebar-window'],
+    ['右侧栏独立窗(仅 hash)', 'file:///app/index.html#/sidebar-window'],
+    ['about:blank', 'about:blank'],
+    ['空串', ''],
+    ['非法 URL', 'not a url'],
+  ])('%s → 不是主壳窗', (_label, url) => {
+    expect(isMainShellWindowUrl(url)).toBe(false);
+  });
+
+  /**
+   * 这条是本能力的主使用路径:编写手册 §4.11.2 第 1 步就是「用户在你的插件面板上
+   * 点一下」,而面板可以被拉成独立窗口。那一刻 focused 是面板窗——若判据把它当成
+   * 可投窗口,草稿就投给了一个接不住它的窗口,用户点了什么都不会发生。
+   */
+  it('插件面板独立窗绝不能被当作可投窗口(本能力的主使用路径)', () => {
+    expect(isMainShellWindowUrl('file:///app/index.html?ghostPanelWindow=codex-reset-planner#/ghost-panel-window')).toBe(false);
   });
 });

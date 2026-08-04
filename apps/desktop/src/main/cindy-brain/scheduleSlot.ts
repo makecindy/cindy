@@ -23,7 +23,7 @@
  *   (按尝试记账,spam 顺延窗口)。比 preview 长一档 —— 这个面板是打断式的
  *   (把用户从当前页带走),预览标签只是右侧栏多开一页。
  *
- * 纯逻辑 + 依赖注入(规则 14):广播在 cindy-brain/index.ts 组装时注入,
+ * 纯逻辑 + 依赖注入(规则 14):选窗与投递在 cindy-brain/index.ts 组装时注入,
  * 单测喂假 deps 直测。
  */
 
@@ -42,8 +42,15 @@ import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 export interface ScheduleSlotDeps {
   getGhost(id: string): InstalledGhost | null;
-  /** 把"开面板并预填"推给宿主窗口;false = 一个窗口都不在(HOST_NOT_READY)。 */
-  broadcast(payload: GhostScheduleDraftPush): boolean;
+  /**
+   * 把"开面板并预填"投给**单个**宿主窗口;false = 没有可投窗口(HOST_NOT_READY)。
+   *
+   * 刻意叫 sendToWindow 而不是 broadcast(与 confirm 槽同名):本操作是打断式的,
+   * 广播出去会让主窗与每个"在新窗口打开"的副窗同时跳页弹表单——那些副窗同样挂载
+   * 完整 MainLayout、各自持有独立的 requestId 去重状态,于是同一份草稿会被重复
+   * 保存成多条自动化。装配处负责选窗(focused ?? 第一个),本槽只管投一次。
+   */
+  sendToWindow(payload: GhostScheduleDraftPush): boolean;
   now?(): number;
   /** 仅测试注入;生产用 randomUUID。 */
   newRequestId?(): string;
@@ -60,7 +67,45 @@ function fail(
   return { ok: false, errorCode, message };
 }
 
-/** 自动化草稿槽:资格审 → 载荷净化 → 频率钳制 → 限速 → 广播开面板。 */
+/**
+ * 该窗口是否挂载了**完整主壳**(MainLayout)。只有主壳窗订阅了草稿通道、也只有它
+ * 能路由到自动化页 —— 投给别的窗口等于静默丢失。
+ *
+ * 为什么必须判:Cindy 有两类与 MainLayout **平级**的独立子窗口(见 router.tsx 的
+ * `sidebar-window` / `ghost-panel-window` 两条根路由),它们只挂各自的轻壳,没有
+ * 这个订阅。而**插件面板恰恰可以被用户拉成独立窗口**,「在插件面板上点一下」正是
+ * 本能力的主使用路径(编写手册 §4.11.2 的第 1 步)——那一刻 focused 就是面板窗,
+ * 若照 confirm 槽那样只写 `focused ?? all[0]`,草稿就投给了一个接不住它的窗口。
+ *
+ * 判据取自两个子窗口创建时显式带的启动参数(right-sidebar-window/window.ts、
+ * ghost-panel-window/window.ts),query 与 hash 两路都查:main 侧两处都设了 query,
+ * hash 是 renderer 单入口的路由段,任一命中即判为非主壳。
+ *
+ * 纯函数(只收 URL 字符串,不碰 Electron),便于直测。
+ */
+export function isMainShellWindowUrl(rawUrl: string): boolean {
+  if (!rawUrl.trim()) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    // 尚未 load 完的空串 / 非法值:不当主壳窗,宁可回落到别的候选。
+    return false;
+  }
+  // 只认 app 真实页面的协议。`about:blank`(窗口刚建还没 load)本身是合法 URL、
+  // 也不带下面那些标识,不显式挡掉会被误判成主壳窗,草稿投过去即丢失。
+  if (parsed.protocol !== 'file:' && parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+  if (parsed.searchParams.has('ghostPanelWindow') || parsed.searchParams.has('sidebarWindow')) {
+    return false;
+  }
+  const hash = parsed.hash;
+  if (hash.includes('/ghost-panel-window') || hash.includes('/sidebar-window')) return false;
+  return true;
+}
+
+/** 自动化草稿槽:资格审 → 载荷净化 → 频率钳制 → 限速 → 投给单个窗口开面板。 */
 export class GhostScheduleSlot {
   /** 意识 id → 上次尝试时刻(按尝试记账;体量 = 已装意识数,无需清理)。 */
   private readonly lastAttemptAt = new Map<string, number>();
@@ -128,7 +173,7 @@ export class GhostScheduleSlot {
           )
         : undefined;
 
-    const delivered = this.deps.broadcast({
+    const delivered = this.deps.sendToWindow({
       requestId: this.deps.newRequestId?.() ?? randomUUID(),
       ghostId,
       ghostName: ghost.manifest.name,

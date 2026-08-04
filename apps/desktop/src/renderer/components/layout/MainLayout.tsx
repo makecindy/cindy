@@ -535,6 +535,11 @@ export function MainLayout() {
   // 必然已登录、可以安全 navigate;而插件请求可能在任何路由下到达(用户当时正在
   // 插件面板里),SchedulerPage 那时还没挂载,接不到这条推送。
   //
+  // main 侧**只投一个主壳窗**(见 cindy-brain 的 isMainShellWindowUrl):独立的插件
+  // 面板窗 / 右侧栏窗与 MainLayout 平级、没有本订阅,所以别在那两个轻壳里再加一份
+  // 处理——它们收不到,加了也是死代码。同一窗口内仍需去重(下游 SchedulerPage 的
+  // handledScheduleCreateRequestRef):navigate 带的 state 可能被 effect 重复消费。
+  //
   // ⚠️ 这里**只导航**。任务落库只发生在用户于面板上点保存之后 —— 插件全程没有
   // 直接建任务的通道(scheduleSlot 的 deps 里压根没有 schedule storage)。
   useEffect(() => {
