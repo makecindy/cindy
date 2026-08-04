@@ -83,6 +83,11 @@ const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
+/**
+ * 出站 429 退避的上限。取值只为兜住异常大的 `retry_after`(坏网关/坏值),
+ * 正常 flood 窗口一律按 Telegram 给的全值等 —— 见 callSend 的注释。
+ */
+const RETRY_AFTER_MAX_WAIT_MS = 60_000;
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
 /** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
@@ -1519,7 +1524,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.api;
   }
 
-  /** 429 退避一次重试; 'message is not modified' 静默。 */
+  /**
+   * 429 退避一次重试; 'message is not modified' 静默。
+   *
+   * 退避时长必须尊重 Telegram 给的 `retry_after` 全值 —— 早先这里封在 10s,
+   * 于是 `retry_after` 更大的 flood 窗口里重试必然二次失败(实测 2026-08-04:
+   * 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试, 再次 429
+   * 后整条答案丢失)。上限只用来兜住异常大的 `retry_after`, 不参与正常判断。
+   */
   private async callSend<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const api = this.requireApi();
     // 首条真实消息即将出现 — typing 使命完成(客户端收到消息也会自动清)。
@@ -1530,7 +1542,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return await api.call<T>(method, params);
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 429) {
-        await sleep(Math.min((err.retryAfterSec ?? 3) * 1000, 10_000));
+        await sleep(Math.min((err.retryAfterSec ?? 3) * 1000, RETRY_AFTER_MAX_WAIT_MS));
         return api.call<T>(method, params);
       }
       throw err;

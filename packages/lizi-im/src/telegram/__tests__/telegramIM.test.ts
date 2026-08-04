@@ -1293,6 +1293,82 @@ describe('TelegramIM', () => {
     expect(richEditCount()).toBe(1);
   });
 
+  it('429 退避等满 Telegram 给的 retry_after(不再封顶 10s), 终稿不丢', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let htmlEditAttempts = 0;
+    const flood = (): TelegramApiError =>
+      new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      // rich 定稿在 flood 下同样撞 429, 让流程落到 HTML 编辑这条真正带退避的路径。
+      if (method === 'editMessageText' && params?.rich_message !== undefined) throw flood();
+      if (method === 'editMessageText') {
+        htmlEditAttempts += 1;
+        if (htmlEditAttempts === 1) throw flood();
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 10m44s');
+    const sendCount = (): number => api.calls.filter((c) => c.method === 'sendMessage').length;
+    const sendsBeforeFinalize = sendCount();
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('完整的最终答案');
+      // 旧实现把退避封在 10s: 此刻已经重试, 而 flood 窗口还剩 16s → 必然二次
+      // 失败, 整条终稿就是这样丢的(2026-08-04 线上实测)。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(htmlEditAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await finalized;
+      expect(htmlEditAttempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 原位编辑最终成功 → 不需要动用补送, 也不该留下多余消息。
+    expect(sendCount()).toBe(sendsBeforeFinalize);
+    const lastEdit = api.calls.filter((c) => c.method === 'editMessageText').at(-1);
+    expect(String(lastEdit?.params.text ?? '')).toContain('完整的最终答案');
+  });
+
+  it('原位编辑始终失败时, 终稿改由新消息承载并撤掉过程消息', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 11m');
+    const progressMessageId = handle.messageId;
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('flood 下也必须送到的答案');
+      // 两次编辑尝试(rich 直连不退避 + HTML 经 callSend 退避一次)后转补送。
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const answer = api.calls.find(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('必须送到的答案'),
+    );
+    expect(answer).toBeDefined();
+    // 先发新、后删旧: 补送落地后才撤掉那条停在"工作中"的过程消息。
+    const deleted = api.calls.filter((c) => c.method === 'deleteMessage');
+    expect(deleted).toHaveLength(1);
+    expect(api.calls.indexOf(answer!)).toBeLessThan(api.calls.indexOf(deleted[0]!));
+    expect(String(deleted[0]!.params.message_id ?? '')).toBe(
+      progressMessageId.split('|')[1] ?? progressMessageId,
+    );
+  });
+
   it('群 lane 流式: send+edit 经典路径 + 定稿 rich 原地升级(本次统一的基准)', async () => {
     await connect();
     const handle = await im.startStreamingText('g/-100200/r7');

@@ -15,7 +15,10 @@
  *     (对齐 turnRunner 的 CARD_PATCH_THROTTLE_MS, 双层节流冗余但无害);
  *   - "message is not modified" 错误静默吞掉(内容未变的重复编辑);
  *   - 中间态超过单条上限后停止编辑(终稿由 finalize 分段补发), 与 Discord
- *     的 INTERMEDIATE_EDIT_LIMIT 行为一致。
+ *     的 INTERMEDIATE_EDIT_LIMIT 行为一致;
+ *   - **终稿的原位编辑必须有兜底**: 长轮次会对同一条消息累计上百次编辑, 撞
+ *     flood 时最后那次(携带答案)最容易失败。finalize 因此在编辑失败后把答案
+ *     新发一条消息承载, 见 finalizeInPlaceOrRepost。
  */
 
 import type { StreamingTextHandle } from '../types.js';
@@ -168,14 +171,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       const upgraded = await this.deps.editFinal(this.messageIdValue, finalText);
       if (upgraded) return;
     }
-    if (firstChunk.trim().length > 0 && this.flushed !== firstChunk) {
-      await this.deps.edit(this.messageIdValue, firstChunk);
-    } else if (
-      firstChunk.trim().length === 0 &&
-      (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
-      this.flushed !== IMAGE_ONLY_PLACEHOLDER
-    ) {
-      await this.deps.edit(this.messageIdValue, IMAGE_ONLY_PLACEHOLDER);
+    // 原位定稿的目标文本(有正文用首段; 纯图轮次用占位符); null = 消息已是终态。
+    const inPlaceText =
+      firstChunk.trim().length > 0 && this.flushed !== firstChunk
+        ? firstChunk
+        : firstChunk.trim().length === 0 &&
+            (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
+            this.flushed !== IMAGE_ONLY_PLACEHOLDER
+          ? IMAGE_ONLY_PLACEHOLDER
+          : null;
+    if (inPlaceText !== null) {
+      await this.finalizeInPlaceOrRepost(inPlaceText);
     }
     for (const chunk of chunks.slice(1)) {
       await this.deps.send(chunk);
@@ -186,6 +192,42 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       ...imageUrls,
       ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
     ]);
+  }
+
+  /**
+   * 原位定稿(editMessageText 覆盖流式那条消息); 编辑失败则把终稿**新发**一条
+   * 消息承载, 落地后再撤掉停在过程态的旧消息。
+   *
+   * 为什么需要这条兜底: 过程区每 5s 重渲染一次(时长在变), 长轮次会对同一条
+   * 消息累计上百次 editMessageText, 迟早撞 Telegram 的编辑 flood。而携带答案
+   * 的这一次编辑排在整轮最后, 最容易被撞 —— 实测 2026-08-04 一个 11 分钟的
+   * 群轮次就是这样丢掉了整条终稿(`429 retry after 26`), 上游只会记一条
+   * non-fatal 警告, 聊天里只剩一条停在"⚙️ 工作中 · 10m44s"的僵尸消息。
+   *
+   * 顺序固定"先发新、后删旧", 不可对调:
+   *   - 先删旧: 一旦新发也失败, 答案与过程记录一起消失, 比现状更糟;
+   *   - 先删再发还会让客户端滚动跳位(与 openclaw 同一条纪律)。
+   * 删除是 best-effort —— 删不掉只是多留一条过程消息, 答案已经到了。
+   */
+  private async finalizeInPlaceOrRepost(text: string): Promise<void> {
+    const staleMessageId = this.messageIdValue;
+    try {
+      await this.deps.edit(staleMessageId, text);
+      return;
+    } catch (editErr) {
+      // 新发失败就把原始编辑错误抛回上游(与改动前同语义), 不掩盖真实原因。
+      try {
+        this.messageIdValue = await this.deps.send(text);
+      } catch {
+        throw editErr;
+      }
+      this.flushed = text;
+    }
+    try {
+      await this.deps.deleteMessage?.(staleMessageId);
+    } catch {
+      /* 删不掉(权限/已删)就留着, 不影响已送达的答案 */
+    }
   }
 
   private scheduleFlush(): void {
