@@ -52,6 +52,11 @@ export interface OrcaWorkerProviderSnapshot {
   name: string;
   models: readonly string[];
   /**
+   * 运行 model id 对应的 Model Registry 稳定身份。缺失表示目录无法证明该路由 model
+   * 与规范身份相同；这种情况下只能使用精确 ID，不能仅凭后缀推断 managed alias。
+   */
+  registryIdentityByModel?: Readonly<Record<string, string>>;
+  /**
    * 该来源下 supportsFastMode 的模型 id 集合。Fast 能力是 per-(provider, model) 的,
    * 同 id 模型在不同来源可分叉;缺省 = 该快照来源未提供 Fast 元数据,Fast 判定
    * 回落拍平清单解析(兼容旧组装方,不整体压灭 Fast)。
@@ -374,7 +379,9 @@ function resolveWorkerModelId(params: {
     if (listedModelIds.has(model) && provider.models.includes(model)) return true;
     if (model.includes('/') || provider.id !== ORCA_MANAGED_GATEWAY_PROVIDER_ID) return false;
     return provider.models.some(
-      (candidate) => candidate.endsWith(`/${model}`) && listedModelIds.has(candidate),
+      (candidate) => candidate.endsWith(`/${model}`)
+        && listedModelIds.has(candidate)
+        && provider.registryIdentityByModel?.[candidate] === candidate,
     );
   };
   // 成对缓存的 defaults model/provider 只有在该来源无法解析当前模型时，才允许回退到
@@ -397,7 +404,11 @@ function resolveWorkerModelId(params: {
     for (const provider of routeProviders) {
       if (provider.id !== ORCA_MANAGED_GATEWAY_PROVIDER_ID) continue;
       for (const candidate of provider.models) {
-        if (candidate.endsWith(`/${model}`) && listedModelIds.has(candidate)) {
+        if (
+          candidate.endsWith(`/${model}`)
+          && listedModelIds.has(candidate)
+          && provider.registryIdentityByModel?.[candidate] === candidate
+        ) {
           canonicalCandidates.add(candidate);
         }
       }

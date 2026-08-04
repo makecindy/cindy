@@ -447,10 +447,16 @@ describe('OrcaWorkerCreationService', () => {
       canonicalModelCapabilities,
     ];
 
-    const managedProvider = (models: string[] = [canonicalId]): OrcaWorkerProviderSnapshot => ({
+    const managedProvider = (
+      models: string[] = [canonicalId],
+      registryIdentityByModel: Readonly<Record<string, string>> = Object.fromEntries(
+        models.map((model) => [model, model]),
+      ),
+    ): OrcaWorkerProviderSnapshot => ({
       id: 'xd',
       name: 'Cindy AI',
       models,
+      registryIdentityByModel,
     });
     const customProvider = (models: string[] = [shortId]): OrcaWorkerProviderSnapshot => ({
       id: 'deepseek',
@@ -592,6 +598,32 @@ describe('OrcaWorkerCreationService', () => {
         ok: false,
         errorCode: 'INVALID_PARAMS',
         message: expect.stringContaining('ambiguous'),
+      });
+
+      expectNoCreationState(deps);
+    });
+
+    it('rejects a unique managed suffix candidate with a different catalog identity', async () => {
+      const standardId = 'gpt-5.5';
+      const budgetId = 'codex/gpt-5.5';
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider(
+          [budgetId],
+          { [budgetId]: 'xd/codex-gpt-5.5' },
+        )],
+        availableModels: [
+          { id: standardId, efforts: ['high'], defaultEffort: 'high' },
+          { id: budgetId, efforts: ['high'], defaultEffort: 'high' },
+        ],
+      });
+
+      await expect(service.createWorker(workerParams({
+        model: standardId,
+        providerId: 'xd',
+      }))).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: expect.stringContaining(`"${standardId}"`),
       });
 
       expectNoCreationState(deps);
