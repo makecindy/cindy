@@ -360,16 +360,19 @@ describe('SchedulerScriptCapabilityBroker', () => {
 
   it('registers script-channel callId before dispatch and finalizes it on success and failure', async () => {
     const broker = new SchedulerScriptCapabilityBroker();
+    // 跨平台绝对路径(isAbsolute 校验在 broker 登记侧,Windows 盘符路径在
+    // POSIX 上不算绝对,会拿到不同的登记形状)。
+    const absWorkdir = path.resolve(path.sep);
     await broker.call(
       { method: 'jira.get', params: { issue_key: 'DING-1' } },
       new Set(['jira.read']),
-      { schedule: schedule() },
+      { schedule: schedule({ workingDir: absWorkdir }) },
     );
-    // 登记形状:无会话、带 schedule.workingDir 作为脚本通道落盘根。
+    // 登记形状:无会话、脚本通道标记、带 schedule.workingDir 作为落盘根。
     expect(registerCallMock).toHaveBeenCalledTimes(1);
     const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(info).toEqual({
-      ghostId: 'xd-atlassian', toolUseId: null, sessionId: null, scriptWorkdir: 'C:\\project',
+      ghostId: 'xd-atlassian', toolUseId: null, sessionId: null, scriptWorkdir: absWorkdir, channel: 'script',
     });
     // 同一 callId 下行给意识;顺序:register → dispatch → finalize。
     expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ callId }));
@@ -393,6 +396,16 @@ describe('SchedulerScriptCapabilityBroker', () => {
       ),
     ).rejects.toMatchObject({ code: 'GHOST_ASLEEP' });
     expect(finalizeCallMock).toHaveBeenCalledTimes(1);
+
+    // 畸形 workingDir(相对路径/首尾空白)按 null 登记:fs 槽拒写但查询
+    // 不受影响;条目的 channel:'script' 标记不受影响(review m2/m3/n2)。
+    registerCallMock.mockClear();
+    await broker.call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']),
+      { schedule: schedule({ workingDir: 'relative/dir' }) },
+    );
+    expect(registerCallMock.mock.calls[0][1]).toMatchObject({ scriptWorkdir: null, channel: 'script' });
   });
 
   it('端到端:脚本通道 out_file 经真实 cardService + fs 槽落进 schedule 工作目录', async () => {
@@ -408,6 +421,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
         getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
         dataRootDir: () => path.join(tmp, 'ghost-fs'),
         callInfo: (callId) => cardService.callInfoOf(callId),
+        inFlightCallInfo: (callId) => cardService.inFlightCallInfoOf(callId),
         getSessionSnapshot: async () => null,
         requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' as const }),
         writeSaveDeposit: async () => null,
@@ -436,8 +450,15 @@ describe('SchedulerScriptCapabilityBroker', () => {
       expect(result).toMatchObject({ saved_to: 'reports/jira.json' });
       // 字节真身落在 schedule 工作目录内,脚本可按相对路径从自己 cwd 读回。
       expect(await fs.promises.readFile(path.join(tmp, 'reports', 'jira.json'), 'utf8')).toBe('{"issues":[1,2,3]}');
-      // 交卷后条目已 settle:宽限窗外这个 callId 不再能写(账本生命周期兜底)。
-      expect(cardService.inFlightCallInfoOf('nope')).toBeNull();
+      // 用完即废(review M1 真断言):broker 已 finalize,同一 callId 再经 fs 槽
+      // 写盘必须被拒——插件在交卷后(含 TIMEOUT 后仍在后台跑的场景)持有的
+      // 旧 callId 不再授权任何写入。
+      const usedCallId = registerCallMock.mock.calls[0][0] as string;
+      const late = await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: usedCallId, path: 'reports/late.json', content: 'x',
+      });
+      expect(late).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'reports', 'late.json'))).toBe(false);
     } finally {
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }

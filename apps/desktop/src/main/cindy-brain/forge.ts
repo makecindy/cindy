@@ -2511,6 +2511,8 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
   机器),会明确报错,请改用 root:'data'。例外:scheduler「仅运行脚本」通道
   (无会话的定时脚本直调)下发的调用,以该 schedule 配置的工作目录为写入根
   直接放行——没有会话就没有权限模式可跟随,授权来自 schedule 配置本身;
+  该通道的写入必须在当次 tool-call 处理期间完成,交卷后 callId 立即失效
+  (比会话通道更严:无宽限,先写盘再交卷);
 - \`root:'save'\` **过户目录**:仅 write,凭主 agent 在 ghost_call 顶层传 \`save_dir\`
   过户后注入的 \`args.save_deposit.token\` 写入(与 §4.7 fetch \`as:'file'\` 下载
   落盘同一张票:限时、限次数、限字节、文件名主机消毒、永不覆盖已有文件)。

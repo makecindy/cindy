@@ -3291,6 +3291,9 @@ export function getGhostFsSlot(): GhostFsSlot {
       // callId → 归属/会话反查:与卡片供片同一本账(ghost_call 派单时
       // cardService.registerCall 登记),不信意识自报。
       callInfo: (callId) => getGhostCardService().callInfoOf(callId),
+      // 严格在途反查:脚本通道(无会话)的 workdir 写盘授权走它——交卷即失效,
+      // 不享宽限窗(目录授权上下文用完即废,与 workspace 槽同一判据)。
+      inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       getSessionSnapshot: (sessionId) => getSessionFsSnapshot(sessionId),
       requestWriteConfirm: async (sessionId, payload) => {
         const bridge = getGhostGrantConfirmBridge();

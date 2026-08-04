@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 
@@ -64,15 +65,18 @@ async function callGhostForScript(
   schedule: Schedule,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
-  const scriptWorkdir = typeof schedule.workingDir === 'string' && schedule.workingDir.trim()
-    ? schedule.workingDir
-    : null;
+  // 登记前规范化:trim + 必须绝对路径——畸形 workingDir 按 null 登记(fs 槽
+  // 会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响;script-runner
+  // 已强制非空,这里防的是相对/带首尾空白的配置,review m2/m3/n2)。
+  const trimmedWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir.trim() : '';
+  const scriptWorkdir = trimmedWorkdir && isAbsolute(trimmedWorkdir) ? trimmedWorkdir : null;
   const cardService = getGhostCardService();
   cardService.registerCall(callId, {
     ghostId: request.ghostId,
     toolUseId: null,
     sessionId: null,
     scriptWorkdir,
+    channel: 'script',
   });
   try {
     return await getGhostPipeDispatcher().callGhostTool({ ...request, callId });

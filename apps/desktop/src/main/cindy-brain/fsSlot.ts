@@ -20,8 +20,10 @@
  *                 没有 permission 模式可跟随、也无人在场可弹确认卡;
  *                 授权来源是 schedule 自身的工作目录配置(script-runner
  *                 本就以此目录 spawn 用户配置的命令,脚本进程对该目录
- *                 有完整写权,意识代写不扩大写面),callId 经同一本
- *                 cardService 账 finalize/清扫,用完即废。
+ *                 有完整写权,意识代写不扩大写面)。脚本通道的 callId
+ *                 反查走**严格在途**查询(inFlightCallInfo,与 workspace
+ *                 槽同一判据):交卷即失效,不享卡片供片的宽限窗——目录
+ *                 授权上下文必须用完即废。
  *       'save'    主 agent 过户的 save 票据目录——仅 write;复用
  *                 saveDeposit 票据库的 TTL/次数/字节预算与文件名消毒去重
  *                 (与 fetch as:'file' 下载落盘同一本账)。
@@ -79,6 +81,13 @@ export interface FsSlotDeps {
   /** callId → 归属反查(生产 = cardService.callInfoOf;不信意识自报)。
    *  scriptWorkdir 仅脚本通道条目带(schedule.workingDir),会话调用为 null。 */
   callInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir?: string | null } | null;
+  /**
+   * callId → 严格在途反查(生产 = cardService.inFlightCallInfoOf):已交卷/
+   * 已清扫的条目返回 null。脚本通道(root:'workdir' 无会话分支)必须走它——
+   * 目录授权上下文在工具调用结束后不得继续有效(用完即废);会话通道沿用
+   * callInfo 宽限窗口径(有 permission 裁决第二道闸,既有行为不变)。
+   */
+  inFlightCallInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir?: string | null } | null;
   /** sessionId → 会话快照(生产查 localDb sessions 行;查无返回 null)。 */
   getSessionSnapshot(sessionId: string): Promise<FsSessionSnapshot | null>;
   /**
@@ -485,6 +494,9 @@ export class GhostFsSlot {
     // - 会话通道:session 快照的 workingDir,放行与否跟随会话 permission 模式;
     // - 脚本通道:登记时的 scriptWorkdir(schedule.workingDir),无会话可裁、
     //   无人可弹确认卡——直写(schedule 配置即授权,见文件头例外分支注释)。
+    //   脚本通道必须走严格在途查询:callInfo 的宽限窗是卡片供片语义,不能
+    //   充当目录授权——交卷后旧 callId 继续可写就是"记住单号跨调用复用
+    //   workdir 写权"(review M1:懒清扫间隔内窗口实际无上界)。
     let workdirSource: 'session' | 'script';
     let session: FsSessionSnapshot | null = null;
     let workingDir: string;
@@ -499,11 +511,17 @@ export class GhostFsSlot {
         return fail('当前会话没有本地工作目录');
       }
       workingDir = session.workingDir;
-    } else if (info.scriptWorkdir && path.isAbsolute(info.scriptWorkdir)) {
-      workdirSource = 'script';
-      workingDir = info.scriptWorkdir;
     } else {
-      return fail('本次调用无会话上下文,无法定位工作目录');
+      const inFlight = this.deps.inFlightCallInfo(callId);
+      if (!inFlight || inFlight.ghostId !== ghostId) {
+        return fail('调用已交卷或已过期,工作目录写盘授权已失效');
+      }
+      if (inFlight.scriptWorkdir && path.isAbsolute(inFlight.scriptWorkdir)) {
+        workdirSource = 'script';
+        workingDir = inFlight.scriptWorkdir;
+      } else {
+        return fail('脚本通道未配置有效的工作目录,无法定位写入根');
+      }
     }
 
     const reason = validateFsRelPath(req.path);
