@@ -90,6 +90,7 @@ interface CodexPluginOverlayBase {
 interface CodexSkillOverlay extends CodexPluginOverlayBase {
   kind: 'skill';
   skillName: string;
+  prerequisiteSkills: Array<{ id: string; skillFile: string }>;
 }
 
 interface CodexMcpOverlay extends CodexPluginOverlayBase {
@@ -106,7 +107,11 @@ interface ManagedOverlayMarker {
   sourceSnapshot: string;
   /** Digest of routing-critical files in the isolated, derived overlay. */
   overlaySnapshot?: string;
-  skills: Array<{ pluginKey: string; skillName: string }>;
+  skills: Array<{
+    pluginKey: string;
+    skillName: string;
+    prerequisiteSkills?: Array<{ id: string; skillFile: string }>;
+  }>;
   mcpServers?: Array<{
     pluginKey: string;
     sourceServerName: string;
@@ -148,6 +153,9 @@ function codexCapabilityOverlays(
         ...base,
         kind: 'skill',
         skillName: directive.source.artifactId ?? directive.source.id,
+        prerequisiteSkills: (directive.prerequisiteSkills ?? []).map(
+          ({ id, skillFile }) => ({ id, skillFile }),
+        ),
       });
       continue;
     }
@@ -315,7 +323,17 @@ async function readManagedOverlayMarker(
 
 function stableOverlaySkills(overlays: readonly CodexSkillOverlay[]) {
   return overlays
-    .map(({ pluginKey, skillName }) => ({ pluginKey, skillName }))
+    .map(({ pluginKey, skillName, prerequisiteSkills }) => ({
+      pluginKey,
+      skillName,
+      ...(prerequisiteSkills.length > 0 && {
+        prerequisiteSkills: [...prerequisiteSkills].sort((a, b) =>
+          a.id === b.id
+            ? a.skillFile.localeCompare(b.skillFile)
+            : a.id.localeCompare(b.id),
+        ),
+      }),
+    }))
     .sort((a, b) =>
       a.pluginKey === b.pluginKey
         ? a.skillName.localeCompare(b.skillName)
@@ -337,6 +355,36 @@ function stableOverlayMcpServers(overlays: readonly CodexMcpOverlay[]) {
       }
       return a.runtimeServerName.localeCompare(b.runtimeServerName);
     });
+}
+
+async function prerequisiteSkillsSnapshot(
+  overlays: readonly CodexPluginOverlay[],
+): Promise<Array<{ id: string; skillFile: string; sha256: string }>> {
+  const unique = new Map<string, { id: string; skillFile: string }>();
+  for (const overlay of overlays) {
+    if (overlay.kind !== 'skill') continue;
+    for (const prerequisite of overlay.prerequisiteSkills) {
+      unique.set(
+        `${prerequisite.id}\0${prerequisite.skillFile}`,
+        prerequisite,
+      );
+    }
+  }
+  return Promise.all(
+    [...unique.values()]
+      .sort((a, b) =>
+        a.id === b.id
+          ? a.skillFile.localeCompare(b.skillFile)
+          : a.id.localeCompare(b.id),
+      )
+      .map(async ({ id, skillFile }) => ({
+        id,
+        skillFile,
+        sha256: createHash('sha256')
+          .update(await fsp.readFile(skillFile))
+          .digest('hex'),
+      })),
+  );
 }
 
 function sameOverlayConfiguration(
@@ -434,6 +482,14 @@ async function capabilityRoutingPluginSnapshot(
           path.join(skillDir, 'agents', 'openai.yaml'),
         ),
       );
+      if (overlay.prerequisiteSkills.length > 0) {
+        artifacts.push(
+          await routingArtifactDigest(
+            marketplaceDir,
+            path.join(skillDir, 'SKILL.md'),
+          ),
+        );
+      }
     }
     if (hasMcpOverlays) {
       artifacts.push(
@@ -511,8 +567,100 @@ async function applyExplicitOnlySkillPolicy(
       };
       await fsp.mkdir(agentDir, { recursive: true });
       await fsp.writeFile(metadataFile, yaml.dump(metadata), 'utf8');
+      if (overlay.prerequisiteSkills.length > 0) {
+        await applySkillPrerequisiteBlock(
+          path.join(skillDir, 'SKILL.md'),
+          overlay.prerequisiteSkills,
+        );
+      }
     }
   }
+}
+
+const SKILL_PREREQUISITES_START = '<!-- cindy:skill-prerequisites:start -->';
+const SKILL_PREREQUISITES_END = '<!-- cindy:skill-prerequisites:end -->';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function safeInlineCode(value: string): string {
+  return value.replace(/`/g, '\\`').replace(/[\r\n]+/g, ' ');
+}
+
+function insertAfterFrontmatter(content: string, block: string): string {
+  const bom = content.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const body = bom ? content.slice(1) : content;
+  const eol = body.includes('\r\n') ? '\r\n' : '\n';
+  const normalizedBlock = block.replace(/\r?\n/g, eol);
+  const frontmatter = body.match(
+    /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,
+  )?.[0];
+  if (!frontmatter) {
+    return `${bom}${normalizedBlock}${eol}${eol}${body.replace(/^(?:\r?\n)+/, '')}`;
+  }
+  const separator = frontmatter.endsWith('\n') ? eol : `${eol}${eol}`;
+  return `${bom}${frontmatter}${separator}${normalizedBlock}${eol}${eol}${body
+    .slice(frontmatter.length)
+    .replace(/^(?:\r?\n)+/, '')}`;
+}
+
+function skillBody(content: string): string {
+  const body = content.startsWith('\uFEFF') ? content.slice(1) : content;
+  const frontmatter = body.match(
+    /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,
+  )?.[0];
+  return (frontmatter ? body.slice(frontmatter.length) : body)
+    .replace(/^(?:\r?\n)+/, '')
+    .trimEnd();
+}
+
+async function applySkillPrerequisiteBlock(
+  skillFile: string,
+  prerequisites: readonly { id: string; skillFile: string }[],
+): Promise<void> {
+  const original = await fsp.readFile(skillFile, 'utf8');
+  const withoutManagedBlock = original.replace(
+    new RegExp(
+      `${escapeRegExp(SKILL_PREREQUISITES_START)}[\\s\\S]*?${escapeRegExp(SKILL_PREREQUISITES_END)}[\\r\\n]*`,
+      'g',
+    ),
+    '',
+  );
+  const sections = await Promise.all(
+    prerequisites.map(async ({ id, skillFile: prerequisiteFile }) => {
+      const body = skillBody(await fsp.readFile(prerequisiteFile, 'utf8'));
+      if (!body) {
+        throw new Error(`Cindy prerequisite Skill ${id} is empty: ${prerequisiteFile}`);
+      }
+      return [
+        `### Cindy prerequisite: \`${safeInlineCode(id)}\``,
+        '',
+        `Canonical source: \`${safeInlineCode(prerequisiteFile)}\``,
+        '',
+        body,
+      ].join('\n');
+    }),
+  );
+  const block = [
+    SKILL_PREREQUISITES_START,
+    '## Cindy workflow prerequisites',
+    '',
+    'Cindy has bound the complete prerequisite Skill content below before this downstream Skill.',
+    'The prerequisite content is authoritative; downstream instructions may only supplement it and must not replace, weaken, or bypass it.',
+    '',
+    ...sections.flatMap((section, index) => index === 0 ? [section] : ['', section]),
+    '',
+    '## Downstream Skill',
+    '',
+    'The original downstream Skill continues below and remains subject to every prerequisite above.',
+    SKILL_PREREQUISITES_END,
+  ].join('\n');
+  await fsp.writeFile(
+    skillFile,
+    insertAfterFrontmatter(withoutManagedBlock, block),
+    'utf8',
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -706,7 +854,10 @@ async function ensureOverlayMarketplace(
     desiredMarker = {
       schemaVersion: 1,
       source: sourceReal,
-      sourceSnapshot: await sourceMarketplaceSnapshot(source, overlays),
+      sourceSnapshot: JSON.stringify({
+        marketplace: await sourceMarketplaceSnapshot(source, overlays),
+        prerequisites: await prerequisiteSkillsSnapshot(overlays),
+      }),
       skills: stableOverlaySkills(
         overlays.filter((overlay): overlay is CodexSkillOverlay => overlay.kind === 'skill'),
       ),
