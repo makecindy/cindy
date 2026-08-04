@@ -143,11 +143,9 @@ export function MessageActionBar({
   // ring behind. Track the latest menu interaction modality so pointer flows
   // can skip restoration while keyboard flows keep their focus indicator.
   const menuInteractionFromPointerRef = useRef(false);
-  // Unified in-flight: fork (internal) OR rewind (external) — bar dims & blocks
-  // pointer events for either. Same visual treatment for consistency.
+  // Fork has its own visible button. Menu-owned actions still dim and block
+  // the whole bar; Fork keeps the More trigger available while it runs.
   const inFlight = forking || deleting || rewindInFlight;
-  // Fork has its own visible button. Keep the More trigger's spinner scoped to
-  // actions that still live inside that menu.
   const moreInFlight = deleting || rewindInFlight;
   // `visible` is the actual opacity driver. It tracks `hovered` with a
   // trailing debounce so the bar fades out smoothly (CSS handles the
@@ -290,7 +288,7 @@ export function MessageActionBar({
           disabled={inFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
+            'rounded-lg border-none bg-transparent outline-none cursor-pointer',
             'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
             'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default',
           )}
@@ -486,7 +484,7 @@ export function MessageActionBar({
           onKeyDown={() => {
             menuInteractionFromPointerRef.current = false;
           }}
-          disabled={inFlight}
+          disabled={moreInFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
             'rounded-full border-none bg-transparent outline-none cursor-pointer',
@@ -610,8 +608,9 @@ export function MessageActionBar({
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[250ms] ease-out',
         visible || menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
-        // Fork / delete / rewind in-flight: dim the entire bar and block clicks.
-        inFlight && 'opacity-60 pointer-events-none',
+        // Menu-owned actions dim the entire bar and block clicks. Fork only
+        // disables its own button so More remains available.
+        moreInFlight && 'opacity-60 pointer-events-none',
       )}
     >
       {items}

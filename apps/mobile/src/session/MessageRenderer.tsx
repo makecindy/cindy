@@ -430,6 +430,8 @@ export interface MobileMessageDraft {
   orderedBody?: string;
 }
 
+export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
+
 interface MessageActions {
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
   onCopyMessageLink?: (clientId: string) => void;
@@ -455,6 +457,7 @@ interface MessageActions {
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   busyClientId?: string | null;
+  busyAction?: MobileMessageActionBusyKind | null;
   canLoadEarlier?: boolean;
   loadingEarlier?: boolean;
   screenWidth?: number;
@@ -483,6 +486,7 @@ export function MessageRenderer({
   onShareImage,
   imageAnnotation,
   busyClientId,
+  busyAction,
   canLoadEarlier,
   emptyTestID,
   bottomOverlayHeight,
@@ -780,11 +784,13 @@ export function MessageRenderer({
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
     busyClientId,
+    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
     busyClientId,
+    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     onCopyMessageLink,
@@ -1783,6 +1789,7 @@ function MessageBubble({
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
+  const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
 
   useEffect(() => {
@@ -2084,7 +2091,7 @@ function MessageBubble({
               return (
                 <MessageControlButton
                   buttonSize={actionBar.buttonSize}
-                  busy={id === 'fork' && actionBusy}
+                  busy={id === 'fork' && forkBusy}
                   copyState={copyState}
                   disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
                   id={id}
@@ -2099,6 +2106,7 @@ function MessageBubble({
         </View>
       ) : null}
       <MessageActionSheet
+        disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
         items={messageMenu}
         onAction={selectMenuAction}
         onClose={() => setActionSheetOpen(false)}

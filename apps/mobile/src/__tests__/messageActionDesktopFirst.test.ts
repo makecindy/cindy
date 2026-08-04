@@ -23,8 +23,9 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('iconSize={actionBar.iconSize}');
     expect(source).toContain("return id === 'copy' || id === 'fork';");
     expect(source).toContain('disabled={disabled && !actionBusy}');
-    expect(source).toContain("busy={id === 'fork' && actionBusy}");
+    expect(source).toContain("busy={id === 'fork' && forkBusy}");
     expect(source).toContain("if (id === 'fork' && busy)");
+    expect(source).toContain("disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}");
     expect(source).toContain('testID="message.moreButton"');
     expect(source).toContain('{ height: buttonSize, width: buttonSize }');
     expect(source).toContain('height: 24');

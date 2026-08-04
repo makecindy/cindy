@@ -177,6 +177,7 @@ describe('MessageActionBar', () => {
     await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeTruthy());
     expect(moreButton.querySelector('.lucide-ellipsis')).toBeTruthy();
     expect(moreButton.querySelector('.lucide-loader-circle')).toBeNull();
+    expect((moreButton as HTMLButtonElement).disabled).toBe(false);
 
     resolveFork();
     await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeNull());
