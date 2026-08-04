@@ -163,7 +163,16 @@ async function setup(overrides: {
 
   await fs.symlink(pluginRoot, path.join(path.dirname(pluginRoot), 'latest'), 'dir');
 
-  return { appBundle, browserClient, codexHome, homeDir, nodeRepl, pluginRoot, sourceConfig };
+  return {
+    appBundle,
+    browserClient,
+    codexHome,
+    homeDir,
+    nodeRepl,
+    pluginRoot,
+    signedPluginRoot,
+    sourceConfig,
+  };
 }
 
 afterEach(async () => {
@@ -205,7 +214,7 @@ describe('prepareCodexBrowserCompanion', () => {
   });
 
   it('injects an allowlisted Chrome-only companion config for the isolated Codex home', async () => {
-    const { appBundle, codexHome, homeDir, nodeRepl } = await setup({
+    const { appBundle, codexHome, homeDir, nodeRepl, signedPluginRoot } = await setup({
       extraEnv: 'MALICIOUS_SECRET = "must-not-cross"',
     });
 
@@ -237,6 +246,9 @@ describe('prepareCodexBrowserCompanion', () => {
     expect(cleanArgs.some((arg) => arg.startsWith('NODE_OPTIONS='))).toBe(false);
     expect(cleanArgs.some((arg) => arg.startsWith('MALICIOUS_SECRET='))).toBe(false);
     expect(result.startupTimeoutMs).toBe(120_000);
+    expect(result.browserClientPath).toBe(
+      path.join(signedPluginRoot, 'scripts', 'browser-client.mjs'),
+    );
     expect(resolveCodexBrowserCompanionSpawnConfig(result)).toEqual({
       codexBrowserUseAvailable: true,
       extraArgs: result.extraArgs,
@@ -424,7 +436,18 @@ describe('prepareCodexBrowserCompanion', () => {
       "});",
       '',
     ].join('\n');
-    const { codexHome, homeDir } = await setup({ nodeReplContent: fakeNodeRepl });
+    const { codexHome, homeDir, nodeRepl, signedPluginRoot } = await setup({
+      nodeReplContent: fakeNodeRepl,
+    });
+    const signedBrowserClient = path.join(signedPluginRoot, 'scripts', 'browser-client.mjs');
+    await fs.writeFile(
+      nodeRepl,
+      fakeNodeRepl.replace(
+        "      && code.includes('agent.browsers.list()')",
+        `      && code.includes(${JSON.stringify(signedBrowserClient)})\n      && code.includes('agent.browsers.list()')`,
+      ),
+      'utf8',
+    );
 
     const result = await checkCodexBrowserCompanionConnection({
       codexHome,

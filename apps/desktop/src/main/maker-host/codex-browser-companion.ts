@@ -24,7 +24,13 @@ export type CodexBrowserCompanionUnavailableReason =
   | 'browser_unavailable';
 
 export type CodexBrowserCompanionResult =
-  | { status: 'ready'; extraArgs: string[]; version: string; startupTimeoutMs: number }
+  | {
+      status: 'ready';
+      extraArgs: string[];
+      version: string;
+      startupTimeoutMs: number;
+      browserClientPath: string;
+    }
   | {
       status: 'unavailable';
       extraArgs: [];
@@ -232,16 +238,7 @@ async function probeCodexChrome(
       // the clean child environment instead of relying on process.env.
       const codexHomeArg = args.find((arg) => arg.startsWith('CODEX_HOME='));
       if (!codexHomeArg) return false;
-      const verifiedBrowserClient = path.join(
-        codexHomeArg.slice('CODEX_HOME='.length),
-        'plugins',
-        'cache',
-        'openai-bundled',
-        'chrome',
-        companion.version,
-        'scripts',
-        'browser-client.mjs',
-      );
+      const verifiedBrowserClient = companion.browserClientPath;
       const turnMetadata = {
         'x-codex-turn-metadata': {
           session_id: `cindy-browser-preflight-${randomUUID()}`,
@@ -559,6 +556,7 @@ async function inspectCodexBrowserCompanion(
     extraArgs,
     version,
     startupTimeoutMs: startupTimeout * 1_000,
+    browserClientPath: signedBrowserClient,
   };
 }
 
