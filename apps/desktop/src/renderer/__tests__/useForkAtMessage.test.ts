@@ -7,6 +7,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 const navigate = vi.hoisted(() => vi.fn());
 const forkAtMessage = vi.hoisted(() => vi.fn());
@@ -248,6 +249,28 @@ describe('useForkAtMessage', () => {
     });
 
     expect(toastError).toHaveBeenCalledWith('chat.userMessage.forkErrors.codexStateUnavailable');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('shows the localized retry message when safe fork preparation is blocked', async () => {
+    forkAtMessage.mockRejectedValueOnce(
+      new ApiError('CODEX_FORK_STATE_UNAVAILABLE', 0, CODEX_RESUME_NOT_READY_WIRE_MESSAGE),
+    );
+    const { result } = renderHook(() =>
+      useForkAtMessage({
+        sessionId: 'source-session',
+        messageClientId: 'message-1',
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current()).rejects.toThrow(CODEX_RESUME_NOT_READY_WIRE_MESSAGE);
+    });
+
+    expect(toastError).toHaveBeenCalledWith('chat.errorBanner.codexResumeNotReady');
+    expect(toastError).not.toHaveBeenCalledWith(
+      'chat.userMessage.forkErrors.codexStateUnavailable',
+    );
     expect(navigate).not.toHaveBeenCalled();
   });
 });

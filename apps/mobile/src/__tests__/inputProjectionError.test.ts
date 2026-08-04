@@ -23,6 +23,11 @@ describe('isPiImageInputUnsupportedProjectionError', () => {
         `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`,
       ),
     ).toBe('message.queue.codexResumeNotReady');
+    expect(
+      inputProjectionErrorI18nKey(
+        `[CODEX_FORK_STATE_UNAVAILABLE] ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`,
+      ),
+    ).toBe('message.queue.codexResumeNotReady');
     expect(inputProjectionErrorI18nKey('provider unavailable')).toBeNull();
   });
 });
