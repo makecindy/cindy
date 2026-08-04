@@ -325,7 +325,7 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
         parts.push(part.text);
         continue;
       }
-      throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
+      throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
     }
     body = parts.join('\n');
   } else {

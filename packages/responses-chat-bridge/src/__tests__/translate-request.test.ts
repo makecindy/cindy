@@ -398,6 +398,12 @@ describe('translateResponsesRequest', () => {
     },
   );
 
+  it('reports an unknown agent message part by path', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
+    }))).toThrow('input[0].content.image_url');
+  });
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [
