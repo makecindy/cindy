@@ -345,7 +345,9 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     // 这个 channel 在 device-link allowlist 里开放,sendOpts 是调用方可控输入 ——
     // 不剥的话传 `{ fromMobileClient: true }` 就能让非手机轮次收到伪造的手机说明
     // (review P1/P2 各报一次)。契约与 maker:send 一致:该字段只由 main 盖章。
-    expect(register).toContain('attachMainOwnedInputBoundary(sendOpts, boundaryStamp)');
+    expect(register).toContain(
+      'attachMainOwnedInputBoundary(stripMainOnlySendOpts(sendOpts), boundaryStamp)',
+    );
     // coordinator 的内部调用**不得**被消毒 —— 那条路的 sendOpts 是 main 构造的透传值。
     expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) =>');
     expect(register).toMatch(

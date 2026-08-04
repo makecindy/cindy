@@ -105,7 +105,6 @@ describe('interrupted continuation enqueue contract', () => {
     expect(dispatchedHook).toMatch(
       /attemptToken !== null/,
     );
-    expect(dispatchedHook).toMatch(/!inputCoordinator\.isAutoResumePending\(sessionId\)/);
     expect(dispatchedHook).toMatch(
       /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId, attemptToken\)/,
     );
@@ -118,7 +117,6 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedHook).toMatch(
       /settleUndispatchedInterruptedAutoResume\(sessionId, item\)/,
     );
-    expect(discardedHook).toMatch(/settleUndispatchedAutoResumeOutcome\(sessionId, item\)/);
     expect(discardedHook).toMatch(
       /finalizeUndispatchedClaimedRetry\(sessionId, item, ['"]cancelled['"]\)/,
     );

@@ -477,6 +477,7 @@ describe('maker SEND transaction', () => {
 
   it('rewinds a persisted user row when clear wins during onPersisted before dispatch', async () => {
     let clearBoundaryCurrent = true;
+    let observedGeneration: number | undefined;
     const rewindPersistedUserMessageAfterClear = vi.fn(async () => {});
     const onPersisted = vi.fn(async () => {
       clearBoundaryCurrent = false;
@@ -490,7 +491,10 @@ describe('maker SEND transaction', () => {
     });
     const { deps } = createDeps({
       getSession: vi.fn(() => session),
-      isClearBoundaryCurrent: vi.fn(() => clearBoundaryCurrent),
+      isClearBoundaryCurrent: vi.fn((_sessionId, _expectedBoundary, expectedGeneration) => {
+        observedGeneration = expectedGeneration;
+        return clearBoundaryCurrent;
+      }),
       rewindPersistedUserMessageAfterClear,
     });
     const transaction = createMakerSendTransaction(deps);
@@ -501,6 +505,7 @@ describe('maker SEND transaction', () => {
           clientId: 'client-clear-race',
           content: 'hello',
           expectedClearBoundaryMs: null,
+          expectedInputGeneration: 7,
           onPersisted,
         },
       }),
@@ -508,6 +513,7 @@ describe('maker SEND transaction', () => {
 
     expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
     expect(onPersisted).toHaveBeenCalledTimes(1);
+    expect(observedGeneration).toBe(7);
     expect(rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
       'session-1',
       'client-clear-race',

@@ -768,7 +768,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           staleUserMessageRewound ||
           expectedClearBoundaryMs === undefined ||
           !deps.isClearBoundaryCurrent ||
-          deps.isClearBoundaryCurrent(sessionId, expectedClearBoundaryMs)
+          deps.isClearBoundaryCurrent(
+            sessionId,
+            expectedClearBoundaryMs,
+            persistedUserMessage.expectedInputGeneration,
+          )
         ) {
           return;
         }
