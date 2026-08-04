@@ -189,11 +189,14 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('fires git snapshots only from post-broadcast done events', () => {
+  it('fires git snapshots only from post-broadcast product-terminal done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
     const snapshotIndex = wireSessionSource.indexOf('void gitSnapshotCoordinator?.onTurnEnd(session.id);');
-    const doneBlockIndex = wireSessionSource.indexOf("if (event.type === 'done') {", broadcastIndex);
+    const doneBlockIndex = wireSessionSource.indexOf(
+      "if (event.type === 'done' && !isContinuationBoundary) {",
+      broadcastIndex,
+    );
     const beforeBroadcast = wireSessionSource.slice(0, broadcastIndex);
 
     expect(snapshotIndex).toBeGreaterThan(broadcastIndex);

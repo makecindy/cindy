@@ -156,12 +156,14 @@ function emitDone(
   plan?: Array<{ step: string; status: string }>,
   turnId = 'turn-1',
   turnStatus?: string,
+  turnContinuationId?: number,
 ): void {
   onEvent?.({
     sessionId: SESSION_ID,
     event: {
       type: 'done',
       source,
+      ...(turnContinuationId !== undefined ? { turnContinuationId } : {}),
       data: {
         type: 'task_complete',
         raw: { id: turnId, ...(turnStatus ? { status: turnStatus } : {}) },
@@ -311,6 +313,38 @@ describe('plan_review 与 done 的时序', () => {
     const snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingPlanReview?.requestId).toBe('pr-1');
     expect(pendingBubbleStatuses()).toEqual(['pending']);
+  });
+
+  it('codex:claimed done 不触发产品终态对账，后续无 claim done 才重建计划审阅', async () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    emitPlanReviewRequest('pr-continuation');
+    getPendingInteractions.mockResolvedValueOnce([
+      {
+        request: {
+          kind: 'plan_review',
+          requestId: 'pr-continuation',
+          plan: '# 续跑后的计划\n1. do Y',
+        },
+        persistId: 'persist-pr-continuation',
+      },
+    ]);
+
+    emitDone('codex', undefined, 'turn-1', undefined, 7);
+    await Promise.resolve();
+
+    expect(getPendingInteractions).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe(
+      'pr-continuation',
+    );
+
+    emitDone('codex');
+
+    await vi.waitFor(() => {
+      expect(getPendingInteractions).toHaveBeenCalledTimes(1);
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe(
+        'pr-continuation',
+      );
+    });
   });
 
   it('codex:done 作废在途旧快照后主动拉新快照重建计划审阅', async () => {
