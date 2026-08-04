@@ -244,6 +244,7 @@ const DEFAULTS = {
   codexProviderId: null,
   codexEffort: null,
   codexSubagentsEnabled: true,
+  codexUseCindySubagentPolicy: true,
   codexMaxConcurrentSubagents: null,
   codexAllowNestedSubagents: false,
 } as const;
@@ -637,6 +638,16 @@ describe('SubagentModelSection guardrails card', () => {
     expect(settingsSet).toHaveBeenCalledWith({ codexSubagentsEnabled: false });
   });
 
+  it('toggles the Cindy custom policy with a single-key patch', async () => {
+    render(<SubagentModelSection />);
+    const policy = await screen.findByRole('switch', {
+      name: 'settings.subagentModels.guardrails.cindyPolicyAria',
+    });
+    fireEvent.click(policy);
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ codexUseCindySubagentPolicy: false });
+  });
+
   it('toggles nested subagents with a single-key patch', async () => {
     render(<SubagentModelSection />);
     const nested = await screen.findByRole('switch', {
@@ -740,6 +751,7 @@ describe('SubagentModelSection guardrails card', () => {
     settingsGet.mockResolvedValue(
       makeState({
         codexSubagentsEnabled: false,
+        codexUseCindySubagentPolicy: true,
         codexMaxConcurrentSubagents: 4,
         codexAllowNestedSubagents: true,
       }),
@@ -751,9 +763,14 @@ describe('SubagentModelSection guardrails card', () => {
     const custom = (await screen.findByRole('switch', {
       name: 'settings.subagentModels.guardrails.concurrencyCustomAria',
     })) as HTMLButtonElement;
+    const policy = (await screen.findByRole('switch', {
+      name: 'settings.subagentModels.guardrails.cindyPolicyAria',
+    })) as HTMLButtonElement;
     expect(nested.disabled).toBe(true);
     expect(custom.disabled).toBe(true);
-    // 值保留:嵌套开关仍显示 on(重开总开关即恢复,不清值)。
+    expect(policy.disabled).toBe(true);
+    // 值保留:Cindy 策略与嵌套开关仍显示 on(重开总开关即恢复,不清值)。
+    expect(policy.getAttribute('aria-checked')).toBe('true');
     expect(nested.getAttribute('aria-checked')).toBe('true');
   });
 
@@ -818,8 +835,13 @@ describe('SubagentModelSection per-card override controls', () => {
     settingsGet.mockResolvedValue(
       makeState({
         codexSubagentsEnabled: false,
+        codexUseCindySubagentPolicy: false,
         codexMaxConcurrentSubagents: 4,
-        customizedKeys: ['codexSubagentsEnabled', 'codexMaxConcurrentSubagents'],
+        customizedKeys: [
+          'codexSubagentsEnabled',
+          'codexUseCindySubagentPolicy',
+          'codexMaxConcurrentSubagents',
+        ],
         isCustomized: true,
       }),
     );
@@ -829,6 +851,7 @@ describe('SubagentModelSection per-card override controls', () => {
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
     expect(settingsSet).toHaveBeenCalledWith({
       codexSubagentsEnabled: true,
+      codexUseCindySubagentPolicy: true,
       codexMaxConcurrentSubagents: null,
       codexAllowNestedSubagents: false,
     });
