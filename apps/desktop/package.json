@@ -122,6 +122,7 @@
     "better-sqlite3": "^12.9.0",
     "cindy-tools": "workspace:*",
     "clsx": "^2.1.1",
+    "decode-named-character-reference": "1.3.0",
     "diff": "^8.0.4",
     "drizzle-orm": "^0.45.2",
     "electron-squirrel-startup": "^1.0.1",
