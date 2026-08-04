@@ -1894,11 +1894,10 @@ export function diffGhostPermissionItems(
 }
 
 /**
- * Returns package permissions not covered by the reviewed release manifest or
- * by permissions already approved on the installed version.
+ * 返回未被发布清单或已批准旧版本覆盖的包权限。
  *
- * The second source is important for updates from older marketplace metadata
- * that omitted permissions which were already present in the installed pack.
+ * 第二个来源用于兼容旧市场元数据：旧详情投影可能漏掉已存在的权限，
+ * 但这些权限此前已经被用户批准，更新时应继续保留。
  */
 export function unreviewedGhostPermissionItems(
   reviewed: GhostManifest,

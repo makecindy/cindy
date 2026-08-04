@@ -123,7 +123,7 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
-  it('updates preserve permissions already approved by the installed manifest when release metadata omits them', () => {
+  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
     const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
       const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
       delete raw.panel;

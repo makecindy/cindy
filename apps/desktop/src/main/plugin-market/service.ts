@@ -158,9 +158,9 @@ function defaultInstallSubject(owner: ActiveAppSession): string {
 function recordFrom(
   plugin: VisiblePluginSummary | VisiblePluginDetail,
   source: PluginMarketInstallationRecord['source'],
-  installed?: InstalledGhost,
+  installed: InstalledGhost,
 ): PluginMarketInstallationRecord {
-  const rawManifest = installed ? installedGhostRawManifest(installed.dir) : null;
+  const rawManifest = installedGhostRawManifest(installed.dir);
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -1177,7 +1177,7 @@ export class PluginMarketService {
       //   互斥。少了它,本地装入能在包检查窗口里落入同 id 的包,随后被本次安装当作
       //   更新目标覆盖,而权限差异确认因审阅时目标不存在而没跑过。账本写入也必须在
       //   锁内:否则本地装入可以插在"落位"与"写溯源"之间,让账本认领一个其实已被
-      //   替换掉的包(服务端记录不带 manifestDigest,投影时判不出来)。
+      //   替换掉的包(账本摘要若未对上当前安装内容,投影时不会认领)。
       // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation,不可反向。
       const ghost = await this.withMutation(SOURCE_MUTATION_KEY, () =>
         withGhostInstallLock(plugin.ghostId, async () => {
