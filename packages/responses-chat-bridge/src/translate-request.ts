@@ -591,7 +591,8 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (item.type === 'agent_message') {
       if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
       assistant ??= { role: 'assistant', content: null };
-      assistant.content = `${assistant.content ?? ''}${agentMessageText(record, index)}`;
+      const content = agentMessageText(record, index);
+      assistant.content = assistant.content ? `${assistant.content}\n${content}` : content;
       continue;
     }
 

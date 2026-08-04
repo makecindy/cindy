@@ -361,7 +361,6 @@ describe('translateResponsesRequest', () => {
             { type: 'encrypted_content', encrypted_content: 'opaque' },
           ],
         },
-        { type: 'message', role: 'user', content: 'continue' },
         {
           type: 'agent_message',
           author: 'reviewer',
@@ -373,9 +372,10 @@ describe('translateResponsesRequest', () => {
 
     expect(out.messages).toEqual([
       { role: 'user', content: 'start' },
-      { role: 'assistant', content: '[collab researcher]\nFindings' },
-      { role: 'user', content: 'continue' },
-      { role: 'assistant', content: '[collab message from reviewer; encrypted payload omitted]' },
+      {
+        role: 'assistant',
+        content: '[collab researcher]\nFindings\n[collab message from reviewer; encrypted payload omitted]',
+      },
       { role: 'user', content: 'finish' },
     ]);
   });
