@@ -258,6 +258,39 @@ describe('plan_review IM 卡片决策', () => {
     );
   });
 
+  it('已消费 interaction 但 resolved 卡收口失败时返回可重试结果', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    (resolvePending as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    attach(im)();
+
+    const result = await registeredHandler(handler)({
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'permission:allow:once',
+      payload: { requestId: 'resolved-card-retry' },
+    });
+
+    expect(resolvePending).toHaveBeenCalledWith('resolved-card-retry', {
+      kind: 'permission',
+      behavior: 'allow',
+    });
+    expect(result).toBe(false);
+  });
+
   it('keeps the complete async card callback inside the closing account scope', async () => {
     const updateGate = deferred();
     const im = makeIm();

@@ -1402,6 +1402,11 @@ export function createCardActionHandler(
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+            // The pending decision has already been consumed, but the rendered card
+            // still exposes its callback. Let Telegram release its dedup key so a
+            // retry can at least run the stale-card cleanup instead of being ACKed
+            // and silently discarded for five minutes.
+            return false;
           }
         });
       } catch (err) {
