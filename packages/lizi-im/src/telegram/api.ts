@@ -112,6 +112,10 @@ export interface TgMessageEntity {
   length: number;
 }
 
+export interface TgInlineKeyboardMarkup {
+  inline_keyboard: Array<Array<Record<string, unknown>>>;
+}
+
 export interface TgMessage {
   message_id: number;
   from?: TgUser;
@@ -137,6 +141,8 @@ export interface TgMessage {
   video_note?: { duration?: number };
   new_chat_members?: TgUser[];
   left_chat_member?: TgUser;
+  /** Inline keyboard attached to the message that produced a callback query. */
+  reply_markup?: TgInlineKeyboardMarkup;
 }
 
 export interface TgCallbackQuery {

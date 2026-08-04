@@ -306,6 +306,47 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(1);
   });
 
+  it('卡片动作收口失败时恢复 callback 原键盘供重试', async () => {
+    await connect();
+    api.calls.length = 0;
+    const handler = vi.fn(async () => false);
+    im.onCardAction(handler);
+    const callbackData = encodeCallbackData('control:session-pick', {
+      requestId: 'retryable-card-action',
+    });
+    const replyMarkup = {
+      inline_keyboard: [[{ text: '接管', callback_data: callbackData }]],
+    };
+    api.pushUpdates([
+      {
+        update_id: 904,
+        callback_query: {
+          id: 'retryable-card-action-callback',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callbackData,
+          message: {
+            message_id: 904,
+            chat: { id: Number(OWNER_ID), type: 'private' },
+            date: 1,
+            reply_markup: replyMarkup,
+          },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(api.calls).toContainEqual({
+        method: 'editMessageReplyMarkup',
+        params: {
+          chat_id: Number(OWNER_ID),
+          message_id: 904,
+          reply_markup: replyMarkup,
+        },
+      });
+    });
+  });
+
   it('失效收口通过 editMessageText 显式发送空 reply_markup', async () => {
     await connect();
     const sent = await im.sendInteractiveCard(OWNER_ID, {

@@ -1436,6 +1436,23 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           if (this.inFlightInteractionCallbacks.get(callbackKey)?.epoch === dedupEpoch) {
             this.inFlightInteractionCallbacks.delete(callbackKey);
           }
+          // The card handler may have ACKed the callback and then failed while
+          // editing the card. Telegram will not replay an already-answered
+          // callback on its own, so restore the keyboard captured on the
+          // callback query as the retry entry. The loading edit is allowed to
+          // clear it; this puts the original controls back only on a genuine
+          // retryable failure.
+          const message = q.message;
+          const replyMarkup = message?.reply_markup;
+          if (message && replyMarkup !== undefined) {
+            void api
+              .call('editMessageReplyMarkup', {
+                chat_id: message.chat.id,
+                message_id: message.message_id,
+                reply_markup: replyMarkup,
+              })
+              .catch(() => undefined);
+          }
         }
       };
       void dispatch();
