@@ -76,6 +76,7 @@ import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../typ
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import {
@@ -896,6 +897,7 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    const registeredMcpServerNames = new Set<string>();
     if (this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
@@ -907,6 +909,13 @@ export class PiAgent extends BaseAgent {
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
+        // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
+        for (const server of mcpBridge?.servers ?? []) {
+          if (typeof server.name === 'string' && server.name.length > 0) {
+            registeredMcpServerNames.add(server.name);
+          }
+        }
       } catch (err) {
         this.deps.logger.error('pi MCP bridge prep failed, continuing without cindy tools', {
           message: err instanceof Error ? err.message : String(err),
@@ -1127,6 +1136,7 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              registeredMcpServerNames,
             }));
             return;
           }
@@ -2111,6 +2121,8 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
+      registeredMcpServerNames: ReadonlySet<string>;
     },
   ): void {
     const method = typeof event.method === 'string' ? event.method : '';
@@ -2137,6 +2149,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        registeredMcpServerNames,
       } = getPermissionCtx();
       const requestUserConfirmation = async (): Promise<boolean> => {
         if (!resolver) {
@@ -2160,6 +2173,56 @@ export class PiAgent extends BaseAgent {
         }
       };
       void (async () => {
+        // 桥接 MCP 工具走 host 审批策略,**不进 Auto-review 灰区** —— 与 Claude Code /
+        // Codex 同一份真源(`getDesktopMcpToolApprovalPolicy`)。
+        //
+        // 为什么不能交模型判:auto-review 是安全分类器,而"要不要开协同团队 / 该不该用
+        // 某个 MCP 工具"是做法选择,不是安全判断。实测把 `mcp__cindy_orca__start_team`
+        // 送去审阅时,模型会按 prompt 里"有更安全替代方案就 block"的字面判成"这点小事
+        // 不必开团队"→ block 对用户静默 → 冒泡回 bridge 就是
+        // "User denied this tool call via Cindy",团队永远建不起来且没有任何弹窗。
+        // 同一个第一方 MCP 在三个 harness 下必须给出同一个答案(base-agent.ts
+        // getMcpToolApprovalPolicy 注释),此前 Pi 是唯一没接这条的。
+        //
+        // 位置与 CC 一致:策略判定在档位分支**之前** —— auto-approve 的第一方 server 在
+        // ask 档也不弹窗(CC claude-code/index.ts 的 mcpApprovalPolicy 分支同义)。
+        // 认不出归属(server 未注册)或 host 没提供策略时不放行,继续走用户确认。
+        const mcpPolicy = ((): 'auto-approve' | 'prompt' | 'prompt-each-time' | null => {
+          const classifier = this.deps.getMcpToolApprovalPolicy;
+          if (!classifier) return null;
+          const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+          if (!target) return null;
+          try {
+            const policy = classifier({
+              serverName: target.serverName,
+              toolName: target.toolName,
+              toolParams: input,
+            });
+            if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+              return policy;
+            }
+            this.deps.logger.error('invalid MCP approval policy -> user confirmation', {
+              serverName: target.serverName,
+              policy,
+            });
+          } catch (err) {
+            this.deps.logger.error('MCP approval policy threw -> user confirmation', {
+              serverName: target.serverName,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return 'prompt-each-time';
+        })();
+        if (mcpPolicy !== null) {
+          // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
+          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            confirmed: mcpPolicy === 'auto-approve' ? true : await requestUserConfirmation(),
+          });
+          return;
+        }
         if (permissionMode !== 'auto') {
           proc.send({
             type: 'extension_ui_response',

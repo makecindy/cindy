@@ -114,11 +114,33 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     if (savedNoProxyLower === undefined) delete process.env.no_proxy; else process.env.no_proxy = savedNoProxyLower;
   });
 
+  interface McpSetup {
+    /** 本会话「已注册」的桥接 MCP server 名(经 preparePiExtraSpawnConfig 下发)。 */
+    serverNames?: string[];
+    policy?: AgentDeps['getMcpToolApprovalPolicy'];
+  }
+
   function buildDeps(
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
+    mcp?: McpSetup,
   ): AgentDeps {
     return {
+      ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
+      ...(mcp?.serverNames
+        ? {
+          preparePiExtraSpawnConfig: async () => ({
+            mcpBridge: {
+              token: 'bridge-token',
+              servers: mcp.serverNames!.map((name) => ({
+                name,
+                url: `http://127.0.0.1:1/${name}`,
+              })),
+            },
+            mcpEnv: {},
+          }),
+        }
+        : {}),
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
         triggerLogin: async () => ({ authenticated: true }),
@@ -162,8 +184,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     permissionMode?: string,
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
+    mcp?: McpSetup,
   ): Promise<AgentSessionHandle> {
-    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel));
+    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
@@ -571,6 +594,75 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r2', confirmed: true });
   });
 
+  /**
+   * 桥接 MCP 工具走 host 审批策略,不进 Auto-review 灰区(与 Claude Code / Codex 同一份
+   * 真源)。回归的真实缺陷:Pi 没接这条策略时,`start_team` 落进灰区交模型判,模型按
+   * 「有更安全替代方案就 block」判成"这点小事不必开团队"→ block 对用户静默 → bridge
+   * 报 "User denied this tool call via Cindy",协同团队永远建不起来且没有任何弹窗。
+   */
+  it('auto-approves trusted first-party MCP tools via host policy without consulting the reviewer', async () => {
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'should never be asked' }));
+    const handle = await start('auto', review, false, {
+      serverNames: ['cindy_orca'],
+      policy: ({ serverName }) => (serverName === 'cindy_orca' ? 'auto-approve' : 'prompt'),
+    });
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    await handle.send({ type: 'user', content: '修一下登录页的样式错位' });
+    firePermissionRequest('r20', 'mcp__cindy_orca__start_team', {});
+    await flush();
+    // 关键三点:不问模型、不弹卡、直接放行。userIntent 与协同无关也不影响(正是原缺陷的触发条件)。
+    expect(review).not.toHaveBeenCalled();
+    expect(resolverCalls).toBe(0);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r20', confirmed: true });
+  });
+
+  it('still asks the user for MCP servers the host policy does not trust', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review, false, {
+      serverNames: ['cindy_ssh'],
+      policy: ({ serverName }) => (serverName === 'cindy_orca' ? 'auto-approve' : 'prompt-each-time'),
+    });
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    await handle.send({ type: 'user', content: 'check the remote host' });
+    firePermissionRequest('r21', 'mcp__cindy_ssh__ssh_exec', { command: 'uptime' });
+    await flush();
+    // 不可信 server 仍逐次确认,且同样不该消耗模型审阅(它不是安全分类器该管的事)。
+    expect(review).not.toHaveBeenCalled();
+    expect(resolverCalls).toBe(1);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r21', confirmed: true });
+  });
+
+  /**
+   * server 名可以含 `__`,盲切 `mcp__` 后首段会把第三方 `cindy_orca__evil` 认成第一方
+   * `cindy_orca` 并继承静默放行 —— 一条实打实的提权路径。归属判定取最长匹配。
+   */
+  it('does not let a look-alike server name inherit first-party trust', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'allow' as const }), false, {
+      serverNames: ['cindy_orca', 'cindy_orca__evil'],
+      policy: ({ serverName }) => (serverName === 'cindy_orca' ? 'auto-approve' : 'prompt-each-time'),
+    });
+    const seen: string[] = [];
+    handle.setInteractionResolver?.(async (req) => {
+      seen.push((req as { toolName: string }).toolName);
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    await handle.send({ type: 'user', content: 'go' });
+    firePermissionRequest('r22', 'mcp__cindy_orca__evil__start_team', {});
+    await flush();
+    expect(seen).toEqual(['mcp__cindy_orca__evil__start_team']);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r22', confirmed: false });
+  });
+
+  // host 未提供 getMcpToolApprovalPolicy(或 server 未注册)时的兜底:归属查不到就不查
+  // 策略,MCP 工具继续走原灰区路径,行为与接策略之前一致。
   it('auto mode gives the current-model reviewer complete MCP tool evidence', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review);
