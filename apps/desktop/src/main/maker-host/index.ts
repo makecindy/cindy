@@ -1101,7 +1101,9 @@ export function getMaker(): Maker {
             mcpProviders: providers,
             logger: desktopMakerLogger,
           });
-          mcpExtraArgs = cfg.extraArgs;
+          // getCodexExtraSpawnConfig may return a cached array; per-host
+          // Browser overrides must never mutate that shared snapshot.
+          mcpExtraArgs = [...cfg.extraArgs];
           mcpExtraEnv = cfg.extraEnv;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
