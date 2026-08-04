@@ -4,6 +4,7 @@ import {
   findAgentTaskUpdate,
   isAgentTaskToolName,
   subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
 } from './agentTask';
 import { HISTORY_GAP_SPLIT_MS } from './historyGap';
 
@@ -1387,11 +1388,15 @@ function isRunningAgentTaskItem<
   const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
-      subagentSpawnReceiptName(
+      (subagentSpawnReceiptName(
         toolNameOf(item.toolCall.source),
         toolInputOf(item.toolCall.source),
         item.toolCall.secondaryBody,
-      ) !== undefined,
+      ) !== undefined
+        || subagentSpawnResultIndicatesRunning(
+          toolNameOf(item.toolCall.source),
+          item.toolCall.secondaryBody,
+        )),
   });
   return status === 'running';
 }

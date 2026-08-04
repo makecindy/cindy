@@ -34,6 +34,7 @@ import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
 import {
   isAgentPlanToolName,
@@ -1428,7 +1429,8 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined,
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
+      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
   });
   return status === 'running';
 }

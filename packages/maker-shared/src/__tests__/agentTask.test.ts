@@ -293,6 +293,21 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.status).toBe('completed');
   });
 
+  it('REPRO: keeps a V1 spawn running when its paired result is a running state summary', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: running',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
   it('preserves explicit failed and stopped terminal states when a result is present', () => {
     const input = {
       toolName: 'collab:spawnAgent',

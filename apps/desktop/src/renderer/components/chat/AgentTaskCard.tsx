@@ -30,7 +30,11 @@ import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNav
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
-import { PI_SUBAGENT_TOOL_NAME, subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
+import {
+  PI_SUBAGENT_TOOL_NAME,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
 
 // 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
@@ -185,7 +189,9 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const status = isWorkflow
     ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
     : deriveAgentTaskStatus(update?.status, result, {
-        resultIsLaunchReceipt: subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined,
+        resultIsLaunchReceipt:
+          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
+          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
       });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(

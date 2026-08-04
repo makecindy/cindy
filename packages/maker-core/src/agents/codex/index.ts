@@ -6117,6 +6117,30 @@ export class CodexAgent extends BaseAgent {
       return `${turnId}:${candidate.id}`;
     };
 
+    const collabItemHasRunningAgentState = (item: unknown): boolean => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as { type?: unknown; agentsStates?: unknown };
+      if (
+        record.type !== 'collabAgentToolCall'
+        || !record.agentsStates
+        || typeof record.agentsStates !== 'object'
+      ) return false;
+      return Object.values(record.agentsStates as Record<string, unknown>).some((state) => {
+        let label: unknown = typeof state === 'string' ? state : undefined;
+        if (!label && state && typeof state === 'object') {
+          const stateRecord = state as Record<string, unknown>;
+          for (const key of ['status', 'state', 'phase']) {
+            if (typeof stateRecord[key] === 'string') {
+              label = stateRecord[key];
+              break;
+            }
+          }
+        }
+        return typeof label === 'string'
+          && /^(running|in[_-]?progress|started|active)$/i.test(label.trim());
+      });
+    };
+
     const stopActiveRolloutPlanFallback = (): void => {
       const stop = stopRolloutPlanFallback;
       stopRolloutPlanFallback = null;
@@ -7711,11 +7735,14 @@ export class CodexAgent extends BaseAgent {
           log,
           onCompactBoundary: handleCompactBoundary,
         });
-        // The one-shot late parent-turn carve-out is already represented by the
-        // translator's terminal update above. Replaying a live-card snapshot here
-        // would enqueue a second `running` frame for the same stale item when the
-        // child thread has not emitted its own terminal notification yet.
-        if (!isLateCollabTerminal) emitReplayedSubagentUpdateOnCompleted?.();
+        // A late V1 spawn completion is the spawn tool closing, not necessarily
+        // the child closing. Reassert the live aggregate when the compact item
+        // summary still contains a running child. When the summary is terminal,
+        // the translator's terminal frame is authoritative and replaying the
+        // tracker would only duplicate it.
+        if (!isLateCollabTerminal || collabItemHasRunningAgentState(params.item)) {
+          emitReplayedSubagentUpdateOnCompleted?.();
+        }
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         if (isTurnInFlight) pushStatus('Generating...');

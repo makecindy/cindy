@@ -370,6 +370,21 @@ export function subagentSpawnReceiptName(
   return name && trimmed && trimmed === name ? name : undefined;
 }
 
+/**
+ * V1 `collab:spawnAgent` returns a compact child-state summary. A `running`
+ * summary is a launch receipt for the spawn tool, not a terminal result for
+ * the child task, so it must not close a stale running update.
+ */
+export function subagentSpawnResultIndicatesRunning(
+  toolName: string | undefined,
+  result: string | undefined,
+): boolean {
+  if (toolName !== 'collab:spawnAgent') return false;
+  return (result ?? '').split(/\r?\n/).some((line) =>
+    /^[^:\n]+:\s*running\s*$/i.test(line.trim()),
+  );
+}
+
 export function buildAgentTaskCardModel(input: {
   toolName?: string;
   toolInput?: unknown;
@@ -378,7 +393,9 @@ export function buildAgentTaskCardModel(input: {
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
   const status = deriveAgentTaskStatus(update?.status, result, {
-    resultIsLaunchReceipt: subagentSpawnReceiptName(toolName, toolInput, result) !== undefined,
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      || subagentSpawnResultIndicatesRunning(toolName, result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider
