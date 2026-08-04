@@ -213,6 +213,8 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Cindy-side display fallback for Codex subagent cards. */
+  subagentModelFallback?: string;
   /**
    * Build per-thread config overrides that bind host-owned HTTP MCP URLs to one
    * in-memory Session instance. The app-server process is shared, so the spawn

@@ -4,18 +4,19 @@ import { createSubagentLiveCardTracker } from '../subagent-live-cards.js';
 import { readCodexSubagentSpawnRegistration } from '../translator.js';
 
 /** V2(codex 0.145):spawn 只发瞬时 subAgentActivity,带 agentThreadId。 */
-function v2SpawnItem(id: string, agentThreadId: string, agentPath?: string) {
+function v2SpawnItem(id: string, agentThreadId: string, agentPath?: string, model?: string) {
   return {
     type: 'subAgentActivity',
     id,
     kind: 'started',
     agentThreadId,
     ...(agentPath ? { agentPath } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
 /** V1(老模型 / 自定义接入模型):spawn 走 collabAgentToolCall,目标在 receiverThreadIds。 */
-function v1SpawnItem(id: string, receiverThreadIds: string[]) {
+function v1SpawnItem(id: string, receiverThreadIds: string[], model?: string) {
   return {
     type: 'collabAgentToolCall',
     id,
@@ -23,6 +24,7 @@ function v1SpawnItem(id: string, receiverThreadIds: string[]) {
     senderThreadId: 'root-1',
     receiverThreadIds,
     prompt: 'survey the repo rules',
+    ...(model ? { model } : {}),
   };
 }
 
@@ -32,17 +34,19 @@ function toolItem(id: string, type = 'commandExecution') {
 
 describe('readCodexSubagentSpawnRegistration', () => {
   it('maps V2 subAgentActivity to its child thread', () => {
-    expect(readCodexSubagentSpawnRegistration(v2SpawnItem('i-1', 't-child', '/root/scout'))).toEqual({
+    expect(readCodexSubagentSpawnRegistration(v2SpawnItem('i-1', 't-child', '/root/scout', 'gpt-5.6-terra'))).toEqual({
       taskId: 'i-1',
       childThreadIds: ['t-child'],
       agentPath: '/root/scout',
+      model: 'gpt-5.6-terra',
     });
   });
 
   it('maps V1 collab spawn to every receiver thread', () => {
-    expect(readCodexSubagentSpawnRegistration(v1SpawnItem('i-2', ['t-a', 't-b']))).toEqual({
+    expect(readCodexSubagentSpawnRegistration(v1SpawnItem('i-2', ['t-a', 't-b'], 'codex/gpt-5.5'))).toEqual({
       taskId: 'i-2',
       childThreadIds: ['t-a', 't-b'],
+      model: 'codex/gpt-5.5',
     });
   });
 
@@ -92,6 +96,29 @@ describe('createSubagentLiveCardTracker', () => {
     });
     expect(afterUsage?.totalTokens).toBe(12_345);
     expect(afterUsage?.toolUses).toBe(1);
+  });
+
+  it('uses Cindy configured model only until the child thread reports its actual model', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+      taskId: 'card-1',
+      model: 'gpt-5.6-terra',
+    });
+
+    expect(tracker.noteDescendantThread('t-child', 'root-thread', 'codex/gpt-5.5')).toMatchObject({
+      model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('retains an observed nested model when lineage arrives before attachment', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+    expect(tracker.noteDescendantThread('t-grandchild', 't-parent', 'codex/gpt-5.5')).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grandchild', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 1 } },
+      }),
+    ).toMatchObject({ model: 'codex/gpt-5.5' });
   });
 
   it('counts a tool item once even when both phases arrive', () => {

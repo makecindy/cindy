@@ -1116,16 +1116,20 @@ export function getMaker(): Maker {
         const endpoint = isControlPlane
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
+        const subagentModelSettings = readSubagentModelSettings();
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexSubagentSpawnArgs(subagentModelSettings),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
+          ...(subagentModelSettings.codexSubagentsEnabled && subagentModelSettings.codex
+            ? { subagentModelFallback: subagentModelSettings.codex }
+            : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对

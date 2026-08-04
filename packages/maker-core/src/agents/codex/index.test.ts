@@ -383,6 +383,9 @@ function installFakeHost(
     getSessionMcpConfig,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
+    // 0.145 不给 spawn 子线程发 thread/started,session 层改为从 spawn item 主动
+    // 登记血缘;fake 里只记录调用,路由行为由 host.test.ts 的真 transport 覆盖。
+    registerDescendantLineage: vi.fn(),
   };
 
   Object.defineProperty(agent, 'getHost', {
@@ -17915,7 +17918,11 @@ describe('CodexAgent context window reporting', () => {
 
     // 映射已就位 → 子线程的实时事件应当当场路由成卡片更新,而不是被缓冲到 completed。
     handlers.descendantThreadStarted({
-      thread: { id: 'child-thread-1', parentThreadId: 'start-thread-id' },
+      thread: {
+        id: 'child-thread-1',
+        parentThreadId: 'start-thread-id',
+        model: 'codex/gpt-5.6-sol',
+      },
     });
     handlers.descendantNotification('child-thread-1', 'item/started', {
       threadId: 'child-thread-1',
@@ -17934,13 +17941,102 @@ describe('CodexAgent context window reporting', () => {
     });
     const updates = events
       .filter((e) => e.type === 'agent_task_update')
-      .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } });
+      .map((e) => e.data as {
+        taskId?: string;
+        status?: string;
+        model?: string;
+        usage?: { totalTokens?: number; toolUses?: number };
+      });
     // 运行期就能看到真实聚合(工具数与 token),不是等 completed 才补。
     expect(updates.some((u) => u.taskId === 'spawn-item-1')).toBe(true);
     const last = updates.filter((u) => u.taskId === 'spawn-item-1').at(-1);
     expect(last?.usage?.toolUses).toBe(1);
     expect(last?.usage?.totalTokens).toBe(4_242);
+    expect(last?.model).toBe('codex/gpt-5.6-sol');
     expect(last?.status).toBe('running');
+
+    await handle.close();
+  });
+
+  it('completes the subagent card without any thread/started (codex 0.145 real behavior)', async () => {
+    // 生产实测(2026-08-04):0.145 只在显式 thread/start / fork RPC 时发
+    // thread/started,spawn 出的子线程从来不发。血缘必须在识别 spawn item 的那一刻
+    // 主动向 host 登记,子线程的实时用量与终态才路由得进来 —— 否则卡片停在 spawn
+    // 时的 running 帧,无用量、永不收口。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-no-thread-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-v2' } });
+
+    // V2 spawn:瞬时 subAgentActivity。识别即应向 host 登记血缘。
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-v2',
+      item: {
+        id: 'spawn-v2-1',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread-v2',
+        agentPath: '/root/scout',
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith('child-thread-v2', 'start-thread-id');
+
+    // 子线程全程只有 item / tokenUsage / turn 通知(0.145 真实形状),没有 thread/started。
+    handlers.descendantNotification('child-thread-v2', 'item/completed', {
+      threadId: 'child-thread-v2',
+      turnId: 'child-turn-v2',
+      item: { id: 'child-tool-v2', type: 'commandExecution' },
+    });
+    // 嵌套 spawn 只出现在子线程自己的流里 —— 必须也从 item 建立孙线程路由。
+    handlers.descendantNotification('child-thread-v2', 'item/started', {
+      threadId: 'child-thread-v2',
+      turnId: 'child-turn-v2',
+      item: {
+        id: 'spawn-v2-nested',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'grandchild-thread-v2',
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith('grandchild-thread-v2', 'child-thread-v2');
+    handlers.descendantNotification('grandchild-thread-v2', 'thread/tokenUsage/updated', {
+      threadId: 'grandchild-thread-v2',
+      tokenUsage: { total: { totalTokens: 1_000 } },
+    });
+    handlers.descendantNotification('grandchild-thread-v2', 'turn/completed', {
+      threadId: 'grandchild-thread-v2',
+      turn: { id: 'grandchild-turn', status: 'completed' },
+    });
+    handlers.descendantNotification('child-thread-v2', 'turn/completed', {
+      threadId: 'child-thread-v2',
+      turn: { id: 'child-turn-v2', status: 'completed' },
+    });
+
+    await vi.waitFor(() => {
+      const updates = events
+        .filter((e) => e.type === 'agent_task_update')
+        .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } })
+        .filter((u) => u.taskId === 'spawn-v2-1');
+      const last = updates.at(-1);
+      // 子线程 + 孙线程全部收口 → 卡片终态 completed,并带聚合用量。
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.toolUses).toBe(1);
+      expect(last?.usage?.totalTokens).toBe(1_000);
+    });
 
     await handle.close();
   });

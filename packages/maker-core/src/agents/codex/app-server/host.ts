@@ -246,6 +246,8 @@ export interface AppServerHostOptions {
   remoteCompactionProviderId?: string;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
   buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  /** Cindy-side fallback used only when a subagent's actual model is not reported. */
+  subagentModelFallback?: string;
 }
 
 interface BufferedNotification {
@@ -307,6 +309,11 @@ export class AppServerHost {
   getSessionMcpConfig(sessionInstanceId?: string): Record<string, unknown> {
     if (!sessionInstanceId || !this.opts.buildSessionMcpConfig) return {};
     return this.opts.buildSessionMcpConfig(sessionInstanceId);
+  }
+
+  /** Display metadata only; observed thread model always wins. */
+  getSubagentModelFallback(): string | undefined {
+    return this.opts.subagentModelFallback;
   }
 
   getConnectionId(): string {
@@ -828,20 +835,58 @@ export class AppServerHost {
     return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
+  /**
+   * 血缘边登记的共享核心:解析 root、幂等去重、写入 lineageRoots。
+   * 返回 root 的 handlers 表示本次真的建立了新边;null = 无法归属或已登记。
+   */
+  private establishDescendantLineage(
+    childThreadId: string,
+    parentThreadId: string,
+  ): { rootThreadId: string; handlers: ThreadEventHandlers } | null {
+    if (!childThreadId || !parentThreadId || parentThreadId === childThreadId) return null;
+    const rootThreadId = this.lineageRoots.get(parentThreadId)
+      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
+    if (!rootThreadId || childThreadId === rootThreadId) return null;
+    if (this.lineageRoots.get(childThreadId) === rootThreadId) return null;
+
+    const handlers = this.subscribers.get(rootThreadId);
+    if (!handlers) return null;
+
+    this.lineageRoots.set(childThreadId, rootThreadId);
+    return { rootThreadId, handlers };
+  }
+
+  /**
+   * Cindy 侧主动登记「子线程 → 父线程」血缘(spawn item 是唯一可靠来源)。
+   *
+   * codex 0.145 会把 spawn 出的子线程自动 attach 到本连接并转发它的
+   * item / tokenUsage / turn 通知,但 `thread/started` 只在显式 thread/start /
+   * fork RPC 时发,**内部 spawn 的子线程从来不发**(codex-rs
+   * `thread_processor.rs` 仅两处 emit)。只等 thread/started 建血缘,子线程的全部
+   * 通知都会在 TTL 缓冲里静默过期:子代理卡没有任何实时数据、终态永远不到,
+   * 卡片停在 spawn 时的 running 帧永久转圈;子线程的 approval 请求也会因
+   * handlersForThread 查不到 root 而被自动 decline(2026-08-04 生产实测)。
+   *
+   * 调用方(codex session)从 spawn item 的 agentThreadId / receiverThreadIds
+   * 拿到子线程 id 后立即登记。幂等:更新版 codex 若补发 thread/started,
+   * routeDescendantThreadStarted 的去重会把它当 no-op。
+   */
+  registerDescendantLineage(childThreadId: string, parentThreadId: string): void {
+    const established = this.establishDescendantLineage(childThreadId, parentThreadId);
+    if (!established) return;
+    // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
+    // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
+    this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
+    this.replayBufferedDescendantThreadStarts(established.rootThreadId);
+  }
+
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
     const childThreadId = params.thread.id;
     const parentThreadId = params.thread.parentThreadId;
-    if (!parentThreadId || parentThreadId === childThreadId) return;
-
-    const rootThreadId = this.lineageRoots.get(parentThreadId)
-      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
-    if (!rootThreadId) return;
-    if (this.lineageRoots.get(childThreadId) === rootThreadId) return;
-
-    const handlers = this.subscribers.get(rootThreadId);
-    if (!handlers) return;
-
-    this.lineageRoots.set(childThreadId, rootThreadId);
+    if (!parentThreadId) return;
+    const established = this.establishDescendantLineage(childThreadId, parentThreadId);
+    if (!established) return;
+    const { rootThreadId, handlers } = established;
     if (handlers.descendantThreadStarted) {
       try {
         handlers.descendantThreadStarted(params);

@@ -1153,7 +1153,7 @@ describe('translateItemNotification collabAgentToolCall', () => {
 });
 
 describe('translateItemNotification subAgentActivity', () => {
-  function activityParams(kind: string, id = 'spawn-1') {
+  function activityParams(kind: string, id = 'spawn-1', model?: string) {
     return {
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -1163,6 +1163,7 @@ describe('translateItemNotification subAgentActivity', () => {
         kind,
         agentThreadId: 'thread-2',
         agentPath: '/root/survey_startup',
+        ...(model ? { model } : {}),
       },
     };
   }
@@ -1172,7 +1173,7 @@ describe('translateItemNotification subAgentActivity', () => {
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
 
-    translateItemNotification('started', activityParams('started'), q, ctx);
+    translateItemNotification('started', activityParams('started', 'spawn-1', 'gpt-5.6-terra'), q, ctx);
 
     const events = await collect(q);
     expect(events.map((event) => event.type)).toEqual([
@@ -1184,7 +1185,7 @@ describe('translateItemNotification subAgentActivity', () => {
     expect(events[0].data).toMatchObject({
       toolUseId: 'spawn-1',
       toolName: 'collab:spawn',
-      input: { name: '/root/survey_startup', agentThreadId: 'thread-2' },
+      input: { name: '/root/survey_startup', agentThreadId: 'thread-2', model: 'gpt-5.6-terra' },
     });
     // fullText 是纯数据(agentPath 原文),本地化句子由 renderer 组装,不持久化英文。
     expect(events[1].data).toMatchObject({
@@ -1200,6 +1201,7 @@ describe('translateItemNotification subAgentActivity', () => {
       parentToolUseId: 'spawn-1',
       status: 'running',
       title: '/root/survey_startup',
+      model: 'gpt-5.6-terra',
     });
   });
 

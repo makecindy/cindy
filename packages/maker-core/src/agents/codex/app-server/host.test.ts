@@ -336,6 +336,94 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('registerDescendantLineage routes child notifications without any thread/started (codex 0.145)', async () => {
+    // 0.145 只对显式 thread/start / fork RPC 发 thread/started;spawn 出的子线程
+    // 只有 item / turn / tokenUsage 通知。血缘必须能由 Cindy 侧(从 spawn item)
+    // 主动登记,否则这些通知全部在 TTL 缓冲里过期,子代理卡永久转圈。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+    });
+
+    // 早到:子线程通知先于 spawn item 被处理,落进 TTL 缓冲。
+    transport.emit({
+      method: 'turn/started',
+      params: { threadId: 'child-thread', turn: { id: 'turn-1' } },
+    });
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+
+    // 缓冲的早到通知按序补投,后续通知实时路由;全程没有任何 thread/started。
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } },
+    });
+    expect(descendantNotification).toHaveBeenNthCalledWith(
+      1,
+      'child-thread',
+      'turn/started',
+      { threadId: 'child-thread', turn: { id: 'turn-1' } },
+    );
+    expect(descendantNotification).toHaveBeenNthCalledWith(
+      2,
+      'child-thread',
+      'turn/completed',
+      { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } },
+    );
+
+    // 幂等:新版 codex 补发同一条边的 thread/started 是 no-op,不重复投递。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantNotification).toHaveBeenCalledTimes(2);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('registerDescendantLineage unlocks a buffered grandchild thread/started chain', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+    });
+
+    // 孙线程的 thread/started(新版 codex 才会发)先到,此时子线程尚无血缘,缓冲。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+
+    // 子线程血缘由 spawn item 路径登记 → 缓冲中的孙线程血缘应被递归重建。
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' },
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('routes descendant server requests to the root subscription handlers', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({
