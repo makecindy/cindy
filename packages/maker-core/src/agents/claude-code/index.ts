@@ -3654,47 +3654,100 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 标记、不推档,而且没有任何补推点,于是留下「标记说走 Cindy 审阅、SDK 实际还在 auto
      * 档」的分叉:工具继续进故障中的原生分类器,正是降级本身要消除的硬拒绝。
      *
-     * 串行(`sdkPermissionModePushInFlight`)不是性能考虑:两个并发 push 的落地顺序不由这里
-     * 保证,后到的会盖掉先到的,而"谁后到"不可知。串行 + 现算之后,完成顺序不再进入判据。
+     * 串行不是性能考虑:两个并发 push 的落地顺序不由这里保证,后到的会盖掉先到的,而
+     * "谁后到"不可知。串行 + 现算之后,完成顺序不再进入判据。
      */
     let sdkPermissionModeSyncOwed = false;
-    let sdkPermissionModePushInFlight = false;
     /**
-     * 把一次档位控制请求纳入串行域。各调用点自己的 await / fire-and-forget 与错误处理都
-     * 不变,只是在飞期间挡住收敛推送(反之亦然)。
+     * 档位写入的**真串行队列**:所有调用点都排进这一条 promise chain,**执行顺序 == 入队
+     * 顺序**,所以最后入队的意图一定最后落地。
+     *
+     * 第一版只用一个布尔 `pushSdkPermissionModePushInFlight` 标记"有在飞",既没让调用点排队
+     * (只有收敛推送查它),又会被先完成的那个请求提前清零 —— 两个并发写入照旧发生,而且
+     * 队列状态还会说谎(greptile / copilot / codex P1 of #1612)。改成 chain + 计数。
+     *
+     * `sdkPermissionModeQueueDepth` 是**排队中 + 在飞**的写入数,只有全部落地才归零;
+     * 用它判断"是否仍有控制写入未 settle",不会被任一请求提前清掉。
      */
-    const pushSdkPermissionMode = async (target: SdkPermissionMode): Promise<void> => {
-      sdkPermissionModePushInFlight = true;
-      try {
-        await q.setPermissionMode(target);
-      } finally {
-        sdkPermissionModePushInFlight = false;
-      }
+    let sdkPermissionModeQueue: Promise<void> = Promise.resolve();
+    let sdkPermissionModeQueueDepth = 0;
+    /**
+     * 把一次档位控制请求排进串行队列。各调用点自己的 await / fire-and-forget 与错误处理、
+     * `sdkInPlanMode` 回写都不变。
+     *
+     * `target` 可以是**取值函数**:轮到自己执行时才现算,并可返回 `null` 表示"此刻已无事
+     * 可做"(收敛推送用它 —— 排队期间用户可能已改档、或又进了推不动的窗口)。传字面量的
+     * 调用点保持原语义:它们的目标档由各自的上下文算出(如 plan turn 起档恒为 `'plan'`、
+     * replay 用 `currentTurnSdkPermissionMode()` 刻意排除 arm 态),**不能**被统一现算覆盖。
+     */
+    const enqueueSdkPermissionModePush = (
+      target: SdkPermissionMode | (() => SdkPermissionMode | null),
+    ): Promise<SdkPermissionMode | null> => {
+      sdkPermissionModeQueueDepth += 1;
+      const run = (async (): Promise<SdkPermissionMode | null> => {
+        // 等前一个写入落地。成功或失败都算落地 —— 一次失败不该毒化整条队列。
+        await sdkPermissionModeQueue;
+        const resolved = typeof target === 'function' ? target() : target;
+        if (resolved === null) return null;
+        await q.setPermissionMode(resolved);
+        return resolved;
+      })();
+      // 队列本身永不 reject,否则后续所有写入都会被前一次失败带走。
+      sdkPermissionModeQueue = run.then(() => {}, () => {});
+      return run.finally(() => {
+        sdkPermissionModeQueueDepth -= 1;
+      });
     };
+    /** 兼容既有调用点的窄签名:目标档由调用点算好,行为与直接 `q.setPermissionMode` 一致。 */
+    const pushSdkPermissionMode = async (target: SdkPermissionMode): Promise<void> => {
+      await enqueueSdkPermissionModePush(target);
+    };
+    /** 已排队但还没执行的收敛推送:它轮到时会现算,所以不必再排第二个。 */
+    let sdkPermissionModeSyncQueued = false;
     /**
      * 状态变更后请求一次收敛。**同步返回、不 await** —— 它可能在 canUseTool 回调里被调用
      * (SDK 正等这个回调返回),也在 send 入口被调用(`docs/dev-rules/maker-core-and-agent-
      * behavior.md` §3.2 禁止在 send 路径上加串行等待)。
      */
     const syncSdkPermissionMode = (reason: string): void => {
+      // auto-review 只在 Auto 档决定 SDK 档位。用户在 Ask / acceptEdits / Full access 上时
+      // 这里**既不记欠账也不推档** —— 推了就是把用户当前选择改回去。等他切回 Auto,
+      // `setPermissionMode` 自己推的目标档已经含 auto-review 状态(`toSdkPermissionMode`)。
+      if (mutablePermissionMode !== 'auto') return;
       sdkPermissionModeSyncOwed = true;
-      // 推不动的窗口:留着欠账,由下一个补推点(turn 起点 / 用户改档收尾 / 在飞 push 收尾)兑。
-      if (sdkPermissionModePushInFlight) return;
+      // 已有一次收敛在队列里等 → 它轮到时会现算,重复入队只是白发控制请求。
+      if (sdkPermissionModeSyncQueued) return;
+      // 推不动的窗口:留着欠账,由下一个补推点(turn 起点 / 用户改档收尾 / 退出 plan)兑。
+      // 注意这里**不**因为"有写入在飞"就放弃 —— 队列会替我们排在它后面,而且轮到时现算。
       if (mutablePlanMode || planTurnActive || controlRequestsBlocked()) return;
       sdkPermissionModeSyncOwed = false;
-      const target = effectiveSdkPermissionMode();
-      void pushSdkPermissionMode(target).then(
-        () => {
-          sdkInPlanMode = target === 'plan';
-          // 在飞期间状态又变了 → 再收敛一次。**只有成功路径自我重试**:控制通道持续故障
-          // 时自我重试会变成紧循环,所以失败只留欠账、等外部补推点。
+      sdkPermissionModeSyncQueued = true;
+      void enqueueSdkPermissionModePush(() => {
+        sdkPermissionModeSyncQueued = false;
+        // 轮到自己时才现算。排队期间用户可能已经切走了档位 —— 那这次收敛就该整个作废,
+        // 而不是把 SDK 推回 Auto 对应的档位(codex 在 #1590 上指出的同一类分叉)。
+        if (mutablePermissionMode !== 'auto') return null;
+        // 又进了推不动的窗口:什么都不推,把欠账留给下一个补推点。
+        if (mutablePlanMode || planTurnActive || controlRequestsBlocked()) {
+          sdkPermissionModeSyncOwed = true;
+          return null;
+        }
+        return effectiveSdkPermissionMode();
+      }).then(
+        (applied) => {
+          if (applied !== null) sdkInPlanMode = applied === 'plan';
+          // 排队/在飞期间状态又变了 → 再收敛一次。**只有成功路径自我重试**:控制通道持续
+          // 故障时自我重试会变成紧循环,所以失败只留欠账、等外部补推点。
           if (sdkPermissionModeSyncOwed) syncSdkPermissionMode(`${reason}:follow-up`);
         },
         (e: unknown) => {
+          sdkPermissionModeSyncQueued = false;
           sdkPermissionModeSyncOwed = true;
           log.warn('sdk permission mode sync failed; will retry at the next opportunity', {
             reason,
-            target,
+            // 排障用:此刻还有多少档位写入排队/在飞。它只在全部落地后归零,不会被
+            // 任一请求提前清掉,所以能如实反映"是不是还有控制写入没 settle"。
+            queueDepth: sdkPermissionModeQueueDepth,
             error: String(e),
           });
         },
@@ -4610,12 +4663,25 @@ export class ClaudeCodeAgent extends BaseAgent {
         const sdkMode = toSdkPermissionMode(newMode);
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
-        if (!isControlBlocked) {
-          await pushSdkPermissionMode(sdkMode);
-        }
+        // **意图先同步落地**,再排队推档。顺序反过来(main 的写法)会留一个窄窗口:排在
+        // 我们后面的收敛推送轮到时现算,读到的还是旧档 —— 用户切到 bypassPermissions /
+        // acceptEdits 的同一瞬间来了第一条分类器故障信号,就会把档位算回旧值。意图先落地
+        // 之后,任何并发现算看到的都是用户要的那一档。
+        const previousMode = mutablePermissionMode;
         mutablePermissionMode = newMode;
-        // 用户改档期间落下的 auto-review 欠账在这里兑:此刻 `mutablePermissionMode` 已是新值,
-        // 收敛推送现算出的目标档才是用户要的那个(不会把刚被改掉的旧档推回去)。
+        if (!isControlBlocked) {
+          try {
+            // 目标档在轮到自己时现算,而不是用入队时的 `sdkMode` 快照:排队期间若又发生
+            // 一次改档,现算出的就是最新那一档,旧意图不会覆盖新意图。
+            await enqueueSdkPermissionModePush(() => toSdkPermissionMode(mutablePermissionMode));
+          } catch (e) {
+            // 推送失败保持 main 的语义:本次改档视为未生效。只在没人在此期间改过档时才回滚,
+            // 否则会把别人刚设好的档抹掉。
+            if (mutablePermissionMode === newMode) mutablePermissionMode = previousMode;
+            throw e;
+          }
+        }
+        // 用户改档期间落下的 auto-review 欠账在这里兑。
         flushOwedSdkPermissionModeSync('permission-mode-change');
       },
 

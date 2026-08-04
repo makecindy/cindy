@@ -242,6 +242,9 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
 
     fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
     await handle.useCindyAutoReviewFallback?.();
+    // 收敛推送排在串行队列里,轮到它执行要过一个 microtask;这一次会被拒。
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
     // 状态本身不受推送失败影响:审批已经落到 Cindy reviewer 上。
     await canUseTool('Bash', { command: 'npx tsc --noEmit' }, { toolUseID: 'after-failed-push' });
     expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
@@ -249,7 +252,154 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     // 欠账留着 → 下一个 turn 起点补推,SDK 与状态重新对齐。
     fakeQuery.setPermissionMode.mockClear();
     await handle.send({ type: 'user', content: 'next turn' });
+    // 收敛推送排在串行队列里,轮到它执行要过一个 microtask。
+    await new Promise((resolve) => setImmediate(resolve));
     expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
+  /**
+   * 档位写入的并发探针:记录写入顺序、同时在飞的写入数,并把每次写入挂住由测试逐个放行。
+   * `maxLive` 是这批用例的核心断言 —— 「同一时刻只有一个控制写入」。
+   */
+  function instrumentModeWrites(fakeQuery: { setPermissionMode: ReturnType<typeof vi.fn> }) {
+    const order: string[] = [];
+    const releases: Array<(err?: Error) => void> = [];
+    let live = 0;
+    let maxLive = 0;
+    fakeQuery.setPermissionMode.mockImplementation(async (mode: string) => {
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      order.push(mode);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          releases.push((err) => (err ? reject(err) : resolve()));
+        });
+      } finally {
+        live -= 1;
+      }
+    });
+    return {
+      order,
+      releaseNext: (err?: Error) => releases.shift()?.(err),
+      pending: () => releases.length,
+      maxLive: () => maxLive,
+    };
+  }
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('never runs two mode writes at once, even from two different call sites', async () => {
+    // 第一版把「串行域」做成了一个布尔量,只有收敛推送查它,而且先完成的请求会把它提前
+    // 清零 —— 两个调用点照旧并发,旧请求晚落地就会盖掉最新档位(greptile/copilot/codex P1)。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const writes = instrumentModeWrites(fakeQuery);
+
+    const userChange = handle.setPermissionMode?.('acceptEdits');
+    await tick();
+    // 用户那次写入还挂着,降级信号到达 —— 它不得并发发出第二个控制请求。
+    void handle.useCindyAutoReviewFallback?.();
+    await tick();
+    expect(writes.order).toEqual(['acceptEdits']);
+    expect(writes.maxLive()).toBe(1);
+
+    writes.releaseNext();
+    await userChange;
+    await tick();
+    await tick();
+    // 用户已经不在 Auto 档 → auto-review 不该把档位推回 Auto 对应的值,这次收敛整个作废。
+    expect(writes.order).toEqual(['acceptEdits']);
+    expect(writes.maxLive()).toBe(1);
+    expect(writes.pending()).toBe(0);
+    await handle.close();
+  });
+
+  it('drops an already-queued convergence when the user leaves Auto before it runs', async () => {
+    // 收敛推送入队时还在 Auto,轮到它执行前用户切走了档位。此时它必须整个作废 —— 否则会在
+    // 用户档位与它之间插进一次「Auto 对应的档位」,那一瞬间的权限面不是用户选的那个。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const writes = instrumentModeWrites(fakeQuery);
+
+    // 先占住队列,让后面两个意图都只能排队。
+    const firstChange = handle.setPermissionMode?.('auto');
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+    // 队列被占住期间:先降级(此刻仍在 Auto,收敛入队),再让用户切走档位。
+    void handle.useCindyAutoReviewFallback?.();
+    await tick();
+    void handle.setPermissionMode?.('acceptEdits');
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+
+    // 逐个放行,直到队列排空。
+    for (let i = 0; i < 5 && writes.pending() > 0; i += 1) {
+      writes.releaseNext();
+      await tick();
+      await tick();
+    }
+    await firstChange;
+    // 中间**不得**出现 'default':那次收敛在轮到自己时发现已不在 Auto,整个作废。
+    expect(writes.order).toEqual(['auto', 'acceptEdits']);
+    expect(writes.maxLive()).toBe(1);
+    await handle.close();
+  });
+
+  it('keeps the queue alive after a failed write and still converges', async () => {
+    // 队列不能被一次失败毒化:失败的那次留欠账,排在它后面的写入照常执行,
+    // 最终 SDK 档位仍等于当前逻辑状态。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const writes = instrumentModeWrites(fakeQuery);
+
+    void handle.useCindyAutoReviewFallback?.();
+    await tick();
+    expect(writes.order).toEqual(['default']);
+    // 第一次写入失败。
+    writes.releaseNext(new Error('transport not ready'));
+    await tick();
+    await tick();
+
+    // 队列仍可用:下一个 turn 起点兑欠账,重新推 default。
+    await Promise.all([
+      handle.send({ type: 'user', content: 'next turn' }),
+      (async () => {
+        await tick();
+        while (writes.pending() > 0) {
+          writes.releaseNext();
+          await tick();
+        }
+      })(),
+    ]);
+    expect(writes.order).toEqual(['default', 'default']);
+    expect(writes.maxLive()).toBe(1);
+    await handle.close();
+  });
+
+  it('holds the owed convergence through a plan window and lands it on exit', async () => {
+    // plan 档恒在 plan:降级只能记欠账。退出 plan 是补推点,此时必须把 default 收口,
+    // 而不是留下「逻辑已 fallback、SDK 仍是 auto」的分叉。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.setPlanMode?.(true);
+    fakeQuery.setPermissionMode.mockClear();
+
+    await handle.useCindyAutoReviewFallback?.();
+    // plan 窗口里一次都不推。
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
+    await handle.setPlanMode?.(false);
+    await new Promise((resolve) => setImmediate(resolve));
+    // 退出 plan 自己推的那次已经现算含 auto-review 状态,收口在 default。
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
     await handle.close();
   });
 
