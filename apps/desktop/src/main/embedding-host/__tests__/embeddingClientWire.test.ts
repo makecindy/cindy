@@ -649,3 +649,55 @@ describe('EmbeddingClient · 默认维度路径也校验批内一致', () => {
     ).rejects.toThrow(/mixed vector lengths/);
   });
 });
+
+describe('EmbeddingClient · 缓存命中与新取回混合时的自洽', () => {
+  /**
+   * 上游在本进程存活期间调了默认维度时,一批里可能"命中项是旧维度、新取回是新维度",
+   * 各自内部自洽 —— 只看新取回那部分的检查会放行,交付出去的是混合长度的向量
+   * (PR #1707 review 第七轮)。对着 catalog 的 dim 判发现不了它:那个常量此时本身
+   * 就过期了。唯一可靠信号是"同一批里长度不一致"。
+   */
+  it('上游改默认维度后:清缓存整批重取,交付的向量等长', async () => {
+    let width = 2;
+    const calls: string[][] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: string[] };
+      calls.push(body.input);
+      return new Response(
+        JSON.stringify({
+          model: 'voyage/voyage-4',
+          data: body.input.map((_t, index) => ({
+            object: 'embedding',
+            index,
+            embedding: Array.from({ length: width }, (_v, i) => i),
+          })),
+          usage: { prompt_tokens: 1 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+
+    // 1) 先把 'a' 以旧维度 2 存进缓存。
+    const first = await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+    expect(first.embeddings[0]).toHaveLength(2);
+
+    // 2) 上游改默认维度 → 请求 ['a','b']:'a' 命中旧的 2 维,'b' 新取回 4 维。
+    width = 4;
+    const mixed = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+
+    // 交付的必须等长(而不是 [2 维, 4 维] 混着给出去)。
+    expect(mixed.embeddings.map((v) => v.length)).toEqual([4, 4]);
+    // 清缓存后整批重取:最后一次请求包含两条文本,且这次零命中。
+    expect(calls[calls.length - 1]).toEqual(['a', 'b']);
+    expect(mixed.cacheHits).toBe(0);
+  });
+
+  it('维度稳定时不触发重取(复查不能顺手废掉缓存)', async () => {
+    const { client, fetchImpl } = harness();
+    await client.embed({ texts: ['a'], model: 'voyage/voyage-4' });
+    const second = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+    expect(second.cacheHits).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // 首次 + 只取 'b',没有第三次
+  });
+});

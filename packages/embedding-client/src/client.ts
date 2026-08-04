@@ -196,6 +196,19 @@ interface OpenAiErrorResponse {
 }
 
 /**
+ * 一批向量里第一个与首条长度不同的下标; 全部等长(或空批)时返 null。
+ * 用于"缓存命中项 + 新取回项"合并后的自洽复查, 那里没有期望维度可比, 只能看内部一致性。
+ */
+function mixedLengthAt(vectors: readonly number[][]): number | null {
+  const first = vectors[0]?.length;
+  if (first === undefined) return null;
+  for (let i = 1; i < vectors.length; i++) {
+    if (vectors[i]?.length !== first) return i;
+  }
+  return null;
+}
+
+/**
  * 校验**批内每一条**向量的长度都一致, 且(显式请求了维度时)等于请求值。
  *
  * 两件事分开说:
@@ -360,6 +373,28 @@ export class EmbeddingClient {
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
       this.cache.set(cacheKey(req.model, missTexts[j], variant), vec);
+    }
+
+    // 组装后再校验一次"整批自洽" —— 上面那次只看了**新取回的**那部分。
+    //
+    // 漏掉的场景(PR #1707 review 第七轮):没显式传 dimensions、本批既有缓存命中又有
+    // 未命中、且上游在本进程存活期间调了该型号的默认维度。命中项是旧维度(如 1024)、
+    // 新取回的是新维度(如 3072),各自内部都自洽,于是前一道检查放行 —— 交付出去的是
+    // 一批混合长度的向量,cindySlot 还按首条填 dim。
+    //
+    // 不能靠"对着 catalog 的 dim 判"来发现它:那个常量记的是上游当前默认值,上游改了
+    // 之后它本身就是过期的(本文件的用例明确允许默认维度偏离 catalog)。唯一可靠的信号
+    // 就是"同一批里长度不一致"。
+    //
+    // 处置:清空缓存后整批重取一次。清得比必要范围大(其它型号的条目也没了)是有意的 ——
+    // 默认维度一变,该型号所有缓存向量都已过期,而缓存只是内存里的性能优化,重取的代价
+    // 远小于交付错数据。递归至多一次:清空后 cacheHits 必为 0,这个分支进不来。
+    if (cacheHits > 0 && mixedLengthAt(result) !== null) {
+      this.log.warn?.(
+        `[embedding-client] mixed vector lengths across cache hits and fresh results for '${req.model}'; upstream default dimension likely changed — clearing cache and refetching`,
+      );
+      this.cache.clear();
+      return this.embed(req);
     }
 
     return {
