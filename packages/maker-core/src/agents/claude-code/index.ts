@@ -3002,6 +3002,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         releaseSettledContinuationClaim(claim);
       }
     };
+    const consumeTaskNotificationForActiveSegment = (claim: ContinuationClaim): void => {
+      const consumed = [...claim.tasks].find(
+        ([, state]) => state === 'completed' || state === 'failed',
+      );
+      if (consumed) claim.tasks.delete(consumed[0]);
+    };
     const captureContinuationBoundary = (event: AgentEvent): boolean => {
       if (event.type !== 'done') return false;
       const existing = activeContinuationClaim();
@@ -3013,6 +3019,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         return false;
       }
       const wasActiveContinuation = existing?.state === 'active';
+      const carriedTasks = existing?.state === 'active'
+        ? new Map(
+            [...existing.tasks].filter(([, state]) => state !== 'stopped'),
+          )
+        : new Map<string, ContinuationTaskState>();
       if (existing?.state === 'active') {
         // This is the automatic continuation's own done. It closes the product
         // turn, so the old claim is no longer needed once its first done has
@@ -3026,11 +3037,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         // now expected.
       }
       const wakeTasks = [...runningBackgroundTasks.entries()].filter(([, info]) => info.wake);
-      if (wakeTasks.length === 0) return wasActiveContinuation;
+      for (const [taskId] of wakeTasks) {
+        if (!carriedTasks.has(taskId)) carriedTasks.set(taskId, 'running');
+      }
+      if (carriedTasks.size === 0) return wasActiveContinuation;
       const claim: ContinuationClaim = {
         id: nextContinuationId++,
         state: 'awaiting',
-        tasks: new Map(wakeTasks.map(([taskId]) => [taskId, 'running' as const])),
+        tasks: carriedTasks,
         pendingBoundaryEvents: 1,
         settled: false,
       };
@@ -3062,7 +3076,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const info = runningBackgroundTasks.get(taskId);
         if (!info?.wake) continue;
         runningBackgroundTasks.delete(taskId);
-        if (claim?.state === 'awaiting') {
+        if (claim?.state === 'awaiting' || claim?.state === 'active') {
           claim.tasks.set(taskId, 'stopped');
         }
       }
@@ -3102,7 +3116,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           title: typeof data?.title === 'string' && data.title ? data.title : prev?.title,
         });
         const claim = activeContinuationClaim();
-        if (claim?.state === 'awaiting' && wake) {
+        if ((claim?.state === 'awaiting' || claim?.state === 'active') && wake) {
           claim.tasks.set(taskId, 'running');
         }
         return null;
@@ -3110,9 +3124,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         const prev = runningBackgroundTasks.get(taskId);
         runningBackgroundTasks.delete(taskId);
         const claim = activeContinuationClaim();
-        if (claim?.state === 'awaiting' && (prev?.wake || claim.tasks.has(taskId))) {
+        if (
+          (claim?.state === 'awaiting' || claim?.state === 'active') &&
+          (prev?.wake || claim.tasks.has(taskId))
+        ) {
           claim.tasks.set(taskId, status);
-          return reconcileActiveContinuation();
+          if (claim.state === 'awaiting') return reconcileActiveContinuation();
         }
       }
       return null;
@@ -3463,6 +3480,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             ) {
               const claim = activeContinuationClaim();
               if (claim?.state === 'awaiting') {
+                // Each task notification queues one SDK continuation segment.
+                // Consume only the notification that activated this segment;
+                // other terminal tasks must keep the next boundary claimed.
+                consumeTaskNotificationForActiveSegment(claim);
                 claim.state = 'active';
                 emitContinuationState(claim.id, 'active');
               }

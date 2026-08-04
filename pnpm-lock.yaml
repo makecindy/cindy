@@ -1202,6 +1202,9 @@ importers:
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../maker-core
+      '@cindy/maker-shared':
+        specifier: workspace:*
+        version: link:../maker-shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
