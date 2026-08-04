@@ -47,8 +47,9 @@ export interface UpdateAllRow {
    */
   reviewedBaseline?: string;
   /**
-   * 非 server 源在审阅时取得的 manifest:主进程对这类来源强制要求安装时
-   * 传回同一份 reviewed manifest,approve 必须原样带上,否则 INVALID_PARAMS。
+   * 用户实际审阅过的目标 manifest。自定义源始终填写；服务端市场详情与
+   * 下载包权限不一致时，也由 Main 返回真实包 manifest 填入。批准时原样
+   * 回传，Main 复核真实包不得超出这份权限面。
    */
   expectedManifest?: GhostManifest;
   /** status 为 failed 时的用户可读错误(已经过 i18n 映射)。 */

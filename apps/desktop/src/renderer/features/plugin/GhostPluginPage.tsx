@@ -662,6 +662,14 @@ export function GhostPluginPage() {
       // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
       const marketBusyLease = acquireMarketBusy(marketItem.pluginId);
       if (!marketBusyLease) return;
+      if (!installedGhost) {
+        if (isMarketBusyLeaseActive(marketBusyLease)) {
+          toast.error(t('settings.ghosts.market.errors.stateChanged'));
+        }
+        releaseMarketBusy(marketBusyLease);
+        await refreshMarket();
+        return;
+      }
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -681,7 +689,7 @@ export function GhostPluginPage() {
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+        let result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
           expectedReleaseId: next.releaseId,
           ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
           allowPermissionExpansion: diff.added.length > 0,
@@ -691,6 +699,43 @@ export function GhostPluginPage() {
             ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
             : {}),
         });
+        if (result.status !== 'installed') {
+          const packageDiff = diffGhostPermissionItems(
+            installedGhost?.manifest ?? next.manifest,
+            result.manifest,
+          );
+          if (packageDiff.added.length > 0) {
+            const packageApproved = await confirm({
+              title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
+              description: t('settings.ghosts.updateConfirm.body', {
+                from: installedGhost?.manifest.version ?? next.version,
+                to: next.version,
+              }),
+              content: <GhostUpdateReview diff={packageDiff} />,
+              maxWidth: 520,
+              confirmText: t('settings.ghosts.updateConfirm.confirm'),
+              cancelText: t('settings.ghosts.updateConfirm.cancel'),
+            });
+            if (!packageApproved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+          }
+          result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+            expectedReleaseId: next.releaseId,
+            expectedManifest: result.manifest,
+            ...(packageDiff.added.length > 0
+              ? {
+                  allowPermissionExpansion: true,
+                  ...(installedGhost
+                    ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                    : {}),
+                }
+              : {}),
+          });
+          if (result.status !== 'installed') {
+            throw new Error(
+              '[PRECONDITION_FAILED] Plugin package permissions require review',
+            );
+          }
+        }
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
@@ -1056,7 +1101,7 @@ export function GhostPluginPage() {
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
+      let result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
         expectedReleaseId: marketDetail.releaseId,
         ...(marketDetail.sourceType !== 'server'
           ? { expectedManifest: marketDetail.manifest }
@@ -1072,6 +1117,53 @@ export function GhostPluginPage() {
             }
           : {}),
       });
+      if (result.status !== 'installed') {
+        const packageDiff = diffGhostPermissionItems(
+          installedGhost?.manifest ?? marketDetail.manifest,
+          result.manifest,
+        );
+        if (packageDiff.added.length > 0) {
+          const packageApproved = await confirm({
+            title: isUpdate
+              ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
+              : t('settings.ghosts.market.installConfirmTitle', {
+                  name: marketDetail.name,
+                }),
+            description: isUpdate
+              ? t('settings.ghosts.market.updateConfirmDescription')
+              : marketDetail.sourceType !== 'server'
+                ? t('settings.ghosts.market.customInstallConfirmDescription')
+                : t('settings.ghosts.market.installConfirmDescription'),
+            content: <GhostUpdateReview diff={packageDiff} />,
+            maxWidth: 520,
+            confirmText: isUpdate
+              ? t('settings.ghosts.updateConfirm.confirm')
+              : t('settings.ghosts.market.install'),
+            cancelText: isUpdate
+              ? t('settings.ghosts.updateConfirm.cancel')
+              : t('settings.ghosts.installConfirm.cancel'),
+            autoFocusConfirm: true,
+          });
+          if (!packageApproved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        }
+        result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
+          expectedReleaseId: marketDetail.releaseId,
+          expectedManifest: result.manifest,
+          ...(packageDiff.added.length > 0 && isUpdate
+            ? {
+                allowPermissionExpansion: true,
+                ...(installedGhost
+                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                  : {}),
+              }
+            : {}),
+        });
+        if (result.status !== 'installed') {
+          throw new Error(
+            '[PRECONDITION_FAILED] Plugin package permissions require review',
+          );
+        }
+      }
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
       // 用"已更新"(生效状态未被改变)。

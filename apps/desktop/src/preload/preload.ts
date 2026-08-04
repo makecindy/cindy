@@ -1090,7 +1090,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
         reviewedBaseline?: string;
       },
-    ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
+    ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),

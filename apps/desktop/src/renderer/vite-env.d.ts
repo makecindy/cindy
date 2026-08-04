@@ -1415,8 +1415,9 @@ interface ElectronAPI {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
         allowPermissionExpansion?: boolean;
+        reviewedBaseline?: string;
       },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (

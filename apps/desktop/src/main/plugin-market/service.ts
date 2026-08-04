@@ -21,6 +21,7 @@ import type {
   MarketSourceConfig,
   MarketSourceSummary,
   PluginMarketDetail,
+  PluginMarketInstallResult,
   PluginMarketItem,
   PluginMarketSnapshot,
 } from '../../shared/pluginMarket.js';
@@ -52,6 +53,7 @@ import {
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
+import { isMarketPackagePermissionReviewRequiredError } from '../cindy-brain/marketPackagePermissionReview.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
@@ -409,7 +411,7 @@ export class PluginMarketService {
       /** Renderer 确认框实际展示过的 release。Main 重拉详情后必须仍一致,
        *  否则用户审阅 A、实际安装/启用 B(review P1)。 */
       expectedReleaseId: string;
-      /** 自定义市场插件：Renderer 确认框实际审阅过的完整 manifest。 */
+      /** Renderer 确认框实际审阅过的完整包 manifest。 */
       expectedManifest?: GhostManifest;
       allowPermissionExpansion?: boolean;
       /**
@@ -421,13 +423,17 @@ export class PluginMarketService {
        */
       reviewedBaseline?: string;
     },
-  ): Promise<{ ghost: InstalledGhost }> {
+  ): Promise<PluginMarketInstallResult> {
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
       if (!options.expectedManifest) {
         throwIpcError('INVALID_PARAMS', 'The reviewed Plugin manifest is required');
       }
-      return this.customInstall(customRef, options as typeof options & { expectedManifest: GhostManifest });
+      const result = await this.customInstall(
+        customRef,
+        options as typeof options & { expectedManifest: GhostManifest },
+      );
+      return { status: 'installed', ghost: result.ghost };
     }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -456,6 +462,23 @@ export class PluginMarketService {
           'Plugin release changed after permission review',
         );
       }
+      let reviewedPackageManifest: GhostManifest | undefined;
+      if (options.expectedManifest) {
+        const validated = validateGhostManifest(options.expectedManifest);
+        if (!validated.ok) {
+          throwIpcError('GHOST_FILE_INVALID', 'The reviewed Plugin manifest is invalid');
+        }
+        if (
+          validated.manifest.id !== plugin.ghostId ||
+          validated.manifest.version !== plugin.currentRelease.version
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'The reviewed Plugin manifest does not match the current release',
+          );
+        }
+        reviewedPackageManifest = validated.manifest;
+      }
       const existing = getGhostManager()
         .list()
         .some((ghost) => ghost.manifest.id === plugin.ghostId);
@@ -475,12 +498,15 @@ export class PluginMarketService {
           knownServerPlugins: catalog,
         });
       await assertOwnership();
-      return {
-        ghost: await this.installDetail(
+      try {
+        const ghost = await this.installDetail(
           plugin,
           {
             expectedInstalled: existing,
             allowPermissionExpansion: options.allowPermissionExpansion === true,
+            ...(reviewedPackageManifest
+              ? { reviewedManifest: reviewedPackageManifest }
+              : {}),
             ...(options.reviewedBaseline !== undefined
               ? { reviewedBaseline: options.reviewedBaseline }
               : {}),
@@ -489,8 +515,21 @@ export class PluginMarketService {
           },
           owner,
           ledger,
-        ),
-      };
+        );
+        return { status: 'installed', ghost };
+      } catch (error) {
+        if (isMarketPackagePermissionReviewRequiredError(error)) {
+          // The package manifest came from an owner-bound download. Re-check
+          // before returning it so an account switch during inspect/download
+          // cannot disclose the previous owner's package metadata.
+          requireSameMarketOwner(owner);
+          return {
+            status: 'permission-review-required',
+            manifest: error.manifest,
+          };
+        }
+        throw error;
+      }
     });
   }
 
@@ -1082,6 +1121,8 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
+      /** Renderer 实际展示过的包 manifest；缺席时沿用市场详情 manifest。 */
+      reviewedManifest?: GhostManifest;
       /** 扩权批准所依据的已装权限指纹;安装锁内复核,详见 install() 的说明。 */
       reviewedBaseline?: string;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
@@ -1111,6 +1152,7 @@ export class PluginMarketService {
     if (!compatible.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
+    const reviewedManifest = options.reviewedManifest ?? compatible.manifest;
     /**
      * 扩权闸门:按**传入时刻的**已装 manifest 判定。下面调用两次——
      *  1. 锁外一次:快速失败,不为注定被拒的更新白下载几十 MB;
@@ -1121,7 +1163,7 @@ export class PluginMarketService {
      */
     const assertExpansionApproved = (installedNow: GhostManifest | null): void => {
       if (!installedNow) return;
-      if (diffGhostPermissionItems(installedNow, compatible.manifest).added.length === 0) return;
+      if (diffGhostPermissionItems(installedNow, reviewedManifest).added.length === 0) return;
       if (options.allowPermissionExpansion !== true) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
       }
@@ -1188,10 +1230,10 @@ export class PluginMarketService {
           const installed = await installOrUpdateMarketGhostPackage(tempPath, {
             ghostId: plugin.ghostId,
             version: plugin.currentRelease.version,
-            // 确认框渲染的就是这份服务端 manifest;包里若多出权限项,出口处拒装
-            // ——服务端投影层与客户端清单契约漂移时,用户会在没审过的情况下多拿
-            // 一个能力面(codex review P1)。
-            reviewedManifest: compatible.manifest,
+            // 确认框渲染的就是这份 reviewed manifest；包里若多出会扩张当前
+            // 权限面的条目，出口返回真实包 manifest 重新审阅，绝不让用户在
+            // 没看过的情况下多拿一个能力面(codex review P1)。
+            reviewedManifest,
           });
           // Once the package directory is committed, finish provenance against
           // the owner captured at operation start even if the active session

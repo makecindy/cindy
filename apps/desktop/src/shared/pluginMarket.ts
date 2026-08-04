@@ -1,4 +1,4 @@
-import type { GhostManifest } from './ghost';
+import type { GhostManifest, InstalledGhost } from './ghost';
 import type { PluginIconMetadata } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
@@ -44,6 +44,17 @@ export interface PluginMarketSnapshot {
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
 }
+
+/**
+ * A package may contain permissions omitted by the marketplace detail
+ * projection. When that omission expands the installed permission surface,
+ * Main returns the real manifest so Renderer can show the missing permission
+ * diff and retry with an explicit review bound to the same release. Permissions
+ * already held by the installed version do not require another approval.
+ */
+export type PluginMarketInstallResult =
+  | { status: 'installed'; ghost: InstalledGhost }
+  | { status: 'permission-review-required'; manifest: GhostManifest };
 
 /* ------------------------------------------------------------------------ */
 /* 自定义市场源（Git / 本地文件夹）                                           */

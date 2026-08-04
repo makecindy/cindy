@@ -13,7 +13,6 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
-  diffGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -38,6 +37,10 @@ import {
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import {
+  assertMarketPackagePermissionsReviewed,
+  isMarketPackagePermissionReviewRequiredError,
+} from './marketPackagePermissionReview.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
@@ -3167,7 +3170,8 @@ export async function installOrUpdateMarketGhostPackage(
     version: string;
     /**
      * 装入确认框实际展示给用户的那份 manifest(来源方给的)。给了就逐项比对:
-     * 包里多出来的权限一律拒装(见 Locked 版里的说明)。两条市场路径都必须给;
+     * 包里多出来且会扩张当前权限面的条目必须重新审阅(见 Locked 版里的说明)。
+     * 两条市场路径都必须给;
      * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
      */
     reviewedManifest?: GhostManifest;
@@ -3215,29 +3219,29 @@ async function installOrUpdateMarketGhostPackageLocked(
      * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
      * 它装进来,用户**从没审过就多出一个常驻能力面**。
      *
-     * 这里按权限项逐项比对,包里多出来的一律拒装——不是只挡 badge,是把这一整类
-     * 「来源投影漏字段」的洞一次封死。落在 inspect 之后、任何落地动作之前,所以
-     * 拒绝时磁盘上什么都没动,不需要回滚。
+     * 这里按权限项逐项比对。包里多出且相对已装版本确属扩权的条目，返回真实
+     * manifest 交给 Renderer 重新审阅；若只是来源投影漏掉了用户早已持有的权限，
+     * 则不重复打扰。不是只挡 badge，而是把这一整类「来源投影漏字段」的洞一次
+     * 封死。检查落在 inspect 之后、任何落地动作之前，需审阅时磁盘上什么都没动。
      */
+    const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.reviewedManifest) {
-      const unreviewed = diffGhostPermissionItems(
-        expected.reviewedManifest,
-        inspected.manifest,
-      ).added;
-      if (unreviewed.length > 0) {
+      try {
+        assertMarketPackagePermissionsReviewed({
+          reviewedManifest: expected.reviewedManifest,
+          packageManifest: inspected.manifest,
+          installedManifest: installed?.manifest ?? null,
+        });
+      } catch (error) {
+        if (!isMarketPackagePermissionReviewRequiredError(error)) throw error;
         log.warn('market package declares unreviewed permissions', {
           ghostId: expected.ghostId,
-          keys: unreviewed.map((item) => item.key),
+          keys: error.unreviewedPermissionKeys,
         });
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          '下载包申请的权限多于安装确认框展示的内容,已阻止安装(请向插件来源反馈)',
-        );
+        throw error;
       }
     }
     rejectUnauthorizedTokenBroker(inspected.manifest);
-
-    const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     // Node 高风险条目由 renderer 装入确认卡权限清单如实展示;
     // 2026-07-24 Lizi 定案:不再有 Main 侧原生二次确认弹窗(PR #333,本处为其
     // 漏删的市场安装路径调用点,一并对齐)。

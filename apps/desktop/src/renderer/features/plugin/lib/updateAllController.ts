@@ -129,6 +129,20 @@ function batchOwnerCurrent(): boolean {
 }
 
 /**
+ * Await 之后、再次发安装 IPC 之前的最后一道批次归属检查。
+ *
+ * 仅靠 patchRow 不够：代际已失效时它会丢弃写入，但调用方若继续执行，
+ * 仍可能把旧账号/旧批次的安装意图发给当前账号。归属失效时主动作废批次，
+ * 与 detail await 后的检查保持同一语义。
+ */
+function ensureGenerationCurrent(generation: number): boolean {
+  if (batchGeneration !== generation) return false;
+  if (batchOwnerCurrent()) return true;
+  voidStaleBatch();
+  return false;
+}
+
+/**
  * 把一行退回「待重新审阅」——前置条件变化的统一收敛(runner 与批准共用)。
  *
  * 清掉旧的 permissionDiff 并打 staleReview:弹窗据此显示「权限差异已过期 /
@@ -155,6 +169,45 @@ function holdRowForReReview(
     ...patch,
     releaseId,
   });
+}
+
+/**
+ * Main inspected the verified package and found permissions missing from the
+ * marketplace detail projection. Review the real package manifest instead of
+ * repeatedly fetching the same stale metadata.
+ *
+ * `unchanged` is a race-safe fallback: another path may already have granted
+ * the package permissions by the time the result reaches Renderer, so no new
+ * confirmation is needed and the caller may retry with this manifest bound.
+ */
+function holdRowForPackageReview(
+  generation: number,
+  pluginId: string,
+  packageManifest: GhostManifest,
+  releaseId: string,
+): 'held' | 'skipped' | 'unchanged' {
+  const row = state.rows?.find((candidate) => candidate.pluginId === pluginId);
+  if (!row) return 'skipped';
+  const installed = installedManifestOf(row.ghostId);
+  if (!installed) {
+    patchRow(generation, pluginId, { status: 'skipped' });
+    return 'skipped';
+  }
+  const permissionDiff = diffGhostPermissionItems(installed, packageManifest);
+  if (permissionDiff.added.length === 0) return 'unchanged';
+  patchRow(generation, pluginId, {
+    status: 'needs-confirm',
+    fromVersion: installed.version,
+    toVersion: packageManifest.version,
+    releaseId,
+    permissionDiff,
+    staleReview: false,
+    reviewedBaseline: ghostPermissionBaselineKey(installed),
+    // 包已经过 Main 的 SHA/体积/manifest 校验；批准时原样回传，Main 会在
+    // 重新下载后再次确认真实包没有超出这份用户看过的权限面。
+    expectedManifest: packageManifest,
+  });
+  return 'held';
 }
 
 /** 账号/模式切换后作废整个批次(旧代际的 runner 在下一个检查点自行退出)。 */
@@ -285,10 +338,36 @@ async function runQueue(generation: number): Promise<void> {
           });
           continue;
         }
-        await window.electronAPI.pluginMarket.install(next.pluginId, {
+        let installResult = await window.electronAPI.pluginMarket.install(next.pluginId, {
           expectedReleaseId: detail.releaseId,
           ...(detail.sourceType !== 'server' ? { expectedManifest: detail.manifest } : {}),
         });
+        if (!ensureGenerationCurrent(generation)) return;
+        if (installResult.status === 'permission-review-required') {
+          const disposition = holdRowForPackageReview(
+            generation,
+            next.pluginId,
+            installResult.manifest,
+            detail.releaseId,
+          );
+          if (disposition !== 'unchanged') continue;
+          if (!ensureGenerationCurrent(generation)) return;
+          installResult = await window.electronAPI.pluginMarket.install(next.pluginId, {
+            expectedReleaseId: detail.releaseId,
+            expectedManifest: installResult.manifest,
+          });
+          if (!ensureGenerationCurrent(generation)) return;
+          if (installResult.status === 'permission-review-required') {
+            const retryDisposition = holdRowForPackageReview(
+              generation,
+              next.pluginId,
+              installResult.manifest,
+              detail.releaseId,
+            );
+            if (retryDisposition !== 'unchanged') continue;
+            throw new Error('Package permission review did not converge');
+          }
+        }
         patchRow(generation, next.pluginId, { status: 'done' });
       } catch (error) {
         if (batchGeneration !== generation) return;
@@ -478,8 +557,31 @@ async function runApprovalBody(pluginId: string, generation: number): Promise<vo
       options: Parameters<typeof window.electronAPI.pluginMarket.install>[1],
     ): Promise<boolean> => {
       try {
-        await window.electronAPI.pluginMarket.install(pluginId, options);
-        return true;
+        let result = await window.electronAPI.pluginMarket.install(pluginId, options);
+        if (!ensureGenerationCurrent(generation)) return false;
+        if (result.status === 'installed') return true;
+        const disposition = holdRowForPackageReview(
+          generation,
+          pluginId,
+          result.manifest,
+          detail.releaseId,
+        );
+        if (disposition !== 'unchanged') return false;
+        if (!ensureGenerationCurrent(generation)) return false;
+        result = await window.electronAPI.pluginMarket.install(pluginId, {
+          expectedReleaseId: detail.releaseId,
+          expectedManifest: result.manifest,
+        });
+        if (!ensureGenerationCurrent(generation)) return false;
+        if (result.status === 'installed') return true;
+        const retryDisposition = holdRowForPackageReview(
+          generation,
+          pluginId,
+          result.manifest,
+          detail.releaseId,
+        );
+        if (retryDisposition !== 'unchanged') return false;
+        throw new Error('Package permission review did not converge');
       } catch (error) {
         if (batchGeneration !== generation) return false;
         if (extractIpcError(error)?.code === 'PRECONDITION_FAILED') {

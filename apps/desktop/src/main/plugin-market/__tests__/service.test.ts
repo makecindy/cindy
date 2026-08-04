@@ -60,6 +60,7 @@ vi.mock('../download.js', () => ({
 import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
+import { MarketPackagePermissionReviewRequiredError } from '../../cindy-brain/marketPackagePermissionReview';
 import { PluginMarketLedger } from '../ledger';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
@@ -412,7 +413,11 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const h = harness([item]);
 
-    const { ghost } = await h.service.install(item.id, { expectedReleaseId: item.currentRelease.id });
+    const result = await h.service.install(item.id, {
+      expectedReleaseId: item.currentRelease.id,
+    });
+    expect(result.status).toBe('installed');
+    if (result.status !== 'installed') throw new Error('expected installed result');
 
     expect(runtime.install).toHaveBeenCalledWith(
       expect.stringMatching(/\.cindy$/),
@@ -423,7 +428,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       },
     );
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
-    expect(ghost.enabled).toBe(true);
+    expect(result.ghost.enabled).toBe(true);
   });
 
   // 装入确认框渲染的是**服务端给的** manifest,真正落地的是 .cindy 包里的
@@ -448,6 +453,88 @@ describe('PluginMarketService migration and defaultInstall', () => {
       id: item.ghostId,
       version: item.currentRelease.version,
     });
+  });
+
+  it('returns the verified package manifest for review, then installs that reviewed manifest', async () => {
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: 'release-2',
+        version: '2.0.0',
+      },
+    });
+    const installedManifest = manifest('cindy-test', '1.0.0', ['notify']);
+    const packageManifest = manifest('cindy-test', '2.0.0', ['notify', 'fs']);
+    runtime.ghosts = [
+      {
+        manifest: installedManifest,
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      },
+    ];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+    });
+    // 市场详情仍只投影 notify；真实下载包新增了 fs。
+    h.api.detail.mockResolvedValue(detail(item, ['notify']));
+    runtime.install.mockRejectedValueOnce(
+      new MarketPackagePermissionReviewRequiredError(packageManifest, ['slot:fs']),
+    );
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).resolves.toEqual({
+      status: 'permission-review-required',
+      manifest: packageManifest,
+    });
+
+    runtime.install.mockResolvedValueOnce({
+      manifest: packageManifest,
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    await expect(
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        expectedManifest: packageManifest,
+        allowPermissionExpansion: true,
+        reviewedBaseline: ghostPermissionBaselineKey(installedManifest),
+      }),
+    ).resolves.toMatchObject({
+      status: 'installed',
+      ghost: { manifest: packageManifest },
+    });
+    expect(runtime.install).toHaveBeenLastCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ reviewedManifest: packageManifest }),
+    );
+  });
+
+  it('does not return a permission-review manifest after the active owner changes', async () => {
+    const item = summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        id: 'release-2',
+        version: '2.0.0',
+      },
+    });
+    const packageManifest = manifest('cindy-test', '2.0.0', ['notify', 'fs']);
+    const h = harness([item]);
+    runtime.install.mockImplementationOnce(async () => {
+      runtime.session = {
+        mode: 'cloud',
+        dataOwnerId: 'user-2',
+        generation: 2,
+      };
+      throw new MarketPackagePermissionReviewRequiredError(packageManifest, ['slot:fs']);
+    });
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
   });
 
   it('installs and enables a public defaultInstall package in local mode', async () => {
@@ -967,6 +1054,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
 
     await expect(h.service.install(item.id, { expectedReleaseId: item.currentRelease.id })).resolves.toEqual({
+      status: 'installed',
       ghost: installedGhost,
     });
     expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({

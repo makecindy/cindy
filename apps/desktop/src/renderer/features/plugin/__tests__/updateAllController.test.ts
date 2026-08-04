@@ -65,7 +65,9 @@ function marketItem(overrides: Partial<PluginMarketItem>): PluginMarketItem {
 }
 
 const detailMock = vi.fn<(pluginId: string) => Promise<PluginMarketDetail>>();
-const installMock = vi.fn(async () => ({ ghost: { manifest: manifest({}) } }) as never);
+const installMock = vi.fn(
+  async () => ({ status: 'installed', ghost: { manifest: manifest({}) } }) as never,
+);
 
 function stubDetail(overrides: {
   manifest: GhostManifest;
@@ -94,7 +96,10 @@ beforeEach(() => {
   // mockReset 而非 mockClear:用例可能装过"卡住不 resolve"的实现(并发编排),
   // 只清调用记录会让它泄漏到后面的用例里把 waitFor 全部拖超时。
   installMock.mockReset();
-  installMock.mockResolvedValue({ ghost: { manifest: manifest({}) } } as never);
+  installMock.mockResolvedValue({
+    status: 'installed',
+    ghost: { manifest: manifest({}) },
+  } as never);
   vi.mocked(toast.success).mockClear();
   installedGhosts = [{ manifest: manifest({ version: '1.0.0' }) }];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -475,7 +480,7 @@ describe('updateAllController', () => {
           concurrentPeak = Math.max(concurrentPeak, active);
           installGate.push(() => {
             active -= 1;
-            resolve({ ghost: { manifest: expanding } } as never);
+            resolve({ status: 'installed', ghost: { manifest: expanding } } as never);
           });
         }),
     );
@@ -544,6 +549,52 @@ describe('updateAllController', () => {
     expect(row).toMatchObject({ status: 'needs-confirm', staleReview: true });
     expect(row?.errorText).toBeUndefined();
     expect(row?.permissionDiff).toBeUndefined();
+  });
+
+  it('reviews the verified package manifest when server metadata omitted permissions', async () => {
+    const existingTool = { name: 'existing_tool', description: 'Existing tool' };
+    const newTool = { name: 'new_tool', description: 'New tool' };
+    installedGhosts = [
+      {
+        manifest: manifest({
+          version: '1.0.0',
+          slots: ['tool'],
+          tools: [existingTool],
+        }),
+      },
+    ];
+    // 市场详情投影漏了 tools；真实包仍包含旧工具并新增一个工具。
+    stubDetail({ manifest: manifest({ slots: [] }), sourceType: 'server' });
+    const packageManifest = manifest({
+      slots: ['tool'],
+      tools: [existingTool, newTool],
+    });
+    installMock.mockResolvedValueOnce({
+      status: 'permission-review-required',
+      manifest: packageManifest,
+    } as never);
+
+    startUpdateAllBatch([marketItem({})]);
+    await waitForSettledBatch();
+
+    const held = getUpdateAllBatchState().rows?.[0];
+    expect(held).toMatchObject({
+      status: 'needs-confirm',
+      staleReview: false,
+      expectedManifest: packageManifest,
+    });
+    // 只提示相对已装版本真正新增的权限，不把市场投影漏掉的全部旧工具都算新增。
+    expect(held?.permissionDiff?.added.map((item) => item.key)).toEqual(['tool:new_tool']);
+
+    await approveUpdateExpansion('plugin-a');
+
+    expect(installMock).toHaveBeenLastCalledWith('plugin-a', {
+      expectedReleaseId: 'release-2',
+      expectedManifest: packageManifest,
+      allowPermissionExpansion: true,
+      reviewedBaseline: expect.any(String),
+    });
+    expect(getUpdateAllBatchState().rows?.[0]?.status).toBe('done');
   });
 
   it('lets a held runner row be re-reviewed and approved through to completion', async () => {
@@ -766,6 +817,57 @@ describe('updateAllController', () => {
     expect(getUpdateAllBatchState().rows).toBeNull();
   });
 
+  it('does not retry package review after the account switches during automatic install', async () => {
+    const packageManifest = manifest({ network: { hosts: ['api.example.com'] } });
+    stubDetail({ manifest: manifest({}), sourceType: 'server' });
+    let releaseInstall: ((result: unknown) => void) | undefined;
+    installMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseInstall = resolve;
+        }) as never,
+    );
+
+    startUpdateAllBatch([marketItem({})]);
+    await vi.waitFor(() => expect(installMock).toHaveBeenCalledTimes(1));
+
+    // The old batch is invalidated before Main returns the real package manifest.
+    setDataOwnerGeneration('owner-b');
+    reconcileUpdateAllBatch();
+    releaseInstall?.({ status: 'permission-review-required', manifest: packageManifest });
+    await vi.waitFor(() => expect(getUpdateAllBatchState().rows).toBeNull());
+
+    expect(installMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry package review after the account switches during approval', async () => {
+    const packageManifest = manifest({ network: { hosts: ['api.example.com'] } });
+    stubDetail({
+      manifest: manifest({ network: { hosts: ['api.example.com'] } }),
+      sourceType: 'server',
+    });
+    startUpdateAllBatch([marketItem({})]);
+    await waitForSettledBatch();
+
+    let releaseInstall: ((result: unknown) => void) | undefined;
+    installMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseInstall = resolve;
+        }) as never,
+    );
+    const approval = approveUpdateExpansion('plugin-a');
+    await vi.waitFor(() => expect(installMock).toHaveBeenCalledTimes(1));
+
+    setDataOwnerGeneration('owner-b');
+    reconcileUpdateAllBatch();
+    releaseInstall?.({ status: 'permission-review-required', manifest: packageManifest });
+    await approval;
+
+    expect(installMock).toHaveBeenCalledTimes(1);
+    expect(getUpdateAllBatchState().rows).toBeNull();
+  });
+
   it('does not make a new generation approval wait behind the previous one', async () => {
     const expanding = manifest({ network: { hosts: ['api.example.com'] } });
     detailMock.mockImplementation(async (pluginId) =>
@@ -784,7 +886,9 @@ describe('updateAllController', () => {
     installMock.mockImplementation(
       () =>
         new Promise((resolve) => {
-          stuck.push(() => resolve({ ghost: { manifest: expanding } } as never));
+          stuck.push(() =>
+            resolve({ status: 'installed', ghost: { manifest: expanding } } as never),
+          );
         }),
     );
     const oldApproval = approveUpdateExpansion('plugin-a');
@@ -836,7 +940,9 @@ describe('updateAllController', () => {
     installMock.mockImplementation(
       () =>
         new Promise((resolve) => {
-          gate.push(() => resolve({ ghost: { manifest: expanding } } as never));
+          gate.push(() =>
+            resolve({ status: 'installed', ghost: { manifest: expanding } } as never),
+          );
         }),
     );
     const first = approveUpdateExpansion('plugin-a');
