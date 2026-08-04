@@ -707,8 +707,14 @@ describe('/permission Full access 确认', () => {
       expect.objectContaining({
         title: slackUi.cards.permissionMode.fullAccessConfirmTitle,
         buttons: expect.arrayContaining([
-          expect.objectContaining({ id: 'permmode:confirm-full-access', type: 'danger' }),
-          expect.objectContaining({ id: 'permmode:cancel-full-access' }),
+          expect.objectContaining({
+            id: 'permmode:confirm-full-access',
+            type: 'danger',
+          }),
+          expect.objectContaining({
+            id: 'permmode:cancel-full-access',
+            payload: expect.objectContaining({ requestId: 'permmode-confirm:sess-target' }),
+          }),
         ]),
       }),
     );

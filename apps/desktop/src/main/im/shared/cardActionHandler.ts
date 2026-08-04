@@ -432,6 +432,7 @@ export function createCardActionHandler(
     });
 
     if (result.kind === 'confirmation-required') {
+      const confirmationRequestId = `permmode-confirm:${sessionId}`;
       try {
         await im.updateInteractiveCard(event.messageId, {
           title: ui.cards.permissionMode.fullAccessConfirmTitle,
@@ -447,7 +448,7 @@ export function createCardActionHandler(
               id: 'permmode:cancel-full-access',
               label: ui.cards.permissionMode.btnCancelFullAccess,
               type: 'default',
-              payload: { sessionId },
+              payload: { requestId: confirmationRequestId, sessionId },
             },
           ],
         });

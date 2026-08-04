@@ -426,6 +426,36 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 
+  it('权限确认卡的取消 callback 带 requestId 时收口失败可重试', async () => {
+    await connect();
+    const handler = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(undefined);
+    im.onCardAction(handler);
+    const callback = encodeCallbackData('permmode:cancel-full-access', {
+      requestId: 'permmode-confirm:sess-target',
+      sessionId: 'sess-target',
+    });
+    const pushCallback = (updateId: number, callbackId: string) => {
+      api.pushUpdates([
+        {
+          update_id: updateId,
+          callback_query: {
+            id: callbackId,
+            from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+            data: callback,
+            message: { message_id: 909, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+          },
+        },
+      ]);
+    };
+
+    pushCallback(909, 'permission-cancel-first');
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    pushCallback(910, 'permission-cancel-second');
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
   it('同一终态 interaction 的不同决策按钮只派发一次', async () => {
     await connect();
     const handler = vi.fn();
