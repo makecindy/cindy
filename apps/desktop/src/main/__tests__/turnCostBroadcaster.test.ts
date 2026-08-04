@@ -21,6 +21,15 @@ vi.mock('electron', () => ({
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+const ownerScopeState = vi.hoisted(() => ({
+  current: true,
+  scope: { ownerScopeKey: 'owner-a', ownerStamp: undefined },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => ownerScopeState.scope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => ownerScopeState.current),
+  tapWindowBroadcast: vi.fn(),
+}));
 vi.mock('../localDb/ipc/messages.js', () => ({
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId: string, _clientId: string, patch: Record<string, unknown>) => ({
     previous: {},
@@ -128,9 +137,22 @@ const DETAILS = buildTurnUsageDetails({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerScopeState.current = true;
 });
 
 describe('recordTurnCostOnMessage', () => {
+  it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
+    const { deps, broadcasts } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
+    expect(broadcasts).toHaveLength(0);
+  });
+
   it('patch 成功 → 写入原始分段与本用户轮累计，并广播同值', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
@@ -501,6 +523,28 @@ describe('recordSchedulerTurnCost', () => {
     )).resolves.toBeNull();
 
     expect(recordOnMessage).toHaveBeenCalledOnce();
+    expect(recordDirect).not.toHaveBeenCalled();
+  });
+
+  it('owner boundary after message ledger commit does not fall back to direct charging', async () => {
+    const { deps } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+    const recordOnMessage: typeof recordTurnCostOnMessage = (args) =>
+      recordTurnCostOnMessage(args, deps);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBeNull();
+
     expect(recordDirect).not.toHaveBeenCalled();
   });
 

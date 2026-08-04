@@ -8338,7 +8338,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     try {
-      return await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, () => {
+      return await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, (ownerScope) => {
         // Coordinator accepts can stamp transcriptParentUuid early; this late FIFO
         // fallback covers makerSendTransaction/direct createDbMessage paths.
         const transcriptParentUuid = getLastAssistantTranscriptUuid(sessionId);
@@ -8357,10 +8357,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : message;
         // session-agent-switch:user 行逐行 stamp 当前引擎(见 messages.agent_kind 注释)。
         const agentKind = getSessionDbAgentKind(sessionId);
+        const scopedOpts = {
+          ...(opts ?? {}),
+          // Keep a committed user row durable across an owner switch, while
+          // preventing createMessage from relabelling its broadcast to the
+          // next owner after the media-ref await.
+          broadcastOwnerScope: ownerScope,
+        };
         return createDbMessage(
           sessionId,
           agentKind ? { ...enrichedMessage, agentKind } : enrichedMessage,
-          opts,
+          scopedOpts,
         );
       });
     } catch (err) {

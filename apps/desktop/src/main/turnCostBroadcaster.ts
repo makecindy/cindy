@@ -188,7 +188,12 @@ export async function recordTurnCostOnMessage(
       }
       return result;
     });
-    if (!patched || !isOwnerScopeCurrent(ownerScope)) return false;
+    if (!patched) return false;
+    // The patch and scheduler ledger side effect are already durable.  An
+    // owner switch only suppresses the stale renderer/device-link broadcast;
+    // report success so scheduler fallback cannot charge the same segment
+    // again.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
     const payload: MessageTurnCostPayload = {
       sessionId,
       clientId,
@@ -276,7 +281,10 @@ export async function recordTurnUsageOnMessage(
       if (!patched) return null;
       return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
     });
-    if (!outcome || !isOwnerScopeCurrent(ownerScope)) return false;
+    if (!outcome) return false;
+    // Usage metadata is durable even when the captured owner became stale;
+    // skip only the old-owner broadcast and keep the successful result.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
     try {
       const { userTurnMoney, userTurnCostIsEstimate } = outcome;
       const payload: MessageTurnCostPayload = {

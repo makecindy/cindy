@@ -29,8 +29,18 @@ vi.mock('../logger.js', () => ({
 }));
 
 const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
+const ownerScopeState = vi.hoisted(() => ({
+  current: true,
+  scope: { ownerScopeKey: 'owner-a', ownerStamp: undefined },
+}));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }] },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => ownerScopeState.scope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => ownerScopeState.current),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  tapWindowBroadcast: vi.fn(),
 }));
 
 import {
@@ -78,6 +88,7 @@ const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.a
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
 });
@@ -182,6 +193,15 @@ describe('update_plan tool_use persistence', () => {
 });
 
 describe('agent_kind enqueue snapshot', () => {
+  it('owner boundary after commit keeps the durable result instead of triggering retry', async () => {
+    const result = await enqueueDurableWrite('post-commit-owner-switch', () => {
+      ownerScopeState.current = false;
+      return { committed: true };
+    });
+
+    expect(result).toEqual({ committed: true });
+  });
+
   it('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 agent_kind', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

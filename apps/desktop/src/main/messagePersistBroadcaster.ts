@@ -390,10 +390,11 @@ export function enqueueDurableWrite<T>(
         }
         try {
           const value = await fn(ownerScope);
-          if (!isOwnerScopeCurrent(ownerScope)) {
-            reject(ownerScopeSupersededError());
-            return;
-          }
+          // The durable side effect may have committed just before an app
+          // session boundary becomes observable.  Keep that commit's result:
+          // callers must not retry or compensate a row/ledger write merely
+          // because its owner-scoped broadcast is now stale.  Each fn owns
+          // suppressing its old-owner broadcast via ownerScope.
           resolve(value);
         } catch (err) {
           if (!isOwnerScopeSupersededError(err)) {
