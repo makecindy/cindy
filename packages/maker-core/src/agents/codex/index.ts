@@ -2487,6 +2487,19 @@ export class CodexAgent extends BaseAgent {
      * 又一致了, 窗口失配这个诱因已经消失, 再提示"切回 A"是让用户去做他刚做过的事。
      * 留着记录还会写出 {from:A, to:A} 这种自相矛盾的文案。清空后若仍压不动, 走的是
      * 不点名原因的那条兜底文案 —— 那时确实不知道原因, 不猜比猜错强。
+     *
+     * **两个字段都必须是目录 (catalog) id, 不能用 mutableModel** (2026-08-05, Codex
+     * review): server 会把请求 id 规范化成只在 wire 上存在的变体 (`gpt-5.4` →
+     * `gpt-5.4-codex`), threadSettingsUpdated 只把那个变体写进 mutableModel、**刻意
+     * 不动 mutableCatalogModel** (见该处注释)。而 setModel 收到的 newModel 是用户从
+     * 选择器点的目录 id。两种口径混着比会同时坏掉这条记录的两个用途:
+     *   - 清除判据失效: A→B→A 时 `'gpt-5.4' !== 'gpt-5.4-codex'`, 记录清不掉, 熔断
+     *     文案继续声称"本任务切换过模型", 而用户其实已经切回来了;
+     *   - 诊断指向一个用户点不到的 id: 文案会让人"切回 gpt-5.4-codex", 但选择器是按
+     *     目录渲染的, 那个变体根本不在里面 —— 比不给建议更糟。
+     * 记录只在 setModel(唯一的用户切换入口)写入; thread/start 的 'gpt-5' 哨兵解析、
+     * thread/resume 的 hydrate、threadSettingsUpdated 的 wire 对齐都不是用户切换,
+     * 本来就不该记, 也确实没有写入点。
      */
     let modelSwitchRecord: { from: string; to: string } | null = null;
     /**
@@ -8934,10 +8947,16 @@ export class CodexAgent extends BaseAgent {
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         // 压缩风暴诊断用 (见 modelSwitchRecord): 首个 from 是 codex 一直拿来算窗口
         // 的那个模型, 后续切换只更新 to; 切回 from 则整条清空 (诱因已消失)。
+        // **基准取 prevCatalogModel 而不是 prevModel**: 后者可能已被 server 规范化成
+        // 只在 wire 上存在的变体, 与用户选的目录 id 比不相等 —— 详见 modelSwitchRecord。
+        // 拿不到目录口径的来源时 (catalog 快照缺失) 不记录: 宁可走不猜原因的兜底文案,
+        // 也不要把用户引向一个他点不到的 id。
         const prevSwitchRecord = modelSwitchRecord;
-        const switchOrigin = modelSwitchRecord?.from ?? prevModel;
+        const switchOrigin = modelSwitchRecord?.from ?? prevCatalogModel;
         modelSwitchRecord =
-          newModel === switchOrigin ? null : { from: switchOrigin, to: newModel };
+          !switchOrigin || newModel === switchOrigin
+            ? null
+            : { from: switchOrigin, to: newModel };
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。

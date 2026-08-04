@@ -18522,6 +18522,12 @@ describe('CodexAgent compaction storm escalation', () => {
   async function stormTerminalAfterSwitches(
     sessionId: string,
     switches: readonly string[],
+    /**
+     * server 把请求 id 规范化后的 wire 变体(如 'model-a-codex')。推一条
+     * thread/settings/updated 让 mutableModel 变成它 —— mutableCatalogModel 按设计
+     * 保持目录 id 不动。真实环境里 codex 就是这么干的,不模拟就测不到口径混用。
+     */
+    normalizedWireModel?: string,
   ): Promise<{ message: string; reason: string }> {
     const agent = new CodexAgent(createDeps());
     const host = installStormHost(agent);
@@ -18531,6 +18537,13 @@ describe('CodexAgent compaction storm escalation', () => {
     const handlers = host.getThreadHandlers();
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    if (normalizedWireModel) {
+      handlers.threadSettingsUpdated?.({
+        threadId: 'start-thread-id',
+        threadSettings: { model: normalizedWireModel, serviceTier: 'default' },
+      } as never);
+    }
 
     if (!handle.setModel) throw new Error('expected setModel support');
     for (const m of switches) await handle.setModel(m);
@@ -18544,6 +18557,36 @@ describe('CodexAgent compaction storm escalation', () => {
     await handle.close();
     return terminal!.data as { message: string; reason: string };
   }
+
+  // 回归 (Codex review, 2026-08-05): server 会把请求 id 规范化成只在 wire 上存在的
+  // 变体('model-a' → 'model-a-codex'), 而 threadSettingsUpdated 刻意只更新
+  // mutableModel、不动 mutableCatalogModel。切换记录若拿 mutableModel 当基准, A→B→A
+  // 时 'model-a' !== 'model-a-codex' 会导致记录清不掉 —— 熔断文案继续声称切换过模型,
+  // 还让用户"切回 model-a-codex"这个选择器里根本不存在的 id。
+  it('server 规范化 wire id 后, A→B→A 仍能正确清除记录', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba-wire',
+      ['model-b', 'model-a'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
+    // 尤其不能把 wire 变体透给用户 —— 它不在模型选择器里。
+    expect(message).not.toContain('model-a-codex');
+  });
+
+  it('server 规范化 wire id 后, A→B→C 的诊断仍用目录 id', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc-wire',
+      ['model-b', 'model-c'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    // wire 变体不得出现在给用户的文案里。
+    expect(message).not.toContain('model-a-codex');
+  });
 
   // Codex review: A→B→A 原先会记成 {from:A,to:A}, 文案变成"从 A 切到 A, 请切回 A"。
   // reason 也必须跟着退回通用那条 —— renderer 拿 reason 的本地化文案盖掉 message,
