@@ -10,8 +10,9 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { IMHost, IMMessageEvent } from '../../types.js';
+import type { IMCardActionEvent, IMHost, IMMessageEvent } from '../../types.js';
 import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
+import { encodeCallbackData, encodeMessageId } from '../codec.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
@@ -21,12 +22,14 @@ interface FakeApi extends TelegramApiClient {
   calls: Array<{ method: string; params: Record<string, unknown> }>;
   pushUpdates(updates: TgUpdate[]): void;
   failNextGetUpdates(err: Error): void;
+  failNextCall(method: string, err: Error): void;
 }
 
 function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
   const pending: TgUpdate[][] = [];
   let waiter: ((u: TgUpdate[]) => void) | null = null;
   let nextFailure: Error | null = null;
+  let nextCallFailure: { method: string; err: Error } | null = null;
   let sentSeq = 1000;
 
   const api: FakeApi = {
@@ -49,6 +52,9 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
         w([]);
       }
     },
+    failNextCall(method, err) {
+      nextCallFailure = { method, err };
+    },
     fileUrl: (p) => `https://files.local/${p}`,
     async callForm(method) {
       api.calls.push({ method, params: {} });
@@ -57,6 +63,11 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
     },
     async call(method, params = {}, signal) {
       api.calls.push({ method, params });
+      if (nextCallFailure?.method === method) {
+        const { err } = nextCallFailure;
+        nextCallFailure = null;
+        throw err;
+      }
       if (method === 'getMe') {
         if (opts.getMeError) throw opts.getMeError;
         return BOT as never;
@@ -2254,6 +2265,108 @@ describe('TelegramIM', () => {
       api.calls.filter((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200')
         .length,
     ).toBe(groupTypingAfterCard);
+  });
+
+  // 交互卡的 callback token 只活在进程内存里(codec 的 callbackRefs), 重启或被淘汰后
+  // 解不出来。此前只弹一次「已过期」、按钮原样留在消息上, 看起来还能点。
+  describe('失效回调的卡片收口', () => {
+    const NOTICE = 'NOTICE-EXPIRED';
+
+    beforeEach(async () => {
+      await im.dispose();
+      im = new TelegramIM(ctx.host, { apiFactory: () => api, expiredCardNotice: NOTICE });
+      im.registerIpc();
+      api.calls.length = 0;
+    });
+
+    function callbackUpdate(args: {
+      data: string;
+      fromId: number;
+      updateId: number;
+      queryId?: string;
+    }): TgUpdate {
+      return {
+        update_id: args.updateId,
+        callback_query: {
+          id: args.queryId ?? `cbq-${args.updateId}`,
+          from: { id: args.fromId, is_bot: false, first_name: 'U' },
+          message: {
+            message_id: 55,
+            chat: { id: args.fromId, type: 'private' },
+            date: 1_753_000_000,
+          },
+          data: args.data,
+        },
+      };
+    }
+
+    it('ref 失效: 唯一一次应答带过期 alert, 并清掉该消息的键盘', async () => {
+      await connect();
+      api.calls.length = 0;
+      api.pushUpdates([callbackUpdate({ data: 'cbr:gone-after-restart', fromId: 111, updateId: 9 })]);
+
+      await vi.waitFor(() =>
+        expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(true),
+      );
+      // 只应答一次 —— 二次 answer 会被 Telegram 拒掉, 先发空 answer 会把 alert 吞掉。
+      const answers = api.calls.filter((c) => c.method === 'answerCallbackQuery');
+      expect(answers).toHaveLength(1);
+      expect(answers[0].params).toMatchObject({ text: NOTICE, show_alert: true });
+      expect(api.calls.find((c) => c.method === 'editMessageReplyMarkup')!.params).toMatchObject({
+        chat_id: 111,
+        message_id: 55,
+        reply_markup: { inline_keyboard: [] },
+      });
+    });
+
+    it('ref 有效: 应答一次(不带 alert)并派发给卡片处理器, 不动键盘', async () => {
+      await connect();
+      const seen: IMCardActionEvent[] = [];
+      im.onCardAction((e) => void seen.push(e));
+      api.calls.length = 0;
+      const data = encodeCallbackData('allow', { requestId: 'req-1' });
+      api.pushUpdates([callbackUpdate({ data, fromId: 111, updateId: 10 })]);
+
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen[0]).toMatchObject({ buttonId: 'allow', payload: { requestId: 'req-1' } });
+      const answers = api.calls.filter((c) => c.method === 'answerCallbackQuery');
+      expect(answers).toHaveLength(1);
+      expect(answers[0].params.text).toBeUndefined();
+      expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
+    });
+
+    it('非 owner 点按: 只消 loading, 不派发也不改别人看到的卡片', async () => {
+      await connect();
+      const seen: IMCardActionEvent[] = [];
+      im.onCardAction((e) => void seen.push(e));
+      api.calls.length = 0;
+      api.pushUpdates([callbackUpdate({ data: 'cbr:whatever', fromId: 222, updateId: 11 })]);
+
+      await vi.waitFor(() =>
+        expect(api.calls.filter((c) => c.method === 'answerCallbackQuery')).toHaveLength(1),
+      );
+      expect(api.calls[api.calls.length - 1].params.text).toBeUndefined();
+      expect(seen).toHaveLength(0);
+      expect(api.calls.some((c) => c.method === 'editMessageReplyMarkup')).toBe(false);
+    });
+
+    it('HTML 编辑失败退回纯文本时仍带上空键盘(否则收口卡片的按钮还在)', async () => {
+      await connect();
+      api.calls.length = 0;
+      api.failNextCall(
+        'editMessageText',
+        new TelegramApiError('editMessageText', 400, "can't parse entities"),
+      );
+      await im.updateInteractiveCard(encodeMessageId('111', '55'), {
+        body: '已过期',
+        buttons: [],
+      });
+
+      const edits = api.calls.filter((c) => c.method === 'editMessageText');
+      expect(edits).toHaveLength(2);
+      expect(edits[1].params.parse_mode).toBeUndefined();
+      expect(edits[1].params.reply_markup).toEqual({ inline_keyboard: [] });
+    });
   });
 
   it('disconnect 清空凭证并回 idle', async () => {

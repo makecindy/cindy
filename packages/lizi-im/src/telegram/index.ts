@@ -1406,17 +1406,38 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async handleCallbackQuery(q: import('./api.js').TgCallbackQuery): Promise<void> {
     const api = this.api;
     if (!api) return;
-    // 无论结果如何都先应答, 消掉客户端 loading 态。
-    void api.call('answerCallbackQuery', { callback_query_id: q.id }).catch(() => undefined);
-    if (String(q.from.id) !== this.ownerUserId) return;
-    const event = parseCallbackQuery(q);
-    if (!event) {
-      const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+    // 应答只有一次机会: 同一个 callback_query_id 二次 answer 会被 Telegram 拒掉。
+    // 先无条件发一次空 answer 消 loading, 会把后面那条「已过期」alert 一起吞掉 ——
+    // 分支决定这唯一一次应答带不带提示。
+    const answer = (extra?: Record<string, unknown>): void => {
       void api
-        .call('answerCallbackQuery', { callback_query_id: q.id, text: notice, show_alert: true })
+        .call('answerCallbackQuery', { callback_query_id: q.id, ...extra })
         .catch(() => undefined);
+    };
+    if (String(q.from.id) !== this.ownerUserId) {
+      answer();
       return;
     }
+    const event = parseCallbackQuery(q);
+    if (!event) {
+      // ref 失效(重启丢内存 token / 被淘汰): 提示过期的同时把键盘清掉。
+      // 只提示不清键盘, 按钮会一直留在原消息上 —— 看起来还能点, 点了只会再弹一次过期。
+      answer({
+        text: this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE,
+        show_alert: true,
+      });
+      if (q.message) {
+        void api
+          .call('editMessageReplyMarkup', {
+            chat_id: q.message.chat.id,
+            message_id: q.message.message_id,
+            reply_markup: { inline_keyboard: [] },
+          })
+          .catch(() => undefined);
+      }
+      return;
+    }
+    answer();
     for (const h of this.cardActionHandlers) {
       try {
         h(event);
@@ -1825,6 +1846,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           message_id: Number(nativeMessageId),
           text: stripTelegramHtmlTags(html) || '…',
           link_preview_options: { is_disabled: true },
+          // 同样要带上 reply_markup: 走到这条 fallback 时若省略, 清空键盘的意图会被丢掉。
+          ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
         }).catch((fallbackErr) => {
           if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {
             return;

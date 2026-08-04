@@ -116,6 +116,11 @@ export interface ImChannelAdapter {
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
   /**
+   * 交互卡的 callback 能送达、但对应的 pending interaction 已经不在了(重启 / 已被
+   * 别处解决)时, 把卡片正文改写成的过期提示。缺省 = 不改写(该渠道保持原行为)。
+   */
+  interactionExpiredNotice?: string;
+  /**
    * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
    * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时

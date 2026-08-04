@@ -32,7 +32,9 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
   const { html: body } = markdownToTelegramHtml(spec.body);
   const html = capCardText(`${title}${body}`);
 
-  if (spec.buttons.length === 0) return { html, replyMarkup: undefined };
+  // 无按钮时必须显式下发空键盘: 省略 reply_markup 只会改文本, Telegram 保留旧键盘,
+  // 于是已收口的卡片(过期/已解决)仍带着可点的按钮。
+  if (spec.buttons.length === 0) return { html, replyMarkup: { inline_keyboard: [] } };
 
   const rows: TelegramInlineKeyboardButton[][] = [];
   let pendingPair: TelegramInlineKeyboardButton | null = null;
