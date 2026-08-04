@@ -8,6 +8,7 @@ import {
   checkCodexBrowserCompanionConnection,
   hasOfficialMacTeamIdentifier,
   prepareCodexBrowserCompanion,
+  resolveCodexBrowserCompanionSpawnConfig,
 } from '../codex-browser-companion.js';
 
 const tempDirs: string[] = [];
@@ -180,13 +181,27 @@ describe('prepareCodexBrowserCompanion', () => {
   });
 
   it('reports unsupported host platforms without claiming a verified companion', async () => {
-    await expect(
-      prepareCodexBrowserCompanion({
-        codexHome: '/tmp/cindy-codex-home',
-        platform: 'win32',
-        arch: 'x64',
-      }),
-    ).resolves.toMatchObject({ status: 'unavailable', reason: 'platform_unsupported' });
+    const companion = await prepareCodexBrowserCompanion({
+      codexHome: '/tmp/cindy-codex-home',
+      platform: 'win32',
+      arch: 'x64',
+    });
+
+    expect(companion).toMatchObject({
+      status: 'unavailable',
+      reason: 'platform_unsupported',
+    });
+    expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: ['-c', 'mcp_servers.node_repl.enabled=false'],
+    });
+  });
+
+  it('keeps the control-plane host neutral when no companion preflight applies', () => {
+    expect(resolveCodexBrowserCompanionSpawnConfig(null)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: [],
+    });
   });
 
   it('injects an allowlisted Chrome-only companion config for the isolated Codex home', async () => {
@@ -222,6 +237,10 @@ describe('prepareCodexBrowserCompanion', () => {
     expect(cleanArgs.some((arg) => arg.startsWith('NODE_OPTIONS='))).toBe(false);
     expect(cleanArgs.some((arg) => arg.startsWith('MALICIOUS_SECRET='))).toBe(false);
     expect(result.startupTimeoutMs).toBe(120_000);
+    expect(resolveCodexBrowserCompanionSpawnConfig(result)).toEqual({
+      codexBrowserUseAvailable: true,
+      extraArgs: result.extraArgs,
+    });
   });
 
   it('rejects a latest selector that points at a different plugin version', async () => {

@@ -32,6 +32,31 @@ export type CodexBrowserCompanionResult =
       detail: string;
     };
 
+export type CodexBrowserCompanionSpawnConfig = {
+  codexBrowserUseAvailable: boolean;
+  extraArgs: string[];
+};
+
+/**
+ * Only a verified companion may enable Cindy's privileged node_repl bridge.
+ * A null result belongs to the control-plane host and must remain neutral;
+ * every concrete unavailable result fails closed for the local app-server.
+ */
+export function resolveCodexBrowserCompanionSpawnConfig(
+  companion: CodexBrowserCompanionResult | null,
+): CodexBrowserCompanionSpawnConfig {
+  if (companion === null) {
+    return { codexBrowserUseAvailable: false, extraArgs: [] };
+  }
+  if (companion.status === 'ready') {
+    return { codexBrowserUseAvailable: true, extraArgs: companion.extraArgs };
+  }
+  return {
+    codexBrowserUseAvailable: false,
+    extraArgs: ['-c', 'mcp_servers.node_repl.enabled=false'],
+  };
+}
+
 interface PrepareCodexBrowserCompanionOptions {
   codexHome: string;
   homeDir?: string;

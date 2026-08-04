@@ -56,8 +56,13 @@ describe('buildDesktopCapabilityRoutingPolicy', () => {
   });
 
   it('fails closed without claiming a replacement when neither browser runtime is available', () => {
-    const routes = codexPluginRoutes(false, false).filter(
-      (route) => route.source.id !== 'computer-use@openai-bundled',
+    const policy = buildDesktopCapabilityRoutingPolicy({
+      cindyBrowserEnabled: false,
+      codexBrowserUseAvailable: false,
+    });
+    const routes = policy.overrides.filter(
+      (route) =>
+        route.source.id !== 'computer-use@openai-bundled' && route.source.surface === 'plugin',
     );
 
     expect(routes.map((route) => route.source.id)).toEqual([
@@ -65,5 +70,13 @@ describe('buildDesktopCapabilityRoutingPolicy', () => {
       'chrome@openai-bundled',
     ]);
     expect(routes.every((route) => route.replacement === undefined)).toBe(true);
+    const nodeReplRoute = policy.overrides.find(
+      (route) => route.source.surface === 'mcp' && route.source.id === 'node_repl',
+    );
+    expect(nodeReplRoute).toMatchObject({
+      invocation: 'disabled',
+      source: expect.objectContaining({ surface: 'mcp', id: 'node_repl' }),
+    });
+    expect(nodeReplRoute?.replacement).toBeUndefined();
   });
 });

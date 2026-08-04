@@ -196,6 +196,7 @@ import {
 } from './capability-routing.js';
 import {
   prepareCodexBrowserCompanion,
+  resolveCodexBrowserCompanionSpawnConfig,
 } from './codex-browser-companion.js';
 export { withRehydrateCloseSuppressed };
 
@@ -1119,21 +1120,17 @@ export function getMaker(): Maker {
         const browserCompanion = isControlPlane
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
-        const codexBrowserUseAvailable =
-          browserCompanion?.status === 'ready'
-          || browserCompanion?.reason === 'platform_unsupported';
-        if (browserCompanion?.status === 'ready') {
-          mcpExtraArgs.push(...browserCompanion.extraArgs);
-        } else if (browserCompanion?.reason !== 'platform_unsupported') {
-          // Neutralize a stale/manual node_repl entry in the isolated config.
-          // Ordinary Codex remains available; only the unverified companion is off.
-          mcpExtraArgs.push('-c', 'mcp_servers.node_repl.enabled=false');
-          if (browserCompanion) {
-            desktopMakerLogger.warn('Codex Browser companion unavailable', {
-              reason: browserCompanion.reason,
-              detail: browserCompanion.detail,
-            });
-          }
+        const browserCompanionSpawnConfig =
+          resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
+        mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
+        if (
+          browserCompanion?.status === 'unavailable' &&
+          browserCompanion.reason !== 'platform_unsupported'
+        ) {
+          desktopMakerLogger.warn('Codex Browser companion unavailable', {
+            reason: browserCompanion.reason,
+            detail: browserCompanion.detail,
+          });
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
@@ -1196,7 +1193,7 @@ export function getMaker(): Maker {
           extraEnv: mcpExtraEnv,
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
-          codexBrowserUseAvailable,
+          codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
                 codexBrowserUseVersion: browserCompanion.version,
