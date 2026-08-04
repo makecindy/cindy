@@ -2830,8 +2830,10 @@ describe('DeviceLinkClient', () => {
     const first = h.current();
     first.ack();
 
-    // ping 周期 8ms,pongMissLimit=1:第 2 个周期(~16ms)触发僵死
-    await tick(40);
+    // ping 周期 8ms,pongMissLimit=1:第 2 个周期(~16ms)触发僵死。
+    // 负载下(Windows CI 分片并跑)固定 tick(40) 不足以保证两个 ping 周期都已跑完 ——
+    // 有界等待到 terminate 真的发生,断言语义不变(僵死必须被判出来并进重连)。
+    for (let i = 0; i < 40 && !first.terminated; i++) await tick(10);
     expect(first.terminated).toBe(true);
     // 已进入重连(新 socket 已创建或定时器排队中)
     expect(h.client.getStatus()).toBe('connecting');
