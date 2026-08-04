@@ -73,6 +73,8 @@ export interface ThemeColors {
   syntaxProperty: string;
   /** Composer / input focus caret。二次改稿 2026-07-18 晚:撤红改蓝,对齐 Mac caret-accent */
   inputCaret: string;
+  /** Text selection highlight: translucent interaction tint preserving foreground contrast. */
+  selectionHighlight: string;
   /** Bottom sheet root 玻璃面 */
   sheetSurface: string;
   /** Bottom sheet action group / row 面 */
@@ -386,6 +388,7 @@ export const lightColors: ThemeColors = {
   syntaxFunction: '#6F42C1',
   syntaxProperty: '#005CC5',
   inputCaret: '#417CDD',
+  selectionHighlight: 'rgba(65, 124, 221, 0.20)',
   sheetSurface: 'rgba(248, 248, 248, 0.95)',
   sheetActionSurface: '#F6F6F6',
   sheetActionBorder: '#DCDFE3',
@@ -458,6 +461,7 @@ export const darkColors: ThemeColors = {
   syntaxFunction: '#D2A8FF',
   syntaxProperty: '#79C0FF',
   inputCaret: '#417CDD',
+  selectionHighlight: 'rgba(65, 124, 221, 0.20)',
   sheetSurface: 'rgba(59, 59, 59, 0.95)',
   sheetActionSurface: 'rgba(59, 59, 59, 0.5)',
   sheetActionBorder: '#505050',
