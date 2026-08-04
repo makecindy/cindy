@@ -45,13 +45,39 @@ function generateTokenValue(): string {
 
 /** 一族 token 的存取 + 开关读取器。A / B 族各注入自己的一套,核心逻辑完全共享。 */
 interface TokenFamily {
+  /** 族标识,用作 safeStorage 写失败时的进程内兜底缓存 key。 */
+  id: string;
   read: () => string | null;
   write: (value: string) => boolean;
   isEnabled: () => boolean;
 }
 
+/**
+ * safeStorage 不可用(write 返回 false)时的进程内兜底:落盘失败也把刚生成的 token 记在
+ * 内存里,保证本次运行期 read/matches/masked/env 复制拿到的是同一个稳定值,而不是每次都
+ * 生成新 token 导致「对外 token 鉴权」永远命不中。落盘成功则清掉兜底(以持久值为准)。
+ */
+const memoryFallbackTokens = new Map<string, string>();
+
+/** 读物理存储;失败(safeStorage 不可用)时回退到进程内兜底缓存。 */
+function effectiveRead(family: TokenFamily): string | null {
+  const physical = family.read();
+  if (physical) return physical;
+  return memoryFallbackTokens.get(family.id) ?? null;
+}
+
+/** 落盘;失败则记进程内兜底缓存,成功则清掉旧兜底。 */
+function persistToken(family: TokenFamily, value: string): void {
+  const ok = family.write(value);
+  if (ok) {
+    memoryFallbackTokens.delete(family.id);
+  } else {
+    memoryFallbackTokens.set(family.id, value);
+  }
+}
+
 function hasToken(family: TokenFamily): boolean {
-  return family.read() !== null;
+  return effectiveRead(family) !== null;
 }
 
 /**
@@ -59,17 +85,17 @@ function hasToken(family: TokenFamily): boolean {
  * safeStorage 不可用导致写失败时,返回内存里刚生成的值(本次进程内可用),不静默吞掉。
  */
 function getOrCreateToken(family: TokenFamily): string {
-  const existing = family.read();
+  const existing = effectiveRead(family);
   if (existing) return existing;
   const next = generateTokenValue();
-  family.write(next);
+  persistToken(family, next);
   return next;
 }
 
 /** 重新生成并覆盖 token(旧 token 立即失效);返回新 token 明文。 */
 function regenerateToken(family: TokenFamily): string {
   const next = generateTokenValue();
-  family.write(next);
+  persistToken(family, next);
   return next;
 }
 
@@ -78,7 +104,7 @@ function regenerateToken(family: TokenFamily): string {
  * 中间用固定长度的 `•`,不泄漏真实长度。无 token 时返回 null。
  */
 function getTokenMasked(family: TokenFamily): string | null {
-  const token = family.read();
+  const token = effectiveRead(family);
   if (!token) return null;
   const tail = token.slice(-4);
   return `${TOKEN_PREFIX}••••••••${tail}`;
@@ -90,7 +116,7 @@ function getTokenMasked(family: TokenFamily): string | null {
  * 调用方据此判定「是不是外部客户端」,再结合 enabled 决定放行还是 401。
  */
 function matchesToken(family: TokenFamily, candidate: string | null | undefined): boolean {
-  const expected = family.read();
+  const expected = effectiveRead(family);
   if (!expected || !candidate) return false;
   const expectedBytes = Buffer.from(expected);
   const candidateBytes = Buffer.from(candidate);
@@ -103,6 +129,7 @@ function matchesToken(family: TokenFamily, candidate: string | null | undefined)
 // ─────────────── A 族:Anthropic(Claude Code)—— 签名保持不变 ───────────────
 
 const anthropicFamily: TokenFamily = {
+  id: 'anthropic',
   read: readLocalProxyExternalToken,
   write: writeLocalProxyExternalToken,
   isEnabled: isAnthropicEnabledFromStore,
@@ -137,6 +164,7 @@ export function isExternalAccessEnabled(): boolean {
 // ─────────────── B 族:Codex / 通用 OpenAI —— 独立一份 token ───────────────
 
 const codexFamily: TokenFamily = {
+  id: 'codex',
   read: readLocalProxyCodexExternalToken,
   write: writeLocalProxyCodexExternalToken,
   isEnabled: isCodexEnabledFromStore,

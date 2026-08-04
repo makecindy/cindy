@@ -140,6 +140,14 @@ export function isValidLocalProxyPort(port: unknown): port is number {
   return typeof port === 'number' && Number.isInteger(port) && port >= MIN_PORT && port <= MAX_PORT;
 }
 
+/**
+ * IPC set-port 入参校验:除了合法可绑端口,额外接受 0 = 「自动(启动时随机绑)」。
+ * 用户清空端口输入框即用 0 把端口从固定改回自动,与状态模型里 0 的语义一致。
+ */
+export function isValidLocalProxyPortOrAuto(port: unknown): port is number {
+  return port === 0 || isValidLocalProxyPort(port);
+}
+
 /** 测试隔离:丢弃单例,下次 getStore 重新构造。 */
 export function resetLocalProxySettingsStoreForTest(): void {
   storeInstance = null;

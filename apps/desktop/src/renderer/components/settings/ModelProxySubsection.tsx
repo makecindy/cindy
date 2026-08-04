@@ -123,8 +123,9 @@ export function ModelProxySubsection() {
   // ───────── Claude Code / Anthropic 出口 ─────────
 
   const handleApplyPort = useCallback(async () => {
-    const parsed = Number.parseInt(portDraft, 10);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    // 空/纯空白 = 恢复「自动」(端口 0 → host 启动时随机绑),与 placeholder 文案一致。
+    const parsed = portDraft.trim() === '' ? 0 : Number.parseInt(portDraft, 10);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
       toast.error(t('settings.localProxy.toast.invalidPort'));
       return;
     }
@@ -267,8 +268,9 @@ export function ModelProxySubsection() {
   }, [t]);
 
   const handleApplyCodexPort = useCallback(async () => {
-    const parsed = Number.parseInt(codexPortDraft, 10);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    // 空/纯空白 = 恢复「自动」(端口 0 → host 启动时随机绑),与 placeholder 文案一致。
+    const parsed = codexPortDraft.trim() === '' ? 0 : Number.parseInt(codexPortDraft, 10);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
       toast.error(t('settings.localProxy.toast.invalidPort'));
       return;
     }

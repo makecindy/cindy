@@ -6,15 +6,20 @@ const tokenBox = vi.hoisted(() => ({ value: null as string | null }));
 const enabledBox = vi.hoisted(() => ({ value: false }));
 const codexTokenBox = vi.hoisted(() => ({ value: null as string | null }));
 const codexEnabledBox = vi.hoisted(() => ({ value: false }));
+// safeStorage 是否可落盘;置 false 模拟 safeStorage 不可用(write 返回 false),
+// 用来验证进程内兜底缓存路径。
+const writableBox = vi.hoisted(() => ({ value: true }));
 
 vi.mock('../../secrets/providerSecretStore', () => ({
   readLocalProxyExternalToken: () => tokenBox.value,
   writeLocalProxyExternalToken: (v: string) => {
+    if (!writableBox.value) return false;
     tokenBox.value = v;
     return true;
   },
   readLocalProxyCodexExternalToken: () => codexTokenBox.value,
   writeLocalProxyCodexExternalToken: (v: string) => {
+    if (!writableBox.value) return false;
     codexTokenBox.value = v;
     return true;
   },
@@ -45,6 +50,7 @@ beforeEach(() => {
   enabledBox.value = false;
   codexTokenBox.value = null;
   codexEnabledBox.value = false;
+  writableBox.value = true;
 });
 
 describe('local proxy external token auth (A 族 = Anthropic)', () => {
@@ -200,5 +206,44 @@ describe('cross-family isolation (跨族 token 不互通)', () => {
     codexEnabledBox.value = true;
     expect(isExternalAccessEnabled()).toBe(false);
     expect(isCodexExternalAccessEnabled()).toBe(true);
+  });
+});
+
+describe('in-process fallback when safeStorage write fails', () => {
+  // 用 regenerate(总是覆盖兜底)取确定值,避免依赖模块级兜底 Map 的跨用例残留。
+  it('keeps the token stable in memory so it still matches this run', () => {
+    writableBox.value = false;
+    const token = regenerateExternalToken();
+    // 落盘失败:物理存储仍为空。
+    expect(tokenBox.value).toBeNull();
+    // 但兜底缓存让本次运行期读取/掩码/命中都拿到同一个稳定值。
+    expect(hasExternalToken()).toBe(true);
+    expect(getExternalTokenMasked()).not.toBeNull();
+    expect(matchesExternalToken(token)).toBe(true);
+    // getOrCreate 不再重新生成,复用兜底值(否则鉴权永远命不中)。
+    expect(getOrCreateExternalToken()).toBe(token);
+  });
+
+  it('a later successful write supersedes the memory fallback', () => {
+    writableBox.value = false;
+    const stale = regenerateExternalToken();
+    writableBox.value = true;
+    const fresh = regenerateExternalToken();
+    // 落盘成功后以持久值为准,旧兜底值失效。
+    expect(tokenBox.value).toBe(fresh);
+    expect(matchesExternalToken(fresh)).toBe(true);
+    expect(matchesExternalToken(stale)).toBe(false);
+  });
+
+  it('memory fallback is keyed per family (A vs B do not collide)', () => {
+    writableBox.value = false;
+    const a = regenerateExternalToken();
+    const b = regenerateCodexExternalToken();
+    expect(a).not.toBe(b);
+    // 各族兜底各认各的,跨族仍不互通。
+    expect(matchesExternalToken(a)).toBe(true);
+    expect(matchesCodexExternalToken(b)).toBe(true);
+    expect(matchesCodexExternalToken(a)).toBe(false);
+    expect(matchesExternalToken(b)).toBe(false);
   });
 });

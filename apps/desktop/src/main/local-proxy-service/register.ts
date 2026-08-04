@@ -44,7 +44,7 @@ import {
 } from '../maker-host/local-proxy-external-auth.js';
 import {
   isCodexExternalAccessEnabled,
-  isValidLocalProxyPort,
+  isValidLocalProxyPortOrAuto,
   loadLocalProxySettings,
   setLocalProxyCodexDefaultProviderId,
   setLocalProxyCodexEnabled,
@@ -184,7 +184,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:set-port',
     async (event, port: unknown): Promise<LocalProxyMutationResult> => {
       assertTrustedAppRendererEvent(event);
-      if (!isValidLocalProxyPort(port)) {
+      if (!isValidLocalProxyPortOrAuto(port)) {
         return { success: false, error: 'invalid port', state: buildState() };
       }
       setLocalProxyPort(port);
@@ -282,7 +282,7 @@ export function registerLocalProxyServiceIpc(): void {
     'local-proxy:set-codex-port',
     async (event, port: unknown): Promise<LocalProxyMutationResult> => {
       assertTrustedAppRendererEvent(event);
-      if (!isValidLocalProxyPort(port)) {
+      if (!isValidLocalProxyPortOrAuto(port)) {
         return { success: false, error: 'invalid port', state: buildState() };
       }
       setLocalProxyCodexPort(port);
