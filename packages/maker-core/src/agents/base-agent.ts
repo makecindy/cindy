@@ -263,6 +263,19 @@ export interface ClaudeSubagentTaskUsage {
   totalTokens: number;
 }
 
+/**
+ * The host has positively identified a resume state that must not be handed to
+ * Codex yet (for example, a rollout file that may still have a live writer).
+ * Unlike an incidental preparation failure, this error deliberately blocks
+ * thread/resume so Codex cannot append to an unsafe path.
+ */
+export class CodexResumePreparationBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CodexResumePreparationBlockedError';
+  }
+}
+
 export interface AgentDeps {
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;

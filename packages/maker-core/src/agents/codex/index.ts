@@ -26,6 +26,7 @@ import { promises as fs } from 'node:fs';
 
 import {
   BaseAgent,
+  CodexResumePreparationBlockedError,
   OneShotError,
   AgentNotAuthenticatedError,
   TurnPermissionPolicyUnsupportedError,
@@ -3601,10 +3602,14 @@ export class CodexAgent extends BaseAgent {
     };
     if (opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
       // Phase 3: thread/resume 真接通, 不再 fallback 到 thread/start
-      if (this.deps.prepareCodexResumeSession) {
+      if (this.deps.prepareCodexResumeSession && !opts.remoteHostId) {
         try {
           await this.deps.prepareCodexResumeSession(opts.resumeSessionId);
         } catch (e) {
+          if (e instanceof CodexResumePreparationBlockedError) {
+            releaseHostBindingLeaseIfNeeded();
+            throw e;
+          }
           log.warn('prepareCodexResumeSession failed, continuing to thread/resume', {
             resumeSessionId: opts.resumeSessionId,
             error: e instanceof Error ? e.message : String(e),
