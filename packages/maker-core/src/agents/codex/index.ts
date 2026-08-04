@@ -825,6 +825,10 @@ const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 // as high as 120 seconds). Once a concrete thread exists, callers can use the
 // thread-scoped status API instead of this pre-thread path.
 const CODEX_BROWSER_USE_READINESS_PROBE_TIMEOUT_MS = 2_000;
+// A single short miss can race the MCP child process finishing its cold start.
+// Retry once before freezing the thread's capability routing, while keeping a
+// genuinely unavailable companion bounded to two short probes.
+const CODEX_BROWSER_USE_READINESS_PROBE_ATTEMPTS = 2;
 
 // thread/start / thread/resume / turn/start 的 RPC 上限。AppServerClient.request
 // 默认无超时 — 远端 daemon 失联 (SSH 隧道半开 / daemon 挂起但 socket 未断) 时
@@ -2992,12 +2996,17 @@ export class CodexAgent extends BaseAgent {
         vendorOptions: vo,
         codexBrowserUseProvisioned,
         codexBrowserUseVersion: host.getCodexBrowserUseVersion(),
-        ensureCodexBrowserUseReady: async () => (
-          codexBrowserUseProvisioned
-          && await host.waitForMcpTool('node_repl', 'js', {
-            timeoutMs: CODEX_BROWSER_USE_READINESS_PROBE_TIMEOUT_MS,
-          })
-        ),
+        ensureCodexBrowserUseReady: async () => {
+          if (!codexBrowserUseProvisioned) return false;
+          for (let attempt = 0; attempt < CODEX_BROWSER_USE_READINESS_PROBE_ATTEMPTS; attempt++) {
+            if (await host.waitForMcpTool('node_repl', 'js', {
+              timeoutMs: CODEX_BROWSER_USE_READINESS_PROBE_TIMEOUT_MS,
+            })) {
+              return true;
+            }
+          }
+          return false;
+        },
       }) ?? this.deps.capabilityRouting;
     assertCurrentHost('capability routing resolution');
     const capabilityRoutingPolicy = buildCodexSessionCapabilityRoutingPolicy(

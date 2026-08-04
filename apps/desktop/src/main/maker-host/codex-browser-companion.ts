@@ -355,7 +355,13 @@ async function inspectCodexBrowserCompanion(
   }
   const mcpServers = isRecord(parsed.mcp_servers) ? parsed.mcp_servers : {};
   const nodeRepl = mcpServers.node_repl;
-  if (!isRecord(nodeRepl) || typeof nodeRepl.command !== 'string') {
+  if (!isRecord(nodeRepl)) {
+    return unavailable('descriptor_invalid', 'the official node_repl descriptor is missing');
+  }
+  if (nodeRepl.enabled === false) {
+    return unavailable('provider_not_installed', 'node_repl is disabled in the official Codex config');
+  }
+  if (typeof nodeRepl.command !== 'string') {
     return unavailable('descriptor_invalid', 'the official node_repl descriptor is missing');
   }
   if (

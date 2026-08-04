@@ -730,10 +730,40 @@ describe('CodexAgent capability routing', () => {
     expect(host.waitForMcpTool).toHaveBeenCalledWith('node_repl', 'js', {
       timeoutMs: 2_000,
     });
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
     expect(resolveCapabilityRouting).toHaveBeenCalledWith(expect.objectContaining({
       codexBrowserUseProvisioned: true,
     }));
     expect(ready).toBe(false);
+
+    await handle.close();
+  });
+
+  it('retries a transient Browser companion readiness miss before freezing routing', async () => {
+    let ready: boolean | undefined;
+    const resolveCapabilityRouting = vi.fn(async (
+      ctx: Parameters<NonNullable<AgentDeps['resolveCapabilityRouting']>>[0],
+    ) => {
+      ready = await ctx.ensureCodexBrowserUseReady();
+      return { overrides: [] };
+    });
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+    });
+    host.waitForMcpTool
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-transient-miss',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
+    expect(ready).toBe(true);
 
     await handle.close();
   });

@@ -19,6 +19,7 @@ async function setup(overrides: {
   command?: string;
   pluginEnabled?: boolean;
   isolatedPluginEnabled?: boolean;
+  nodeReplEnabled?: boolean;
   includeExtensionHost?: boolean;
   extraEnv?: string;
   nodeReplContent?: string;
@@ -118,6 +119,9 @@ async function setup(overrides: {
       `enabled = ${overrides.pluginEnabled === false ? 'false' : 'true'}`,
       '',
       '[mcp_servers.node_repl]',
+      ...(overrides.nodeReplEnabled === undefined
+        ? []
+        : [`enabled = ${overrides.nodeReplEnabled ? 'true' : 'false'}`]),
       `command = ${JSON.stringify(nodeRepl)}`,
       'args = []',
       'startup_timeout_sec = 120',
@@ -146,7 +150,7 @@ async function setup(overrides: {
   await fs.symlink(
     path.join(homeDir, '.codex', 'plugins', 'cache', 'openai-bundled'),
     isolatedMarketplace,
-    'dir',
+    process.platform === 'win32' ? 'junction' : 'dir',
   );
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(
@@ -163,7 +167,11 @@ async function setup(overrides: {
     'utf8',
   );
 
-  await fs.symlink(pluginRoot, path.join(path.dirname(pluginRoot), 'latest'), 'dir');
+  await fs.symlink(
+    pluginRoot,
+    path.join(path.dirname(pluginRoot), 'latest'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
 
   return {
     appBundle,
@@ -287,7 +295,11 @@ describe('prepareCodexBrowserCompanion', () => {
     const otherVersion = path.join(path.dirname(pluginRoot), 'other-version');
     await fs.unlink(latest);
     await fs.mkdir(otherVersion);
-    await fs.symlink(otherVersion, latest, 'dir');
+    await fs.symlink(
+      otherVersion,
+      latest,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     const result = await prepareCodexBrowserCompanion({
       codexHome,
@@ -312,6 +324,23 @@ describe('prepareCodexBrowserCompanion', () => {
     });
 
     expect(result).toMatchObject({ status: 'unavailable', reason: 'provider_not_installed' });
+  });
+
+  it('does not re-enable a node_repl descriptor disabled by the user', async () => {
+    const { codexHome, homeDir } = await setup({ nodeReplEnabled: false });
+
+    const result = await prepareCodexBrowserCompanion({
+      codexHome,
+      homeDir,
+      platform: 'darwin',
+      arch: 'arm64',
+      verifyMacBundle: async () => true,
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'provider_not_installed',
+    });
   });
 
   it('revalidates the signed app bundle for each host provision', async () => {
