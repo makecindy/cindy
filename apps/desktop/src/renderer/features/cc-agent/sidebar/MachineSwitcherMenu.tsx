@@ -163,9 +163,14 @@ export function MachineSwitcherMenu(): ReactNode {
             className="shrink-0 text-[var(--sidebar-nav-text)]"
           />
           <span className="truncate leading-none">{triggerText}</span>
+          <ChevronDown
+            size={14}
+            strokeWidth={1.8}
+            className="shrink-0 text-[var(--sidebar-nav-text)]"
+          />
           <span
             aria-hidden="true"
-            className="flex h-4 w-4 shrink-0 items-center justify-center"
+            className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center"
           >
             {remoteSessionBootstrapLoading && (
               <span className="inline-flex animate-spinner motion-reduce:animate-none">
@@ -173,11 +178,6 @@ export function MachineSwitcherMenu(): ReactNode {
               </span>
             )}
           </span>
-          <ChevronDown
-            size={14}
-            strokeWidth={1.8}
-            className="shrink-0 text-[var(--sidebar-nav-text)]"
-          />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

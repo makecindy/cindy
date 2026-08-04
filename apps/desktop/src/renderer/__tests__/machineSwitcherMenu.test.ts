@@ -196,11 +196,14 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
-  it('在机器栏固定显示远程任务读取 loading,不把提示插入会话列表', () => {
-    // 后台 bootstrap 只占机器栏内的固定状态槽,避免列表行因提示挂载/卸载而上下跳动。
+  it('在机器栏固定显示远程任务读取 loading,不改变文字与下拉箭头间距', () => {
+    // 文字与箭头保持原有相邻布局；后台 bootstrap 只占最右侧固定状态槽，
+    // 避免列表上下跳动，也避免空槽把下拉箭头推远。
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
-    expect(menuSource).toContain('className="flex h-4 w-4 shrink-0 items-center justify-center"');
+    expect(menuSource).toMatch(
+      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?<span\s*aria-hidden="true"\s*className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center"\s*>/,
+    );
     expect(menuSource).toContain(
       '<span className="inline-flex animate-spinner motion-reduce:animate-none">',
     );
