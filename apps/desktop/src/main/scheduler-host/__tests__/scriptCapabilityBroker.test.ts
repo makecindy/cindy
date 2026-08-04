@@ -624,39 +624,53 @@ describe('SchedulerScriptCapabilityBroker', () => {
     }
   });
 
-  it('finalizeActiveCalls:runner 终结本轮时在途 callId 立即失写权,调用后续交卷不受影响(review P1)', async () => {
+  it('finalizeActiveCalls(runId):终结本 run 的在途写权,并发 run 不误伤(两个 review P1)', async () => {
     const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-finalize-'));
     const { cardService, fsSlot } = wireRealChannel(tmp);
-    // 调用挂闸门保持在途。
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    callGhostToolMock.mockImplementationOnce(async () => { await gate; return { ok: true, result: {} }; });
+    // 两个不同 run 的调用都挂闸门保持在途。
+    const gates: Array<() => void> = [];
+    callGhostToolMock.mockImplementation(async () => {
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return { ok: true, result: {} };
+    });
     const broker = new SchedulerScriptCapabilityBroker();
-    const p = broker
-      .call(
-        { method: 'jira.get', params: { issue_key: 'DING-1' } },
-        new Set(['jira.read']),
-        { schedule: schedule({ workingDir: tmp }) },
-      )
+    const granted = new Set(['jira.read'] as const);
+    const pA = broker
+      .call({ method: 'jira.get', params: { issue_key: 'DING-1' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-A' })
+      .catch((err: unknown) => err);
+    const pB = broker
+      .call({ method: 'jira.get', params: { issue_key: 'DING-2' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-B' })
       .catch((err: unknown) => err);
     try {
-      const callId = registerCallMock.mock.calls[0][0] as string;
-      // 在途:写盘放行。
+      const callIdA = registerCallMock.mock.calls[0][0] as string;
+      const callIdB = registerCallMock.mock.calls[1][0] as string;
+      // 两个 run 都在途:写盘都放行。
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
-        op: 'write', root: 'workdir', callId, path: 'inflight.json', content: 'x',
+        op: 'write', root: 'workdir', callId: callIdA, path: 'a.json', content: 'x',
       })).toMatchObject({ ok: true });
-      // runner 终结本轮(drain 30s 截止/abort/超时放弃等待):在途授权立即失效,
-      // 不等 pipeDispatcher 超时(上限 30min)。
-      broker.finalizeActiveCalls();
-      expect(cardService.inFlightCallInfoOf(callId)).toBeNull();
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
-        op: 'write', root: 'workdir', callId, path: 'after-end.json', content: 'x',
+        op: 'write', root: 'workdir', callId: callIdB, path: 'b.json', content: 'x',
+      })).toMatchObject({ ok: true });
+      // run-A 终结(drain 30s 截止/abort):它的在途授权立即失效,不等
+      // pipeDispatcher 超时(上限 30min);并发的 run-B 不受影响(broker 单例、
+      // scheduler 并发上限 8,误清别家桶会把合法写盘拒成「已过期」)。
+      broker.finalizeActiveCalls('run-A');
+      expect(cardService.inFlightCallInfoOf(callIdA)).toBeNull();
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: callIdA, path: 'a-late.json', content: 'x',
       })).toMatchObject({ ok: false });
-      expect(fs.existsSync(path.join(tmp, 'after-end.json'))).toBe(false);
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: callIdB, path: 'b2.json', content: 'x',
+      })).toMatchObject({ ok: true });
+      // run-B 终结后同样失效。
+      broker.finalizeActiveCalls('run-B');
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: callIdB, path: 'b-late.json', content: 'x',
+      })).toMatchObject({ ok: false });
     } finally {
       // 调用之后正常交卷:finalize 幂等(dispatcher 配对账本独立),不炸。
-      release();
-      await p;
+      for (const release of gates) release();
+      await Promise.all([pA, pB]);
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
   });

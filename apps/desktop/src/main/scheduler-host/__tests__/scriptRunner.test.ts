@@ -160,7 +160,7 @@ describe('ScriptScheduleRunner', () => {
     expect(broker.call).toHaveBeenCalledWith(
       { method: 'jira.get', params: { issue_key: 'DING-1' } },
       new Set(['jira.read']),
-      { schedule: expect.objectContaining({ id: 'script-schedule' }) },
+      { schedule: expect.objectContaining({ id: 'script-schedule' }), runId: 'run-1' },
     );
     child.stdout.write(`${JSON.stringify({
       protocol: 'xdt-maker-script/1',
@@ -460,7 +460,9 @@ describe('ScriptScheduleRunner', () => {
     child.emit('close', 0);
 
     await expect(resultPromise).resolves.toEqual({ sessionId: '', resultText: 'done' });
+    // 收口按 runId 调用:scheduler 并发跑多个 schedule 时只 finalize 本 run(review P1 第二轮)。
     expect(finalizeActiveCalls).toHaveBeenCalledTimes(1);
+    expect(finalizeActiveCalls).toHaveBeenCalledWith('run-1');
   });
 
   it('does not hang past pause/delete when a call is still in flight after the child has already exited (codex review 第七轮)', async () => {
