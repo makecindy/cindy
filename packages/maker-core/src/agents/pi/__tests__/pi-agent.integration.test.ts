@@ -10,7 +10,15 @@
  */
 
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, existsSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +44,7 @@ const RIPGREP_DIR = path.join(
   'ripgrep-bin',
   `${process.platform}-${process.arch}`,
 );
+const RIPGREP_BINARY = path.join(RIPGREP_DIR, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const PREVIOUS_PI_BINARY = path.join(
   REPO_ROOT,
   'tools',
@@ -335,7 +344,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'test-key-123' }),
       },
-      runtimeConfig: { endpoint, pathPrepends: [RIPGREP_DIR] },
+      runtimeConfig: { endpoint, managedExecutablePaths: { ripgrep: RIPGREP_BINARY } },
       binaryPath: PI_BINARY,
       logger: noopLogger,
       capabilityAdditions: {
@@ -1153,6 +1162,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     async () => {
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-grep-'));
       writeFileSync(path.join(workingDir, 'tool-target.ts'), 'needle-line\n');
+      const rogueRg = path.join(workingDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+      writeFileSync(rogueRg, process.platform === 'win32' ? 'not-an-executable' : '#!/bin/sh\nexit 42\n');
+      if (process.platform !== 'win32') chmodSync(rogueRg, 0o755);
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -1279,7 +1291,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
               'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
-              'CINDY_PI_SECRET_ENV_NAMES',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
               'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
               'done; printf "PI_ENV_CLEAN\\n"',

@@ -45,6 +45,7 @@ import {
 const PERMISSION_TITLE = 'cindy:permission';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
+const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 
 // Pi 的模型鉴权、localhost proxy 与 MCP bearer 需要留在父进程 env 供 runtime
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
@@ -53,6 +54,7 @@ const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  MANAGED_RG_PATH_ENV,
   'PI_CODING_AGENT_DIR',
 ]);
 try {
@@ -70,6 +72,14 @@ function withoutPiSecrets(env: Record<string, string | undefined>): Record<strin
   const clean = { ...env };
   for (const name of SECRET_ENV_NAMES) delete clean[name];
   return clean;
+}
+
+function managedRipgrepPath(): string {
+  const configured = process.env[MANAGED_RG_PATH_ENV];
+  if (!configured || !path.isAbsolute(configured)) {
+    throw new Error('Cindy managed ripgrep is unavailable');
+  }
+  return configured;
 }
 
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
@@ -473,7 +483,10 @@ function rgGlob(
     const args = ['--files', '--hidden', '--no-require-git'];
     for (const ignored of options.ignore) args.push('--glob', '!' + ignored);
 
-    const child = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(managedRipgrepPath(), args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const lines: string[] = [];
     let stderr = '';
     let stoppedAtLimit = false;
@@ -531,8 +544,11 @@ export default async function cindyBridge(pi: any) {
   const grepTool = createGrepTool(process.cwd());
   pi.registerTool({
     ...grepTool,
-    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) =>
-      grepTool.execute(id, params as any, signal, onUpdate as any),
+    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
+      // Fail closed before Pi upstream ensureTool can fall back to cwd/PATH lookup.
+      managedRipgrepPath();
+      return grepTool.execute(id, params as any, signal, onUpdate as any);
+    },
   });
 
   // 覆盖内置 find：保留 Pi 原生 schema、渲染、截断和权限工具名，只替换文件枚举后端。
