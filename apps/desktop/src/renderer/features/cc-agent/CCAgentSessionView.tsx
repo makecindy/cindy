@@ -87,6 +87,7 @@ import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn';
+import { CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
@@ -1392,6 +1393,26 @@ export function CCAgentSessionView({
   const [errorTailBannerHiddenFor, setErrorTailBannerHiddenFor] = useState<string | null>(null);
   const errorTailBannerHidden =
     errorTailBannerHiddenFor !== null && errorTailBannerHiddenFor === errorTailMsg?.clientId;
+  /**
+   * Claude Code captures the subscription token and plan metadata when its process is spawned.
+   * Settings auth changes only affect future sessions, so a subscription-plan retry must first
+   * use the existing soft-close path; the next dispatch then lazy-creates Claude with fresh auth.
+   * preserveWorkspace keeps this recovery from triggering worktree cleanup, and makerApiFor
+   * keeps the same behavior for device-link sessions.
+   */
+  const rebuildClaudeSubscriptionSessionBeforeRetry = useCallback(
+    async (reason: string | null | undefined): Promise<void> => {
+      if (
+        !sessionId ||
+        session?.agentKind !== 'cc' ||
+        reason !== CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON
+      ) {
+        return;
+      }
+      await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
+    },
+    [session?.agentKind, sessionId],
+  );
   // 抑制交棒(review P2):本地 hidden 态只服务「点击 → enqueue 被接受」的短窗口;
   // 合成续跑项进入队列或 coordinator dispatch 边界后就释放 hidden 态，由
   // main projection 接管抑制。排队项被取消 / dispatch 前被 Ghost block 时，
@@ -1409,6 +1430,9 @@ export function CCAgentSessionView({
       // 隐藏的英文续跑指令([UI_ACTION_TRIGGER] 前缀,消息流不渲染)——用户视角
       // 就是任务继续跑了。transcript 里已有原任务与(可能的)部分进展,模型自查
       // 进度接着做。send 失败恢复红条让用户能重试。
+      await rebuildClaudeSubscriptionSessionBeforeRetry(
+        errorTailKind === 'error' ? errorTailMsg.errorReason : null,
+      );
       await makerChatStore.sendUiTrigger(
         sessionId,
         errorTailKind === 'interrupted'
@@ -1427,7 +1451,7 @@ export function CCAgentSessionView({
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [errorTailKind, errorTailMsg, sessionId]);
+  }, [errorTailKind, errorTailMsg, rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
     // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
@@ -2629,10 +2653,12 @@ export function CCAgentSessionView({
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
-    void retryLastError().catch((error) => {
-      log.warn('retryLastError failed', error);
-    });
-  }, [retryLastError]);
+    void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
+      .then(() => retryLastError())
+      .catch((error) => {
+        log.warn('retryLastError failed', error);
+      });
+  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
