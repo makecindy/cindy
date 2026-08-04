@@ -27,7 +27,7 @@ import {
 } from '../accountBoundary';
 
 import { getControlScope, isInControl } from './controlState';
-import { isStopCommand } from './controlCommands';
+import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
@@ -60,6 +60,27 @@ export function createMessageHandler(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
     );
+
+    // ── 控制命令的主人门: 群成员的 !stop / slash 静默丢弃 ────────────────────
+    // 群消息的 senderId 是**群 lane**(telegram g/<chatId>、钉钉
+    // encodeLaneUserId(conversationId)), 所以群成员发的 !stop 会解析到同一个群
+    // 会话 —— 等于掐掉主人正在跑的那一轮; slash 则会去动主人的目录/会话。
+    // 静默(不回提示)与 telegram 入站层同口径: 群里不可被探测。也不落到 agent,
+    // 否则命令会变成一句普通 prompt。
+    //
+    // 放在 /ctr 拦截**之前**: 否则主人正走 /ctr 时, 群成员发命令会收到一句
+    // "控制流程中" —— 等于把主人的状态回给了没有权限的人。
+    const commandLike =
+      event.text.length > 0 &&
+      event.attachments.length === 0 &&
+      (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
+    if (commandLike && !isCommandAuthorized(event)) {
+      log.info(
+        `dropped non-owner command sender=...${event.senderId.slice(-8)} ` +
+          `speaker=...${(event.speaker?.id ?? '').slice(-8)}`,
+      );
+      return;
+    }
 
     // ── /ctr 原子化拦截 ────────────────────────────────────────────────
     // 该 (bot, owner) 处于 /ctr 流程中 → 任何消息都不路由到 slash/agent,
