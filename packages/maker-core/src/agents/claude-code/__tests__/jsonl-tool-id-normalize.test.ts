@@ -758,6 +758,36 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     // content_block.id(子调用)→ 独立解析匹配第二个 Task_1 → Task_1_dup2,
     // 不复用父映射
     const evt = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
+    expect((evt.content_block).id).toBe('Task_1_dup2');
+  });
+
+  it('child content_block_start 在 assistant 后且父同 id 时匹配子 occurrence(P1: Map post-assistant stream starts to the child occurrence)', () => {
+    // 父 Agent/Task 调用 Task_1(line 0), 子 assistant 的 tool 也 Task_1(line 2, 重铸)。
+    // child 的 content_block_start(带 parent_tool_use_id)在 assistant 之后(line 3),
+    // 无 future occurrence —— 若 fallback 到最早之前会命中父(Task_x1), 但应命中子
+    // occurrence(Task_1_dup2), 否则 replay/import 以父 id 启动子 tool card。
+    const text = [
+      assistantEntry('aParent', [toolUse('Task_1')]), // 父调用 → Task_x1
+      userEntry('uParent', [toolResult('Task_1')]),
+      assistantEntry('aChild', [toolUse('Task_1')]), // 子 tool → Task_1_dup2
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'child-stream',
+        parent_tool_use_id: 'Task_1',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Task_1', name: 'Task', input: {} },
+        },
+      }),
+      userEntry('uChild', [toolResult('Task_1')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Task_x1');
+    expect(contentOf(entries[2])[0].id).toBe('Task_1_dup2');
+    // content_block_start(assistant 后, 带 parent)匹配子 occurrence(Task_1_dup2), 非父
+    const evt = (entries[3] as Record<string, unknown>).event as Record<string, unknown>;
     expect((evt.content_block as Record<string, unknown>).id).toBe('Task_1_dup2');
   });
 

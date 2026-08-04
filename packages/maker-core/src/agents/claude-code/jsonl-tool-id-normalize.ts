@@ -418,6 +418,23 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       }
       return occs[occs.length - 1].finalId;
     };
+    // 带 parent 的 content_block_start 专用: 匹配「最近的 future occurrence」——
+    // 父 Agent/Task 与子 tool 同原始 id 时, 子调用通常是更晚的 future(父先出现),
+    // content_block_start 应指向子; 单 occurrence 时匹配唯一。无 future(assistant 后
+    // 的 child start)时 fallback 最近之前 —— 子 occurrence 仍在父之后, 命中子而非父
+    // (codex-connector P1: Map post-assistant stream starts to the child occurrence)。
+    // 不推进 aheadPtr(不与其他无 parent 的 start FIFO 共享)。
+    const resolveLastFuture = (val: string, index: number): string | undefined => {
+      const occs = occurrenceByOriginal.get(val);
+      if (!occs || occs.length === 0) return undefined;
+      let last: { line: number; finalId: string } | undefined;
+      for (let i = 0; i < occs.length; i += 1) {
+        if (occs[i].line >= index) last = occs[i];
+        else break;
+      }
+      if (last) return last.finalId;
+      return occs[occs.length - 1].finalId; // 无 future → 最近之前
+    };
     // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
     // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
     // 重映射到下一个 occurrence 拆散。
@@ -545,18 +562,19 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // (如父 Task_1 与子自己启动的首个 Task_1), 也指向不同 occurrence。若走
       // resolveField, 父的映射被缓存后嵌套复用, replay/import 把子 tool 挂到父 id 下
       // (codex-connector P1: Resolve nested stream IDs independently)。
-      // **前瞻优先**: content_block_start 预告的是**即将出现**的 tool call, 即使存在
-      // 更早的旧 occurrence(line < index), 也应匹配未来 —— 重铸后新调用的 start 记录
-      // 若后顾命中旧调用, 会被改写为首个卡片而非新调用(codex-connector P2: Map
-      // pre-assistant duplicate stream IDs forward)。resolveAhead 本身已有「无 future
-      // 时按内容顺序 fallback 之前 occurrence」的逻辑, 覆盖 start 落在 assistant 之后
-      // 的场景; aheadPtr 跨字段推进保证同一 entry 内 parent_tool_use_id 先占的
-      // occurrence 不会与 content_block.id 冲突(nested 场景父/子各匹配各次)。
+      // **归属区分**: 带顶层 parent_tool_use_id 的 content_block_start 属于某 child,
+      // 走 resolveForEntry(后顾优先, 匹配该 child 的最近 occurrence —— 即使 start 落
+      // 在 child assistant 之后, fallback 也命中子 occurrence 而非父 occurrence,
+      // codex-connector P1: Map post-assistant stream starts to the child occurrence);
+      // 不带 parent 的主流程 tool 预告走 resolveAhead(前瞻, 匹配即将出现的调用,
+      // codex-connector P2: Map pre-assistant duplicate stream IDs forward)。
       const evt = entry.event;
       if (isRecord(evt) && evt.type === 'content_block_start') {
         const cb = evt.content_block;
         if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-          const mapped = resolveAhead(cb.id, index);
+          const mapped = typeof entry.parent_tool_use_id === 'string' && entry.parent_tool_use_id
+            ? resolveLastFuture(cb.id, index)
+            : resolveAhead(cb.id, index);
           if (mapped !== undefined && mapped !== cb.id) {
             cb.id = mapped;
             entryChanged = true;
