@@ -24,6 +24,9 @@ import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
+import remarkRepairLocalMarkdownLinks, {
+  RAW_LOCAL_LINK_HREF_PROP,
+} from './remarkRepairLocalMarkdownLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkPreserveLocalImagePaths, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -203,6 +206,7 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkRepairLocalMarkdownLinks,
   remarkPreserveLocalImagePaths,
   remarkSessionLinks,
   remarkLocalPathLinks,
@@ -1735,10 +1739,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         // Explicit drop guarantees our link styling is never overridden by an
         // upstream change. `node` is the mdast node — not a valid DOM prop.
         const rawProps = props as Record<string, unknown>;
+        const rawLocalHref = rawProps[RAW_LOCAL_LINK_HREF_PROP];
+        const effectiveHref = typeof rawLocalHref === 'string' ? rawLocalHref : href;
         // remarkLocalPathLinks 打的标记:这条 link 来自正文裸写的路径,不是作者手写的
         // `[label](path)`。读完即从 DOM props 里剥掉(它只是内部信道,不该落到 <a> 上)。
         const fromBarePath = BARE_PATH_ATTR in rawProps;
         const safeProps = omitMarkdownInternalProps(rawProps);
+        delete safeProps[RAW_LOCAL_LINK_HREF_PROP];
         delete safeProps[BARE_PATH_ATTR];
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session-card/')) {
           const parsed = parseSessionCardHref(href);
@@ -1776,7 +1783,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         }
         return (
           <MarkdownTargetLink
-            href={href}
+            href={effectiveHref}
             workingDir={workingDir}
             isStreaming={isStreaming}
             localFileRefs={localFileRefs}
