@@ -15726,6 +15726,108 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('REPRO: preserves a late collab-agent terminal update after the parent turn completes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'spawnAgent running...', isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      data: { toolUseId: 'collab-1', toolName: 'collab:spawnAgent' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The carve-out is one-shot: a retried late item must not duplicate the
+    // tool result or terminal task update.
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
   it('emits the terminal boundary only once for duplicate turnCompleted notifications', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

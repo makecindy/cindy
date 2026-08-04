@@ -2540,6 +2540,10 @@ export class CodexAgent extends BaseAgent {
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
     };
+    // A collab item can finish after its parent turn/completed notification. Keep
+    // those late terminal ids one-shot so the narrow carve-out below cannot replay
+    // tool results when the server retries the same item notification.
+    const lateCollabTerminalItemIds = new Set<string>();
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -6097,6 +6101,22 @@ export class CodexAgent extends BaseAgent {
       );
     };
 
+    const lateCollabTerminalItemKey = (
+      turnId: string | null | undefined,
+      item: unknown,
+    ): string | undefined => {
+      if (!turnId || !completedTurnIds.has(turnId)) return undefined;
+      if (!item || typeof item !== 'object') return undefined;
+      const candidate = item as { id?: unknown; type?: unknown; status?: unknown };
+      if (
+        candidate.type !== 'collabAgentToolCall' ||
+        (candidate.status !== 'completed' && candidate.status !== 'failed') ||
+        typeof candidate.id !== 'string' ||
+        candidate.id.length === 0
+      ) return undefined;
+      return `${turnId}:${candidate.id}`;
+    };
+
     const stopActiveRolloutPlanFallback = (): void => {
       const stop = stopRolloutPlanFallback;
       stopRolloutPlanFallback = null;
@@ -7673,7 +7693,11 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
         })) return;
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          const lateKey = lateCollabTerminalItemKey(params.turnId, params.item);
+          if (!lateKey || lateCollabTerminalItemIds.has(lateKey)) return;
+          lateCollabTerminalItemIds.add(lateKey);
+        }
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);

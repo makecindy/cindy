@@ -31,6 +31,7 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
+import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
 import {
   isAgentPlanToolName,
   isDeliveryProseText,
@@ -1416,11 +1417,13 @@ function isWorkChild(it: RenderItem): it is WorkChildItem {
 /** 运行中(未到终态)的子 Agent 卡片 —— 折叠时视为"可见锚点",绝不折进
  *  「已工作 Xs」工作组:任务没完成就归档会谎报终态时长(典型:后台 workflow
  *  子 Agent 仍在跑,父 turn 却已产出最终正文)。status 派生口径与 AgentTaskCard
- *  完全一致(update.status 优先,否则有 result 视为 completed、无则 running),
- *  保证"卡片显示运行中"与"是否折叠"永远同步。终态 = completed/failed/stopped。 */
+ *  完全一致:配对的最终 result 会把 stale running 收敛为 completed,但不覆盖
+ *  failed/stopped 等明确终态,
+ *  保证"卡片显示运行中"与"是否折叠"永远同步。 */
+// A paired final result closes a stale running update; this must match AgentTaskCard.
 function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
-  const status = it.update?.status ?? (it.result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(it.update?.status, it.result);
   return status === 'running';
 }
 

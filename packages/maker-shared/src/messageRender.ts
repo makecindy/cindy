@@ -1,5 +1,6 @@
 import {
   type AgentTaskUpdate,
+  deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
 } from './agentTask';
@@ -1375,15 +1376,14 @@ function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
  * 运行中(未到终态)的子 Agent 卡是折叠时的"可见锚点",绝不折进「工作过程」组:
  * 任务没完成就归档会谎报终态(典型:后台子 agent 仍在跑,父 turn 已产出最终正文)。
  * status 派生口径与 buildAgentTaskCardModel / 桌面 MessageStream 的 isRunningAgentTask
- * 完全一致(update.status 优先;否则有配对工具结果 secondaryBody 视为 completed、
- * 无则 running),保证「卡片显示运行中」与「是否折叠」永远同步。
- * 终态 = completed/failed/stopped。
+ * 完全一致:配对工具结果 secondaryBody 会把 stale running 收敛为 completed,
+ * 但不覆盖 failed/stopped 等明确终态,保证「卡片显示运行中」与「是否折叠」永远同步。
  */
 function isRunningAgentTaskItem<
   TMessage extends MessageRenderNormalizedMessage,
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
-  const status = item.update?.status ?? (item.toolCall?.secondaryBody ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody);
   return status === 'running';
 }
 

@@ -12,6 +12,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
@@ -181,9 +182,9 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
     };
   }, [isWorkflow, update?.status, sessionId, workflowTaskId]);
 
-  const status =
-    update?.status ??
-    (isWorkflow ? (historyFileStatus ?? (result ? 'completed' : 'running')) : result ? 'completed' : 'running');
+  const status = isWorkflow
+    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
+    : deriveAgentTaskStatus(update?.status, result);
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(
     'text-[var(--text-secondary)]',

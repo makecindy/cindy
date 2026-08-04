@@ -153,6 +153,19 @@ export interface AgentTaskUpdate {
 }
 
 /**
+ * Derive the visible task status from the live update and its paired tool result.
+ * A result is a terminal fact, so it closes a stale `running` update without
+ * overriding an explicit failure or stopped state.
+ */
+export function deriveAgentTaskStatus(
+  updateStatus: AgentTaskStatus | undefined,
+  result?: string,
+): AgentTaskStatus {
+  const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (updateStatus === 'running' && hasResult) return 'completed';
+  return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
  * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
  * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
  *
@@ -363,7 +376,7 @@ export function buildAgentTaskCardModel(input: {
   result?: string;
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
-  const status: AgentTaskStatus = update?.status ?? (result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(update?.status, result);
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider
     ?? (toolName?.startsWith('collab:')

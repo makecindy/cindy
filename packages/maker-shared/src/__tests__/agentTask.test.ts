@@ -278,6 +278,37 @@ describe('findAgentTaskUpdate', () => {
 });
 
 describe('buildAgentTaskCardModel', () => {
+  it('REPRO: treats a paired final result as terminal when the live update is stale running', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: completed',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('completed');
+  });
+
+  it('preserves explicit failed and stopped terminal states when a result is present', () => {
+    const input = {
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: terminal',
+      update: {
+        provider: 'codex' as const,
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+      },
+    };
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'failed' } }).status)
+      .toBe('failed');
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'stopped' } }).status)
+      .toBe('stopped');
+  });
+
   it('falls back the title through update → tool input description → prompt', () => {
     expect(buildAgentTaskCardModel({ update: { provider: 'codex', taskId: 't', status: 'running', title: 'From update' } }).title)
       .toBe('From update');
