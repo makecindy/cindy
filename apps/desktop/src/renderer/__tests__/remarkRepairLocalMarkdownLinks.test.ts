@@ -164,6 +164,48 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     ]);
   });
 
+  it('keeps a character-reference opening bracket inactive', () => {
+    const children = firstParagraphChildren('&#91;示例](/tmp/My File.md)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: '[示例](/tmp/My File.md)' },
+    ]);
+  });
+
+  it('keeps a character-reference image marker inactive', () => {
+    const children = firstParagraphChildren('&#33;[示例](/tmp/My File.png)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: '![示例](/tmp/My File.png)' },
+    ]);
+  });
+
+  it('keeps escaped link syntax inactive after a CRLF line ending', () => {
+    const children = firstParagraphChildren('line\r\n\\[示例](/tmp/My File.md)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: 'line\r\n[示例](/tmp/My File.md)' },
+    ]);
+  });
+
+  it('still repairs an unescaped link after a CRLF line ending', () => {
+    const children = firstParagraphChildren('line\r\n[示例](/tmp/My File.md)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: 'line\r\n' },
+      {
+        type: 'link',
+        url: '/tmp/My File.md',
+        children: [{ type: 'text', value: '示例' }],
+        data: {
+          hProperties: {
+            [RAW_LOCAL_LINK_HREF_PROP]: '/tmp/My File.md',
+          },
+        },
+      },
+    ]);
+  });
+
   it('still repairs an unescaped link after a decoded character reference', () => {
     const children = firstParagraphChildren('&amp; [示例](/tmp/My File.md)');
 
@@ -191,6 +233,56 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     ]);
     expect(firstParagraphChildren('&#x26; \\[示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
       { type: 'text', value: '& [示例](/tmp/My File.md)' },
+    ]);
+  });
+
+  it('does not rewrite malformed link syntax inside an existing link label', () => {
+    const children = firstParagraphChildren('[outer [inner](/tmp/My File.md)](https://example.com)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      {
+        type: 'link',
+        url: 'https://example.com',
+        title: null,
+        children: [{ type: 'text', value: 'outer [inner](/tmp/My File.md)' }],
+      },
+    ]);
+  });
+
+  it('does not rewrite malformed syntax nested deeper inside an existing link label', () => {
+    const children = firstParagraphChildren(
+      '[outer *[inner](/tmp/My File.md)*](https://example.com)',
+    );
+
+    expect(children.map(withoutPositions)).toEqual([
+      {
+        type: 'link',
+        url: 'https://example.com',
+        title: null,
+        children: [
+          { type: 'text', value: 'outer ' },
+          {
+            type: 'emphasis',
+            children: [{ type: 'text', value: '[inner](/tmp/My File.md)' }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('does not rewrite malformed syntax inside a reference link label', () => {
+    const children = firstParagraphChildren(
+      '[outer [inner](/tmp/My File.md)][ref]\n\n[ref]: https://example.com',
+    );
+
+    expect(children.map(withoutPositions)).toEqual([
+      {
+        type: 'linkReference',
+        identifier: 'ref',
+        label: 'ref',
+        referenceType: 'full',
+        children: [{ type: 'text', value: 'outer [inner](/tmp/My File.md)' }],
+      },
     ]);
   });
 });

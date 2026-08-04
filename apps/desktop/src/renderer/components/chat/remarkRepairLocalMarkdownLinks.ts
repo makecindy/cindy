@@ -80,6 +80,17 @@ function isRawEscaped(decodedIndex: number, rawSource: string | undefined, rawOf
   return slashCount % 2 === 1;
 }
 
+function isRawCharacter(
+  decodedIndex: number,
+  expected: string,
+  rawSource: string | undefined,
+  rawOffsets: number[] | null,
+) {
+  if (decodedIndex < 0 || !rawSource || !rawOffsets) return true;
+  const rawIndex = rawOffsets[decodedIndex];
+  return rawIndex !== undefined && rawSource[rawIndex] === expected;
+}
+
 function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
   const matches: Array<{ start: number; end: number; label: string; href: string; image: boolean }> = [];
   MALFORMED_LOCAL_LINK_START_RE.lastIndex = 0;
@@ -88,8 +99,10 @@ function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
   let match: RegExpExecArray | null;
   while ((match = MALFORMED_LOCAL_LINK_START_RE.exec(value)) !== null) {
     if (isRawEscaped(match.index, rawSource, rawOffsets)) continue;
+    if (!isRawCharacter(match.index, '[', rawSource, rawOffsets)) continue;
     const image = match.index > 0 && value[match.index - 1] === '!';
     if (image && isRawEscaped(match.index - 1, rawSource, rawOffsets)) continue;
+    if (image && !isRawCharacter(match.index - 1, '!', rawSource, rawOffsets)) continue;
     const hrefStart = MALFORMED_LOCAL_LINK_START_RE.lastIndex;
     const hrefSource = value.slice(hrefStart);
     // A relative Windows path has no drive/UNC anchor, but a separator before
@@ -171,8 +184,9 @@ function splitMalformedLocalLinks(node: Text, rawSource?: string): PhrasingConte
 
 const remarkRepairLocalMarkdownLinks: Plugin<[], Root> = () => {
   return (tree, file) => {
-    visit(tree, 'text', (node: Text, index, parent) => {
-      if (!parent || index == null || !node.value.includes('](')) return;
+    visit(tree, (node, index, parent) => {
+      if (node.type === 'link' || node.type === 'linkReference') return SKIP;
+      if (node.type !== 'text' || !parent || index == null || !node.value.includes('](')) return;
       const rawSource =
         node.position?.start.offset !== undefined && node.position.end.offset !== undefined
           ? file.toString().slice(node.position.start.offset, node.position.end.offset)
