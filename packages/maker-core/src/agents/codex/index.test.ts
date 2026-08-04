@@ -727,7 +727,9 @@ describe('CodexAgent capability routing', () => {
       workingDir: '/repo',
     });
 
-    expect(host.waitForMcpTool).toHaveBeenCalledWith('node_repl', 'js');
+    expect(host.waitForMcpTool).toHaveBeenCalledWith('node_repl', 'js', {
+      timeoutMs: 2_000,
+    });
     expect(resolveCapabilityRouting).toHaveBeenCalledWith(expect.objectContaining({
       codexBrowserUseProvisioned: true,
     }));
