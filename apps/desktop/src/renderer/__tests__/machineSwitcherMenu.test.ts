@@ -196,6 +196,17 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
+  it('在机器栏固定显示远程任务读取 loading,不把提示插入会话列表', () => {
+    // 后台 bootstrap 只占机器栏内的固定状态槽,避免列表行因提示挂载/卸载而上下跳动。
+    expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
+    expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
+    expect(menuSource).toContain('className="flex h-4 w-4 shrink-0 items-center justify-center"');
+    expect(menuSource).toContain(
+      '<span className="inline-flex animate-spinner motion-reduce:animate-none">',
+    );
+    expect(menuSource).toContain('<Loader2 size={14} strokeWidth={1.8} />');
+  });
+
   it('MachineSwitcherMenu 保留门控 / 设备选择 / 远程设置入口', () => {
     expect(menuSource).toContain('if (!hasRemote) return null');
     expect(menuSource).toContain('MACHINE_ALL');
