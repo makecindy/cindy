@@ -1,4 +1,23 @@
-import type { CapabilityRoutingPolicy } from '@cindy/maker-core';
+import type {
+  CapabilityRouteOverride,
+  CapabilityRoutingPolicy,
+} from '@cindy/maker-core';
+
+const CODEX_COMPUTER_USE_REPLACEMENT_ROUTE = {
+  capabilityId: 'computer-use',
+  source: {
+    kind: 'harness-plugin',
+    harness: 'codex',
+    surface: 'plugin',
+    id: 'computer-use@openai-bundled',
+  },
+  invocation: 'disabled',
+  replacement: {
+    kind: 'cindy-host',
+    id: 'cindy_computer',
+  },
+  reason: 'Cindy owns desktop-control enablement, permissions, and execution.',
+} as const satisfies CapabilityRouteOverride;
 
 /**
  * Product-level arbitration for capability sources that collide inside Cindy.
@@ -95,20 +114,41 @@ export const DESKTOP_CAPABILITY_ROUTING_POLICY = {
       },
       reason: 'The downstream Feishu account must not be used without an explicit source choice.',
     },
+    // The bundled Skill requires node_repl, which Cindy's Codex host does not
+    // expose. Keep this compatibility restriction independent from whether the
+    // user enabled Cindy's own Computer Use replacement.
     {
       capabilityId: 'computer-use',
       source: {
         kind: 'harness-plugin',
         harness: 'codex',
-        surface: 'plugin',
-        id: 'computer-use@openai-bundled',
+        surface: 'skill',
+        id: 'computer-use:computer-use',
+        artifactId: 'computer-use',
+        containerId: 'computer-use@openai-bundled',
       },
       invocation: 'disabled',
-      replacement: {
-        kind: 'cindy-host',
-        id: 'cindy_computer',
-      },
-      reason: 'Cindy owns desktop-control enablement, permissions, and execution.',
+      reason: 'The bundled Skill requires node_repl, which is unavailable in Cindy.',
     },
   ],
 } as const satisfies CapabilityRoutingPolicy;
+
+/**
+ * Freeze the routing policy for one Codex session.
+ *
+ * Disabling the downstream plugin is replacement arbitration, so it only
+ * applies after the current Codex environment actually exposes cindy_computer.
+ * The base policy still hides the incompatible node_repl Skill when the Cindy
+ * replacement is unavailable, without changing the plugin-wide setting.
+ */
+export function buildDesktopCapabilityRoutingPolicy(opts: {
+  cindyComputerAvailable: boolean;
+}): CapabilityRoutingPolicy {
+  if (!opts.cindyComputerAvailable) return DESKTOP_CAPABILITY_ROUTING_POLICY;
+  return {
+    overrides: [
+      ...DESKTOP_CAPABILITY_ROUTING_POLICY.overrides,
+      CODEX_COMPUTER_USE_REPLACEMENT_ROUTE,
+    ],
+  };
+}

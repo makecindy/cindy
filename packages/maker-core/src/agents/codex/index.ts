@@ -98,7 +98,11 @@ import {
   parseOverloadError,
 } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
-import { buildCodexCapabilityConfigOverrides } from './capability-routing.js';
+import {
+  buildCodexCapabilityConfigOverrides,
+  buildCodexCapabilitySkillConfigOverrides,
+  requiresCodexCapabilitySkillDiscovery,
+} from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
@@ -1364,11 +1368,23 @@ export class CodexAgent extends BaseAgent {
     forceReload: boolean,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
     const { host } = await this.getUtilityHost();
-    const response = await host.request<SkillsListResponse>(Method.SkillsList, {
+    return await this.listSkillsForHost(host, workingDir, forceReload);
+  }
+
+  private async listSkillsForHost(
+    host: AppServerHost,
+    workingDir: string,
+    forceReload: boolean,
+    timeoutMs?: number,
+  ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
+    const params = {
       cwds: [workingDir],
       forceReload,
       perCwdExtraUserRoots: null,
-    });
+    };
+    const response = timeoutMs == null
+      ? await host.request<SkillsListResponse>(Method.SkillsList, params)
+      : await host.request<SkillsListResponse>(Method.SkillsList, params, { timeoutMs });
     const entry = response.data.find((item) => item.cwd === workingDir) ?? response.data[0];
     return {
       skills: entry?.skills ?? [],
@@ -2945,7 +2961,7 @@ export class CodexAgent extends BaseAgent {
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
     const capabilityRoutingPolicy = this.deps.capabilityRouting;
-    const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
+    let capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
       capabilityRoutingPolicy,
       {
         // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
@@ -2954,6 +2970,35 @@ export class CodexAgent extends BaseAgent {
         isolatedPluginOverlays: !opts.remoteHostId,
       },
     );
+    if (requiresCodexCapabilitySkillDiscovery(capabilityRoutingPolicy)) {
+      try {
+        assertCurrentHost('capability Skill discovery');
+        const { skills, errors } = await this.listSkillsForHost(
+          host,
+          opts.workingDir,
+          false,
+          CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        );
+        assertCurrentHost('capability Skill discovery');
+        capabilityRoutingConfig = {
+          ...capabilityRoutingConfig,
+          ...buildCodexCapabilitySkillConfigOverrides(capabilityRoutingPolicy, [
+            ...skills,
+            // A malformed restricted Skill may be absent from `skills` while
+            // its concrete SKILL.md path is still reported here. Disable that
+            // path too instead of failing open on a catalog parse error.
+            ...errors.flatMap((error) =>
+              error.path ? [{ path: error.path, enabled: true }] : [],
+            ),
+          ]),
+        };
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(
+          `Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const capabilityRoutingProtocolSupported =
       supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
     if (
@@ -5138,7 +5183,7 @@ export class CodexAgent extends BaseAgent {
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
-        this.deps.capabilityRouting,
+        capabilityRoutingPolicy,
         {
           harness: 'codex',
           surface: 'mcp',
