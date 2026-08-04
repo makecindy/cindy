@@ -11,8 +11,16 @@ import {
   systemTimeZone,
   usageLimitScheduleNavigationState,
 } from '@/features/scheduler/lib/usageLimitScheduleCreateIntent';
+import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 
 const createSchedule = vi.fn();
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
+vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 const localStorageData = new Map<string, string>();
 const routerMocks = vi.hoisted(() => ({
   location: {
@@ -301,6 +309,77 @@ describe('Scheduler template entry', () => {
     await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
     expect(screen.getByTestId('cron-expr').textContent).toBe('');
     expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
+    expect(createSchedule).not.toHaveBeenCalled();
+  });
+
+  it('插件请求打开预填的创建表单,但不创建任务', async () => {
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-1',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: 'Codex 重置提醒',
+      prompt: '检查本机 Codex 重置时间,快到了就提醒我。',
+      intervalMs: 3_600_000,
+    });
+
+    render(createElement(SchedulerPage));
+
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    expect(screen.getByDisplayValue('Codex 重置提醒')).toBeTruthy();
+    expect(screen.getByDisplayValue('检查本机 Codex 重置时间,快到了就提醒我。')).toBeTruthy();
+    // 插件永远不能直接建任务:落库只发生在用户点保存之后。
+    expect(createSchedule).not.toHaveBeenCalled();
+    // 一次性意图用完即清,重进自动化页不会再弹。
+    expect(routerMocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled', {
+      replace: true,
+      state: null,
+    });
+  });
+
+  /**
+   * #1715 review Codex P2 的回归:表单已打开且用户改过内容时,新到的插件请求
+   * **绝不能静默 reset 掉它**(ScheduleFormDialog 的 reset effect 依赖 initialValues,
+   * 守卫只有 `if (!open) return`)。语义是"拒绝 + 提示",用户输入一个字都不能丢。
+   */
+  it('表单已打开且已修改时,新的插件请求不覆盖用户输入,只提示', async () => {
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-first',
+      ghostId: 'sign-board',
+      ghostName: '签字门看板',
+      name: '插件预填的名字',
+      prompt: '第一次请求的提示词。',
+    });
+
+    const view = render(createElement(SchedulerPage));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+
+    // 用户在表单里改了名称 —— 这就是绝不能丢的内容。
+    const nameInput = screen.getByDisplayValue('插件预填的名字');
+    fireEvent.change(nameInput, { target: { value: '用户自己改的名字' } });
+    expect(screen.getByDisplayValue('用户自己改的名字')).toBeTruthy();
+
+    // 第二个插件请求到来(不同 requestId,否则会被去重挡掉)。
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-second',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: '第二次请求的名字',
+      prompt: '第二次请求的提示词。',
+    });
+    view.rerender(createElement(SchedulerPage));
+
+    // 用户输入原样保留,没有被第二次请求的预填顶掉。
+    await waitFor(() =>
+      expect(toastMocks.warning).toHaveBeenCalledWith(
+        'scheduler.toast.pluginDraftIgnoredFormOpen',
+      ),
+    );
+    expect(screen.getByDisplayValue('用户自己改的名字')).toBeTruthy();
+    expect(screen.queryByDisplayValue('第二次请求的名字')).toBeNull();
+    expect(screen.queryByDisplayValue('第二次请求的提示词。')).toBeNull();
     expect(createSchedule).not.toHaveBeenCalled();
   });
 });

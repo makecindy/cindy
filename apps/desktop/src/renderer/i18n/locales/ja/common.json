@@ -7266,7 +7266,8 @@
       "actionFailed": "操作に失敗しました: {{error}}",
       "renameFailed": "名前の変更に失敗しました: {{error}}",
       "deleteFailed": "削除に失敗しました: {{error}}",
-      "restartFailed": "再開に失敗しました: {{error}}"
+      "restartFailed": "再開に失敗しました: {{error}}",
+      "pluginDraftIgnoredFormOpen": "「{{name}}」が自動化の作成を求めましたが、編集中のフォームが開いています。入力内容はそのまま保持しました。保存または閉じたあと、もう一度実行してください。"
     },
     "deleteDialog": {
       "title": "自動化「{{name}}」を削除しますか？",

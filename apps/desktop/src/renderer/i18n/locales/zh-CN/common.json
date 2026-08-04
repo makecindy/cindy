@@ -7266,7 +7266,8 @@
       "actionFailed": "操作失败：{{error}}",
       "renameFailed": "重命名失败：{{error}}",
       "deleteFailed": "删除失败：{{error}}",
-      "restartFailed": "重启失败：{{error}}"
+      "restartFailed": "重启失败：{{error}}",
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。"
     },
     "deleteDialog": {
       "title": "删除自动化「{{name}}」？",

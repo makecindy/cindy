@@ -258,15 +258,35 @@ export function SchedulerPage() {
     const intent = readPluginScheduleCreateIntent(location.state);
     if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
     handledScheduleCreateRequestRef.current = intent.requestId;
+    const consumeState = () => {
+      const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
+      navigate(path, { replace: true, state: null });
+    };
+    // 表单已经开着 → **不覆盖**,提示后把这次请求丢掉(#1715 review Codex P2)。
+    //
+    // 为什么不能直接往下走:ScheduleFormDialog 的 reset effect 依赖 initialValues 且
+    // 守卫只有 `if (!open) return`(components/ScheduleFormDialog.tsx 的那个 effect),
+    // 所以在表单已 open 时换一份 initialValues 会**静默 reset 掉用户正在填的内容**。
+    // 插件请求可以在任何时刻到达,这条路径是本 PR 打开的,必须由本 PR 兜住。
+    //
+    // 语义选"拒绝 + 提示"而不是"延后"或"弹确认":延后要引入待处理队列与过期判定,
+    // 弹确认会在用户填表中途再插一层模态——两者都比"让用户存完再点一次"更重。用户
+    // 输入绝不丢是硬要求,一次插件请求丢掉只需再点一次,代价不对称。
+    //
+    // 只可能在用户正停在自动化页时命中:formOpen 是本页 state,离开页面即卸载归 false。
+    if (formOpen) {
+      toast.warning(t('scheduler.toast.pluginDraftIgnoredFormOpen', { name: intent.ghostName }));
+      consumeState();
+      return;
+    }
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setEditing(null);
     setCreateInitialValues(buildPluginScheduleFormOverrides(intent));
     setPluginScheduleOrigin({ ghostId: intent.ghostId, ghostName: intent.ghostName });
     setFormOpen(true);
-    const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
-    navigate(path, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate]);
+    consumeState();
+  }, [formOpen, location.pathname, location.search, location.state, navigate, t]);
 
   // workingDir filter（URL ?workingDir=...）
   const scopedByDir = useMemo(() => {

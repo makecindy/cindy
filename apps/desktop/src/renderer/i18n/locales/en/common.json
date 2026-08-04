@@ -7277,7 +7277,8 @@
       "actionFailed": "Action failed: {{error}}",
       "renameFailed": "Rename failed: {{error}}",
       "deleteFailed": "Failed to delete: {{error}}",
-      "restartFailed": "Failed to restart: {{error}}"
+      "restartFailed": "Failed to restart: {{error}}",
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\" asked to create an automation, but a form is already open. Your edits were kept — save or close it, then trigger the request again."
     },
     "deleteDialog": {
       "title": "Delete automation \"{{name}}\"?",

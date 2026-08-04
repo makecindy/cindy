@@ -7266,7 +7266,8 @@
       "actionFailed": "작업 실패: {{error}}",
       "renameFailed": "이름 변경 실패: {{error}}",
       "deleteFailed": "삭제 실패: {{error}}",
-      "restartFailed": "재시작 실패: {{error}}"
+      "restartFailed": "재시작 실패: {{error}}",
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\"에서 자동화 만들기를 요청했지만 편집 중인 양식이 열려 있습니다. 입력한 내용은 그대로 유지했습니다. 저장하거나 닫은 뒤 다시 요청하세요."
     },
     "deleteDialog": {
       "title": "자동화 \"{{name}}\"을(를) 삭제하시겠습니까?",

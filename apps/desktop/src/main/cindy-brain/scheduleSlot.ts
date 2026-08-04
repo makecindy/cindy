@@ -68,18 +68,24 @@ function fail(
 }
 
 /**
- * 该窗口是否挂载了**完整主壳**(MainLayout)。只有主壳窗订阅了草稿通道、也只有它
- * 能路由到自动化页 —— 投给别的窗口等于静默丢失。
+ * 该窗口是否是**能承载自动化页的主窗口**。投给别的窗口要么静默丢失,要么落错地方。
  *
- * 为什么必须判:Cindy 有两类与 MainLayout **平级**的独立子窗口(见 router.tsx 的
- * `sidebar-window` / `ghost-panel-window` 两条根路由),它们只挂各自的轻壳,没有
- * 这个订阅。而**插件面板恰恰可以被用户拉成独立窗口**,「在插件面板上点一下」正是
- * 本能力的主使用路径(编写手册 §4.11.2 的第 1 步)——那一刻 focused 就是面板窗,
- * 若照 confirm 槽那样只写 `focused ?? all[0]`,草稿就投给了一个接不住它的窗口。
+ * 排除三类,理由各不相同:
  *
- * 判据取自两个子窗口创建时显式带的启动参数(right-sidebar-window/window.ts、
- * ghost-panel-window/window.ts),query 与 hash 两路都查:main 侧两处都设了 query,
- * hash 是 renderer 单入口的路由段,任一命中即判为非主壳。
+ * 1. **插件面板独立窗**(`?ghostPanelWindow=<id>` / hash `/ghost-panel-window`)与
+ *    **右侧栏独立窗**(`?sidebarWindow=1` / hash `/sidebar-window`):它们与 MainLayout
+ *    **平级**(见 router.tsx 两条根路由),只挂各自的轻壳,**没有草稿订阅、也去不了
+ *    自动化页** → 投过去就是静默丢失。而插件面板恰恰可以被用户拉成独立窗口,而
+ *    「在插件面板上点一下」正是本能力的主使用路径(编写手册 §4.11.2 第 1 步)——
+ *    那一刻 focused 就是面板窗,若照 confirm 槽那样只写 `focused ?? all[0]` 就丢了。
+ * 2. **「在新窗口打开」的会话副窗**(`?secondaryWindow=1`,见 main/secondary-windows.ts):
+ *    它**挂的是完整 MainLayout**(所以有订阅、技术上接得住),但它是用户为某个会话
+ *    单独开的窗口。回落时把创建面板弹进它 = 落错地方:用户以为在主窗口建任务,
+ *    结果主窗口什么也没发生,而某个会话副窗被劫持去开自动化页(#1715 review
+ *    Greptile P1 第二轮)。**能接住 ≠ 该接住**,故一并排除。
+ *
+ * 判据只认 query 与 hash 两路的显式启动参数(main 侧创建三类窗口时都显式设了 query;
+ * hash 是 renderer 单入口的路由段),并只接受 app 真实页面的协议。
  *
  * 纯函数(只收 URL 字符串,不碰 Electron),便于直测。
  */
@@ -97,7 +103,12 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
   if (parsed.protocol !== 'file:' && parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return false;
   }
-  if (parsed.searchParams.has('ghostPanelWindow') || parsed.searchParams.has('sidebarWindow')) {
+  if (
+    parsed.searchParams.has('ghostPanelWindow') ||
+    parsed.searchParams.has('sidebarWindow') ||
+    // 会话副窗:挂完整壳、技术上接得住,但它不是用户建任务时看的那个窗口。
+    parsed.searchParams.get('secondaryWindow') === '1'
+  ) {
     return false;
   }
   const hash = parsed.hash;

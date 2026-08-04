@@ -304,11 +304,55 @@ describe('GhostScheduleSlot 硬约束:只能开面板,不能建任务', () => {
   });
 });
 
+/**
+ * 「插件面板聚焦 + 主窗口 + 会话副窗」的顺序不稳定场景(review 第二轮点名要覆盖)。
+ *
+ * 装配处的选窗规则是:candidates = 全部窗口按判据过滤 → focused 在 candidates 内则用它,
+ * 否则取 candidates[0]。这里用判据函数复现那条规则,验证**无论窗口列表顺序如何**,
+ * 回落都只会落到真正的主窗口 —— 副窗被判据挡在 candidates 之外,所以它排第几都不影响。
+ */
+describe('选窗回落:插件面板聚焦时只能落到主窗口', () => {
+  const MAIN = 'file:///app/index.html#/cc-agent';
+  const SECONDARY = 'file:///app/index.html?secondaryWindow=1&bootSession=s1#/cc-agent';
+  const PANEL = 'file:///app/index.html?ghostPanelWindow=codex-reset-planner#/ghost-panel-window';
+
+  /** 复刻 index.ts 装配处的选窗规则(那里拿的是 BrowserWindow,这里用 URL 代表窗口)。 */
+  const pick = (all: string[], focused: string | null): string | undefined => {
+    const candidates = all.filter((url) => isMainShellWindowUrl(url));
+    return focused && candidates.includes(focused) ? focused : candidates[0];
+  };
+
+  it.each([
+    ['主窗在前', [MAIN, SECONDARY, PANEL]],
+    ['副窗在前', [SECONDARY, MAIN, PANEL]],
+    ['面板窗在前', [PANEL, SECONDARY, MAIN]],
+    ['副窗夹在中间', [PANEL, SECONDARY, MAIN, SECONDARY]],
+  ])('%s:focused=插件面板窗 → 回落到主窗口而不是副窗', (_label, all) => {
+    expect(pick(all, PANEL)).toBe(MAIN);
+  });
+
+  it('focused 本身是主窗口 → 就用它', () => {
+    expect(pick([SECONDARY, MAIN, PANEL], MAIN)).toBe(MAIN);
+  });
+
+  it('只有副窗与面板窗(没有主窗)→ 无可投窗口,交由装配处回 HOST_NOT_READY', () => {
+    expect(pick([SECONDARY, PANEL], PANEL)).toBeUndefined();
+  });
+
+  it('多个主窗:focused 不在候选内时取第一个主窗,不随副窗位置漂移', () => {
+    const MAIN2 = 'file:///app/index.html#/settings';
+    expect(pick([SECONDARY, MAIN, MAIN2], PANEL)).toBe(MAIN);
+    expect(pick([SECONDARY, MAIN, MAIN2], MAIN2)).toBe(MAIN2);
+  });
+});
+
 describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
   it.each([
     ['主窗口', 'file:///app/index.html#/cc-agent'],
     ['主窗口带其它 query', 'file:///app/index.html?foo=1#/cc-agent/scheduled'],
     ['dev server', 'http://localhost:5173/#/cc-agent'],
+    // 判据取 ==='1',不是 has():带 secondaryWindow=0 的主窗不该被误排除。
+    ['主窗口 secondaryWindow=0', 'file:///app/index.html?secondaryWindow=0#/cc-agent'],
   ])('%s → 是主壳窗', (_label, url) => {
     expect(isMainShellWindowUrl(url)).toBe(true);
   });
@@ -319,6 +363,9 @@ describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
     ['插件面板独立窗(仅 hash)', 'file:///app/index.html#/ghost-panel-window'],
     ['右侧栏独立窗(query)', 'file:///app/index.html?sidebarWindow=1#/sidebar-window'],
     ['右侧栏独立窗(仅 hash)', 'file:///app/index.html#/sidebar-window'],
+    // 会话副窗:挂完整壳、技术上接得住,但不是用户建任务时看的窗口(review 第二轮)。
+    ['会话副窗(secondaryWindow=1)', 'file:///app/index.html?secondaryWindow=1#/cc-agent'],
+    ['会话副窗带 bootSession', 'file:///app/index.html?secondaryWindow=1&bootSession=abc#/cc-agent/x'],
     ['about:blank', 'about:blank'],
     ['空串', ''],
     ['非法 URL', 'not a url'],
