@@ -8342,6 +8342,15 @@
       "closeAria": "閉じる"
     }
   },
+  "splitGroup": {
+    "closeAria": "「{{title}}」のペインを閉じる",
+    "closeAll": "分割を閉じる",
+    "toggleDirection": "上下 / 左右の分割を切り替え",
+    "sessionMissing": "タスクが見つからないか削除されました",
+    "dropHint": "ここにタスクを開くにはドロップ",
+    "loadingTask": "タスクを読み込み中…",
+    "resizeAria": "タスクペインのサイズを変更"
+  },
   "extraDirs": {
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",

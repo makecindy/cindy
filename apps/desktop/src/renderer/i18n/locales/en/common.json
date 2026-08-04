@@ -8355,6 +8355,15 @@
       "closeAria": "Close"
     }
   },
+  "splitGroup": {
+    "closeAria": "Close the pane for “{{title}}”",
+    "closeAll": "Close split",
+    "toggleDirection": "Toggle horizontal / vertical split",
+    "sessionMissing": "Task not found or deleted",
+    "dropHint": "Drop to open the task here",
+    "loadingTask": "Loading task…",
+    "resizeAria": "Resize task panes"
+  },
   "extraDirs": {
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",

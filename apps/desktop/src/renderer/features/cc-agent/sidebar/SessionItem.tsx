@@ -30,7 +30,11 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type {
+  DragEvent as ReactDragEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -90,6 +94,7 @@ import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import { isSplitGroupDragSource, writeSplitGroupSessionDragData } from '../splitGroupDnd';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -426,6 +431,39 @@ export const SessionItem = memo(function SessionItem({
     [displayTitle, isEditing, remoteWritesBlocked, t],
   );
 
+  // SortableJS（置顶/项目手动排序，forceFallback 指针手势）与原生 HTML5 拖拽会争抢
+  // 同一次手势：行带 `draggable` 时浏览器可能启动原生拖拽并中断 fallback 排序。这些
+  // 行保持原有排序拖拽，分屏拖拽源只留给非 Sortable 容器（时间排序的对话列表等）。
+  const [inSortableContainer, setInSortableContainer] = useState(false);
+  useEffect(() => {
+    setInSortableContainer(Boolean(rowRef.current?.closest('[data-sortable-id]')));
+  }, []);
+  const splitDragEnabled = isSplitGroupDragSource({
+    editing: isEditing,
+    orcaRole: session.orcaRole,
+    inSortableContainer,
+  });
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        !splitDragEnabled ||
+        (target !== event.currentTarget &&
+          target?.closest('button, input, textarea, select, a[href], [role="menuitem"]'))
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (!writeSplitGroupSessionDragData(event.dataTransfer, session.id)) {
+        event.preventDefault();
+        return;
+      }
+      event.currentTarget.dataset.sessionDragging = 'true';
+    },
+    [splitDragEnabled, session.id],
+  );
+
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
   useEffect(() => {
@@ -608,8 +646,14 @@ export const SessionItem = memo(function SessionItem({
       ref={rowRef}
       data-session-id={session.id}
       data-sidebar-session-row="true"
+      data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
+      draggable={splitDragEnabled}
       role="button"
       tabIndex={0}
+      onDragStart={handleDragStart}
+      onDragEnd={(event) => {
+        delete event.currentTarget.dataset.sessionDragging;
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
@@ -648,7 +692,8 @@ export const SessionItem = memo(function SessionItem({
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
-        'text-sm font-medium text-left cursor-pointer',
+        'text-left text-sm font-medium',
+        !isEditing && 'cursor-grab active:cursor-grabbing',
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive

@@ -8342,6 +8342,15 @@
       "closeAria": "关闭"
     }
   },
+  "splitGroup": {
+    "closeAria": "关闭任务“{{title}}”的分栏",
+    "closeAll": "关闭分栏",
+    "toggleDirection": "切换上下 / 左右分栏",
+    "sessionMissing": "任务不存在或已删除",
+    "dropHint": "松开以在此分栏打开任务",
+    "loadingTask": "正在加载任务…",
+    "resizeAria": "调整任务分栏大小"
+  },
   "extraDirs": {
     "menuAria": "操作菜单",
     "tooltipEmpty": "更多操作",

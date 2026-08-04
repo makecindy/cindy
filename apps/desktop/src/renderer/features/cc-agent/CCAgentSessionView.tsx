@@ -167,6 +167,8 @@ import {
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
+import { hasSplitGroupSessionType } from './splitGroupDnd';
+import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
   getGhostMediaUriFromDataTransfer,
@@ -313,6 +315,12 @@ function parseOrcaWorkersRevealState(state: unknown): OrcaWorkersRevealState | n
 
 interface CCAgentSessionViewProps {
   sessionIdProp?: string;
+  /**
+   * 显式声明内嵌实例是否接管当前窗口路由的 header / 右栏主权。默认不传时沿用
+   * 历史判据：只有无 sessionIdProp 的全屏路由实例拥有主权。SplitGroup 用它在
+   * 多个常驻会话 pane 之间转移主权，避免切活动 pane 时卸载重挂聊天视图。
+   */
+  routeOwner?: boolean;
   compact?: boolean;
   orcaMode?: boolean;
   /** 在输入区状态栏中央显示被控端 Banner。普通路由自动显示；协同 Lead pane 显式传入。 */
@@ -451,6 +459,7 @@ function findLatestWorkflowTask(
 
 export function CCAgentSessionView({
   sessionIdProp,
+  routeOwner,
   compact,
   orcaMode,
   showControlledBanner = false,
@@ -561,10 +570,10 @@ export function CCAgentSessionView({
   // 让窄 rail 里的消息和输入框尽量铺满。
   const isCompactRail = compact ?? location.pathname.startsWith('/cc-agent/files/');
   const isOrcaMode = orcaMode ?? location.pathname.startsWith('/cc-agent/orca/');
-  // 路由主实例判据(与 SessionContentHeaderRegistration 同款,见 1259 行):只有
-  // 「全屏聊天视图」这个实例拥有右栏开关 / 声明右栏在场;内嵌复用实例(doc 模式
-  // chat rail / 协同 worker 面板,带 sessionIdProp 或处于 compact/orca 语境)不参与。
-  const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;
+  // 路由主实例判据(与 SessionContentHeaderRegistration 同款):默认只有全屏路由
+  // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
+  // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
+  const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
   const showInlineControlledBanner = ownsRoute || showControlledBanner;
   // 平台分流:mac 右栏开关放在 ContentHeader 右端(见 ContentHeader.tsx),Windows
   // 放在下方 chip 栈第一行。两端都靠 ownsRoute 限定只在全屏聊天视图出现。
@@ -858,6 +867,9 @@ export function CCAgentSessionView({
     if (!sessionId) return;
     if (session?.status === 'deleted') {
       makerChatStore.purgeSession(sessionId);
+      // 分屏树同步收敛：已删任务的 pane 立即塌缩，持久化布局不再保留死节点；
+      // 嵌入 pane 靠这一步退出（下方 return 不导航），owner 导航后也不会恢复它。
+      splitGroupStore.removeSession(sessionId);
       if (!ownsWindowRoute) {
         log.info('deleted session navigation ignored by embedded sidebar view', { sessionId });
         return;
@@ -871,7 +883,10 @@ export function CCAgentSessionView({
     if (!sessionId || !searchJump) return;
     if (searchJump.sessionId !== sessionId) {
       if (!session) return;
-      if (!isOrcaMode && !isOrcaLeadSessionView) {
+      // 仅路由主权实例回收「跳转目标 ≠ 当前会话」的陈旧状态：分屏的嵌入 pane
+      // sessionId 固定，跨会话跳转时它们天然不匹配，若也清理会把 owner 正在
+      // 消费的跳转取消掉（异步 loadAround 被 cleanup 置为 cancelled）。
+      if (!isOrcaMode && !isOrcaLeadSessionView && ownsWindowRoute) {
         clearSearchJumpState();
       }
       return;
@@ -934,6 +949,7 @@ export function CCAgentSessionView({
     clearSearchJumpState,
     isOrcaLeadSessionView,
     isOrcaMode,
+    ownsWindowRoute,
     requestFocusMessage,
     searchJump,
     session,
@@ -3076,11 +3092,9 @@ export function CCAgentSessionView({
     // in that case so the card catches scroll/click events without a wrapper
     // swap that would flash the layout.
     <>
-      {/* ContentHeader 注入：仅路由直挂实例（无 sessionIdProp）注册会话标题
-          到右栏顶栏；内嵌实例（workdir-browse chat rail / Orca 面板）不注册，
-          避免覆盖路由主实例的 header。渲染为 null，不影响布局。
-          见 SessionContentHeaderRegistration。 */}
-      {!sessionIdProp && !isCompactRail && !isOrcaMode && session && (
+      {/* ContentHeader 注入：仅 ownsRoute 实例注册。普通路由仍由历史判据获得主权；
+          SplitGroup 则把主权交给活动 pane，非活动 pane 不覆盖 header。 */}
+      {ownsRoute && session && (
         <SessionContentHeaderRegistration
           session={session}
           remoteSessionUnavailable={remoteSessionUnavailable}
@@ -3113,23 +3127,27 @@ export function CCAgentSessionView({
         className="relative flex h-full w-full flex-col bg-content-area"
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current += 1;
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'copy';
         }}
         onDragLeave={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
+          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;

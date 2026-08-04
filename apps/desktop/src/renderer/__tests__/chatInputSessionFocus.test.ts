@@ -55,7 +55,9 @@ describe('ChatInput session switch focus contract', () => {
   });
 
   it('enables storageKey refocus for routed session and new-draft views', () => {
-    expect(sessionViewSource).toContain('const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;');
+    expect(sessionViewSource).toContain(
+      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+    );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
   });

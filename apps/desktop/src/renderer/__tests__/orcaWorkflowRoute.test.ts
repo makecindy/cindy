@@ -301,12 +301,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
   it('keeps Orca search jump state available for the target pane', () => {
     expect(sessionViewSource).toContain('if (!sessionId || !searchJump) return;');
     expect(sessionViewSource).toContain(`if (searchJump.sessionId !== sessionId) {
-      if (!session) return;
-      if (!isOrcaMode && !isOrcaLeadSessionView) {
+      if (!session) return;`);
+    // 陈旧跳转只由路由主权实例回收：Orca 视图与分屏嵌入 pane 都不得取消
+    // owner 正在消费的跳转。
+    expect(sessionViewSource).toContain(`if (!isOrcaMode && !isOrcaLeadSessionView && ownsWindowRoute) {
         clearSearchJumpState();
-      }
-      return;
-    }`);
+      }`);
     expect(sessionViewSource).toContain('...(workerSearchJump ? { searchJump: workerSearchJump } : {})');
     expect(sessionViewSource).toContain('...(workerSearchJump ? { searchJump: undefined } : {})');
     expect(workerPanelSource).toContain('searchJumpProp={searchJump}');
@@ -430,7 +430,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('shows the Lead identity bar only in the plain Orca Lead route', () => {
-    expect(sessionViewSource).toContain('const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;');
+    expect(sessionViewSource).toContain(
+      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+    );
     expect(sessionViewSource).toContain('const collabEnabled = isOrcaLeadSessionView;');
     expect(sessionViewSource).toContain('const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;');
     expect(sessionViewSource).toContain("t('orca.split.leadLabel', {");
