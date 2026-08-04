@@ -74,8 +74,9 @@ export function SplitGroup({ children, activeSessionId }: SplitGroupProps) {
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         dataAttribute="single"
         onSessionDropped={(sessionId, side) => {
-          splitGroupStore.addSession(sessionId, activeSessionId, side);
-          focusSession(sessionId);
+          if (splitGroupStore.addSession(sessionId, activeSessionId, side)) {
+            focusSession(sessionId);
+          }
         }}
       >
         {children}
@@ -340,8 +341,9 @@ function SplitPaneView({
       className="relative h-full min-h-0 min-w-0 overflow-hidden"
       dataAttribute="pane"
       onSessionDropped={(sessionId, side) => {
-        splitGroupStore.addSession(sessionId, pane.sessionId, side);
-        focusSession(sessionId);
+        if (splitGroupStore.addSession(sessionId, pane.sessionId, side)) {
+          focusSession(sessionId);
+        }
       }}
     >
       <div
@@ -391,7 +393,7 @@ function SplitPaneView({
             routeOwner={isOwner}
             compactToolbar
             navigationMode={isOwner ? 'route-owner' : 'sidebar-embedded'}
-            sidebarTargetSessionId={activeSessionId}
+            sidebarTargetSessionId={viewSessionId}
             viewVisible
             chatRealtime
           />

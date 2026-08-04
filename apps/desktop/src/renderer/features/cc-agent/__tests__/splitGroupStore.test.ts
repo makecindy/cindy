@@ -119,19 +119,19 @@ describe('splitGroupStore', () => {
 
   it('重复任务、非法 anchor 与上限不会修改状态', async () => {
     const { getSplitPanes, MAX_SPLIT_PANES, splitGroupStore } = await loadStore();
-    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    expect(splitGroupStore.addSession('session-b', 'session-a', 'right')).toBe(true);
     const initial = splitGroupStore.getSnapshot();
 
-    splitGroupStore.addSession('session-b', 'session-a', 'left');
-    splitGroupStore.addSession('session-c', 'missing', 'right');
+    expect(splitGroupStore.addSession('session-b', 'session-a', 'left')).toBe(false);
+    expect(splitGroupStore.addSession('session-c', 'missing', 'right')).toBe(false);
     expect(splitGroupStore.getSnapshot()).toBe(initial);
 
     for (let index = 3; index <= MAX_SPLIT_PANES; index += 1) {
-      splitGroupStore.addSession(`session-${index}`, 'session-b', 'bottom');
+      expect(splitGroupStore.addSession(`session-${index}`, 'session-b', 'bottom')).toBe(true);
     }
     expect(getSplitPanes(splitGroupStore.getSnapshot().root)).toHaveLength(MAX_SPLIT_PANES);
     const atLimit = splitGroupStore.getSnapshot();
-    splitGroupStore.addSession('session-over-limit', 'session-b', 'right');
+    expect(splitGroupStore.addSession('session-over-limit', 'session-b', 'right')).toBe(false);
     expect(splitGroupStore.getSnapshot()).toBe(atLimit);
   });
 

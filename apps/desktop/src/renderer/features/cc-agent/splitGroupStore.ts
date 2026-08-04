@@ -310,13 +310,15 @@ export const splitGroupStore = {
     return getSplitPanes(state.root).length >= 2;
   },
 
-  addSession(sessionIdInput: string, anchorSessionIdInput: string, side: DropSide): void {
+  addSession(sessionIdInput: string, anchorSessionIdInput: string, side: DropSide): boolean {
     ensureHydrated();
     const sessionId = normalizeSessionId(sessionIdInput);
     const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
-    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId) return;
+    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId) return false;
     const panes = getSplitPanes(state.root);
-    if (panes.some((pane) => pane.sessionId === sessionId) || panes.length >= MAX_SPLIT_PANES) return;
+    if (panes.some((pane) => pane.sessionId === sessionId) || panes.length >= MAX_SPLIT_PANES) {
+      return false;
+    }
 
     const existingKeys = new Set<string>();
     if (state.root) {
@@ -347,9 +349,9 @@ export const splitGroupStore = {
         sessionId: anchorSessionId,
       };
       emit({ root: makeSplit(anchorPane) });
-      return;
+      return true;
     }
-    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return;
+    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
     emit({
       root: replaceNode(
         state.root,
@@ -357,6 +359,7 @@ export const splitGroupStore = {
         (node) => makeSplit(node as SplitPaneNode),
       ),
     });
+    return true;
   },
 
   removeSession(sessionIdInput: string): void {

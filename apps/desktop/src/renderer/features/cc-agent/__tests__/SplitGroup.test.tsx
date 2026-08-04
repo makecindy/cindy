@@ -7,6 +7,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { SplitGroup } from '../SplitGroup';
 import { splitGroupStore } from '../splitGroupStore';
 
+const { resolveSessionRouteMock } = vi.hoisted(() => ({
+  resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -22,21 +26,24 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 }));
 
 vi.mock('@/lib/orcaSessionIdentity', () => ({
-  resolveSessionRoute: async (sessionId: string) => `/cc-agent/${sessionId}`,
+  resolveSessionRoute: resolveSessionRouteMock,
 }));
 
 vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: ({
     sessionIdProp,
     routeOwner,
+    sidebarTargetSessionId,
   }: {
     sessionIdProp: string;
     routeOwner: boolean;
+    sidebarTargetSessionId: string;
   }) => (
     <div
       data-testid={`session-view-${sessionIdProp}`}
       data-session-id={sessionIdProp}
       data-route-owner={routeOwner ? 'true' : 'false'}
+      data-sidebar-target-session-id={sidebarTargetSessionId}
       onDragOver={(event) => event.stopPropagation()}
       onDrop={(event) => event.stopPropagation()}
     />
@@ -56,6 +63,7 @@ function renderSplitGroup(activeSessionId: string) {
 describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
+    resolveSessionRouteMock.mockClear();
     splitGroupStore.__resetForTest();
   });
 
@@ -79,6 +87,8 @@ describe('SplitGroup', () => {
     const sessionBView = screen.getByTestId('session-view-session-b');
     expect(sessionAView.dataset.routeOwner).toBe('true');
     expect(sessionBView.dataset.routeOwner).toBe('false');
+    expect(sessionAView.dataset.sidebarTargetSessionId).toBe('session-a');
+    expect(sessionBView.dataset.sidebarTargetSessionId).toBe('session-b');
 
     view.rerender(
       <MemoryRouter>
@@ -92,6 +102,8 @@ describe('SplitGroup', () => {
     expect(screen.getByTestId('session-view-session-b')).toBe(sessionBView);
     expect(sessionAView.dataset.routeOwner).toBe('false');
     expect(sessionBView.dataset.routeOwner).toBe('true');
+    expect(sessionAView.dataset.sidebarTargetSessionId).toBe('session-a');
+    expect(sessionBView.dataset.sidebarTargetSessionId).toBe('session-b');
   });
 
   it('递归渲染左一右二与左二右二混合布局', () => {
@@ -192,5 +204,44 @@ describe('SplitGroup', () => {
 
     expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(1);
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
+  });
+
+  it('达到窗格上限时拒绝拖入且不切换路由', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      for (let index = 3; index <= 8; index += 1) {
+        splitGroupStore.addSession(`session-${index}`, 'session-b', 'bottom');
+      }
+    });
+    const view = renderSplitGroup('session-a');
+    const sessionBView = screen.getByTestId('session-view-session-b');
+    const dropTarget = sessionBView.closest('[data-split-drop-target="pane"]');
+    expect(dropTarget).toBeTruthy();
+    vi.spyOn(dropTarget as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 500,
+      top: 50,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    const dataTransfer = {
+      types: ['application/x-cindy-session-id'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-session-id' ? 'session-over-limit' : '',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(sessionBView, { clientX: 490, clientY: 200, dataTransfer });
+      fireEvent.drop(sessionBView, { clientX: 490, clientY: 200, dataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(8);
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 });
