@@ -110,20 +110,52 @@ describe('embedding-host 多 consumer 启停', () => {
     expect(hoisted.instances).toBe(1);
   });
 
-  it('starter 起不动(依赖未 ready)→ 照旧抛 not-started,但标记留着供下次重试', async () => {
+  it('starter 起不动(依赖未 ready)→ 抛 not-started,并把标记回滚', async () => {
     const host = await loadHost();
     // 模拟 DbClient 未 ready 的早退分支:starter 被调了但什么都没起
     host.registerEmbeddingHostLazyStart(() => {});
 
     expect(() => host.ensureEmbeddingServiceForPluginVector()).toThrow(/not started/);
-    expect(host.isPluginVectorConsumerActive()).toBe(true);
     expect(host.isEmbeddingHostStarted()).toBe(false);
+    // 标记的语义是"有一个正在被服务的 consumer",不是"有人试过"。留着它就成了幽灵
+    // consumer:切账号后新账号的 onReady 会把它当成当前有人在用(review 第十二轮)。
+    expect(host.isPluginVectorConsumerActive()).toBe(false);
+  });
+
+  it('starter 抛错也回滚标记(不靠 starter 自己 catch 干净)', async () => {
+    const host = await loadHost();
+    host.registerEmbeddingHostLazyStart(() => {
+      throw new Error('boom');
+    });
+
+    expect(() => host.ensureEmbeddingServiceForPluginVector()).toThrow(/boom/);
+    expect(host.isPluginVectorConsumerActive()).toBe(false);
+  });
+
+  it('启动失败后切账号 → 新账号(chat 关)不会被幽灵 consumer 拽起一个 host', async () => {
+    const host = await loadHost();
+    const chatEnabled = { value: false };
+    const starter = bootstrapStarter(host, () => chatEnabled.value);
+    // 旧账号:DbClient 未 ready,插件请求失败
+    host.registerEmbeddingHostLazyStart(() => {});
+    expect(() => host.ensureEmbeddingServiceForPluginVector()).toThrow(/not started/);
+
+    // 切账号边界:stopEmbeddingHost 此时没有 service,不能因此跳过清标记
+    await host.stopEmbeddingHost();
+    expect(host.isPluginVectorConsumerActive()).toBe(false);
+
+    // 新账号 onReady:chat 关着,新账号的插件也没请求过 → 一个 Worker 都不该起
+    host.registerEmbeddingHostLazyStart(starter);
+    starter();
+    expect(host.isEmbeddingHostStarted()).toBe(false);
+    expect(hoisted.instances).toBe(0);
   });
 
   it('没注册 starter → 懒启动是 no-op,不炸在 undefined 上', async () => {
     const host = await loadHost();
 
     expect(() => host.ensureEmbeddingServiceForPluginVector()).toThrow(/not started/);
+    expect(host.isPluginVectorConsumerActive()).toBe(false);
   });
 
   it('stopEmbeddingHost 清插件标记 → 切账号后不会为没在请求的 consumer 白起 host', async () => {

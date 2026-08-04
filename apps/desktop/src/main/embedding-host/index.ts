@@ -88,14 +88,14 @@ export function startEmbeddingHost(deps: StartEmbeddingHostDeps): EmbeddingServi
 }
 
 export async function stopEmbeddingHost(): Promise<void> {
+  // 标记清在最前面, **不受 `!_service` 早退影响** (review 第十二轮): 不变量是
+  // "没有活着的 host ⇒ 没有已提交的 consumer"。清了也不会丢能力: 插件下一次请求
+  // 会重新打标并懒启动 (这就是"按需"的含义)。
+  _pluginVectorConsumer = false;
   if (!_service) return;
   await _service.stop();
   _service = null;
   _client = null;
-  // host 停了就没有"正在被服务的 consumer"了 —— 标记跟着清, 否则切账号后 onReady
-  // 会为一个并没有在请求的插件 consumer 白启一个 Worker setInterval。清了也不会
-  // 丢能力: 插件下一次请求会重新打标并懒启动 (这就是"按需"的含义)。
-  _pluginVectorConsumer = false;
 }
 
 export function getEmbeddingService(): EmbeddingService {
@@ -123,10 +123,24 @@ export function registerEmbeddingHostLazyStart(start: () => void): void {
  * 打标发生在启动之前: starter 回调会回读 isPluginVectorConsumerActive() 来决定
  * "chat 关着也要启"。启动失败 (DbClient 未 ready 等) 时照旧抛 not-started, 由
  * 上层折叠成插件可见的错误码。
+ *
+ * **起不来就回滚标记** (review 第十二轮): 标记的语义是"有一个正在被服务的 consumer",
+ * 不是"有人试过"。留着一个从未被服务过的标记会让它变成幽灵 consumer —— 切账号后新账号
+ * 的 onReady 会把它当成当前有人在用, 在聊天嵌入关着的情况下白起一个 host, Worker 每
+ * 5 秒空转。回滚也不损失什么: 重试路径本身就会重新打标。
  */
 export function ensureEmbeddingServiceForPluginVector(): EmbeddingService {
+  if (_service) {
+    _pluginVectorConsumer = true;
+    return _service;
+  }
   _pluginVectorConsumer = true;
-  if (!_service) _lazyStart?.();
+  try {
+    _lazyStart?.();
+  } finally {
+    // starter 早退 / 抛错 / 根本没注册 → 一律回到"没有 consumer"的状态。
+    if (!_service) _pluginVectorConsumer = false;
+  }
   return getEmbeddingService();
 }
 
