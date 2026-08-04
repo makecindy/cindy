@@ -67,6 +67,7 @@ import {
   buildRouteDecision,
 } from './provider-route.js';
 import {
+  isCindyLocalToken,
   isCodexExternalAccessEnabled,
   matchesCodexExternalToken,
 } from './local-proxy-external-auth.js';
@@ -2277,7 +2278,13 @@ async function resolveExternalCodexResponsesDecision(body: unknown): Promise<Rou
   }
   // openai-responses / 其它:透明转发到供应商真上游,注入真实凭证,再 strip 外部 token 头。
   const gatewayKey = _readGatewayKey();
-  const decision = buildRouteDecision(route.routing, gatewayKey, 'codex', route.apiKey, route.oauthToken);
+  const base = buildRouteDecision(route.routing, gatewayKey, 'codex', route.apiKey, route.oauthToken);
+  // 供应商 runtime 若定义了 requestPath(如 /tenant/acme/infer),外部转发也要带上 pathOverride,
+  // 与 session 路由(resolveSessionRouteDecision)一致;否则会被转到客户端原始入向路径(/responses),
+  // 固定 endpoint 的供应商会失败,尽管它可作为对外默认供应商被选中。
+  const decision = route.routing.requestPath
+    ? { ...base, pathOverride: route.routing.requestPath }
+    : base;
   const stripped = stripExternalTokenHeadersCodex(decision);
   if (stripped) return stripped;
   return externalOpenAIError(502, 'provider_unavailable', `「${wireModel}」的供应商暂不可用。`);
@@ -2303,7 +2310,9 @@ function externalChatCompletionsDecision(externalToken: string): RoutingDecision
         writeExternalOpenAIError(res, 503, 'proxy_unavailable', 'Cindy Codex proxy 尚未就绪。');
         return;
       }
-      const wantStream = chatRequest.stream !== false;
+      // OpenAI Chat Completions 语义:省略 stream 视为**非流式**(仅 stream===true 才流式)。
+      // 之前把「未指定」当流式,会让不设 stream 的客户端拿到 SSE 而非期望的单个 JSON。
+      const wantStream = chatRequest.stream === true;
       const includeUsage =
         isPlainObject(chatRequest.stream_options)
         && (chatRequest.stream_options as Record<string, unknown>).include_usage === true;
@@ -2350,7 +2359,15 @@ function externalChatCompletionsDecision(externalToken: string): RoutingDecision
       }
 
       const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
+      // 上游失败(response.failed)时,translator 会产出一个带 `error` 字段的 chunk。流式路径会把它
+      // 写给客户端;非流式路径下 writeChunk 直接丢弃 → 若不另行捕获,finally 会照常 aggregate 出一个
+      // 200 的空 completion,把失败伪装成成功。这里捕获首个 error chunk,让非流式路径改吐 OpenAI 错误。
+      let failureMessage: string | null = null;
       const writeChunk = (chunk: Record<string, unknown>): void => {
+        if (isPlainObject(chunk.error) && failureMessage === null) {
+          const msg = (chunk.error as Record<string, unknown>).message;
+          failureMessage = typeof msg === 'string' && msg ? msg : '上游返回错误。';
+        }
         if (wantStream) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
       };
       const parsePayload = (payload: string): void => {
@@ -2413,8 +2430,13 @@ function externalChatCompletionsDecision(externalToken: string): RoutingDecision
           }
           res.write('data: [DONE]\n\n');
           res.end();
-        } else if (streamFailed) {
-          writeExternalOpenAIError(res, 502, 'upstream_error', 'Cindy Responses 流式中断。');
+        } else if (streamFailed || failureMessage) {
+          writeExternalOpenAIError(
+            res,
+            502,
+            'upstream_error',
+            failureMessage ?? 'Cindy Responses 流式中断。',
+          );
         } else {
           res.writeHead(200, {
             'content-type': 'application/json; charset=utf-8',
@@ -2473,6 +2495,11 @@ export function createModelRoutingTransform(
     const externalToken = bearerToken(ctx.headers);
     if (externalToken && matchesCodexExternalToken(externalToken)) {
       return routeExternalCodexClient(body, ctx, externalToken);
+    }
+    // 带 `cindy-local-` 前缀但不命中本族 token(已重置 / 跨族拿 A 族 token 打 B 族 loopback /
+    // 已失效)→ 明确 401,绝不落到下方内部路由把这个对外 token 当 Authorization 透传上游。
+    if (externalToken && isCindyLocalToken(externalToken)) {
+      return externalOpenAIError(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
     }
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。

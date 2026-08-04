@@ -65,6 +65,7 @@ import {
   rewriteImplicitModelIdForRoute,
 } from './provider-route.js';
 import {
+  isCindyLocalToken,
   isExternalAccessEnabled,
   matchesExternalToken,
 } from './local-proxy-external-auth.js';
@@ -319,8 +320,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     //    放在最前:优先级高于 Pi / per-session / spawn 默认路由。命中判定与 enabled 无关
     //    (matchesExternalToken 只比 token),enabled 与否在 routeExternalClient 内决定放行/401。
     //    未命中(Cindy 自家子进程 / 无 token)→ 落到下方现有逻辑,字节级不变。
-    if (matchesExternalToken(headerValue(ctx.headers, 'x-api-key'))) {
+    const externalApiKey = headerValue(ctx.headers, 'x-api-key');
+    if (matchesExternalToken(externalApiKey)) {
       return routeExternalClient(body, ctx);
+    }
+    // 带 `cindy-local-` 前缀但不命中 A 族 token(已重置 / 跨族拿 B 族 token 打 A 族 loopback /
+    // 已失效)→ 明确 401,绝不落到下方内部路由把这个对外 token 当 x-api-key 透传上游。
+    if (isCindyLocalToken(externalApiKey)) {
+      return externalErrorDecision(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
     }
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
     if (

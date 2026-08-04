@@ -31,12 +31,14 @@ vi.mock('../local-proxy-settings-store', () => ({
 }));
 
 import {
+  clearExternalTokenMemoryFallback,
   getCodexExternalTokenMasked,
   getExternalTokenMasked,
   getOrCreateCodexExternalToken,
   getOrCreateExternalToken,
   hasCodexExternalToken,
   hasExternalToken,
+  isCindyLocalToken,
   isCodexExternalAccessEnabled,
   isExternalAccessEnabled,
   matchesCodexExternalToken,
@@ -206,6 +208,52 @@ describe('cross-family isolation (跨族 token 不互通)', () => {
     codexEnabledBox.value = true;
     expect(isExternalAccessEnabled()).toBe(false);
     expect(isCodexExternalAccessEnabled()).toBe(true);
+  });
+});
+
+describe('isCindyLocalToken(前缀判别器,用于拒绝陈旧/跨族 token)', () => {
+  it('只按前缀判定,不比对具体值', () => {
+    expect(isCindyLocalToken('cindy-local-anything')).toBe(true);
+    // 生成的真 token 也带前缀。
+    expect(isCindyLocalToken(getOrCreateExternalToken())).toBe(true);
+  });
+
+  it('非前缀值(真凭证 / 网关 key / 占位 key / 空)一律否', () => {
+    expect(isCindyLocalToken('sk-ant-realkey')).toBe(false);
+    expect(isCindyLocalToken('xdt-provider-auth-placeholder-key')).toBe(false);
+    expect(isCindyLocalToken('')).toBe(false);
+    expect(isCindyLocalToken(null)).toBe(false);
+    expect(isCindyLocalToken(undefined)).toBe(false);
+  });
+
+  it('陈旧/跨族的 cindy-local- token 命不中但仍被识别为本地代理 token', () => {
+    const a = getOrCreateExternalToken();
+    const b = getOrCreateCodexExternalToken();
+    // 跨族:A 族 token 打 B 族命不中,但前缀判别器认得它是 Cindy 本地 token(host 据此 401,不透传)。
+    expect(matchesCodexExternalToken(a)).toBe(false);
+    expect(isCindyLocalToken(a)).toBe(true);
+    // 重置后旧值命不中,但仍带前缀。
+    regenerateExternalToken();
+    expect(matchesExternalToken(a)).toBe(false);
+    expect(isCindyLocalToken(a)).toBe(true);
+    expect(isCindyLocalToken(b)).toBe(true);
+  });
+});
+
+describe('clearExternalTokenMemoryFallback(账号切换清理)', () => {
+  it('清掉进程内兜底 token,清理后旧 token 不再命中', () => {
+    writableBox.value = false;
+    const a = regenerateExternalToken();
+    const b = regenerateCodexExternalToken();
+    // 落盘失败,兜底缓存让两族 token 本次运行仍命中。
+    expect(matchesExternalToken(a)).toBe(true);
+    expect(matchesCodexExternalToken(b)).toBe(true);
+    // 切换账号:物理 token 由 providerSecretStore 清除(此处物理本就为空),兜底须一并清。
+    clearExternalTokenMemoryFallback();
+    expect(hasExternalToken()).toBe(false);
+    expect(hasCodexExternalToken()).toBe(false);
+    expect(matchesExternalToken(a)).toBe(false);
+    expect(matchesCodexExternalToken(b)).toBe(false);
   });
 });
 

@@ -128,7 +128,11 @@ export function writeExternalConfig(url: string, token: string): LocalProxyConfi
     fs.mkdirSync(dir, { recursive: true });
     const tmpPath = `${filePath}.${process.pid}-${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpPath, `${JSON.stringify(nextRoot, null, 2)}\n`, 'utf8');
+      // settings.json 写入后含 `env.ANTHROPIC_API_KEY`(对外访问 token),是敏感文件:temp 以
+      // 0600 创建,再显式 chmod(不受 umask 影响)后 rename。rename 用 temp 的 inode 替换目标,
+      // 故结果一定是 0600 —— 既不让新文件默认 world-readable,也顺带收紧已存在的 0644 旧文件。
+      fs.writeFileSync(tmpPath, `${JSON.stringify(nextRoot, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(tmpPath, 0o600);
       fs.renameSync(tmpPath, filePath);
     } catch (writeErr) {
       try { fs.unlinkSync(tmpPath); } catch { /* best-effort 清理 */ }

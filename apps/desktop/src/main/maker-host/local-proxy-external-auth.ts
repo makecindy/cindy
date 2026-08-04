@@ -43,6 +43,18 @@ function generateTokenValue(): string {
   return `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
 }
 
+/**
+ * 候选值是否长得像一个 Cindy 本地代理对外 token(带 `cindy-local-` 前缀)。仅凭前缀判定,
+ * **不比对具体值**。用途:host 侧在「命中本族已存 token」判定**失败后**,借此区分
+ *   ① 带前缀但不命中(已重置 / 跨族 / 已失效的 Cindy 对外 token)→ 应明确 401,
+ *      绝不能落到内部默认路由把它当作 x-api-key / Authorization 透传上游(否则泄漏 + 误路由);
+ *   ② 完全不带前缀(Cindy 自家子进程的真凭证 / 网关 key / 占位 key)→ 正常走内部逻辑。
+ * 真凭证不会以 `cindy-local-` 开头,故前缀是一个安全的判别器。
+ */
+export function isCindyLocalToken(candidate: string | null | undefined): boolean {
+  return typeof candidate === 'string' && candidate.startsWith(TOKEN_PREFIX);
+}
+
 /** 一族 token 的存取 + 开关读取器。A / B 族各注入自己的一套,核心逻辑完全共享。 */
 interface TokenFamily {
   /** 族标识,用作 safeStorage 写失败时的进程内兜底缓存 key。 */
@@ -194,4 +206,14 @@ export function matchesCodexExternalToken(candidate: string | null | undefined):
 /** B 族对外服务是否已开启(来自非密钥设置存储)。 */
 export function isCodexExternalAccessEnabled(): boolean {
   return codexFamily.isEnabled();
+}
+
+/**
+ * 清空进程内兜底缓存(两族)。切换账号 / 清空所有 secrets 时必须调用 —— 否则
+ * safeStorage 写失败留下的兜底 token 会跨账号存活,让旧账号的对外 token 在新账号下
+ * 仍被判定命中。物理 token 由 providerSecretStore 的 clearAllSecrets 删除,本函数补上
+ * 内存兜底这一路,与其在同一清理路径里调用。
+ */
+export function clearExternalTokenMemoryFallback(): void {
+  memoryFallbackTokens.clear();
 }

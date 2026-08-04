@@ -33,6 +33,7 @@ import {
 } from '../maker-host/codex-proxy-host.js';
 import { listExternalRoutableProviders } from '../maker-host/provider-route.js';
 import {
+  clearExternalTokenMemoryFallback,
   getExternalTokenMasked,
   getOrCreateExternalToken,
   hasExternalToken,
@@ -42,6 +43,7 @@ import {
   hasCodexExternalToken,
   regenerateCodexExternalToken,
 } from '../maker-host/local-proxy-external-auth.js';
+import { addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import {
   isCodexExternalAccessEnabled,
   isValidLocalProxyPortOrAuto,
@@ -85,6 +87,11 @@ function buildState(): LocalProxyServiceState {
 }
 
 export function registerLocalProxyServiceIpc(): void {
+  // 账号边界清理(切换账号 / 清空 secrets)时,providerSecretStore 会删掉两族物理 token。
+  // 但 safeStorage 写失败时留下的进程内兜底 token 不经 secretStore,必须在同一路径上一并清掉,
+  // 否则旧账号的对外 token 会跨账号存活、在新账号下仍被判定命中(串到新账号付费凭证)。
+  addProviderSecretsClearedListener(clearExternalTokenMemoryFallback);
+
   ipcMain.handle('local-proxy:get-state', async (): Promise<LocalProxyServiceState> =>
     buildState());
 
