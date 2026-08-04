@@ -30,6 +30,12 @@ const PI_BINARY = path.join(
   `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'pi.exe' : 'pi',
 );
+const RIPGREP_DIR = path.join(
+  REPO_ROOT,
+  'apps',
+  'ripgrep-bin',
+  `${process.platform}-${process.arch}`,
+);
 const PREVIOUS_PI_BINARY = path.join(
   REPO_ROOT,
   'tools',
@@ -329,7 +335,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'test-key-123' }),
       },
-      runtimeConfig: { endpoint },
+      runtimeConfig: { endpoint, pathPrepends: [RIPGREP_DIR] },
       binaryPath: PI_BINARY,
       logger: noopLogger,
       capabilityAdditions: {
@@ -1140,6 +1146,64 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  it(
+    'offline grep uses the host-managed ripgrep instead of falling back to bash',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-grep-'));
+      writeFileSync(path.join(workingDir, 'tool-target.ts'), 'needle-line\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle-line', path: '.', literal: true }),
+          anthropicStreamBody('grep turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-grep',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'offline find uses the Cindy ripgrep override without fd',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-find-'));
+      writeFileSync(path.join(workingDir, 'find-me.ts'), 'export {};\n');
+      writeFileSync(path.join(workingDir, 'skip-me.txt'), 'skip\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: '*.ts', path: '.' }),
+          anthropicStreamBody('find turn finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('find-me.ts'))).toBe(true);
+        expect(followUp.some((body) => body.includes('skip-me.txt'))).toBe(false);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
 
   it(
     'auto mode: safe bash executes end-to-end without prompting (real bridge intercept)',

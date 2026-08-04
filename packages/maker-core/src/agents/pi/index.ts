@@ -178,6 +178,20 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
   delete env.no_proxy;
 }
 
+/** 把 host 受管工具目录放到 Pi 父进程 PATH 首位；子代理继承同一环境。 */
+function prependRuntimePath(env: NodeJS.ProcessEnv, prepends: string[]): void {
+  const cleaned = prepends.map((entry) => entry.trim()).filter(Boolean);
+  if (cleaned.length === 0) return;
+
+  const pathKeys = Object.keys(env).filter((key) => key.toLowerCase() === 'path');
+  const key = pathKeys[0] ?? (process.platform === 'win32' ? 'Path' : 'PATH');
+  const current = env[key] ?? '';
+  for (const duplicate of pathKeys) {
+    if (duplicate !== key) delete env[duplicate];
+  }
+  env[key] = [...cleaned, current].filter(Boolean).join(path.delimiter);
+}
+
 /** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
 function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
@@ -1154,6 +1168,7 @@ export class PiAgent extends BaseAgent {
           ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) }
           : {}),
       };
+      prependRuntimePath(spawnEnv, this.deps.runtimeConfig.pathPrepends ?? []);
       mergeLoopbackNoProxy(spawnEnv);
       proc = new PiRpcProcess({
         binaryPath: this.deps.binaryPath,

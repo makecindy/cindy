@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+
+import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+
+describe('cindy-bridge extension source', () => {
+  it('overrides find with the managed ripgrep backend instead of runtime fd download', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+
+    for (const tool of ['createBashTool', 'createFindTool', 'createGrepTool', 'createLsTool']) {
+      expect(source).toContain(tool + ',');
+    }
+    expect(source).toContain(
+      "const args = ['--files', '--hidden', '--no-require-git', '--glob', pattern]",
+    );
+    expect(source).toContain("const child = spawn('rg', args");
+    expect(source).toContain('glob: rgGlob');
+    expect(source).toContain('const grepTool = createGrepTool(process.cwd())');
+    expect(source).toContain('const lsTool = createLsTool(process.cwd())');
+    expect(source).not.toContain("spawn('fd'");
+  });
+
+  it('keeps generated extension source free of template literals', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('`');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
+  });
+});
