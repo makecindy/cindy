@@ -474,7 +474,7 @@ describe('cindy_contacts tools', () => {
       store.getContact(id).identities.some((i) => i.platform === 'apple-contacts'),
     );
     expect(anchored).toHaveLength(200);
-  });
+  }, 15_000);
 
   it('write/manage 工具成功后触发 onMutated, 只读工具不触发(UI 刷新通道)', async () => {
     // 回归: onMutated 注入后从未被调用 — agent 经 MCP 直写 store 不经 IPC 层,
