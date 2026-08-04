@@ -646,6 +646,9 @@ export async function resolveExternalModelRouteDecision(
   const inferred = model ? inferProviderIdForModel(model, 'claude-code') : null;
   const providerId = inferred ?? (defaultProviderId?.trim() || null);
   if (!providerId) return null;
+  // 与下拉候选同源:按模型名命中的供应商也必须是可对外路由的(排除 oauth-passthrough 订阅直连)。
+  // 否则 host 会当它可路由、strip 掉 Cindy bearer 后转发,而外部 CLI 没有订阅 OAuth bearer → 上游 401。
+  if (!isExternalRoutableProvider(providerId, 'claude-code')) return null;
   const resolved = await resolveProviderRouteDecision(providerId, 'claude-code', gatewayKey);
   if (!resolved?.decision) return null;
   // 与会话路由(resolveSessionRouteDecision 的 withRequestPath)一致:自定义 requestPath 的
@@ -676,6 +679,9 @@ export async function resolveExternalCodexRoute(
   const inferred = model ? inferProviderIdForModel(model, 'codex') : null;
   const providerId = inferred ?? (defaultProviderId?.trim() || null);
   if (!providerId) return null;
+  // 与下拉候选同源:按模型名命中的供应商也必须是可对外路由的(排除 oauth-passthrough 订阅直连,
+  // 如内置 OpenAI Codex 路由)。否则 host strip 掉 Cindy bearer 后转发,外部 CLI 无订阅 bearer → 上游 401。
+  if (!isExternalRoutableProvider(providerId, 'codex')) return null;
   return resolveProviderRouteById(providerId, 'codex', model);
 }
 
@@ -697,18 +703,33 @@ const EXTERNAL_ROUTABLE_AUTH_STRATEGIES = new Set([
   'provider-oauth-header',
   'none',
 ]);
+
+/**
+ * 某供应商在给定 agent 下是否可被**外部**客户端路由。判据与 `listExternalRoutableProviders`
+ * 下拉候选**同源**:未在 mutation 窗口内、`xd` 仅在网关可用时、该 agent 有未 disabled 的 routing、
+ * 且 `authStrategy ∈ EXTERNAL_ROUTABLE_AUTH_STRATEGIES`(排除 `oauth-passthrough` 订阅直连)。
+ *
+ * 单独抽出来是因为 `inferProviderIdForModel` 会**按模型名**命中一个下拉里被排除的 passthrough
+ * 供应商(如内置 OpenAI Codex / Anthropic 订阅直连 —— 尤其网关不可用、`xd` 被排除、stock 模型转而
+ * 唯一命中订阅供应商时)。外部解析必须用同一判据拦掉:否则 host 会当它可路由、strip 掉 Cindy
+ * bearer 后转发,而外部 CLI 没有子进程订阅 OAuth bearer,结果必然上游 401(或把不可路由供应商
+ * 当成可路由对外宣告)。
+ */
+function isExternalRoutableProvider(providerId: string, agent: AgentKind): boolean {
+  if (isProviderRouteMutationInProgress(providerId)) return false;
+  if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return false;
+  const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
+  if (!provider || !provider.agents.includes(agent)) return false;
+  const routing = provider.routing[agent];
+  if (!routing || routing.disabled) return false;
+  return EXTERNAL_ROUTABLE_AUTH_STRATEGIES.has(routing.authStrategy);
+}
+
 export function listExternalRoutableProviders(
   agent: AgentKind = 'claude-code',
 ): { id: string; name: string }[] {
   return getActiveCatalog()
-    .providers.filter((provider) => {
-      if (isProviderRouteMutationInProgress(provider.id)) return false;
-      if (provider.id === 'xd' && !getAppCapabilities().canUseCindyGateway) return false;
-      if (!provider.agents.includes(agent)) return false;
-      const routing = provider.routing[agent];
-      if (!routing || routing.disabled) return false;
-      return EXTERNAL_ROUTABLE_AUTH_STRATEGIES.has(routing.authStrategy);
-    })
+    .providers.filter((provider) => isExternalRoutableProvider(provider.id, agent))
     .map((provider) => ({ id: provider.id, name: provider.name }));
 }
 

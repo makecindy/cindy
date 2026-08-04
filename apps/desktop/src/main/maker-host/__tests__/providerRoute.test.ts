@@ -972,6 +972,28 @@ describe('对外模型代理 — resolveExternalModelRouteDecision（无会话�
       pathOverride: '/tenant/acme/infer?stream=1',
     });
   });
+
+  it('模型名唯一命中 oauth-passthrough(订阅直连)供应商 → null(与下拉候选同源排除)', async () => {
+    // stock claude 模型此处只由内置 anthropic(oauth-passthrough)提供 → 唯一命中它。
+    // 但订阅直连依赖子进程 OAuth bearer,外部 CLI 没有;外部解析必须拦掉,不能 strip 掉
+    // Cindy bearer 后转发(否则必然上游 401,或把不可路由供应商当可路由对外)。
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-passthrough-only',
+        name: 'Claude Passthrough Only',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    expect(inferProviderIdForModel('claude-passthrough-only', 'claude-code')).toBe('anthropic');
+    await expect(
+      resolveExternalModelRouteDecision('claude-passthrough-only', KEY, ''),
+    ).resolves.toBeNull();
+    // 显式把 passthrough 供应商当默认供应商也一样拦掉(纵深防御,不依赖下拉过滤)。
+    await expect(resolveExternalModelRouteDecision('whatever', KEY, 'anthropic')).resolves.toBeNull();
+    setAnthropicDiscoveredModels([]);
+  });
 });
 
 describe('对外模型代理 — listExternalRoutableProviders（下拉候选）', () => {
@@ -1071,6 +1093,26 @@ describe('对外模型代理 — resolveExternalCodexRoute（Codex 无会话,返
   it('xd 网关(codex)显式选中时解析出网关 route,不越过外部分支', async () => {
     const route = await resolveExternalCodexRoute('anything-codex', 'xd');
     expect(route).toMatchObject({ providerId: 'xd', providerSource: 'builtin' });
+  });
+
+  it('模型名唯一命中 oauth-passthrough(内置 OpenAI Codex 订阅直连)供应商 → null', async () => {
+    // 该 gpt 模型此处只由内置 openai(codex=oauth-passthrough)提供 → 唯一命中它。
+    // 订阅直连依赖子进程 OAuth bearer,外部 CLI 没有;外部解析必须拦掉,绝不 strip 掉
+    // Cindy bearer 后转发(否则必然上游 401)。
+    setDiscoveredCodexModels([
+      {
+        id: 'gpt-passthrough-only',
+        name: 'GPT Passthrough Only',
+        contextWindow: 272_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    expect(inferProviderIdForModel('gpt-passthrough-only', 'codex')).toBe('openai');
+    await expect(resolveExternalCodexRoute('gpt-passthrough-only', '')).resolves.toBeNull();
+    // 显式把 passthrough 供应商当默认供应商也一样拦掉(纵深防御)。
+    await expect(resolveExternalCodexRoute('whatever-codex', 'openai')).resolves.toBeNull();
+    setDiscoveredCodexModels([]);
   });
 });
 
