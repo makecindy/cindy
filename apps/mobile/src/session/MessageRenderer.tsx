@@ -1769,18 +1769,18 @@ function MessageBubble({
     canAddToChat,
     canCopyLink,
     canDelete,
-    canFork,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind, i18nInstance.language]);
+  }), [canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
+    canFork,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
     // 金额与 token 回退占同一格,任一有值就保留该位置。
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
+  }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const disabled = !!actions.busyClientId;
@@ -1840,7 +1840,6 @@ function MessageBubble({
   ]);
   const selectMenuAction = useCallback((id: MobileMessageMenuActionId) => {
     if (!clientId) return;
-    if (id === 'fork') return selectControlAction('fork');
     if (id === 'rewind') return selectControlAction('rewind');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
@@ -2072,7 +2071,9 @@ function MessageBubble({
               return (
                 <MessageMoreButton
                   buttonSize={actionBar.buttonSize}
-                  disabled={disabled || actionBusy}
+                  // Fork has its own visible busy state. Keep More available
+                  // while that direct action is running.
+                  disabled={disabled && !actionBusy}
                   iconSize={actionBar.iconSize}
                   key="more"
                   onPress={() => setActionSheetOpen(true)}
@@ -2083,6 +2084,7 @@ function MessageBubble({
               return (
                 <MessageControlButton
                   buttonSize={actionBar.buttonSize}
+                  busy={id === 'fork' && actionBusy}
                   copyState={copyState}
                   disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
                   id={id}
@@ -5669,6 +5671,7 @@ function formatMediaPayloadBody(
 
 function MessageControlButton({
   buttonSize,
+  busy,
   copyState,
   disabled,
   id,
@@ -5676,6 +5679,7 @@ function MessageControlButton({
   onPress,
 }: {
   buttonSize: number;
+  busy?: boolean;
   copyState: CopyMessageStatus | 'idle' | 'copying';
   disabled?: boolean;
   id: MobileMessageControlActionId;
@@ -5700,7 +5704,7 @@ function MessageControlButton({
       ]}
       testID={messageControlActionTestID(id)}
     >
-      {messageControlActionIcon(id, copyState, iconSize, colors)}
+      {messageControlActionIcon(id, copyState, iconSize, colors, busy)}
     </Pressable>
   );
 }
@@ -5739,8 +5743,8 @@ function MessageMoreButton({
   );
 }
 
-function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' {
-  return id === 'copy';
+function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'fork' {
+  return id === 'copy' || id === 'fork';
 }
 
 function messageControlActionLabel(
@@ -5765,7 +5769,11 @@ function messageControlActionIcon(
   copyState: CopyMessageStatus | 'idle' | 'copying',
   iconSize: number,
   colors: ThemeColors,
+  busy = false,
 ): ReactNode {
+  if (id === 'fork' && busy) {
+    return <ActivityIndicator color={colors.textSecondary} size="small" />;
+  }
   if (id === 'copy') {
     return copyState === 'copying'
       ? <ActivityIndicator color={colors.textSecondary} size="small" />

@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import {
   Link2,
   MessageSquarePlus,
-  Split,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -16,7 +15,6 @@ import type { MobileMessageMenuActionId, MobileMessageMenuItem } from '@/session
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 const ACTION_ICONS: Record<MobileMessageMenuActionId, LucideIcon> = {
-  fork: Split,
   'add-to-chat': MessageSquarePlus,
   'copy-link': Link2,
   rewind: Undo2,

@@ -83,6 +83,7 @@ describe('messagePresentation', () => {
     expect(buildMessageActionBarPresentation({
       align: 'agent',
       canCopy: true,
+      canFork: true,
       hasMoreActions: true,
       hasTime: true,
       hasTurnCost: true,
@@ -91,12 +92,13 @@ describe('messagePresentation', () => {
       align: 'left',
       buttonSize: 24,
       iconSize: 14,
-      items: ['copy', 'more', 'time', 'cost'],
+      items: ['copy', 'fork', 'more', 'time', 'cost'],
     });
 
     expect(buildMessageActionBarPresentation({
       align: 'user',
       canCopy: true,
+      canFork: true,
       hasMoreActions: true,
       hasTime: true,
       hasTurnCost: true,
@@ -105,12 +107,13 @@ describe('messagePresentation', () => {
       align: 'right',
       buttonSize: 24,
       iconSize: 14,
-      items: ['time', 'copy', 'more'],
+      items: ['time', 'copy', 'fork', 'more'],
     });
 
     expect(buildMessageActionBarPresentation({
       align: 'agent',
       canCopy: true,
+      canFork: false,
       hasMoreActions: true,
       hasTime: true,
       hasTurnCost: true,

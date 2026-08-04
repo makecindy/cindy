@@ -248,7 +248,6 @@
     "backToMenu": "세션 메뉴로 돌아가기"
   },
   "messageMenu": {
-    "fork": "새 세션에서 계속하기",
     "addToChat": "대화에 추가",
     "copyLink": "현재 메시지 링크 복사",
     "rewind": "여기로 돌아가기",

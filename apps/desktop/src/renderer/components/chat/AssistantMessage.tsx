@@ -6,7 +6,7 @@
  * F-MSG-1: assistant message styling (left-aligned, no bubble)
  * F-MSG-2: Markdown rendering
  * message-actions V1.2: hover-revealed bar below the markdown body, left-aligned,
- *   order [copy][time]. Streaming messages do NOT mount the bar (per spec
+ *   order [copy][fork][more][time][cost]. Streaming messages do NOT mount the bar (per spec
  *   "流式期间不挂载"); 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
  *   时才挂载 —— 任务执行过程中的中间句没有操作行。The bar
  *   owns its own fade lifecycle (see MessageActionBar) so this component

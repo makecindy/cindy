@@ -1575,7 +1575,7 @@ export function UserMessage({
                   </div>
                 )}
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
-            right-aligned, order [time][copy][edit][undo][more]。被拦消息只保留
+                right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
                 <MessageActionBar
                   createdAt={createdAt}
