@@ -87,6 +87,25 @@ export interface EmbeddingServiceDeps {
   log: ReturnType<typeof createLogger>;
 }
 
+/**
+ * "供应商/模型被用户在设置里停用" 的错误 —— 带稳定 code。
+ *
+ * 为什么不是普通 Error(PR #1707 review):这条失败对上层的含义是**主机没得选**,
+ * 与"目录里没有可用型号"同一个语义面(插件协议的 NO_CANDIDATE),而不是"主机内部
+ * 炸了"。消费方(cindySlot 的 embeddingErrorCode)只认 `.code`,不带 code 就会被
+ * 压成 INTERNAL —— 而 FORGE_GUIDE 明确承诺"用户在设置里停用了"要报 NO_CANDIDATE,
+ * 那就成了文档与实现不一致。
+ *
+ * 命中窗口很窄但真实存在:目录派生时已经把停用型号滤掉了,所以正常路径到不了这里;
+ * 能到这里的是"取完目录快照之后用户才去设置里停用"的竞态。窄不等于不会发生。
+ */
+function embeddingDisabledError(modelId: string): Error & { code: string } {
+  return Object.assign(
+    new Error(`embedding provider or model disabled in settings: ${modelId}`),
+    { code: 'DISABLED' as const },
+  );
+}
+
 export class EmbeddingService {
   private readonly registry: VecTableRegistry;
   private readonly worker: EmbeddingWorker;
@@ -176,7 +195,7 @@ export class EmbeddingService {
     // 调用,供应商停用时同样不发 —— 抛错交给消费方既有降级路径(语义搜索回落
     // 关键词检索)。
     if (isProviderModelRouteDisabled('xd', opts.modelId)) {
-      throw new Error('embedding provider or model disabled in settings');
+      throw embeddingDisabledError(opts.modelId);
     }
     return this.deps.getClient().embed({
       texts,
@@ -201,7 +220,7 @@ export class EmbeddingService {
     },
   ): Promise<EmbedDocumentsResponse> {
     if (isProviderModelRouteDisabled('xd', opts.modelId)) {
-      throw new Error('embedding provider or model disabled in settings');
+      throw embeddingDisabledError(opts.modelId);
     }
     return this.deps.getClient().embedDocuments({
       documents,

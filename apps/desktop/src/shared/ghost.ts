@@ -5754,6 +5754,22 @@ export interface GhostVideoResultParams {
   audio?: boolean;
 }
 
+/**
+ * embed_text 两种成功形态共有的交付元数据。
+ *
+ * `model` 与 `dim` 是**必须一并存下**的:换了模型或维度,旧向量与新向量不在同一
+ * 空间,相似度不可比,存量必须重嵌 —— 这是它跟出图最不一样的地方(出图换型号只是
+ * 风格变了,向量换型号会让整个索引静默失效)。
+ */
+interface GhostCindyEmbedResultMeta {
+  /** 实际执行的模型 id。 */
+  model: string;
+  /** 实际返回的向量维度。 */
+  dim: number;
+  /** 模型展示名(目录 label;给用户看的场合用这个,不用裸 id)。 */
+  modelLabel: string;
+}
+
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
   | {
@@ -5840,30 +5856,26 @@ export type GhostPipeModelResult =
       /** 实际应答的供应商/模型标识(轻量链解析结果;仅诊断展示用)。 */
       model?: string;
     }
-  | {
-      /**
-       * embed_text 成功(独立成员:有 `embeddings`,可与其它成功分支可靠判别)。
-       */
+  /**
+   * embed_text 成功 —— 两种形态**互斥**,写成两个分支而不是一个"两个字段都可选"
+   * 的分支(PR #1707 review):后者在类型层允许"两个都缺"和"两个都有"这两种非法
+   * 响应,加新路径时 TS 不会拦。拆开之后每个分支各有一个**必填**的独占成员,既锁死
+   * 二选一,也让它们与其它 ok:true 分支的判别更牢靠。wire 形态与拆分前完全一致。
+   */
+  | ({
+      /** 逐条独立嵌(请求传 texts)。 */
       ok: true;
-      /**
-       * 与请求 texts 等长、顺序一一对应的向量数组。传 documents 时**缺席**
-       * (那条路径回 documentEmbeddings)。
-       */
-      embeddings?: number[][];
-      /**
-       * 上下文化结果:与请求 documents 同形(文档 → chunk → 维度)。
-       * 只在传了 documents 时出现。
-       */
-      documentEmbeddings?: number[][][];
-      /**
-       * 实际执行的模型 id 与向量维度。**存向量时必须一并存下这两个值**:
-       * 换了模型或维度,旧向量与新向量不在同一空间,相似度不可比,必须重嵌。
-       */
-      model: string;
-      dim: number;
-      /** 模型展示名(目录 label;给用户看的场合用这个,不用裸 id)。 */
-      modelLabel: string;
-    }
+      /** 与请求 texts 等长、顺序一一对应。 */
+      embeddings: number[][];
+      documentEmbeddings?: never;
+    } & GhostCindyEmbedResultMeta)
+  | ({
+      /** 上下文化嵌入(请求传 documents)。 */
+      ok: true;
+      embeddings?: never;
+      /** 与请求 documents 同形:文档 → chunk → 维度。 */
+      documentEmbeddings: number[][][];
+    } & GhostCindyEmbedResultMeta)
   | {
       ok: false;
       message: string;

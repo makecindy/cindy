@@ -353,8 +353,9 @@ function supportsContextualEmbedding(model: string): boolean {
  *     改参数再来,重试同样的请求永远失败;
  *   - RATE_LIMITED(429)→ 同名:退避后可重试;
  *   - TIMEOUT(预算耗尽)→ 同名:可重试,但要考虑减小批量;
- *   - AUTH_FAILED(未登录 / 凭证不可用)→ NO_CANDIDATE:与"目录里没有可用型号"同一
- *     语义面 —— 插件改什么都没用,是主机侧条件不满足,应如实告诉用户而不是重试轰炸;
+ *   - AUTH_FAILED(未登录 / 凭证不可用)、DISABLED(用户在设置里停用了该供应商或型号)
+ *     → NO_CANDIDATE:与"目录里没有可用型号"同一语义面 —— 插件改什么都没用,是主机
+ *     侧条件不满足,应如实告诉用户而不是重试轰炸;
  *   - NETWORK_ERROR / SERVER_ERROR / 其它 → INTERNAL:主机侧故障,重试由调方决定。
  */
 function embeddingErrorCode(err: unknown): string {
@@ -368,6 +369,7 @@ function embeddingErrorCode(err: unknown): string {
     case 'TIMEOUT':
       return 'TIMEOUT';
     case 'AUTH_FAILED':
+    case 'DISABLED':
       return 'NO_CANDIDATE';
     default:
       return 'INTERNAL';

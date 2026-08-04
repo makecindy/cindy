@@ -443,8 +443,11 @@ export class EmbeddingClient {
     }
     // abort 之后 fetch 抛的是 AbortError,与真正的网络故障混在一起 —— 但两者的
     // 重试语义相反(网络错该重试、超时不该),所以靠 signal.aborted 而不是错误
-    // 消息来区分。注入的 fetchImpl 若无视 signal(测试替身常见),超时判定仍然
-    // 成立:抛出点变成下面的 aborted 复查。
+    // 消息来区分。
+    //
+    // 前提:fetchImpl 必须尊重 AbortSignal(真 fetch / undici 的契约)。无视
+    // signal 的替身若最终正常返回,这里不会把它判成超时 —— 预算只能约束"愿意被
+    // 中断"的实现,注入自定义 fetchImpl 时需自行保证这一点。
     const timedOut = (): boolean => controller?.signal.aborted === true;
     try {
       let res: Response;

@@ -2040,6 +2040,9 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
     ['RATE_LIMITED', 'RATE_LIMITED'],
     ['TIMEOUT', 'TIMEOUT'],
     ['AUTH_FAILED', 'NO_CANDIDATE'],
+    // 用户在设置里停用了供应商/型号 —— 主机没得选,与"目录里没有可用型号"同一
+    // 语义面。FORGE_GUIDE 明确承诺这种情况报 NO_CANDIDATE。
+    ['DISABLED', 'NO_CANDIDATE'],
     ['NETWORK_ERROR', 'INTERNAL'],
     ['SERVER_ERROR', 'INTERNAL'],
   ])('执行层 %s → 协议 %s', async (upstream, expected) => {
