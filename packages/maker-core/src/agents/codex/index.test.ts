@@ -18445,11 +18445,17 @@ describe('CodexAgent compaction storm escalation', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
+  /** 熔断有两条 reason(有无切模型证据),两条都要认。 */
+  const STORM_REASONS = [
+    'codex_compaction_not_converging',
+    'codex_compaction_not_converging_model_switch',
+  ];
+
   function findStormError(seen: AgentEvent[]): AgentEvent | undefined {
     return seen.find(
       (ev) =>
         ev.type === 'error' &&
-        (ev.data as { reason?: string } | null)?.reason === 'codex_compaction_not_converging',
+        STORM_REASONS.includes((ev.data as { reason?: string } | null)?.reason ?? ''),
     );
   }
 
@@ -18513,10 +18519,10 @@ describe('CodexAgent compaction storm escalation', () => {
   });
 
   /** 跑到熔断, 返回终态错误消息正文 (诊断文案由 modelSwitchRecord 决定)。 */
-  async function stormMessageAfterSwitches(
+  async function stormTerminalAfterSwitches(
     sessionId: string,
     switches: readonly string[],
-  ): Promise<string> {
+  ): Promise<{ message: string; reason: string }> {
     const agent = new CodexAgent(createDeps());
     const host = installStormHost(agent);
     const handle = await agent.startSession({ sessionId, model: 'model-a', workingDir: '/repo' });
@@ -18536,23 +18542,33 @@ describe('CodexAgent compaction storm escalation', () => {
     const terminal = findStormError(seen);
     expect(terminal).toBeDefined();
     await handle.close();
-    return (terminal!.data as { message: string }).message;
+    return terminal!.data as { message: string; reason: string };
   }
 
   // Codex review: A→B→A 原先会记成 {from:A,to:A}, 文案变成"从 A 切到 A, 请切回 A"。
-  it('A→B→A 切回原模型后不再点名模型(诱因已消失)', async () => {
-    const msg = await stormMessageAfterSwitches('session-storm-aba', ['model-b', 'model-a']);
-    expect(msg).not.toContain('switched model');
+  // reason 也必须跟着退回通用那条 —— renderer 拿 reason 的本地化文案盖掉 message,
+  // 只把 message 改成不猜原因是没用的, 用户看到的仍是 reason 对应的那句。
+  it('A→B→A 切回原模型后不点名模型, 且用通用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba',
+      ['model-b', 'model-a'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
     // 落到不猜原因的兜底文案。
-    expect(msg).toContain('system prompt and tool definitions');
+    expect(message).toContain('system prompt and tool definitions');
   });
 
   // A→B→C: from 保持最初的 A(codex 一直按它算窗口), to 是最新的 C。
-  it('A→B→C 保留最初来源与最新目标', async () => {
-    const msg = await stormMessageAfterSwitches('session-storm-abc', ['model-b', 'model-c']);
-    expect(msg).toContain('switched model from "model-a" to "model-c"');
-    expect(msg).toContain('Switch back to "model-a"');
-    expect(msg).not.toContain('model-b');
+  it('A→B→C 保留最初来源与最新目标, 且用切模型专用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc',
+      ['model-b', 'model-c'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    expect(message).not.toContain('model-b');
   });
 
   it('开着 Maker Memory 时同样熔断(改成无条件回调没打断 flush 路径)', async () => {

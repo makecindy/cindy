@@ -131,7 +131,7 @@ import {
 } from './retry-escalation.js';
 import {
   CompactionStormTracker,
-  buildCompactionStormMessage,
+  buildCompactionStormTerminalError,
 } from './compaction-storm.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
@@ -7444,7 +7444,9 @@ export class CodexAgent extends BaseAgent {
         // contextTokens 掺了本地口径的换算与跨 turn 累计, 拿它比会把口径差当成压缩效果。
         const stormDecision = compactionStormTracker.noteUsage(totalInput, Date.now());
         if (stormDecision?.escalate) {
-          const message = buildCompactionStormMessage({
+          // reason 与 message 一起取: renderer 会用 reason 的本地化文案盖掉 message,
+          // 两者必须同源, 否则用户看到的那半可能与证据不符 (见该函数注释)。
+          const { reason, message } = buildCompactionStormTerminalError({
             ineffectiveCount: stormDecision.ineffectiveCount,
             contextTokens: stormDecision.contextTokens,
             elapsedMs: stormDecision.elapsedMs,
@@ -7461,6 +7463,7 @@ export class CodexAgent extends BaseAgent {
             elapsedMs: stormDecision.elapsedMs,
             reportedContextWindow: params.tokenUsage?.modelContextWindow ?? null,
             effectiveContextWindow: lastModelContextWindow,
+            reason,
             ...(modelSwitchRecord ? { modelSwitch: modelSwitchRecord } : {}),
           });
           // 熔断后重新计数: 用户若选择继续 (发新消息前上游又压了几轮), 不会因为
@@ -7471,7 +7474,7 @@ export class CodexAgent extends BaseAgent {
           // 超时"; 而这里的判据是"压缩本身失效了", 与球在谁手里无关。留着那道闸只会
           // 让残留的未收口工具条目把熔断挡在门外, 用户继续看着它循环。
           onUpstreamIdleTimeout({
-            reason: 'codex_compaction_not_converging',
+            reason,
             message,
             logLabel: 'compaction storm — interrupting current turn',
             ignorePendingTools: true,

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   CompactionStormTracker,
-  buildCompactionStormMessage,
+  buildCompactionStormTerminalError,
   COMPACTION_STORM_MAX_INEFFECTIVE,
   COMPACTION_STORM_MAX_SKIPPED_USAGE,
+  COMPACTION_STORM_REASON,
+  COMPACTION_STORM_REASON_MODEL_SWITCH,
 } from './compaction-storm.js';
 
 /**
@@ -239,34 +241,61 @@ describe('CompactionStormTracker', () => {
   });
 });
 
-describe('buildCompactionStormMessage', () => {
-  it('切过模型时点名两个模型与可操作出路', () => {
-    const msg = buildCompactionStormMessage({
+describe('buildCompactionStormTerminalError', () => {
+  it('切过模型时点名两个模型与可操作出路, 并用切模型专用 reason', () => {
+    const { reason, message } = buildCompactionStormTerminalError({
       ineffectiveCount: 3,
       contextTokens: 326_827,
       elapsedMs: 120_000,
       switchedModel: { from: 'codex/gpt-5.6-sol', to: 'claude-opus-5' },
     });
-    expect(msg).toContain('codex/gpt-5.6-sol');
-    expect(msg).toContain('claude-opus-5');
-    expect(msg).toContain('326827');
-    expect(msg).toContain('start a new task');
+    expect(reason).toBe(COMPACTION_STORM_REASON_MODEL_SWITCH);
+    expect(message).toContain('codex/gpt-5.6-sol');
+    expect(message).toContain('claude-opus-5');
+    expect(message).toContain('326827');
+    expect(message).toContain('start a new task');
     // 首句必须是通顺的英文 —— 它是非 renderer 消费方(IM / orca / 日志)唯一看到的
     // 说明, 断言整句而不是零散关键词, 免得语法退化没人发现。
-    expect(msg).toContain(
+    expect(message).toContain(
       '3 compactions over 120s, each leaving about 326827 input tokens behind, ' +
       'so compaction cannot recover this turn.',
     );
   });
 
-  it('没有切模型记录时不猜原因', () => {
-    const msg = buildCompactionStormMessage({
+  // 回归 (Codex review): renderer 用 reason 的本地化文案**覆盖** message, 所以没有
+  // 切换证据时必须换 reason —— 只改 message 是没用的, 用户看到的仍是 reason 那条。
+  it('没有切模型记录时用通用 reason, 且不猜原因', () => {
+    const { reason, message } = buildCompactionStormTerminalError({
       ineffectiveCount: 3,
       contextTokens: 326_827,
       elapsedMs: 120_000,
       switchedModel: null,
     });
-    expect(msg).not.toContain('switched model');
-    expect(msg).toContain('system prompt and tool definitions');
+    expect(reason).toBe(COMPACTION_STORM_REASON);
+    expect(reason).not.toBe(COMPACTION_STORM_REASON_MODEL_SWITCH);
+    expect(message).not.toContain('switched model');
+    expect(message).not.toContain('Switch back');
+    expect(message).toContain('system prompt and tool definitions');
+  });
+
+  it('两个 reason 必须不同 —— 否则本地化文案无从区分证据', () => {
+    expect(COMPACTION_STORM_REASON).not.toBe(COMPACTION_STORM_REASON_MODEL_SWITCH);
+  });
+
+  // reason 与 message 同源: 结构上不可能出现"reason 说因为切模型、message 说不知道
+  // 原因"这种分叉 —— 而分叉后错的那半恰好是用户唯一看得到的那半。
+  it('reason 与 message 永远一致地反映有没有切换证据', () => {
+    for (const switchedModel of [null, { from: 'a', to: 'b' }] as const) {
+      const { reason, message } = buildCompactionStormTerminalError({
+        ineffectiveCount: 3,
+        contextTokens: 1_000,
+        elapsedMs: 1_000,
+        switchedModel,
+      });
+      const reasonClaimsSwitch = reason === COMPACTION_STORM_REASON_MODEL_SWITCH;
+      const messageClaimsSwitch = message.includes('switched model');
+      expect(reasonClaimsSwitch).toBe(messageClaimsSwitch);
+      expect(reasonClaimsSwitch).toBe(switchedModel !== null);
+    }
   });
 });

@@ -177,19 +177,46 @@ export class CompactionStormTracker {
 }
 
 /**
- * 合成给用户的终态错误消息 (非 renderer 消费方的英文兜底; renderer 侧走
- * ERROR_REASON_I18N_KEYS 的本地化文案)。
+ * 熔断的稳定 reason key —— **按有没有切模型证据分成两个**。
+ *
+ * renderer 侧 `ERROR_REASON_I18N_KEYS[reason]` 的本地化文案会**完全覆盖**下面合成的
+ * message (`displayError = errorReasonI18nKey ? t(key) : error`), 所以 reason 决定了
+ * 用户实际看到的那句话。只用一个 reason 时, 那条文案要么无条件断言「通常由切模型
+ * 引起、请切回原模型」—— 对没切过模型 (或 A→B→A 已经切回去) 的用户就是没有证据的
+ * 误导, 而且"切回原模型"根本无从执行; 要么退回不痛不痒的通用话术, 又浪费了我们确实
+ * 掌握的切换证据。拆成两个 reason 让本地化文案跟证据走。
+ *
+ * 默认那个 (`…NOT_CONVERGING`) 刻意留给**通用**语义: 万一以后有人漏了映射或走了
+ * 没预料到的路径, 落到不猜原因的文案是安全的, 落到断言切模型的文案是有害的。
+ */
+export const COMPACTION_STORM_REASON = 'codex_compaction_not_converging';
+export const COMPACTION_STORM_REASON_MODEL_SWITCH =
+  'codex_compaction_not_converging_model_switch';
+
+export interface CompactionStormTerminalError {
+  /** 稳定 reason key, 供 renderer 映射本地化文案。 */
+  reason: string;
+  /** 英文兜底 message, 给非 renderer 消费方 (IM / orca / 日志)。 */
+  message: string;
+}
+
+/**
+ * 合成熔断的终态错误 —— **reason 与 message 一起产出**。
+ *
+ * 两者必须同源: 它们描述的是同一件事的两种呈现 (本地化 UI 与英文兜底), 分开算就会
+ * 出现"reason 说因为切模型、message 说不知道原因"这种自相矛盾, 而且因为 renderer
+ * 用 reason 覆盖 message, 分叉后错的那一半恰好是用户唯一看得到的那半。
  *
  * 带上 `switchedModel` 时点名切模型 —— 那是实测唯一已知的触发路径, 也是用户唯一
  * 能自己动手解决的 (切回去 / 新开任务)。拿不到切换记录时只陈述观测到的现象, 不猜
  * 原因: 报错指错方向比不指方向更浪费用户时间。
  */
-export function buildCompactionStormMessage(opts: {
+export function buildCompactionStormTerminalError(opts: {
   ineffectiveCount: number;
   contextTokens: number;
   elapsedMs: number;
   switchedModel?: { from: string; to: string } | null;
-}): string {
+}): CompactionStormTerminalError {
   const elapsedS = Math.round(opts.elapsedMs / 1000);
   const head =
     `Codex kept compacting the context without making progress — ` +
@@ -197,16 +224,20 @@ export function buildCompactionStormMessage(opts: {
     `${opts.contextTokens} input tokens behind, so compaction cannot recover this turn. ` +
     `It was interrupted automatically to stop the loop.`;
   if (opts.switchedModel) {
-    return (
-      `${head}\nThis session switched model from "${opts.switchedModel.from}" to ` +
-      `"${opts.switchedModel.to}" mid-conversation, and Codex keeps evaluating the ` +
-      `context limit against the previous model's window. Switch back to ` +
-      `"${opts.switchedModel.from}" to continue here, or start a new task with ` +
-      `"${opts.switchedModel.to}".`
-    );
+    return {
+      reason: COMPACTION_STORM_REASON_MODEL_SWITCH,
+      message:
+        `${head}\nThis session switched model from "${opts.switchedModel.from}" to ` +
+        `"${opts.switchedModel.to}" mid-conversation, and Codex keeps evaluating the ` +
+        `context limit against the previous model's window. Switch back to ` +
+        `"${opts.switchedModel.from}" to continue here, or start a new task with ` +
+        `"${opts.switchedModel.to}".`,
+    };
   }
-  return (
-    `${head}\nThe bulk of the context is the system prompt and tool definitions, ` +
-    `which compaction cannot shrink. Start a new task to continue.`
-  );
+  return {
+    reason: COMPACTION_STORM_REASON,
+    message:
+      `${head}\nThe bulk of the context is the system prompt and tool definitions, ` +
+      `which compaction cannot shrink. Start a new task to continue.`,
+  };
 }
