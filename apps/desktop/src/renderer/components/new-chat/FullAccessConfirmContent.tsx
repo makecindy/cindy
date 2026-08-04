@@ -1,9 +1,9 @@
 /**
  * Full access 升级确认弹窗的富内容区(ChatInput 切换权限档时经 useConfirmDialog 弹出)。
  *
- * 把原先一整段权限说明拆成逐类可扫读的清单(文件 / 终端命令 / 网络),行排版与
- * 装入确认的权限清单(cindy-brain/GhostPermissionList.tsx)同款 token,让两处
- * "授权前的知情确认"读起来是同一套语言。文案在
+ * 把原先一整段权限说明拆成逐类可扫读的清单(文件 / 终端命令 / 网络),行结构与
+ * 装入确认的权限清单(cindy-brain/GhostPermissionList.tsx)同构;标题/说明的
+ * 文字色阶改用 --text-primary / --text-secondary(原因见行内注释)。文案在
  * newChat.chatInput.fullAccessConfirmation.*,此处只负责排版。
  */
 import { FolderOpen, Globe, Terminal, type LucideIcon } from 'lucide-react';
@@ -36,10 +36,14 @@ export function FullAccessConfirmContent() {
               aria-hidden="true"
             />
             <div className="min-w-0">
-              <p className="break-words text-13 font-medium leading-5 text-[var(--confirm-desc)]">
+              {/* 标题/说明用 --text-primary / --text-secondary:两档在明暗两模式都有
+                  色阶差。不沿用 GhostPermissionList 的 --confirm-desc / --text-tertiary
+                  —— 那对 token 在 Dark 下同为 #737373,两级层级会塌成同色,
+                  只剩字号差(2026-08 产品门 review 定的取舍)。 */}
+              <p className="break-words text-13 font-medium leading-5 text-[var(--text-primary)]">
                 {t(`newChat.chatInput.fullAccessConfirmation.items.${key}.title`)}
               </p>
-              <p className="break-words text-12 leading-[1.5] text-[var(--text-tertiary)]">
+              <p className="break-words text-12 leading-[1.5] text-[var(--text-secondary)]">
                 {t(`newChat.chatInput.fullAccessConfirmation.items.${key}.description`)}
               </p>
             </div>
