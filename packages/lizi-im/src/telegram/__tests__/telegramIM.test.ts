@@ -359,6 +359,42 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 
+  it('卡片 handler 失败后允许同一 callback 重试', async () => {
+    await connect();
+    const handler = vi.fn().mockRejectedValueOnce(new Error('temporary handler failure'));
+    im.onCardAction(handler);
+    const callback = encodeCallbackData('control:back', {
+      requestId: 'retryable-request',
+    });
+    api.pushUpdates([
+      {
+        update_id: 905,
+        callback_query: {
+          id: 'retry-first',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 905, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+    api.pushUpdates([
+      {
+        update_id: 906,
+        callback_query: {
+          id: 'retry-second',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 905, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
   it('同一终态 interaction 的不同决策按钮只派发一次', async () => {
     await connect();
     const handler = vi.fn();

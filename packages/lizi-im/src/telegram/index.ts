@@ -302,6 +302,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly ambientTriggerIds = new Set<string>();
   /** Recent rendered callback tokens already handed to desktop; suppress duplicate taps. */
   private readonly handledInteractionCallbacks = new Map<string, number>();
+  /** Callback keys whose async card handlers have not settled yet. */
+  private readonly inFlightInteractionCallbacks = new Map<string, { at: number; epoch: number }>();
   /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
   private readonly typingLoops = new Map<
     string,
@@ -309,8 +311,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   >();
 
   /** Callback dedup survives polling restarts, but not a bot/owner boundary. */
+  private interactionCallbackDedupEpoch = 0;
+
   private clearInteractionCallbackDedup(): void {
+    this.interactionCallbackDedupEpoch += 1;
     this.handledInteractionCallbacks.clear();
+    this.inFlightInteractionCallbacks.clear();
   }
 
   constructor(
@@ -1365,6 +1371,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       for (const [key, at] of this.handledInteractionCallbacks) {
         if (now - at > 5 * 60_000) this.handledInteractionCallbacks.delete(key);
       }
+      for (const [key, entry] of this.inFlightInteractionCallbacks) {
+        if (now - entry.at > 5 * 60_000) this.inFlightInteractionCallbacks.delete(key);
+      }
       // Terminal decision buttons share one requestId, so different choices
       // (e.g. allow + deny) cannot race and overwrite the first resolution.
       // Navigation/direct-command cards may reuse requestId when the message
@@ -1372,17 +1381,49 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       const callbackKey = isTerminalInteractionButton(event.buttonId)
         ? `${event.messageId}|request:${requestId}`
         : `${event.messageId}|token:${q.data}`;
-      if (this.handledInteractionCallbacks.has(callbackKey)) return;
-      this.handledInteractionCallbacks.set(callbackKey, now);
-      while (this.handledInteractionCallbacks.size > 512) {
-        const oldest = this.handledInteractionCallbacks.keys().next().value;
-        if (oldest === undefined) break;
-        this.handledInteractionCallbacks.delete(oldest);
+      if (
+        this.handledInteractionCallbacks.has(callbackKey) ||
+        this.inFlightInteractionCallbacks.has(callbackKey)
+      ) {
+        return;
       }
+      const dedupEpoch = this.interactionCallbackDedupEpoch;
+      this.inFlightInteractionCallbacks.set(callbackKey, { at: now, epoch: dedupEpoch });
+      while (this.inFlightInteractionCallbacks.size > 512) {
+        const oldest = this.inFlightInteractionCallbacks.keys().next().value;
+        if (oldest === undefined) break;
+        this.inFlightInteractionCallbacks.delete(oldest);
+      }
+      const dispatch = async (): Promise<void> => {
+        const results = await Promise.allSettled(
+          [...this.cardActionHandlers].map((handler) =>
+            Promise.resolve().then(() => handler(event)),
+          ),
+        );
+        const succeeded = results.every((result) => result.status === 'fulfilled');
+        if (succeeded) {
+          if (this.inFlightInteractionCallbacks.get(callbackKey)?.epoch !== dedupEpoch) return;
+          this.inFlightInteractionCallbacks.delete(callbackKey);
+          this.handledInteractionCallbacks.set(callbackKey, Date.now());
+          while (this.handledInteractionCallbacks.size > 512) {
+            const oldest = this.handledInteractionCallbacks.keys().next().value;
+            if (oldest === undefined) break;
+            this.handledInteractionCallbacks.delete(oldest);
+          }
+        } else {
+          // A transient handler failure must not make the rendered button
+          // permanently unresponsive; a later Telegram retry may try again.
+          if (this.inFlightInteractionCallbacks.get(callbackKey)?.epoch === dedupEpoch) {
+            this.inFlightInteractionCallbacks.delete(callbackKey);
+          }
+        }
+      };
+      void dispatch();
+      return;
     }
     for (const h of this.cardActionHandlers) {
       try {
-        void Promise.resolve(h(event)).catch(() => undefined);
+        void Promise.resolve().then(() => h(event)).catch(() => undefined);
       } catch {
         /* swallow */
       }
