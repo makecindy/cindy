@@ -179,6 +179,35 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
+test("model access protocol is built before every desktop and mobile consumer entrypoint", () => {
+	const scripts = readJson("package.json").scripts;
+	assert.equal(scripts["build:protocol"], "pnpm --filter @cindy/model-access-protocol build");
+
+	for (const name of [
+		"dev:desktop",
+		"dev:desktop:remote",
+		"dev:desktop:inspect",
+		"build",
+		"release:package",
+		"mobile:sim:rebuild",
+		"mobile:sim:start",
+		"mobile:build:ios",
+		"mobile:build:android",
+	]) {
+		const command = scripts[name];
+		assert.equal(typeof command, "string", `missing protocol consumer script: ${name}`);
+		const protocolIndex = command.indexOf("pnpm build:protocol");
+		assert.ok(protocolIndex >= 0, `${name} must build the model access protocol first`);
+		const dependencyIndex = command.indexOf("ensure-deps");
+		if (dependencyIndex >= 0) {
+			assert.ok(
+				dependencyIndex < protocolIndex,
+				`${name} must prepare dependencies before building the model access protocol`,
+			);
+		}
+	}
+});
+
 test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const shards = workflowJob(workflow, "windows-unit-shards");
