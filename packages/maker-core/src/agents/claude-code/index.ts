@@ -3832,10 +3832,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetSdkMode = sdkMode;
           try {
-            await pushSdkPermissionMode(targetSdkMode);
-            sdkInPlanMode = targetSdkMode === 'plan';
-            snapshot.sdkPermissionMode = targetSdkMode;
-            log.debug(`${label}: replayed setPermissionMode`, { sdkMode: targetSdkMode });
+            // 只有真的落地才回写本地记账:队列在 Query 已被替换时返回 null(那次写入被丢弃),
+            // 无条件回写会把"没落地"记成"已落地",后续 plan 补推会被错误跳过(copilot)。
+            const applied = await enqueueSdkPermissionModePush(targetSdkMode);
+            if (applied !== null) {
+              sdkInPlanMode = applied === 'plan';
+              snapshot.sdkPermissionMode = applied;
+              log.debug(`${label}: replayed setPermissionMode`, { sdkMode: applied });
+            } else {
+              log.debug(`${label}: setPermissionMode replay dropped (query replaced)`, { sdkMode: targetSdkMode });
+            }
           } catch (e) {
             log.warn(`${label}: replay setPermissionMode failed`, { error: String(e) });
           }
@@ -3907,8 +3913,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // effectiveSdkPermissionMode()(planTurnActive 已置 true → 'plan') 起档。
           if (!sdkInPlanMode && !controlRequestsBlocked()) {
             try {
-              await pushSdkPermissionMode('plan');
-              sdkInPlanMode = true;
+              // 同上:被丢弃的写入不得把 sdkInPlanMode 记成 true(copilot)。
+              if (await enqueueSdkPermissionModePush('plan') !== null) sdkInPlanMode = true;
             } catch (e) {
               log.warn('deferred plan-mode SDK switch failed — sending as a normal turn', { error: String(e) });
             }
@@ -4201,7 +4207,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (sdkPermissionModeQueueDepth > 0) {
             await sdkPermissionModeQueue;
             try {
-              await enqueueSdkPermissionModePush(() => currentTurnSdkPermissionMode());
+              // 复核落地后必须同步 sdkInPlanMode:否则那条仍在等待的 setPlanMode(true) 之后会把
+              // 它置成 true,而 SDK 实际已被复核写回普通档 —— 下一条真正的 plan 消息会因为
+              // 「标记说已在 plan」而跳过补推,整轮按普通权限档跑(codex P2)。
+              const applied = await enqueueSdkPermissionModePush(() => currentTurnSdkPermissionMode());
+              if (applied !== null) sdkInPlanMode = applied === 'plan';
             } catch (e) {
               // 复核失败不该把用户这条消息毙掉(与既有的 best-effort 档位调用点同款);记欠账,
               // 下一个补推点重试。这一轮可能跑在旧档上,已在日志里留痕。
@@ -4722,6 +4732,20 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 推送失败保持 main 的语义:本次改档视为未生效。只在没人在此期间改过档时才回滚,
             // 否则会把别人刚设好的档抹掉。
             if (mutablePermissionMode === newMode) mutablePermissionMode = previousMode;
+            // **回滚本地状态还不够,SDK 也要收回去。** 目标档是现算的,所以队列里排在前面的
+            // 写入可能已经把 SDK 推到了这次(更新的)档位;这次失败只把 mutablePermissionMode
+            // 回滚,SDK 就会长期停在那个更宽的档上(典型:停在 Full access),与界面和本地状态
+            // 不符(codex P1)。这里排一次现算写入把它收回去,并记欠账兜住这次也失败的情况。
+            sdkPermissionModeSyncOwed = true;
+            void enqueueSdkPermissionModePush(() => toSdkPermissionMode(mutablePermissionMode))
+              .then(
+                (applied) => { if (applied !== null) sdkPermissionModeSyncOwed = false; },
+                (revertError: unknown) => {
+                  log.warn('permission mode rollback push failed; owed for the next opportunity', {
+                    error: String(revertError),
+                  });
+                },
+              );
             throw e;
           }
         }
@@ -4767,8 +4791,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 重建时 buildQuery 以 effectiveSdkPermissionMode() 起档并回写 sdkInPlanMode
           return;
         }
-        await pushSdkPermissionMode(sdkMode);
-        sdkInPlanMode = sdkMode === 'plan';
+        // 被丢弃的写入不得回写记账(copilot);重建路径本就会按 effectiveSdkPermissionMode()
+        // 起档并自行回写。
+        const appliedPlanMode = await enqueueSdkPermissionModePush(sdkMode);
+        if (appliedPlanMode !== null) sdkInPlanMode = appliedPlanMode === 'plan';
         // 退出 plan 时补推点:plan 档期间 auto-review 状态变过的话,欠账在这里兑。
         if (!enabled) flushOwedSdkPermissionModeSync('plan-mode-disabled');
       },

@@ -508,6 +508,67 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     // ……但输入入队之前**最后落地**的档位必须是本轮意图对应的档,不是 plan。
     expect(writes.order[writes.order.length - 1]).toBe('auto');
     expect(writes.maxLive()).toBe(1);
+
+    // 复核落地后 sdkInPlanMode 必须同步成 false。否则那条仍在等待的 setPlanMode(true) 会把
+    // 它置成 true,而 SDK 实际已被复核写回普通档 —— 下一条**真正的** plan 消息就会因为
+    // 「标记说已在 plan」而跳过补推,整轮按普通权限档跑(codex P2)。
+    const planTurn = handle.send({ type: 'user', content: 'real plan turn' }, { planMode: true });
+    for (let i = 0; i < 6; i += 1) {
+      if (writes.pending() > 0) writes.releaseNext();
+      await tick();
+      await tick();
+    }
+    await planTurn;
+    expect(writes.order).toContain('plan');
+    expect(writes.order.filter((m) => m === 'plan')).toHaveLength(2);
+    await handle.close();
+  });
+
+  it('pushes the rolled-back mode to the SDK when a user mode change fails', async () => {
+    // 目标档是现算的,所以队列里排在前面的写入可能已经把 SDK 推到了**更新的**那一档。若后一次
+    // 改档随后失败,只回滚 mutablePermissionMode 会让 SDK 长期停在那个更宽的档上(典型:停在
+    // Full access),与界面和本地权限状态不符(codex P1)。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const writes = instrumentModeWrites(fakeQuery);
+
+    // ① 占住队列。
+    const occupying = handle.setPermissionMode?.('auto');
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+    // ② 两次改档都只能排队;后者先把 mutablePermissionMode 推到 bypassPermissions。
+    const toAcceptEdits = handle.setPermissionMode?.('acceptEdits');
+    await tick();
+    const toFullAccess = handle.setPermissionMode?.('bypassPermissions').catch(() => {});
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+
+    // ③ 放行 ①;②-前一条现算出的是最新的 bypassPermissions,落地。
+    writes.releaseNext();
+    await tick();
+    await tick();
+    writes.releaseNext();
+    await tick();
+    await tick();
+    // 两次排队的改档都现算成最新那一档;放行两次之后第三条已经起跑。
+    expect(writes.order.slice(0, 3)).toEqual(['auto', 'bypassPermissions', 'bypassPermissions']);
+    // ④ ②-后一条(bypassPermissions 那次调用自己的写入)失败 → 触发回滚。
+    writes.releaseNext(new Error('transport not ready'));
+    await tick();
+    await tick();
+    // ⑤ 回滚不只改本地:必须把 SDK 也收回去。
+    for (let i = 0; i < 4; i += 1) {
+      if (writes.pending() > 0) writes.releaseNext();
+      await tick();
+      await tick();
+    }
+    await occupying;
+    await toAcceptEdits;
+    await toFullAccess;
+    expect(writes.order[writes.order.length - 1]).toBe('acceptEdits');
+    expect(writes.maxLive()).toBe(1);
     await handle.close();
   });
 
