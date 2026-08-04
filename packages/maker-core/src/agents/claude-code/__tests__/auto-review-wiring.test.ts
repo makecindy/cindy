@@ -377,7 +377,9 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
         }
       })(),
     ]);
-    expect(writes.order).toEqual(['default', 'default']);
+    // 三次:失败的那次 + turn 起点兑欠账 + 输入入队前按本轮意图的复核(队列非空时无条件做,
+    // 目标已一致时也重复 push 一次 —— 换来的是"输入之前最后落地的档位恒等于本轮意图")。
+    expect(writes.order).toEqual(['default', 'default', 'default']);
     expect(writes.maxLive()).toBe(1);
     await handle.close();
   });
@@ -463,6 +465,49 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     releaseOwedWrite();
     await sendPromise;
     expect(sendSettled).toBe(true);
+    await handle.close();
+  });
+
+  it('does not let a queued plan write leak into an explicit normal turn', async () => {
+    // 上一轮加的"等队列排空"把一个随机竞态变成了确定性 bug:setPlanMode(true) 的 'plan'
+    // 写入被前面的请求卡在队列里时 sdkInPlanMode 仍是 false,send 头部那条"显式普通消息
+    // 要降档"的分支不触发;等队列排空恰好保证那条**过期的** plan literal 一定在输入之前
+    // 落地,这一轮就整轮跑在 Plan 档上(codex P2)。所以等完必须按本轮意图再收一次口。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const writes = instrumentModeWrites(fakeQuery);
+
+    // ① 占住队列,后面的意图只能排队。
+    const occupying = handle.setPermissionMode?.('auto');
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+
+    // ② plan 写入排队(还没落地,所以 sdkInPlanMode 仍是 false)。
+    const planOn = handle.setPlanMode?.(true);
+    await tick();
+    expect(writes.order).toEqual(['auto']);
+
+    // ③ 本轮是**显式普通消息**。
+    const sendPromise = handle.send({ type: 'user', content: 'normal turn' }, { planMode: false });
+    await tick();
+
+    // 逐个放行,直到 send 收尾(复核写入是在等待之后才入队的,所以不能只按 pending 判停)。
+    for (let i = 0; i < 10; i += 1) {
+      if (writes.pending() > 0) writes.releaseNext();
+      await tick();
+      await tick();
+    }
+    await sendPromise;
+    await occupying;
+    await planOn;
+
+    // 那条排队的 'plan' 确实执行过(它是队列里的旧意图)……
+    expect(writes.order).toContain('plan');
+    // ……但输入入队之前**最后落地**的档位必须是本轮意图对应的档,不是 plan。
+    expect(writes.order[writes.order.length - 1]).toBe('auto');
+    expect(writes.maxLive()).toBe(1);
     await handle.close();
   });
 

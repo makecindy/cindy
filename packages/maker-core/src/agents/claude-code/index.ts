@@ -4187,9 +4187,30 @@ export class ClaudeCodeAgent extends BaseAgent {
           //
           // 不违反 §3.2 的"send 路径不加串行等待":没有欠账、也没有在飞的档位写入时
           // `sdkPermissionModeQueueDepth` 为 0,这里一个 await 都不产生 —— 常态零开销。
-          // 队列本身永不 reject(见 enqueueSdkPermissionModePush),失败已在各自 settle
-          // 分支记了欠账,turn 照常继续,所以不需要 catch。
-          if (sdkPermissionModeQueueDepth > 0) await sdkPermissionModeQueue;
+          //
+          // **等完还要按本轮意图再收一次口。** 只等不复核会把一个随机竞态变成确定性 bug:
+          // `setPlanMode(true)` 的 `'plan'` 写入被前面的请求卡在队列里时,`sdkInPlanMode`
+          // 仍是 false,于是 send 头部那条"显式普通消息要降档"的分支不会触发;等队列排空
+          // 恰好保证那条**过期的** plan literal 一定在输入之前落地,这一轮就整轮跑在 Plan
+          // 档上,而 arm 还留给下一条消息(codex P2 —— 上一轮我加的等待引入的反例)。
+          //
+          // 复核写入用 `currentTurnSdkPermissionMode()`(**本轮**目标档:只看 planTurnActive,
+          // 不含 arm 态),并让它在轮到自己时现算 —— 于是"输入之前最后落地的档位"恒等于本轮
+          // 意图,无论队列里躺着谁的旧意图。已经一致时也只是对同一档位重复 push 一次(SDK 侧
+          // 幂等),代价只发生在"队列非空"这条少见路径上。
+          if (sdkPermissionModeQueueDepth > 0) {
+            await sdkPermissionModeQueue;
+            try {
+              await enqueueSdkPermissionModePush(() => currentTurnSdkPermissionMode());
+            } catch (e) {
+              // 复核失败不该把用户这条消息毙掉(与既有的 best-effort 档位调用点同款);记欠账,
+              // 下一个补推点重试。这一轮可能跑在旧档上,已在日志里留痕。
+              sdkPermissionModeSyncOwed = true;
+              log.warn('turn permission-mode reconcile before input failed; sending anyway', {
+                error: String(e),
+              });
+            }
+          }
           const accepted = inputQueue.push(sdkInput);
           if (!accepted) {
             // close() can win while content conversion is still preparing files or
