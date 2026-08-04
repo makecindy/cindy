@@ -354,6 +354,45 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 
+  it('同一终态 interaction 的不同决策按钮只派发一次', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const allow = encodeCallbackData('permission:allow:once', {
+      requestId: 'terminal-request',
+    });
+    const deny = encodeCallbackData('permission:deny', {
+      requestId: 'terminal-request',
+    });
+    expect(deny).not.toBe(allow);
+    api.pushUpdates([
+      {
+        update_id: 905,
+        callback_query: {
+          id: 'terminal-allow',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: allow,
+          message: { message_id: 905, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+      {
+        update_id: 906,
+        callback_query: {
+          id: 'terminal-deny',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: deny,
+          message: { message_id: 905, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toEqual([
+      { method: 'answerCallbackQuery', params: { callback_query_id: 'terminal-allow' } },
+      { method: 'answerCallbackQuery', params: { callback_query_id: 'terminal-deny' } },
+    ]);
+  });
+
   it('同一消息重绘后相同 requestId 的新 callback token 仍可合法导航', async () => {
     await connect();
     const handler = vi.fn();

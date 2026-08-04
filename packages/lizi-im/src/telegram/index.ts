@@ -92,6 +92,21 @@ const TYPING_LOOP_MAX_MS = 5 * 60_000;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
+/**
+ * These buttons make a single decision for one pending interaction. Their
+ * individual callback tokens must share a deduplication key: a fast
+ * allow/deny (or two ask options) click must not dispatch two decisions for
+ * the same request. Navigation and direct-command cards are intentionally
+ * excluded because they can be rendered again with the same requestId.
+ */
+function isTerminalInteractionButton(buttonId: string): boolean {
+  return (
+    buttonId.startsWith('permission:') ||
+    buttonId.startsWith('plan:') ||
+    buttonId.startsWith('ask:')
+  );
+}
+
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
 const DEFAULT_STRANGER_NOTICE =
@@ -1338,11 +1353,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       for (const [key, at] of this.handledInteractionCallbacks) {
         if (now - at > 5 * 60_000) this.handledInteractionCallbacks.delete(key);
       }
-      // requestId identifies the underlying interaction, not this rendered
-      // button instance: /ctr can rebuild the same message with the same
-      // requestId while presenting a new callback token. Telegram retries of
-      // one button keep q.data unchanged, so the raw token is the dedup key.
-      const callbackKey = `${event.messageId}|${q.data}`;
+      // Terminal decision buttons share one requestId, so different choices
+      // (e.g. allow + deny) cannot race and overwrite the first resolution.
+      // Navigation/direct-command cards may reuse requestId when the message
+      // is rebuilt, so those remain scoped to the rendered callback token.
+      const callbackKey = isTerminalInteractionButton(event.buttonId)
+        ? `${event.messageId}|request:${requestId}`
+        : `${event.messageId}|token:${q.data}`;
       if (this.handledInteractionCallbacks.has(callbackKey)) return;
       this.handledInteractionCallbacks.set(callbackKey, now);
       while (this.handledInteractionCallbacks.size > 512) {
