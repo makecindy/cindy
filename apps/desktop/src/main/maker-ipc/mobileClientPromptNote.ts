@@ -87,7 +87,11 @@ export function attachMainOwnedInputBoundary(
   const sanitized = stripMainOnlySendOpts(sendOpts);
   if (!stamp) return sanitized;
   if (!sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) {
-    return { ...stamp };
+    return {
+      expectedClearBoundaryMs: stamp.expectedClearBoundaryMs,
+      expectedInputGeneration: stamp.expectedInputGeneration,
+      ...(stamp.inputAbortSignal ? { signal: stamp.inputAbortSignal } : {}),
+    };
   }
   return {
     ...(sanitized as Record<string, unknown>),
@@ -112,7 +116,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (
     !('fromMobileClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
-    !('inputAbortSignal' in opts)
+    !('inputAbortSignal' in opts) &&
+    !('signal' in opts)
   ) {
     return sendOpts;
   }
@@ -120,6 +125,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     fromMobileClient: _ignoredMobile,
     expectedInputGeneration: _ignoredGeneration,
     inputAbortSignal: _ignoredAbortSignal,
+    signal: _ignoredSignal,
     ...rest
   } = opts;
   return rest;

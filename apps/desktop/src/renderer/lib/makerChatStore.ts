@@ -1050,17 +1050,11 @@ function scheduleRemoteClearRetry(sessionId: string): void {
 function armRemoteClearFence(sessionId: string, deviceId: string, clearedAt: string): void {
   const dataOwner = getDataOwnerGeneration();
   const clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
-  const normalized = normalizeAgentInputClearBoundaryMs(clearedAt);
-  const previous = remoteInputClearBoundaryBySession.get(sessionId);
-  // The renderer-created boundary is only a local hint until the host ACKs it,
-  // but recording it here prevents the first ACK projection from being treated
-  // as historical hydration and deleting messages created after this clear.
-  if (
-    typeof normalized === 'number' &&
-    (previous === undefined || previous === null || normalized > previous)
-  ) {
-    remoteInputClearBoundaryBySession.set(sessionId, normalized);
-  }
+  // `clearedAt` is the request identity and local renderer fence only. The
+  // controlled host owns the authoritative boundary and may have a different
+  // wall clock, so never seed the remote boundary map with the controller's
+  // timestamp. The ACK projection below is the first value allowed to update
+  // `remoteInputClearBoundaryBySession`.
   clearRemoteClearRetryTimer(sessionId);
   remoteClearFences.set(sessionId, {
     sessionId,
@@ -1094,18 +1088,34 @@ function resolveRemoteClearFenceFromProjection(
   ) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')) {
+  const hasAuthoritativeBoundary = Object.prototype.hasOwnProperty.call(
+    projection,
+    'clearBoundaryMs',
+  );
+  if (hasAuthoritativeBoundary) {
     const observed = normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs);
-    const requested = normalizeAgentInputClearBoundaryMs(clearedAt);
+    const known = remoteInputClearBoundaryBySession.get(sessionId);
+    // The host timestamp is authoritative; do not compare it with the
+    // controller's `clearedAt`. We can still reject malformed or regressing
+    // host projections against a token already observed from that same host.
     if (
-      typeof observed !== 'number' ||
-      typeof requested !== 'number' ||
-      observed < requested
+      observed === undefined ||
+      (typeof known === 'number' &&
+        (observed === null || (typeof observed === 'number' && observed < known)))
     ) {
       return false;
     }
   }
-  clearRemoteClearFence(sessionId, opts);
+  // For modern projections, record the host token and retire the fence through
+  // the same acknowledgement path used by push/session patches. This keeps
+  // the clock-independent ordering rule in one place even if the caller later
+  // drops the rest of the projection as stale. Legacy projections omit the
+  // field, so resolve immediately for compatibility.
+  if (hasAuthoritativeBoundary) {
+    observeRemoteInputClearBoundary(sessionId, projection.clearBoundaryMs);
+  } else {
+    clearRemoteClearFence(sessionId, opts);
+  }
   return true;
 }
 
@@ -2688,15 +2698,14 @@ function observeRemoteInputClearBoundary(
   const hadPrevious = remoteInputClearBoundaryBySession.has(sessionId);
   const previous = remoteInputClearBoundaryBySession.get(sessionId);
   const pendingFence = remoteClearFences.get(sessionId);
-  const pendingFenceBoundary = pendingFence
-    ? normalizeAgentInputClearBoundaryMs(pendingFence.clearedAt)
-    : undefined;
+  const knownBoundary = remoteInputClearBoundaryBySession.get(sessionId);
   const acknowledgesPendingFence = Boolean(
     pendingFence &&
       isRemoteClearFenceCurrent(sessionId, pendingFence) &&
       typeof normalized === 'number' &&
-      typeof pendingFenceBoundary === 'number' &&
-      normalized >= pendingFenceBoundary,
+      (knownBoundary === undefined ||
+        knownBoundary === null ||
+        (typeof knownBoundary === 'number' && normalized >= knownBoundary)),
   );
   let advanced = false;
   if (!hadPrevious) {
@@ -2707,7 +2716,7 @@ function observeRemoteInputClearBoundary(
     // ordering here. Retire every record/recovery that has not already captured
     // an authoritative token; a record created after hydration captures the
     // known token synchronously and is therefore preserved.
-    if (typeof normalized === 'number') {
+    if (typeof normalized === 'number' && !acknowledgesPendingFence) {
       cancelRemoteOptimisticSendsForRemoteClear(sessionId, normalized, {
         historicalHydration: true,
       });

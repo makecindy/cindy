@@ -284,6 +284,27 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     ).toEqual({ expectedClearBoundaryMs: 456, expectedInputGeneration: 9, messageUuid: 'u' });
   });
 
+  it('非对象 sendOpts 也映射 main-owned abort signal 到事务读取的 signal', () => {
+    const controller = new AbortController();
+    expect(
+      attachMainOwnedInputBoundary(undefined, {
+        expectedClearBoundaryMs: 456,
+        expectedInputGeneration: 9,
+        inputAbortSignal: controller.signal,
+      }),
+    ).toEqual({
+      expectedClearBoundaryMs: 456,
+      expectedInputGeneration: 9,
+      signal: controller.signal,
+    });
+  });
+
+  it('剥掉 wire 注入的 signal,只允许 main 写入 AbortSignal', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', signal: 'forged' })).toEqual({
+      messageUuid: 'u',
+    });
+  });
+
   it('其它字段原样保留', () => {
     const opts = { messageUuid: 'u', userName: 'n', origin: { kind: 'scheduler' } };
     expect(stripMainOnlySendOpts(opts)).toEqual(opts);

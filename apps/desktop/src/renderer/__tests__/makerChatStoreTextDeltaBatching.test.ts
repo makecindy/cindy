@@ -3670,11 +3670,9 @@ describe('makerChatStore text delta batching', () => {
       ),
     ).resolves.toBe(false);
     await flushPromises();
-    expect(deviceLinkInvoke).toHaveBeenCalledWith(
-      'device-1',
-      'maker:input:get-projection',
-      [SESSION_ID],
-    );
+    expect(deviceLinkInvoke).toHaveBeenCalledWith('device-1', 'maker:input:get-projection', [
+      SESSION_ID,
+    ]);
 
     makerChatStore.cancelRemoteOptimisticSendsForDataOwnerBoundary();
     setDataOwnerGeneration('owner-b');
@@ -4317,19 +4315,22 @@ describe('makerChatStore text delta batching', () => {
         clearAttempts += 1;
         clearedAt = args[1] as string;
         if (clearAttempts === 1) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] offline');
-        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt) });
+        // The controller and controlled host may have skewed clocks. The
+        // host-owned boundary is still authoritative even when it is earlier
+        // than the controller's request timestamp.
+        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt) - 10_000 });
       }
       if (channel === 'maker:close-session') return undefined;
       if (channel === 'maker:input:enqueue') {
         enqueueCalls += 1;
         enqueueOpts = args[2];
         return projection(SESSION_ID, {
-          clearBoundaryMs: Date.parse(clearedAt!),
+          clearBoundaryMs: Date.parse(clearedAt!) - 10_000,
           pendingQueue: [args[1] as AgentInputQueuedMessage],
         });
       }
       if (channel === 'maker:input:get-projection') {
-        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt!) });
+        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt!) - 10_000 });
       }
       throw new Error(`unexpected remote channel: ${channel}`);
     });
@@ -4362,7 +4363,7 @@ describe('makerChatStore text delta batching', () => {
     expect(enqueueCalls).toBe(1);
     expect(enqueueOpts).toEqual({
       sendAtMs: expect.any(Number),
-      expectedClearBoundaryMs: Date.parse(clearedAt!),
+      expectedClearBoundaryMs: Date.parse(clearedAt!) - 10_000,
     });
   });
 
