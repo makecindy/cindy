@@ -436,8 +436,8 @@ export function MessageActionBar({
     );
 
   // Edit (Pencil) button — last user message only. Enters the inline edit
-  // state owned by UserMessage; no in-flight state here (entering edit is
-  // instant and side-effect free — commit happens on the edit box's Send).
+  // state owned by UserMessage; keep it disabled while any message action is
+  // in flight so editing cannot race with Fork's history read or a menu action.
   const editBtn = onEdit && align === 'right' && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
@@ -447,10 +447,11 @@ export function MessageActionBar({
             e.stopPropagation();
             onEdit();
           }}
+          disabled={inFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
             'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
           )}
           aria-label={t('chat.messageActionBar.edit')}
         >

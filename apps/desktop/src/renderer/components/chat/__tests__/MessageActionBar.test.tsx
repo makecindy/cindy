@@ -155,14 +155,16 @@ describe('MessageActionBar', () => {
         resolveFork = resolve;
       }),
     );
+    const onEdit = vi.fn();
 
     render(
       <MessageActionBar
         copyText="message body"
-        align="left"
+        align="right"
         hovered
         onFork={onFork}
         onAddToChat={vi.fn()}
+        onEdit={onEdit}
       />,
     );
 
@@ -172,15 +174,24 @@ describe('MessageActionBar', () => {
     const moreButton = screen.getByRole('button', {
       name: 'chat.messageActionBar.moreActions',
     });
+    const editButton = screen.getByRole('button', {
+      name: 'chat.messageActionBar.edit',
+    });
 
     fireEvent.click(forkButton);
     await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeTruthy());
     expect(moreButton.querySelector('.lucide-ellipsis')).toBeTruthy();
     expect(moreButton.querySelector('.lucide-loader-circle')).toBeNull();
     expect((moreButton as HTMLButtonElement).disabled).toBe(false);
+    expect((editButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(editButton);
+    expect(onEdit).not.toHaveBeenCalled();
 
     resolveFork();
-    await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeNull());
+    await waitFor(() => {
+      expect(forkButton.querySelector('.animate-spin')).toBeNull();
+      expect((editButton as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   it('restores focus to the ellipsis trigger for keyboard users', async () => {
