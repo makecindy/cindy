@@ -160,6 +160,42 @@ interface OpenAiErrorResponse {
   error?: { message?: string; type?: string; code?: string };
 }
 
+/**
+ * 显式请求了维度时, 校验**批内每一条**向量都兑现了该长度。
+ *
+ * 只看首条不够(PR #1707 review):首条对、后面某条错时检查会通过, 整批被缓存并交付,
+ * 上层(cindySlot)又按首条填 `dim` —— 调方拿到一批"声称同维度"其实不等长的向量,
+ * 写进索引后相似度失去意义, 而且哪一步都没有报错。上游对不支持的维度行为不统一
+ * (可能 400, 也可能静默回默认长度), 这里是最后一道能看见长度的地方。
+ *
+ * `dimensions` 缺省 = 跟随上游默认, 不做校验(没有期望值可比)。
+ *
+ * `mode` 只影响报错里的位置描述:扁平路径每组恒为 1 条(组下标 = 文本下标),报
+ * "group 3 index 0" 只会让调方困惑。
+ */
+function assertBatchDimensions(
+  grouped: readonly number[][][],
+  model: string,
+  dimensions: number | undefined,
+  mode: 'flat' | 'grouped',
+): void {
+  if (dimensions === undefined) return;
+  for (let d = 0; d < grouped.length; d++) {
+    const group = grouped[d];
+    for (let c = 0; c < group.length; c++) {
+      const got = group[c]?.length;
+      if (got !== undefined && got !== dimensions) {
+        // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
+        const at = mode === 'flat' ? `index ${d}` : `group ${d} index ${c}`;
+        throw new EmbeddingError(
+          `requested dimensions=${dimensions} but model '${model}' returned ${got} at ${at}`,
+          'INVALID_MODEL',
+        );
+      }
+    }
+  }
+}
+
 export class EmbeddingClient {
   private readonly resolveBaseUrl: () => string;
   private readonly getApiKey: () => string | undefined | null;
@@ -261,15 +297,7 @@ export class EmbeddingClient {
     // **必须在写缓存之前判**(PR #1707 review):先写后判会让本次抛错、缓存里却留下
     // 那批错长度的向量 —— 下一次同参请求全命中缓存直接 return, 绕过这里的自检把
     // 非法向量当成功交付出去。判在前面 = 非法响应一条都不入缓存。
-    if (req.dimensions !== undefined) {
-      const got = grouped[0]?.[0]?.length;
-      if (got !== undefined && got !== req.dimensions) {
-        throw new EmbeddingError(
-          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
-          'INVALID_MODEL',
-        );
-      }
-    }
+    assertBatchDimensions(grouped, req.model, req.dimensions, 'flat');
 
     for (let j = 0; j < missTexts.length; j++) {
       const vec = grouped[j]?.[0];
@@ -323,15 +351,7 @@ export class EmbeddingClient {
       body as unknown as ContextualizedResponse,
       groupSizes,
     );
-    if (req.dimensions !== undefined) {
-      const got = embeddings[0]?.[0]?.length;
-      if (got !== undefined && got !== req.dimensions) {
-        throw new EmbeddingError(
-          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
-          'INVALID_MODEL',
-        );
-      }
-    }
+    assertBatchDimensions(embeddings, req.model, req.dimensions, 'grouped');
     return {
       embeddings,
       modelUsed: body.model || req.model,

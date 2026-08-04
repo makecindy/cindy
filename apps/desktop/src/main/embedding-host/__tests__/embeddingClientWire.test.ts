@@ -436,3 +436,50 @@ describe('EmbeddingClient · 非法响应不入缓存', () => {
     expect(second.cacheHits).toBe(1);
   });
 });
+
+describe('EmbeddingClient · 维度自检覆盖批内每一条', () => {
+  it('首条对、后续某条错 → 抛 INVALID_MODEL 并指出位置,不入缓存', async () => {
+    // 只看首条的实现会放它过去:整批被缓存并交付,上层按首条填 dim,调方拿到一批
+    // "声称同维度"其实不等长的向量。
+    const fetchImpl = respond({
+      model: 'text-embedding-3-small',
+      data: [
+        { object: 'embedding', index: 0, embedding: [1, 2] },
+        { object: 'embedding', index: 1, embedding: [1, 2, 3] },
+      ],
+      usage: { prompt_tokens: 2 },
+    });
+    const client = clientWith(fetchImpl);
+    const req = { texts: ['a', 'b'], model: 'text-embedding-3-small' as const, dimensions: 2 };
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    await expect(client.embed(req)).rejects.toThrow(/index 1/);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // 第二次仍出网 = 首次一条都没入缓存
+  });
+
+  it('上下文化:非首篇非首块的错长度同样被抓出,报文带分组下标', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [
+        { data: [{ embedding: [1, 2] }, { embedding: [3, 4] }] },
+        { data: [{ embedding: [5, 6] }, { embedding: [7, 8, 9] }] },
+      ],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a', 'b'], ['c', 'd']],
+        model: 'voyage/voyage-context-4',
+        dimensions: 2,
+      }),
+    ).rejects.toThrow(/group 1 index 1/);
+  });
+
+  it('全批都对时照常返回(自检不能把合法批判错)', async () => {
+    const { client } = harness();
+    const r = await client.embed({
+      texts: ['a', 'b'],
+      model: 'voyage/voyage-4',
+      dimensions: 8,
+    });
+    expect(r.embeddings.every((v) => v.length === 8)).toBe(true);
+  });
+});

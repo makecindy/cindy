@@ -2053,6 +2053,49 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
     });
   });
 
+  it.each([['ultra'], ['Best'], [123], [null]])(
+    '非法档位 tier=%s → INVALID_PARAMS,不出网(静默降级会让向量落错模型空间)',
+    async (tier) => {
+      const embedText = vi.fn();
+      const { slot } = makeSlot({
+        getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+        getEmbedConfig: vi.fn(embedCfg),
+        embedText,
+      } as unknown as Partial<CindySlotDeps>);
+      expect(await slot.handleModelRequest('art', { ...EMBED, tier })).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+      });
+      expect(embedText).not.toHaveBeenCalled();
+    },
+  );
+
+  it('合法档位照常生效(明拒不能顺手把三个档位一起拒掉)', async () => {
+    const embedText = vi.fn(async (_p: { model: string }) => ({
+      embeddings: [[1]],
+      modelUsed: 'x',
+    }));
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(() => ({
+        models: [
+          { id: 'voyage/voyage-4', label: 'Voyage 4' },
+          { id: 'voyage/voyage-4-large', label: 'Voyage 4 Large' },
+        ],
+        defaults: {
+          standard: 'voyage/voyage-4',
+          draft: 'voyage/voyage-4',
+          best: 'voyage/voyage-4-large',
+        },
+      })),
+      embedText,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', { ...EMBED, tier: 'best' })).toMatchObject({
+      ok: true,
+    });
+    expect(embedText.mock.calls[0][0]).toMatchObject({ model: 'voyage/voyage-4-large' });
+  });
+
   it('不带 code 的普通异常仍是 INTERNAL(鸭子判型不能把任何 Error 都当结构化失败)', async () => {
     const { slot } = throwingSlot(undefined);
     expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({

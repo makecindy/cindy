@@ -1431,7 +1431,18 @@ export class GhostCindySlot {
     }
     const whitelist = new Set(cfg.models.map((m) => m.id));
     let model = cfg.defaults.standard;
-    if (typeof p.tier === 'string' && (GHOST_MODEL_TIERS as readonly string[]).includes(p.tier)) {
+    // 档位非法必须明拒,不能"跳过覆盖然后照常用 standard"(PR #1707 review):
+    // 媒体分支本来就是明拒的(未知档位),而向量这条路径上静默降级更坏 —— 插件以为
+    // 拿到的是 best 的向量,实际是 standard 的,两者不在同一空间。它把这批向量存进
+    // 索引,之后用 best 查,相似度全是噪声,而且哪一步都没报错。
+    if (p.tier !== undefined) {
+      if (typeof p.tier !== 'string' || !(GHOST_MODEL_TIERS as readonly string[]).includes(p.tier)) {
+        return {
+          ok: false,
+          message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')},或不传)`,
+          errorCode: 'INVALID_PARAMS',
+        };
+      }
       model = cfg.defaults[p.tier as GhostModelTier];
     }
     const override = this.deps.getOverride(ghostId, 'embed.text');
