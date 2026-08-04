@@ -1030,6 +1030,19 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
   ));
 }
 
+/** Claude 额度段的非颜色严重度文案；普通段无需额外读出。 */
+function getClaudeQuotaSeverityLabel(
+  severity: QuotaSeverity,
+  t: TFunction,
+): string | null {
+  if (severity === 'normal') return null;
+  return t(
+    severity === 'warn'
+      ? 'todaySpend.claude.limitWarning'
+      : 'todaySpend.claude.limitRejected',
+  );
+}
+
 /** Claude 订阅额度段合并本地利用率与服务端等级着色，不影响相邻窗口与会话金额。 */
 function renderClaudeQuotaSegment(
   content: React.ReactNode,
@@ -1045,13 +1058,8 @@ function renderClaudeQuotaSegment(
       ? 'text-[var(--quota-bar-crit)]'
       : undefined;
   // 普通段沿用可见文字，只有告警段补充非颜色信号；严重级必须与警告级读出不同语义。
-  const ariaLabel = severity === 'normal'
-    ? undefined
-    : `${visibleText} ${t(
-        severity === 'warn'
-          ? 'todaySpend.claude.limitWarning'
-          : 'todaySpend.claude.limitRejected',
-      )}`;
+  const severityLabel = getClaudeQuotaSeverityLabel(severity, t);
+  const ariaLabel = severityLabel ? `${visibleText} ${severityLabel}` : undefined;
 
   return (
     <>
@@ -1758,6 +1766,24 @@ export function TodaySpendChip({
           : highestSeverity;
       }, 'normal')
     : 'normal';
+  // button 自身的 aria-label 会覆盖后代段落的 accessible name；把每个升级段使用的
+  // 同一份严重度文案提升到 trigger，确保读屏仍能听见 warn / crit 的区别。
+  const triggerAccessibleName = usageDashboardLabel
+    ? [
+        usageDashboardLabel,
+        ...(usesClaudeQuotaChipSegments
+          ? chipWindows
+              .map((window) => getClaudeQuotaSeverityLabel(
+                effectiveQuotaSeverity(
+                  100 - window.remainingPercent,
+                  window.serverSeverity,
+                ),
+                t,
+              ))
+              .filter((label): label is string => label !== null)
+          : []),
+      ].join(' ')
+    : null;
   const showClaudeSubscriptionFallbackAlert =
     QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
       < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
@@ -1826,7 +1852,7 @@ export function TodaySpendChip({
                   closeQuotaPopoverImmediately();
                 }}
                 className={buttonClass}
-                aria-label={usageDashboardLabel ?? undefined}
+                aria-label={triggerAccessibleName ?? undefined}
               >
                 {labelNode}
               </button>
@@ -1898,7 +1924,7 @@ export function TodaySpendChip({
               type="button"
               onClick={handleClick}
               className={buttonClass}
-              aria-label={usageDashboardLabel ?? undefined}
+              aria-label={triggerAccessibleName ?? undefined}
             >
               {labelNode}
             </button>
