@@ -1301,23 +1301,30 @@ export function createCardActionHandler(
     return patched;
   }
 
-  async function handleControlExit(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleControlExit(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean> {
     // Terminal: 解锁 controlState。同 session-pick: card patch 失败也解锁。
     const botContextId = String(event.payload.botAppId ?? '');
     if (!botContextId) {
       log.warn('control:exit missing botAppId — ignoring');
-      return;
+      return true;
     }
     log.info(`control:exit (sender=...${event.senderId.slice(-8)})`);
     exitControl(botContextId, event.senderId);
+    const resolvedLabel = ui.cards.control.resolvedExit;
     try {
       await im.updateInteractiveCard(
         event.messageId,
-        cards.buildResolvedCard(ui.cards.control.resolvedExit),
+        cards.buildResolvedCard(resolvedLabel),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`control:exit card patch failed (non-fatal): ${msg}`);
+      rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+      return false;
     }
     // thread 模型: 顶层锚点卡也收口成"已取消", 不留一张悬空的"接管对话"卡
     const anchorMessageId = String(event.payload.anchorMessageId ?? '');
@@ -1333,6 +1340,7 @@ export function createCardActionHandler(
         log.warn(`control:exit anchor patch failed (non-fatal): ${msg}`);
       }
     }
+    return true;
   }
 
   // ── press → decision ──────────────────────────────────────────────────────
@@ -1476,8 +1484,7 @@ export function createCardActionHandler(
             return handleControlNewSession(im, event, accountGeneration);
           }
           if (event.buttonId === 'control:exit') {
-            await handleControlExit(im, event);
-            return;
+            return handleControlExit(im, event, accountGeneration);
           }
           if (event.buttonId === 'control:thread-exit') {
             await handleControlThreadExit(im, event);

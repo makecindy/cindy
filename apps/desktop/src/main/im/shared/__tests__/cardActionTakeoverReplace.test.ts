@@ -719,6 +719,42 @@ describe('Telegram 失效交互卡', () => {
     );
   });
 
+  it('control:exit 已退出但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      threadScoped: false,
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'control:exit',
+      callbackToken: 'control-exit-token',
+      payload: { requestId: 'control-exit', botAppId: 'BOT1' },
+    } as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(im.updateInteractiveCard).toHaveBeenCalledTimes(2);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ body: slackUi.cards.control.resolvedExit, buttons: [] }),
+    );
+  });
+
   it('model:pick 业务成功但卡片收口失败后重试只重放终态卡', async () => {
     const im = makeIm();
     im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
