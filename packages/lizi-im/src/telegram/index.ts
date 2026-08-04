@@ -308,6 +308,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     { timer: ReturnType<typeof setInterval>; startedAt: number }
   >();
 
+  /** Callback dedup survives polling restarts, but not a bot/owner boundary. */
+  private clearInteractionCallbackDedup(): void {
+    this.handledInteractionCallbacks.clear();
+  }
+
   constructor(
     host: IMHost,
     private readonly opts: TelegramIMOptions = {},
@@ -500,6 +505,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
       const nextOwnerUserId = ownerUserId || this.ownerUserId;
       if (token) {
+        const accountChanged =
+          token !== (previousToken?.trim() ?? '') || nextOwnerUserId !== this.ownerUserId;
         this.configVersion += 1;
         await this.stopPolling();
         this.ownerUserId = nextOwnerUserId;
@@ -533,6 +540,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           }
           return configResult(failedStatus);
         }
+        if (accountChanged) this.clearInteractionCallbackDedup();
         const noticeConfigVersion = this.configVersion;
         await this.sendOwnerNoticeWithTimeout(
           nextOwnerUserId,
@@ -543,6 +551,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       } else if (nextOwnerUserId !== this.ownerUserId) {
         this.configVersion += 1;
         this.ownerUserId = nextOwnerUserId;
+        this.clearInteractionCallbackDedup();
       }
       return configResult();
     });
@@ -614,6 +623,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // offline, 表现为"填了 token 却不工作"。
       this.host.secrets.remove(OFFLINE_SECRET_KEY);
       await this.stopPolling();
+      this.clearInteractionCallbackDedup();
       this.setStatus({ kind: 'idle' });
       return { status: this.status };
     });
@@ -1062,7 +1072,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private async stopPolling(): Promise<void> {
     this.clearPendingAlbums();
-    this.handledInteractionCallbacks.clear();
+    // Polling can restart for the same bot after a transient offline/reconnect
+    // cycle. Keep recent callback keys so Telegram retries cannot redispatch a
+    // decision that was already consumed before the polling restart.
     this.pollAbort?.abort();
     this.pollAbort = null;
     if (this.pollLoop) {

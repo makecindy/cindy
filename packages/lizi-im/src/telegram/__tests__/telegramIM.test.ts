@@ -191,6 +191,11 @@ async function connect(): Promise<void> {
   await handler({ token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID });
 }
 
+async function connectWithToken(token: string): Promise<void> {
+  const handler = ctx.handlers.get('telegramBot:set-config')!;
+  await handler({ token, ownerUserId: OWNER_ID });
+}
+
 describe('TelegramIM', () => {
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
@@ -391,6 +396,82 @@ describe('TelegramIM', () => {
       { method: 'answerCallbackQuery', params: { callback_query_id: 'terminal-allow' } },
       { method: 'answerCallbackQuery', params: { callback_query_id: 'terminal-deny' } },
     ]);
+  });
+
+  it('同一 bot 重连后保留近期 callback 去重状态', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const callback = encodeCallbackData('permission:allow:once', {
+      requestId: 'reconnect-request',
+    });
+    api.pushUpdates([
+      {
+        update_id: 907,
+        callback_query: {
+          id: 'reconnect-first',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 907, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+    api.pushUpdates([
+      {
+        update_id: 908,
+        callback_query: {
+          id: 'reconnect-duplicate',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 907, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+    });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('切换 bot 账号后清除旧账号 callback 去重状态', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const first = encodeCallbackData('permission:allow:once', {
+      requestId: 'account-switch-request',
+    });
+    api.pushUpdates([
+      {
+        update_id: 909,
+        callback_query: {
+          id: 'account-first',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: first,
+          message: { message_id: 909, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+    await connectWithToken('888:replacement-token-abcdefghijk');
+    api.pushUpdates([
+      {
+        update_id: 910,
+        callback_query: {
+          id: 'account-second',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: first,
+          message: { message_id: 909, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
   });
 
   it('同一消息重绘后相同 requestId 的新 callback token 仍可合法导航', async () => {
