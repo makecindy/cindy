@@ -2540,6 +2540,13 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
+      if (
+        event.key === 'Escape' &&
+        event.target instanceof Element &&
+        event.target.closest('[role="alertdialog"]')
+      ) {
+        return;
+      }
       const platform = window.electronAPI?.platform;
       if (event.key === 'Escape' && !event.repeat && !event.isComposing) {
         if (
