@@ -26,9 +26,42 @@ import type { FileBrowserGridItem } from '@/session/fileBrowserGrid';
  * 覆写后,以 URL 为 key 的手机端 resolver 缓存自然失效,不会复用旧图;被控端
  * 忽略该参数,新老版本均兼容。
  */
-export function remoteFileMediaUrl(absPath: string, versionMs?: number): string {
+/**
+ * SSH 远程工作区的取件上下文。被控端 parseSshMediaOrigin 要求 sessionId /
+ * remoteHostId / workdir **三者同时提供**,并按 sessionId 反查本地会话库逐项比对后
+ * 才使用 —— 缺项直接抛错,少给一项等于取件必失败。
+ */
+export interface RemoteMediaSshContext {
+  sessionId: string;
+  remoteHostId: string;
+  workdir: string;
+}
+
+/** 三项齐备才算有效上下文(与被控端 parseSshMediaOrigin 的完整性要求同口径)。 */
+function sshContextQuery(ssh: RemoteMediaSshContext | null | undefined): string {
+  if (!ssh) return '';
+  const sessionId = ssh.sessionId.trim();
+  const remoteHostId = ssh.remoteHostId.trim();
+  const workdir = ssh.workdir.trim();
+  if (!sessionId || !remoteHostId || !workdir) return '';
+  return `&sessionId=${encodeURIComponent(sessionId)}`
+    + `&remoteHostId=${encodeURIComponent(remoteHostId)}`
+    + `&workdir=${encodeURIComponent(workdir)}`;
+}
+
+export function remoteFileMediaUrl(
+  absPath: string,
+  versionMs?: number,
+  /**
+   * SSH 会话必须带上,否则被控端会把 absPath 当**本机**路径交给 realpath:
+   * 取件失败,而被控桌面恰有同名路径时还会读到错误来源(review P2 实捉)。
+   * 本机会话传 null / 省略。
+   */
+  ssh?: RemoteMediaSshContext | null,
+): string {
   const base = `xdt-file://open?path=${encodeURIComponent(absPath)}`;
-  return versionMs ? `${base}&v=${versionMs}` : base;
+  const withSsh = `${base}${sshContextQuery(ssh)}`;
+  return versionMs ? `${withSsh}&v=${versionMs}` : withSsh;
 }
 
 /** 当前目录的图片文件 → lightbox gallery(顺序与网格排序一致)。 */

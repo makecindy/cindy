@@ -1,8 +1,7 @@
 /**
  * 预览文档的 CSP:策略内容、注入位置,以及「策略必须挂在渲染载体上」的接线守卫。
  *
- * 资源透传相关的接线守卫(签名地址不得进页面、OSS 对象回收)在栈上一层的 PR 里,
- * 与那条取件链路同层。
+ * 资源透传相关的接线守卫(签名地址不得进页面、OSS 对象回收)在本文件末尾单独一段。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -256,5 +255,66 @@ describe('渲染载体的安全接线(源码级守卫)', () => {
     expect(readerSource).not.toMatch(/\bLinking\.\w/);
     expect(HTML_PREVIEW_CSP).toContain("default-src 'none'");
     expect(HTML_PREVIEW_CSP).toContain("connect-src 'none'");
+  });
+});
+
+describe('资源取件的安全接线(源码级守卫)', () => {
+  const pageSource = readFileSync(
+    resolve(process.cwd(), 'app/files/preview/[sessionId].tsx'),
+    'utf8',
+  );
+
+  it('预签名地址不得回填进页面:必须先转成 data: URI', () => {
+    // 取件返回的是 data: URI,不是 presign URL(review P1)。
+    expect(pageSource).toContain('downloadRemoteMediaAsDataUri(');
+    expect(pageSource).toContain('HTML_RESOURCE_MAX_BYTES');
+    // fetchResourceDataUri 必须返回 downloadRemoteMediaAsDataUri 的结果,
+    // 不能直接把 fetchRemoteAbsFileToUrl 的 URL 交出去。
+    expect(pageSource).not.toMatch(/fetchResourceDataUri[\s\S]{0,400}?return url;/);
+  });
+
+  it('下载前先按 media.size 拒掉超限资源(别先拉几 GB 再看)', () => {
+    // downloadRemoteMediaAsDataUri 是先落盘再看 file.size;media:fetch 上限 2 GB、批量取件
+    // 4 路并发,不前置判断的话一份不可信产物能打出数 GB 流量与临时磁盘占用(review P1)。
+    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(pageSource);
+    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
+    expect(body![1]).toContain('if (media.size > HTML_RESOURCE_MAX_BYTES) return');
+    // 前置判断必须在下载之前。
+    expect(body![1].indexOf('media.size > HTML_RESOURCE_MAX_BYTES'))
+      .toBeLessThan(body![1].indexOf('downloadRemoteMediaAsDataUri('));
+    // 下载后那道判断保留(size 缺失 / 谎报时的第二道 fail-closed)。
+    const dl = readFileSync(
+      resolve(process.cwd(), 'src/session/remoteMediaDiskCacheExpo.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    expect(dl).toContain('size > maxBytes');
+  });
+
+  it('取件产生的 OSS 对象必须回收,且失败路径也删', () => {
+    // 每个资源都新建一个 OSS 对象,不删的话一页最多遗留 32 个、反复进出还会累积。
+    expect(pageSource).toContain('const deleteResourceOssObject = useCallback');
+    expect(pageSource).toContain("method: 'DELETE'");
+    // 用带 ossKey 且不进共享缓存的一次性取件 —— 只回 url 的那个拿不到 key,
+    // 且对象删掉后缓存命中会回死 URL。
+    expect(pageSource).toContain('fetchRemoteAbsFileOnce(');
+    // 删除必须在 finally 里:下载失败 / 超限同样要回收(失败路径最容易漏)。
+    //
+    // 回收对象取自 onOssKey 累加的集合,**不是** media.ossKey(review P1 第二轮):
+    // presign 失败时取件在返回 media 之前就抛错,围绕 media 写的 finally 不会执行;
+    // 瞬断重试还会重复上传、产出不同的 key。
+    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(pageSource);
+    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
+    expect(body![1]).toMatch(/finally\s*\{[\s\S]*?for \(const ossKey of uploadedKeys\) deleteResourceOssObject\(ossKey\)/);
+    expect(body![1]).not.toContain('deleteResourceOssObject(media.ossKey)');
+    // 集合必须在 try 之外声明,否则取件抛错时 finally 拿不到它。
+    expect(body![1]).toMatch(/const uploadedKeys = new Set<string>\(\);\s*\n\s*try \{/);
+  });
+
+  it('SSH 会话的资源取件必须带会话上下文', () => {
+    expect(pageSource).toContain('const sshMediaContext = useMemo');
+    expect(pageSource).toContain('session?.remoteHostId?.trim()');
+    // 三项必须同时给,缺一即视为本机会话(被控端会拒绝不完整的 SSH 参数)。
+    expect(pageSource).toContain('if (!remoteHostId || !sessionId || !workdir) return null;');
+    expect(pageSource).toContain('sshMediaContext,');
   });
 });

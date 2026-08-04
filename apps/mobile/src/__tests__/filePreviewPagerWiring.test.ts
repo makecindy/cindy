@@ -31,8 +31,10 @@ describe('remote file preview pager wiring', () => {
     expect(source).toContain("scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}");
     // 让路状态按页 key 存,不存布尔:翻页时新旧两页的上报先后顺序不能决定结果。
     expect(source).toContain('setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)))');
-    // 只有真的挂着 WebView 的那种组合才要横滑;cleanup 必须无条件归还。
-    expect(source).toContain("visible && richKind === 'html' && richView === 'rendered' && state.status === 'ready'");
+    // 只有真的挂着 WebView 的那种组合才要横滑(资源还在取 → 页面是 spinner → 不禁滑);
+    // cleanup 必须无条件归还。
+    expect(source).toContain("visible && richKind === 'html' && richView === 'rendered'");
+    expect(source).toContain("state.status === 'ready' && !htmlResources.loading");
     expect(source).toContain('return () => onHtmlPanChange?.(item.key, false)');
   });
 
@@ -82,8 +84,9 @@ describe('HTML 渲染态的 WebView 约束', () => {
   it('零出网信道:连用户点击的 http(s) 外链也不外送', () => {
     // 导航回调**只管导航**,`new Image().src` / `fetch` 这类子资源请求完全不经过它 ——
     // 出网必须由 CSP 在引擎层关掉(见 htmlPreviewCsp)。这里关的是另一半:顶层跳转。
-    // 连「用户点击的外链」也不放:页面里有从被控端取回的内容,脚本能把它拼进一个真实
-    // <a href> 让用户去点,CSP 管不到顶层导航(navigate-to 已从 CSP3 移除)(review P1)。
+    // 连「用户点击的外链」也不放:页面里内联了被控电脑上的资源字节(data: URI)、脚本又是
+    // 开启的,作者脚本能把这些字节拼进一个真实 <a href="https://attacker/…"> 让用户去点,
+    // 而 CSP 管不到顶层导航(navigate-to 已从 CSP3 移除)(review P1)。
     //
     // 判据写成「模块既不 import 也不调用 Linking」:比检查某个分支更难绕过。
     // (注意别写成 /Linking/ —— 头注里本来就在解释「为什么不用 Linking」,会自我命中。)
@@ -108,9 +111,10 @@ describe('HTML 渲染态的 WebView 约束', () => {
     // 相邻预取页(active)不得提前挂 WebView:里面的脚本 / 计时器 / 网络请求会在
     // 用户还没打开该文件时就跑起来,滑走后还继续跑(review P1)。
     //
-    // 断言写成空白宽松的正则而不是跨行字面量:意图是「visible 直接包住 HtmlFileReader,
-    // 中间没有夹别的东西」,与缩进、行尾都无关(见 readSource 的 CRLF 说明)。
-    expect(source).toMatch(/visible\s*\?\s*\(\s*<HtmlFileReader/);
+    // 断言避开跨行字面量:意图是「不可见时走占位、可见时才是 HtmlFileReader」,
+    // 与缩进、行尾都无关(见 readSource 的 CRLF 说明)。
+    expect(source).toContain('!visible ? (');
+    expect(source).toContain('<HtmlFileReader html={htmlResources.html}');
     expect(source).toContain('testID="filePreview.htmlOffscreen"');
     // 挂载门必须是 visible 而不是 active。
     expect(source).not.toMatch(/active\s*\?\s*\(\s*<HtmlFileReader/);
@@ -129,12 +133,57 @@ describe('HTML 渲染态的 WebView 约束', () => {
 });
 
 describe('HTML 生成物的渲染态接线', () => {
-  it('渲染态复用已读文本,不为 HTML 另走一遍 OSS 导出', () => {
-    // 取件通道保持一条:richKind 非空时才留原文,渲染态直接把它喂 HtmlFileReader。
+  it('文档正文复用已读文本,不为 HTML 另走一遍 OSS 两段式导出', () => {
+    // 取件通道保持一条:richKind 非空时才留原文,渲染态用的就是它(经资源回填)。
     expect(source).toContain('content: richKind ? content : undefined');
-    expect(source).toContain("<HtmlFileReader html={state.content ?? ''}");
+    expect(source).toContain('<HtmlFileReader html={htmlResources.html}');
     // HTML 不得混进 exportToUrl 那条(图片 / PDF / 音视频 / 下载共用的)导出链路。
     expect(source).not.toMatch(/HtmlFileReader[^>]*exportToUrl/);
+  });
+
+  it('同目录资源走 media:fetch 绝对路径通道,不复用 exportToUrl', () => {
+    // exportToUrl 只服务「当前这个文件」;资源要取的是页面引用的其它路径。
+    expect(source).toContain('useHtmlLocalResources(htmlSource, htmlBaseDir, fetchResourceDataUri)');
+    // 精确取回调体判定(不用邻近匹配:props 列表里两个名字相邻会误报)。
+    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(source);
+    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
+    // 一次性取件(带 ossKey、不进共享缓存),而不是只回 url 的那个。
+    expect(body![1]).toContain('fetchRemoteAbsFileOnce(');
+    expect(body![1]).toContain('downloadRemoteMediaAsDataUri(');
+    // exportToUrl 只服务「当前这个文件」,资源要取的是页面引用的其它路径。
+    expect(body![1]).not.toContain('exportToUrl');
+  });
+
+  it('资源被跳过 / 取不到时如实提示,不静默截断', () => {
+    expect(source).toContain("t('files.preview.htmlResourcesMissing'");
+    expect(source).toContain("t('files.preview.htmlResourcesTruncated'");
+    expect(source).toContain('testID="filePreview.htmlResourceNotice"');
+  });
+
+  it('条数上限与总量预算分开提示(不谎报「已取回前 32 项」)', () => {
+    // 只有条数上限才等于「前 32 项已取回」;总量预算可能在第 3 项就用尽,合并成一条
+    // 会在后一种情况下报错数量(review P2)。hook 也必须分开两个计数,不能先合并。
+    expect(source).toContain('htmlResources.overLimit > 0');
+    expect(source).toContain("t('files.preview.htmlResourcesOverBudget', { count: htmlResources.overBudget })");
+    expect(source).not.toContain('htmlResources.skipped');
+    const hook = readSource('src/session/useHtmlLocalResources.ts');
+    expect(hook).toContain('overLimit: plan.skipped');
+    expect(hook).toContain('overBudget: outcome?.overBudget ?? 0');
+    expect(hook).not.toMatch(/skipped:\s*plan\.skipped\s*\+/);
+  });
+
+  it('取件产出的每个 OSS 对象都回收,含 presign 失败与重试重复上传', () => {
+    // presign 失败时 resolveMobileRemoteMedia 在返回前抛错 —— 只围绕 media.ossKey 写
+    // finally 的话那个已上传对象永久遗留;重试还会产出不同的 key(review P1 第二轮)。
+    expect(source).toContain('const uploadedKeys = new Set<string>()');
+    expect(source).toContain('(ossKey) => uploadedKeys.add(ossKey)');
+    expect(source).toContain('for (const ossKey of uploadedKeys) deleteResourceOssObject(ossKey)');
+    expect(source).not.toMatch(/deleteResourceOssObject\(media\.ossKey\)/);
+    // key 的来源:上传成功后、presign 之前同步回调。
+    const media = readSource('src/session/remoteMedia.ts');
+    expect(media).toContain('opts?.onOssKey?.(fetched.ossKey);');
+    expect(media.indexOf('opts?.onOssKey?.(fetched.ossKey);'))
+      .toBeLessThan(media.indexOf('const signed = await deps.presignGet('));
   });
 
   it('markdown 与 HTML 共用同一套双态机(不再是 markdown 专用)', () => {

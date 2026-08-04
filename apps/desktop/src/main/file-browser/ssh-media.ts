@@ -140,6 +140,19 @@ const MIME_BY_EXT: Record<string, string> = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
   '.flac': 'audio/flac',
+  // HTML 预览的同目录资源(review P1):手机端 htmlLocalResources 接受这些扩展名并把它们
+  // 内联成 data: URI,本表若不同步,SSH 会话下最常见的 `<link href="assets/style.css">`
+  // 会直接 415 —— 本地会话有样式、SSH 会话必然缺样式。
+  // 只放宽「类型」,不放宽「范围」:路径仍由上面的 toWorkdirRelPosix 约束在 SSH 工作目录内。
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.json': 'application/json',
+  '.avif': 'image/avif',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.opus': 'audio/ogg',
 };
 
