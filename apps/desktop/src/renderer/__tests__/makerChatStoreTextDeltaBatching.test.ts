@@ -4367,6 +4367,48 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
+  it('does not reset a remote owner fence for repeated online presence updates', () => {
+    const deviceId = 'device-1';
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Test Mac', [
+      { id: SESSION_ID, status: 'active', title: 'initial' } as Session,
+    ]);
+
+    // The first online edge permits a restarted controlled process to start at
+    // any local generation; subsequent online=true snapshots must not reopen
+    // the fence (busy/name/settings updates use the same snapshot shape).
+    onPresenceChanged?.({ deviceId, online: true });
+    onRemotePush?.({
+      deviceId,
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { title: 'generation-5' } },
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 5 },
+    });
+    expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe('generation-5');
+
+    onPresenceChanged?.({ deviceId, online: true });
+    onRemotePush?.({
+      deviceId,
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { title: 'stale-generation-4' } },
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 4 },
+    });
+    expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe('generation-5');
+
+    // A real offline -> online edge represents a possible controlled-process
+    // restart, so the next lower generation is accepted after the reset.
+    onPresenceChanged?.({ deviceId, online: false });
+    onPresenceChanged?.({ deviceId, online: true });
+    onRemotePush?.({
+      deviceId,
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { title: 'generation-1-after-restart' } },
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+    });
+    expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe(
+      'generation-1-after-restart',
+    );
+  });
+
   it.each(['send', 'steer'] as const)(
     'discards an already-accepted annotated %s when clear wins before materialization',
     async (deliveryMode) => {

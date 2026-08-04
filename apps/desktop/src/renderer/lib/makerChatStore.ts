@@ -985,6 +985,8 @@ const REMOTE_OPTIMISTIC_SETTLING_TIMEOUT_MS = 10_000;
 const REMOTE_OUTBOX_RETRY_DELAY_MS = 1_500;
 const remoteOptimisticPumps = new Map<string, Promise<void>>();
 const remoteOptimisticRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Last remote presence state observed by this renderer, used to detect real reconnect edges. */
+const remotePresenceOnlineByDevice = new Map<string, boolean>();
 const remoteClearInFlight = new Set<string>();
 /**
  * A remote clear is a content fence, not just a renderer-side reset.  When the
@@ -1850,6 +1852,7 @@ export function invalidateLiveIngressForDataOwnerBoundary(): void {
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
+  remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
 }
 
@@ -6708,11 +6711,15 @@ function initGlobalListeners(): void {
         return;
       }
       const presence = raw as { deviceId?: string; online?: boolean } | null;
-      if (!presence?.deviceId || presence.online !== true) return;
-      // A fresh online edge may follow a controlled-process restart, which can
-      // legitimately reset its local owner generation. Re-seed that device's
-      // monotonic fence before accepting its next stamped frame.
-      resetRemoteDataOwnerPushFence(presence.deviceId);
+      if (!presence?.deviceId) return;
+      const wasOnline = remotePresenceOnlineByDevice.get(presence.deviceId);
+      remotePresenceOnlineByDevice.set(presence.deviceId, presence.online === true);
+      if (presence.online !== true) return;
+      // Only a real offline -> online edge may indicate that the controlled
+      // process restarted and reset its local owner generation. Busy/name/
+      // settings presence updates also carry online=true; those must retain
+      // the monotonic fence so a late older frame stays rejected.
+      if (wasOnline !== true) resetRemoteDataOwnerPushFence(presence.deviceId);
       for (const [sessionId, records] of remoteOptimisticSends) {
         if ([...records.values()].some((record) => record.deviceId === presence.deviceId)) {
           clearRemoteInputProjectionProbeFailure(sessionId, presence.deviceId);
@@ -7036,6 +7043,7 @@ function __teardownGlobalListeners(): void {
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
+  remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
   const remoteOptimisticSessionIds = new Set([
     ...remoteOptimisticSends.keys(),
