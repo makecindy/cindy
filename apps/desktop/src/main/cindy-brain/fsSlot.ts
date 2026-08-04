@@ -80,7 +80,7 @@ export interface FsSlotDeps {
   dataRootDir(): string;
   /** callId → 归属反查(生产 = cardService.callInfoOf;不信意识自报)。
    *  scriptWorkdir 仅脚本通道条目带(schedule.workingDir),会话调用为 null。 */
-  callInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir?: string | null } | null;
+  callInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null } | null;
   /**
    * callId → 严格在途反查(生产 = cardService.inFlightCallInfoOf):已交卷/
    * 已清扫的条目返回 null。脚本通道(root:'workdir' 无会话分支)必须走它——
@@ -91,8 +91,8 @@ export interface FsSlotDeps {
   inFlightCallInfo(callId: string): {
     ghostId: string;
     sessionId: string | null;
-    scriptWorkdir?: string | null;
-    channel?: 'session' | 'script';
+    scriptWorkdir: string | null;
+    channel: 'session' | 'script';
   } | null;
   /** sessionId → 会话快照(生产查 localDb sessions 行;查无返回 null)。 */
   getSessionSnapshot(sessionId: string): Promise<FsSessionSnapshot | null>;

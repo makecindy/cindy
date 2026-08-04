@@ -59,10 +59,16 @@ function rejectHostOwnedParams(params: Record<string, unknown>, keys: string[]):
  * 泄洪落盘(如大结果 out_file)时,主机凭这个 callId 把写入钳在该目录内;
  * 交卷后 finalize 记账,条目随宽限窗+懒清扫失效(在途有效、用完即废,与
  * 会话通道同一本账)。不 finalize 的话条目永驻,callId 永久有效——绝不允许。
+ *
+ * active 集合:在途 callId 的登记簿,供 runner 在本轮 fire 终结(放弃等待
+ * 在途调用)时统一 finalize——否则 runner 的 30s drain 截止后,调用要等
+ * pipeDispatcher 超时(上限 GHOST_PIPE_CALL_MAX_TOTAL_MS = 30min)才交卷,
+ * 这段 gap 里旧 callId 仍有写权而下一轮 fire 可能已开始(review P1)。
  */
 async function callGhostForScript(
   request: { ghostId: string; tool: string; args: Record<string, unknown> },
   schedule: Schedule,
+  active: Set<string>,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
   // 登记值与 script-runner 的 spawn cwd 严格同源(同一字符串,不 trim 改写):
@@ -79,9 +85,11 @@ async function callGhostForScript(
     scriptWorkdir,
     channel: 'script',
   });
+  active.add(callId);
   try {
     return await getGhostPipeDispatcher().callGhostTool({ ...request, callId });
   } finally {
+    active.delete(callId);
     cardService.finalizeCall(callId);
   }
 }
@@ -110,20 +118,27 @@ async function callFeishu(
   name: string,
   args: Record<string, unknown>,
   schedule: Schedule,
+  active: Set<string>,
 ): Promise<unknown> {
   const result = await callGhostForScript(
     { ghostId: 'xd-feishu', tool: 'call_tool', args: { name, args } },
     schedule,
+    active,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   const payload = result.result as { data?: unknown } | null | undefined;
   return payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
 }
 
-async function callJira(args: Record<string, unknown>, schedule: Schedule): Promise<unknown> {
+async function callJira(
+  args: Record<string, unknown>,
+  schedule: Schedule,
+  active: Set<string>,
+): Promise<unknown> {
   const result = await callGhostForScript(
     { ghostId: 'xd-atlassian', tool: 'jira_issues', args },
     schedule,
+    active,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   return result.result;
@@ -153,12 +168,29 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
  * methods to current host APIs and rejects every method/action not listed here.
  */
 export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
+  /** 本实例在途脚本通道调用的 callId 登记簿(finalizeActiveCalls 用)。 */
+  private readonly activeScriptCallIds = new Set<string>();
+
   constructor(private readonly deps: {
     resolveDefaultModelRoute?: (
       agent: Schedule['agentKind'],
       preferredProviderId?: string | null,
     ) => Promise<{ model: string; providerId: string } | null>;
   } = {}) {}
+
+  /**
+   * runner 判定本轮 fire 终结(drain 截止/abort/超时放弃等待在途调用)时调用:
+   * 让残留脚本通道 callId 立即失去写盘授权,不等 pipeDispatcher 超时
+   * (上限 30min)才交卷——否则 gap 期间旧 callId 仍可写 schedule.workingDir,
+   * 而下一轮 fire 可能已开始(review P1)。cardService.finalizeCall 幂等:
+   * 被提前 finalize 的调用之后正常交卷不受影响(dispatcher 配对账本独立)。
+   */
+  finalizeActiveCalls(): void {
+    if (this.activeScriptCallIds.size === 0) return;
+    const cardService = getGhostCardService();
+    for (const callId of this.activeScriptCallIds) cardService.finalizeCall(callId);
+    this.activeScriptCallIds.clear();
+  }
 
   async call(
     request: ScriptCapabilityCall,
@@ -186,7 +218,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           issue_key: requireString(params, 'issue_key'),
           ...(fields ? { fields } : {}),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule);
+        }, context.schedule, this.activeScriptCallIds);
       }
       case 'jira.search_jql': {
         requireCapability(granted, 'jira.read');
@@ -212,7 +244,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           // 或传 out_file 让意识把整包落盘到 schedule 工作目录,脚本自己读回。
           ...(nextPageToken === undefined ? {} : { next_page_token: nextPageToken }),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule);
+        }, context.schedule, this.activeScriptCallIds);
       }
       case 'jira.add_comment': {
         requireCapability(granted, 'jira.comment');
@@ -229,13 +261,13 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           if (typeof bodyAdf !== 'object' || bodyAdf === null || Array.isArray(bodyAdf)) {
             fail('INVALID_ARGS', 'body_adf must be an ADF document object');
           }
-          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule);
+          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, this.activeScriptCallIds);
         }
         return callJira({
           action: 'add_comment',
           issue_key: issueKey,
           body_text: requireString(params, 'body_text'),
-        }, context.schedule);
+        }, context.schedule, this.activeScriptCallIds);
       }
       case 'feishu.recent_chats': {
         // 按活跃时间倒序列最近会话(群/单聊)。配合 feishu.recent_messages 的
@@ -252,7 +284,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         return callFeishu('im_list_chats', {
           sort_type: 'ByActiveTimeDesc',
           page_size: chatCount ?? 20,
-        }, context.schedule);
+        }, context.schedule, this.activeScriptCallIds);
       }
       case 'feishu.recent_messages': {
         // 拉某个飞书会话(群/单聊)最近 N 条消息,新→旧;实现走 xd-feishu 意识
@@ -274,7 +306,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           ...(count === undefined ? {} : { page_size: count }),
           // 增量扫描游标:只取该时刻之后的消息(配本地已处理游标去重)
           ...(startTime === undefined ? {} : { start_time: String(startTime) }),
-        }, context.schedule);
+        }, context.schedule, this.activeScriptCallIds);
       }
       case 'sessions.dispatch': {
         requireCapability(granted, 'sessions.dispatch');

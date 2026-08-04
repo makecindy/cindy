@@ -88,6 +88,12 @@ export interface ScriptCapabilityBroker {
     granted: ReadonlySet<ScriptCapability>,
     context: { schedule: Schedule },
   ): Promise<unknown>;
+  /**
+   * 本轮 fire 终结(成功/失败/放弃等待在途调用)的统一收口:让残留的脚本
+   * 通道意识调用 callId 立即失效(写盘授权不跨 run 存活;review P1)。可选——
+   * 不带意识调用的 broker 实现无需提供。
+   */
+  finalizeActiveCalls?(): void;
 }
 
 export interface ScriptScheduleRunnerDeps {
@@ -609,6 +615,10 @@ export class ScriptScheduleRunner {
       if (timer) clearTimeout(timer);
       ctx.signal.removeEventListener('abort', onAbort);
       cutoffReject = null;
+      // 本轮 fire 终结(无论成败):放弃等待的在途调用不能再留着写盘授权——
+      // 否则旧 callId 要等 pipeDispatcher 超时(上限 30min)才失效,而下一轮
+      // fire 可能已开始(review P1)。正常路径下集合已空,这里是 no-op。
+      this.deps.broker.finalizeActiveCalls?.();
     }
     // deferredCallFailure 只在闭包(handleCall)内被赋值,TS 的控制流分析看不到
     // 那次赋值、一直把这里narrow 回声明时的 null——显式断言绕开,不是真的绕过

@@ -428,6 +428,41 @@ describe('ScriptScheduleRunner', () => {
     await expect(resultPromise).rejects.toThrow('session archived');
   });
 
+  it('fire 终结的统一收口调用 broker.finalizeActiveCalls(残留写盘授权不跨 run 存活,review P1)', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const finalizeActiveCalls = vi.fn();
+    const broker = {
+      call: vi.fn(async () => ({ ok: true })),
+      finalizeActiveCalls,
+    };
+    const runner = new ScriptScheduleRunner({ broker, logger: {} });
+    const resultPromise = runner.fire(schedule(), {
+      runId: 'run-1',
+      firedAt: 1,
+      signal: new AbortController().signal,
+    });
+
+    child.stdout.write(`${JSON.stringify({
+      protocol: 'xdt-maker-script/1',
+      type: 'call',
+      id: 'py-1',
+      method: 'sessions.dispatch',
+      params: { message: 'hi' },
+    })}\n`);
+    await vi.waitFor(() => expect(broker.call).toHaveBeenCalledTimes(1));
+    child.stdout.write(`${JSON.stringify({
+      protocol: 'xdt-maker-script/1',
+      type: 'complete',
+      resultText: 'done',
+    })}\n`);
+    await vi.waitFor(() => expect(child.stdin.writable).toBe(false));
+    child.emit('close', 0);
+
+    await expect(resultPromise).resolves.toEqual({ sessionId: '', resultText: 'done' });
+    expect(finalizeActiveCalls).toHaveBeenCalledTimes(1);
+  });
+
   it('does not hang past pause/delete when a call is still in flight after the child has already exited (codex review 第七轮)', async () => {
     // 子进程已经 close(退出码 0),但 broker.call() 仍未 resolve——这之后若
     // abort,不能让 fire() 永久挂起等一个已经失去意义的等待(此前 timer/abort

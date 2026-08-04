@@ -579,6 +579,43 @@ describe('SchedulerScriptCapabilityBroker', () => {
     }
   });
 
+  it('finalizeActiveCalls:runner 终结本轮时在途 callId 立即失写权,调用后续交卷不受影响(review P1)', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-finalize-'));
+    const { cardService, fsSlot } = wireRealChannel(tmp);
+    // 调用挂闸门保持在途。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    callGhostToolMock.mockImplementationOnce(async () => { await gate; return { ok: true, result: {} }; });
+    const broker = new SchedulerScriptCapabilityBroker();
+    const p = broker
+      .call(
+        { method: 'jira.get', params: { issue_key: 'DING-1' } },
+        new Set(['jira.read']),
+        { schedule: schedule({ workingDir: tmp }) },
+      )
+      .catch((err: unknown) => err);
+    try {
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      // 在途:写盘放行。
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId, path: 'inflight.json', content: 'x',
+      })).toMatchObject({ ok: true });
+      // runner 终结本轮(drain 30s 截止/abort/超时放弃等待):在途授权立即失效,
+      // 不等 pipeDispatcher 超时(上限 30min)。
+      broker.finalizeActiveCalls();
+      expect(cardService.inFlightCallInfoOf(callId)).toBeNull();
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId, path: 'after-end.json', content: 'x',
+      })).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'after-end.json'))).toBe(false);
+    } finally {
+      // 调用之后正常交卷:finalize 幂等(dispatcher 配对账本独立),不炸。
+      release();
+      await p;
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('并发调用:两个 callId 各自独立,一个 finalize 不误伤另一个的在途写权', async () => {
     const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-conc-'));
     try {
