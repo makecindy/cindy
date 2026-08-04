@@ -249,11 +249,22 @@ function assertBatchDimensions(
       if (got !== expected) {
         // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
         const at = mode === 'flat' ? `index ${d}` : `group ${d} index ${c}`;
-        const why =
-          dimensions === undefined
-            ? `model '${model}' returned mixed vector lengths (${expected} then ${got})`
-            : `requested dimensions=${dimensions} but model '${model}' returned ${got}`;
-        throw new EmbeddingError(`${why} at ${at}`, 'INVALID_MODEL');
+        // 错误码要分清**是谁错了**(PR #1707 review 第八轮):
+        //   - 显式传了 dimensions 而上游给了别的长度 = 这个型号不支持你要的维度,
+        //     调方改参数才有救 → INVALID_MODEL(slot 层译成 INVALID_PARAMS);
+        //   - 没传 dimensions(走默认)却回来一批不等长的 = 上游响应畸形,调方的请求
+        //     本来完全合法 → SERVER_ERROR(slot 层译成 INTERNAL)。
+        // 这里若一律用 INVALID_MODEL,插件会被告知去改一个没有问题的请求。
+        if (dimensions === undefined) {
+          throw new EmbeddingError(
+            `model '${model}' returned mixed vector lengths (${expected} then ${got}) at ${at}`,
+            'SERVER_ERROR',
+          );
+        }
+        throw new EmbeddingError(
+          `requested dimensions=${dimensions} but model '${model}' returned ${got} at ${at}`,
+          'INVALID_MODEL',
+        );
       }
     }
   }
@@ -305,6 +316,9 @@ export class EmbeddingClient {
     if (req.texts.length === 0) {
       return { embeddings: [], modelUsed: req.model, tokensUsed: 0, cacheHits: 0 };
     }
+    // 本次调用的起点 —— 只用于下面"清缓存重取"那条路径:重取必须吃掉**同一份**预算的
+    // 剩余量,不能重新计时(见那里的注释)。
+    const startedAt = Date.now();
 
     // 1. 查缓存, 拆出 miss index
     const result: number[][] = new Array(req.texts.length);
@@ -394,7 +408,24 @@ export class EmbeddingClient {
         `[embedding-client] mixed vector lengths across cache hits and fresh results for '${req.model}'; upstream default dimension likely changed — clearing cache and refetching`,
       );
       this.cache.clear();
-      return this.embed(req);
+      // 重取要吃**同一份**预算的剩余量(PR #1707 review 第八轮):`timeoutMs` 是时长而
+      // 不是绝对截止点,原样递下去等于重新计时 —— 第一次取新向量已经花掉 55 秒时,整批
+      // 重取还能再等 60 秒,插件那一次 await 最长接近 120 秒,在途额度也一直占着,与手册
+      // 承诺的"单次请求 60 秒"直接矛盾。
+      let remaining: number | undefined;
+      if (req.timeoutMs !== undefined) {
+        remaining = req.timeoutMs - (Date.now() - startedAt);
+        if (remaining <= 0) {
+          throw new EmbeddingError(
+            `embed: timed out after ${req.timeoutMs}ms (budget exhausted before cache-reset refetch)`,
+            'TIMEOUT',
+          );
+        }
+      }
+      return this.embed({
+        ...req,
+        ...(remaining !== undefined ? { timeoutMs: remaining } : {}),
+      });
     }
 
     return {

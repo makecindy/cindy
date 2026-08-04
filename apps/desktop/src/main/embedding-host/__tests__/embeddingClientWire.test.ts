@@ -614,7 +614,8 @@ describe('EmbeddingClient · 默认维度路径也校验批内一致', () => {
     });
     const client = clientWith(fetchImpl);
     const req = { texts: ['a', 'b'], model: 'voyage/voyage-4' as const };
-    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    // 没传 dimensions ⇒ 是上游响应畸形,不是调方参数错 → SERVER_ERROR(slot 译 INTERNAL)
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'SERVER_ERROR' });
     await expect(client.embed(req)).rejects.toThrow(/mixed vector lengths \(4 then 2\)/);
     expect(fetchImpl).toHaveBeenCalledTimes(2); // 首次一条都没入缓存
   });
@@ -699,5 +700,66 @@ describe('EmbeddingClient · 缓存命中与新取回混合时的自洽', () => 
     const second = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
     expect(second.cacheHits).toBe(1);
     expect(fetchImpl).toHaveBeenCalledTimes(2); // 首次 + 只取 'b',没有第三次
+  });
+});
+
+describe('EmbeddingClient · 错误归属与重取的预算', () => {
+  /**
+   * 错误码要分清是谁错了(PR #1707 review 第八轮):slot 层把 INVALID_MODEL 译成
+   * INVALID_PARAMS、SERVER_ERROR 译成 INTERNAL。默认维度请求本来完全合法,若也报
+   * INVALID_MODEL,插件会被告知去改一个没有问题的请求。
+   */
+  it('显式维度不符 → INVALID_MODEL;默认维度批内不等长 → SERVER_ERROR', async () => {
+    const ragged = () =>
+      respond({
+        model: 'voyage/voyage-4',
+        data: [
+          { object: 'embedding', index: 0, embedding: [1, 2, 3, 4] },
+          { object: 'embedding', index: 1, embedding: [1, 2] },
+        ],
+        usage: { prompt_tokens: 2 },
+      });
+    await expect(
+      clientWith(ragged()).embed({
+        texts: ['a', 'b'],
+        model: 'voyage/voyage-4',
+        dimensions: 4,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    await expect(
+      clientWith(ragged()).embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+  });
+
+  it('清缓存重取吃同一份预算的剩余量:预算已耗尽时抛 TIMEOUT 而不是再等一轮', async () => {
+    // 第一次取新向量把预算耗光(sleep > timeoutMs),随后混合长度触发重取 —— 重取不能
+    // 重新计时,否则插件那一次 await 最长接近 2×预算。
+    let width = 2;
+    let calls = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body)) as { input: string[] };
+      if (calls > 1) await new Promise((r) => setTimeout(r, 80));
+      return new Response(
+        JSON.stringify({
+          model: 'voyage/voyage-4',
+          data: body.input.map((_t, index) => ({
+            object: 'embedding',
+            index,
+            embedding: Array.from({ length: width }, (_v, i) => i),
+          })),
+          usage: { prompt_tokens: 1 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+    await client.embed({ texts: ['a'], model: 'voyage/voyage-4' }); // 以 2 维入缓存
+    width = 4;
+    await expect(
+      client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4', timeoutMs: 60 }),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+    // 只发了首次入缓存 + 这次的 miss 取回;重取没有发出(预算已耗尽)。
+    expect(calls).toBe(2);
   });
 });
