@@ -145,9 +145,8 @@ export class GhostManager {
         continue;
       }
       const hostMetadata = this.readInstalledHostMetadata(dir);
-      // atResourceProvider 在旧版宿主里只是未知顶层元数据。只有新版宿主在
-      // install/update 审阅后写下的精确 receipt 才把它提升为运行时入口；旧安装
-      // 没 receipt 时 fail closed，但插件本体与已批准 tool 仍照旧可用。
+      // 历史 manifest / receipt 中可能保留已移除的资源搜索元数据；它不参与当前
+      // 运行时入口，插件本体与已批准的其它能力仍按现有授权照常可用。
       const manifest = v.manifest;
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       const iconDataUrl = this.readInstalledIconDataUrl(dir, manifest);

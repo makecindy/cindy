@@ -263,7 +263,7 @@ export function AtMentionPanel({
           <GhostPluginIcon
             iconDataUrl={item.iconDataUrl}
             iconId={item.pluginId ?? item.relPath}
-            iconName={item.name}
+            iconName={item.type === 'plugin-resource' ? (item.sourceLabel ?? item.name) : item.name}
             size="menu"
           />
         ) : (
