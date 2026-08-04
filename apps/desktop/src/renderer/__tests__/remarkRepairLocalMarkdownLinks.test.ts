@@ -156,6 +156,14 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     ]);
   });
 
+  it('keeps escaped link syntax inactive after another Markdown escape', () => {
+    const children = firstParagraphChildren('\\* \\[示例](/tmp/My File.md)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: '* [示例](/tmp/My File.md)' },
+    ]);
+  });
+
   it('still repairs an unescaped link after a decoded character reference', () => {
     const children = firstParagraphChildren('&amp; [示例](/tmp/My File.md)');
 

@@ -24,7 +24,7 @@ function decodedOffsetMap(raw: string): number[] {
   for (let index = 0; index < raw.length; ) {
     if (raw[index] === '\\' && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(raw[index + 1] ?? '')) {
       offsets.push(index + 1);
-      index += 1;
+      index += 2;
       continue;
     }
 
