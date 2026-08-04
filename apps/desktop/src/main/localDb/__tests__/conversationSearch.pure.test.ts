@@ -53,6 +53,7 @@ describe('conversationSearch.pure', () => {
           createdAt: contentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -77,6 +78,7 @@ describe('conversationSearch.pure', () => {
           createdAt: newerContentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -102,6 +104,7 @@ describe('conversationSearch.pure', () => {
           createdAt: contentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -126,6 +129,7 @@ describe('conversationSearch.pure', () => {
           createdAt: target.updatedAt,
           snippet: 'search settings',
           preview: 'search settings preview',
+          occurrenceCount: 1,
           score: 1,
           ftsRank: 1,
           vectorRank: null,
@@ -153,6 +157,7 @@ describe('conversationSearch.pure', () => {
             createdAt: '2026-01-01T00:00:00.000Z',
             snippet: 'older search settings',
             preview: 'older search settings preview',
+            occurrenceCount: 1,
             score: 1,
             ftsRank: 2,
             vectorRank: null,
@@ -167,6 +172,7 @@ describe('conversationSearch.pure', () => {
             createdAt: '2026-01-02T00:00:00.000Z',
             snippet: 'newer search settings',
             preview: 'newer search settings preview',
+            occurrenceCount: 1,
             score: 9,
             ftsRank: 1,
             vectorRank: null,
@@ -272,14 +278,111 @@ describe('conversationSearch.pure', () => {
     });
   });
 
-  it('extracts visible AskUser and plan review text for conversation search', () => {
+  it('matches and counts the complete query phrase', () => {
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error then timeout; error timeout and ERROR TIMEOUT',
+        'error timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: true,
+      occurrenceCount: 2,
+    });
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error happened before a later timeout',
+        'error timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: false,
+      occurrenceCount: 0,
+    });
+  });
+
+  it('keeps visible code text while excluding Markdown source details', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '`<div>` and `a < b`\n\n```html\n<section>visible code</section>\n```',
+      '<section>visible code</section>',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(true);
+    expect(preview.preview).toContain('<div>');
+    expect(preview.preview).toContain('a < b');
+  });
+
+  it('excludes Markdown link destinations from visible search text', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '[visible label](https://example.com/hidden-token)',
+      'hidden-token',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(false);
+    expect(preview.occurrenceCount).toBe(0);
+    expect(preview.preview).toBe('visible label');
+  });
+
+  it('keeps Markdown autolinks visible while excluding raw HTML tags', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '<https://example.com/ticket-123> <span>hidden tag</span>',
+      'ticket-123',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(true);
+    expect(preview.preview).toContain('https://example.com/ticket-123');
+    expect(preview.preview).not.toContain('<span>');
+  });
+
+  it('excludes trailing goal protocol blocks from assistant search text', () => {
+    const content = 'Visible answer.\n\n```json\n{"goal_status":"done","note":"hidden token"}\n```';
+
+    expect(normalizeConversationContentPreview('assistant', content, 'hidden token')).toMatchObject({
+      keywordMatchedVisibleText: false,
+      occurrenceCount: 0,
+      preview: 'Visible answer.',
+    });
+  });
+
+  it('normalizes whitespace in both the visible text and query', () => {
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error\n\t timeout',
+        'error   \n timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: true,
+      occurrenceCount: 1,
+    });
+  });
+
+  it('extracts only rendered AskUser and plan review text for conversation search', () => {
     expect(visibleMessageTextForConversationSearch('ask_user', {
       questions: [{ question: 'Which branch should I use?' }],
       answers: { q0: 'Use main' },
     })).toBe('Which branch should I use? Use main');
-    expect(visibleMessageTextForConversationSearch('plan_review', {
+
+    const planReview = {
       plan: 'Update the search index',
       feedback: 'Keep the UI stable',
-    })).toBe('Update the search index Keep the UI stable');
+    };
+    expect(visibleMessageTextForConversationSearch('plan_review', {
+      ...planReview,
+      status: 'pending',
+    })).toBe('');
+    expect(visibleMessageTextForConversationSearch('plan_review', {
+      ...planReview,
+      status: 'revised',
+    })).toBe('Keep the UI stable');
+    for (const status of ['approved', 'expired', 'cancelled']) {
+      expect(visibleMessageTextForConversationSearch('plan_review', {
+        ...planReview,
+        status,
+      })).toBe('Update the search index');
+    }
   });
 });

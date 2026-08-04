@@ -110,6 +110,7 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
 
   return (
     <div
+      data-session-search-body=""
       className={cn(
         'flex w-full min-w-0 flex-col gap-[8px]',
         'rounded-[12px] border border-[var(--border-default)]',
@@ -127,7 +128,10 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
         >
           {pair.question && (
             <div className="flex min-w-0 items-start gap-[8px]">
-              <span className="mt-[2px] w-[14px] shrink-0 select-none text-11 font-medium leading-[1.4] text-[var(--text-tertiary)]">
+              <span
+                data-session-search-ignore=""
+                className="mt-[2px] w-[14px] shrink-0 select-none text-11 font-medium leading-[1.4] text-[var(--text-tertiary)]"
+              >
                 Q
               </span>
               <span className="min-w-0 flex-1 whitespace-pre-wrap text-13 font-normal leading-[1.45] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
@@ -137,7 +141,10 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
           )}
 
           <div className="flex min-w-0 items-start gap-[8px]">
-            <span className="mt-[1px] w-[14px] shrink-0 select-none text-12 font-medium leading-[1.4] text-[var(--text-primary)]">
+            <span
+              data-session-search-ignore=""
+              className="mt-[1px] w-[14px] shrink-0 select-none text-12 font-medium leading-[1.4] text-[var(--text-primary)]"
+            >
               ✓
             </span>
             {pair.skipped ? (

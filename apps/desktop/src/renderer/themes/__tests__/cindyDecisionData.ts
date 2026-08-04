@@ -177,6 +177,8 @@ export const HSL_FORMAT_IDS = [
   'sidebar-muted',
   'sidebar-action-icon',
   'search-match-bg',
+  'search-match-active-bg',
+  'search-match-active-fg',
   'search-match-fg',
   'content-area',
   'welcome-text',

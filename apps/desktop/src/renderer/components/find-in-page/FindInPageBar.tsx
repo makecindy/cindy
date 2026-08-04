@@ -4,7 +4,7 @@ import { ChevronDown, ChevronUp, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
-import { isFindInPageClaimed } from './findInPageOwnership';
+import { isFindInPageClaimed, subscribeFindInPageClaim } from './findInPageOwnership';
 
 /**
  * F-FIP-1 — Find in Page overlay (Ctrl/Cmd+F).
@@ -57,6 +57,12 @@ export function FindInPageBar() {
     window.electronAPI.stopFindInPage('clearSelection');
   }, []);
 
+  useEffect(() => {
+    return subscribeFindInPageClaim(() => {
+      if (isFindInPageClaimed()) close();
+    });
+  }, [close]);
+
   // Global find-in-page shortcut (registry 默认 Ctrl/Cmd+F, 用户可改绑) →
   // open + focus. Capture phase so editable inputs (TipTap, plain inputs,
   // contenteditable) don't swallow the chord first.
@@ -96,7 +102,7 @@ export function FindInPageBar() {
     [],
   );
 
-  if (!open) return null;
+  if (!open || isFindInPageClaimed()) return null;
 
   return (
     <div

@@ -51,6 +51,8 @@ interface PlanReviewBubbleProps {
   currentSessionId?: string;
   currentSessionTitle?: string | null;
   localFileRefs?: readonly KnownLocalFileRef[];
+  /** Temporarily reveal a collapsed plan while its message owns the active search hit. */
+  searchFocused?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,7 @@ export function PlanReviewBubble({
   currentSessionId,
   currentSessionTitle,
   localFileRefs,
+  searchFocused,
 }: PlanReviewBubbleProps) {
   const { t } = useTranslation();
   const status = message.planReviewStatus ?? 'pending';
@@ -158,6 +161,7 @@ export function PlanReviewBubble({
           localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={APPROVED_COLLAPSED_MAX_HEIGHT}
+          searchFocused={searchFocused}
         />
       )}
 
@@ -167,14 +171,16 @@ export function PlanReviewBubble({
             {t('chat.planReviewBubble.feedbackLabel')}
           </span>
           {/* 反馈是用户自己敲的原话,保持纯文本(不当 Markdown 解析)。 */}
-          <p
-            className={cn(
-              'whitespace-pre-wrap break-words text-14 leading-[1.6]',
-              'text-[var(--plan-bubble-body-text)]',
-            )}
-          >
-            {feedback || t('chat.planReviewBubble.noFeedback')}
-          </p>
+          <div data-session-search-body="">
+            <p
+              className={cn(
+                'whitespace-pre-wrap break-words text-14 leading-[1.6]',
+                'text-[var(--plan-bubble-body-text)]',
+              )}
+            >
+              {feedback || t('chat.planReviewBubble.noFeedback')}
+            </p>
+          </div>
         </div>
       )}
 
@@ -186,6 +192,7 @@ export function PlanReviewBubble({
           localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={INACTIVE_COLLAPSED_MAX_HEIGHT}
+          searchFocused={searchFocused}
         />
       )}
     </div>
@@ -214,6 +221,7 @@ function PlanMarkdownBody({
   localFileRefs,
   plan,
   collapsedMaxHeight,
+  searchFocused,
 }: {
   workingDir: string;
   currentSessionId?: string;
@@ -221,6 +229,7 @@ function PlanMarkdownBody({
   localFileRefs?: readonly KnownLocalFileRef[];
   plan: string;
   collapsedMaxHeight: number;
+  searchFocused?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -244,11 +253,12 @@ function PlanMarkdownBody({
     return () => observer.disconnect();
   }, [collapsedMaxHeight, plan]);
 
-  const collapsed = !expanded && overflowing;
+  const collapsed = !expanded && overflowing && !searchFocused;
 
   return (
     <div className="flex flex-col gap-[8px]">
       <div
+        data-session-search-collapsed={collapsed ? '' : undefined}
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
         // 折叠态整块 inert。overflow-hidden 与 mask 只挡住"看得见",被裁掉的
         // Markdown 链接、文件 chip、代码块按钮仍留在 tab 序与 a11y 树里:键盘
@@ -273,6 +283,7 @@ function PlanMarkdownBody({
         }
       >
         <div
+          data-session-search-body=""
           ref={bodyRef}
           className={cn(
             'min-w-0 text-14 leading-[1.6]',

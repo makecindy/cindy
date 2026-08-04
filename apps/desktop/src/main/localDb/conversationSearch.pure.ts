@@ -1,3 +1,8 @@
+import {
+  visibleMarkdownTextForSearch,
+  visiblePlanReviewTextForSearch,
+} from '../../shared/conversationSearch.js';
+import { stripGoalVerdictBlock } from '../../shared/goalVerdict.js';
 import type {
   ConversationSearchContentHit,
   ConversationSearchResultItem,
@@ -235,6 +240,7 @@ export interface NormalizedConversationContentPreview {
   preview: string;
   snippet: string | null;
   keywordMatchedVisibleText: boolean;
+  occurrenceCount: number;
 }
 
 export function normalizeConversationContentPreview(
@@ -250,6 +256,7 @@ export function normalizeConversationContentPreview(
     preview: textPreview(visibleText, max),
     snippet,
     keywordMatchedVisibleText: ranges.length > 0,
+    occurrenceCount: ranges.length,
   };
 }
 
@@ -278,7 +285,7 @@ function userVisibleText(content: unknown): string {
 }
 
 function userVisibleTextRaw(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return visibleMarkdownTextForSearch(content);
   const blocksText = textBlocksText(content);
   if (blocksText) return blocksText;
   if (content && typeof content === 'object') {
@@ -290,7 +297,9 @@ function userVisibleTextRaw(content: unknown): string {
 }
 
 function assistantVisibleText(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') {
+    return visibleMarkdownTextForSearch(stripGoalVerdictBlock(content));
+  }
   const blocksText = textBlocksText(content);
   if (blocksText) return blocksText;
   if (
@@ -331,9 +340,13 @@ function askUserVisibleText(content: unknown): string {
 }
 
 function planReviewVisibleText(content: unknown): string {
-  if (!content || typeof content !== 'object') return typeof content === 'string' ? content : '';
+  if (!content || typeof content !== 'object') return '';
   const obj = content as Record<string, unknown>;
-  return [obj.plan, obj.feedback].filter((value): value is string => typeof value === 'string').join('\n');
+  return visiblePlanReviewTextForSearch({
+    status: typeof obj.status === 'string' ? obj.status : undefined,
+    plan: typeof obj.plan === 'string' ? obj.plan : undefined,
+    feedback: typeof obj.feedback === 'string' ? obj.feedback : undefined,
+  });
 }
 
 function textBlocksText(content: unknown): string {
@@ -360,26 +373,18 @@ function preferredObjectText(obj: Record<string, unknown>): string {
 }
 
 function keywordRanges(text: string, query: string): Array<{ start: number; end: number }> {
-  const tokens = [...new Set(query.match(/[\p{L}\p{N}]+/gu) ?? [])]
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0)
-    .sort((a, b) => b.length - a.length);
-  if (tokens.length === 0 || !text) return [];
+  const phrase = query.replace(/\s+/g, ' ').trim();
+  if (!phrase || !text) return [];
 
   const lowerText = text.toLocaleLowerCase();
+  const lowerPhrase = phrase.toLocaleLowerCase();
   const ranges: Array<{ start: number; end: number }> = [];
-  for (const token of tokens) {
-    const lowerToken = token.toLocaleLowerCase();
-    let index = lowerText.indexOf(lowerToken);
-    while (index >= 0) {
-      const next = { start: index, end: index + token.length };
-      if (!ranges.some((range) => rangesOverlap(range, next))) {
-        ranges.push(next);
-      }
-      index = lowerText.indexOf(lowerToken, index + lowerToken.length);
-    }
+  let index = lowerText.indexOf(lowerPhrase);
+  while (index >= 0) {
+    ranges.push({ start: index, end: index + phrase.length });
+    index = lowerText.indexOf(lowerPhrase, index + lowerPhrase.length);
   }
-  return ranges.sort((a, b) => a.start - b.start);
+  return ranges;
 }
 
 function visibleSnippet(text: string, range: { start: number; end: number }, max: number): string {
@@ -392,10 +397,6 @@ function visibleSnippet(text: string, range: { start: number; end: number }, max
   const prefix = start > 0 ? '...' : '';
   const suffix = end < text.length ? '...' : '';
   return `${prefix}${text.slice(start, end).trim()}${suffix}`;
-}
-
-function rangesOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
-  return a.start < b.end && b.start < a.end;
 }
 
 function extractText(value: unknown): string {

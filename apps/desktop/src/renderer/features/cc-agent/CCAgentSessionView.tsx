@@ -21,16 +21,33 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
+import { acquireFindInPage } from '@/components/find-in-page/findInPageOwnership';
+import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { searchConversations } from '@/lib/conversationSearchService';
+import { SessionSearchBar } from './SessionSearchBar';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import {
   connectedProvidersForAgent,
   providerOffersModel,
 } from '@cindy/model-providers';
+import { getGhostCardSnapshot, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
+import { splitGhostDirective } from '@/cindy-brain/ghostCommand';
+import {
+  joinChatQuoteTextSegments,
+  parseChatQuoteSegments,
+} from '@/lib/chatQuotes';
+import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { isSyntheticTriggerText } from '../../../shared/interruptedTurn';
+import {
+  visibleMarkdownTextForSearch,
+  visiblePlanReviewTextForSearch,
+} from '../../../shared/conversationSearch';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -540,11 +557,22 @@ export function CCAgentSessionView({
   const [focusedMessageTarget, setFocusedMessageTarget] = useState<{
     clientId: string;
     requestId: number;
+    occurrenceIndex?: number;
   } | null>(null);
-  const requestFocusMessage = useCallback((clientId: string) => {
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const [sessionSearchHits, setSessionSearchHits] = useState<
+    Array<{ messageId: string; messageClientId: string; occurrenceIndex: number }>
+  >([]);
+  const [sessionSearchActive, setSessionSearchActive] = useState(-1);
+  const [sessionSearchPending, setSessionSearchPending] = useState(false);
+  const sessionSearchInputRef = useRef<HTMLInputElement>(null);
+  const sessionSearchRequestRef = useRef(0);
+  const requestFocusMessage = useCallback((clientId: string, occurrenceIndex?: number) => {
     setFocusedMessageTarget((current) => ({
       clientId,
       requestId: (current?.requestId ?? 0) + 1,
+      occurrenceIndex,
     }));
   }, []);
   const clearSearchJumpState = useCallback(() => {
@@ -582,6 +610,253 @@ export function CCAgentSessionView({
   // chat rail / 协同 worker 面板,带 sessionIdProp 或处于 compact/orca 语境)不参与。
   const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;
   const showInlineControlledBanner = ownsRoute || showControlledBanner;
+
+  useEffect(() => {
+    if (!ownsRoute) return;
+    return acquireFindInPage();
+  }, [ownsRoute]);
+
+  useAppShortcut(
+    'find-in-page',
+    () => {
+      if (!ownsRoute) return false;
+      setSessionSearchOpen(true);
+      queueMicrotask(() => {
+        sessionSearchInputRef.current?.focus();
+        sessionSearchInputRef.current?.select();
+      });
+      return true;
+    },
+    { stopImmediate: true },
+  );
+
+  const closeSessionSearch = useCallback(() => {
+    sessionSearchRequestRef.current += 1;
+    setSessionSearchOpen(false);
+    setSessionSearchQuery('');
+    setSessionSearchHits([]);
+    setSessionSearchActive(-1);
+    setSessionSearchPending(false);
+  }, []);
+
+  const focusSessionSearchHit = useCallback(
+    (hit: { messageId: string; messageClientId: string; occurrenceIndex: number }) => {
+      if (!sessionId) return;
+      const loaded = makerChatStore
+        .getSnapshot(sessionId)
+        .messages.some((message) => message.clientId === hit.messageClientId);
+      if (loaded) {
+        requestFocusMessage(hit.messageClientId, hit.occurrenceIndex);
+        return;
+      }
+      void makerChatStore
+        .loadAroundMessageClientId(sessionId, hit.messageClientId, { radius: 60 })
+        .then((message) => {
+          if (message) requestFocusMessage(message.clientId, hit.occurrenceIndex);
+        })
+        .catch((err) => {
+          log.warn('Failed to load in-conversation search hit:', err);
+        });
+    },
+    [requestFocusMessage, sessionId],
+  );
+
+  const ghostCardSnapshot = useSyncExternalStore(
+    subscribeGhostCards,
+    getGhostCardSnapshot,
+    getGhostCardSnapshot,
+  );
+
+  useEffect(() => {
+    if (!ownsRoute || !sessionSearchOpen || !sessionId) return;
+    const query = sessionSearchQuery.trim();
+    const requestId = ++sessionSearchRequestRef.current;
+    if (!query) {
+      setSessionSearchHits([]);
+      setSessionSearchActive(-1);
+      setSessionSearchPending(false);
+      return;
+    }
+
+    const normalizedQuery = query.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    const currentMessages = makerChatStore.getSnapshot(sessionId).messages;
+    const hiddenGhostMessageClientIds = new Set<string>();
+
+    function searchVisibleMessageText(message: {
+      role: string;
+      content: string;
+      askUserQuestions?: Array<{ question: string }>;
+      askUserAnswers?: Record<string, string>;
+      askUserReply?: string | null;
+      planReviewPlan?: string;
+      planReviewFeedback?: string;
+      planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
+      quotesEncoded?: boolean;
+      hookSource?: { userText?: string };
+    }): string {
+      if (message.role === 'ask_user') {
+        const questions = message.askUserQuestions ?? [];
+        const parts = questions.flatMap((question) => [
+          question.question,
+          ...(message.askUserAnswers?.[question.question]
+            ? [message.askUserAnswers[question.question]]
+            : []),
+        ]);
+        if (parts.length > 0) return parts.join('\n');
+        return [message.content, message.askUserReply ?? ''].filter(Boolean).join('\n');
+      }
+      if (message.role === 'plan_review') {
+        return visiblePlanReviewTextForSearch({
+          status: message.planReviewStatus,
+          plan: message.planReviewPlan,
+          feedback: message.planReviewFeedback,
+        });
+      }
+
+      let visibleContent = message.content;
+      if (message.role === 'assistant') {
+        visibleContent = stripGoalVerdictBlock(visibleContent);
+      } else if (message.role === 'user') {
+        try {
+          const parsed = JSON.parse(visibleContent) as unknown;
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            ((parsed as { orcaSource?: unknown }).orcaSource === 'lead' ||
+              (parsed as { orcaSource?: unknown }).orcaSource === 'worker') &&
+            typeof (parsed as { content?: unknown }).content === 'string'
+          ) {
+            visibleContent = (parsed as { content: string }).content;
+          }
+        } catch {
+          // 普通用户消息不是 Orca JSON,保留原文。
+        }
+        if (message.hookSource) {
+          visibleContent = message.hookSource.userText ?? visibleContent;
+        }
+        const ghostSplit = splitGhostDirective(visibleContent);
+        if (ghostSplit) visibleContent = ghostSplit.body;
+        if (message.quotesEncoded) {
+          visibleContent = joinChatQuoteTextSegments(
+            parseChatQuoteSegments(visibleContent),
+          );
+        }
+      }
+      return visibleContent;
+    }
+
+    const localHits = currentMessages
+      .filter(
+        (message) =>
+          message.role === 'user' ||
+          message.role === 'assistant' ||
+          message.role === 'ask_user' ||
+          message.role === 'plan_review',
+      )
+      .filter((message) => {
+        if (message.role !== 'assistant') return true;
+        const entry = ghostCardSnapshot.byCallId.get(message.clientId);
+        if (entry?.status === 'ready') {
+          hiddenGhostMessageClientIds.add(message.clientId);
+          return false;
+        }
+        return true;
+      })
+      .flatMap((message) => {
+        const sourceContent = searchVisibleMessageText(message);
+        if (isSyntheticTriggerText(sourceContent)) return [];
+        const content = (message.role === 'plan_review'
+          ? sourceContent
+          : visibleMarkdownTextForSearch(sourceContent))
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLocaleLowerCase();
+        const hits: Array<{
+          messageId: string;
+          messageClientId: string;
+          occurrenceIndex: number;
+        }> = [];
+        let offset = content.indexOf(normalizedQuery);
+        let occurrenceIndex = 0;
+        while (offset >= 0) {
+          hits.push({
+            messageId: message.clientId,
+            messageClientId: message.clientId,
+            occurrenceIndex,
+          });
+          occurrenceIndex += 1;
+          offset = content.indexOf(normalizedQuery, offset + normalizedQuery.length);
+        }
+        return hits;
+      });
+    setSessionSearchHits(localHits);
+    setSessionSearchActive(localHits.length > 0 ? 0 : -1);
+    if (localHits[0]) focusSessionSearchHit(localHits[0]);
+    setSessionSearchPending(true);
+
+    const timer = window.setTimeout(() => {
+      void searchConversations({
+        query,
+        limit: 50,
+        semanticMode: 'keyword',
+        messagesOnly: true,
+        filters: { status: 'all', sessionIds: [sessionId] },
+      })
+        .then((response) => {
+          if (requestId !== sessionSearchRequestRef.current) return;
+          const seen = new Set(localHits.map((hit) => hit.messageClientId));
+          const remoteHits = response.results.flatMap((result) =>
+            result.contentHits
+              .filter(
+                (hit) =>
+                  !seen.has(hit.messageClientId) &&
+                  !hiddenGhostMessageClientIds.has(hit.messageClientId) &&
+                  hit.occurrenceCount > 0,
+              )
+              .flatMap((hit) =>
+                Array.from({ length: hit.occurrenceCount }, (_, occurrenceIndex) => ({
+                  messageId: hit.messageId,
+                  messageClientId: hit.messageClientId,
+                  occurrenceIndex,
+                })),
+              ),
+          );
+          const hits = [...localHits, ...remoteHits];
+          setSessionSearchHits(hits);
+          setSessionSearchActive((active) =>
+            active >= 0 || hits.length === 0 ? active : 0,
+          );
+          if (hits[0] && localHits.length === 0) focusSessionSearchHit(hits[0]);
+          setSessionSearchPending(false);
+        })
+        .catch(() => {
+          if (requestId !== sessionSearchRequestRef.current) return;
+          setSessionSearchPending(false);
+        });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [
+    focusSessionSearchHit,
+    ghostCardSnapshot.version,
+    ownsRoute,
+    sessionId,
+    sessionSearchOpen,
+    sessionSearchQuery,
+  ]);
+
+  const navigateSessionSearch = useCallback(
+    (direction: 1 | -1) => {
+      if (sessionSearchHits.length === 0) return;
+      const next =
+        (Math.max(sessionSearchActive, 0) + direction + sessionSearchHits.length) %
+        sessionSearchHits.length;
+      setSessionSearchActive(next);
+      focusSessionSearchHit(sessionSearchHits[next]);
+    },
+    [focusSessionSearchHit, sessionSearchActive, sessionSearchHits],
+  );
+
   // 平台分流:mac 右栏开关放在 ContentHeader 右端(见 ContentHeader.tsx),Windows
   // 放在下方 chip 栈第一行。两端都靠 ownsRoute 限定只在全屏聊天视图出现。
   const isMac = window.electronAPI?.platform === 'darwin';
@@ -3103,6 +3378,8 @@ export function CCAgentSessionView({
       contentWidth={messageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
+      searchQuery={sessionSearchOpen ? sessionSearchQuery.trim() : undefined}
+      focusMessageOccurrenceIndex={focusedMessageTarget?.occurrenceIndex}
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
     />
@@ -3216,6 +3493,19 @@ export function CCAgentSessionView({
           }
         }}
       >
+        {ownsRoute && sessionSearchOpen && (
+          <SessionSearchBar
+            ref={sessionSearchInputRef}
+            query={sessionSearchQuery}
+            total={sessionSearchHits.length}
+            activeIndex={Math.max(sessionSearchActive, 0)}
+            searching={sessionSearchPending}
+            onChange={setSessionSearchQuery}
+            onNext={() => navigateSessionSearch(1)}
+            onPrevious={() => navigateSessionSearch(-1)}
+            onClose={closeSessionSearch}
+          />
+        )}
         {showOrcaLeadIdentityBar && (
           <div className="flex h-8 shrink-0 select-none items-center border-b border-border/40 px-3 text-[11px] font-medium leading-none text-muted-foreground">
             <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">

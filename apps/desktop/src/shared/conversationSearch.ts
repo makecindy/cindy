@@ -15,12 +15,21 @@ export type ConversationSearchMessageRole =
   | 'plan_review'
   | 'thinking';
 
+export type PlanReviewSearchStatus =
+  | 'pending'
+  | 'approved'
+  | 'revised'
+  | 'expired'
+  | 'cancelled';
+
 export interface ConversationSearchRequest {
   query: string;
   limit?: number;
   sortBy?: ConversationSearchSortBy;
   semanticMode?: ConversationSearchSemanticMode;
   filters?: ConversationSearchFilters;
+  /** Limit matching to message content, excluding session title matches. */
+  messagesOnly?: boolean;
   /**
    * @deprecated Use filters.status instead. Kept so older renderer builds keep
    * the previous active-only / active+archived behavior.
@@ -76,6 +85,8 @@ export interface ConversationSearchContentHit {
   createdAt: string;
   snippet: string | null;
   preview: string;
+  /** Number of visible keyword occurrences in this message. */
+  occurrenceCount: number;
   score: number;
   ftsRank: number | null;
   vectorRank: number | null;
@@ -113,4 +124,92 @@ export interface ConversationSearchResponse {
   vectorUsed: boolean;
   vectorSkipReason: string | null;
   poolCapped: boolean;
+}
+
+/** Project only the plan-review fields that its current bubble state renders. */
+export function visiblePlanReviewTextForSearch(input: {
+  status?: PlanReviewSearchStatus | string;
+  plan?: string | null;
+  feedback?: string | null;
+}): string {
+  const status = input.status ?? 'pending';
+  if (status === 'revised') return input.feedback ?? '';
+  if (status === 'approved' || status === 'expired' || status === 'cancelled') {
+    return visibleMarkdownTextForSearch(input.plan ?? '');
+  }
+  return '';
+}
+
+/** Remove Markdown/HTML source details that are not rendered as visible message text. */
+export function visibleMarkdownTextForSearch(source: string): string {
+  const protectedCode: string[] = [];
+  let markerPrefix = 'cindy-search-code-';
+  while (source.includes(markerPrefix)) markerPrefix += '-';
+  const markerSuffix = '';
+  let text = source.replace(/```[^\n]*\n?[\s\S]*?```|~~~[^\n]*\n?[\s\S]*?~~~|`[^`\n]*`/g, (code) => {
+    const index = protectedCode.push(visibleCodeText(code)) - 1;
+    return `${markerPrefix}${index}${markerSuffix}`;
+  });
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  text = preserveMarkdownAutolinks(text);
+  text = text.replace(/<[^>]+>/g, '');
+  text = stripMarkdownLinkDestinations(text);
+  return text.replace(
+    new RegExp(`${markerPrefix}(\\d+)${markerSuffix}`, 'g'),
+    (_marker, index: string) => protectedCode[Number(index)] ?? '',
+  );
+}
+
+function preserveMarkdownAutolinks(source: string): string {
+  return source.replace(
+    /<((?:https?:\/\/|mailto:)[^<>\s]+|[^<>\s@]+@[^<>\s@]+)>/gi,
+    (_match, visible: string) => visible.replace(/^mailto:/i, ''),
+  );
+}
+
+function visibleCodeText(source: string): string {
+  if (source.startsWith('```') || source.startsWith('~~~')) {
+    const openingEnd = source.indexOf('\n');
+    const bodyStart = openingEnd >= 0 ? openingEnd + 1 : 3;
+    return source.slice(bodyStart, -3);
+  }
+  return source.slice(1, -1);
+}
+
+function stripMarkdownLinkDestinations(source: string): string {
+  let output = '';
+  let cursor = 0;
+  while (cursor < source.length) {
+    const labelStart = source[cursor] === '!' && source[cursor + 1] === '['
+      ? cursor + 1
+      : source[cursor] === '['
+        ? cursor
+        : -1;
+    if (labelStart < 0) {
+      output += source[cursor];
+      cursor += 1;
+      continue;
+    }
+    const labelEnd = source.indexOf('](', labelStart + 1);
+    if (labelEnd < 0) {
+      output += source[cursor];
+      cursor += 1;
+      continue;
+    }
+    let destinationEnd = labelEnd + 2;
+    let depth = 1;
+    while (destinationEnd < source.length && depth > 0) {
+      if (source[destinationEnd] === '(') depth += 1;
+      else if (source[destinationEnd] === ')') depth -= 1;
+      destinationEnd += 1;
+    }
+    if (depth !== 0) {
+      output += source[cursor];
+      cursor += 1;
+      continue;
+    }
+    output += source.slice(labelStart + 1, labelEnd);
+    cursor = destinationEnd;
+  }
+  return output;
 }

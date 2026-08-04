@@ -34,6 +34,7 @@ export function registerSearchIpc(): void {
     const semanticMode = optionalEnum(body.semanticMode, SEMANTIC_MODE_VALUES, 'semanticMode') as
       | ConversationSearchSemanticMode
       | undefined;
+    const messagesOnly = typeof body.messagesOnly === 'boolean' ? body.messagesOnly : undefined;
     const filters = parseFilters(body.filters);
     const unnamedLabel = parseUnnamedLabel(body.unnamedLabel);
     return searchConversations({
@@ -42,6 +43,7 @@ export function registerSearchIpc(): void {
       includeArchived,
       sortBy,
       semanticMode,
+      messagesOnly,
       filters,
       unnamedLabel,
     });

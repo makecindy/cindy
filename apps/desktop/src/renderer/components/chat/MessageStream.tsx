@@ -209,6 +209,7 @@ import {
 } from './autoFollowIntent';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
+import { findSessionSearchRanges } from './sessionSearchHighlight';
 
 interface MessageStreamProps {
   /** Active session id — used to reset scroll state on session switch. */
@@ -254,6 +255,10 @@ interface MessageStreamProps {
   focusMessageClientId?: string | null;
   /** Incremented by the parent for each search navigation, including repeated hits. */
   focusMessageRequestId?: number;
+  /** Current in-conversation search query; omitted for non-search navigation. */
+  searchQuery?: string;
+  /** Zero-based occurrence within the focused message's rendered text. */
+  focusMessageOccurrenceIndex?: number;
   /** Source marker shown for sessions forked from another conversation. */
   forkOrigin?: {
     parentSessionId: string;
@@ -2224,6 +2229,8 @@ export function MessageStream({
   contentWidth,
   focusMessageClientId,
   focusMessageRequestId,
+  searchQuery,
+  focusMessageOccurrenceIndex,
   forkOrigin,
   onOpenForkOrigin,
 }: MessageStreamProps) {
@@ -2303,7 +2310,6 @@ export function MessageStream({
     }
     return RENDER_WINDOW_FIRST_PAINT_ITEMS;
   });
-  const [highlightMessageClientId, setHighlightMessageClientId] = useState<string | null>(null);
   const lastAppliedFocusRef = useRef<string | null>(null);
   const lastMissingFocusRef = useRef<{
     clientId: string;
@@ -2520,7 +2526,6 @@ export function MessageStream({
       if (highlightApplied) return;
       highlightApplied = true;
       root.removeEventListener('scrollend', applyHighlight);
-      setHighlightMessageClientId(focusMessageClientId);
     };
     root.addEventListener('scrollend', applyHighlight, { once: true });
     focusScrollTimerRef.current = window.setTimeout(() => {
@@ -2538,6 +2543,39 @@ export function MessageStream({
       root.removeEventListener('scrollend', applyHighlight);
     };
   }, [allRenderItems, focusMessageClientId, focusMessageRequestId, visibleRenderItems]);
+
+  useLayoutEffect(() => {
+    if (
+      typeof CSS === 'undefined' ||
+      typeof CSS.escape !== 'function' ||
+      !CSS.highlights ||
+      typeof Highlight === 'undefined'
+    ) {
+      return;
+    }
+    const highlights = CSS.highlights;
+    const matchKey = 'cindy-session-search-match';
+    const activeKey = 'cindy-session-search-active';
+    highlights.delete(matchKey);
+    highlights.delete(activeKey);
+    if (!searchQuery || !focusMessageClientId) return;
+    const root = scrollRef.current;
+    const target = root?.querySelector(
+      `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
+    );
+    const body = target?.querySelector('[data-session-search-body]');
+    if (!body) return;
+    const ranges = findSessionSearchRanges(body, searchQuery);
+    if (ranges.length === 0) return;
+    highlights.set(matchKey, new Highlight(...ranges));
+    const activeRange = ranges[Math.min(focusMessageOccurrenceIndex ?? 0, ranges.length - 1)];
+    highlights.set(activeKey, new Highlight(activeRange));
+    activeRange.startContainer.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return () => {
+      highlights.delete(matchKey);
+      highlights.delete(activeKey);
+    };
+  }, [focusMessageClientId, focusMessageOccurrenceIndex, searchQuery, visibleRenderItems]);
 
   // 会话内全部图片的有序 src(全量,来自未裁剪的 allRenderItems),下发给
   // ImageLightbox 做翻图。基于全量而非 visibleRenderItems,这样计数 / 翻页
@@ -3825,11 +3863,7 @@ export function MessageStream({
                       <div
                         key={item.key}
                         data-message-client-id={msg.clientId}
-                        className={
-                          highlightMessageClientId === msg.clientId
-                            ? 'scroll-mt-20 rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)] transition-colors'
-                            : 'scroll-mt-20 transition-colors'
-                        }
+                        className="scroll-mt-20"
                       >
                         <MessageItem
                           message={msg}
@@ -3855,6 +3889,9 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          searchFocused={
+                            Boolean(searchQuery) && msg.clientId === focusMessageClientId
+                          }
                         />
                       </div>
                     );
@@ -3947,6 +3984,7 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  searchFocused,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -3992,6 +4030,7 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  searchFocused?: boolean;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -4041,6 +4080,7 @@ const MessageItem = memo(function MessageItem({
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}
+          searchFocused={searchFocused}
         />
       );
     case 'assistant':
@@ -4107,6 +4147,7 @@ const MessageItem = memo(function MessageItem({
           currentSessionId={sessionId}
           currentSessionTitle={sessionTitle}
           localFileRefs={localFileRefs}
+          searchFocused={searchFocused}
         />
       );
     case 'error':

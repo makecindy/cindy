@@ -16,17 +16,29 @@
  */
 
 let claimCount = 0;
+const listeners = new Set<() => void>();
+
+function notifyListeners(): void {
+  for (const listener of listeners) listener();
+}
 
 export function acquireFindInPage(): () => void {
   claimCount += 1;
+  notifyListeners();
   let released = false;
   return () => {
     if (released) return;
     released = true;
     claimCount = Math.max(0, claimCount - 1);
+    notifyListeners();
   };
 }
 
 export function isFindInPageClaimed(): boolean {
   return claimCount > 0;
+}
+
+export function subscribeFindInPageClaim(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
