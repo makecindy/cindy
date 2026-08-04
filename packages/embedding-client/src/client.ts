@@ -90,12 +90,56 @@ interface ContextualizedResponse {
 }
 
 /**
+ * 按响应项自报的 `index` 把它们放回确定的位次;`index` 缺省时退回数组序。
+ *
+ * 为什么不是"排个序就完事"(PR #1707 review):排序只保证顺序单调,不保证位次是**一个
+ * 双射**。上游回重复 index(如请求 2 项、响应 index 为 0/1/1)时,排序后条数可能刚好
+ * 对得上,于是所有条数校验都通过,而某一项的向量被另一项静默顶掉 —— 交付出去的是
+ * 错误位置的向量,不报任何错。越界 index 同理:多出来的项如果不导致缺位,就完全不会
+ * 被发现。所以这里要求 **项数相等 + 无重复 + 无越界**,三条齐了位次才必然填满。
+ *
+ * `what` 只用于报错定位(document / chunk / embedding)。
+ */
+function orderedByIndex<T>(
+  items: readonly T[],
+  indexOf: (item: T, arrayOrder: number) => number,
+  expected: number,
+  what: string,
+): T[] {
+  if (items.length !== expected) {
+    throw new EmbeddingError(
+      `contextualized response: got ${items.length} ${what} entries, expected ${expected}`,
+      'SERVER_ERROR',
+    );
+  }
+  const slots = new Array<T | undefined>(expected);
+  items.forEach((item, arrayOrder) => {
+    const idx = indexOf(item, arrayOrder);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= expected) {
+      throw new EmbeddingError(
+        `contextualized response: ${what} index ${String(idx)} out of range (expected 0..${expected - 1})`,
+        'SERVER_ERROR',
+      );
+    }
+    if (slots[idx] !== undefined) {
+      throw new EmbeddingError(
+        `contextualized response: duplicate ${what} index ${idx}`,
+        'SERVER_ERROR',
+      );
+    }
+    slots[idx] = item;
+  });
+  // 项数相等 + 无重复 + 无越界 ⇒ 每个位次都被填过,无需再判空。
+  return slots as T[];
+}
+
+/**
  * 把响应解析成按文档分组的向量。两种形态都吃(见 ContextualizedResponse 注释),
  * 形状不认识时抛 SERVER_ERROR 而不是给出半个结果。
  *
  * `groupSizes` 是**期望**的分组:扁平路径传全 1(每个 input 一个单 chunk 文档),
- * 上下文化索引侧传各文档真实 chunk 数。它同时充当条数校验 —— 上游少给 / 多给都
- * 在这里失败,不会让调方拿到错位的向量。
+ * 上下文化索引侧传各文档真实 chunk 数。它同时充当条数校验 —— 上游少给 / 多给、
+ * 或 index 重复 / 越界,都在这里失败,不会让调方拿到错位的向量。
  */
 function parseGroupedEmbeddings(
   body: ContextualizedResponse,
@@ -104,49 +148,40 @@ function parseGroupedEmbeddings(
   const items = body.data ?? [];
   const nested = items.length > 0 && Array.isArray((items[0] as { data?: unknown }).data);
   if (nested) {
-    // 嵌套形态:一项一个文档。按 index 定位(缺 index 时退回数组序)。
-    const byIndex = new Map<number, number[][]>();
-    items.forEach((item, i) => {
-      const inner = (item as { data: Array<{ embedding: number[]; index?: number }> }).data;
-      const docIndex = (item as { index?: number }).index ?? i;
-      const vectors = inner
-        .map((entry, j) => ({ entry, order: entry.index ?? j }))
-        .sort((a, b) => a.order - b.order)
-        .map((x) => x.entry.embedding);
-      byIndex.set(docIndex, vectors);
-    });
-    return groupSizes.map((size, docIndex) => {
-      const vectors = byIndex.get(docIndex);
-      if (!vectors || vectors.length !== size) {
-        throw new EmbeddingError(
-          `contextualized response: document ${docIndex} returned ${vectors?.length ?? 0} embeddings, expected ${size}`,
-          'SERVER_ERROR',
-        );
-      }
-      return vectors;
+    // 嵌套形态:一项一个文档。外层与内层都要求 index 构成双射(见 orderedByIndex)。
+    const docs = orderedByIndex(
+      items as Array<{ index?: number; data: Array<{ embedding: number[]; index?: number }> }>,
+      (item, arrayOrder) => item.index ?? arrayOrder,
+      groupSizes.length,
+      'document',
+    );
+    return docs.map((doc, docIndex) => {
+      const chunks = orderedByIndex(
+        doc.data ?? [],
+        (entry, arrayOrder) => entry.index ?? arrayOrder,
+        groupSizes[docIndex],
+        `document ${docIndex} chunk`,
+      );
+      return chunks.map((entry) => entry.embedding);
     });
   }
   // 扁平形态:所有 chunk 按全局顺序摊平,按 groupSizes 重新切回文档。
-  const flat = items
-    .map((item, i) => ({
-      embedding: (item as { embedding?: number[] }).embedding,
-      order: (item as { index?: number }).index ?? i,
-    }))
-    .sort((a, b) => a.order - b.order)
-    .map((x) => x.embedding);
-  if (flat.some((v) => !Array.isArray(v))) {
+  // 形状判定要走在位次解析之前 —— 条数刚好对上的坏形态应当报"形状不认识",
+  // 而不是报一个会把人带偏的条数/位次错误。
+  const raw = items as Array<{ embedding?: number[]; index?: number }>;
+  if (raw.some((item) => !Array.isArray(item.embedding))) {
     throw new EmbeddingError(
       'contextualized response: unrecognized data shape (neither flat embeddings nor per-document groups)',
       'SERVER_ERROR',
     );
   }
   const total = groupSizes.reduce((sum, n) => sum + n, 0);
-  if (flat.length !== total) {
-    throw new EmbeddingError(
-      `contextualized response: got ${flat.length} embeddings, expected ${total}`,
-      'SERVER_ERROR',
-    );
-  }
+  const flat = orderedByIndex(
+    raw,
+    (item, arrayOrder) => item.index ?? arrayOrder,
+    total,
+    'embedding',
+  ).map((item) => item.embedding as number[]);
   const out: number[][][] = [];
   let cursor = 0;
   for (const size of groupSizes) {

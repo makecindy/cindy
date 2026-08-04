@@ -483,3 +483,115 @@ describe('EmbeddingClient · 维度自检覆盖批内每一条', () => {
     expect(r.embeddings.every((v) => v.length === 8)).toBe(true);
   });
 });
+
+describe('EmbeddingClient · 响应位次必须是双射', () => {
+  /**
+   * 排序只保证顺序单调,不保证位次是双射(PR #1707 review)。上游回重复 index 时条数
+   * 可能刚好对上 —— 于是所有条数校验都通过,某一项的向量被另一项静默顶掉,交付出去的
+   * 是**错误位置**的向量。这类错误不报警,只让检索结果莫名其妙。
+   */
+  it('上下文化:外层文档 index 重复 → 拒绝,不静默用最后一组覆盖', async () => {
+    // 请求两篇(各 1 chunk),响应外层 index 为 0/1/1:旧实现 Map.set 会让 doc1 被
+    // 第三项顶掉,而多出来的那项永远不会被发现。
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [
+        { index: 0, data: [{ index: 0, embedding: [1, 1] }] },
+        { index: 1, data: [{ index: 0, embedding: [2, 2] }] },
+        { index: 1, data: [{ index: 0, embedding: [9, 9] }] },
+      ],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a'], ['b']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+  });
+
+  it('上下文化:外层项数多于请求文档数 → 拒绝(即使覆盖了全部期望位次)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [
+        { index: 0, data: [{ index: 0, embedding: [1, 1] }] },
+        { index: 1, data: [{ index: 0, embedding: [2, 2] }] },
+      ],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['only-one-doc']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/document entries, expected 1/);
+  });
+
+  it('上下文化:内层 chunk index 重复 → 拒绝(条数对但位次错)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [
+        {
+          index: 0,
+          data: [
+            { index: 0, embedding: [1, 1] },
+            { index: 0, embedding: [2, 2] },
+          ],
+        },
+      ],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a', 'b']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/duplicate document 0 chunk index 0/);
+  });
+
+  it('上下文化:外层 index 越界 → 拒绝', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ index: 7, data: [{ index: 0, embedding: [1, 1] }] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/out of range/);
+  });
+
+  it('扁平形态:index 重复 → 拒绝(旧实现排序后条数对得上就放过了)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [
+        { object: 'embedding', index: 0, embedding: [1, 1] },
+        { object: 'embedding', index: 0, embedding: [2, 2] },
+      ],
+      usage: { prompt_tokens: 2 },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' }),
+    ).rejects.toThrow(/duplicate embedding index 0/);
+  });
+
+  it('条数对上的坏形态仍报"形状不认识",不被位次校验抢先带偏', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [{ object: 'embedding', index: 0, vector: [1, 1] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toThrow(/unrecognized data shape/);
+  });
+
+  it('index 全缺省时退回数组序,照常可用(不能因为收紧把正常响应判错)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ data: [{ embedding: [1, 1] }, { embedding: [2, 2] }] }],
+    });
+    const r = await clientWith(fetchImpl).embedDocuments({
+      documents: [['a', 'b']],
+      model: 'voyage/voyage-context-4',
+    });
+    expect(r.embeddings).toEqual([[[1, 1], [2, 2]]]);
+  });
+});
