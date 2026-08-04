@@ -35,6 +35,7 @@ import {
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   type ProxyHandle,
+  type RequestTransform,
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
@@ -59,8 +60,18 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolveExternalModelRouteDecision,
   resolveSessionRouteDecision,
+  rewriteImplicitModelIdForRoute,
 } from './provider-route.js';
+import {
+  isExternalAccessEnabled,
+  matchesExternalToken,
+} from './local-proxy-external-auth.js';
+import {
+  loadLocalProxySettings,
+  setLocalProxyPort,
+} from './local-proxy-settings-store.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
@@ -139,6 +150,153 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
   return null;
 }
 
+// ───────────────────────── 对外模型代理(external client)─────────────────────────
+// 用户自己电脑上的 Claude Code CLI 把 ANTHROPIC_BASE_URL 指向本代理、ANTHROPIC_API_KEY
+// 设为 Cindy 生成的对外 token 时,这些请求没有 Cindy session。它们靠 x-api-key 命中已存
+// 对外 token 被识别为「外部客户端」,走一条独立、无会话、按模型名/默认供应商的路由分支,
+// **绝不回落 Cindy 默认网关/订阅路由**(否则外部 token 会被当成 gateway 的 x-api-key 透传
+// 上游 → 凭证泄漏/误计费)。
+
+/** 从 ctx.url(可能带 query)取纯 path,小写化便于匹配。 */
+function requestPathname(url: string): string {
+  const q = url.indexOf('?');
+  return (q === -1 ? url : url.slice(0, q)).toLowerCase();
+}
+
+/** 外部分支的统一 JSON 错误响应(localHandler 完全接管,不转发上游)。 */
+function externalErrorDecision(
+  status: number,
+  code: string,
+  message: string,
+): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: { type: status === 401 || status === 403 ? 'authentication_error' : 'invalid_request_error', code, message },
+      });
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+/**
+ * 转发前从外部请求剥掉它自带的对外 token 头,防止透传上游。
+ * headerDelete 在 headerOverride **之后**应用 —— 若路由决策已用 headerOverride 覆盖了某个
+ * 鉴权头(gateway-key / api-key-header 注入真实凭证),就**不能**再 delete 它(否则会净删除真凭证);
+ * 仅对决策没有覆盖的鉴权头追加 delete。这样:注入了真凭证的头保留真值,没注入的(如 oauth-passthrough
+ * 只 upstreamOverride 不换头)则把外部 token 删掉 → fail-closed(上游 401),不泄漏。
+ */
+function stripExternalTokenHeaders(decision: RoutingDecision | null): RoutingDecision | null {
+  if (!decision || decision.localHandler) return decision;
+  const overridden = new Set(
+    Object.keys(decision.headerOverride ?? {}).map((k) => k.toLowerCase()),
+  );
+  const toDelete = ['x-api-key', 'authorization'].filter((h) => !overridden.has(h));
+  if (toDelete.length === 0) return decision;
+  return {
+    ...decision,
+    headerDelete: [...new Set([...(decision.headerDelete ?? []), ...toDelete])],
+  };
+}
+
+/**
+ * 构造 `GET /v1/models` 的 Anthropic 形状清单:外部 CLI 用它发现可用模型。
+ * 取「对外可路由的 claude-code 供应商」并集里的模型,按 id 去重(同一 stock claude-* 可能
+ * 同时由多家提供)。不含任何凭证 / 上游地址。
+ */
+function buildExternalModelsPayload(): string {
+  const seen = new Set<string>();
+  const data: { type: 'model'; id: string; display_name: string }[] = [];
+  for (const provider of getActiveCatalog().providers) {
+    if (!provider.agents.includes('claude-code')) continue;
+    const routing = provider.routing['claude-code'];
+    if (!routing || routing.disabled) continue;
+    for (const model of provider.models['claude-code'] ?? []) {
+      if (!model.id || seen.has(model.id)) continue;
+      seen.add(model.id);
+      data.push({ type: 'model', id: model.id, display_name: model.name });
+    }
+  }
+  return JSON.stringify({
+    data,
+    has_more: false,
+    first_id: data[0]?.id ?? null,
+    last_id: data[data.length - 1]?.id ?? null,
+  });
+}
+
+/**
+ * 外部客户端请求的路由决策。**先判 enabled**:未开启 → 401(即使 token 还在,也拒绝,
+ * 防止关了开关后旧 token 还能用)。GET /v1/models → 本地吐清单。其余按 model 解析供应商,
+ * 解析不出 → 400(不回落默认路由)。最后 strip 外部 token 头。
+ */
+function routeExternalClient(
+  body: unknown,
+  ctx: Parameters<RoutingTransform>[1],
+): RoutingDecision | Promise<RoutingDecision | null> {
+  if (!isExternalAccessEnabled()) {
+    return externalErrorDecision(401, 'external_access_disabled', 'Cindy 对外模型代理未开启。');
+  }
+  const pathname = requestPathname(ctx.url);
+  if (ctx.method.toUpperCase() === 'GET' && /\/v1\/models\/?$/.test(pathname)) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(buildExternalModelsPayload());
+      },
+    };
+  }
+  if (!isPlainObject(body)) {
+    // 非 JSON 的外部请求(非 /models 的控制面调用等):不识别就拒绝,绝不带着 token 透传上游。
+    return externalErrorDecision(400, 'unsupported_request', '不支持的外部请求。');
+  }
+  const wireModel = typeof body.model === 'string' ? body.model : '';
+  // 订阅前缀模型(chatgpt/ / xai/):交本地 responses bridge,用 Cindy 持有的订阅 OAuth 直连
+  // (与内部同一 handler)。外部客户端由此可复用 Cindy 的订阅额度。
+  if (isSubscriptionDirectModel(wireModel)) {
+    const bridgeHandler = getResponsesBridgeHandler();
+    if (!bridgeHandler) {
+      return externalErrorDecision(503, 'bridge_unavailable', '订阅直连桥暂不可用。');
+    }
+    return { localHandler: (args) => bridgeHandler.handle({ ...args, prefs: {} }) };
+  }
+  const gatewayKey = _readGatewayKey();
+  const defaultProviderId = loadLocalProxySettings().defaultProviderId;
+  return resolveExternalModelRouteDecision(wireModel, gatewayKey, defaultProviderId).then(
+    (decision) => {
+      if (!decision) {
+        return externalErrorDecision(
+          400,
+          'no_provider_for_model',
+          `没有可路由「${wireModel || '(未指定)'}」的供应商;请在 Cindy 设置里选择对外默认供应商,或换用某供应商的模型 id。`,
+        );
+      }
+      return stripExternalTokenHeaders(decision);
+    },
+  );
+}
+
+/**
+ * 外部模型代理的 model id 改写请求 transform:仅对外部客户端(x-api-key 命中对外 token)
+ * 生效,把带命名空间前缀的 model(如某自定义供应商的 `foo/bar`)在发往上游前剥成上游可识别
+ * 的裸 id。与路由 transform 同源(都用 inferProviderIdForModel);路由 transform 看**原始** body
+ * (带前缀)推断供应商,本 transform 改写**转发** body,两者互补。
+ */
+function createExternalModelRewriteTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!matchesExternalToken(headerValue(ctx.headers, 'x-api-key'))) return null;
+    return rewriteImplicitModelIdForRoute('claude-code', body);
+  };
+}
+
 /**
  * per-request 路由 transform。两段:
  *   ① 会话显式选了供应商 → 据 catalog 统一路由(per-session,取代全局开关推断)。
@@ -157,6 +315,13 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
  */
 export function createModelRoutingTransform(): RoutingTransform {
   const route: RoutingTransform = (body, ctx) => {
+    // ⓪ 对外模型代理:x-api-key 命中已存对外 token → 外部客户端,走独立无会话分支。
+    //    放在最前:优先级高于 Pi / per-session / spawn 默认路由。命中判定与 enabled 无关
+    //    (matchesExternalToken 只比 token),enabled 与否在 routeExternalClient 内决定放行/401。
+    //    未命中(Cindy 自家子进程 / 无 token)→ 落到下方现有逻辑,字节级不变。
+    if (matchesExternalToken(headerValue(ctx.headers, 'x-api-key'))) {
+      return routeExternalClient(body, ctx);
+    }
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
     if (
       claimedPiSessionId
@@ -352,8 +517,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
   if (_initialized) return;
   _initialized = true;
 
+  // 对外模型代理的端口策略:默认随机;用户在设置里开启对外服务时会捕获当前端口并持久化
+  // (见 local-proxy IPC)。持久化了(>0)就固定绑该端口,让外部 CLI 的 ANTHROPIC_BASE_URL 稳定;
+  // 固定端口被占用则 fallback 随机并回写新端口(UI 始终显示当前实际 url)。
+  const pinnedPort = loadLocalProxySettings().port;
   try {
-    _handle = await createAnthropicCompatProxy({
+    const proxyOptions = {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
@@ -396,6 +565,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         }),
       ),
       transformRequest: [
+        // 对外模型代理:外部客户端带命名空间前缀的 model 在发往上游前剥成裸 id(仅外部请求生效)。
+        // 放最前:后续 strip/修复 transform 看到的就是最终 model,与路由 transform 用原始 model 推断供应商互补。
+        createExternalModelRewriteTransform(),
         // 子代理 usage 在请求阶段预留 taskId，后续用同一 reqId 关联响应，避免响应乱序交换归因。
         createClaudeSubagentUsageRequestTransform(),
         // 开头:fast mode 请求侧核验(passthrough 不改写,放最前先记 cc 实际发出的 speed/beta)。
@@ -482,7 +654,24 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
       // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
       resolveOutboundProxy: resolveDesktopOutboundProxy,
-    });
+    };
+    try {
+      _handle = await createAnthropicCompatProxy(
+        pinnedPort > 0 ? { ...proxyOptions, port: pinnedPort } : proxyOptions,
+      );
+    } catch (err) {
+      // 固定端口被占用(EADDRINUSE)/ 无权限(EACCES):fallback 随机端口重试,并把
+      // 持久化端口回写成实际绑定值,避免下次启动又撞同一个占用端口。其它错误照抛给外层兜底。
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES')) {
+        log.error('固定的对外代理端口不可用,fallback 随机端口', { pinnedPort, code });
+        _handle = await createAnthropicCompatProxy(proxyOptions);
+        const actual = portFromProxyUrl(_handle.url);
+        if (actual) setLocalProxyPort(actual);
+      } else {
+        throw err;
+      }
+    }
     log.debug('proxy ready', { url: _handle.url, upstream: claudeUpstreamEndpoint() });
   } catch (err) {
     _handle = null;
@@ -491,6 +680,32 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       fallbackEndpoint: claudeUpstreamEndpoint(),
     });
   }
+}
+
+/** 从 loopback proxy url(`http://127.0.0.1:<port>`)取端口;解析失败返回 null。 */
+export function portFromProxyUrl(url: string): number | null {
+  try {
+    const port = Number.parseInt(new URL(url).port, 10);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 当前代理是否就绪且其 url;供 IPC get-state 展示 127.0.0.1 地址与端口。未就绪返回 null。 */
+export function getLocalProxyUrl(): string | null {
+  return _handle?.url ?? null;
+}
+
+/**
+ * 重建代理以让新的固定端口生效(用户在设置里改端口后调用)。dispose 会把
+ * `_initialized` 复位,随后 ensure 按最新持久化端口重新绑定。返回重建后的实际 url。
+ * 注意:会中断当前经代理的 in-flight 请求 —— 仅在用户显式改端口时用,不做常态调用。
+ */
+export async function restartAnthropicCompatProxy(): Promise<string | null> {
+  await disposeAnthropicCompatProxy();
+  await ensureAnthropicCompatProxyReady();
+  return getLocalProxyUrl();
 }
 
 /**

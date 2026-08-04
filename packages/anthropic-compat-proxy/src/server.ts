@@ -2102,7 +2102,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     socket.on('close', () => inflightSockets.delete(socket));
   });
 
-  const port = await listenOnFetchSafeLoopbackPort(server, host, logger);
+  // 固定端口(opts.port)时只绑这一个,失败即抛(host 负责 fallback);否则随机选 Fetch-safe 端口。
+  const port = opts.port !== undefined
+    ? await listenOnLoopbackPort(server, host, opts.port)
+    : await listenOnFetchSafeLoopbackPort(server, host, logger);
   const hostInUrl = host.includes(':') ? `[${host}]` : host;
   const url = `http://${hostInUrl}:${port}`;
 

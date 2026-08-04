@@ -487,7 +487,7 @@ export interface ResolvedSessionRoute {
   oauthToken: string | null;
 }
 
-async function resolveProviderRouteById(
+export async function resolveProviderRouteById(
   providerId: string,
   agent: AgentKind,
   wireModel?: string,
@@ -623,6 +623,85 @@ export async function resolveProviderRouteDecision(
     routing,
     decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
   };
+}
+
+/**
+ * 对外模型代理(给用户自己的 Claude Code CLI 用)的**无会话**路由解析。
+ *
+ * 外部客户端没有 Cindy session,所以不查 getSessionProvider,而是纯按**模型名**推断供应商:
+ *   - `inferProviderIdForModel` 唯一命中 → 用该供应商(注入其真实凭证)。
+ *   - 推断不出(多来源 / stock `claude-*` 同时由 Anthropic 与 XD 提供)→ 回落到用户在设置里选的
+ *     「对外默认供应商」`defaultProviderId`。
+ * 两者都拿不到供应商 → 返回 null(调用方据此 401 / 拒绝,**绝不回落 Cindy 默认网关/订阅**,
+ * 否则外部 token 会被当成 gateway 的 x-api-key 透传上游 —— 见 host 外部分支注释)。
+ *
+ * 只解析 `claude-code` agent(compat-proxy 保持 Anthropic wire 格式)。凭证经
+ * `resolveProviderRouteDecision` → `buildRouteDecision` 注入,外部 token 头由 host 侧再 strip。
+ */
+export async function resolveExternalModelRouteDecision(
+  model: string,
+  gatewayKey: string | null,
+  defaultProviderId: string | null | undefined,
+): Promise<RoutingDecision | null> {
+  const inferred = model ? inferProviderIdForModel(model, 'claude-code') : null;
+  const providerId = inferred ?? (defaultProviderId?.trim() || null);
+  if (!providerId) return null;
+  const resolved = await resolveProviderRouteDecision(providerId, 'claude-code', gatewayKey);
+  return resolved?.decision ?? null;
+}
+
+/**
+ * 对外模型代理的 **Codex(OpenAI Responses)** 无会话路由解析。
+ *
+ * 与 `resolveExternalModelRouteDecision`(claude-code、只需 forward decision)不同,codex
+ * 侧要按 `routing.wireProtocol` 决定是直连 Responses 还是走本地 bridge(openai-chat /
+ * anthropic-messages),因此返回**完整** `ResolvedSessionRoute`(含 routing/apiKey/oauthToken),
+ * 由 host 侧据此分派。
+ *
+ * 纯按模型名推断供应商('codex' agent);推断不出则回落用户在设置里选的「对外默认供应商」。
+ * 两者都拿不到 → 返回 null(调用方 400,**绝不回落 Cindy 默认网关/订阅** —— 见 host 外部分支注释)。
+ */
+export async function resolveExternalCodexRoute(
+  model: string,
+  defaultProviderId: string | null | undefined,
+): Promise<ResolvedSessionRoute | null> {
+  const inferred = model ? inferProviderIdForModel(model, 'codex') : null;
+  const providerId = inferred ?? (defaultProviderId?.trim() || null);
+  if (!providerId) return null;
+  return resolveProviderRouteById(providerId, 'codex', model);
+}
+
+/**
+ * 「对外默认供应商」候选:能被对外模型代理用来给**外部**客户端路由的 claude-code 供应商。
+ *
+ * 判据 = 该供应商 claude-code routing 的 authStrategy 属于「Cindy 能自行注入凭证」的一类
+ * (`gateway-key` 换网关 key、`api-key-header` 注入用户 key、`oauth-token` / `provider-oauth-header`
+ * 注入 host 持有的 token、`none` 无鉴权)。**排除 `oauth-passthrough`**(Anthropic/ChatGPT 订阅直连):
+ * 它依赖子进程自带的订阅 OAuth bearer,外部 CLI 没有,选它只会 401 且无凭证可注入。
+ *
+ * 同时排除:mutation 窗口内的供应商、xd(网关不可用时)、被 disabled 的 routing。
+ * 供 IPC 层投影给设置页下拉;只回 `{id,name}`,不含任何凭证。
+ */
+const EXTERNAL_ROUTABLE_AUTH_STRATEGIES = new Set([
+  'gateway-key',
+  'api-key-header',
+  'oauth-token',
+  'provider-oauth-header',
+  'none',
+]);
+export function listExternalRoutableProviders(
+  agent: AgentKind = 'claude-code',
+): { id: string; name: string }[] {
+  return getActiveCatalog()
+    .providers.filter((provider) => {
+      if (isProviderRouteMutationInProgress(provider.id)) return false;
+      if (provider.id === 'xd' && !getAppCapabilities().canUseCindyGateway) return false;
+      if (!provider.agents.includes(agent)) return false;
+      const routing = provider.routing[agent];
+      if (!routing || routing.disabled) return false;
+      return EXTERNAL_ROUTABLE_AUTH_STRATEGIES.has(routing.authStrategy);
+    })
+    .map((provider) => ({ id: provider.id, name: provider.name }));
 }
 
 export function resolveSessionRouteDecision(

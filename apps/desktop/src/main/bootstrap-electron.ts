@@ -358,6 +358,7 @@ import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
+import { registerLocalProxyServiceIpc } from './local-proxy-service/register';
 import {
   registerRemoteSshIpc,
   disposeRemoteSshPool,
@@ -6453,6 +6454,7 @@ app.on('ready', async () => {
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
   registerLocalThemesIpc();
+  registerLocalProxyServiceIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({
     getMainWindow: () => mainWindowRef,

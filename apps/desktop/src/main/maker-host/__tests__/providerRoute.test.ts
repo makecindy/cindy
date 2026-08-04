@@ -26,6 +26,9 @@ import {
   resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
+  listExternalRoutableProviders,
+  resolveExternalCodexRoute,
+  resolveExternalModelRouteDecision,
   setCustomProviderKeyReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
@@ -868,5 +871,212 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
   it('内置供应商 isUserProviderSession=false', () => {
     setSessionProvider('s-user', 'xd');
     expect(isUserProviderSession('s-user')).toBe(false);
+  });
+});
+
+describe('对外模型代理 — resolveExternalModelRouteDecision（无会话）', () => {
+  afterEach(() => {
+    setCustomProviders([]);
+    setCustomProviderKeyReader(() => null);
+  });
+
+  function seedClaudeUserProvider() {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'my-claude',
+        name: 'My Claude',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://claude.example/v1',
+            models: [{ id: 'house-claude', name: 'House Claude' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'my-claude' && agent === 'claude-code' ? 'sk-house' : null,
+    );
+  }
+
+  it('按模型名解析到供应商并注入其真实凭证', async () => {
+    seedClaudeUserProvider();
+    // 前置：模型名确实唯一命中该供应商。
+    expect(inferProviderIdForModel('house-claude', 'claude-code')).toBe('my-claude');
+
+    const decision = await resolveExternalModelRouteDecision('house-claude', KEY, '');
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-house', authorization: 'Bearer sk-house' },
+      upstreamOverride: 'https://claude.example/v1',
+    });
+  });
+
+  it('模型名推不出供应商时回落到「对外默认供应商」', async () => {
+    seedClaudeUserProvider();
+    // stock/未知模型名推不出唯一供应商 → 用 defaultProviderId 兜底。
+    expect(inferProviderIdForModel('unknown-stock-claude', 'claude-code')).toBeNull();
+
+    const decision = await resolveExternalModelRouteDecision(
+      'unknown-stock-claude',
+      KEY,
+      'my-claude',
+    );
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-house', authorization: 'Bearer sk-house' },
+      upstreamOverride: 'https://claude.example/v1',
+    });
+  });
+
+  it('既推不出模型也没有默认供应商 → null（绝不回落 Cindy 默认网关/订阅）', async () => {
+    seedClaudeUserProvider();
+    await expect(
+      resolveExternalModelRouteDecision('unknown-stock-claude', KEY, ''),
+    ).resolves.toBeNull();
+    await expect(
+      resolveExternalModelRouteDecision('unknown-stock-claude', KEY, '   '),
+    ).resolves.toBeNull();
+  });
+
+  it('模型名与默认供应商都指向 xd 网关也不例外：仍按该供应商路由，不越过外部分支', async () => {
+    // xd 是 gateway-key 策略：外部分支解析出网关决策（换网关 key），
+    // 与「回落默认路由」不同——这是显式选中的供应商，凭证由 buildRouteDecision 注入。
+    const decision = await resolveExternalModelRouteDecision('anything', KEY, 'xd');
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
+    });
+  });
+});
+
+describe('对外模型代理 — listExternalRoutableProviders（下拉候选）', () => {
+  afterEach(() => {
+    setCustomProviders([]);
+  });
+
+  it('列出 gateway-key（xd），排除 oauth-passthrough（anthropic/openai 订阅直连）', () => {
+    const ids = listExternalRoutableProviders().map((p) => p.id);
+    expect(ids).toContain('xd');
+    expect(ids).not.toContain('anthropic');
+    expect(ids).not.toContain('openai');
+  });
+
+  it('包含 api-key-header 的自定义 claude-code 供应商（含 id+name，无凭证）', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'my-claude',
+        name: 'My Claude',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://claude.example/v1',
+            models: [{ id: 'house-claude', name: 'House Claude' }],
+          },
+        },
+      }),
+    ]);
+    const listed = listExternalRoutableProviders();
+    expect(listed).toContainEqual({ id: 'my-claude', name: 'My Claude' });
+    // 只投影 id/name,不含任何路由/凭证字段。
+    for (const p of listed) {
+      expect(Object.keys(p).sort()).toEqual(['id', 'name']);
+    }
+  });
+
+  it('canUseCindyGateway=false 时排除 xd', () => {
+    mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: false });
+    const ids = listExternalRoutableProviders().map((p) => p.id);
+    expect(ids).not.toContain('xd');
+  });
+});
+
+describe('对外模型代理 — resolveExternalCodexRoute（Codex 无会话,返回完整 route）', () => {
+  afterEach(() => {
+    setCustomProviders([]);
+    setCustomProviderKeyReader(() => null);
+  });
+
+  function seedCodexUserProvider() {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'my-codex',
+        name: 'My Codex',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://codex.example/v1',
+            models: [{ id: 'house-codex', name: 'House Codex' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'my-codex' && agent === 'codex' ? 'sk-codex-house' : null,
+    );
+  }
+
+  it('按模型名解析到 codex 供应商并带出完整 route(含注入的真实凭证)', async () => {
+    seedCodexUserProvider();
+    expect(inferProviderIdForModel('house-codex', 'codex')).toBe('my-codex');
+
+    const route = await resolveExternalCodexRoute('house-codex', '');
+    expect(route).toMatchObject({
+      providerId: 'my-codex',
+      providerSource: 'user',
+      apiKey: 'sk-codex-house',
+    });
+    // host 侧据 routing.wireProtocol 决定直连 Responses(undefined/openai-responses)还是走本地
+    // bridge(openai-chat/anthropic-messages)—— 必须带出 routing 供分派。
+    expect(route?.routing).toBeTruthy();
+  });
+
+  it('模型名推不出供应商时回落到 codex「对外默认供应商」', async () => {
+    seedCodexUserProvider();
+    expect(inferProviderIdForModel('unknown-codex-model', 'codex')).toBeNull();
+
+    const route = await resolveExternalCodexRoute('unknown-codex-model', 'my-codex');
+    expect(route).toMatchObject({ providerId: 'my-codex', apiKey: 'sk-codex-house' });
+  });
+
+  it('既推不出模型也没有默认供应商 → null（调用方 400,绝不回落 Cindy 默认网关/订阅）', async () => {
+    seedCodexUserProvider();
+    await expect(resolveExternalCodexRoute('unknown-codex-model', '')).resolves.toBeNull();
+    await expect(resolveExternalCodexRoute('unknown-codex-model', '   ')).resolves.toBeNull();
+    await expect(resolveExternalCodexRoute('', '')).resolves.toBeNull();
+  });
+
+  it('xd 网关(codex)显式选中时解析出网关 route,不越过外部分支', async () => {
+    const route = await resolveExternalCodexRoute('anything-codex', 'xd');
+    expect(route).toMatchObject({ providerId: 'xd', providerSource: 'builtin' });
+  });
+});
+
+describe('对外模型代理 — listExternalRoutableProviders(\'codex\')（codex 下拉候选）', () => {
+  afterEach(() => {
+    setCustomProviders([]);
+  });
+
+  it('列出 gateway-key(xd),排除 oauth-passthrough(openai codex 订阅直连)', () => {
+    // 注意与 claude-code 侧不同:codex agent 下 anthropic 走**可注入**订阅 token 的策略
+    //(非 oauth-passthrough),故 anthropic/xai 对 codex 可路由并出现在候选里;只有 openai
+    // 的 codex routing 是 oauth-passthrough(依赖子进程订阅 bearer),外部没有 → 排除。
+    const ids = listExternalRoutableProviders('codex').map((p) => p.id);
+    expect(ids).toContain('xd');
+    expect(ids).not.toContain('openai');
+  });
+
+  it('包含自定义 codex 供应商(只投影 id+name,无凭证)', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'my-codex',
+        name: 'My Codex',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://codex.example/v1',
+            models: [{ id: 'house-codex', name: 'House Codex' }],
+          },
+        },
+      }),
+    ]);
+    const listed = listExternalRoutableProviders('codex');
+    expect(listed).toContainEqual({ id: 'my-codex', name: 'My Codex' });
+    for (const p of listed) {
+      expect(Object.keys(p).sort()).toEqual(['id', 'name']);
+    }
   });
 });

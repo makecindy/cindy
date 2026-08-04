@@ -2673,6 +2673,77 @@
         "toggleFailed": "暗号化コンテンツの静かな再試行の切り替えに失敗しました"
       }
     },
+    "localProxy": {
+      "title": "モデルプロキシ",
+      "subtitle": "ローカルサービスをあなた自身のコマンドラインツールに公開します。環境変数を設定するだけで、ここで構成したプロバイダーと認証情報を再利用できます。Anthropic API 形式(Claude Code など)と OpenAI API 形式(Codex やその他の OpenAI 互換ツール)の両方に対応します。",
+      "address": "アドレス",
+      "notReady": "サービスは準備できていません",
+      "copy": "コピー",
+      "port": "ポート",
+      "portPlaceholder": "自動",
+      "applyPort": "適用",
+      "portHint": "サービスを有効にすると現在のポートが固定されます。変更するとローカルサービスが再起動し、処理中のリクエストが中断される場合があります。",
+      "token": "アクセストークン",
+      "regenerate": {
+        "button": "再生成",
+        "title": "アクセストークンを再生成しますか？",
+        "description": "古いトークンは直ちに無効になります。設定済みの外部クライアントは新しいトークンに切り替える必要があります。",
+        "confirm": "再生成"
+      },
+      "defaultProvider": "既定のプロバイダー",
+      "defaultProviderNone": "指定しない（モデル名でルーティング）",
+      "noProviders": "ルーティングできるプロバイダーがまだありません。まず上で追加して構成してください。",
+      "defaultProviderHint": "モデル名が単一のプロバイダーに対応しない場合のフォールバックとして使用します。",
+      "copyEnv": "環境変数をコピー",
+      "writeConfig": {
+        "button": "Claude Code の設定に書き込む",
+        "title": "Claude Code の設定に書き込みますか？",
+        "descExisting": "接続情報を既存の設定ファイル（{{path}}）にマージし、他のフィールドは保持します。",
+        "descNew": "接続情報を含む設定ファイル（{{path}}）を作成します。",
+        "confirm": "書き込む",
+        "overwriteWarning": "次の既存項目が上書きされます：{{keys}}"
+      },
+      "toast": {
+        "updateFailed": "更新に失敗しました",
+        "invalidPort": "ポートは 1〜65535 の範囲で指定してください",
+        "portApplied": "ポートを更新しました",
+        "tokenReset": "アクセストークンを再生成しました",
+        "copied": "コピーしました",
+        "copyFailed": "コピーに失敗しました",
+        "envCopied": "環境変数をコピーしました",
+        "tokenCopied": "アクセストークンをコピーしました",
+        "notReady": "サービスは準備できていません",
+        "configWritten": "設定を書き込みました",
+        "configWriteFailed": "設定の書き込みに失敗しました",
+        "codexPortApplied": "ポートを更新しました",
+        "codexEnvCopied": "環境変数をコピーしました",
+        "codexNotReady": "Codex サービスが準備できていません",
+        "codexConfigWritten": "Codex 設定を書き込みました",
+        "codexConfigWriteFailed": "Codex 設定の書き込みに失敗しました"
+      },
+      "anthropic": {
+        "title": "Claude Code / Anthropic",
+        "subtitle": "Anthropic 形式を話すツール向け(Claude Code など):ANTHROPIC_BASE_URL をローカルポートに向けるだけです。"
+      },
+      "openai": {
+        "title": "Codex / OpenAI",
+        "subtitle": "OpenAI 形式を話すツール向け:Codex は Responses、その他のツールは Chat Completions を使用し、別のローカルポートで動作します。",
+        "address": "サービスアドレス",
+        "port": "ポート",
+        "portHint": "サービスを有効にすると現在のポートが固定されます。ポートを変更するとローカルの Codex サービスが再起動し、実行中のリクエストが中断されることがあります。",
+        "defaultProvider": "デフォルトプロバイダー",
+        "defaultProviderHint": "モデル名から単一のプロバイダーを特定できない場合、このプロバイダーにフォールバックします。",
+        "copyEnv": "環境変数をコピー",
+        "writeConfig": {
+          "button": "Codex 設定に書き込む",
+          "title": "Codex 設定に書き込みますか?",
+          "descExisting": "接続情報を既存の設定ファイル({{path}})にマージし、他のフィールドは保持します。",
+          "descNew": "設定ファイルを作成し、接続情報を書き込みます({{path}})。",
+          "confirm": "書き込む",
+          "tokenExportHint": "アクセストークンはファイルに書き込まれません。Codex を実行するターミナルで、次の環境変数を自分で設定してください:"
+        }
+      }
+    },
     "remoteControl": {
       "title": "リモート接続",
       "description": "同じアカウントのデバイスを相互に遠隔操作したり、SSH でリモートホストに接続したりできます。",
