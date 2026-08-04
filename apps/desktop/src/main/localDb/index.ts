@@ -146,6 +146,13 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 
   const filePath = dbPath(userId);
   const passiveSharedUserData = !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+  // A packaged release may be launched while a shared passive dev instance is still
+  // open.  The passive reader lease must continue to block schema writes, but an
+  // already-compatible database does not need any startup DDL; let the release use
+  // the existing schema in read-only startup mode instead of failing before opening
+  // the database.  If compatibility is not exact, the policy below still fails
+  // closed and the user gets the normal update/isolated recovery path.
+  let schemaMaintenanceReadOnly = false;
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
@@ -162,16 +169,42 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   } else {
     const leaseResult = acquireSchemaMigrationWriterLease(filePath);
     if (!leaseResult.acquired) {
-      const readerHint = leaseResult.activeReaderCount
-        ? `（当前有 ${leaseResult.activeReaderCount} 个 passive 实例）`
-        : '';
-      const message =
-        `当前不能执行数据库 schema 启动维护${readerHint}。` +
-        '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
-      showFatalDialog('数据库 schema 正被其它实例使用', message, 'MIGRATE_FAILED');
-      return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+      // Do not let a passive dev reader make an otherwise compatible packaged
+      // install unstartable.  We deliberately do not bypass the lease: the
+      // packaged instance enters the read-only schema policy below, so no
+      // migration, drift repair, runtime-manifest write, or schema cleanup can
+      // race the reader.  A pending/ahead/drifted schema remains fail-closed.
+      if (app.isPackaged && leaseResult.reason === 'readers-active') {
+        const readerLeaseResult = schemaMigrationReaderLeaseLifecycle.ensure(filePath);
+        if (!readerLeaseResult.acquired) {
+          const message =
+            '共享数据库的 schema 状态正在变化，Cindy 暂时无法安全打开它。请稍后重试。';
+          showFatalDialog('数据库 schema 正在维护', message, 'MIGRATE_FAILED');
+          return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+        }
+        schemaMaintenanceReadOnly = true;
+        readerLeaseAcquiredThisCall = readerLeaseResult.newlyAcquired;
+        log.warn(
+          JSON.stringify({
+            event: 'localDb.ensureReady.packagedPassiveReader.readOnlyStartup',
+            userId,
+            dbPath: filePath,
+            activeReaderCount: leaseResult.activeReaderCount ?? 0,
+          }),
+        );
+      } else {
+        const readerHint = leaseResult.activeReaderCount
+          ? `（当前有 ${leaseResult.activeReaderCount} 个 passive 实例）`
+          : '';
+        const message =
+          `当前不能执行数据库 schema 启动维护${readerHint}。` +
+          '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+        showFatalDialog('数据库 schema 正被其它实例使用', message, 'MIGRATE_FAILED');
+        return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+      }
+    } else {
+      startupWriterLease = leaseResult.lease;
     }
-    startupWriterLease = leaseResult.lease;
   }
 
   const releaseSchemaLeasesAfterFailure = (): void => {
@@ -196,19 +229,15 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     const message = err instanceof Error ? err.message : String(err);
     const errCode = (err as { code?: string }).code ?? '';
     if (errCode === 'SQLITE_CORRUPT' || /corrupt/i.test(message)) {
-      if (passiveSharedUserData) {
-        const passiveMessage =
-          'passive dev 检测到共享数据库损坏，但不会在其它实例可能运行时自动恢复。' +
-          '请关闭 passive 实例后用 primary 启动恢复，或改用 --isolated。';
-        showFatalDialog(
-          'passive dev 无法恢复共享数据库',
-          passiveMessage,
-          'DB_CORRUPT_NO_BACKUP',
-        );
+      if (passiveSharedUserData || schemaMaintenanceReadOnly) {
+        const readOnlyStartupMessage =
+          '共享数据库当前由其它实例使用，Cindy 不会在其运行期间自动恢复或修改 schema。' +
+          '请关闭共享该 userData 的 passive 实例后重试，或改用 --isolated。';
+        showFatalDialog('共享数据库无法恢复', readOnlyStartupMessage, 'DB_CORRUPT_NO_BACKUP');
         releaseSchemaLeasesAfterFailure();
         return {
           ready: false,
-          error: { code: 'DB_CORRUPT_NO_BACKUP', message: passiveMessage },
+          error: { code: 'DB_CORRUPT_NO_BACKUP', message: readOnlyStartupMessage },
         };
       }
       const restored = tryRestoreWithFallback(filePath);
@@ -279,7 +308,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 
   try {
     const schemaStartup = await runSchemaStartupPolicy({
-      sharedPassive: passiveSharedUserData,
+      sharedPassive: passiveSharedUserData || schemaMaintenanceReadOnly,
       checkCompatibility: () => checkMigrationCompatibility(db, getDrizzleDir(), filePath),
       prepareRuntimeManifest: () => {
         const prepared = prepareMigrationRuntimeManifest(
@@ -731,9 +760,7 @@ function showFatalDialog(title: string, detail: string, code: EnsureReadyErrorCo
   // MIGRATE_FAILED 由 renderer 的 LocalDbFatalScreen 全屏接管（可安装已暂存更新），
   // 不再弹阻塞式原生对话框；错误详情随 ensureReady 的 invoke reply 回渲染层。
   if (!shouldShowNativeFatalDialog(code)) {
-    log.error(
-      JSON.stringify({ event: 'localDb.fatal.rendererOwned', code, title, detail }),
-    );
+    log.error(JSON.stringify({ event: 'localDb.fatal.rendererOwned', code, title, detail }));
     return;
   }
   try {

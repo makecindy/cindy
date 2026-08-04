@@ -46,4 +46,30 @@ describe('shared-passive schema lease worker takeover wiring', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('allows another reader to join while preserving writer exclusion', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-schema-packaged-reader-'));
+    const dbFilePath = path.join(dir, 'shared.db');
+    const passiveLifecycle = new SchemaMigrationReaderLeaseLifecycle();
+    const packagedLifecycle = new SchemaMigrationReaderLeaseLifecycle();
+    try {
+      expect(passiveLifecycle.ensure(dbFilePath)).toEqual({
+        acquired: true,
+        newlyAcquired: true,
+      });
+      expect(packagedLifecycle.ensure(dbFilePath)).toEqual({
+        acquired: true,
+        newlyAcquired: true,
+      });
+      expect(acquireSchemaMigrationWriterLease(dbFilePath)).toMatchObject({
+        acquired: false,
+        reason: 'readers-active',
+        activeReaderCount: 2,
+      });
+    } finally {
+      packagedLifecycle.release();
+      passiveLifecycle.release();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
