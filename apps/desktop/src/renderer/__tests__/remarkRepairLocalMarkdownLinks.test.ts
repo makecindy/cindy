@@ -84,6 +84,32 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     expect((children[0] as Image).type).toBe('image');
   });
 
+  it('separates an optional quoted title from a local link destination', () => {
+    const children = firstParagraphChildren('[产物](/tmp/My File.md "下载")');
+
+    expect(children.map(withoutPositions)).toEqual([
+      {
+        type: 'link',
+        url: '/tmp/My File.md',
+        title: '下载',
+        children: [{ type: 'text', value: '产物' }],
+        data: {
+          hProperties: {
+            [RAW_LOCAL_LINK_HREF_PROP]: '/tmp/My File.md',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('separates an optional parenthesized title from a local image destination', () => {
+    const children = firstParagraphChildren('![预览](/tmp/My File.png (成品))');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'image', url: '/tmp/My File.png', alt: '预览', title: '成品' },
+    ]);
+  });
+
   it('repairs text-file links too, so generated artifact lists remain usable', () => {
     const children = firstParagraphChildren(
       '[制作 manifest](/Users/justin/Library/Application Support/Cindy/work/manifest.md)',

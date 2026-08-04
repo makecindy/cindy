@@ -91,8 +91,59 @@ function isRawCharacter(
   return rawIndex !== undefined && rawSource[rawIndex] === expected;
 }
 
+function isEscaped(value: string, index: number) {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function splitDestinationAndTitle(value: string): { href: string; title?: string } {
+  const trimmed = value.trim();
+
+  for (const quote of ['"', "'"]) {
+    if (!trimmed.endsWith(quote)) continue;
+    for (let index = trimmed.length - 2; index > 0; index -= 1) {
+      if (
+        trimmed[index] === quote &&
+        !isEscaped(trimmed, index) &&
+        /\s/.test(trimmed[index - 1] ?? '')
+      ) {
+        const href = trimmed.slice(0, index).trimEnd();
+        if (href) return { href, title: trimmed.slice(index + 1, -1) };
+      }
+    }
+  }
+
+  if (trimmed.endsWith(')')) {
+    let depth = 0;
+    for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+      if (isEscaped(trimmed, index)) continue;
+      if (trimmed[index] === ')') {
+        depth += 1;
+      } else if (trimmed[index] === '(') {
+        depth -= 1;
+        if (depth === 0 && index > 0 && /\s/.test(trimmed[index - 1] ?? '')) {
+          const href = trimmed.slice(0, index).trimEnd();
+          if (href) return { href, title: trimmed.slice(index + 1, -1) };
+        }
+      }
+    }
+  }
+
+  return { href: trimmed };
+}
+
 function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
-  const matches: Array<{ start: number; end: number; label: string; href: string; image: boolean }> = [];
+  const matches: Array<{
+    start: number;
+    end: number;
+    label: string;
+    href: string;
+    title?: string;
+    image: boolean;
+  }> = [];
   MALFORMED_LOCAL_LINK_START_RE.lastIndex = 0;
   const rawOffsets = rawSource == null ? null : decodedOffsetMap(rawSource);
 
@@ -138,7 +189,7 @@ function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
     }
 
     if (hrefEnd < 0) continue;
-    const href = value.slice(hrefStart, hrefEnd).trim();
+    const { href, title } = splitDestinationAndTitle(value.slice(hrefStart, hrefEnd));
     const kind = classifyMarkdownHref(href);
     if (/\s/.test(href) && kind !== 'external' && kind !== 'directory') {
       matches.push({
@@ -146,6 +197,7 @@ function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
         end: hrefEnd + 1,
         label: match[1],
         href,
+        title,
         image,
       });
     }
@@ -165,12 +217,18 @@ function splitMalformedLocalLinks(node: Text, rawSource?: string): PhrasingConte
   for (const item of matches) {
     if (item.start > cursor) out.push({ type: 'text', value: node.value.slice(cursor, item.start) });
     if (item.image) {
-      const image: Image = { type: 'image', url: item.href, alt: item.label };
+      const image: Image = {
+        type: 'image',
+        url: item.href,
+        alt: item.label,
+        ...(item.title === undefined ? {} : { title: item.title }),
+      };
       out.push(image);
     } else {
       const link: Link = {
         type: 'link',
         url: item.href,
+        ...(item.title === undefined ? {} : { title: item.title }),
         children: [{ type: 'text', value: item.label }],
         data: { hProperties: { [RAW_LOCAL_LINK_HREF_PROP]: item.href } },
       };
