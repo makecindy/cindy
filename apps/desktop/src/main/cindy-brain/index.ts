@@ -164,6 +164,7 @@ import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
+import { GhostScheduleSlot } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
@@ -2095,6 +2096,36 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
   return previewSlotSingleton;
 }
 
+let scheduleSlotSingleton: GhostScheduleSlot | null = null;
+
+/** 插件自动化草稿通道(main → 全窗口 renderer;renderer 开自动化创建面板并预填)。 */
+export const GHOST_SCHEDULE_DRAFT_CHANNEL = 'ghosts:schedule-draft';
+
+/**
+ * 自动化草稿槽单例(agent 槽的 schedule 加档):资格审/净化/频率钳制/限速在
+ * GhostScheduleSlot,这里只组装全窗口广播(与 preview 同模式;renderer 落地成
+ * 预填好的自动化创建面板)。
+ *
+ * ⚠️ deps 里**刻意不注入任何建任务的能力** —— 本槽只能开面板,任务必须由用户
+ * 在面板上选模型后亲手保存。别为了"省一步"给它接 schedule storage。
+ */
+export function getGhostScheduleSlot(): GhostScheduleSlot {
+  if (!scheduleSlotSingleton) {
+    scheduleSlotSingleton = new GhostScheduleSlot({
+      getGhost: findAvailableGhost,
+      broadcast: (payload) => {
+        const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+        windows.forEach((window) => {
+          window.webContents.send(GHOST_SCHEDULE_DRAFT_CHANNEL, payload);
+        });
+        return windows.length > 0;
+      },
+      log,
+    });
+  }
+  return scheduleSlotSingleton;
+}
+
 /**
  * 模型槽单例:意识借主机 AI 出图的代办窗口。
  * 生成走主机统一图片通道(art 底层客户端,与聊天画图同一条付费链路);
@@ -4006,6 +4037,12 @@ export function registerGhostIpc(): void {
     // preview.hosts 白名单;守门/限速在 previewSlot,落地在 renderer。
     if (type === 'preview-request') {
       return getGhostPreviewSlot().handleRequest(id, payload);
+    }
+    // schedule-request = 打开自动化创建面板并预填(agent 槽的 schedule 加档):
+    // 只开面板,任务由用户选模型后亲手保存才落库——本槽全程不碰 schedule storage。
+    // 资格审/净化/频率钳制/限速在 scheduleSlot,落地在 renderer。
+    if (type === 'schedule-request') {
+      return getGhostScheduleSlot().handleRequest(id, payload);
     }
     if (type === 'card-update') {
       // 卡槽③供片:校验链(归属/卡槽/限速/净化)在 cardService,拒绝原因

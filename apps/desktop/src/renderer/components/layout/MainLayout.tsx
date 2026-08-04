@@ -29,6 +29,7 @@ import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportLi
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
+import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
@@ -527,6 +528,44 @@ export function MainLayout() {
     });
     return unsubscribe;
   }, [navigateToSession]);
+
+  // 插件请求新建自动化(agent 槽的 schedule 加档):main 的 scheduleSlot 已做资格审 /
+  // 净化截断 / 频率钳制 / 限速,这里只负责把用户带到自动化页并把预填内容交过去。
+  // 挂在 MainLayout 的理由同上面那条:它在 ProtectedRoute + LocalDbGate 之内,用户
+  // 必然已登录、可以安全 navigate;而插件请求可能在任何路由下到达(用户当时正在
+  // 插件面板里),SchedulerPage 那时还没挂载,接不到这条推送。
+  //
+  // ⚠️ 这里**只导航**。任务落库只发生在用户于面板上点保存之后 —— 插件全程没有
+  // 直接建任务的通道(scheduleSlot 的 deps 里压根没有 schedule storage)。
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      if (
+        typeof requestId !== 'string' || !requestId ||
+        typeof ghostId !== 'string' || !ghostId ||
+        typeof ghostName !== 'string' || !ghostName ||
+        typeof name !== 'string' || !name ||
+        typeof prompt !== 'string' || !prompt
+      ) {
+        return;
+      }
+      navigate('/cc-agent/scheduled', {
+        state: pluginScheduleNavigationState({
+          kind: 'plugin-schedule-draft',
+          requestId,
+          ghostId,
+          ghostName,
+          name,
+          prompt,
+          ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
+            ? { intervalMs }
+            : {}),
+        }),
+      });
+    });
+    return unsubscribe;
+  }, [navigate]);
 
   // cindy://(+ 历史 xdt-maker://)深度链接 + --open-folder 右键菜单订阅 —— main 端解析后推 payload,
   // 这里按 type 分发。

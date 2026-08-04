@@ -64,6 +64,10 @@ import {
   buildUsageLimitScheduleFormOverrides,
   readUsageLimitScheduleCreateIntent,
 } from './lib/usageLimitScheduleCreateIntent';
+import {
+  buildPluginScheduleFormOverrides,
+  readPluginScheduleCreateIntent,
+} from './lib/pluginScheduleCreateIntent';
 
 function scheduleToUserCreateInput(
   schedule: Schedule,
@@ -154,6 +158,13 @@ export function SchedulerPage() {
   // 项目分组"+"按钮的预填 workingDir：用户级 schedule，仅省去选项目目录这一步，
   // 不强制写 schedules.json（要"提升为项目自动化"走右键菜单 promoteToProject）。
   const [createPrefillWorkingDir, setCreatePrefillWorkingDir] = useState<string | null>(null);
+  // 本次创建面板是由哪个插件请求打开的(agent 槽 schedule 加档)。只做面板上的
+  // 来源标注 —— 让用户看清是谁请求建这条任务;不落库(见 pluginScheduleCreateIntent
+  // 里 ghostId 的注释:落库要新增 DB 列 + 不可回退的 migration)。
+  const [pluginScheduleOrigin, setPluginScheduleOrigin] = useState<{
+    ghostId: string;
+    ghostName: string;
+  } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Status 筛选默认 'all'(默认展示全部任务,含 paused);用户在 popover 主动
   // 切换后持久化,重进页面恢复上次选择(issue #75)。
@@ -213,6 +224,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(focused);
     setFormOpen(true);
   }, [editToken, focusId, schedules]);
@@ -236,6 +248,25 @@ export function SchedulerPage() {
     const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
     navigate(path, { replace: true, state: null });
   }, [location.pathname, location.search, location.state, navigate, t]);
+
+  // 插件请求新建自动化(agent 槽 schedule 加档):形态与上面 usage-limit 那条
+  // 完全一致 —— 一次性导航意图 → 预填打开面板 → 用完立刻清掉 state。
+  // 与它共用 handledScheduleCreateRequestRef:两种意图不该叠开两个面板。
+  // ⚠️ 这里只 setCreateInitialValues + 打开面板,**不创建任务**。落库仍然只发生在
+  // 用户点保存后走 handleSubmit —— 插件全程没有直接建任务的通道。
+  useEffect(() => {
+    const intent = readPluginScheduleCreateIntent(location.state);
+    if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
+    handledScheduleCreateRequestRef.current = intent.requestId;
+    setCreatePrefillWorkingDir(null);
+    setCreateInitialTemplate(null);
+    setEditing(null);
+    setCreateInitialValues(buildPluginScheduleFormOverrides(intent));
+    setPluginScheduleOrigin({ ghostId: intent.ghostId, ghostName: intent.ghostName });
+    setFormOpen(true);
+    const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
+    navigate(path, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
 
   // workingDir filter（URL ?workingDir=...）
   const scopedByDir = useMemo(() => {
@@ -299,6 +330,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -307,6 +339,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(template);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -315,6 +348,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(s);
     setFormOpen(true);
   }, []);
@@ -323,6 +357,7 @@ export function SchedulerPage() {
     setEditing(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setCreatePrefillWorkingDir(workingDir);
     setFormOpen(true);
   }, []);
@@ -469,6 +504,7 @@ export function SchedulerPage() {
   const handleEditProjectSchedule = useCallback((s: Schedule) => {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
+    setPluginScheduleOrigin(null);
     setEditing(s);
     setFormOpen(true);
   }, []);
@@ -638,12 +674,14 @@ export function SchedulerPage() {
             setCreatePrefillWorkingDir(null);
             setCreateInitialTemplate(null);
             setCreateInitialValues(null);
+            setPluginScheduleOrigin(null);
           }
         }}
         initial={editing}
         initialTemplate={createInitialTemplate}
         initialValues={createInitialValues}
         initialWorkingDir={createPrefillWorkingDir}
+        requestedByGhostName={pluginScheduleOrigin?.ghostName ?? null}
         editProjectSchedule={editing?.source === 'project'}
         onSubmit={handleSubmit}
       />
