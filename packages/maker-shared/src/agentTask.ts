@@ -167,6 +167,7 @@ export function deriveAgentTaskStatus(
   return updateStatus ?? (hasResult ? 'completed' : 'running');
 }
 
+/**
  * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
  * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
  *

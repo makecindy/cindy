@@ -473,6 +473,7 @@ const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>(
 interface BackgroundTurnPersistState {
   agentMeta: AgentMeta | null;
   knownToolUseIds: Set<string>;
+  pendingToolUseIds: Set<string>;
   toolUseCreatedAt: Map<string, number>;
   toolResultIdByToolUseId: Map<string, string>;
   pendingFullTextByToolUseId: Map<string, { text: string; createdAt: number }>;
@@ -481,25 +482,49 @@ interface BackgroundTurnPersistState {
 
 /**
  * Late child results are still useful after a parent turn has ended, but must
- * not borrow the next turn's persistence context. Keep a bounded queue of
- * completed-turn snapshots for events explicitly marked `turnScope=background`.
+ * not borrow the next turn's persistence context. Keep snapshots keyed by the
+ * in-flight collab tool ids for events explicitly marked `turnScope=background`.
  */
 const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
 
 export function preserveTurnPersistStateForBackground(sessionId: string): void {
+  const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
+  const toolUseInfo = toolUseInfoBySession.get(sessionId);
+  const collabToolUseIds = new Set(
+    [...knownToolUseIds].filter((toolUseId) =>
+      toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+    ),
+  );
+  const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
+  const pendingToolUseIds = new Set(
+    [...collabToolUseIds].filter((toolUseId) => !resultIds.has(toolUseId)),
+  );
+  // Only retain contexts that can still receive a late background result. A
+  // completed collab result already has its normal persistence row and needs
+  // no snapshot; this also keeps the state bounded by in-flight tool ids.
+  if (pendingToolUseIds.size === 0) return;
   const snapshot: BackgroundTurnPersistState = {
     agentMeta: lastAgentMetaBySession.get(sessionId) ?? null,
-    knownToolUseIds: new Set(knownToolUseIdsBySession.get(sessionId) ?? []),
-    toolUseCreatedAt: new Map(toolUseCreatedAtBySession.get(sessionId) ?? []),
-    toolResultIdByToolUseId: new Map(toolResultIdByToolUseId.get(sessionId) ?? []),
-    pendingFullTextByToolUseId: new Map(pendingFullTextByToolUseId.get(sessionId) ?? []),
-    toolResultContentByClientId: new Map(toolResultContentByClientId.get(sessionId) ?? []),
+    knownToolUseIds: new Set(collabToolUseIds),
+    pendingToolUseIds,
+    toolUseCreatedAt: new Map(
+      [...(toolUseCreatedAtBySession.get(sessionId) ?? [])]
+        .filter(([toolUseId]) => collabToolUseIds.has(toolUseId)),
+    ),
+    toolResultIdByToolUseId: new Map(
+      [...resultIds].filter(([toolUseId]) => collabToolUseIds.has(toolUseId)),
+    ),
+    pendingFullTextByToolUseId: new Map(
+      [...(pendingFullTextByToolUseId.get(sessionId) ?? [])]
+        .filter(([toolUseId]) => collabToolUseIds.has(toolUseId)),
+    ),
+    toolResultContentByClientId: new Map(
+      [...(toolResultContentByClientId.get(sessionId) ?? [])]
+        .filter(([persistId]) => [...resultIds.values()].includes(persistId)),
+    ),
   };
   const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
   snapshots.push(snapshot);
-  // A session can have more than one late parent in flight, but unbounded
-  // retention here would turn this correctness guard into a memory leak.
-  if (snapshots.length > 4) snapshots.splice(0, snapshots.length - 4);
   backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
 }
 
@@ -518,9 +543,21 @@ function backgroundStateForToolUse(
       return state;
     }
   }
-  // The old tool_use may have been omitted by the provider. In that case the
-  // newest completed-turn context is still safer than borrowing the live turn.
-  return snapshots[snapshots.length - 1] ?? null;
+  return null;
+}
+
+function releaseBackgroundStateForToolUses(
+  sessionId: string,
+  state: BackgroundTurnPersistState,
+  toolUseIds: string[],
+): void {
+  for (const toolUseId of toolUseIds) state.pendingToolUseIds.delete(toolUseId);
+  if (state.pendingToolUseIds.size !== 0 || state.pendingFullTextByToolUseId.size !== 0) return;
+  const snapshots = backgroundTurnPersistStatesBySession.get(sessionId);
+  if (!snapshots) return;
+  const index = snapshots.indexOf(state);
+  if (index >= 0) snapshots.splice(index, 1);
+  if (snapshots.length === 0) backgroundTurnPersistStatesBySession.delete(sessionId);
 }
 
 function rememberToolUseId(sessionId: string, toolUseId: string, createdAt: number): void {
@@ -805,6 +842,7 @@ export function onToolResultEvent(
     const prev = contentMap.get(existing);
     // 内容没增长 → 不写库;renderer 已显示该条,返回现有内容即可(upsert 命中后无变化)。
     if (prev === undefined || content.length <= prev.length) {
+      if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
       return { persistId: existing, content: prev ?? content };
     }
     contentMap.set(existing, content);
@@ -812,6 +850,7 @@ export function onToolResultEvent(
       updateDbMessageContent(sessionId, existing!, content),
     );
     if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', existing);
+    if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
     return { persistId: existing, content };
   }
 
@@ -827,6 +866,7 @@ export function onToolResultEvent(
     createdAt,
   });
   if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', persistId);
+  if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
   return { persistId, content };
 }
 

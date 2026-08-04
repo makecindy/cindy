@@ -5,8 +5,9 @@
  * - 工具识别 / update 配对口径 = MessageStream.buildRenderItems + findTaskUpdate:
  *   先 toolUseId 后 clientId 查 taskUpdates;tool_result 存在性 = toolUseId 查表
  *   命中,或紧邻其后的 tool_result 行(旧数据 toolUseId 缺失时的 adjacency 兜底)。
- * - 状态推导口径 = AgentTaskCard:update?.status 优先,无 update 时有结果为
- *   completed、无结果为 running。
+ * - 状态推导口径 = 非 workflow 任务复用 AgentTaskCard 的结果派生(终态结果会
+ *   收口 running,V1 running 回执仍保留 running);workflow 仍以 update.status
+ *   优先,无 update 时有结果为 completed、无结果按流式状态推导。
  * - 孤儿 update(map 里有、消息窗口内配不到 toolCall)只在会话运行中列出
  *   (口径 = maker-shared/messageRender.appendOrphanAgentTasks 的 gating 注释:
  *   空闲态的孤儿是滑出分页窗口的陈旧残留,不得复播)。
@@ -15,7 +16,12 @@
  * - 本文件签名是并行开发契约,不得改动。
  */
 
-import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
+import {
+  deriveAgentTaskStatus,
+  isAgentTaskToolName,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
 
 import type { Message } from '@/lib/ccAgent.types';
 import type { AgentTaskStatus, AgentTaskUpdate } from '@/lib/makerChatStore';
@@ -327,8 +333,16 @@ export function listSessionTasks(input: {
     // running(事件可能尚未到达)—— 非流式 + 无 update + 无结果 = 强杀/崩溃留下
     // 的死任务(同步 Task 没有启动回执,永远不会有结果),断言 running 会让它
     // 永久转圈且无任何收口路径,按 stopped(被中断)呈现。
-    const status: AgentTaskStatus =
-      update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+    const resultText = typeof resultContent === 'string' ? resultContent : undefined;
+    const status: AgentTaskStatus = isWorkflowTool
+      ? update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped')
+      : update
+        ? deriveAgentTaskStatus(update.status, resultText, {
+            resultIsLaunchReceipt:
+              subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
+              || subagentSpawnResultIndicatesRunning(toolName, resultText),
+          })
+        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
     const provider: SessionTaskItem['provider'] =
       update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
 

@@ -3349,7 +3349,7 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
-     * 登记 spawn 映射,并回传"在 translator 之后重新声明真实聚合状态"的补发闭包。
+     * 登记 spawn 映射,并回传"在 translator 之后重新声明真实聚合状态"的快照。
      *
      * 发帧点必须在 translateItemNotification **之后**,两个理由:
      *  - V2:translator 对 spawn 推一帧 status=running(无 usage),而重放出的状态可能
@@ -3360,12 +3360,7 @@ export class CodexAgent extends BaseAgent {
      */
     const noteSubagentSpawnItem = (
       item: unknown,
-      turnScope: AgentEvent['turnScope'] = 'turn',
-    ): (() => void) | null => {
-      const replayed = subagentLiveCards.noteSpawnItem(item);
-      if (!replayed) return null;
-      return () => emitSubagentCardUpdate(replayed, turnScope);
-    };
+    ): SubagentLiveCardUpdate | null => subagentLiveCards.noteSpawnItem(item);
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
@@ -7689,7 +7684,7 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
-        const emitReplayedSubagentUpdate = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdate = noteSubagentSpawnItem(params.item);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -7697,7 +7692,7 @@ export class CodexAgent extends BaseAgent {
           onCompactBoundary: handleCompactBoundary,
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
-        emitReplayedSubagentUpdate?.();
+        if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
       },
       itemUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
@@ -7712,13 +7707,15 @@ export class CodexAgent extends BaseAgent {
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
         // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
         // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
-        const emitReplayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
         });
-        emitReplayedSubagentUpdateOnUpdated?.();
+        if (replayedSubagentUpdateOnUpdated) {
+          emitSubagentCardUpdate(replayedSubagentUpdateOnUpdated);
+        }
       },
       itemCompleted: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
@@ -7736,9 +7733,8 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
-        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
+        const replayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
           params.item,
-          isLateCollabTerminal ? 'background' : 'turn',
         );
         const itemEventQueue = isLateCollabTerminal
           ? {
@@ -7755,12 +7751,17 @@ export class CodexAgent extends BaseAgent {
           onCompactBoundary: handleCompactBoundary,
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
-        // the child closing. Reassert the live aggregate when the compact item
-        // summary still contains a running child. When the summary is terminal,
-        // the translator's terminal frame is authoritative and replaying the
-        // tracker would only duplicate it.
-        if (!isLateCollabTerminal || collabItemHasRunningAgentState(params.item)) {
-          emitReplayedSubagentUpdateOnCompleted?.();
+        // the child closing. Reassert a running compact state, or an explicit
+        // failed/stopped tracker state; a completed replay would only duplicate
+        // the translator's own frame.
+        const shouldReplayLateSubagentState =
+          collabItemHasRunningAgentState(params.item)
+          || replayedSubagentUpdateOnCompleted?.status === 'failed'
+          || replayedSubagentUpdateOnCompleted?.status === 'stopped';
+        if (!isLateCollabTerminal || shouldReplayLateSubagentState) {
+          if (replayedSubagentUpdateOnCompleted) {
+            emitSubagentCardUpdate(replayedSubagentUpdateOnCompleted, isLateCollabTerminal ? 'background' : 'turn');
+          }
         }
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。

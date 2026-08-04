@@ -255,7 +255,7 @@ describe('background tool_result persistence', () => {
     noteAgentMeta(SESSION, oldMeta);
     onToolUseEvent(
       SESSION,
-      { toolUseId: 'late-child', toolName: 'collab', input: {} },
+      { toolUseId: 'late-child', toolName: 'collab:spawnAgent', input: {} },
       oldMeta,
     );
     preserveTurnPersistStateForBackground(SESSION);
@@ -293,6 +293,46 @@ describe('background tool_result persistence', () => {
         content: FULL,
         agentMeta: oldMeta,
       }),
+      broadcastGuard(),
+    );
+  });
+
+  it('retains an in-flight background context beyond four later turns', async () => {
+    const oldMeta = { uuid: 'old-in-flight-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child-long', toolName: 'collab:spawnAgent', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    for (let i = 0; i < 5; i += 1) {
+      const meta = { uuid: `later-turn-${i}` };
+      noteAgentMeta(SESSION, meta);
+      onToolUseEvent(
+        SESSION,
+        { toolUseId: `later-child-${i}`, toolName: 'collab:spawnAgent', input: {} },
+        meta,
+      );
+      preserveTurnPersistStateForBackground(SESSION);
+      resetTurnPersistState(SESSION);
+    }
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child-long'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(result).toEqual({ persistId: expect.any(String), content: SUMMARY });
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', agentMeta: oldMeta }),
       broadcastGuard(),
     );
   });

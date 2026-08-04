@@ -3711,8 +3711,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
-      preserveTurnPersistStateForBackground(session.id);
-      resetTurnPersistState(session.id);
+        preserveTurnPersistStateForBackground(session.id);
+        resetTurnPersistState(session.id);
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
         // done 早段、flush 之前触发,流式轮次会读到上一轮文本)。只在正常 done 触发。
         // codex review:flushAssistantBlock 仅把 assistant insert 入队 writeChain、未落库,
