@@ -24,6 +24,7 @@ import {
   isManagedWorktreeBranchForName,
   validateWorktreeName,
 } from './nameGenerator';
+import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import { gitExec, GitExecError } from './gitExec';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
@@ -82,19 +83,6 @@ async function pathExists(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function readAttachedWorktreeBranch(worktreePath: string): Promise<string | null> {
-  try {
-    const { stdout } = await gitExec(
-      ['symbolic-ref', '--quiet', '--short', 'HEAD'],
-      worktreePath,
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
   }
 }
 
@@ -1020,6 +1008,13 @@ async function removeWorktreeForSessionInner(
   // Store 只持久化创建时的托管分支；若用户/Agent 后来切到其它分支或 detached
   // HEAD，当前恢复协议无法在目录删除后可靠重建那个基底。必须在任何 snapshot、
   // quarantine 或 remove 前 fail closed，保留完整 worktree。
+  if (!isManagedWorktreeBranchForName(meta.branch, meta.name)) {
+    log.warn(
+      `[worktree] preserved worktree at ${worktreePath}: registered branch ${meta.branch} ` +
+        `is not a managed branch for ${meta.name}`,
+    );
+    return;
+  }
   const attachedBranch = await readAttachedWorktreeBranch(worktreePath);
   if (!attachedBranch) {
     log.warn(

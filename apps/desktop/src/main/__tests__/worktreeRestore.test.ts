@@ -127,6 +127,9 @@ describe('worktree restore', () => {
     storeGetAllMock.mockReturnValue([meta]);
     dbOwnerRows = [{ id: 'owner', worktreePath: null, status: 'active' }];
     gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
+      }
       if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/owner')) {
         return { stdout: `${SHA}\n`, stderr: '' };
       }
@@ -161,7 +164,7 @@ describe('worktree restore', () => {
     fsSync.mkdirSync(wtPath, { recursive: true });
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'cindy/wt1\n', stderr: '' };
+        return { stdout: 'refs/heads/cindy/wt1\n', stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -174,6 +177,45 @@ describe('worktree restore', () => {
       's1',
       expect.objectContaining({ branch: 'cindy/wt1', sourceBranch: 'cindy/wt1' }),
     );
+  });
+
+  it.each(['feature/foo', 'cindy/other'])(
+    'present directory without Store metadata does not register non-candidate branch %s',
+    async (branch) => {
+      fsSync.mkdirSync(wtPath, { recursive: true });
+      gitExecMock.mockImplementation(async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') {
+          return { stdout: `refs/heads/${branch}\n`, stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(mod.restoreWorktreeForSession('s1')).resolves.toEqual({
+        ok: true,
+        snapshotApplied: true,
+      });
+      expect(storeSetMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('preserves a pending snapshot when the existing directory is on a custom branch', async () => {
+    fsSync.mkdirSync(wtPath, { recursive: true });
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/feature/manual-switch\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/s1')) {
+        return { stdout: `${SHA}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(mod.restoreWorktreeForSession('s1')).resolves.toEqual({
+      ok: true,
+      snapshotApplied: false,
+    });
+    expect(gitExecMock.mock.calls.map(argsOf)).not.toContainEqual(['stash', 'apply', SHA]);
+    expect(storeSetMock).not.toHaveBeenCalled();
   });
 
   it('present directory prefers actual HEAD when Store metadata is stale', async () => {
@@ -191,7 +233,7 @@ describe('worktree restore', () => {
       .mockReturnValueOnce(null);
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'cindy/wt1\n', stderr: '' };
+        return { stdout: 'refs/heads/cindy/wt1\n', stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -222,7 +264,7 @@ describe('worktree restore', () => {
     fsSync.mkdirSync(wtPath, { recursive: true });
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'xdt/wt1\n', stderr: '' };
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
       }
       if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/s1')) {
         return { stdout: `${SHA}\n`, stderr: '' };
@@ -408,6 +450,45 @@ describe('worktree restore', () => {
     );
   });
 
+  it('ignores a custom Store branch and restores only the matching managed candidate', async () => {
+    storeGetMock.mockReturnValue({
+      sessionId: 's1',
+      name: 'wt1',
+      path: wtPath,
+      baseRepo,
+      branch: 'feature/manual-switch',
+      sourceBranch: 'main',
+      createdAt: '2026-08-04T00:00:00.000Z',
+    });
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'rev-parse' && args.includes('refs/heads/xdt/wt1')) {
+        return { stdout: 'deadbeef\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(mod.restoreWorktreeForSession('s1')).resolves.toEqual({
+      ok: true,
+      snapshotApplied: true,
+    });
+
+    const calls = gitExecMock.mock.calls.map(argsOf);
+    expect(calls).not.toContainEqual([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      'refs/heads/feature/manual-switch',
+    ]);
+    expect(calls).toContainEqual([
+      '-c',
+      'core.longpaths=true',
+      'worktree',
+      'add',
+      wtPath,
+      'xdt/wt1',
+    ]);
+  });
+
   it('restore: worktree add + snapshot apply + store re-register', async () => {
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'rev-parse' && args.includes('refs/heads/xdt/wt1')) {
@@ -522,7 +603,7 @@ describe('worktree restore', () => {
     dbOwnerRows = [{ id: 'owner', worktreePath: equivalentOwnerPath, status: 'active' }];
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'xdt/wt1\n', stderr: '' };
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
       }
       if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/owner')) {
         return { stdout: `${SHA}\n`, stderr: '' };
@@ -576,6 +657,9 @@ describe('worktree restore', () => {
     fsSync.mkdirSync(wtPath, { recursive: true });
     storeGetMock.mockReturnValue({ sessionId: 's1', path: wtPath });
     gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
+      }
       if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/s1')) {
         return { stdout: `${SHA}\n`, stderr: '' };
       }
@@ -619,6 +703,9 @@ describe('worktree restore', () => {
     storeGetMock.mockReturnValue({ sessionId: 's1', path: wtPath });
     let fallbackStashPresent = false;
     gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
+      }
       if (args[0] === 'stash' && args[1] === 'list') {
         return { stdout: fallbackStashPresent ? `${AUTO_STASH}\n` : '', stderr: '' };
       }
@@ -781,6 +868,9 @@ describe('worktree restore', () => {
 
   it('send-time restore remains blocked and retries a pending snapshot after apply conflict', async () => {
     gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: 'refs/heads/xdt/wt1\n', stderr: '' };
+      }
       if (args[0] === 'rev-parse' && args.includes('refs/heads/xdt/wt1')) {
         return { stdout: 'deadbeef\n', stderr: '' };
       }

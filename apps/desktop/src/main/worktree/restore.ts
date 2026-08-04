@@ -21,6 +21,7 @@ import {
   getRestorableSnapshotSha,
   markSnapshotConsumed,
 } from './dirty';
+import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
@@ -34,7 +35,10 @@ import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
 import { createLogger } from '../logger';
-import { getManagedWorktreeBranchCandidates } from '../../shared/managedWorktreeBranches';
+import {
+  getManagedWorktreeBranchCandidates,
+  isManagedWorktreeBranchForName,
+} from '../../shared/managedWorktreeBranches';
 import { isManagedWorktreeDirectoryName } from '../../shared/managedWorktreePaths';
 
 import type { WorktreeMeta } from './types';
@@ -190,16 +194,6 @@ async function hasRestorableBranch(baseRepo: string, branch: string): Promise<bo
   );
 }
 
-async function readCurrentWorktreeBranch(worktreePath: string): Promise<string | null> {
-  try {
-    const { stdout } = await gitExec(['symbolic-ref', '--quiet', '--short', 'HEAD'], worktreePath);
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
-}
-
 type RestorableBranchResolution =
   | { state: 'found'; branch: string }
   | { state: 'missing' }
@@ -214,7 +208,11 @@ async function resolveRestorableBranch(
   name: string,
   storedBranch?: string,
 ): Promise<RestorableBranchResolution> {
-  if (storedBranch && (await hasRestorableBranch(baseRepo, storedBranch))) {
+  if (
+    storedBranch &&
+    isManagedWorktreeBranchForName(storedBranch, name) &&
+    (await hasRestorableBranch(baseRepo, storedBranch))
+  ) {
     return { state: 'found', branch: storedBranch };
   }
 
@@ -378,8 +376,17 @@ async function getWorktreeRestorePlan(sessionId: string): Promise<WorktreeRestor
       sessionId,
       restoreParsed.name,
     );
+    const attachedBranch = await readAttachedWorktreeBranch(worktreePath);
     const branch =
-      (await readCurrentWorktreeBranch(worktreePath)) || registeredForPath?.branch || undefined;
+      attachedBranch && isManagedWorktreeBranchForName(attachedBranch, restoreParsed.name)
+        ? attachedBranch
+        : undefined;
+    if (attachedBranch && !branch) {
+      log.warn(
+        `[restore] preserved existing worktree registration gap at ${worktreePath}: ` +
+          `HEAD branch ${attachedBranch} is not managed for ${restoreParsed.name}`,
+      );
+    }
     return {
       status: { state: 'present', worktreePath, hasSnapshot: pending !== null },
       parsed: restoreParsed,
@@ -435,6 +442,13 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
         await finishRestoredWorktree(sessionId, parsed, status.worktreePath, plan.branch);
       }
       return { ok: true, snapshotApplied: true };
+    }
+    if (!plan.branch) {
+      log.warn(
+        `[restore] preserved pending snapshot for ${status.worktreePath}: ` +
+          'cannot confirm the expected managed HEAD branch',
+      );
+      return { ok: true, snapshotApplied: false };
     }
     const snapshotApplied = await applyPendingSnapshot(
       parsed.baseRepo,

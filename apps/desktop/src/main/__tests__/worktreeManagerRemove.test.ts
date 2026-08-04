@@ -99,7 +99,7 @@ describe('removeWorktreeForSession', () => {
         const meta = [...storeMap.values()].find(
           (candidate) => candidate.path === cwd || candidate.quarantinePath === cwd,
         );
-        return { stdout: `${meta?.branch ?? 'xdt/unknown'}\n`, stderr: '' };
+        return { stdout: `refs/heads/${meta?.branch ?? 'xdt/unknown'}\n`, stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -163,10 +163,7 @@ describe('removeWorktreeForSession', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
       gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout:
-          args[0] === 'branch'
-            ? 'refs/remotes/origin/cindy/pensive-lederberg/child\n'
-            : '',
+        stdout: args[0] === 'branch' ? 'refs/remotes/origin/cindy/pensive-lederberg/child\n' : '',
         stderr: '',
       }));
 
@@ -201,10 +198,7 @@ describe('removeWorktreeForSession', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
       gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout:
-          args[0] === 'branch'
-            ? 'refs/remotes/origin/cindy/pensive-lederberg\n'
-            : '',
+        stdout: args[0] === 'branch' ? 'refs/remotes/origin/cindy/pensive-lederberg\n' : '',
         stderr: '',
       }));
 
@@ -241,7 +235,7 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'feature/manual-switch\n', stderr: '' };
+        return { stdout: 'refs/heads/feature/manual-switch\n', stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -263,7 +257,7 @@ describe('removeWorktreeForSession', () => {
     isWorktreeDirtyMock.mockResolvedValue(true);
     gitExecMock.mockImplementation(async (args: string[]) => {
       if (args[0] === 'symbolic-ref') {
-        return { stdout: 'feature/manual-switch\n', stderr: '' };
+        return { stdout: 'refs/heads/feature/manual-switch\n', stderr: '' };
       }
       return { stdout: '', stderr: '' };
     });
@@ -285,6 +279,18 @@ describe('removeWorktreeForSession', () => {
 
     await manager.removeWorktreeForSession('s1');
 
+    expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
+    expect(autoStashMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('preserves a worktree whose registered branch is outside its managed candidates', async () => {
+    const meta = { ...makeMeta('s1'), branch: 'feature/manual-switch' };
+    storeMap.set('s1', meta);
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
     expect(autoStashMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(true);
@@ -438,7 +444,9 @@ describe('removeWorktreeForSession', () => {
     isWorktreeDirtyMock.mockResolvedValue(true);
     autoStashMock.mockResolvedValue(true);
     gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') return { stdout: `${meta.branch}\n`, stderr: '' };
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
+      }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         throw new Error('worktree locked');
       }
@@ -540,7 +548,9 @@ describe('removeWorktreeForSession', () => {
 
     let removeAttempts = 0;
     gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') return { stdout: `${meta.branch}\n`, stderr: '' };
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
+      }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         removeAttempts += 1;
         if (removeAttempts < 3) throw new Error('locked');
@@ -662,10 +672,7 @@ describe('removeWorktreeForSession', () => {
     ).resolves.toEqual({ status: 'preserved' });
 
     expect(canRemove).toHaveBeenCalledTimes(1);
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', meta.path],
-      BASE_REPO,
-    );
+    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
     expect(storeMap.get('s1')).toBe(meta);
   });
 
@@ -717,7 +724,9 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     isWorktreeDirtyMock.mockResolvedValue(false);
     gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') return { stdout: `${meta.branch}\n`, stderr: '' };
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
+      }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         throw new Error('worktree contains modified or untracked files');
       }
@@ -870,7 +879,7 @@ describe('removeWorktreeForSession', () => {
       return {
         stdout:
           args[0] === 'symbolic-ref'
-            ? `${meta.branch}\n`
+            ? `refs/heads/${meta.branch}\n`
             : args[0] === 'rev-parse'
               ? 'abc123\n'
               : args[0] === 'rev-list'
@@ -910,7 +919,7 @@ describe('removeWorktreeForSession', () => {
     gitExecMock.mockImplementation(async (args: string[]) => ({
       stdout:
         args[0] === 'symbolic-ref'
-          ? `${meta.branch}\n`
+          ? `refs/heads/${meta.branch}\n`
           : args[0] === 'rev-parse'
             ? 'abc123\n'
             : args[0] === 'rev-list'
@@ -936,7 +945,9 @@ describe('removeWorktreeForSession', () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
     gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') return { stdout: `${meta.branch}\n`, stderr: '' };
+      if (args[0] === 'symbolic-ref') {
+        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
+      }
       if (args[0] === 'rev-parse') return { stdout: 'abc123\n', stderr: '' };
       if (args[0] === 'rev-list') return { stdout: '0\n', stderr: '' };
       if (args[0] === 'update-ref') throw new Error('cannot lock ref: expected abc123');
@@ -954,7 +965,7 @@ describe('removeWorktreeForSession', () => {
     );
   });
 
-  it('discard pre-created: never deletes a branch that does not match the generated name', async () => {
+  it('discard pre-created: preserves a worktree registered to a non-managed branch', async () => {
     const meta = {
       ...makeMeta('s1'),
       branch: 'main',
@@ -962,11 +973,10 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
 
     await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'discarded',
-      branchDeleted: false,
+      status: 'preserved',
     });
 
-    expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(gitExecMock).not.toHaveBeenCalledWith(
       expect.arrayContaining(['update-ref', '-d']),
       BASE_REPO,

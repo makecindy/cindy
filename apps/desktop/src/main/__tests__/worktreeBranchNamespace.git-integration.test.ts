@@ -9,6 +9,7 @@ import {
   blocksManagedWorktreeBranchNamespace,
   getManagedWorktreeReservedName,
 } from '../../shared/managedWorktreeBranches';
+import { readAttachedWorktreeBranch } from '../worktree/attachedBranch';
 
 const tempDirs: string[] = [];
 
@@ -69,5 +70,15 @@ describe('managed Worktree branch namespace', () => {
     const refs = git(repo, 'branch', '--all', '--format=%(refname)').split(/\r?\n/);
     expect(refs).toContain('refs/heads/origin/cindy');
     expect(refs).toContain('refs/remotes/origin/cindy');
+  });
+
+  it('reads the canonical branch name when a tag has the same short name', async () => {
+    const repo = makeRepo();
+    git(repo, 'branch', 'cindy/foo');
+    git(repo, 'tag', 'cindy/foo');
+    git(repo, 'checkout', 'cindy/foo');
+
+    expect(git(repo, 'symbolic-ref', '--quiet', '--short', 'HEAD')).toBe('heads/cindy/foo');
+    await expect(readAttachedWorktreeBranch(repo)).resolves.toBe('cindy/foo');
   });
 });
