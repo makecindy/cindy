@@ -487,15 +487,21 @@ function rgGlob(
     reader.on('line', (line) => {
       if (!line || lines.length >= limit) return;
       const relative = line.replace(/\r$/, '');
-      // 与 fd -g 对齐：纯 basename glob 在整棵树递归匹配；只有带路径分隔符时
-      // 才把 pattern 当作相对路径 glob。
-      const candidate = pattern.includes('/') || pattern.includes('\\')
-        ? relative
-        : path.basename(relative);
+      // 完整镜像 Pi 上游 fd 规则：无 slash 时匹配 basename；有 slash 时启用
+      // full-path，且相对 pattern 自动加 **/，让 src/** 同时命中 monorepo 子包。
+      let candidate = path.basename(relative);
+      let effectivePattern = pattern;
+      if (pattern.includes('/')) {
+        candidate = path.resolve(cwd, relative).split(path.sep).join('/');
+        if (!pattern.startsWith('/') && !pattern.startsWith('**/') && pattern !== '**') {
+          effectivePattern = '**/' + pattern;
+        }
+      }
       // path.matchesGlob 默认不让 * 匹配点开头的段；rg glob 会匹配。保留原路径先匹配
       // 显式点模式，再用等长占位符补齐 --hidden 下的普通通配语义。
       const visibleCandidate = candidate.replace(/(^|[\\/])\./g, '$1_');
-      if (!path.matchesGlob(candidate, pattern) && !path.matchesGlob(visibleCandidate, pattern)) return;
+      if (!path.matchesGlob(candidate, effectivePattern)
+        && !path.matchesGlob(visibleCandidate, effectivePattern)) return;
       lines.push(path.join(cwd, relative));
       if (lines.length >= limit && !child.killed) {
         stoppedAtLimit = true;

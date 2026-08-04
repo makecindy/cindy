@@ -1184,6 +1184,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       writeFileSync(path.join(workingDir, 'skip-me.txt'), 'skip\n');
       mkdirSync(path.join(workingDir, 'nested'));
       writeFileSync(path.join(workingDir, 'nested', 'find-nested.ts'), 'export {};\n');
+      mkdirSync(path.join(workingDir, 'packages', 'foo', 'src'), { recursive: true });
+      writeFileSync(
+        path.join(workingDir, 'packages', 'foo', 'src', 'find-path.spec.ts'),
+        'export {};\n',
+      );
       writeFileSync(path.join(workingDir, '.gitignore'), 'ignored-by-git.ts\n');
       writeFileSync(path.join(workingDir, 'ignored-by-git.ts'), 'secret\n');
       try {
@@ -1204,6 +1209,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(followUp.some((body) => body.includes('find-nested.ts'))).toBe(true);
         expect(followUp.some((body) => body.includes('skip-me.txt'))).toBe(false);
         expect(followUp.some((body) => body.includes('ignored-by-git.ts'))).toBe(false);
+
+        scriptedResponses.push(
+          anthropicToolUseBody('find', { pattern: 'src/**/*.spec.ts', path: '.' }),
+          anthropicStreamBody('path find turn finished'),
+        );
+        const pathReqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-managed-find-full-path',
+          workingDir,
+          permissionMode: 'bypassPermissions',
+          resolverBehavior: 'deny',
+        });
+        const pathFollowUp = seenRequests.slice(pathReqBefore).map((request) => request.body);
+        expect(pathFollowUp.some((body) => body.includes('find-path.spec.ts'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

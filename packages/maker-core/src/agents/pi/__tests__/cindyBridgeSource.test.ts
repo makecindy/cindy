@@ -11,9 +11,11 @@ describe('cindy-bridge extension source', () => {
     }
     expect(source).toContain("const args = ['--files', '--hidden', '--no-require-git']");
     expect(source).toContain("const child = spawn('rg', args");
-    expect(source).toContain("pattern.includes('/') || pattern.includes('\\\\')");
+    expect(source).toContain("if (pattern.includes('/')) {");
     expect(source).toContain('path.basename(relative)');
-    expect(source).toContain('path.matchesGlob(candidate, pattern)');
+    expect(source).toContain("effectivePattern = '**/' + pattern");
+    expect(source).toContain('path.resolve(cwd, relative)');
+    expect(source).toContain('path.matchesGlob(candidate, effectivePattern)');
     expect(source).not.toContain("'--glob', pattern");
     expect(source).toContain('glob: rgGlob');
     expect(source).toContain('const grepTool = createGrepTool(process.cwd())');
