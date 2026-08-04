@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import {
   Link2,
   MessageSquarePlus,
-  Split,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -16,7 +15,6 @@ import type { MobileMessageMenuActionId, MobileMessageMenuItem } from '@/session
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 const ACTION_ICONS: Record<MobileMessageMenuActionId, LucideIcon> = {
-  fork: Split,
   'add-to-chat': MessageSquarePlus,
   'copy-link': Link2,
   rewind: Undo2,
@@ -25,11 +23,13 @@ const ACTION_ICONS: Record<MobileMessageMenuActionId, LucideIcon> = {
 
 /** Touch-first counterpart of desktop's compact More dropdown. */
 export function MessageActionSheet({
+  disabledActions,
   items,
   onAction,
   onClose,
   visible,
 }: {
+  disabledActions?: readonly MobileMessageMenuActionId[];
   items: readonly MobileMessageMenuItem[];
   onAction(action: MobileMessageMenuActionId): void;
   onClose(): void;
@@ -74,14 +74,21 @@ export function MessageActionSheet({
           {items.map((item) => {
             const Icon = ACTION_ICONS[item.id];
             const color = item.destructive ? colors.destructive : colors.sheetActionText;
+            const disabled = disabledActions?.includes(item.id) === true;
             return (
               <View key={item.id}>
                 {item.separatorBefore ? <View style={styles.separator} /> : null}
                 <Pressable
                   accessibilityLabel={item.label}
                   accessibilityRole="button"
+                  accessibilityState={{ disabled }}
+                  disabled={disabled}
                   onPress={() => select(item.id)}
-                  style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+                  style={({ pressed }) => [
+                    styles.actionRow,
+                    disabled && styles.disabled,
+                    pressed && styles.pressed,
+                  ]}
                   testID={`message.actions.${item.id}`}
                 >
                   <Icon color={color} size={iconSize.lg} strokeWidth={iconStroke.regular} />
@@ -125,6 +132,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   separator: { backgroundColor: colors.sheetActionBorder, height: StyleSheet.hairlineWidth },
+  disabled: { opacity: 0.42 },
   actionLabel: {
     color: colors.sheetActionText,
     flexShrink: 1,

@@ -16,5 +16,15 @@
   "sectionRemoteDisabled": "컴퓨터에서 조작",
   "sectionAccessRevoked": "다시 허용 필요",
   "retryAccess": "액세스 재시도",
-  "recheck": "다시 확인"
+  "recheck": "다시 확인",
+  "authFailedTitle": "로그인이 만료되었습니다",
+  "authFailedHint": "로그인이 만료되었습니다. 로그아웃한 후 다시 로그인해 주세요.",
+  "replacedTitle": "연결이 다른 곳에서 대체되었습니다",
+  "replacedHint": "이 기기의 연결이 다른 곳에서 대체되었습니다. 다시 연결하는 중입니다.",
+  "tooManyConnectionsTitle": "연결 수 한도에 도달했습니다",
+  "tooManyConnectionsHint": "이 계정에 온라인 상태인 기기가 너무 많습니다. 다른 기기의 연결을 끊고 다시 시도해 주세요.",
+  "versionMismatchTitle": "버전이 일치하지 않습니다",
+  "versionMismatchHint": "이 앱 버전은 서비스와 호환되지 않습니다. 최신 버전으로 업데이트한 후 다시 시도해 주세요.",
+  "unstableTitle": "연결이 반복적으로 끊깁니다",
+  "unstableHint": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 앱을 다시 시작해 주세요."
 }

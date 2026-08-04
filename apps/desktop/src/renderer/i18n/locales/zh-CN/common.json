@@ -397,6 +397,7 @@
         "importPartial": "已导入 {{name}}（{{themeCount}} 个方案）。{{skipped}} 项语义色按规范不变，{{unresolved}} 项取值无法识别，{{derived}} 项由邻近色近似推导",
         "importFailed": "导入失败：{{error}}",
         "importUnsupported": "这个文件不是可识别的 VSCode 或 Obsidian 主题",
+        "importContrastUnsupported": "主题配色无法清晰显示关闭状态的开关，调整背景色或次要文字颜色后重新导入",
         "importUsesInclude": "该 VSCode 主题通过 include 继承配色，无法独立导入",
         "importNotAFile": "选择一个文件，而非文件夹",
         "importTooLarge": "文件太大，无法作为主题导入",
@@ -1323,6 +1324,9 @@
           "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "modelSupportsImageInput": "支持图片输入",
           "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
+          "modelSupportsReasoning": "支持推理",
+          "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
+          "modelReasoningEfforts": "支持的推理强度",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1641,7 +1645,7 @@
     "gitSafety": {
       "title": "Git 安全",
       "autoSnapshotTitle": "Git 安全保存点",
-      "description": "Agent 修改后自动创建保存点 commit。只有开启后才显示 Codex rewind 入口。",
+      "description": "Agent 修改后自动在项目 Git 仓库里记录隐藏保存点，不会在你的分支上产生 commit。只有开启后才显示 Codex rewind 入口。",
       "toggleAria": "切换 Git 安全保存点",
       "saveFailed": "保存 Git 安全设置失败"
     },
@@ -2695,7 +2699,23 @@
           "removeWorkspace": "删除此工作目录",
           "changeDir": "点击更换目录(别名与偏好保留)",
           "defaultWorkspaceChip": "默认：{{name}}",
-          "defaultWorkspaceAria": "选择 X 派发任务时使用的默认工作目录"
+          "defaultWorkspaceAria": "选择派发任务时使用的默认工作目录",
+          "defaultWorkspaceRadioAria": "把「{{name}}」设为默认工作目录",
+          "defaultWorkspaceRowHint": "选中的目录是默认工作目录：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /workspace 单独选过的，仍按那个走）。请留意所选目录这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个仓库里执行。",
+          "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
+          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的目录的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个目录里设置。恢复默认会一并清掉以下全部内容：",
+          "legacyDefaultsRow": {
+            "agentKind": "默认 Agent：{{current}} → {{fallback}}",
+            "permissionMode": "权限模式：{{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
+          "legacyDefaultsField": {
+            "model": "模型 {{current}} → {{fallback}}",
+            "effort": "思考档位 {{current}} → {{fallback}}",
+            "source": "模型来源 {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": "，",
+          "legacyDefaultsSourceFollowsGlobal": "跟随全局设置"
         },
         "binding": {
           "copyLink": "复制链接",
@@ -2919,7 +2939,8 @@
         "auth-failed": "登录已失效，请重新登录",
         "replaced": "连接被另一处相同设备顶替",
         "too-many-connections": "同账号连接数已达上限",
-        "version-mismatch": "协议版本不一致，请升级应用"
+        "version-mismatch": "协议版本不一致，请升级应用",
+        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy"
       },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
@@ -2960,7 +2981,8 @@
         "disconnectFailed": "断开远程连接失败",
         "remoteSessionEnded": "被控设备已结束该远程任务"
       },
-      "control": "控制"
+      "control": "控制",
+      "standbyHint": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。"
     },
     "imBot": {
       "beta": "Beta",
@@ -3404,6 +3426,8 @@
         "networkSecretGhostInputDetail": "凭证由这个插件自己的设置界面收集，录入时会经过插件页面；随后一次性交给主机加密保管，存入后插件无法读回，主机只在请求它声明的域名时注入。",
         "networkSecretIdentity": "将使用你的登录邮箱作为凭证「{{name}}」",
         "networkSecretIdentityDetail": "值取自当前登录账号的邮箱，请求时由主机自动派生注入；无需填写。插件可读取该邮箱，用于在它的设置界面里展示当前身份。",
+        "networkSecretOrganizationIdentity": "将使用你的 Cindy 企业身份作为凭证「{{name}}」",
+        "networkSecretOrganizationIdentityDetail": "Cindy 会按需签发短时身份断言，仅由主机发送给明确列出的服务域名；插件代码无法读取或保存令牌。",
         "networkSecretOauth": "将引导你在 {{host}} 完成 OAuth 授权({{name}})",
         "networkSecretOauthDetail": "授权流程与全部令牌由主机代管，插件代码无法读取；客户端凭证由你在本插件详情页自填。下方为其申请的权限范围(scopes)原文，请确认后再放行。",
         "networkConnections": "可连接你添加的 {{label}}",
@@ -5271,10 +5295,20 @@
       }
     },
     "atMention": {
-      "scanFailed": "扫描工作目录失败",
+      "add": "添加",
+      "plugins": "插件",
+      "filesAndFolders": "文件和文件夹",
+      "browserTab": "浏览器标签",
+      "desktopWindow": "应用窗口",
+      "task": "任务",
+      "pluginResources": "插件资源",
+      "pluginResource": "插件资源",
+      "backToAll": "返回全部 @ 内容",
+      "scanFailed": "加载 @ 内容失败",
       "retry": "重试",
       "searching": "搜索中…",
-      "noMatch": "没有匹配的文件",
+      "noMatch": "没有匹配的内容",
+      "typeToSearchFiles": "输入关键字搜索文件和任务",
       "keepTyping": "继续输入以缩小范围…"
     },
     "planReview": {
@@ -5459,6 +5493,7 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
+        "pi": "Pi",
         "workflow": "Workflow",
         "shell": "后台命令"
       },
@@ -5538,7 +5573,9 @@
       "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
       "credentialSwitchBusy": "Codex 正在其它任务中运行，暂时无法按本任务选择的模型来源切换（需要重启共享的 Codex 后台进程）。等它结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
+      "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
+      "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
       "switchClaudeSubscription": "切换到 Claude.ai 并重试",
       "switchClaudeSubscriptionTitle": "把当前任务切换到 Claude.ai 订阅并重试",
       "switchingClaudeSubscription": "正在切换到 Claude.ai…",
@@ -5565,6 +5602,7 @@
       "networkAutoRetrying": "网络异常，正在自动重试…",
       "networkReconnecting": "网络连接中断，正在重新连接（{{attempt}}/{{maxAttempts}}）…",
       "overloadRetrying": "模型服务繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
+      "rateLimitRetrying": "请求受到限流，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "模型服务繁忙，上游暂时没有可用容量。可点击「重试」，或换一个模型。",
       "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
       "networkShowRaw": "查看原始错误",
@@ -5915,6 +5953,11 @@
       "openInBrowser": "在浏览器中查看",
       "fileCopied": "文件已复制",
       "pathCopied": "路径已复制",
+      "BROWSER_FILE_INVALID_TARGET": "本地页面路径无效",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "不允许访问该路径",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "该文件类型无法在浏览器中打开",
+      "BROWSER_FILE_NOT_FOUND": "未找到本地页面",
+      "BROWSER_FILE_OPEN_FAILED": "在浏览器中打开失败",
       "openInBrowserFailed": "在浏览器中打开失败",
       "openLinkFailed": "打开链接失败",
       "anchorNotFound": "未找到对应标题",
@@ -6033,6 +6076,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
@@ -6139,7 +6183,8 @@
         "auth-failed": "登录已失效，重新登录后才能恢复远程连接",
         "replaced": "本机连接被另一处相同设备顶替，正在重新连接…",
         "too-many-connections": "同账号在线设备过多，连接被服务端拒绝",
-        "version-mismatch": "与服务端协议版本不一致，请升级应用后重试"
+        "version-mismatch": "与服务端协议版本不一致，请升级应用后重试",
+        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试"
       }
     },
     "common": {
@@ -8663,7 +8708,7 @@
     },
     "catalog": {
       "errorTitle": "暂时无法获取套餐",
-      "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
+      "errorDescription": "请检查网络后重试。",
       "emptyTitle": "即将上线，敬请期待",
       "currentPlan": "当前套餐",
       "unavailableReasons": {
@@ -8727,7 +8772,7 @@
       "openPayment": "打开支付页面",
       "refreshingAction": "正在获取支付方式…",
       "paymentCompleted": "支付已完成。",
-      "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
+      "requestFailed": "请求失败，请稍后重试。",
       "expiredBody": "支付链接已过期，请重新创建支付。",
       "actionExpiredBody": "二维码已过期，请关闭后重新选择以生成新的支付。",
       "canceledBody": "本次支付已取消。",
@@ -8735,16 +8780,17 @@
     },
     "planChange": {
       "targetTitle": "更改订阅套餐",
+      "back": "上一步",
       "upgradeBadge": "升级",
       "sameLevelBadge": "同等级",
       "downgradeBadge": "降级",
       "emptyTitle": "暂无可切换的套餐",
-      "emptyDescription": "服务端尚未为当前支付方式配置其他可切换套餐。",
+      "emptyDescription": "当前没有其他可切换的套餐。",
       "quotingTitle": "正在准备套餐变更",
-      "quotingBody": "正在向服务端获取价格与生效时间…",
+      "quotingBody": "正在确认价格与生效时间…",
       "quoteTitle": "确认套餐变更",
       "confirmingTitle": "正在提交变更",
-      "confirmingBody": "正在向服务端提交套餐变更…",
+      "confirmingBody": "正在提交套餐变更…",
       "pendingProviderTitle": "正在处理套餐变更",
       "pendingProviderBody": "支付渠道正在处理本次变更，Cindy 会持续确认最新结果…",
       "awaitingTitle": "支付差价",
@@ -8761,7 +8807,7 @@
       "requestFailed": "套餐变更请求未完成，请刷新订阅状态后重试。",
       "quoteRejected": "当前订阅无法切换到这个套餐，请选择其他套餐。",
       "chooseAnotherPlan": "选择其他套餐",
-      "resyncHint": "确认结果暂时无法核实，正在从服务端同步最新状态…",
+      "resyncHint": "确认结果暂时无法核实，正在重新确认最新状态…",
       "upgradeDueNow": "本期需支付差价 {{amount}}",
       "upgradeNoAmount": "确认后升级立即生效。",
       "upgradeHint": "支付完成后升级立即生效，后续按新套餐价格续费。",

@@ -17,6 +17,7 @@
 import { addTab, ensureHydrated } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
 import { routeSidebarCommand } from './detachedSidebarRouting';
+import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 
 /**
  * 绝对路径 → file:// URL。macOS/Linux POSIX 路径与 Windows 盘符路径都支持:
@@ -36,15 +37,13 @@ export function pathToFileUrl(absPath: string): string {
   return `file://${encoded}`;
 }
 
-/** 本地 HTML 预览自动刷新只认这些扩展名(与 browserOpenableExts / 文件树菜单对齐)。 */
-const LOCAL_HTML_EXT_RE = /\.(html?|xhtml)$/i;
-
 /**
  * file:// URL → 本机绝对路径。与 pathToFileUrl 互逆:
  *   file:///Users/a%20b/x.html  → /Users/a b/x.html
  *   file:///E:/out/index.html   → E:\out\index.html (win32 风格分隔)
  *
- * 只取 pathname(忽略 hash / query);非 file: 或解析失败 → null。
+ * 仅接受无凭证、无端口且 authority 为空或 localhost 的本地 file URL；只取
+ * pathname(忽略 hash / query)，非 file:、远端 authority 或解析失败 → null。
  */
 export function fileUrlToAbsPath(url: string): string | null {
   let parsed: URL;
@@ -54,6 +53,9 @@ export function fileUrlToAbsPath(url: string): string | null {
     return null;
   }
   if (parsed.protocol !== 'file:') return null;
+  if (parsed.username || parsed.password) return null;
+  if (parsed.hostname && parsed.hostname !== 'localhost') return null;
+  if (parsed.port) return null;
   let pathname: string;
   try {
     pathname = decodeURIComponent(parsed.pathname);
@@ -67,10 +69,10 @@ export function fileUrlToAbsPath(url: string): string | null {
   return pathname || null;
 }
 
-/** 当前页是否为本地 HTML 文件预览(file:// + html/htm/xhtml)。 */
+/** 当前页是否为本地 HTML 文件预览(file:// + html/htm)。 */
 export function isLocalHtmlFileUrl(url: string): boolean {
   const abs = fileUrlToAbsPath(url);
-  return abs !== null && LOCAL_HTML_EXT_RE.test(abs);
+  return abs !== null && isBrowserOpenablePath(abs);
 }
 
 export interface OpenUrlInSidebarBrowserOptions {

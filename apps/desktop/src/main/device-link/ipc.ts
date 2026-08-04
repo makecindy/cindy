@@ -25,6 +25,7 @@ import {
 import {
   getDeviceLinkStatus,
   getDeviceLinkConnectionIssue,
+  isDeviceLinkStandby,
   getUnresponsiveDeviceIds,
   clearDeviceResponsiveness,
   setRemoteControlEnabled,
@@ -122,6 +123,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
         connectionIssue: getDeviceLinkConnectionIssue(),
+        standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
@@ -229,6 +231,8 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     keepAwake: state.keepAwake,
     linkStatus: 'stopped',
     connectionIssue: null,
+    // 无 device-link 能力(未登录 / 本地会话)不是“被本机另一实例占用”,按 false 上报。
+    standby: false,
     controlledBy: [],
     revokedControllers: [],
     disabledControlDeviceIds: [],
@@ -401,7 +405,15 @@ export function handleCloseLink(deps: DeviceLinkIpcDeps, deviceId: unknown): { o
   if (typeof deviceId !== 'string' || !deviceId.trim()) {
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
-  deps.closeLink(deviceId);
+  const normalizedDeviceId = deviceId.trim();
+  // 显式断开 = 撤回对该设备的控制需求。订阅引用表是全部重放入口(ws-online /
+  // presence 翻转 / 熔断恢复)共用的需求信号:不清的话,close 后任一恢复事件都会
+  // 带着幽灵引用经按需建链把刚关的链路建回来;被控端在 link 关闭时本就丢弃订阅,
+  // 这里让控制端账本与之对齐。清引用 + 清熔断 + 关链路,与「禁用设备控制」路径
+  // (setDeviceControlEnabled(false))的既有三连一致(review P2)。
+  resetSubscriptionRefcountForDevice(normalizedDeviceId);
+  deps.clearDeviceResponsiveness?.(normalizedDeviceId);
+  deps.closeLink(normalizedDeviceId);
   return { ok: true };
 }
 

@@ -445,7 +445,8 @@ export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
   | 'replaced'
   | 'too-many-connections'
-  | 'version-mismatch';
+  | 'version-mismatch'
+  | 'unstable';
 
 /** 连接问题标题(手机端直出文案;桌面端走 i18n,不用这组)。 */
 export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
@@ -458,6 +459,8 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
       return '连接数已达上限';
     case 'version-mismatch':
       return '版本不匹配';
+    case 'unstable':
+      return '连接反复断开';
   }
 }
 
@@ -472,6 +475,8 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
       return '当前账号同时在线的设备过多，请断开其它设备后重试。';
     case 'version-mismatch':
       return '当前 App 版本与服务端协议不一致，请升级到最新版本。';
+    case 'unstable':
+      return '本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。';
   }
 }
 

@@ -52,6 +52,8 @@ export interface RsbWindowControllerDeps {
   contextChannel: string;
   commandChannel: string;
   isQuitting: () => boolean;
+  /** Popup WindowProxy depends on the ordinary webview opener staying alive. */
+  canCloseWindow?: () => boolean;
   log: ControllerLogger;
 }
 
@@ -107,6 +109,12 @@ export class RsbWindowController {
     this.winRef = win;
     this.closing = false;
     this.ready = false;
+    win.on('close', (event) => {
+      if (this.deps.isQuitting() || this.deps.canCloseWindow?.() !== false) return;
+      event.preventDefault();
+      this.closing = false;
+      this.deps.log.warn('right-sidebar window close blocked by active browser popup');
+    });
     win.on('closed', () => this.onClosed());
     this.deps.settings.writePatch({ lastOpen: true });
     this.broadcast();

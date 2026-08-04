@@ -25,6 +25,7 @@ import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
 import { createLogger } from '@/lib/logger';
+import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 
 const log = createLogger('useForkAtMessage');
 
@@ -117,6 +118,7 @@ export function useForkAtMessage({
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'UNKNOWN';
+      const detail = err instanceof Error ? err.message : String(err);
       const msg =
         code === 'FORK_UNSUPPORTED_HISTORY'
           ? t('chat.userMessage.forkErrors.unsupportedHistory')
@@ -125,9 +127,9 @@ export function useForkAtMessage({
             : code === 'SOURCE_NEVER_RAN'
               ? t('chat.userMessage.forkErrors.sourceNeverRan')
               : code === 'CODEX_FORK_STATE_UNAVAILABLE'
-                ? t('chat.userMessage.forkErrors.codexStateUnavailable', {
-                    detail: err instanceof Error ? err.message : String(err),
-                  })
+                ? isCodexResumeNotReadyProjectionError(detail)
+                  ? t('chat.errorBanner.codexResumeNotReady')
+                  : t('chat.userMessage.forkErrors.codexStateUnavailable', { detail })
                 : t('chat.userMessage.forkErrors.generic');
       toast.error(msg);
       // Re-throw so MessageActionBar's `forking` state knows to clear via

@@ -117,6 +117,8 @@ describe('device-link shared contract', () => {
     expect(connectionIssueTitle('replaced')).toContain('顶替');
     expect(connectionIssueHint('too-many-connections')).toContain('断开其它设备');
     expect(connectionIssueHint('version-mismatch')).toContain('升级到最新版本');
+    expect(connectionIssueTitle('unstable')).toContain('反复断开');
+    expect(connectionIssueHint('unstable')).toContain('本机');
   });
 
   it('preserves structured remote error codes and access revoked classification', () => {

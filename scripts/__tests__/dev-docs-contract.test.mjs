@@ -73,10 +73,52 @@ function assertPnpmCommandExists(line, rootPackage) {
 	assert.ok(rootPackage.scripts?.[command], `documented root script is missing: ${line}`);
 }
 
+/**
+ * 去掉 fenced code block 与 inline code span,再抽链接。顺序不能反 —— fenced block
+ * 内部含反引号,先剥 inline 会把围栏本身吃掉。
+ *
+ * 这样 `[x](y)` 这类**演示 markdown 语法**的写法不会被当成真链接(design-rules/DESIGN.md
+ * 里有多处);而 [`foo.md`](./foo.md) 这种「链接文本本身是 inline code」的常见写法,剥完
+ * 变成 [](./foo.md),目标仍在括号里,正则照常命中。
+ */
+function stripCodeSpans(text) {
+	return (
+		text
+			// 围栏允许带缩进 —— 列表项里的围栏本就是缩进的(docs/design-rules/DESIGN.md
+			// 与 docs/dev-rules/pi-remaining-work.md 各有一处)。只认行首 ``` 会漏掉它们,
+			// 块内的示例链接就会被当成真链接。
+			.replace(/^[ \t]*```[\s\S]*?^[ \t]*```/gm, "")
+			// inline code 用「等长反引号串」配对,这样内容本身含反引号的写法也能整段剥掉
+			// (docs/product-rules/task-and-conversation-naming.md 有 `` `${n} 个会话` ``)。
+			// 刻意不跨行:落单的反引号不应该让后面整篇文档漏检。
+			.replace(/(`+)(?:(?!\1)[^\n])*?\1/g, "")
+	);
+}
+
 function localMarkdownLinks(relativePath) {
-	return [...readText(relativePath).matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]
+	return [...stripCodeSpans(readText(relativePath)).matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]
 		.map((match) => match[1].trim())
 		.filter((target) => !/^(?:https?:|mailto:|#)/.test(target));
+}
+
+/**
+ * 需要做内链体检的全部文档:根目录规则文件 + `docs/` 下所有 markdown(递归)。
+ *
+ * 覆盖面刻意做全 —— 悬空内链最容易出现在深层目录里:文档被删除时,引用它的索引
+ * (如 `docs/legal/README.md`、`docs/README.md`)常常漏改。只体检 CHECKED_DOCS 那几篇
+ * canonical 文档挡不住这类回归。
+ */
+function listLinkCheckedDocs() {
+	const out = ["AGENTS.md", ...CONTRIBUTING_DOCS];
+	const walk = (relativeDir) => {
+		for (const entry of fs.readdirSync(path.join(ROOT, relativeDir), { withFileTypes: true })) {
+			const relativePath = path.join(relativeDir, entry.name);
+			if (entry.isDirectory()) walk(relativePath);
+			else if (entry.name.endsWith(".md")) out.push(relativePath);
+		}
+	};
+	walk("docs");
+	return [...new Set(out)].sort();
 }
 
 test("developer docs only document pnpm commands that exist", () => {
@@ -117,7 +159,7 @@ test("AGENTS and CONTRIBUTING route to the canonical developer docs", () => {
 });
 
 test("developer documentation links resolve", () => {
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of listLinkCheckedDocs()) {
 		const sourceDir = path.dirname(path.join(ROOT, relativePath));
 		for (const target of localMarkdownLinks(relativePath)) {
 			const fileTarget = decodeURIComponent(target.split("#", 1)[0]);

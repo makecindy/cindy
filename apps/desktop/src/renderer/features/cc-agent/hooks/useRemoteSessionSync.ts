@@ -84,6 +84,11 @@ export interface RemoteSyncEngine {
   handleOnline(): void;
   /** presence 变化:本会话设备且 online → 重建订阅 + 对账;否则忽略。 */
   handlePresence(deviceId: string, online: boolean): void;
+  /**
+   * 「设备无响应」熔断恢复:本会话设备 → 重建订阅 + 对账,并核实/收尾熔断期间
+   * 可能已结束却丢了 done 帧的回合(见 verifyAndSettleRunningTurn)。
+   */
+  handleResponsivenessRecovered(deviceId: string): void;
   /** turn 运行态变化(内部边沿检测 true→false → 对账)。 */
   handleRunningChange(running: boolean): void;
   /** 窗口聚焦 → 对账。 */
@@ -223,10 +228,23 @@ export function createRemoteSessionSyncEngine(
   const MOUNT_RECONCILE_DELAY_MS = 1_000;
   let mountReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const reconcileOnMount = (): void => {
+  /**
+   * 「本地仍 isRunning,但被控端可能早已跑完」的一次性核实与收尾。
+   *
+   * 两个触发时点共用(都是「本机与被控端可能已错过 done 帧」的边沿):
+   *  - mount:切回一个 turn 期间被退订过的远程会话;
+   *  - 熔断恢复:熔断 open 期间订阅与消息拉取全被快速失败挡掉,done 帧可能丢了。
+   *
+   * 先延迟一小段等晚到的 done push 落地,仍 isRunning 才向被控端核实权威态;
+   * 权威 not-running 时先 finalize 清 isStreaming、再 force 对账 —— 不 force 的
+   * 对账会被 store 的 streaming guard 跳过,消息补不回来(review P2)。
+   * 核实不可达时不 auto-finalize,交给看门狗兜底。
+   */
+  const verifyAndSettleRunningTurn = (): void => {
     if (!watchdogEnabled) return; // 缺看门狗 deps → 无法核实,依赖原有 90s 路径
     const { sessionId } = getTarget();
     if (!sessionId || !deps.isRunningNow!(sessionId)) return;
+    if (mountReconcileTimer !== null) return; // 已有一次核实在途,不叠加
     mountReconcileTimer = setTimeout(() => {
       mountReconcileTimer = null;
       const { sessionId: sid } = getTarget();
@@ -240,15 +258,24 @@ export function createRemoteSessionSyncEngine(
         try {
           const stillRunning = await deps.queryTurnRunning!(sid);
           if (watchdogStopped) return;
+          // 核实**成功**本身就是「被控端可达」的证据 → 收起 suspect-stall 兜底
+          // (与看门狗路径对齐)。否则此前因查询失败挂起的兜底横幅会在连接已恢复后
+          // 继续要求用户手动处理,直到下一次看门狗巡检(退避后可能约 60s)才消失
+          // (review P2)。turn 仍在运行也照样清 —— 它只是「无法核实」的兜底态。
+          deps.onRecovered?.(sid);
           if (!stillRunning) {
             deps.finalize!(sid);
             deps.reconcileForce!(sid);
           }
         } catch {
-          // 不可达 → 不 auto-finalize,看门狗后续会覆盖
+          // 不可达 → 不 auto-finalize、不清兜底,看门狗后续会覆盖
         }
       })();
     }, MOUNT_RECONCILE_DELAY_MS);
+  };
+
+  const reconcileOnMount = (): void => {
+    verifyAndSettleRunningTurn();
   };
 
   return {
@@ -260,6 +287,14 @@ export function createRemoteSessionSyncEngine(
     handleOnline() {
       subscribeHeavy();
       scheduleReconcile();
+    },
+    handleResponsivenessRecovered(deviceId) {
+      if (deviceId !== getTarget().deviceId) return;
+      subscribeHeavy();
+      scheduleReconcile();
+      // 熔断期间被控端可能已跑完而 done 帧被丢:不带 force 的对账会被 store 的
+      // streaming guard 跳过,Generating 与缺失消息会一直留到看门狗核实。
+      verifyAndSettleRunningTurn();
     },
     handlePresence(deviceId, online) {
       if (deviceId !== getTarget().deviceId || !online) return;
@@ -388,6 +423,15 @@ export function useRemoteSessionSync(
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
       engine.handlePresence(snap.deviceId, snap.online);
     });
+    // 「设备无响应」熔断恢复(main 权威)→ 与 relay 上线同处理:重订阅 + 对账。
+    // 熔断 open 期间本会话的订阅与消息拉取都被快速失败挡掉了,而 presence / relay
+    // 状态全程没变、窗口可能一直聚焦、turn 也可能还在跑 —— 既有的四个对账触发点
+    // (relay online / presence online / focus / turn 结束)一个都不会发生,恢复后
+    // 视图会继续缺消息。连接类状态的恢复必须全自动,不能靠横幅按钮兜(review P2)。
+    const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
+      if (p.unresponsive) return;
+      engine.handleResponsivenessRecovered(p.deviceId);
+    });
     const offStore = makerChatStore.subscribe(sessionId, () => {
       const running = makerChatStore.getSnapshot(sessionId).agentStatus.isRunning;
       if (!running) setSuspectStall(false); // turn 结束(含被收尾)→ 收起兜底
@@ -399,6 +443,7 @@ export function useRemoteSessionSync(
     return () => {
       offStatus();
       offPresence();
+      offResponsiveness();
       offStore();
       window.removeEventListener('focus', onFocus);
       engine.dispose();

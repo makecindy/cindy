@@ -137,6 +137,12 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
     });
 }
 
+// shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
+// 即时清理:覆盖导入等流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复,
+// status 触发的 ref 删除与这类回滚天然竞态(删了就不可逆)。孤儿 ref 隐藏且
+// 极小,统一由启动期 reconcileSavepointRefsForDeletedSessions() 清理——启动期
+// 不存在进行中的瞬态软删流程。
+
 /**
  * 会话 status 变化的订阅槽①旁路通知(archived → did-session-archived)。
  * 与 worktree 回收共用同三个调用点(update / patch-meta / 批量 setStatus),
@@ -1176,6 +1182,15 @@ export function registerSessionIpc(
     }
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    const updated = sessionToCamel(row);
+    const broadcastPatch =
+      p.pinnedAt === undefined
+        ? p
+        : {
+            ...p,
+            pinnedAt: updated.pinnedAt,
+            ...(updated.pinnedAt === null ? {} : { status: updated.status }),
+          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1187,18 +1202,17 @@ export function registerSessionIpc(
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
-    if (projectTargetChanged || settingsChanged || titleChanged) {
-      broadcastSessionPatched(sid, p);
+    if (projectTargetChanged || settingsChanged || titleChanged || p.pinnedAt !== undefined) {
+      broadcastSessionPatched(sid, broadcastPatch);
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
     // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
     // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
-    if (p.pinnedAt != null) {
+    if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
       void import('../../sessionTaskSummary.js').then((m) =>
         m.maybeGenerateSessionTaskSummary(sid),
       );
     }
-    const updated = sessionToCamel(row);
     notifyAgentIslandSessionPatch(updated.id, {
       status: updated.status,
       title: updated.title,

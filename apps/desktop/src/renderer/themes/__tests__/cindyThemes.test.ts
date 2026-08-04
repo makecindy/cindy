@@ -109,6 +109,26 @@ const THEMES: ReadonlyArray<readonly [string, CindyTheme]> = [
   ['cindy-dark', { colors: cindyDark.colors as unknown as Record<string, string> }],
 ];
 
+// 决策表生成后已有的字面 override 债务；这里只冻结 ID 边界，不把其值另立为权威。
+// 新 ID 不得扩充这份 baseline，而应进入决策表或引用已治理 token。
+const PREEXISTING_UNFROZEN_LITERAL_IDS: Record<string, ReadonlySet<string>> = {
+  'cindy-light': new Set([
+    'ask-option-list-bg',
+    'model-item-hover',
+    'update-btn-bg',
+    'update-btn-hover',
+  ]),
+  'cindy-dark': new Set([
+    'ask-header-chip-bg',
+    'ask-option-hover',
+    'ask-option-list-bg',
+    'ask-send-disabled-bg',
+    'model-item-hover',
+    'update-btn-bg',
+    'update-btn-hover',
+  ]),
+};
+
 // ===== ① key 合法 =====
 describe('CINDY · ① key 合法(每 override key ∈ ColorRegistry)', () => {
   for (const [name, theme] of THEMES) {
@@ -144,6 +164,28 @@ describe('CINDY · ③ 值格式按消费契约', () => {
         if (isHslSlot) {
           expect(isHslVal, `${name}.${id} 在 HSL_FORMAT_IDS 但值非 HSL 三元组: ${val}`).toBe(true);
         }
+      }
+    }
+  });
+
+  it('baseline 外未列入决策表的新增 override 只能引用已治理 token', () => {
+    const frozenIds = new Set(Object.keys(CINDY_EXPECTED_VALUES));
+    const registeredIds = new Set(colorRegistry.getColors().map((color) => color.id));
+    const tokenReference = /^var\(--([a-z0-9-]+)\)$/;
+    for (const [name, theme] of THEMES) {
+      const preexistingLiteralIds = PREEXISTING_UNFROZEN_LITERAL_IDS[name] ?? new Set();
+      for (const [id, value] of Object.entries(theme.colors)) {
+        if (frozenIds.has(id) || preexistingLiteralIds.has(id)) continue;
+        const referencedId = value.match(tokenReference)?.[1];
+        expect(
+          referencedId,
+          `${name}.${id} 未入决策表且不在 baseline，只能引用已治理 token，实际 ${value}`,
+        ).toBeTruthy();
+        if (!referencedId) continue;
+        expect(
+          registeredIds.has(referencedId),
+          `${name}.${id} 引用了未注册 token: ${referencedId}`,
+        ).toBe(true);
       }
     }
   });

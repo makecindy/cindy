@@ -28,6 +28,7 @@
     "thinking": "생각 중…",
     "networkReconnecting": "다시 연결하는 중…",
     "modelBusyRetrying": "모델 서비스 혼잡, 다시 시도 중…",
+    "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 다시 시도 중…",
     "composerSyncing": "세션 데이터를 동기화 중입니다. 완료되면 보낼 수 있습니다.",
     "composerSessionNotSynced": "이 세션은 아직 동기화가 끝나지 않았습니다.",
     "composerCreating": "세션을 만드는 중입니다. 첫 메시지가 전송되면 계속 보낼 수 있습니다.",
@@ -247,7 +248,6 @@
     "backToMenu": "세션 메뉴로 돌아가기"
   },
   "messageMenu": {
-    "fork": "새 세션에서 계속하기",
     "addToChat": "대화에 추가",
     "copyLink": "현재 메시지 링크 복사",
     "rewind": "여기로 돌아가기",

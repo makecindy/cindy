@@ -33,8 +33,11 @@ export const HOOK_CONTROL_INVOKE = {
   SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
   /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
   SET_WORKSPACES: 'maker:hook-control:set-workspaces',
-  /** 设置 X 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。 */
-  SET_X_DEFAULT_WORKSPACE: 'maker:hook-control:set-x-default-workspace',
+  /**
+   * 设置某个 provider 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。
+   * 进程内通道, 没有跨版本兼容问题 —— 原 set-x-default-workspace 直接改名。
+   */
+  SET_PROVIDER_DEFAULT_WORKSPACE: 'maker:hook-control:set-provider-default-workspace',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */

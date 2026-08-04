@@ -821,6 +821,7 @@
       },
       "note": "面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。",
       "exempt": [
+        "desktop:settings.providers.custom.fields.modelSupportsReasoningHelp",
         "desktop:chat.backgroundActivity.stopBashTitle",
         "desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED",
         "desktop:chat.rewind.errors.remoteNotSupported",
@@ -830,6 +831,7 @@
         "desktop:chat.userMessage.forkErrors.unsupportedHistory",
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
+        "desktop:newChat.atMention.typeToSearchFiles",
         "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",

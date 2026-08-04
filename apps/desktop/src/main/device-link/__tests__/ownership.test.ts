@@ -81,18 +81,20 @@ function memoryStore(): OwnershipStore & {
 function makeArbiter(opts: { store: OwnershipStore | null; id?: string; now: () => number }) {
   const onAcquire = vi.fn();
   const onDemote = vi.fn();
+  const onStandbyChanged = vi.fn();
   const arbiter = new DeviceLinkOwnershipArbiter({
     getStore: () => opts.store,
     instance: { ownerPid: 100, ownerLabel: 'test' },
     newOwnerId: () => opts.id ?? 'self',
     onAcquire,
     onDemote,
+    onStandbyChanged,
     heartbeatMs: 5_000,
     staleMs: 15_000,
     now: opts.now,
   });
   // 测试直接手动驱动 tick,不调 start()(避免 start 的后台首 tick 与手动 tick 竞争防重入锁)
-  return { arbiter, onAcquire, onDemote };
+  return { arbiter, onAcquire, onDemote, onStandbyChanged };
 }
 
 describe('DeviceLinkOwnershipArbiter', () => {
@@ -457,6 +459,127 @@ describe('DeviceLinkOwnershipArbiter', () => {
           now,
         }),
     ).toThrow(/staleMs/);
+  });
+
+  describe('待命状态通知(onStandbyChanged)', () => {
+    it('外部持有者心跳新鲜 → 通知待命并去重', async () => {
+      const store = memoryStore();
+      store.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 5_000 });
+      const { arbiter, onStandbyChanged } = makeArbiter({ store, now });
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+      expect(onStandbyChanged).toHaveBeenCalledWith(true);
+      store.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock });
+      await arbiter.tick();
+      expect(onStandbyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('过期持有者直接接管,不先闪一次待命', async () => {
+      const store = memoryStore();
+      store.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 16_000 });
+      const { arbiter, onStandbyChanged } = makeArbiter({ store, now });
+      await arbiter.tick();
+      expect(arbiter.isOwner()).toBe(true);
+      expect(arbiter.isStandby()).toBe(false);
+      expect(onStandbyChanged).not.toHaveBeenCalled();
+    });
+
+    it('失去持有权、接管和 stop 都会翻转待命状态', async () => {
+      const store = memoryStore();
+      const { arbiter, onStandbyChanged } = makeArbiter({ store, now });
+      await arbiter.tick();
+      store.set({ ownerId: 'usurper', ownerPid: 300, heartbeatAt: clock });
+      clock += 5_000;
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+      expect(onStandbyChanged).toHaveBeenLastCalledWith(true);
+      clock += 16_000;
+      await arbiter.tick();
+      expect(arbiter.isOwner()).toBe(true);
+      expect(onStandbyChanged).toHaveBeenLastCalledWith(false);
+      await arbiter.stop();
+      expect(arbiter.isStandby()).toBe(false);
+    });
+
+    it('ownership store 短暂不可用时保留最近一次已确认的待命状态', async () => {
+      const base = memoryStore();
+      base.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 5_000 });
+      let store: OwnershipStore | null = base;
+      const onStandbyChanged = vi.fn();
+      const arbiter = new DeviceLinkOwnershipArbiter({
+        getStore: () => store,
+        instance: { ownerPid: 100, ownerLabel: 'test' },
+        newOwnerId: () => 'self',
+        onAcquire: vi.fn(),
+        onDemote: vi.fn(),
+        onStandbyChanged,
+        heartbeatMs: 5_000,
+        staleMs: 15_000,
+        now,
+      });
+
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+
+      store = {
+        ...base,
+        read: async () => {
+          throw new Error('temporary ownership store failure');
+        },
+      };
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+
+      store = null;
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+      expect(onStandbyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('ownership read 本地超时时保留待命,直到明确结果推进状态', async () => {
+      vi.useFakeTimers();
+      try {
+        const base = memoryStore();
+        base.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 5_000 });
+        let readHangs = false;
+        const store: OwnershipStore = {
+          ...base,
+          read: () => (readHangs ? new Promise<never>(() => {}) : base.read()),
+        };
+        const onStandbyChanged = vi.fn();
+        const arbiter = new DeviceLinkOwnershipArbiter({
+          getStore: () => store,
+          instance: { ownerPid: 100, ownerLabel: 'test' },
+          newOwnerId: () => 'self',
+          onAcquire: vi.fn(),
+          onDemote: vi.fn(),
+          onStandbyChanged,
+          heartbeatMs: 5_000,
+          staleMs: 15_000,
+          opTimeoutMs: 100,
+          now,
+        });
+
+        await arbiter.tick();
+        expect(arbiter.isStandby()).toBe(true);
+
+        readHangs = true;
+        const timedOutTick = arbiter.tick();
+        await vi.advanceTimersByTimeAsync(100);
+        await timedOutTick;
+        expect(arbiter.isStandby()).toBe(true);
+        expect(onStandbyChanged).toHaveBeenCalledTimes(1);
+
+        readHangs = false;
+        base.set(null);
+        await arbiter.tick();
+        expect(arbiter.isOwner()).toBe(true);
+        expect(arbiter.isStandby()).toBe(false);
+        expect(onStandbyChanged).toHaveBeenLastCalledWith(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

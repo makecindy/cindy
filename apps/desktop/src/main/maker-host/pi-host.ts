@@ -27,7 +27,8 @@ import type {
   PiNativeProviderSpec,
   PiNativeProvidersResult,
 } from '@cindy/maker-core';
-import type { ProviderWireProtocol } from '@cindy/model-providers';
+import { PI_REASONING_EFFORTS } from '@cindy/model-providers';
+import type { PiReasoningEffort, ProviderWireProtocol } from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
@@ -42,6 +43,7 @@ import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
+import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 
 const log = createLogger('pi-host');
 
@@ -185,6 +187,7 @@ export interface BuildPiAgentOpts {
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
+  resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -232,6 +235,8 @@ export function buildPiNativeProvidersFromConfigs(
           name?: string;
           contextWindow?: number;
           supportsImageInput?: boolean;
+          reasoning?: boolean;
+          reasoningEfforts?: PiReasoningEffort[];
         }>;
       };
     };
@@ -295,14 +300,28 @@ export function buildPiNativeProvidersFromConfigs(
       api: wireProtocolToPiApi(rt.wireProtocol),
       apiKeyEnvVar,
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      models: rt.models.map((m) => ({
-        id: m.id,
-        name: m.name,
-        contextWindow: m.contextWindow,
-        ...(m.supportsImageInput === true
-          ? { input: ['text', 'image'] as Array<'text' | 'image'> }
-          : {}),
-      })),
+      models: rt.models.map((m) => {
+        const supportedEfforts = new Set(m.reasoningEfforts ?? []);
+        return {
+          id: m.id,
+          name: m.name,
+          contextWindow: m.contextWindow,
+          ...(m.supportsImageInput === true
+            ? { input: ['text', 'image'] as Array<'text' | 'image'> }
+            : {}),
+          ...(m.reasoning === true
+            ? {
+                reasoning: true,
+                thinkingLevelMap: Object.fromEntries(
+                  PI_REASONING_EFFORTS.map((effort) => [
+                    effort,
+                    supportedEfforts.has(effort) ? effort : null,
+                  ]),
+                ),
+              }
+            : {}),
+        };
+      }),
     });
   }
   return { providers, env };
@@ -341,10 +360,14 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,
     mcpProviders: opts.mcpProviders,
     makerMemory: opts.makerMemory,
+    // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类
+    // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     resolvePiAgentHome: () => path.join(app.getPath('userData'), 'pi-agent-home'),
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
     registerPiProxySession,
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
+    resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
   });
 }

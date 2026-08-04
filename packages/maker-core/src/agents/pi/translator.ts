@@ -19,6 +19,7 @@ import type { Logger } from '../../interfaces/logger.js';
 import type { AgentEvent, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { PiRpcEvent } from './rpc-client.js';
+import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
 interface PiUsage {
   input?: number;
@@ -70,6 +71,11 @@ export interface PiTranslateContext {
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
    */
   finalAssistantText: string;
+  /**
+   * 每个子代理调用(taskId)最近一次上报的**累计**委派用量。进度帧报累计值,这里存上次值
+   * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
+   */
+  delegatedUsage: Map<string, PiSubagentUsage>;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -87,6 +93,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
     finalAssistantText: '',
+    delegatedUsage: new Map(),
   };
 }
 
@@ -126,6 +133,38 @@ function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
   ctx.contextTokens = input + cacheRead + cacheWrite;
   const cost = usage.cost?.total;
   if (typeof cost === 'number' && Number.isFinite(cost)) ctx.costUsd += cost;
+}
+
+/**
+ * 把子代理(委派)的用量并进本 turn 的记账。
+ *
+ * 进度帧报的是**累计**值(丢一帧不该让那段用量永久消失),所以这里按 taskId 记住上次值、
+ * 只加增量。回退的累计值(理论上不该出现)按 0 处理,绝不产生负增量。
+ *
+ * 刻意**不动 `ctx.contextTokens`**:那是"最后一次 API 调用占了多少上下文",而子代理有它
+ * 自己独立的上下文窗口 —— 混进来会让父会话的上下文占用条读数虚高。
+ */
+function applyDelegatedUsage(
+  ctx: PiTranslateContext,
+  taskId: string,
+  cumulative: PiSubagentUsage | undefined,
+): void {
+  if (!cumulative || !taskId) return;
+  const previous = ctx.delegatedUsage.get(taskId);
+  const delta = {
+    input: Math.max(0, cumulative.input - (previous?.input ?? 0)),
+    output: Math.max(0, cumulative.output - (previous?.output ?? 0)),
+    cacheRead: Math.max(0, cumulative.cacheRead - (previous?.cacheRead ?? 0)),
+    cacheWrite: Math.max(0, cumulative.cacheWrite - (previous?.cacheWrite ?? 0)),
+    cost: Math.max(0, cumulative.cost - (previous?.cost ?? 0)),
+  };
+  ctx.delegatedUsage.set(taskId, cumulative);
+  ctx.turnTokens += delta.input + delta.output;
+  ctx.turnInput += delta.input;
+  ctx.turnOutput += delta.output;
+  ctx.turnCacheRead += delta.cacheRead;
+  ctx.turnCacheWrite += delta.cacheWrite;
+  ctx.costUsd += delta.cost;
 }
 
 function assistantTextOf(message: PiAssistantMessage): string {
@@ -190,6 +229,9 @@ export function translatePiEvent(
       ctx.turnCacheRead = 0;
       ctx.turnCacheWrite = 0;
       ctx.finalAssistantText = '';
+      // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
+      // 也避免长会话里 taskId 条目无界堆积。
+      ctx.delegatedUsage.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -246,8 +288,20 @@ export function translatePiEvent(
       return;
     }
 
-    case 'tool_execution_update':
+    case 'tool_execution_update': {
+      // 子代理卡的实时状态:`subagent` 工具用 pi 原生的 onUpdate 流上报 tokens /
+      // 工具调用数 / 耗时(卡片的 tool_use / tool_result 由 start / end 分支承载)。
+      // 其它工具的流式中间结果照旧忽略 —— 载荷不带标记时 parse 返回 null。
+      const progress = parsePiSubagentProgress(event.partialResult);
+      if (progress) {
+        // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
+        // 不在这里显式并进来,done.data.usage 与 register.ts 持久化的 session token/cost
+        // 就会漏掉全部子代理花费(review)。
+        applyDelegatedUsage(ctx, progress.update.taskId, progress.delegatedUsage);
+        queue.push({ type: 'agent_task_update', data: progress.update, source: 'pi' });
+      }
       return;
+    }
 
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');

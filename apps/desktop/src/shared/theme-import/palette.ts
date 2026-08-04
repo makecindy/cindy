@@ -16,8 +16,9 @@
  *
  * ## 为什么用 allow-list
  *
- * 模板产出这 108 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
- * `md-h6-fg` / `md-strong-fg`）。这 7 个主题都没有 override `--login-*`、品牌红、
+ * 模板产出这 108 个 builtin 基础 key，并为不受约束的外部色板追加 2 个 Switch
+ * 安全 key（源主题提供 Markdown 色时再追加 `md-h1-fg`…`md-h6-fg` / `md-strong-fg`）。
+ * 这 7 个主题都没有 override `--login-*`、品牌红、
  * `--destructive`、`--warning-accent`、`--status-bar-accent`、`--focus-ring`、
  * `--diff-*`(DESIGN.md §10 / §16 的语义豁免族),照抄它们的 key 列表就自动守住了
  * 豁免边界——比"先大量产出再过滤"安全。`protected-tokens.ts` 只作为回归断言的
@@ -26,11 +27,13 @@
 
 import {
   contrastRatio,
+  mix,
   toHex,
   toHslTriplet,
   toRgbaString,
   type Rgb,
 } from './color';
+import { UnsupportedThemePaletteError } from './errors';
 
 export type ThemeTypeName = 'light' | 'dark';
 
@@ -80,8 +83,8 @@ const MARKDOWN_HEADING_TOKENS = [
 ] as const;
 
 /**
- * 模板产出的 108 个 token id。导出供测试断言"与 builtin 主题 key 集合一致"，
- * 以及供 importer 统计命中数量。
+ * 模板产出的 108 个 builtin 基础 token，加 2 个导入主题专用的 Switch 安全 token。
+ * 导出供测试断言 allow-list 边界，以及供 importer 统计命中数量。
  */
 export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   // ── Tier1 语义 slot(35) ──
@@ -183,6 +186,8 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   'settings-menu-bg-selected',
   'settings-source-link',
   'settings-theme-auto-dark',
+  'switch-thumb-off',
+  'switch-track-off',
   'sidebar-action-icon',
   'sidebar-item-active',
   'splash-bg',
@@ -198,6 +203,48 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
 
 const WHITE: Rgb = { r: 255, g: 255, b: 255 };
 const BLACK: Rgb = { r: 0, g: 0, b: 0 };
+// 3:1 是非文字组件的合规底线；自动派生多留 0.2，避免表面微调或 hex 量化后掉线。
+const UNCHECKED_SWITCH_DERIVATION_TARGET = 3.2;
+const RGB_SEARCH_STEPS = 255;
+
+function minimumContrast(color: Rgb, against: readonly Rgb[]): number {
+  return Math.min(...against.map((other) => contrastRatio(color, other)));
+}
+
+/**
+ * 外部主题的 muted/comment 色不受 Cindy 约束，不能直接拿来当关闭态轨道。
+ * 保留已经合格的源色；否则分别向黑、白搜索首个合格的整数 RGB 色，并选择
+ * 改动更小的一侧。整数步进与最终 hex 精度一致，也避免多背景约束下的非单调误判。
+ */
+export function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb[]): Rgb {
+  if (minimumContrast(preferred, against) >= UNCHECKED_SWITCH_DERIVATION_TARGET) return preferred;
+
+  let best: { color: Rgb; distance: number; contrast: number } | null = null;
+  for (const target of [BLACK, WHITE]) {
+    for (let step = 1; step <= RGB_SEARCH_STEPS; step += 1) {
+      const candidate = mix(preferred, target, step / RGB_SEARCH_STEPS);
+      const candidateContrast = minimumContrast(candidate, against);
+      if (candidateContrast < UNCHECKED_SWITCH_DERIVATION_TARGET) continue;
+
+      const distance = (candidate.r - preferred.r) ** 2
+        + (candidate.g - preferred.g) ** 2
+        + (candidate.b - preferred.b) ** 2;
+      if (
+        best === null
+        || distance < best.distance
+        || (distance === best.distance && candidateContrast > best.contrast)
+      ) {
+        best = { color: candidate, distance, contrast: candidateContrast };
+      }
+      break;
+    }
+  }
+
+  if (best) return best.color;
+  throw new UnsupportedThemePaletteError(
+    'Unable to derive unchecked Switch colors with 3.2:1 contrast',
+  );
+}
 
 /**
  * 把色板展开成 Cindy token map。`type` 决定 22 处 light / dark 分支——取值依据
@@ -263,6 +310,14 @@ export function buildThemeColorsFromPalette(
   const quickIconBg = liftsOffSurface
     ? toHex(palette.surface)
     : pick(toHex(palette.border), toHex(palette.chip));
+  const switchThumbOffRgb = pick(palette.surface, palette.elevated);
+  const switchTrackOff = toHex(deriveUncheckedSwitchTrack(palette.textSecondary, [
+    palette.surface,
+    palette.elevated,
+    palette.hover,
+    switchThumbOffRgb,
+  ]));
+  const switchThumbOff = toHex(switchThumbOffRgb);
 
   const colors: Record<string, string> = {
     // ── Tier1 语义 slot ──
@@ -373,6 +428,8 @@ export function buildThemeColorsFromPalette(
     'settings-menu-bg-selected': chip,
     'settings-source-link': linkColor,
     'settings-theme-auto-dark': surface,
+    'switch-thumb-off': switchThumbOff,
+    'switch-track-off': switchTrackOff,
     'sidebar-action-icon': textTertiaryHsl,
     'sidebar-item-active': chipHsl,
     'splash-bg': surfaceHsl,

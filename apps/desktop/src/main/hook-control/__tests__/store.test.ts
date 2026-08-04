@@ -58,6 +58,7 @@ describe('默认态与持久化', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       xDefaultWorkspace: null,
+      telegramDefaultWorkspace: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -180,6 +181,7 @@ describe('旧多连接文件迁移', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       xDefaultWorkspace: null,
+      telegramDefaultWorkspace: null,
     });
   });
 });
@@ -332,31 +334,87 @@ describe('provider 与 Cindy 账号隔离', () => {
     });
   });
 
-  describe('X 默认工作目录', () => {
+  describe('默认工作目录(Telegram / X)', () => {
     it('设置后可读回;「对话」与 null 归一成同一种表示', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
 
-      expect(store.setXDefaultWorkspace('cindy').xDefaultWorkspace).toBe('cindy');
+      expect(store.setProviderDefaultWorkspace('x', 'cindy').xDefaultWorkspace).toBe('cindy');
       expect(store.get().xDefaultWorkspace).toBe('cindy');
       // 「对话」伪目录不是 workspaces 的键, 与「没设过」语义相同 —— 存 null,
       // 免得同一状态有两种表示, 消费方各写一套判断。
-      expect(store.setXDefaultWorkspace(HOOK_CHAT_WORKSPACE_ALIAS).xDefaultWorkspace).toBeNull();
-      expect(store.setXDefaultWorkspace('cindy').xDefaultWorkspace).toBe('cindy');
-      expect(store.setXDefaultWorkspace(null).xDefaultWorkspace).toBeNull();
+      expect(
+        store.setProviderDefaultWorkspace('x', HOOK_CHAT_WORKSPACE_ALIAS).xDefaultWorkspace,
+      ).toBeNull();
+      expect(store.setProviderDefaultWorkspace('x', 'cindy').xDefaultWorkspace).toBe('cindy');
+      expect(store.setProviderDefaultWorkspace('x', null).xDefaultWorkspace).toBeNull();
+    });
+
+    it('两个 provider 各存一份, 互不影响', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+
+      store.setProviderDefaultWorkspace('telegram', 'cindy');
+      store.setProviderDefaultWorkspace('x', 'other');
+      expect(store.get().telegramDefaultWorkspace).toBe('cindy');
+      expect(store.get().xDefaultWorkspace).toBe('other');
+
+      // 清掉一个不得连带清掉另一个 —— 泛化前只有一个字段, 很容易写成共用。
+      store.setProviderDefaultWorkspace('telegram', null);
+      expect(store.get().telegramDefaultWorkspace).toBeNull();
+      expect(store.get().xDefaultWorkspace).toBe('other');
+    });
+
+    it('旧配置文件没有 telegram.defaultWorkspace 键: 读成 null, 不需要迁移动作', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
+      store.setProviderDefaultWorkspace('x', 'cindy');
+
+      // 手工把这个键删掉, 模拟升级前写下的存档。
+      const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
+        accounts: Record<string, { telegram: Record<string, unknown> }>;
+      };
+      delete raw.accounts['account-test'].telegram.defaultWorkspace;
+      fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+
+      const reopened = makeStore();
+      expect(reopened.get().telegramDefaultWorkspace).toBeNull();
+      // 同一份存档里 X 那份不受影响。
+      expect(reopened.get().xDefaultWorkspace).toBe('cindy');
+    });
+
+    it('目录被删掉后两个 provider 的默认值都归零(存档层面也删掉)', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+      store.setProviderDefaultWorkspace('telegram', 'cindy');
+      store.setProviderDefaultWorkspace('x', 'cindy');
+
+      store.setWorkspaces({ other: '/tmp/other' });
+      expect(store.get().telegramDefaultWorkspace).toBeNull();
+      expect(store.get().xDefaultWorkspace).toBeNull();
+
+      // 只清一个 provider 会让另一个的失效别名留在盘上, 用户重建同名别名时复活。
+      const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
+        accounts: Record<
+          string,
+          { telegram: { defaultWorkspace: string | null }; x: { defaultWorkspace: string | null } }
+        >;
+      };
+      expect(raw.accounts['account-test'].telegram.defaultWorkspace).toBeNull();
+      expect(raw.accounts['account-test'].x.defaultWorkspace).toBeNull();
     });
 
     it('未配置的别名写入即拒(非法值会在下次握手时被协议拒收, 那时离操作已经很远)', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
-      expect(() => store.setXDefaultWorkspace('nope')).toThrow(HookConnectionValidationError);
+      expect(() => store.setProviderDefaultWorkspace('x', 'nope')).toThrow(HookConnectionValidationError);
       expect(store.get().xDefaultWorkspace).toBeNull();
     });
 
     it('目录被删掉后默认值自动归零, 不会把清单外的别名发进 hello', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
-      store.setXDefaultWorkspace('cindy');
+      store.setProviderDefaultWorkspace('x', 'cindy');
       expect(store.get().xDefaultWorkspace).toBe('cindy');
 
       // 用户在设置里删掉了 cindy 这条映射。留着旧默认值会让 hello 带上清单外的
@@ -368,7 +426,7 @@ describe('provider 与 Cindy 账号隔离', () => {
     it('删掉的别名重新出现(指向另一个目录)时默认值不复活 —— 存档里已经删了, 不只是被遮住', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
-      store.setXDefaultWorkspace('cindy');
+      store.setProviderDefaultWorkspace('x', 'cindy');
       store.setWorkspaces({ other: '/tmp/other' });
 
       // 别名是用户自己起的名字, 删掉 cindy 之后再建一个同名的很常见, 但它现在

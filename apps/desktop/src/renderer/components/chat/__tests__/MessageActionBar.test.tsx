@@ -38,7 +38,7 @@ describe('MessageActionBar', () => {
     });
   });
 
-  it('groups continue, add-to-chat, link copy, rewind, and delete under ellipsis', async () => {
+  it('keeps fork beside copy and groups the remaining actions under ellipsis', async () => {
     const onFork = vi.fn(async () => undefined);
     const onAddToChat = vi.fn();
     const onRewind = vi.fn();
@@ -62,9 +62,9 @@ describe('MessageActionBar', () => {
       name: 'chat.messageActionBar.moreActions',
     });
     expect(trigger).toBeTruthy();
-    expect(screen.queryByRole('button', {
+    expect(screen.getByRole('button', {
       name: 'chat.messageActionBar.fork',
-    })).toBeNull();
+    })).toBeTruthy();
     expect(screen.queryByRole('button', {
       name: 'chat.messageActionBar.rewind',
     })).toBeNull();
@@ -72,13 +72,14 @@ describe('MessageActionBar', () => {
       name: 'chat.messageActionBar.fork',
     })).toBeNull();
 
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    expect(screen.getAllByRole('menuitem', {
-      name: 'chat.messageActionBar.fork',
-    })).toHaveLength(1);
-    expect(screen.getByRole('menuitem', {
+    expect(screen.getByRole('button', {
       name: 'chat.messageActionBar.fork',
     }).querySelector('.lucide-split')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.fork' }));
+    await waitFor(() => expect(onFork).toHaveBeenCalledTimes(1));
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     expect(screen.getByRole('menuitem', {
       name: 'chat.quote.addToChat',
     }).querySelector('.lucide-message-square-plus')).toBeTruthy();
@@ -92,14 +93,6 @@ describe('MessageActionBar', () => {
       name: 'chat.messageActionBar.delete',
     }).querySelector('.lucide-trash2')).toBeTruthy();
 
-    fireEvent.click(
-      screen.getByRole('menuitem', {
-        name: 'chat.messageActionBar.fork',
-      }),
-    );
-    await waitFor(() => expect(onFork).toHaveBeenCalledTimes(1));
-
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(
       screen.getByRole('menuitem', {
         name: 'chat.quote.addToChat',
@@ -153,6 +146,52 @@ describe('MessageActionBar', () => {
     );
 
     await waitFor(() => expect(document.activeElement).not.toBe(trigger));
+  });
+
+  it('keeps the ellipsis icon static while the direct fork action is running', async () => {
+    let resolveFork!: () => void;
+    const onFork = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveFork = resolve;
+      }),
+    );
+    const onEdit = vi.fn();
+
+    render(
+      <MessageActionBar
+        copyText="message body"
+        align="right"
+        hovered
+        onFork={onFork}
+        onAddToChat={vi.fn()}
+        onEdit={onEdit}
+      />,
+    );
+
+    const forkButton = screen.getByRole('button', {
+      name: 'chat.messageActionBar.fork',
+    });
+    const moreButton = screen.getByRole('button', {
+      name: 'chat.messageActionBar.moreActions',
+    });
+    const editButton = screen.getByRole('button', {
+      name: 'chat.messageActionBar.edit',
+    });
+
+    fireEvent.click(forkButton);
+    await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeTruthy());
+    expect(moreButton.querySelector('.lucide-ellipsis')).toBeTruthy();
+    expect(moreButton.querySelector('.lucide-loader-circle')).toBeNull();
+    expect((moreButton as HTMLButtonElement).disabled).toBe(false);
+    expect((editButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(editButton);
+    expect(onEdit).not.toHaveBeenCalled();
+
+    resolveFork();
+    await waitFor(() => {
+      expect(forkButton.querySelector('.animate-spin')).toBeNull();
+      expect((editButton as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   it('restores focus to the ellipsis trigger for keyboard users', async () => {

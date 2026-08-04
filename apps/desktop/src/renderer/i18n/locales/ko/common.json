@@ -397,6 +397,7 @@
         "importPartial": "{{name}}({{themeCount}}개 구성)을 가져왔습니다. 의미가 정해진 색 {{skipped}}개는 규칙대로 그대로 두었고, {{unresolved}}개는 값을 읽을 수 없어 건너뛰었고, {{derived}}개는 인접색에서 추정했습니다.",
         "importFailed": "가져오기에 실패했습니다: {{error}}",
         "importUnsupported": "이 파일은 VSCode 또는 Obsidian 테마로 인식할 수 없습니다.",
+        "importContrastUnsupported": "테마 색상으로는 꺼진 스위치를 선명하게 표시할 수 없습니다. 배경색이나 보조 텍스트 색상을 조정한 뒤 다시 가져오세요.",
         "importUsesInclude": "이 VSCode 테마는 include를 통해 색상을 상속하므로 단독으로 가져올 수 없습니다.",
         "importNotAFile": "폴더가 아닌 파일을 선택해 주세요.",
         "importTooLarge": "파일이 너무 커서 테마로 가져올 수 없습니다.",
@@ -1323,6 +1324,9 @@
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
+          "modelSupportsReasoning": "추론 지원",
+          "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
+          "modelReasoningEfforts": "지원되는 추론 강도",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",
@@ -1641,7 +1645,7 @@
     "gitSafety": {
       "title": "Git 안전",
       "autoSnapshotTitle": "Git 안전 저장점",
-      "description": "Agent 편집 후 저장점 commit을 자동으로 만듭니다. 켜져 있을 때만 Codex rewind를 표시합니다.",
+      "description": "Agent 편집 후 프로젝트 Git 저장소에 숨겨진 저장점을 자동으로 기록합니다. 브랜치에 commit이 추가되지 않습니다. 켜져 있을 때만 Codex rewind를 표시합니다.",
       "toggleAria": "Git 안전 저장점 전환",
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
@@ -2695,7 +2699,23 @@
           "removeWorkspace": "이 작업 디렉터리 삭제",
           "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)",
           "defaultWorkspaceChip": "기본값: {{name}}",
-          "defaultWorkspaceAria": "X에서 보낸 작업에 사용할 기본 작업 디렉터리 선택"
+          "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 작업 디렉터리 선택",
+          "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 작업 디렉터리로 설정",
+          "defaultWorkspaceRowHint": "선택한 디렉터리가 기본 작업 디렉터리입니다. Telegram 개인 대화·그룹·주제 중 프로젝트를 따로 고르지 않은 대화의 작업은 모두 여기에서 실행됩니다(/workspace로 따로 고른 대화는 그대로 유지). 선택한 디렉터리 행의 권한 모드를 확인하세요. ‘전체 액세스’로 두면 어느 그룹에서 @로 불러도 해당 저장소에서 전체 액세스로 실행됩니다.",
+          "legacyDefaultsTitle": "이전 ‘새 대화 설정’이 아직 적용되고 있습니다",
+          "legacyDefaultsDescription": "이 기기에는 예전 공식 bot 기본값이 저장되어 있으며, 개별 설정이 없는 디렉터리의 대체값으로 계속 사용됩니다(공식 Telegram과 X가 같은 항목을 공유). 이 값들은 이제 디렉터리별로 설정합니다. 기본값으로 복원하면 다음 항목이 모두 삭제됩니다:",
+          "legacyDefaultsRow": {
+            "agentKind": "기본 Agent: {{current}} → {{fallback}}",
+            "permissionMode": "권한 모드: {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
+          "legacyDefaultsField": {
+            "model": "모델 {{current}} → {{fallback}}",
+            "effort": "추론 강도 {{current}} → {{fallback}}",
+            "source": "모델 제공자 {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": ", ",
+          "legacyDefaultsSourceFollowsGlobal": "전역 설정 따름"
         },
         "binding": {
           "copyLink": "링크 복사",
@@ -2919,7 +2939,8 @@
         "auth-failed": "로그인이 만료되었습니다. 다시 로그인해 주세요",
         "replaced": "동일한 기기의 다른 연결로 대체되었습니다",
         "too-many-connections": "이 계정의 동시 연결 수가 상한에 도달했습니다",
-        "version-mismatch": "프로토콜 버전이 일치하지 않습니다. 앱을 업데이트해 주세요"
+        "version-mismatch": "프로토콜 버전이 일치하지 않습니다. 앱을 업데이트해 주세요",
+        "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요"
       },
       "refresh": "새로고침",
       "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터에서 같은 계정으로 {{appName}}에 로그인하면 여기에 표시됩니다.",
@@ -2960,7 +2981,8 @@
         "disconnectFailed": "원격 연결 끊기에 실패했습니다",
         "remoteSessionEnded": "원격 기기가 이 세션을 종료했습니다"
       },
-      "control": "제어"
+      "control": "제어",
+      "standbyHint": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다."
     },
     "imBot": {
       "beta": "Beta",
@@ -3404,6 +3426,8 @@
         "networkSecretGhostInputDetail": "이 자격 증명은 플러그인 자체 설정 화면에서 입력받으므로 입력 시점에 플러그인 페이지를 거칩니다. 이후 호스트에 한 번만 전달되어 암호화 저장되며, 저장 후에는 플러그인이 다시 읽을 수 없습니다. 주입은 선언된 도메인 요청 시에만 호스트가 수행합니다.",
         "networkSecretIdentity": "로그인 이메일을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretIdentityDetail": "값은 로그인된 계정의 이메일에서 가져오며, 요청 시 호스트가 자동으로 파생하여 주입합니다. 입력할 필요가 없으며, 플러그인은 설정 화면에 현재 신원을 표시하기 위해 이 이메일을 읽을 수 있습니다.",
+        "networkSecretOrganizationIdentity": "Cindy 조직 사용자 신원을 자격 증명 \"{{name}}\"(으)로 사용합니다",
+        "networkSecretOrganizationIdentityDetail": "Cindy가 필요할 때 단기 신원 어설션을 발급하며, 호스트만 명시된 서비스 호스트로 전송합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다.",
         "networkSecretOauth": "{{host}}에서 OAuth 인증을 진행하도록 안내합니다({{name}})",
         "networkSecretOauthDetail": "인증 흐름과 모든 토큰은 호스트가 관리하며 플러그인 코드는 읽을 수 없습니다. 클라이언트 자격 증명은 이 플러그인의 상세 페이지에서 직접 입력합니다. 아래는 요청되는 권한 범위(scopes) 원문이니 확인 후 허용하세요.",
         "networkConnections": "내가 추가한 {{label}}에 연결 가능",
@@ -5271,10 +5295,20 @@
       }
     },
     "atMention": {
-      "scanFailed": "작업 디렉터리 스캔 실패",
+      "add": "추가",
+      "plugins": "플러그인",
+      "filesAndFolders": "파일 및 폴더",
+      "browserTab": "브라우저 탭",
+      "desktopWindow": "앱 창",
+      "task": "작업",
+      "pluginResources": "플러그인 리소스",
+      "pluginResource": "플러그인 리소스",
+      "backToAll": "모든 @ 콘텐츠로 돌아가기",
+      "scanFailed": "@ 콘텐츠를 불러오지 못했습니다",
       "retry": "재시도",
       "searching": "검색 중…",
-      "noMatch": "일치하는 파일 없음",
+      "noMatch": "일치하는 항목 없음",
+      "typeToSearchFiles": "키워드를 입력해 파일과 세션 검색",
       "keepTyping": "계속 입력하여 범위 좁히기…"
     },
     "planReview": {
@@ -5459,6 +5493,7 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
+        "pi": "Pi",
         "workflow": "Workflow",
         "shell": "백그라운드 명령"
       },
@@ -5538,7 +5573,9 @@
       "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
+      "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
+      "claudeSubscriptionOpusPlanMismatch": "현재 연결된 Claude Pro 요금제에서는 Opus를 사용할 수 없습니다. 요금제에 포함된 모델로 전환하세요. 최근 요금제를 업그레이드했다면 설정에서 Anthropic을 다시 연결한 후 재시도하세요.",
       "switchClaudeSubscription": "Claude.ai로 전환 후 재시도",
       "switchClaudeSubscriptionTitle": "이 세션을 Claude.ai 구독으로 전환하고 다시 시도",
       "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
@@ -5565,6 +5602,7 @@
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
+      "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"재시도\"를 누르거나 다른 모델로 바꿔 보세요",
       "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요",
       "networkShowRaw": "원본 오류 보기",
@@ -5915,6 +5953,11 @@
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
       "pathCopied": "경로가 복사되었습니다",
+      "BROWSER_FILE_INVALID_TARGET": "로컬 페이지 경로가 올바르지 않습니다",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "이 경로에는 접근할 수 없습니다",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "이 파일 형식은 브라우저에서 열 수 없습니다",
+      "BROWSER_FILE_NOT_FOUND": "로컬 페이지를 찾을 수 없습니다",
+      "BROWSER_FILE_OPEN_FAILED": "브라우저에서 열지 못했습니다",
       "openInBrowserFailed": "브라우저에서 열지 못했습니다",
       "openLinkFailed": "링크를 열지 못했습니다",
       "anchorNotFound": "해당 제목을 찾을 수 없습니다",
@@ -6033,6 +6076,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
@@ -6139,7 +6183,8 @@
         "auth-failed": "로그인이 만료되었습니다. 다시 로그인하면 원격 연결이 복구됩니다",
         "replaced": "동일한 기기의 다른 연결로 대체되었습니다. 다시 연결하는 중…",
         "too-many-connections": "이 계정의 동시 접속 기기가 너무 많아 서버가 연결을 거부했습니다",
-        "version-mismatch": "서버와 프로토콜 버전이 일치하지 않습니다. 앱을 업데이트한 뒤 다시 시도해 주세요"
+        "version-mismatch": "서버와 프로토콜 버전이 일치하지 않습니다. 앱을 업데이트한 뒤 다시 시도해 주세요",
+        "unstable": "이 컴퓨터의 연결이 끊김과 재연결을 반복하고 있어 원격 작업이 계속 시간 초과될 수 있습니다. 네트워크를 확인하거나 Cindy를 다시 시작한 뒤 다시 시도해 주세요"
       }
     },
     "common": {
@@ -8607,7 +8652,7 @@
       "remaining": "잔여",
       "progressLabel": "{{label}} 사용량",
       "noPlanCredits": "활성 구독이 없어 요금제 잔액이 없습니다.",
-      "historyUnavailable": "사용 기록이 완전하지 않아 남은 잔액만 표시합니다.",
+      "historyUnavailable": "사용 기록이 완전하지 않아 잔여 잔액만 표시합니다.",
       "detailsUnavailable": "사용량 상세를 불러올 수 없어 현재 잔액만 표시합니다.",
       "promotionalDetails": {
         "title": "프로모션 잔액 상세",
@@ -8663,7 +8708,7 @@
     },
     "catalog": {
       "errorTitle": "요금제를 불러올 수 없습니다",
-      "errorDescription": "네트워크를 확인하고 다시 시도하세요. 로컬 대체 요금제는 표시하지 않습니다.",
+      "errorDescription": "네트워크를 확인한 후 다시 시도하세요.",
       "emptyTitle": "곧 출시됩니다. 기대해 주세요.",
       "currentPlan": "현재 요금제",
       "unavailableReasons": {
@@ -8727,7 +8772,7 @@
       "openPayment": "결제 페이지 열기",
       "refreshingAction": "결제 정보를 불러오는 중…",
       "paymentCompleted": "결제가 완료되었습니다.",
-      "requestFailed": "요청에 실패했습니다. 결과가 불확실한 생성 요청은 같은 멱등성 키로 안전하게 재시도합니다.",
+      "requestFailed": "요청에 실패했습니다. 잠시 후 다시 시도하세요.",
       "expiredBody": "결제 링크가 만료되었습니다. 새 결제를 생성하세요.",
       "actionExpiredBody": "코드가 만료되었습니다. 창을 닫고 다시 선택하여 새 결제를 생성하세요.",
       "canceledBody": "이 결제가 취소되었습니다.",
@@ -8735,16 +8780,17 @@
     },
     "planChange": {
       "targetTitle": "구독 플랜 변경",
+      "back": "이전",
       "upgradeBadge": "업그레이드",
       "sameLevelBadge": "동일 등급",
       "downgradeBadge": "다운그레이드",
       "emptyTitle": "전환 가능한 플랜이 없습니다",
-      "emptyDescription": "현재 결제 수단으로 전환할 수 있는 다른 플랜이 아직 설정되지 않았습니다.",
+      "emptyDescription": "현재 전환할 수 있는 다른 요금제가 없습니다.",
       "quotingTitle": "플랜 변경 준비 중",
-      "quotingBody": "서버에서 금액과 적용 시점을 가져오는 중…",
+      "quotingBody": "금액과 적용 시점을 확인하는 중…",
       "quoteTitle": "플랜 변경 확인",
       "confirmingTitle": "변경 제출 중",
-      "confirmingBody": "플랜 변경을 서버에 제출하는 중…",
+      "confirmingBody": "요금제 변경을 제출하는 중…",
       "pendingProviderTitle": "요금제 변경 처리 중",
       "pendingProviderBody": "결제 제공자에서 변경을 처리하고 있습니다. Cindy가 결과를 계속 확인합니다…",
       "awaitingTitle": "차액 결제",
@@ -8761,7 +8807,7 @@
       "requestFailed": "플랜 변경 요청을 완료하지 못했습니다. 구독 상태를 새로고침한 후 다시 시도하세요.",
       "quoteRejected": "현재 구독에서는 이 플랜으로 변경할 수 없습니다. 다른 플랜을 선택하세요.",
       "chooseAnotherPlan": "다른 플랜 선택",
-      "resyncHint": "확인 결과를 검증할 수 없습니다. 서버에서 최신 상태를 동기화하는 중…",
+      "resyncHint": "결과를 아직 확인할 수 없습니다. 최신 상태를 다시 확인하는 중…",
       "upgradeDueNow": "이번 기간 차액 {{amount}}을(를) 결제하세요",
       "upgradeNoAmount": "확인 후 업그레이드가 즉시 적용됩니다.",
       "upgradeHint": "결제 완료 후 업그레이드가 즉시 적용되며 이후 새 플랜 가격으로 갱신됩니다.",

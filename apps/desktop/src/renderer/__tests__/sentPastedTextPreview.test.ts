@@ -145,18 +145,19 @@ describe('UserMessage pasted-text chip wiring', () => {
     // 那条路径上的粘贴段就又变回不可点。召唤卡 prompt 插槽已随「卡片即消息」
     // 合并形态一并取消(chip 标注行改版):$指令 正文回归气泡,由普通正文
     // 调用点统一渲染,不再有第三个调用点。
-    expect(source.match(/handlePastedTextChipClick,/g)?.length).toBe(2);
+    // 计数包含 useCallback 定义本身 + 两个调用点。
+    expect(source.match(/handlePastedTextChipClick/g)?.length).toBe(3);
   });
 
   it('S1b 两个调用点都拿到同一份 sessionReferences(不再有 undefined 占位)', () => {
     // 召唤卡 prompt 曾经漏传 sessionReferences(PR #966 review);该插槽现已
     // 随合并形态取消,$指令 正文并入普通正文调用点。sessionReferences 按
     // sessionId / messageClientId 匹配、不依赖文本偏移,两处理应拿同一份。
-    // 调用点的末两个实参恒为 `sessionReferences, handlePastedTextChipClick`,
-    // 一并锁住"都可点"与"都有引用元数据"。
-    expect(
-      source.match(/sessionReferences,\s*\n\s*handlePastedTextChipClick,/g)?.length,
-    ).toBe(2);
+    // 展开态传 handler;收起态传 undefined,但两个调用点都保留同一份引用元数据。
+    expect(source).toMatch(
+      /sessionReferences,\s*\n\s*longMessageCollapsed \? undefined : handlePastedTextChipClick,/,
+    );
+    expect(source).toMatch(/sessionReferences,\s*\n\s*handlePastedTextChipClick,/);
   });
 
   it('S2 ToolPayloadLightbox 以只读 text 模式挂载', () => {
@@ -178,8 +179,11 @@ describe('UserMessage pasted-text chip wiring', () => {
     );
     // 测量镜像(独立 JSX 表达式)。
     expect(source.match(/\{collapseMeasureBody\}/g)?.length).toBe(1);
-    // 收起态正文(三元分支里,不是独立表达式)。
-    expect(source).toMatch(/longMessageCollapsed\s*\n?\s*\?[\s\S]{0,400}collapseMeasureBody/);
+    // 收起态正文使用同一套静态 chip renderer,不再把投影纯文本直接塞进正文。
+    expect(source).toMatch(
+      /longMessageCollapsed\s*\n\s*\? renderContent\(\n\s*displayBubbleBody,/,
+    );
+    expect(source).toContain('bubbleAgentReferences,\n                              false,');
     // 偏移只在 bubbleBody 与 ghostBody 同源时才折叠(引用交错的消息保持原文测量)。
     expect(source).toContain('bubbleBody === ghostBody');
   });

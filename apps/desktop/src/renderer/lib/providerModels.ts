@@ -12,6 +12,7 @@
  */
 
 import {
+  getModel,
   isModelSelectableForNewRoute,
   isModelVisible,
   providerOffersModel,
@@ -26,6 +27,26 @@ import {
 // 同型，picker 现有代码（effortDisplayNames 按 string 索引等）零改动即可消费。
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
+
+/**
+ * 按目标 `(provider, agent, model)` 读取 effort 能力。
+ *
+ * 不能复用 `deriveModelsFromProviders`：后者是 picker 的跨来源 union，按目录顺序
+ * first-wins；同一模型 id 在内置来源与 BYOM 上的显式 effort 子集可以不同。运行时切换
+ * 若读拍平条目，会把另一来源支持的档位写给目标 provider。
+ */
+export function resolveProviderModelEfforts(params: {
+  providers: ProviderView[];
+  providerId: string;
+  modelId: string;
+  agentKind: AgentKind;
+}): Pick<ModelDescriptor, 'efforts' | 'defaultEffort'> | null {
+  const { providers, providerId, modelId, agentKind } = params;
+  const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
+  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  if (!model) return null;
+  return { efforts: model.efforts, defaultEffort: model.defaultEffort };
+}
 
 /** CatalogModel → renderer ModelDescriptor（name→displayName；group/sortOrder 不在 renderer 型里——
  *  picker 的分组走 categorize(id 前缀)，与既有内置模型一致）。 */

@@ -53,7 +53,11 @@ export function CCAgentFeatureLayout() {
      * file-browser plugin 据此 useFileTree / useFileContent。空串 = 尚未解析或 remote session。
      * 同 setRightSidebarSessionId,仅主实例调。
      */
-    setRightSidebarWorkdir?: (workdir: string, remoteHostId?: string | null) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
   return <Outlet context={shellContext} />;
 }

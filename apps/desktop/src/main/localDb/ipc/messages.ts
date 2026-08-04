@@ -542,11 +542,9 @@ export function registerMessageIpc(): void {
 /**
  * messages:list 的「按需导入外部 CLI 会话历史」副作用。
  *
- * codex / cc importer 各自在会话非对应 agent / 非 import 会话时 early-return，但仍各跑一次
- * `SELECT FROM sessions`，且二者串行 await 在真正的消息查询之前。device-link 远程读是被控端
- * 已导入状态的镜像:在每次(含分页)远程 open 上重跑这些「读外部 rollout/JSONL → 写本机 DB」的
- * 本地副作用,只会把导入延迟串接到消息查询前(见 GitHub issue #318 A3)。故 device-link 路径
- * 整体跳过这些副作用;非 device-link 路径保持原有的串行顺序、错误吞并与告警语义不变。
+ * 普通 Cindy 任务不需要外部 CLI 历史导入；只有带有明确来源前缀的任务才运行对应 importer。
+ * 这样可以避免每次切换普通任务都先为两个 importer 各做一次 sessions 查询。device-link 远程读
+ * 仍遵循首页/分页语义，但首页也只对 Codex/Claude 来源任务运行对应 importer。
  *
  * 抽成可注入函数仅为单测(规则 14):默认依赖即生产实现,Electron `ipcMain.handle` 只做 adapter。
  */
@@ -568,18 +566,23 @@ export async function runMessagesListImportSideEffects(
   if (isDeviceLink() && !opts.deviceLinkFirstPage) return;
   const importCodex = deps.importCodex ?? importExternalCodexMessagesForSession;
   const importClaude = deps.importClaude ?? importExternalClaudeCodeMessagesForSession;
-  await importCodex(sessionId).catch((err) => {
-    log.warn('external Codex message import failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+  if (sessionId.startsWith('codex-')) {
+    await importCodex(sessionId).catch((err) => {
+      log.warn('external Codex message import failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
     });
-  });
-  await importClaude(sessionId).catch((err) => {
-    log.warn('external Claude Code message import failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+    return;
+  }
+  if (sessionId.startsWith('claude-')) {
+    await importClaude(sessionId).catch((err) => {
+      log.warn('external Claude Code message import failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
     });
-  });
+  }
 }
 
 /**

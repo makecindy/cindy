@@ -8,7 +8,7 @@
  *     主窗收广播后恢复内嵌侧栏)。
  *   - 挂 RightSidebarShell(零改动复用:Shell 自带 store 订阅 / rsbBrowserBridge
  *     init / setActiveSession / popup 订阅)。
- *   - 渲染上下文(sessionId / workdir / remoteHostId)不自查 —— 主窗 MainLayout
+ *   - 渲染上下文(sessionId / workdir / remoteHostId / deviceLinkDeviceId)不自查 —— 主窗 MainLayout
  *     是唯一真相(草稿会话 / remote 会话语义只有主窗路由视图知道),经 main 中转:
  *     mount 时 invoke getContext 拉一次,此后订阅 context-changed 推送跟随主窗切换。
  *   - mount 后 invoke ready() 握手:main 的 ensureOpenForAutomation(agent tab-op
@@ -51,6 +51,7 @@ interface SidebarWindowContext {
   sessionId: string | null;
   workdir: string | null;
   remoteHostId: string | null;
+  deviceLinkDeviceId?: string | null;
   available: boolean;
 }
 
@@ -193,6 +194,7 @@ export function SidebarWindowLayout() {
           sessionId={sessionId}
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
+          deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
           isMac={isMac}
         />
         {!sessionId && (

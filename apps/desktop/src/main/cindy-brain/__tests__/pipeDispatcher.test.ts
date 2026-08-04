@@ -35,6 +35,10 @@ interface Harness {
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
     sendToGhost: ReturnType<typeof vi.fn>;
+    log: {
+      info: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
   };
   sent: GhostPipeToolCall[];
 }
@@ -53,6 +57,10 @@ function makeHarness(opts: {
       sent.push(payload);
       return true;
     }),
+    log: {
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
@@ -189,6 +197,37 @@ describe('配对交卷', () => {
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
 
+  it('完成日志只含元数据，不记录参数或返回内容', async () => {
+    const h = makeHarness();
+    const secretArg = 'must-not-log-argument';
+    const secretResult = 'must-not-log-result';
+    const p = h.dispatcher.callGhostTool({
+      ...CALL,
+      args: { prompt: secretArg },
+      callId: 'observable-call',
+    });
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId: 'observable-call',
+      ok: true,
+      result: { value: secretResult },
+    });
+    await expect(p).resolves.toMatchObject({ ok: true });
+
+    expect(h.deps.log.info).toHaveBeenCalledTimes(1);
+    expect(h.deps.log.info).toHaveBeenCalledWith('ghost tool call completed', {
+      ghostId: 'art',
+      tool: 'gen_image',
+      callId: 'observable-call',
+      ok: true,
+      totalMs: expect.any(Number),
+    });
+    const logs = JSON.stringify(h.deps.log.info.mock.calls);
+    expect(logs).not.toContain(secretArg);
+    expect(logs).not.toContain(secretResult);
+  });
+
   it('意识侧报错 → INTERNAL 透传 message', async () => {
     const h = makeHarness();
     const p = h.dispatcher.callGhostTool(CALL);
@@ -275,6 +314,24 @@ describe('超时与收卷', () => {
       result: 'too late',
     });
     expect(late.accepted).toBe(false);
+  });
+
+  it('可信宿主可为 UI 查询单独收短超时，不改变普通调用默认档', async () => {
+    const h = makeHarness({ timeoutMs: 1000 });
+    const short = h.dispatcher.callGhostTool({ ...CALL, timeoutMs: 50 });
+    const normal = h.dispatcher.callGhostTool(CALL);
+    expect(h.sent).toHaveLength(2);
+
+    vi.advanceTimersByTime(40);
+    expect(h.dispatcher.handleToolProgress('art', {
+      callId: h.sent[0].callId,
+    }).accepted).toBe(true);
+    vi.advanceTimersByTime(10);
+    await expect(short).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
+    expect(h.dispatcher.pendingCount()).toBe(1);
+
+    vi.advanceTimersByTime(950);
+    await expect(normal).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
   });
 
   it('崩溃收卷 → GHOST_CRASHED;熄灯收卷 → GHOST_ASLEEP;只收本意识的', async () => {

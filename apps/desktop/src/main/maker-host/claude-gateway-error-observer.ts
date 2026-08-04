@@ -1,16 +1,17 @@
 /**
- * Claude XD Gateway 错误观察器。
+ * Claude Opus 套餐错误观察器。
  *
  * 路由 transform 与响应 observer 通过 proxy reqId 关联，只有同一个 Opus 请求
- * 确认走 XD Gateway 且收到特定 400 套餐错误时才留下待消费证据。terminal event
- * 到达时还要求它仍是该会话最新请求；后续 retry / tool 请求会使旧证据失效。
+ * 确认走 Gateway 或 Claude.ai 订阅且收到特定 400 套餐错误时才留下待消费证据。
+ * terminal event 到达时还要求它仍是该会话最新请求；后续 retry / tool 请求会使旧证据失效。
  */
 
 import type { ResponseObserver, ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
 
 import {
-  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   classifyClaudeGatewayError,
+  classifyClaudeSubscriptionError,
+  type ClaudeOpusPlanMismatchReason,
 } from '../../shared/claudeGatewayError.js';
 import {
   readLatestClaudeSessionRequestId,
@@ -23,7 +24,7 @@ const MAX_PENDING_SESSIONS = 128;
 
 interface PendingMismatch {
   reqId: number;
-  reason: typeof CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
+  reason: ClaudeOpusPlanMismatchReason;
 }
 
 const pendingMismatches = new Map<string, PendingMismatch>();
@@ -50,7 +51,7 @@ function recordPendingMismatch(sessionId: string, mismatch: PendingMismatch): vo
 export function createClaudeGatewayErrorObserver(): ResponseObserver {
   return (ctx: ResponseObserverCtx) => {
     const requestRoute = takeClaudeRequestRoute(ctx.reqId);
-    if (!requestRoute || requestRoute.route !== 'gateway' || ctx.status !== 400) return null;
+    if (!requestRoute || ctx.status !== 400) return null;
 
     const modelId = requestModel(ctx.requestBody);
     if (!modelId.startsWith('claude-opus-')) return null;
@@ -70,16 +71,15 @@ export function createClaudeGatewayErrorObserver(): ResponseObserver {
           Buffer.concat(chunks, size),
           typeof encoding === 'string' ? encoding : undefined,
         );
-        const reason = classifyClaudeGatewayError({
+        const context = {
           modelId,
           requestRoute: requestRoute.route,
           status: ctx.status,
           error: bodyText,
-        });
-        if (
-          reason &&
-          readLatestClaudeSessionRequestId(requestRoute.sessionId) === ctx.reqId
-        ) {
+        } as const;
+        const reason =
+          classifyClaudeGatewayError(context) ?? classifyClaudeSubscriptionError(context);
+        if (reason && readLatestClaudeSessionRequestId(requestRoute.sessionId) === ctx.reqId) {
           recordPendingMismatch(requestRoute.sessionId, { reqId: ctx.reqId, reason });
         }
       },
@@ -89,9 +89,9 @@ export function createClaudeGatewayErrorObserver(): ResponseObserver {
 }
 
 /** terminal error 转发点一次性消费；后续请求已开始时保守放弃旧证据。 */
-export function consumeClaudeGatewayOpusPlanMismatch(
+export function consumeClaudeOpusPlanMismatch(
   sessionId: string,
-): typeof CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON | null {
+): ClaudeOpusPlanMismatchReason | null {
   const pending = pendingMismatches.get(sessionId) ?? null;
   pendingMismatches.delete(sessionId);
   if (!pending || readLatestClaudeSessionRequestId(sessionId) !== pending.reqId) return null;

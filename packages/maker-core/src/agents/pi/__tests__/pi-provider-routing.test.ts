@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,7 @@ vi.mock('../rpc-client.js', () => ({
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps } from '../../base-agent.js';
+import type { ModelDescriptor } from '../../../types/capabilities.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const noopLogger: Logger = {
@@ -42,6 +43,17 @@ const noopLogger: Logger = {
 
 describe('Pi provider-aware model routing', () => {
   let agentHome = '';
+
+  /**
+   * runtime 文件名带每运行时 nonce(dev + 打包版 / passive 共用 userData 时的跨实例隔离),
+   * 所以按「前缀 + sessionId」找,不能再拼死名字。前缀含 sessionId → 不会串到别的用例。
+   */
+  const runtimeFileOf = (prefix: string, sessionId: string): string => {
+    const dir = path.join(agentHome, 'runtime');
+    const name = readdirSync(dir).find((f) => f.startsWith(prefix + '-' + sessionId + '-'));
+    if (!name) throw new Error('runtime file not found: ' + prefix + '-' + sessionId + '-*');
+    return path.join(dir, name);
+  };
   let cwd = '';
 
   beforeEach(() => {
@@ -130,7 +142,321 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
-  const byomDeps = (resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders']): AgentDeps => ({
+  it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
+    const resolver = vi.fn((modelId: string) => {
+      if (modelId !== 'shared-model') return null;
+      return {
+        id: modelId,
+        displayName: 'Shared through Cindy',
+        contextWindow: 200_000,
+        efforts: ['minimal', 'low', 'high'] as const,
+        defaultEffort: 'high' as const,
+      };
+    });
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        // 模拟 flat availableModels 已因 non-reasoning BYOM 同 id 冲突收敛为空。
+        availableModels: [
+          { id: 'shared-model', displayName: 'Shared', contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-responses',
+            models: [{ id: 'shared-model', reasoning: false }],
+          },
+        ],
+        env: {},
+      }),
+      resolvePiGatewayModelDescriptor: resolver,
+    };
+    const agent = new PiAgent(deps);
+
+    const handle = await agent.startSession({
+      sessionId: 'gateway-reasoning-collision',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'openai',
+      effort: 'high',
+    });
+
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models: Array<{ id: string; reasoning: boolean }> }>;
+    };
+    expect(resolver).toHaveBeenCalledWith('shared-model');
+    expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      reasoning: true,
+    });
+    expect(models.providers['native-a']?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      reasoning: false,
+    });
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'high' });
+    await handle.close();
+  });
+
+  it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
+    const resolver = vi.fn((providerId: string | null | undefined, modelId: string) => {
+      if (providerId !== 'native-a' || modelId !== 'shared-model') return null;
+      return {
+        id: modelId,
+        displayName: 'Shared through BYOM',
+        contextWindow: 200_000,
+        efforts: ['low', 'xhigh'] as const,
+        defaultEffort: 'xhigh' as const,
+      };
+    });
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 200_000,
+            efforts: ['low'],
+            defaultEffort: 'low',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-responses',
+            models: [
+              {
+                id: 'shared-model',
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: null,
+                  low: 'low',
+                  medium: null,
+                  high: null,
+                  xhigh: 'xhigh',
+                  max: null,
+                },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      resolvePiRuntimeModelDescriptor: resolver,
+    };
+    const agent = new PiAgent(deps);
+
+    const handle = await agent.startSession({
+      sessionId: 'stale-effort',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'native-a',
+      // 旧任务保存的 high 已在用户收窄能力后失效；必须走当前路由默认 xhigh，不能发 high→null。
+      effort: 'high',
+    });
+
+    expect(resolver).toHaveBeenCalledWith('native-a', 'shared-model');
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'xhigh' });
+    expect(captured.requests).not.toContainEqual({ type: 'set_thinking_level', level: 'high' });
+    await handle.close();
+  });
+
+  it('freezes active BYOM effort selection to the startup models.json snapshot', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [
+        {
+          id: 'native-a',
+          name: 'Native A',
+          baseUrl: 'http://a.test',
+          api: 'openai-responses',
+          models: [{
+            id: 'local-model',
+            reasoning: true,
+            thinkingLevelMap: {
+              minimal: null,
+              low: 'low',
+              medium: null,
+              high: null,
+              xhigh: null,
+              max: null,
+            },
+          }],
+        },
+      ],
+      env: {},
+    })));
+
+    const handle = await agent.startSession({
+      sessionId: 'frozen-effort-snapshot',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const startupRequests = captured.requests.filter((request) => request.type === 'set_thinking_level');
+    expect(startupRequests).toContainEqual({ type: 'set_thinking_level', level: 'low' });
+
+    // provider 保存后 renderer 目录可能已出现 xhigh，但这个活动 Pi 进程仍读旧 models.json。
+    await expect(handle.setEffort!('xhigh')).rejects.toThrow(/startup model snapshot.*restart the Pi session/);
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      startupRequests.length,
+    );
+
+    await handle.setEffort!('low');
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      startupRequests.length + 1,
+    );
+    await handle.close();
+  });
+
+  it('rejects an atomic model switch before set_model when its effort is outside the startup snapshot', async () => {
+    const lowOnly = {
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: 'low',
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    } as const;
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        models: [
+          { id: 'local-model', ...lowOnly },
+          { id: 'target-model', ...lowOnly },
+        ],
+      }],
+      env: {},
+    }), [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+      { id: 'target-model', displayName: 'Target', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'atomic-effort-preflight',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const beforeSwitch = captured.requests.length;
+
+    // renderer catalog 热更新后把目标模型显示成 high；活动 Pi 的 models.json 仍只允许 low。
+    await expect(handle.setModel!('target-model', { providerId: 'native-a', effort: 'high' }))
+      .rejects.toThrow(/startup model snapshot/);
+    expect(captured.requests.slice(beforeSwitch)).not.toContainEqual({
+      type: 'set_model',
+      provider: 'native-a',
+      modelId: 'target-model',
+    });
+    expect(handle.model).toBe('local-model');
+    await handle.close();
+  });
+
+  it('freezes omitted BYOM reasoning to an empty startup capability snapshot', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        // buildPiNativeProvidersFromConfigs omits reasoning for this model; models.json writes false.
+        models: [{ id: 'local-model' }],
+      }],
+      env: {},
+    })));
+    const handle = await agent.startSession({
+      sessionId: 'frozen-non-reasoning-snapshot',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+    });
+
+    await expect(handle.setEffort!('xhigh')).rejects.toThrow(/startup model snapshot/);
+    expect(captured.requests.some((request) => request.type === 'set_thinking_level')).toBe(false);
+    await handle.close();
+  });
+
+  it('accepts the low placeholder after switching to a non-reasoning gateway model', async () => {
+    const availableModels: readonly ModelDescriptor[] = [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+      { id: 'gateway-model', displayName: 'Gateway', contextWindow: 200_000, efforts: [], defaultEffort: null },
+    ];
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        models: [{
+          id: 'local-model',
+          reasoning: true,
+          thinkingLevelMap: {
+            minimal: null,
+            low: 'low',
+            medium: null,
+            high: null,
+            xhigh: null,
+            max: null,
+          },
+        }],
+      }],
+      env: {},
+    }), availableModels));
+    const handle = await agent.startSession({
+      sessionId: 'switch-to-non-reasoning-gateway',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const beforePlaceholder = captured.requests.filter((request) => request.type === 'set_thinking_level').length;
+
+    await handle.setModel!('gateway-model', { providerId: null });
+    await expect(handle.setEffort!('low')).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      beforePlaceholder,
+    );
+    await handle.close();
+  });
+
+  const byomDeps = (
+    resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders'],
+    availableModels: readonly ModelDescriptor[] = [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: [], defaultEffort: null },
+    ],
+  ): AgentDeps => ({
     auth: {
       getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
       triggerLogin: async () => ({ authenticated: true }),
@@ -141,9 +467,7 @@ describe('Pi provider-aware model routing', () => {
     binaryPath: path.join(agentHome, 'pi'),
     logger: noopLogger,
     capabilityAdditions: {
-      availableModels: [
-        { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: [], defaultEffort: null },
-      ],
+      availableModels,
     },
     resolvePiAgentHome: () => agentHome,
     resolvePiNativeProviders,
@@ -375,7 +699,7 @@ describe('Pi provider-aware model routing', () => {
     // 不得在其后 stale 覆盖(否则 bridge 现读到 bypassPermissions,而 host/UI 已是 Ask)。
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
     const handle = await agent.startSession({ sessionId: 'perm-race', workingDir: cwd, model: 'local-model' });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-race.json');
+    const permFile = runtimeFileOf('perm', 'perm-race');
     const a = handle.setPermissionMode!('bypassPermissions');
     const b = handle.setPermissionMode!('ask');
     await Promise.all([a, b]);
@@ -393,7 +717,7 @@ describe('Pi provider-aware model routing', () => {
       model: 'local-model',
       permissionMode: 'ask',
     });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-recover.json');
+    const permFile = runtimeFileOf('perm', 'perm-recover');
     // 下一次写(尝试放宽到 Full)失败一次；旧文件仍是安全的 ask，此后恢复真实写。
     const spy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
     await handle.setPermissionMode!('bypassPermissions').catch(() => {});
@@ -413,7 +737,7 @@ describe('Pi provider-aware model routing', () => {
       model: 'local-model',
       permissionMode: 'ask',
     });
-    const permFile = path.join(agentHome, 'runtime', 'perm-perm-failed-intent.json');
+    const permFile = runtimeFileOf('perm', 'perm-failed-intent');
     const spy = vi.spyOn(fsp.promises, 'writeFile').mockRejectedValueOnce(new Error('transient EIO'));
     await expect(handle.setPermissionMode!('bypassPermissions')).rejects.toThrow('transient EIO');
     spy.mockRestore();

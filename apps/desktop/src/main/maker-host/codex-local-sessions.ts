@@ -22,7 +22,10 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 
-import { finalizeCodexCitationText } from '@cindy/maker-core';
+import {
+  CodexResumePreparationBlockedError,
+  finalizeCodexCitationText,
+} from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
@@ -42,7 +45,252 @@ const log = createLogger('codex-local-sessions');
 const LOCAL_SESSION_ID_PREFIX = 'codex-';
 const MAX_THREADS_PER_HOME = 1000;
 const SQLITE_BUSY_TIMEOUT_MS = 3000;
+// Codex can create a rollout before writing session_meta and keep that file at
+// zero bytes for several minutes. Recovery must not fork a still-live writer.
+const EMPTY_ROLLOUT_RECOVERY_GRACE_MS = 15 * 60_000;
+const MAX_RECOVERY_PATH_ATTEMPTS = 8;
 const codexMessageImportFileCache = new Map<string, ExternalImportFileCacheEntry>();
+
+function isNonEmptyRolloutFile(filePath: string, threadId: string): boolean {
+  const state = readRegularRolloutPathState(filePath);
+  if (state === 'unsafe') {
+    throw resumePreparationBlocked(threadId, 'the rollout path is not a stable regular file');
+  }
+  return state === 'non-empty-file';
+}
+
+interface EmptyRolloutSnapshot {
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number | null;
+}
+
+interface NonEmptyRolloutSnapshot extends EmptyRolloutSnapshot {
+  size: number;
+}
+
+/** Capture an unchanged zero-byte file so recovery can fail closed around live writers. */
+function readEmptyRolloutSnapshot(filePath: string): EmptyRolloutSnapshot | null {
+  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile() || before.size !== 0) return null;
+    const stat = fs.lstatSync(filePath);
+    if (
+      !stat.isFile()
+      || stat.size !== 0
+      || before.dev !== stat.dev
+      || before.ino !== stat.ino
+    ) return null;
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      birthtimeMs: usableBirthtimeMs(stat),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isStableEmptyRollout(snapshot: EmptyRolloutSnapshot): boolean {
+  const latestIdentityTime = Math.max(
+    snapshot.mtimeMs,
+    snapshot.ctimeMs,
+    snapshot.birthtimeMs ?? 0,
+  );
+  return Date.now() - latestIdentityTime >= EMPTY_ROLLOUT_RECOVERY_GRACE_MS;
+}
+
+function usableBirthtimeMs(stat: fs.Stats): number | null {
+  return Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0 ? stat.birthtimeMs : null;
+}
+
+function emptyRolloutStillMatches(
+  filePath: string,
+  expected: EmptyRolloutSnapshot,
+): boolean {
+  const current = readEmptyRolloutSnapshot(filePath);
+  return !!current
+    && current.dev === expected.dev
+    && current.ino === expected.ino
+    && current.mtimeMs === expected.mtimeMs
+    && current.ctimeMs === expected.ctimeMs
+    && current.birthtimeMs === expected.birthtimeMs;
+}
+
+/** Capture an external empty without following a symlink or accepting a replace race. */
+function readRegularEmptyRolloutSnapshot(filePath: string): EmptyRolloutSnapshot | null {
+  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile() || before.size !== 0) return null;
+    const after = fs.lstatSync(filePath);
+    if (
+      !after.isFile()
+      || after.size !== 0
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+    ) return null;
+    return {
+      dev: after.dev,
+      ino: after.ino,
+      mtimeMs: after.mtimeMs,
+      ctimeMs: after.ctimeMs,
+      birthtimeMs: usableBirthtimeMs(after),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function regularEmptyRolloutStillMatches(
+  filePath: string,
+  expected: EmptyRolloutSnapshot,
+): boolean {
+  const current = readRegularEmptyRolloutSnapshot(filePath);
+  return !!current
+    && current.dev === expected.dev
+    && current.ino === expected.ino
+    && current.mtimeMs === expected.mtimeMs
+    && current.ctimeMs === expected.ctimeMs
+    && current.birthtimeMs === expected.birthtimeMs;
+}
+
+function readNonEmptyRolloutSnapshot(filePath: string): NonEmptyRolloutSnapshot | null {
+  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile() || before.size <= 0) return null;
+    const stat = fs.lstatSync(filePath);
+    if (
+      !stat.isFile()
+      || stat.size <= 0
+      || before.dev !== stat.dev
+      || before.ino !== stat.ino
+    ) return null;
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      birthtimeMs: usableBirthtimeMs(stat),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function nonEmptyRolloutStillMatches(
+  filePath: string,
+  expected: NonEmptyRolloutSnapshot,
+): boolean {
+  const current = readNonEmptyRolloutSnapshot(filePath);
+  return !!current
+    && current.dev === expected.dev
+    && current.ino === expected.ino
+    && current.size === expected.size
+    && current.mtimeMs === expected.mtimeMs
+    && current.ctimeMs === expected.ctimeMs
+    && current.birthtimeMs === expected.birthtimeMs;
+}
+
+/** Bounded-memory equality check used only for Cindy-owned immutable candidates. */
+function filesHaveSameContents(leftPath: string, rightPath: string): boolean {
+  let leftFd: number | null = null;
+  let rightFd: number | null = null;
+  try {
+    const leftStat = fs.statSync(leftPath);
+    const rightStat = fs.statSync(rightPath);
+    if (!leftStat.isFile() || !rightStat.isFile() || leftStat.size !== rightStat.size) return false;
+    leftFd = fs.openSync(leftPath, 'r');
+    rightFd = fs.openSync(rightPath, 'r');
+    const left = Buffer.allocUnsafe(64 * 1024);
+    const right = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const leftRead = fs.readSync(leftFd, left, 0, left.length, null);
+      const rightRead = fs.readSync(rightFd, right, 0, right.length, null);
+      if (leftRead !== rightRead) return false;
+      if (leftRead === 0) return true;
+      if (!left.subarray(0, leftRead).equals(right.subarray(0, rightRead))) return false;
+    }
+  } catch {
+    return false;
+  } finally {
+    if (leftFd !== null) {
+      try { fs.closeSync(leftFd); } catch { /* best effort */ }
+    }
+    if (rightFd !== null) {
+      try { fs.closeSync(rightFd); } catch { /* best effort */ }
+    }
+  }
+}
+
+/**
+ * Read an exact Cindy-owned rollout through a no-follow file descriptor and
+ * bind the bytes to one regular-file identity before it is persisted in state.
+ */
+function readPrivateExactRolloutSnapshot(
+  targetHome: string,
+  filePath: string,
+  contents: string,
+): NonEmptyRolloutSnapshot | null {
+  const expected = Buffer.from(contents, 'utf-8');
+  if (expected.length === 0 || !isPathInside(targetHome, filePath)) return null;
+
+  let fd: number | null = null;
+  try {
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile() || before.size !== expected.length) return null;
+
+    const noFollow = typeof fs.constants.O_NOFOLLOW === 'number'
+      ? fs.constants.O_NOFOLLOW
+      : 0;
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(fd);
+    if (
+      !opened.isFile()
+      || opened.size !== expected.length
+      || opened.dev !== before.dev
+      || opened.ino !== before.ino
+    ) return null;
+
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    while (offset < expected.length) {
+      const read = fs.readSync(fd, chunk, 0, Math.min(chunk.length, expected.length - offset), null);
+      if (read <= 0 || !chunk.subarray(0, read).equals(expected.subarray(offset, offset + read))) {
+        return null;
+      }
+      offset += read;
+    }
+    if (fs.readSync(fd, chunk, 0, 1, null) !== 0) return null;
+
+    const after = fs.lstatSync(filePath);
+    if (
+      !after.isFile()
+      || after.dev !== opened.dev
+      || after.ino !== opened.ino
+      || after.size !== opened.size
+      || !isPathInside(targetHome, filePath)
+    ) return null;
+    return {
+      dev: after.dev,
+      ino: after.ino,
+      size: after.size,
+      mtimeMs: after.mtimeMs,
+      ctimeMs: after.ctimeMs,
+      birthtimeMs: usableBirthtimeMs(after),
+    };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* best effort */ }
+    }
+  }
+}
 
 type SqlScalar = string | number | bigint | Buffer | null;
 type SqlRow = Record<string, SqlScalar | undefined>;
@@ -178,78 +426,693 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
   }
 
   let targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-  // rollout 文件真实存在 → resume 能直接读,无需任何处理(最热路径,优先短路)。
-  // 注意: 这里必须校验文件**真的在磁盘上**, 不能只看 DB 里有没有 rollout_path ——
-  // DB threads 行可能指向一个已被删除的 rollout 文件(孤儿), 那种情况要继续往下走恢复。
-  if (
-    targetRollout
-    && fs.existsSync(targetRollout)
-    && (
-      isPathInside(targetHome, targetRollout)
-      || !isLegacyBrandedCodexLocation(targetHome, targetRollout)
-    )
-  ) return targetRollout;
+  if (targetRollout) {
+    const recordedTargetRollout = targetRollout;
+    const targetIsPrivate = isPathInside(targetHome, targetRollout);
 
-  // state 行可能已经丢失,但标准 sessions/ 下的 rollout 仍在。app-server 的
-  // thread/resume 会自己扫描并重新 hydrate state;这里只需避免再合成一份重复文件。
-  if (!targetRollout) {
-    const currentHomeThread = findExternalThreadByIdFromRollouts(targetHome, threadId);
-    if (currentHomeThread?.rolloutPath && fs.existsSync(currentHomeThread.rolloutPath)) return;
-  }
+    // A state-pointed private rollout is an irreversible handoff boundary. It may
+    // already have native Codex records or a live writer, so later preflights must
+    // never replace it from timestamps or the lossy Cindy chat projection.
+    if (
+      targetIsPrivate
+      && readPrivateRolloutPathState(targetHome, targetRollout) === 'non-empty-file'
+    ) {
+      return targetRollout;
+    }
 
-  // 尝试从外部 CODEX_HOME(~/.codex、Codex.app、历史品牌 userData 等)导入这个 thread。
-  // rollout 必须接管进当前 Cindy HOME,不能让新 state 长期指向可能被用户清理的老目录。
-  // target row 已指向旧品牌 rollout 时,这个指针比外部 HOME 的 updatedAt 更权威。
-  // 否则 ~/.codex / CODEX_HOME 中较新的同 id thread 会先胜出,linked 分支又因 target
-  // row 已存在而跳过复制,导致旧品牌指针永远没有被接管。
-  const legacyTargetThread = targetRollout
-    && isLegacyBrandedCodexLocation(targetHome, targetRollout)
-    ? findThreadByIdInHome(targetHome, threadId)
-    : null;
-  const found = legacyTargetThread
-    ?? findExternalThreadById(threadId)
-    ?? (targetRollout ? findThreadByIdInHome(targetHome, threadId) : null);
-  if (found) {
-    // 外部会话(~/.codex、Codex.app、历史品牌 HOME)一律**复制成 Cindy 私有副本**,
-    // 不再链接源 rollout(#789 方案 A:Dash 定稿)。Cindy 的续聊只写进 desktop CODEX_HOME
-    // 的这份副本,源会话零改动、也没有任何回写通道——彻底消除跨 runtime 版本回写污染源会话
-    // 的风险。接管进当前 HOME 还避免 state 长期指向可能被用户清理的外部目录。
-    const adoptedRolloutPath = targetRolloutPathForExternalThread(found, targetHome);
-    const sourceRolloutExists = !!found.rolloutPath && fs.existsSync(found.rolloutPath);
-    let adoptedRollout = false;
-    if (sourceRolloutExists) {
-      try {
-        adoptedRollout = await copyExternalRolloutAtomically(found.rolloutPath, adoptedRolloutPath);
-      } catch (err) {
-        log.warn('failed to adopt external Codex rollout into current home', {
+    // Until state points at a private non-empty file, no recovery boundary has
+    // committed. Reconcile any native canonical/preserved inode first so a
+    // crash after preservation cannot hide that writer on the next retry.
+    const nativeWinner = restoreInterruptedNativeCanonicalWithoutState(
+      targetHome,
+      threadId,
+      { requireAllNativePrecursorsConverged: true },
+    );
+    if (nativeWinner) {
+      const snapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, nativeWinner);
+      if (!snapshot) {
+        throw resumePreparationBlocked(
           threadId,
-          sourceRolloutPath: found.rolloutPath,
-          targetRolloutPath: adoptedRolloutPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
+          'the native private rollout changed before state reconciliation',
+        );
+      }
+      const remainingEmptyGuard = observePendingInterruptedEmptyPreservations(
+        targetHome,
+        threadId,
+      );
+      const assertNativeCanonicalNamespaceUnchanged = () => {
+        assertNoUnexpectedCanonicalRollouts(
+          threadId,
+          targetHome,
+          [nativeWinner],
+        );
+      };
+      const assertNativeHandoffUnchanged = combineHandoffGuards(
+        remainingEmptyGuard,
+        assertNativeCanonicalNamespaceUnchanged,
+      );
+      if (handoffThreadToNativeRollout(
+        targetDbPath,
+        threadId,
+        targetHome,
+        targetRollout,
+        { path: nativeWinner, created: false, snapshot },
+        assertNativeHandoffUnchanged,
+      )) {
+        return acceptStateBackedWinnerAfterRecovery(
+          targetDbPath,
+          threadId,
+          targetHome,
+          nativeWinner,
+          { beforeReturn: assertNativeCanonicalNamespaceUnchanged },
+        );
+      }
+      const concurrentWinner = readPrivateNonEmptyRollout(
+        targetDbPath,
+        threadId,
+        targetHome,
+      );
+      if (concurrentWinner) {
+        if (!samePath(concurrentWinner, nativeWinner)) {
+          throw resumePreparationBlocked(
+            threadId,
+            'concurrent state selected a different private winner during native reconciliation',
+          );
+        }
+        return acceptStateBackedWinnerAfterRecovery(
+          targetDbPath,
+          threadId,
+          targetHome,
+          concurrentWinner,
+          { beforeReturn: assertNativeCanonicalNamespaceUnchanged },
+        );
+      }
+      throw resumePreparationBlocked(
+        threadId,
+        'state changed before native rollout reconciliation',
+      );
+    }
+
+    const localCanonicalSet = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+    // A full canonical found here appeared after the initial native preflight.
+    // Keep state unchanged so the next attempt can reconcile it through the
+    // native-winner CAS instead of letting an external/synthetic handoff hide it.
+    if (localCanonicalSet.nonEmpty.length > 0) {
+      throw resumePreparationBlocked(
+        threadId,
+        'a private canonical rollout materialized during recovery planning',
+      );
+    }
+    const canonicalEmptiesToPreserve = targetIsPrivate
+      ? localCanonicalSet.empties.filter(
+        (candidate) => !samePath(candidate.path, recordedTargetRollout),
+      )
+      : localCanonicalSet.empties;
+    const retainedCanonicalEmpties = targetIsPrivate
+      ? localCanonicalSet.empties.filter(
+        (candidate) => samePath(candidate.path, recordedTargetRollout),
+      )
+      : [];
+    const assertCanonicalEmptiesUnchanged = preserveAdditionalCanonicalEmptiesBeforeHandoff(
+      threadId,
+      targetHome,
+      canonicalEmptiesToPreserve,
+    );
+    const assertCanonicalNamespaceUnchanged = createCanonicalNamespaceGuard(
+      threadId,
+      targetHome,
+      retainedCanonicalEmpties,
+    );
+    assertCanonicalNamespaceUnchanged();
+    const assertInterruptedEmptiesUnchanged = observePendingInterruptedEmptyPreservations(
+      targetHome,
+      threadId,
+    );
+    const assertExistingStatePrecursorsUnchanged = combineHandoffGuards(
+      assertCanonicalEmptiesUnchanged,
+      assertInterruptedEmptiesUnchanged,
+      assertCanonicalNamespaceUnchanged,
+    );
+
+    // #1554: existence is not readability. Codex can create a zero-byte rollout
+    // several minutes before writing session_meta, so recent empties must fail
+    // closed and stable empties recover without modifying the original file.
+    if (readEmptyRolloutSnapshot(targetRollout)) {
+      try {
+        return await recoverStableEmptyRollout(
+          threadId,
+          targetDbPath,
+          targetHome,
+          targetRollout,
+          assertExistingStatePrecursorsUnchanged,
+          assertCanonicalNamespaceUnchanged,
+        );
+      } catch (error) {
+        failClosedResumePreparation(threadId, 'empty rollout recovery', error);
       }
     }
 
-    // 原文件存在但接管失败时仍指回原文件,保证本次 resume 不因迁移 IO 故障被阻断(此时
-    // app-server 仍以 CODEX_HOME=desktop 运行、新事件写进 desktop home,不改源);原文件
-    // 本就缺失时把 state 指向当前 HOME,随后由 localDb 历史合成兜底 rollout。
-    const preparedRolloutPath = adoptedRollout || !sourceRolloutExists
-      ? adoptedRolloutPath
-      : found.rolloutPath;
-    const copiedState = copyThreadStateToTarget(found, targetDbPath, {
-      rolloutPathOverride: preparedRolloutPath,
-    });
-    const pointedState = pointThreadAtRollout(targetDbPath, threadId, preparedRolloutPath);
-    targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-    log.info('prepared private-copy external Codex thread for resume', {
+    // A non-empty external pointer is never a valid hot path: Codex resumes by
+    // appending directly to state.rollout_path. Publish a stable private copy,
+    // then move the existing row with CAS while preserving all current metadata.
+    if (!targetIsPrivate && isNonEmptyRolloutFile(targetRollout, threadId)) {
+      try {
+        const row = readRawThreadRow(targetDbPath, threadId);
+        const preferred = privateRolloutPathForStateRow(targetHome, targetRollout, row);
+        const adopted = await copyExternalRolloutAtomically(
+          targetRollout,
+          preferred,
+          threadId,
+          {
+            allowSibling: true,
+            // Keep every new filename Cindy-owned until the guarded state
+            // transaction verifies the complete canonical namespace.
+            skipPreferred: true,
+          },
+        );
+        if (!adopted) {
+          throw resumePreparationBlocked(threadId, 'external rollout changed during private adoption');
+        }
+        if (handoffThreadToCopiedRollout(
+          targetDbPath,
+          threadId,
+          targetHome,
+          targetRollout,
+          adopted,
+          assertExistingStatePrecursorsUnchanged,
+        )) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            adopted.path,
+            { beforeReturn: assertCanonicalNamespaceUnchanged },
+          );
+        }
+        const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+        if (winner) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            winner,
+            { beforeReturn: assertCanonicalNamespaceUnchanged },
+          );
+        }
+        throw resumePreparationBlocked(threadId, 'external rollout pointer changed during private adoption');
+      } catch (error) {
+        failClosedResumePreparation(threadId, 'external rollout adoption', error);
+      }
+    }
+
+    // The recorded file is missing. If the pointer is external, first publish a
+    // private synthetic fallback and only then move state; never recreate data in
+    // another runtime's CODEX_HOME. A private orphan keeps the established path.
+    if (!targetIsPrivate) {
+      try {
+        return await recoverMissingExternalRollout(
+          threadId,
+          targetDbPath,
+          targetHome,
+          targetRollout,
+          assertExistingStatePrecursorsUnchanged,
+          assertCanonicalNamespaceUnchanged,
+        );
+      } catch (error) {
+        failClosedResumePreparation(threadId, 'missing external rollout recovery', error);
+      }
+    }
+
+    const expectedMissingPrivateRollout = targetRollout;
+    const external = findExternalThreadById(threadId);
+    if (external && isNonEmptyRolloutFile(external.rolloutPath, threadId)) {
+      try {
+        const adopted = await copyExternalRolloutAtomically(
+          external.rolloutPath,
+          expectedMissingPrivateRollout,
+          threadId,
+          {
+            allowSibling: true,
+            // Linking directly at the state-pointed path is itself a commit.
+            // Always keep the copy hidden until the namespace-aware CAS.
+            skipPreferred: true,
+          },
+        );
+        if (!adopted) {
+          throw resumePreparationBlocked(threadId, 'external fallback changed during private adoption');
+        }
+        if (samePath(adopted.path, expectedMissingPrivateRollout)) {
+          if (privateRolloutPublicationOwnsPath(targetHome, adopted)) {
+            return acceptStateBackedWinnerAfterRecovery(
+              targetDbPath,
+              threadId,
+              targetHome,
+              adopted.path,
+              { allowedCanonicalPaths: [adopted.path] },
+            );
+          }
+          throw resumePreparationBlocked(threadId, 'private adoption target changed during publication');
+        }
+        const assertMissingPrivateHandoffUnchanged = () => {
+          assertExistingStatePrecursorsUnchanged?.();
+          if (
+            readPrivateRolloutPathState(targetHome, expectedMissingPrivateRollout) !== 'missing'
+          ) {
+            throw resumePreparationBlocked(
+              threadId,
+              'the missing private rollout materialized before state handoff',
+            );
+          }
+        };
+        if (handoffThreadToCopiedRollout(
+          targetDbPath,
+          threadId,
+          targetHome,
+          expectedMissingPrivateRollout,
+          adopted,
+          assertMissingPrivateHandoffUnchanged,
+        )) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            adopted.path,
+            { beforeReturn: assertCanonicalNamespaceUnchanged },
+          );
+        }
+        const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+        if (winner) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            winner,
+            { beforeReturn: assertCanonicalNamespaceUnchanged },
+          );
+        }
+        throw resumePreparationBlocked(threadId, 'private orphan pointer changed during adoption');
+      } catch (error) {
+        failClosedResumePreparation(threadId, 'external orphan adoption', error);
+      }
+    }
+
+    try {
+      return await recoverMissingPrivateRollout(
+        threadId,
+        targetDbPath,
+        targetHome,
+        targetRollout,
+        assertExistingStatePrecursorsUnchanged,
+        assertCanonicalNamespaceUnchanged,
+      );
+    } catch (error) {
+      failClosedResumePreparation(threadId, 'missing private rollout recovery', error);
+    }
+  }
+
+  // The state row may be gone while a valid private rollout remains. Codex can
+  // scan its own standard directories and hydrate current-schema state, but a
+  // Cindy recovery sibling is not discoverable when an empty canonical rollout
+  // for the same thread still shadows it. In that shape, continue into the
+  // state-backed import paths below or fail closed.
+  const interruptedNativeCanonical = restoreInterruptedNativeCanonicalWithoutState(
+    targetHome,
+    threadId,
+  );
+  if (interruptedNativeCanonical) return interruptedNativeCanonical;
+  const assertInterruptedPreservedEmptiesUnchanged =
+    observePendingInterruptedEmptyPreservations(targetHome, threadId);
+  const currentHomeCanonicalSet = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  const recentCurrentHomeCanonicalEmpty = currentHomeCanonicalSet.empties.find(
+    (candidate) => !isStableEmptyRollout(candidate.snapshot),
+  );
+  if (recentCurrentHomeCanonicalEmpty) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
+  }
+  if (currentHomeCanonicalSet.nonEmpty.length > 1) {
+    throw resumePreparationBlocked(threadId, 'multiple private canonical rollouts conflict');
+  }
+  if (currentHomeCanonicalSet.nonEmpty.length === 1) {
+    const existingWinner = currentHomeCanonicalSet.nonEmpty[0];
+    preserveStableCanonicalEmptiesBesideWinner(
       threadId,
-      sourceHome: found.sourceHome,
-      copiedState,
-      pointedState,
-      adoptedRollout,
-      rolloutPath: targetRollout,
+      targetHome,
+      currentHomeCanonicalSet.empties,
+    );
+    const converged = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+    if (
+      converged.empties.length > 0
+      || converged.nonEmpty.length !== 1
+      || !samePath(converged.nonEmpty[0], existingWinner)
+    ) {
+      throw resumePreparationBlocked(threadId, 'the private canonical winner changed during handoff');
+    }
+    return existingWinner;
+  }
+  const [currentHomeCanonicalEmptyObservation, ...additionalCanonicalEmpties] =
+    currentHomeCanonicalSet.empties;
+  const assertAdditionalCanonicalEmptiesUnchanged = preserveAdditionalCanonicalEmptiesBeforeHandoff(
+    threadId,
+    targetHome,
+    additionalCanonicalEmpties,
+  );
+  const assertLocalCanonicalPrecursorsUnchanged = combineHandoffGuards(
+    assertInterruptedPreservedEmptiesUnchanged,
+    assertAdditionalCanonicalEmptiesUnchanged,
+  );
+  const currentHomeCanonicalEmpty = currentHomeCanonicalEmptyObservation?.path ?? null;
+  const currentHomeCanonicalEmptySnapshot = currentHomeCanonicalEmptyObservation?.snapshot ?? null;
+  const currentHomeThread = findExternalThreadByIdFromRollouts(targetHome, threadId);
+  if (
+    currentHomeThread?.rolloutPath
+    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath, threadId)
+    && !currentHomeCanonicalEmpty
+    && isCanonicalCodexRolloutPath(currentHomeThread.rolloutPath, threadId)
+  ) {
+    const converged = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+    if (
+      converged.empties.length === 0
+      && converged.nonEmpty.length === 1
+      && samePath(converged.nonEmpty[0], currentHomeThread.rolloutPath)
+    ) return currentHomeThread.rolloutPath;
+    throw resumePreparationBlocked(
+      threadId,
+      'the private canonical rollout namespace changed during native discovery',
+    );
+  }
+
+  // With no target row, a discovered external thread can still be adopted. A
+  // sibling is usable only when source state can be copied to point at it;
+  // rollout-only sources must publish at the standard preferred path.
+  const found = findExternalThreadById(threadId);
+  let stateBackedLocalHandoffGuard = assertLocalCanonicalPrecursorsUnchanged;
+  let stateBackedCanonicalNamespaceGuard: (() => void) | undefined;
+  if (
+    found?.sourceDbPath
+    && currentHomeCanonicalEmpty
+    && currentHomeCanonicalEmptySnapshot
+  ) {
+    // A state-backed sibling is not discoverable until its row commits. Move
+    // the primary empty inode aside first, then keep it in the same safety set
+    // as the publication for both transaction validations. A writer waking
+    // after commit remains preserved; one waking before commit wins on the
+    // next retry through interrupted-preservation restoration.
+    const preservation = preserveStableEmptyCanonical(
+      threadId,
+      targetHome,
+      currentHomeCanonicalEmpty,
+      currentHomeCanonicalEmptySnapshot,
+    );
+    if (preservation.kind === 'native-winner') {
+      return acceptSoleCanonicalNativeWinner(
+        threadId,
+        targetHome,
+        currentHomeCanonicalEmpty,
+        stateBackedLocalHandoffGuard,
+      );
+    }
+    const preservedState = readPrivateRolloutPathState(targetHome, preservation.path);
+    if (preservedState === 'non-empty-file') {
+      return restoreSoleCanonicalNativeWinner(
+        threadId,
+        targetHome,
+        preservation.path,
+        currentHomeCanonicalEmpty,
+        stateBackedLocalHandoffGuard,
+      );
+    }
+    const preservedSnapshot = readRegularEmptyRolloutSnapshot(preservation.path);
+    if (!preservedSnapshot) {
+      if (readPrivateRolloutPathState(targetHome, preservation.path) === 'non-empty-file') {
+        return restoreSoleCanonicalNativeWinner(
+          threadId,
+          targetHome,
+          preservation.path,
+          currentHomeCanonicalEmpty,
+          stateBackedLocalHandoffGuard,
+        );
+      }
+      throw resumePreparationBlocked(
+        threadId,
+        'the primary private rollout changed before state-backed adoption',
+      );
+    }
+    const assertPrimaryCanonicalUnchanged = () => {
+      if (!regularEmptyRolloutStillMatches(preservation.path, preservedSnapshot)) {
+        throw resumePreparationBlocked(
+          threadId,
+          'the primary private rollout changed before state handoff',
+        );
+      }
+    };
+    stateBackedLocalHandoffGuard = combineHandoffGuards(
+      stateBackedLocalHandoffGuard,
+      assertPrimaryCanonicalUnchanged,
+    );
+  }
+  if (found?.sourceDbPath) {
+    stateBackedCanonicalNamespaceGuard = createCanonicalNamespaceGuard(
+      threadId,
+      targetHome,
+      [],
+    );
+    stateBackedCanonicalNamespaceGuard();
+    stateBackedLocalHandoffGuard = combineHandoffGuards(
+      stateBackedLocalHandoffGuard,
+      stateBackedCanonicalNamespaceGuard,
+    );
+  }
+  if (found && isNonEmptyRolloutFile(found.rolloutPath, threadId)) {
+    try {
+      const preferred = targetRolloutPathForExternalThread(found, targetHome);
+      const stateHandoffGuard = found.sourceDbPath
+        ? stateBackedLocalHandoffGuard
+        : assertLocalCanonicalPrecursorsUnchanged;
+      if (
+        !found.sourceDbPath
+        && currentHomeCanonicalEmpty
+        && currentHomeCanonicalEmptySnapshot
+      ) {
+        return await adoptExternalRolloutOverStableCanonicalWithoutState(
+          threadId,
+          targetHome,
+          found.rolloutPath,
+          currentHomeCanonicalEmpty,
+          currentHomeCanonicalEmptySnapshot,
+          assertLocalCanonicalPrecursorsUnchanged,
+        );
+      }
+      if (
+        !found.sourceDbPath
+        && isCanonicalCodexRolloutPath(preferred, threadId)
+      ) {
+        return await adoptExternalRolloutAfterPendingLocalHandoff(
+          threadId,
+          targetHome,
+          found.rolloutPath,
+          preferred,
+          assertLocalCanonicalPrecursorsUnchanged ?? (() => undefined),
+        );
+      }
+      const adopted = await copyExternalRolloutAtomically(
+        found.rolloutPath,
+        preferred,
+        threadId,
+        {
+          allowSibling: !!found.sourceDbPath,
+          skipPreferred: !!found.sourceDbPath && !!stateHandoffGuard,
+        },
+      );
+      if (!adopted) {
+        throw resumePreparationBlocked(threadId, 'external rollout changed during private adoption');
+      }
+
+      const copiedState = copyThreadStateToTarget(found, targetDbPath, {
+        rolloutPathOverride: adopted.path,
+        validateBeforeCopy: () => {
+          stateHandoffGuard?.();
+          return privateRolloutPublicationStillMatches(targetHome, adopted);
+        },
+        validateAfterCopy: () => {
+          stateHandoffGuard?.();
+          return privateRolloutPublicationStillMatches(targetHome, adopted);
+        },
+      });
+      targetRollout = readThreadRolloutPath(targetDbPath, threadId);
+      if (targetRollout) {
+        if (
+          isPathInside(targetHome, targetRollout)
+          && readPrivateRolloutPathState(targetHome, targetRollout) === 'non-empty-file'
+        ) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            targetRollout,
+            { beforeReturn: stateBackedCanonicalNamespaceGuard },
+          );
+        }
+        if (!isPathInside(targetHome, targetRollout) && handoffThreadToCopiedRollout(
+          targetDbPath,
+          threadId,
+          targetHome,
+          targetRollout,
+          adopted,
+          stateHandoffGuard,
+        )) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            adopted.path,
+            { beforeReturn: stateBackedCanonicalNamespaceGuard },
+          );
+        }
+        throw resumePreparationBlocked(threadId, 'concurrent state prevented safe private adoption');
+      }
+      if (
+        samePath(adopted.path, preferred)
+        && isCanonicalCodexRolloutPath(adopted.path, threadId)
+        && privateRolloutPublicationOwnsPath(targetHome, adopted)
+      ) {
+        assertSoleCanonicalPath(threadId, targetHome, adopted.path, true);
+        return adopted.path;
+      }
+      log.warn('external rollout copied to sibling but source state was not available', {
+        threadId,
+        copiedState,
+        adoptedRolloutPath: adopted.path,
+      });
+      throw resumePreparationBlocked(threadId, 'private rollout sibling is not discoverable without state');
+    } catch (error) {
+      failClosedResumePreparation(threadId, 'external rollout import', error);
+    }
+  }
+  const externalEmpty = found ? readEmptyRolloutSnapshot(found.rolloutPath) : null;
+  if (found && externalEmpty) {
+    try {
+      return await recoverStableExternalEmptyWithoutTargetState(
+        threadId,
+        targetDbPath,
+        targetHome,
+        found,
+        externalEmpty,
+        stateBackedLocalHandoffGuard,
+        stateBackedCanonicalNamespaceGuard,
+      );
+    } catch (error) {
+      failClosedResumePreparation(threadId, 'external empty rollout import', error);
+    }
+  }
+  if (found?.sourceDbPath && rolloutPathIsMissing(found.rolloutPath)) {
+    try {
+      const sourceRow = readRawThreadRow(found.sourceDbPath, threadId);
+      if (sourceRow) {
+        const preferred = targetRolloutPathForExternalThread(found, targetHome);
+        const published = await publishFreshSyntheticBeforeHandoff(
+          preferred,
+          threadId,
+          sourceRow,
+          { skipPreferred: true },
+        );
+        if (!published) {
+          throw resumePreparationBlocked(threadId, 'a private recovery file could not be published safely');
+        }
+        const assertMissingSourceAndLocalPrecursorsUnchanged = () => {
+          stateBackedLocalHandoffGuard?.();
+          if (!rolloutPathIsMissing(found.rolloutPath)) {
+            throw resumePreparationBlocked(
+              threadId,
+              'the missing external rollout materialized before state handoff',
+            );
+          }
+        };
+        copyThreadStateToTarget(found, targetDbPath, {
+          rolloutPathOverride: published.path,
+          validateBeforeCopy: () => {
+            assertMissingSourceAndLocalPrecursorsUnchanged();
+            return syntheticPublicationStillMatches(targetHome, published);
+          },
+          validateAfterCopy: () => {
+            assertMissingSourceAndLocalPrecursorsUnchanged();
+            return syntheticPublicationOwnsPath(targetHome, published);
+          },
+        });
+        const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+        if (isAcceptableSyntheticWinner(targetHome, winner, published)) {
+          return acceptStateBackedWinnerAfterRecovery(
+            targetDbPath,
+            threadId,
+            targetHome,
+            winner!,
+            { beforeReturn: stateBackedCanonicalNamespaceGuard },
+          );
+        }
+        throw resumePreparationBlocked(threadId, 'external state could not be copied after recovery');
+      }
+    } catch (error) {
+      failClosedResumePreparation(threadId, 'missing external thread import', error);
+    }
+  }
+
+  // An unindexed external empty is outside the current Cindy HOME and therefore
+  // cannot shadow the app-server's scanner. A recent one may still have a live
+  // writer, but a stable one must not permanently poison recovery from Cindy's
+  // own persisted history.
+  const unindexedExternalEmpties = observeUnindexedExternalEmptyRolloutsById(threadId);
+  const recentUnindexedExternalEmpty = unindexedExternalEmpties.find(
+    (candidate) => !isStableEmptyRollout(candidate.snapshot),
+  );
+  if (recentUnindexedExternalEmpty) {
+    throw resumePreparationBlocked(threadId, 'external rollout may still be materializing');
+  }
+  const assertUnindexedExternalEmptiesUnchanged = unindexedExternalEmpties.length > 0
+    ? () => assertExternalEmptyObservationsUnchanged(threadId, unindexedExternalEmpties)
+    : undefined;
+  const assertPrivateRecoverySourcesUnchanged = combineHandoffGuards(
+    assertLocalCanonicalPrecursorsUnchanged,
+    assertUnindexedExternalEmptiesUnchanged,
+  );
+  if (unindexedExternalEmpties.length > 0) {
+    log.info('ignoring stable unindexed external empty during private recovery', {
+      threadId,
+      externalRolloutPaths: unindexedExternalEmpties.map((candidate) => candidate.path),
     });
-    if (targetRollout && fs.existsSync(targetRollout)) return targetRollout;
+  }
+
+  // Prefer a full-fidelity external source above. Only when no state-backed
+  // source can win do we replace a stable local empty from Cindy's projection.
+  if (currentHomeCanonicalEmpty && currentHomeCanonicalEmptySnapshot) {
+    try {
+      const recovered = await recoverStableCanonicalEmptyWithoutTargetState(
+        threadId,
+        targetHome,
+        currentHomeCanonicalEmpty,
+        currentHomeCanonicalEmptySnapshot,
+        assertPrivateRecoverySourcesUnchanged,
+      );
+      if (recovered) return recovered;
+    } catch (error) {
+      failClosedResumePreparation(threadId, 'state-less empty rollout recovery', error);
+    }
+  }
+
+  if (
+    currentHomeThread?.rolloutPath
+    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath, threadId)
+    && !isCanonicalCodexRolloutPath(currentHomeThread.rolloutPath, threadId)
+  ) {
+    throw resumePreparationBlocked(threadId, 'private rollout is not discoverable without state');
+  }
+
+  // An empty standard rollout is invisible to the parser but may still have a
+  // live writer. Do not synthesize a second same-thread file beside it.
+  const currentHomeEmpty = collectRolloutFiles(targetHome).find(
+    (candidate) => threadIdFromRolloutPath(candidate) === threadId
+      && !!readEmptyRolloutSnapshot(candidate),
+  );
+  if (currentHomeEmpty) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
   }
 
   // 孤儿兜底: state DB 有 threads 行、但 rollout 文件已缺失(典型成因: 旧版 codex logout
@@ -257,33 +1120,57 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
   // xdt-maker localDb 的可读消息历史, 合成一份最小 rollout, 让 thread/resume 能继续。
   // 合成版只含 user/assistant 文本(丢 codex 内部 reasoning/tool 细节, 跨供应商时这些本就
   // 失效), 是 best-effort 恢复, 失败不抛(让 maker-core 走清晰报错路径)。
-  if (targetRollout && !fs.existsSync(targetRollout)) {
-    try {
-      await synthesizeRolloutForOrphanThread(threadId, targetDbPath, targetRollout);
-    } catch (err) {
-      log.warn('synthesize orphan rollout failed', {
-        threadId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  } else if (!targetRollout) {
+  if (!targetRollout) {
     // 更深一层的孤儿: Cindy localDb 仍保留 sdk_session_id 与可读聊天历史,但 Codex
     // state 行和 rollout 同时丢失。不要伪造版本敏感的 threads 行;先在当前 HOME 的
     // 标准目录重建 rollout,随后的 thread/resume 会让 app-server 按当前 schema hydrate。
     try {
-      const synthesizedPath = await synthesizeRolloutForMissingThreadState(threadId, targetHome);
+      const synthesizedPath = await synthesizeRolloutForMissingThreadState(
+        threadId,
+        targetHome,
+        assertPrivateRecoverySourcesUnchanged,
+      );
       if (!synthesizedPath) {
+        if (unindexedExternalEmpties.length > 0) {
+          throw resumePreparationBlocked(
+            threadId,
+            'the stable external empty rollout has no readable private recovery history',
+          );
+        }
         log.debug('prepare resume: no localDb recovery source for missing thread state', { threadId });
+      } else if (readEmptyRolloutSnapshot(synthesizedPath)) {
+        throw resumePreparationBlocked(threadId, 'a same-thread rollout began materializing during recovery');
+      } else {
+        return synthesizedPath;
       }
     } catch (err) {
+      if (err instanceof CodexResumePreparationBlockedError) throw err;
       log.warn('synthesize rollout for missing Codex thread state failed', {
         threadId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  const preparedRollout = readThreadRolloutPath(targetDbPath, threadId);
-  return preparedRollout && fs.existsSync(preparedRollout) ? preparedRollout : undefined;
+  const lateStatePath = readThreadRolloutPath(targetDbPath, threadId);
+  if (!lateStatePath) return undefined;
+  const preparedRollout = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+  if (!preparedRollout) {
+    throw resumePreparationBlocked(
+      threadId,
+      'late Codex state appeared outside a readable private recovery boundary',
+    );
+  }
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath,
+    threadId,
+    targetHome,
+    preparedRollout,
+    {
+      allowedCanonicalPaths: isCanonicalCodexRolloutPath(preparedRollout, threadId)
+        ? [preparedRollout]
+        : [],
+    },
+  );
 }
 
 /** 为外部 thread 派生当前 Codex HOME 内的稳定 rollout 路径。 */
@@ -302,13 +1189,191 @@ function targetRolloutPathForExternalThread(thread: CodexThreadSummary, targetHo
   return path.join(targetHome, directory, filename);
 }
 
-/** realpath 可用时先消除 macOS `/var` 等路径别名,再做目录边界判断。 */
+/** Resolve a missing path through its nearest existing ancestor, including symlinks. */
+function resolvePathForBoundary(candidate: string): string {
+  let current = path.resolve(candidate);
+  const missingSegments: string[] = [];
+  for (;;) {
+    const resolved = safeRealpathSync(current);
+    if (resolved) return path.join(resolved, ...missingSegments);
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(candidate);
+    missingSegments.unshift(path.basename(current));
+    current = parent;
+  }
+}
+
+/** 消除 macOS `/var` 别名与已存在的 symlink ancestor,再做目录边界判断。 */
 function isPathInside(parentDir: string, candidate: string): boolean {
-  const parent = safeRealpathSync(parentDir) ?? path.resolve(parentDir);
-  const child = safeRealpathSync(candidate) ?? path.resolve(candidate);
+  const parent = resolvePathForBoundary(parentDir);
+  const child = resolvePathForBoundary(candidate);
   const relative = path.relative(parent, child);
   return relative === ''
     || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+type PrivateRolloutPathState = 'missing' | 'empty-file' | 'non-empty-file' | 'unsafe';
+
+/** Classify one rollout path without following its final symbolic link. */
+function readRegularRolloutPathState(candidate: string): PrivateRolloutPathState {
+  let before: fs.Stats;
+  try {
+    before = fs.lstatSync(candidate);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe';
+  }
+  if (!before.isFile()) return 'unsafe';
+  try {
+    const after = fs.lstatSync(candidate);
+    if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) {
+      return 'unsafe';
+    }
+    return after.size > 0 ? 'non-empty-file' : 'empty-file';
+  } catch {
+    return 'unsafe';
+  }
+}
+
+function rolloutPathIsMissing(candidate: string): boolean {
+  try {
+    fs.lstatSync(candidate);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+/**
+ * Revalidate a path that was classified as private while it was absent or
+ * empty. lstat deliberately rejects symbolic links, and the second identity
+ * check closes ordinary replace-between-checks races before a state pointer is
+ * restored to the path.
+ */
+function readPrivateRolloutPathState(targetHome: string, candidate: string): PrivateRolloutPathState {
+  try {
+    const before = fs.lstatSync(candidate);
+    if (!before.isFile() || !isPathInside(targetHome, candidate)) return 'unsafe';
+    const after = fs.lstatSync(candidate);
+    if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) return 'unsafe';
+    return after.size > 0 ? 'non-empty-file' : 'empty-file';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe';
+  }
+}
+
+function sameRegularFileIdentity(leftPath: string, rightPath: string): boolean {
+  try {
+    const left = fs.lstatSync(leftPath);
+    const right = fs.lstatSync(rightPath);
+    return left.isFile()
+      && right.isFile()
+      && left.dev === right.dev
+      && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
+function regularFileIdentityMatchesSnapshot(
+  filePath: string,
+  expected: EmptyRolloutSnapshot,
+): boolean {
+  try {
+    const current = fs.lstatSync(filePath);
+    return current.isFile()
+      && current.dev === expected.dev
+      && current.ino === expected.ino;
+  } catch {
+    return false;
+  }
+}
+
+function resumePreparationBlocked(
+  threadId: string,
+  reason: string,
+): CodexResumePreparationBlockedError {
+  return new CodexResumePreparationBlockedError(
+    `Codex thread ${threadId} is not safe to resume yet: ${reason}. Retry after the current write finishes.`,
+  );
+}
+
+function failClosedResumePreparation(
+  threadId: string,
+  operation: string,
+  error: unknown,
+): never {
+  if (error instanceof CodexResumePreparationBlockedError) throw error;
+  log.warn('Codex resume preparation failed after detecting unsafe state', {
+    threadId,
+    operation,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  throw resumePreparationBlocked(threadId, `${operation} failed`);
+}
+
+function privateRolloutPathForStateRow(
+  targetHome: string,
+  recordedPath: string,
+  row: SqlRow | null,
+): string {
+  const directory = numberValue(row?.archived) > 0 ? 'archived_sessions' : 'sessions';
+  const filename = path.basename(recordedPath) || 'rollout-cindy-recovered.jsonl';
+  return path.join(targetHome, directory, filename);
+}
+
+function readPrivateNonEmptyRollout(
+  targetDbPath: string,
+  threadId: string,
+  targetHome: string,
+): string | null {
+  const current = readThreadRolloutPath(targetDbPath, threadId);
+  return current
+    && readPrivateRolloutPathState(targetHome, current) === 'non-empty-file'
+    ? current
+    : null;
+}
+
+/** Revalidate a winner selected during recovery before the caller resumes it. */
+function acceptStateBackedWinnerAfterRecovery(
+  targetDbPath: string,
+  threadId: string,
+  targetHome: string,
+  winner: string,
+  opts: {
+    beforeReturn?: () => void;
+    allowedCanonicalPaths?: readonly string[];
+  } = {},
+): string {
+  const validate = () => {
+    opts.beforeReturn?.();
+    if (opts.allowedCanonicalPaths) {
+      assertNoUnexpectedCanonicalRollouts(
+        threadId,
+        targetHome,
+        opts.allowedCanonicalPaths,
+      );
+    } else if (!opts.beforeReturn) {
+      assertNoUnexpectedCanonicalRollouts(
+        threadId,
+        targetHome,
+        isCanonicalCodexRolloutPath(winner, threadId) ? [winner] : [],
+      );
+    }
+    const stateWinner = readThreadRolloutPath(targetDbPath, threadId);
+    if (
+      !stateWinner
+      || !samePath(stateWinner, winner)
+      || readPrivateRolloutPathState(targetHome, winner) !== 'non-empty-file'
+    ) {
+      throw resumePreparationBlocked(
+        threadId,
+        'the private state winner changed before recovery could return',
+      );
+    }
+  };
+  validate();
+  validate();
+  return winner;
 }
 
 /** 当前区域的全部历史品牌 Codex HOME;不包含当前 Cindy/CindyGlobal HOME。 */
@@ -319,32 +1384,131 @@ function legacyBrandedCodexHomes(targetHome: string): string[] {
     .map((dirName) => path.join(userDataParent, dirName, 'codex-home'));
 }
 
-function isLegacyBrandedCodexLocation(targetHome: string, candidate: string): boolean {
-  return legacyBrandedCodexHomes(targetHome).some((legacyHome) => isPathInside(legacyHome, candidate));
+/**
+ * Snapshot an external rollout into Cindy storage and atomically publish it.
+ * The source must remain byte/stat stable for the whole copy. Existing private
+ * candidates are reused only when byte-identical; different or empty files are
+ * preserved and, when state can point at one, bypassed with a deterministic sibling.
+ */
+interface PrivateRolloutPublication {
+  path: string;
+  created: boolean;
+  snapshot: NonEmptyRolloutSnapshot;
 }
 
-/**
- * 先复制到同目录临时文件,再用 hard-link 原子发布。并发迁移同一 thread 时只有首个
- * 发布者成功,其余调用复用已存在目标;删除临时 hard-link 不影响正式文件。
- */
-async function copyExternalRolloutAtomically(sourcePath: string, targetPath: string): Promise<boolean> {
-  if (samePath(sourcePath, targetPath)) return fs.existsSync(sourcePath);
-  if (!fs.existsSync(sourcePath)) return false;
-  if (fs.existsSync(targetPath)) return true;
+function readPrivateNonEmptyRolloutSnapshot(
+  targetHome: string,
+  candidate: string,
+): NonEmptyRolloutSnapshot | null {
+  if (!isPathInside(targetHome, candidate)) return null;
+  const snapshot = readNonEmptyRolloutSnapshot(candidate);
+  return snapshot
+    && nonEmptyRolloutStillMatches(candidate, snapshot)
+    && isPathInside(targetHome, candidate)
+    ? snapshot
+    : null;
+}
 
-  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+function privateRolloutPublicationOwnsPath(
+  targetHome: string,
+  publication: PrivateRolloutPublication,
+  candidatePath = publication.path,
+): boolean {
+  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, candidatePath);
+  return !!current
+    && current.dev === publication.snapshot.dev
+    && current.ino === publication.snapshot.ino;
+}
+
+function privateRolloutPublicationStillMatches(
+  targetHome: string,
+  publication: PrivateRolloutPublication,
+): boolean {
+  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, publication.path);
+  return !!current
+    && current.dev === publication.snapshot.dev
+    && current.ino === publication.snapshot.ino
+    && current.size === publication.snapshot.size
+    // Removing the temporary hard-link after publication legitimately changes
+    // ctime/link-count on the same immutable inode; mtime still binds content.
+    && current.mtimeMs === publication.snapshot.mtimeMs;
+}
+
+async function copyExternalRolloutAtomically(
+  sourcePath: string,
+  preferredPath: string,
+  threadId: string,
+  opts: { allowSibling: boolean; skipPreferred?: boolean },
+): Promise<PrivateRolloutPublication | null> {
+  if (samePath(sourcePath, preferredPath)) return null;
+  const targetHome = getDesktopCodexHome();
+  if (!isPathInside(targetHome, preferredPath)) return null;
+  const sourceSnapshot = readNonEmptyRolloutSnapshot(sourcePath);
+  if (!sourceSnapshot) return null;
+
+  await fsp.mkdir(path.dirname(preferredPath), { recursive: true });
   const tempPath = path.join(
-    path.dirname(targetPath),
-    `.${path.basename(targetPath)}.${randomUUID()}.migration-tmp`,
+    path.dirname(preferredPath),
+    `.${path.basename(preferredPath)}.${randomUUID()}.migration-tmp`,
   );
   try {
     await fsp.copyFile(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
-    try {
-      await fsp.link(tempPath, targetPath);
-    } catch (err) {
-      if (!fs.existsSync(targetPath)) throw err;
+    const tempSnapshot = readNonEmptyRolloutSnapshot(tempPath);
+    if (
+      !tempSnapshot
+      || tempSnapshot.size !== sourceSnapshot.size
+      || !nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)
+    ) return null;
+
+    const attempts = opts.allowSibling ? MAX_RECOVERY_PATH_ATTEMPTS : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)) return null;
+      let candidate = preferredPath;
+      if (opts.skipPreferred) {
+        candidate = recoveredSiblingRolloutPath(preferredPath, threadId, attempt, 'adopted');
+      } else if (attempt > 0) {
+        candidate = recoveredSiblingRolloutPath(preferredPath, threadId, attempt - 1, 'adopted');
+      }
+      if (fs.existsSync(candidate)) {
+        const candidateSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, candidate);
+        if (
+          candidateSnapshot
+          && filesHaveSameContents(candidate, tempPath)
+          && nonEmptyRolloutStillMatches(candidate, candidateSnapshot)
+          && nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)
+        ) return { path: candidate, created: false, snapshot: candidateSnapshot };
+        if (!nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)) return null;
+        continue;
+      }
+
+      // This is the snapshot boundary: the source was stable for the complete
+      // copy and immediately before atomic publication. Bytes appended after
+      // this check belong to the still-preserved external runtime, while Cindy
+      // intentionally continues from its isolated point-in-time copy (#789).
+      if (!nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)) return null;
+      try {
+        await fsp.link(tempPath, candidate);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        const candidateSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, candidate);
+        if (
+          candidateSnapshot
+          && filesHaveSameContents(candidate, tempPath)
+          && nonEmptyRolloutStillMatches(candidate, candidateSnapshot)
+          && nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)
+        ) return { path: candidate, created: false, snapshot: candidateSnapshot };
+        if (!nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)) return null;
+        continue;
+      }
+      const candidateSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, candidate);
+      if (
+        !candidateSnapshot
+        || !sameRegularFileIdentity(tempPath, candidate)
+        || !nonEmptyRolloutStillMatches(sourcePath, sourceSnapshot)
+      ) return null;
+      return { path: candidate, created: true, snapshot: candidateSnapshot };
     }
-    return true;
+    return null;
   } finally {
     await fsp.rm(tempPath, { force: true }).catch(() => undefined);
   }
@@ -664,34 +1828,621 @@ function pickColumns(row: Record<string, SqlScalar>, columns: string[]): Record<
   return out;
 }
 
-/**
- * 孤儿恢复: 给 state DB 里有 threads 行、但磁盘 rollout 文件缺失的 thread, 用 localDb 里
- * 可读的消息历史合成一份最小 rollout 写回 `rolloutPath`, 让 codex thread/resume 能继续。
- * 仅在确有 threads 行(=曾真实存在过的会话)且 localDb 有可读历史时才写; 否则 no-op。
- */
-async function synthesizeRolloutForOrphanThread(
+/** Recover a missing private pointer without writing into the recorded path. */
+async function recoverMissingPrivateRollout(
   threadId: string,
   targetDbPath: string,
-  rolloutPath: string,
-): Promise<void> {
+  targetHome: string,
+  recordedPath: string,
+  beforeHandoff?: () => void,
+  beforeReturn?: () => void,
+): Promise<string | undefined> {
   const row = readRawThreadRow(targetDbPath, threadId);
-  if (!row) {
-    log.debug('orphan synth skipped: threads row missing', { threadId });
-    return;
-  }
-  const messages = await readXdtMessagesByThreadId(threadId);
-  if (messages.length === 0) {
-    log.debug('orphan synth skipped: no readable localDb messages', { threadId });
-    return;
-  }
-  const jsonl = buildSyntheticRollout(threadId, row, messages);
-  await fsp.mkdir(path.dirname(rolloutPath), { recursive: true });
-  await fsp.writeFile(rolloutPath, jsonl, 'utf-8');
-  log.info('synthesized rollout for orphan Codex thread', {
+  if (!row) throw resumePreparationBlocked(threadId, 'target state disappeared during recovery');
+
+  const published = await publishFreshSyntheticBeforeHandoff(
+    recordedPath,
     threadId,
-    rolloutPath,
-    messageCount: messages.length,
+    row,
+    { skipPreferred: true },
+  );
+  if (!published) {
+    if ((await readXdtMessagesByThreadId(threadId)).length === 0) {
+      log.debug('private orphan recovery skipped: no readable localDb messages', { threadId });
+      return undefined;
+    }
+    throw resumePreparationBlocked(threadId, 'a private recovery file could not be published safely');
+  }
+
+  // The absent path can still belong to a live Codex writer. It remains
+  // authoritative until the state pointer is handed to the synthetic sibling.
+  const materializedBeforeCas = readPrivateRolloutPathState(targetHome, recordedPath);
+  if (materializedBeforeCas === 'non-empty-file') {
+    return acceptStateBackedWinnerAfterRecovery(
+      targetDbPath,
+      threadId,
+      targetHome,
+      recordedPath,
+      { allowedCanonicalPaths: [recordedPath] },
+    );
+  }
+  if (materializedBeforeCas === 'empty-file') {
+    throw resumePreparationBlocked(threadId, 'the private orphan began materializing during recovery');
+  }
+  if (materializedBeforeCas === 'unsafe') {
+    throw resumePreparationBlocked(
+      threadId,
+      'the private orphan materialized outside Cindy storage or as a non-file',
+    );
+  }
+
+  handoffThreadToSyntheticRollout(
+    targetDbPath,
+    threadId,
+    targetHome,
+    recordedPath,
+    published,
+    () => {
+      beforeHandoff?.();
+      return readPrivateRolloutPathState(targetHome, recordedPath) === 'missing';
+    },
+  );
+
+  // Missing-path validation ran inside the write transaction. Once that
+  // transaction commits, the synthetic path is irreversible; a writer that
+  // wakes afterward is preserved but cannot pull state away from a live winner.
+  const stateWinnerPath = readThreadRolloutPath(targetDbPath, threadId);
+  const materializedAfterCas = readPrivateRolloutPathState(targetHome, recordedPath);
+  if (stateWinnerPath === recordedPath) {
+    if (materializedAfterCas === 'non-empty-file') {
+      return acceptStateBackedWinnerAfterRecovery(
+        targetDbPath,
+        threadId,
+        targetHome,
+        recordedPath,
+        { allowedCanonicalPaths: [recordedPath] },
+      );
+    }
+    if (materializedAfterCas === 'empty-file') {
+      throw resumePreparationBlocked(threadId, 'the private orphan began materializing during recovery');
+    }
+    if (materializedAfterCas === 'unsafe') {
+      throw resumePreparationBlocked(
+        threadId,
+        'the private orphan materialized outside Cindy storage or as a non-file',
+      );
+    }
+  } else if (materializedAfterCas !== 'missing') {
+    log.warn('late private orphan was preserved after committed recovery handoff', {
+      threadId,
+      originalRolloutPath: recordedPath,
+      recoveredRolloutPath: published.path,
+    });
+  }
+
+  const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+  if (!isAcceptableSyntheticWinner(targetHome, winner, published)) {
+    throw resumePreparationBlocked(threadId, 'target state changed during private orphan recovery');
+  }
+  log.info('recovered missing private Codex rollout from Cindy history', {
+    threadId,
+    originalRolloutPath: recordedPath,
+    recoveredRolloutPath: winner,
+    messageCount: published.messageCount,
+    created: published.created,
   });
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath,
+    threadId,
+    targetHome,
+    winner!,
+    { beforeReturn },
+  );
+}
+
+/** Recover a missing external pointer without ever recreating data outside Cindy storage. */
+async function recoverMissingExternalRollout(
+  threadId: string,
+  targetDbPath: string,
+  targetHome: string,
+  recordedPath: string,
+  beforeHandoff?: () => void,
+  beforeReturn?: () => void,
+): Promise<string> {
+  const row = readRawThreadRow(targetDbPath, threadId);
+  if (!row) throw resumePreparationBlocked(threadId, 'target state disappeared during recovery');
+
+  const preferred = privateRolloutPathForStateRow(targetHome, recordedPath, row);
+  const published = await publishFreshSyntheticBeforeHandoff(
+    preferred,
+    threadId,
+    row,
+    { skipPreferred: true },
+  );
+  if (!published) {
+    throw resumePreparationBlocked(
+      threadId,
+      'the external rollout is missing and no fresh readable history could be published safely',
+    );
+  }
+  handoffThreadToSyntheticRollout(
+    targetDbPath,
+    threadId,
+    targetHome,
+    recordedPath,
+    published,
+    () => {
+      beforeHandoff?.();
+      return rolloutPathIsMissing(recordedPath);
+    },
+  );
+  const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+  if (!isAcceptableSyntheticWinner(targetHome, winner, published)) {
+    throw resumePreparationBlocked(threadId, 'target state changed during missing-rollout recovery');
+  }
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath,
+    threadId,
+    targetHome,
+    winner!,
+    { beforeReturn },
+  );
+}
+
+/**
+ * No target row exists, but an external current-schema row still identifies a
+ * stably empty rollout. Publish a private synthetic history first, then copy the
+ * source row with its rollout pointer overridden. The external empty is never
+ * modified and an unindexed empty is intentionally not recoverable here.
+ */
+async function recoverStableExternalEmptyWithoutTargetState(
+  threadId: string,
+  targetDbPath: string,
+  targetHome: string,
+  external: CodexThreadSummary,
+  originalEmpty: EmptyRolloutSnapshot,
+  beforeHandoff?: () => void,
+  beforeReturn?: () => void,
+): Promise<string> {
+  if (!isStableEmptyRollout(originalEmpty)) {
+    throw resumePreparationBlocked(threadId, 'external rollout may still be materializing');
+  }
+  if (!external.sourceDbPath) {
+    throw resumePreparationBlocked(threadId, 'external empty rollout has no state metadata');
+  }
+
+  const sourceRow = readRawThreadRow(external.sourceDbPath, threadId);
+  if (!sourceRow) {
+    throw resumePreparationBlocked(threadId, 'external thread state disappeared during recovery');
+  }
+
+  const preferred = targetRolloutPathForExternalThread(external, targetHome);
+  const published = await publishFreshSyntheticBeforeHandoff(
+    preferred,
+    threadId,
+    sourceRow,
+    // Keep an unpublished partial result visibly Cindy-owned. If the external
+    // writer wakes before state handoff, the next attempt must adopt that source
+    // instead of mistaking this orphan for a canonical Codex rollout.
+    { skipPreferred: true },
+  );
+  if (!published) {
+    throw resumePreparationBlocked(threadId, 'a private recovery file could not be published safely');
+  }
+
+  if (!emptyRolloutStillMatches(external.rolloutPath, originalEmpty)) {
+    throw resumePreparationBlocked(threadId, 'external rollout changed before private state handoff');
+  }
+
+  const assertRecoverySourcesUnchanged = () => {
+    beforeHandoff?.();
+    if (!emptyRolloutStillMatches(external.rolloutPath, originalEmpty)) {
+      throw resumePreparationBlocked(
+        threadId,
+        'external rollout changed before private state handoff',
+      );
+    }
+  };
+  const copiedState = copyThreadStateToTarget(external, targetDbPath, {
+    rolloutPathOverride: published.path,
+    validateBeforeCopy: () => {
+      assertRecoverySourcesUnchanged();
+      return syntheticPublicationStillMatches(targetHome, published);
+    },
+    validateAfterCopy: () => {
+      assertRecoverySourcesUnchanged();
+      return syntheticPublicationOwnsPath(targetHome, published);
+    },
+  });
+  const winner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+  if (!winner) {
+    log.warn('external empty rollout recovery could not establish private state', {
+      threadId,
+      copiedState,
+      recoveredRolloutPath: published.path,
+    });
+    throw resumePreparationBlocked(threadId, 'external state could not be copied after recovery');
+  }
+  if (!isAcceptableSyntheticWinner(targetHome, winner, published)) {
+    throw resumePreparationBlocked(threadId, 'a concurrent state handoff selected a different recovery');
+  }
+
+  if (!emptyRolloutStillMatches(external.rolloutPath, originalEmpty)) {
+    log.warn('external rollout changed after private state handoff; preserved outside Cindy append boundary', {
+      threadId,
+      externalRolloutPath: external.rolloutPath,
+      recoveredRolloutPath: winner,
+    });
+  }
+  log.info('recovered stable external empty rollout with source state', {
+    threadId,
+    externalRolloutPath: external.rolloutPath,
+    recoveredRolloutPath: winner,
+    messageCount: published.messageCount,
+    created: published.created,
+  });
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath,
+    threadId,
+    targetHome,
+    winner,
+    { beforeReturn },
+  );
+}
+
+/**
+ * Repair the #1554 shape: an existing state row points at a stably empty
+ * rollout. The original is preserved, a private recovery is published first,
+ * and the state pointer moves transactionally. Private writers detected before
+ * commit remain authoritative; writers waking after commit are preserved but
+ * never pull state away from the recovered append target.
+ */
+async function recoverStableEmptyRollout(
+  threadId: string,
+  targetDbPath: string,
+  targetHome: string,
+  rolloutPath: string,
+  beforeHandoff?: () => void,
+  beforeReturn?: () => void,
+): Promise<string | undefined> {
+  const originalEmpty = readEmptyRolloutSnapshot(rolloutPath);
+  if (!originalEmpty || !isStableEmptyRollout(originalEmpty)) {
+    log.debug('empty rollout recovery deferred: file may still be materializing', {
+      threadId,
+      rolloutPath,
+    });
+    throw resumePreparationBlocked(threadId, 'the rollout may still be materializing');
+  }
+
+  const row = readRawThreadRow(targetDbPath, threadId);
+  if (!row) throw resumePreparationBlocked(threadId, 'target state disappeared during recovery');
+
+  const originalIsPrivate = isPathInside(targetHome, rolloutPath);
+  const preferredPrivatePath = originalIsPrivate
+    ? rolloutPath
+    : privateRolloutPathForStateRow(targetHome, rolloutPath, row);
+  const published = await publishFreshSyntheticBeforeHandoff(
+    preferredPrivatePath,
+    threadId,
+    row,
+    { skipPreferred: true },
+  );
+  if (!published) {
+    throw resumePreparationBlocked(threadId, 'a private recovery file could not be published safely');
+  }
+
+  const originalChangedBeforeCas = !emptyRolloutStillMatches(rolloutPath, originalEmpty);
+  if (originalChangedBeforeCas && originalIsPrivate) {
+    const current = readPrivateRolloutPathState(targetHome, rolloutPath);
+    if (current === 'non-empty-file') {
+      return acceptStateBackedWinnerAfterRecovery(
+        targetDbPath,
+        threadId,
+        targetHome,
+        rolloutPath,
+        { allowedCanonicalPaths: [rolloutPath] },
+      );
+    }
+    if (current === 'empty-file') {
+      throw resumePreparationBlocked(threadId, 'the private rollout changed during recovery');
+    }
+    throw resumePreparationBlocked(
+      threadId,
+      'the private rollout changed outside its safe storage boundary during recovery',
+    );
+  }
+
+  handoffThreadToSyntheticRollout(
+    targetDbPath,
+    threadId,
+    targetHome,
+    rolloutPath,
+    published,
+    () => {
+      beforeHandoff?.();
+      return emptyRolloutStillMatches(rolloutPath, originalEmpty);
+    },
+  );
+  let recoveredWinner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+
+  const originalChangedAfterCas = !emptyRolloutStillMatches(rolloutPath, originalEmpty);
+  if (originalChangedAfterCas && originalIsPrivate) {
+    const current = readPrivateRolloutPathState(targetHome, rolloutPath);
+    const stateWinner = readThreadRolloutPath(targetDbPath, threadId);
+    if (stateWinner === rolloutPath) {
+      if (current === 'non-empty-file') {
+        return acceptStateBackedWinnerAfterRecovery(
+          targetDbPath,
+          threadId,
+          targetHome,
+          rolloutPath,
+          { allowedCanonicalPaths: [rolloutPath] },
+        );
+      }
+      if (current === 'empty-file') {
+        throw resumePreparationBlocked(threadId, 'the private rollout began materializing during recovery');
+      }
+      throw resumePreparationBlocked(
+        threadId,
+        'the private rollout changed outside its safe storage boundary during recovery',
+      );
+    } else {
+      log.warn('late private rollout was preserved after committed recovery handoff', {
+        threadId,
+        originalRolloutPath: rolloutPath,
+        recoveredRolloutPath: published.path,
+      });
+    }
+  }
+  if ((originalChangedBeforeCas || originalChangedAfterCas) && !originalIsPrivate) {
+    log.warn('external rollout changed during recovery; preserved outside Cindy append boundary', {
+      threadId,
+      externalRolloutPath: rolloutPath,
+      recoveredRolloutPath: published.path,
+    });
+  }
+  recoveredWinner = readPrivateNonEmptyRollout(targetDbPath, threadId, targetHome);
+  if (!recoveredWinner) {
+    throw resumePreparationBlocked(threadId, 'the rollout pointer changed during recovery');
+  }
+
+  // A concurrent recovery may win CAS with a different path. Accept it only
+  // when it is byte-identical to the snapshot verified immediately pre-handoff.
+  if (!isAcceptableSyntheticWinner(targetHome, recoveredWinner, published)) {
+    throw resumePreparationBlocked(threadId, 'a concurrent state handoff selected a different recovery');
+  }
+
+  log.info('recovered stable empty Codex rollout from Cindy history', {
+    threadId,
+    originalRolloutPath: rolloutPath,
+    recoveredRolloutPath: recoveredWinner,
+    messageCount: published.messageCount,
+    created: published.created,
+  });
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath,
+    threadId,
+    targetHome,
+    recoveredWinner,
+    { beforeReturn },
+  );
+}
+
+function syntheticPublicationStillMatches(
+  targetHome: string,
+  publication: FreshSyntheticPublication,
+): boolean {
+  const current = readPrivateExactRolloutSnapshot(
+    targetHome,
+    publication.path,
+    publication.contents,
+  );
+  return !!current
+    && current.dev === publication.snapshot.dev
+    && current.ino === publication.snapshot.ino
+    && current.size === publication.snapshot.size
+    && current.mtimeMs === publication.snapshot.mtimeMs
+    && current.ctimeMs === publication.snapshot.ctimeMs
+    && current.birthtimeMs === publication.snapshot.birthtimeMs;
+}
+
+/** Same published inode is still private and regular; native appends are valid. */
+function syntheticPublicationOwnsPath(
+  targetHome: string,
+  publication: FreshSyntheticPublication,
+  candidatePath: string = publication.path,
+): boolean {
+  if (!isPathInside(targetHome, candidatePath)) return false;
+  try {
+    const before = fs.lstatSync(candidatePath);
+    if (
+      !before.isFile()
+      || before.size <= 0
+      || before.dev !== publication.snapshot.dev
+      || before.ino !== publication.snapshot.ino
+    ) return false;
+    const after = fs.lstatSync(candidatePath);
+    return after.isFile()
+      && after.size > 0
+      && after.dev === before.dev
+      && after.ino === before.ino
+      && isPathInside(targetHome, candidatePath);
+  } catch {
+    return false;
+  }
+}
+
+function isAcceptableSyntheticWinner(
+  targetHome: string,
+  winner: string | null,
+  publication: FreshSyntheticPublication,
+): boolean {
+  if (!winner) return false;
+  if (samePath(winner, publication.path)) {
+    // Once a transaction commits this private regular path, native Codex may
+    // immediately append or another validated recovery may reuse the same name.
+    return readPrivateRolloutPathState(targetHome, winner) === 'non-empty-file';
+  }
+  return !!readPrivateExactRolloutSnapshot(targetHome, winner, publication.contents);
+}
+
+/**
+ * Reconcile an invalid external state pointer to an already-native private
+ * rollout. Identity, rather than size, is the boundary because Codex may keep
+ * appending to this inode while the IMMEDIATE transaction commits.
+ */
+function handoffThreadToNativeRollout(
+  targetDbPath: string,
+  threadId: string,
+  targetHome: string,
+  expectedRolloutPath: string,
+  publication: PrivateRolloutPublication,
+  expectedPathGuard?: () => void,
+): boolean {
+  let db: Database.Database | null = null;
+  const rollback = new Error('native rollout identity changed during state reconciliation');
+  try {
+    db = createBetterSqliteDatabase(targetDbPath);
+    db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    if (!tableExists(db, 'threads')) return false;
+    const targetDb = db;
+    const handoff = targetDb.transaction(() => {
+      const current = targetDb
+        .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ? LIMIT 1')
+        .get(threadId) as { rolloutPath?: unknown } | undefined;
+      if (current?.rolloutPath === publication.path) {
+        return privateRolloutPublicationOwnsPath(targetHome, publication);
+      }
+      if (current?.rolloutPath !== expectedRolloutPath) return false;
+      expectedPathGuard?.();
+      if (!privateRolloutPublicationOwnsPath(targetHome, publication)) return false;
+      const updated = targetDb.prepare(
+        'UPDATE threads SET rollout_path = ? WHERE id = ? AND rollout_path = ?',
+      ).run(publication.path, threadId, expectedRolloutPath);
+      if (updated.changes === 0) return false;
+      if (!privateRolloutPublicationOwnsPath(targetHome, publication)) throw rollback;
+      expectedPathGuard?.();
+      return true;
+    });
+    return handoff.immediate();
+  } catch (error) {
+    if (error !== rollback) {
+      log.warn('failed to reconcile Codex thread to native rollout', {
+        threadId,
+        rolloutPath: publication.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return false;
+  } finally {
+    closeDbQuietly(db);
+  }
+}
+
+function handoffThreadToCopiedRollout(
+  targetDbPath: string,
+  threadId: string,
+  targetHome: string,
+  expectedRolloutPath: string,
+  publication: PrivateRolloutPublication,
+  expectedPathGuard?: () => void,
+): boolean {
+  let db: Database.Database | null = null;
+  const rollback = new Error('copied rollout identity changed during state handoff');
+  try {
+    db = createBetterSqliteDatabase(targetDbPath);
+    db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    if (!tableExists(db, 'threads')) return false;
+    const targetDb = db;
+    const handoff = targetDb.transaction(() => {
+      const current = targetDb
+        .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ? LIMIT 1')
+        .get(threadId) as { rolloutPath?: unknown } | undefined;
+      if (current?.rolloutPath === publication.path) {
+        return readPrivateRolloutPathState(targetHome, publication.path) === 'non-empty-file';
+      }
+      if (current?.rolloutPath !== expectedRolloutPath) return false;
+      expectedPathGuard?.();
+      if (!privateRolloutPublicationStillMatches(targetHome, publication)) return false;
+      const updated = targetDb.prepare(
+        'UPDATE threads SET rollout_path = ? WHERE id = ? AND rollout_path = ?',
+      ).run(publication.path, threadId, expectedRolloutPath);
+      if (updated.changes === 0) return false;
+      if (!privateRolloutPublicationStillMatches(targetHome, publication)) throw rollback;
+      expectedPathGuard?.();
+      return true;
+    });
+    return handoff.immediate();
+  } catch (error) {
+    if (error !== rollback) {
+      log.warn('failed to hand off Codex thread to copied rollout', {
+        threadId,
+        rolloutPath: publication.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return false;
+  } finally {
+    closeDbQuietly(db);
+  }
+}
+
+/**
+ * Persist an existing-row handoff only while the exact staged snapshot is
+ * current. If the path is swapped during CAS, roll back only our pointer. A
+ * same-inode append after CAS is authoritative native progress and is retained.
+ */
+function handoffThreadToSyntheticRollout(
+  targetDbPath: string,
+  threadId: string,
+  targetHome: string,
+  expectedRolloutPath: string,
+  publication: FreshSyntheticPublication,
+  expectedPathStillOwns?: () => boolean,
+): boolean {
+  let db: Database.Database | null = null;
+  const rollback = new Error('synthetic rollout identity changed during state handoff');
+  try {
+    db = createBetterSqliteDatabase(targetDbPath);
+    db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    if (!tableExists(db, 'threads')) return false;
+    const targetDb = db;
+    const handoff = targetDb.transaction(() => {
+      const current = targetDb
+        .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ? LIMIT 1')
+        .get(threadId) as { rolloutPath?: unknown } | undefined;
+      if (current?.rolloutPath === publication.path) {
+        return readPrivateRolloutPathState(targetHome, publication.path) === 'non-empty-file';
+      }
+      if (current?.rolloutPath !== expectedRolloutPath) return false;
+      if (expectedPathStillOwns && !expectedPathStillOwns()) return false;
+      if (!syntheticPublicationStillMatches(targetHome, publication)) return false;
+
+      const updated = targetDb.prepare(
+        'UPDATE threads SET rollout_path = ? WHERE id = ? AND rollout_path = ?',
+      ).run(publication.path, threadId, expectedRolloutPath);
+      if (updated.changes === 0) return false;
+      // Throwing here rolls back the still-uncommitted pointer. No other
+      // recovery can commit a same-path handoff while this write tx is open.
+      if (
+        !syntheticPublicationOwnsPath(targetHome, publication)
+        || (expectedPathStillOwns && !expectedPathStillOwns())
+      ) throw rollback;
+      return true;
+    });
+    return handoff.immediate();
+  } catch (error) {
+    if (error !== rollback) {
+      log.warn('failed to hand off Codex thread to synthetic rollout', {
+        threadId,
+        rolloutPath: publication.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return false;
+  } finally {
+    closeDbQuietly(db);
+  }
 }
 
 /** Cindy 会话仍在、Codex state 与 rollout 都丢失时用于重建 session_meta 的最小元数据。 */
@@ -710,35 +2461,676 @@ interface LocalCodexRecoverySource {
   recoveryCreatedAt: number;
 }
 
+interface FreshLocalSyntheticPublication extends FreshSyntheticPublication {
+  source: LocalCodexRecoverySource;
+}
+
 /**
- * 双缺失恢复:只重建标准位置的 rollout,让 app-server thread/resume 重新生成当前版本的
- * state 行。写入路径由原会话创建时间稳定派生,重复调用和并发调用都复用同一文件。
+ * Stage a state-less recovery under a Cindy-only filename. Codex's UUID lookup
+ * returns the first canonical filename yielded by read_dir, not the newest one,
+ * so H1/H2 convergence must finish before any canonical candidate is visible.
+ */
+async function publishFreshLocalSyntheticBeforeHandoff(
+  preferredPath: string,
+  threadId: string,
+): Promise<FreshLocalSyntheticPublication | null> {
+  for (let attempt = 0; attempt < MAX_RECOVERY_PATH_ATTEMPTS; attempt += 1) {
+    const source = await readBestLocalCodexRecoverySource(threadId);
+    if (!source) return null;
+    const contents = buildSyntheticRollout(
+      threadId,
+      syntheticRowForLocalRecoverySource(source),
+      source.messages,
+    );
+    const published = await publishSyntheticRollout(
+      preferredPath,
+      threadId,
+      contents,
+      { skipPreferred: true, siblingKind: 'state-less-stage' },
+    );
+    if (!published) return null;
+
+    const latestSource = await readBestLocalCodexRecoverySource(threadId);
+    if (!latestSource) {
+      throw resumePreparationBlocked(threadId, 'local recovery history disappeared before handoff');
+    }
+    const latestContents = buildSyntheticRollout(
+      threadId,
+      syntheticRowForLocalRecoverySource(latestSource),
+      latestSource.messages,
+    );
+    const latestSnapshot = readPrivateExactRolloutSnapshot(
+      getDesktopCodexHome(),
+      published.path,
+      latestContents,
+    );
+    if (latestSnapshot) {
+      return {
+        ...published,
+        snapshot: latestSnapshot,
+        contents: latestContents,
+        messageCount: latestSource.messages.length,
+        source: latestSource,
+      };
+    }
+  }
+  throw resumePreparationBlocked(threadId, 'local recovery history did not stabilize before handoff');
+}
+
+interface CanonicalSyntheticPublication {
+  path: string;
+  created: boolean;
+  synthetic: boolean;
+}
+
+/** Atomically expose one exact synthetic candidate under Codex's canonical filename. */
+function publishStagedSyntheticAtCanonical(
+  threadId: string,
+  targetHome: string,
+  staged: FreshLocalSyntheticPublication,
+  canonicalPath: string,
+  expectedCanonicalStillAvailable?: () => boolean,
+): CanonicalSyntheticPublication {
+  if (
+    !isCanonicalCodexRolloutPath(canonicalPath, threadId)
+    || !isPathInside(targetHome, canonicalPath)
+  ) {
+    throw resumePreparationBlocked(threadId, 'the recovery target is outside the canonical private layout');
+  }
+  if (!syntheticPublicationStillMatches(targetHome, staged)) {
+    throw resumePreparationBlocked(threadId, 'the staged recovery changed outside its safe boundary');
+  }
+  if (expectedCanonicalStillAvailable && !expectedCanonicalStillAvailable()) {
+    throw resumePreparationBlocked(threadId, 'the preserved rollout materialized before canonical handoff');
+  }
+  try {
+    fs.linkSync(staged.path, canonicalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const winner = readPrivateRolloutPathState(targetHome, canonicalPath);
+    if (
+      winner === 'non-empty-file'
+      && syntheticPublicationOwnsPath(targetHome, staged, canonicalPath)
+    ) {
+      assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+      return { path: canonicalPath, created: false, synthetic: true };
+    }
+    if (
+      winner === 'non-empty-file'
+      && syntheticPublicationStillMatches(targetHome, staged)
+      && readPrivateExactRolloutSnapshot(targetHome, canonicalPath, staged.contents)
+    ) {
+      assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+      return { path: canonicalPath, created: false, synthetic: true };
+    }
+    if (winner === 'non-empty-file') {
+      assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+      return { path: canonicalPath, created: false, synthetic: false };
+    }
+    if (winner === 'empty-file') {
+      throw resumePreparationBlocked(threadId, 'a same-thread rollout began materializing during recovery');
+    }
+    throw resumePreparationBlocked(threadId, 'the canonical recovery path changed outside its safe boundary');
+  }
+  if (syntheticPublicationOwnsPath(targetHome, staged, canonicalPath)) {
+    assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+    return { path: canonicalPath, created: true, synthetic: true };
+  }
+
+  // We created this name from a Cindy-only staging path. If that staging name
+  // was replaced with another inode during link(), remove only the hard-link
+  // we just created; a same-inode native append is accepted above and retained.
+  if (
+    readPrivateRolloutPathState(targetHome, staged.path) === 'non-empty-file'
+    && readPrivateRolloutPathState(targetHome, canonicalPath) === 'non-empty-file'
+    && sameRegularFileIdentity(staged.path, canonicalPath)
+  ) {
+    fs.unlinkSync(canonicalPath);
+  }
+  throw resumePreparationBlocked(threadId, 'the canonical recovery publication changed before handoff');
+}
+
+type EmptyCanonicalPreservation =
+  | { kind: 'native-winner' }
+  | { kind: 'preserved'; path: string };
+
+/**
+ * Move a stable empty canonical name aside without overwriting anything. A
+ * hard-link followed by unlink preserves the original inode even when a late
+ * Codex writer still has it open.
+ */
+function preserveStableEmptyCanonical(
+  threadId: string,
+  targetHome: string,
+  canonicalPath: string,
+  originalEmpty: EmptyRolloutSnapshot,
+  opts: { preserveLateNativeAsArtifact?: boolean } = {},
+): EmptyCanonicalPreservation {
+  const current = readPrivateRolloutPathState(targetHome, canonicalPath);
+  if (current === 'non-empty-file' && !opts.preserveLateNativeAsArtifact) {
+    return { kind: 'native-winner' };
+  }
+  const unchangedEmpty = current === 'empty-file'
+    && emptyRolloutStillMatches(canonicalPath, originalEmpty);
+  const sameInodeLateNative = current === 'non-empty-file'
+    && opts.preserveLateNativeAsArtifact
+    && regularFileIdentityMatchesSnapshot(canonicalPath, originalEmpty);
+  if (!unchangedEmpty && !sameInodeLateNative) {
+    throw resumePreparationBlocked(threadId, 'the stable empty canonical changed before preservation');
+  }
+
+  for (let attempt = 0; attempt < MAX_RECOVERY_PATH_ATTEMPTS; attempt += 1) {
+    const preservedPath = recoveredSiblingRolloutPath(
+      canonicalPath,
+      threadId,
+      attempt,
+      opts.preserveLateNativeAsArtifact ? 'retired-empty' : 'preserved-empty',
+    );
+    try {
+      fs.linkSync(canonicalPath, preservedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // A prior publication failure or process exit can leave both names linked
+      // to the same empty inode. Reuse that recoverable checkpoint instead of
+      // turning it into a permanent blocker.
+      if (!sameRegularFileIdentity(canonicalPath, preservedPath)) continue;
+    }
+
+    if (
+      !sameRegularFileIdentity(canonicalPath, preservedPath)
+      || readPrivateRolloutPathState(targetHome, preservedPath) === 'unsafe'
+    ) {
+      throw resumePreparationBlocked(threadId, 'the preserved empty rollout crossed its safe boundary');
+    }
+    const originalAfterLink = readPrivateRolloutPathState(targetHome, canonicalPath);
+    if (originalAfterLink === 'non-empty-file' && !opts.preserveLateNativeAsArtifact) {
+      try {
+        if (sameRegularFileIdentity(canonicalPath, preservedPath)) fs.unlinkSync(preservedPath);
+      } catch {
+        // The duplicate Cindy-only name is harmless; the canonical remains authoritative.
+      }
+      return { kind: 'native-winner' };
+    }
+    if (originalAfterLink !== 'empty-file' && originalAfterLink !== 'non-empty-file') {
+      throw resumePreparationBlocked(threadId, 'the canonical rollout changed during preservation');
+    }
+    try {
+      fs.unlinkSync(canonicalPath);
+    } catch (error) {
+      if (!opts.preserveLateNativeAsArtifact) {
+        try {
+          if (sameRegularFileIdentity(canonicalPath, preservedPath)) fs.unlinkSync(preservedPath);
+        } catch {
+          // Best effort rollback of the duplicate link; never remove the canonical.
+        }
+      }
+      throw resumePreparationBlocked(
+        threadId,
+        `the empty canonical could not be moved aside (${(error as NodeJS.ErrnoException).code ?? 'unknown'})`,
+      );
+    }
+    return { kind: 'preserved', path: preservedPath };
+  }
+  throw resumePreparationBlocked(threadId, 'no safe preservation path was available for the empty rollout');
+}
+
+function restorePreservedCanonical(
+  threadId: string,
+  targetHome: string,
+  preservedPath: string,
+  canonicalPath: string,
+): string {
+  const preserved = readPrivateRolloutPathState(targetHome, preservedPath);
+  if (preserved !== 'empty-file' && preserved !== 'non-empty-file') {
+    throw resumePreparationBlocked(threadId, 'the preserved rollout changed outside its safe boundary');
+  }
+  try {
+    fs.linkSync(preservedPath, canonicalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    if (!sameRegularFileIdentity(preservedPath, canonicalPath)) {
+      throw resumePreparationBlocked(threadId, 'another writer occupied the canonical rollout path');
+    }
+  }
+  const restored = readPrivateRolloutPathState(targetHome, canonicalPath);
+  if (restored !== preserved || !sameRegularFileIdentity(preservedPath, canonicalPath)) {
+    throw resumePreparationBlocked(threadId, 'the preserved rollout could not be restored safely');
+  }
+  return canonicalPath;
+}
+
+/** Accept one native canonical only after every pre-handoff source still matches. */
+function acceptSoleCanonicalNativeWinner(
+  threadId: string,
+  targetHome: string,
+  canonicalPath: string,
+  beforeReturn?: () => void,
+): string {
+  beforeReturn?.();
+  assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+  return canonicalPath;
+}
+
+function assertSoleCanonicalPath(
+  threadId: string,
+  targetHome: string,
+  canonicalPath: string,
+  requireNonEmpty: boolean,
+): void {
+  const current = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  const allCanonical = [
+    ...current.empties.map((candidate) => candidate.path),
+    ...current.nonEmpty,
+  ];
+  if (
+    allCanonical.length !== 1
+    || !samePath(allCanonical[0], canonicalPath)
+    || (requireNonEmpty && current.nonEmpty.length !== 1)
+  ) {
+    throw resumePreparationBlocked(
+      threadId,
+      'the private canonical rollout namespace changed before completing the handoff',
+    );
+  }
+}
+
+/** Restore a preserved native inode only while its canonical name is still unopposed. */
+function restoreSoleCanonicalNativeWinner(
+  threadId: string,
+  targetHome: string,
+  preservedPath: string,
+  canonicalPath: string,
+  beforeReturn?: () => void,
+): string {
+  beforeReturn?.();
+  assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+  const restored = restorePreservedCanonical(
+    threadId,
+    targetHome,
+    preservedPath,
+    canonicalPath,
+  );
+  // The canonical link is an irreversible handoff: Codex may already have
+  // opened it or hydrated state even when this post-link check fails.
+  return acceptSoleCanonicalNativeWinner(
+    threadId,
+    targetHome,
+    restored,
+    beforeReturn,
+  );
+}
+
+/** Restore an empty/native precursor after a failed publication only if it remains the sole history. */
+function restorePreservedCanonicalAfterFailedHandoff(
+  threadId: string,
+  targetHome: string,
+  preservedPath: string,
+  canonicalPath: string,
+  beforeRestore?: () => void,
+): void {
+  beforeRestore?.();
+  assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+  if (readPrivateRolloutPathState(targetHome, canonicalPath) !== 'missing') return;
+  restorePreservedCanonical(threadId, targetHome, preservedPath, canonicalPath);
+  beforeRestore?.();
+  assertSoleCanonicalPath(threadId, targetHome, canonicalPath, false);
+  if (sameRegularFileIdentity(preservedPath, canonicalPath)) {
+    fs.unlinkSync(preservedPath);
+  }
+}
+
+/**
+ * Recover a stable canonical empty when the Codex state row is gone. The empty
+ * inode is retained under a Cindy-only name and exactly one canonical filename
+ * is exposed, so Codex's unordered first-match UUID scan cannot pick the empty.
+ */
+async function recoverStableCanonicalEmptyWithoutTargetState(
+  threadId: string,
+  targetHome: string,
+  canonicalPath: string,
+  originalEmpty: EmptyRolloutSnapshot,
+  beforeHandoff?: () => void,
+): Promise<string | null> {
+  if (!isStableEmptyRollout(originalEmpty)) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
+  }
+  if (
+    !isCanonicalCodexRolloutPath(canonicalPath, threadId)
+    || readPrivateRolloutPathState(targetHome, canonicalPath) !== 'empty-file'
+  ) {
+    throw resumePreparationBlocked(threadId, 'the empty rollout is not a regular private canonical file');
+  }
+
+  const staged = await publishFreshLocalSyntheticBeforeHandoff(canonicalPath, threadId);
+  if (!staged) return null;
+  const preservation = preserveStableEmptyCanonical(
+    threadId,
+    targetHome,
+    canonicalPath,
+    originalEmpty,
+  );
+  if (preservation.kind === 'native-winner') {
+    return acceptSoleCanonicalNativeWinner(
+      threadId,
+      targetHome,
+      canonicalPath,
+      beforeHandoff,
+    );
+  }
+
+  const preservedBeforePublication = readPrivateRolloutPathState(targetHome, preservation.path);
+  if (preservedBeforePublication === 'non-empty-file') {
+    return restoreSoleCanonicalNativeWinner(
+      threadId,
+      targetHome,
+      preservation.path,
+      canonicalPath,
+      beforeHandoff,
+    );
+  }
+  if (preservedBeforePublication !== 'empty-file') {
+    throw resumePreparationBlocked(threadId, 'the preserved empty rollout changed before handoff');
+  }
+
+  let published: CanonicalSyntheticPublication;
+  try {
+    published = publishStagedSyntheticAtCanonical(
+      threadId,
+      targetHome,
+      staged,
+      canonicalPath,
+      () => {
+        beforeHandoff?.();
+        assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+        return readPrivateRolloutPathState(targetHome, preservation.path) === 'empty-file';
+      },
+    );
+  } catch (error) {
+    if (readPrivateRolloutPathState(targetHome, canonicalPath) === 'missing') {
+      try {
+        restorePreservedCanonicalAfterFailedHandoff(
+          threadId,
+          targetHome,
+          preservation.path,
+          canonicalPath,
+          beforeHandoff,
+        );
+      } catch {
+        // Preserve the original exception; both files remain inside Cindy storage.
+      }
+    }
+    throw error;
+  }
+  if (!published.synthetic) return published.path;
+
+  // link(canonical) is the no-state commit point: Codex's scanner may open it
+  // immediately. A retained writer waking afterward stays preserved under the
+  // Cindy-only name and must never pull canonical away from that live inode.
+  if (readPrivateRolloutPathState(targetHome, preservation.path) === 'non-empty-file') {
+    log.warn('late native rollout was preserved after canonical recovery handoff', {
+      threadId,
+      preservedRolloutPath: preservation.path,
+      recoveredRolloutPath: canonicalPath,
+    });
+  }
+
+  log.info('recovered stable canonical empty Codex rollout without target state', {
+    threadId,
+    originalRolloutPath: canonicalPath,
+    preservedRolloutPath: preservation.path,
+    recoveredRolloutPath: published.path,
+    messageCount: staged.messageCount,
+    created: published.created,
+  });
+  return published.path;
+}
+
+interface CanonicalFullRolloutPublication {
+  path: string;
+  created: boolean;
+  staged: boolean;
+}
+
+function publishStagedFullRolloutAtCanonical(
+  threadId: string,
+  targetHome: string,
+  staged: PrivateRolloutPublication,
+  canonicalPath: string,
+  expectedCanonicalStillAvailable?: () => boolean,
+): CanonicalFullRolloutPublication {
+  if (
+    !isCanonicalCodexRolloutPath(canonicalPath, threadId)
+    || !isPathInside(targetHome, canonicalPath)
+  ) {
+    throw resumePreparationBlocked(threadId, 'the external adoption target is outside private storage');
+  }
+  if (!privateRolloutPublicationStillMatches(targetHome, staged)) {
+    throw resumePreparationBlocked(threadId, 'the staged external rollout changed outside private storage');
+  }
+  if (expectedCanonicalStillAvailable && !expectedCanonicalStillAvailable()) {
+    throw resumePreparationBlocked(threadId, 'the preserved rollout materialized before external handoff');
+  }
+  try {
+    fs.linkSync(staged.path, canonicalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const winner = readPrivateRolloutPathState(targetHome, canonicalPath);
+    if (
+      winner === 'non-empty-file'
+      && privateRolloutPublicationOwnsPath(targetHome, staged, canonicalPath)
+    ) {
+      assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+      return { path: canonicalPath, created: false, staged: true };
+    }
+    if (winner === 'non-empty-file') {
+      assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+      return { path: canonicalPath, created: false, staged: false };
+    }
+    if (winner === 'empty-file') {
+      throw resumePreparationBlocked(threadId, 'a same-thread rollout began materializing during adoption');
+    }
+    throw resumePreparationBlocked(threadId, 'the external adoption target changed outside its safe boundary');
+  }
+  if (privateRolloutPublicationOwnsPath(targetHome, staged, canonicalPath)) {
+    assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+    return { path: canonicalPath, created: true, staged: true };
+  }
+
+  // We created this canonical name, but link() may have opened a swapped
+  // staging inode after the captured publication was validated. Remove only
+  // that just-linked current staging inode; never unlink an unrelated winner.
+  if (
+    readPrivateRolloutPathState(targetHome, staged.path) === 'non-empty-file'
+    && readPrivateRolloutPathState(targetHome, canonicalPath) === 'non-empty-file'
+    && sameRegularFileIdentity(staged.path, canonicalPath)
+  ) {
+    fs.unlinkSync(canonicalPath);
+  }
+  throw resumePreparationBlocked(threadId, 'the external rollout publication changed before handoff');
+}
+
+/**
+ * A rollout-only external source has no state row that can point at a sibling.
+ * Preserve a stable private empty, then atomically expose the verified external
+ * snapshot under its sole canonical name. A local native writer still wins up
+ * to that handoff; later external writes remain isolated in the source HOME.
+ */
+async function adoptExternalRolloutOverStableCanonicalWithoutState(
+  threadId: string,
+  targetHome: string,
+  sourcePath: string,
+  canonicalPath: string,
+  originalEmpty: EmptyRolloutSnapshot,
+  beforeHandoff?: () => void,
+): Promise<string> {
+  if (!isStableEmptyRollout(originalEmpty)) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
+  }
+  const staged = await copyExternalRolloutAtomically(
+    sourcePath,
+    canonicalPath,
+    threadId,
+    { allowSibling: true, skipPreferred: true },
+  );
+  if (!staged) {
+    throw resumePreparationBlocked(threadId, 'external rollout changed during private adoption');
+  }
+  const preservation = preserveStableEmptyCanonical(
+    threadId,
+    targetHome,
+    canonicalPath,
+    originalEmpty,
+  );
+  if (preservation.kind === 'native-winner') {
+    return acceptSoleCanonicalNativeWinner(
+      threadId,
+      targetHome,
+      canonicalPath,
+      beforeHandoff,
+    );
+  }
+  const preservedBeforePublication = readPrivateRolloutPathState(targetHome, preservation.path);
+  if (preservedBeforePublication === 'non-empty-file') {
+    return restoreSoleCanonicalNativeWinner(
+      threadId,
+      targetHome,
+      preservation.path,
+      canonicalPath,
+      beforeHandoff,
+    );
+  }
+  if (preservedBeforePublication !== 'empty-file') {
+    throw resumePreparationBlocked(threadId, 'the preserved empty rollout changed before adoption');
+  }
+
+  let published: CanonicalFullRolloutPublication;
+  try {
+    published = publishStagedFullRolloutAtCanonical(
+      threadId,
+      targetHome,
+      staged,
+      canonicalPath,
+      () => {
+        beforeHandoff?.();
+        assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+        return readPrivateRolloutPathState(targetHome, preservation.path) === 'empty-file';
+      },
+    );
+  } catch (error) {
+    if (readPrivateRolloutPathState(targetHome, canonicalPath) === 'missing') {
+      try {
+        restorePreservedCanonicalAfterFailedHandoff(
+          threadId,
+          targetHome,
+          preservation.path,
+          canonicalPath,
+          beforeHandoff,
+        );
+      } catch {
+        // Preserve the original error and every recoverable private artifact.
+      }
+    }
+    throw error;
+  }
+  if (!published.staged) return published.path;
+
+  if (readPrivateRolloutPathState(targetHome, preservation.path) === 'non-empty-file') {
+    log.warn('late native rollout was preserved after external canonical handoff', {
+      threadId,
+      preservedRolloutPath: preservation.path,
+      recoveredRolloutPath: canonicalPath,
+    });
+  }
+
+  log.info('adopted rollout-only external history over stable private empty', {
+    threadId,
+    sourceRolloutPath: sourcePath,
+    preservedRolloutPath: preservation.path,
+    recoveredRolloutPath: published.path,
+    created: published.created,
+  });
+  return published.path;
+}
+
+async function adoptExternalRolloutAfterPendingLocalHandoff(
+  threadId: string,
+  targetHome: string,
+  sourcePath: string,
+  canonicalPath: string,
+  beforeHandoff: () => void,
+): Promise<string> {
+  const staged = await copyExternalRolloutAtomically(
+    sourcePath,
+    canonicalPath,
+    threadId,
+    { allowSibling: true, skipPreferred: true },
+  );
+  if (!staged) {
+    throw resumePreparationBlocked(threadId, 'external rollout changed during guarded adoption');
+  }
+  const published = publishStagedFullRolloutAtCanonical(
+    threadId,
+    targetHome,
+    staged,
+    canonicalPath,
+    () => {
+      beforeHandoff();
+      assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+      return true;
+    },
+  );
+  log.info('adopted rollout-only external history after pending local handoff', {
+    threadId,
+    sourceRolloutPath: sourcePath,
+    recoveredRolloutPath: published.path,
+    created: published.created,
+  });
+  return published.path;
+}
+
+/**
+ * 双缺失恢复:在标准目录发布 rollout,让 app-server thread/resume 重新生成当前版本的
+ * state 行。H1/H2 只发布到 Cindy staging sibling；历史稳定后才原子暴露唯一的
+ * canonical 文件。返回是无 state 场景的不可逆 handoff，此后不再跨调用替换它。
  */
 async function synthesizeRolloutForMissingThreadState(
   threadId: string,
   targetHome: string,
+  beforeHandoff?: () => void,
 ): Promise<string | null> {
   const source = await readBestLocalCodexRecoverySource(threadId);
   if (!source) return null;
-  const { session, messages, recoveryCreatedAt } = source;
-
-  const rolloutPath = recoveredRolloutPath(targetHome, threadId, recoveryCreatedAt);
-  const row: SqlRow = {
-    created_at_ms: recoveryCreatedAt,
-    cwd: session.workingDir,
-    originator: 'xdt-maker',
-    source: 'cli',
-    model: session.model,
-  };
-  const jsonl = buildSyntheticRollout(threadId, row, messages);
-  const created = await writeFileAtomicallyIfAbsent(rolloutPath, jsonl);
+  const rolloutPath = recoveredRolloutPath(targetHome, threadId, source.recoveryCreatedAt);
+  const staged = await publishFreshLocalSyntheticBeforeHandoff(rolloutPath, threadId);
+  if (!staged) return null;
+  const published = publishStagedSyntheticAtCanonical(
+    threadId,
+    targetHome,
+    staged,
+    rolloutPath,
+    () => {
+      beforeHandoff?.();
+      assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [rolloutPath]);
+      return true;
+    },
+  );
   log.info('synthesized rollout for missing Codex thread state', {
     threadId,
-    rolloutPath,
-    messageCount: messages.length,
-    created,
+    rolloutPath: published.path,
+    messageCount: staged.messageCount,
+    created: published.created,
   });
-  return rolloutPath;
+  return published.path;
+}
+
+function syntheticRowForLocalRecoverySource(source: LocalCodexRecoverySource): SqlRow {
+  return {
+    created_at_ms: source.recoveryCreatedAt,
+    cwd: source.session.workingDir,
+    originator: 'xdt-maker',
+    source: 'cli',
+    model: source.session.model,
+  };
 }
 
 /**
@@ -806,16 +3198,150 @@ function recoveredRolloutPath(targetHome: string, threadId: string, createdAt: n
   );
 }
 
+/** Stable siblings used when an unreadable private rollout must be preserved. */
+function recoveredSiblingRolloutPath(
+  unreadablePath: string,
+  threadId: string,
+  attempt: number,
+  kind: 'adopted' | 'empty-recovery' | 'preserved-empty' | 'retired-empty' | 'state-less-stage' | 'synthetic',
+): string {
+  const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
+  const originalName = path.basename(unreadablePath) || `rollout-${threadId}.jsonl`;
+  if (kind === 'state-less-stage') {
+    return path.join(
+      path.dirname(unreadablePath),
+      `.cindy-state-less-recovery${suffix}-${originalName}.stage`,
+    );
+  }
+  return path.join(
+    path.dirname(unreadablePath),
+    `rollout-cindy-${kind}${suffix}-${originalName}`,
+  );
+}
+
+type PublishedSyntheticRollout = PrivateRolloutPublication;
+
+interface FreshSyntheticPublication extends PublishedSyntheticRollout {
+  contents: string;
+  messageCount: number;
+}
+
+/**
+ * Publish a synthetic candidate while the old state pointer still owns the
+ * session, then verify it against one final localDb snapshot before handoff.
+ * If H1 advances to H2 during publication, preserve H1 and retry with H2.
+ */
+async function publishFreshSyntheticBeforeHandoff(
+  preferredPath: string,
+  threadId: string,
+  row: SqlRow,
+  opts: { skipPreferred: boolean },
+): Promise<FreshSyntheticPublication | null> {
+  for (let attempt = 0; attempt < MAX_RECOVERY_PATH_ATTEMPTS; attempt += 1) {
+    const messages = await readXdtMessagesByThreadId(threadId);
+    if (messages.length === 0) return null;
+    const contents = buildSyntheticRollout(threadId, row, messages);
+    const published = await publishSyntheticRollout(
+      preferredPath,
+      threadId,
+      contents,
+      opts,
+    );
+    if (!published) return null;
+
+    const latestMessages = await readXdtMessagesByThreadId(threadId);
+    if (latestMessages.length === 0) return null;
+    const latestContents = buildSyntheticRollout(threadId, row, latestMessages);
+    const latestSnapshot = readPrivateExactRolloutSnapshot(
+      getDesktopCodexHome(),
+      published.path,
+      latestContents,
+    );
+    if (latestSnapshot) {
+      return {
+        ...published,
+        snapshot: latestSnapshot,
+        contents: latestContents,
+        messageCount: latestMessages.length,
+      };
+    }
+  }
+  return null;
+}
+
+/** Atomically publish into the first usable deterministic private candidate. */
+async function publishSyntheticRollout(
+  preferredPath: string,
+  threadId: string,
+  contents: string,
+  opts: { skipPreferred: boolean; siblingKind?: 'empty-recovery' | 'state-less-stage' },
+): Promise<PublishedSyntheticRollout | null> {
+  const targetHome = getDesktopCodexHome();
+  if (!isPathInside(targetHome, preferredPath)) return null;
+
+  for (let attempt = 0; attempt < MAX_RECOVERY_PATH_ATTEMPTS; attempt += 1) {
+    const candidate = !opts.skipPreferred && attempt === 0
+      ? preferredPath
+      : recoveredSiblingRolloutPath(
+        preferredPath,
+        threadId,
+        opts.skipPreferred ? attempt : attempt - 1,
+        opts.skipPreferred ? (opts.siblingKind ?? 'empty-recovery') : 'synthetic',
+      );
+    // Resolve the boundary before every read or write. In particular, a
+    // symlinked sessions ancestor must not redirect recovery into another HOME.
+    if (!isPathInside(targetHome, candidate)) return null;
+    const candidateState = readPrivateRolloutPathState(targetHome, candidate);
+    if (candidateState === 'unsafe') return null;
+    if (candidateState === 'non-empty-file') {
+      // A prior crash may have published H1 before localDb advanced to H2. Reuse
+      // only the exact current synthetic history; otherwise preserve H1 and move on.
+      const snapshot = readPrivateExactRolloutSnapshot(targetHome, candidate, contents);
+      if (snapshot) {
+        return { path: candidate, created: false, snapshot };
+      }
+      continue;
+    }
+
+    if (candidateState === 'empty-file') {
+      const empty = readEmptyRolloutSnapshot(candidate);
+      if (!empty || !isStableEmptyRollout(empty)) return null;
+      continue;
+    }
+
+    const created = await writeFileAtomicallyIfAbsent(targetHome, candidate, contents);
+    const snapshot = readPrivateExactRolloutSnapshot(targetHome, candidate, contents);
+    if (snapshot) return { path: candidate, created, snapshot };
+    if (readPrivateRolloutPathState(targetHome, candidate) === 'unsafe') return null;
+    const racedEmpty = readEmptyRolloutSnapshot(candidate);
+    if (!racedEmpty || !isStableEmptyRollout(racedEmpty)) return null;
+  }
+  return null;
+}
+
 /** 同目录临时文件 + hard-link 发布:不覆盖既有 rollout,并避免并发 resume 读到半截文件。 */
-async function writeFileAtomicallyIfAbsent(targetPath: string, contents: string): Promise<boolean> {
+async function writeFileAtomicallyIfAbsent(
+  targetHome: string,
+  targetPath: string,
+  contents: string,
+): Promise<boolean> {
+  if (!isPathInside(targetHome, targetPath)) return false;
   if (fs.existsSync(targetPath)) return false;
   await fsp.mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = path.join(
     path.dirname(targetPath),
     `.${path.basename(targetPath)}.${randomUUID()}.recovery-tmp`,
   );
+  if (
+    !isPathInside(targetHome, targetPath)
+    || !isPathInside(targetHome, tempPath)
+  ) return false;
   try {
     await fsp.writeFile(tempPath, contents, { encoding: 'utf-8', flag: 'wx' });
+    if (
+      readPrivateRolloutPathState(targetHome, tempPath) !== 'non-empty-file'
+      || !isPathInside(targetHome, targetPath)
+    ) return false;
     try {
       await fsp.link(tempPath, targetPath);
       return true;
@@ -825,7 +3351,9 @@ async function writeFileAtomicallyIfAbsent(targetPath: string, contents: string)
       throw err;
     }
   } finally {
-    await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+    if (isPathInside(targetHome, tempPath)) {
+      await fsp.unlink(tempPath).catch(() => undefined);
+    }
   }
 }
 
@@ -1259,6 +3787,11 @@ async function appendSessionIndexEntry(home: string, thread: CodexThreadSummary)
   }
 }
 
+function isCindyRolloutArtifactFileName(name: string): boolean {
+  return name.startsWith('rollout-cindy-')
+    || name.startsWith('.cindy-state-less-recovery');
+}
+
 function collectRolloutFiles(home: string): string[] {
   const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
   const files: Array<{ file: string; mtime: number }> = [];
@@ -1274,7 +3807,12 @@ function collectRolloutFiles(home: string): string[] {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         visit(full, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes('rollout-')) {
+      } else if (
+        entry.isFile()
+        && entry.name.endsWith('.jsonl')
+        && entry.name.includes('rollout-')
+        && !isCindyRolloutArtifactFileName(entry.name)
+      ) {
         try {
           files.push({ file: full, mtime: fs.statSync(full).mtimeMs });
         } catch {
@@ -1304,7 +3842,12 @@ async function collectRolloutFilesAsync(home: string): Promise<Array<{ file: str
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await visit(full, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes('rollout-')) {
+      } else if (
+        entry.isFile()
+        && entry.name.endsWith('.jsonl')
+        && entry.name.includes('rollout-')
+        && !isCindyRolloutArtifactFileName(entry.name)
+      ) {
         try {
           files.push({ file: full, mtime: (await fsp.stat(full)).mtimeMs });
         } catch {
@@ -1435,6 +3978,430 @@ function threadIdFromRolloutPath(file: string): string {
   return m?.[1] ?? '';
 }
 
+/** Match the filename contract used by Codex's state-less rollout scanner. */
+function isCanonicalCodexRolloutPath(file: string, threadId: string): boolean {
+  return threadIdFromRolloutPath(file) === threadId
+    && /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-fA-F-]{36}\.jsonl$/
+      .test(path.basename(file));
+}
+
+interface InterruptedEmptyPreservation {
+  preservedPath: string;
+  canonicalPath: string;
+}
+
+function collectInterruptedEmptyPreservations(
+  home: string,
+  threadId: string,
+): InterruptedEmptyPreservation[] {
+  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
+  const found: InterruptedEmptyPreservation[] = [];
+  const visit = (dir: string, depth: number): void => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(candidate, depth + 1);
+        continue;
+      }
+      const match = entry.name.match(
+        /^rollout-cindy-preserved-empty(?:-\d+)?-(rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-fA-F-]{36}\.jsonl)$/,
+      );
+      if (!match) continue;
+      const canonicalPath = path.join(dir, match[1]);
+      if (!isCanonicalCodexRolloutPath(canonicalPath, threadId)) continue;
+      found.push({ preservedPath: candidate, canonicalPath });
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  return found;
+}
+
+function observePendingInterruptedEmptyPreservations(
+  targetHome: string,
+  threadId: string,
+): (() => void) | undefined {
+  const pending: Array<{ path: string; snapshot: EmptyRolloutSnapshot }> = [];
+  for (const preservation of collectInterruptedEmptyPreservations(targetHome, threadId)) {
+    if (readPrivateRolloutPathState(targetHome, preservation.canonicalPath) !== 'missing') {
+      continue;
+    }
+    const snapshot = readRegularEmptyRolloutSnapshot(preservation.preservedPath);
+    if (!snapshot) {
+      throw resumePreparationBlocked(
+        threadId,
+        'an interrupted preserved rollout changed before recovery planning',
+      );
+    }
+    pending.push({ path: preservation.preservedPath, snapshot });
+  }
+  if (pending.length === 0) return undefined;
+  return () => {
+    for (const candidate of pending) {
+      if (!regularEmptyRolloutStillMatches(candidate.path, candidate.snapshot)) {
+        throw resumePreparationBlocked(
+          threadId,
+          'an interrupted preserved rollout changed before canonical handoff',
+        );
+      }
+    }
+  };
+}
+
+function collectInterruptedCanonicalRetirements(
+  home: string,
+  threadId: string,
+): InterruptedEmptyPreservation[] {
+  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
+  const found: InterruptedEmptyPreservation[] = [];
+  const visit = (dir: string, depth: number): void => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(candidate, depth + 1);
+        continue;
+      }
+      const match = entry.name.match(
+        /^rollout-cindy-retired-empty(?:-\d+)?-(rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-fA-F-]{36}\.jsonl)$/,
+      );
+      if (!match) continue;
+      const canonicalPath = path.join(dir, match[1]);
+      if (!isCanonicalCodexRolloutPath(canonicalPath, threadId)) continue;
+      found.push({ preservedPath: candidate, canonicalPath });
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  return found;
+}
+
+function reconcileInterruptedCanonicalRetirements(
+  targetHome: string,
+  threadId: string,
+  canonicalSet: { empties: CanonicalEmptyObservation[]; nonEmpty: string[] },
+): { empties: CanonicalEmptyObservation[]; nonEmpty: string[] } {
+  if (canonicalSet.nonEmpty.length <= 1) return canonicalSet;
+  const retirements = collectInterruptedCanonicalRetirements(targetHome, threadId);
+  const checkpointByCanonical = new Map<string, string>();
+  for (const canonicalPath of canonicalSet.nonEmpty) {
+    const checkpoint = retirements.find((candidate) => (
+      samePath(candidate.canonicalPath, canonicalPath)
+      && readPrivateRolloutPathState(targetHome, candidate.preservedPath) === 'non-empty-file'
+      && sameRegularFileIdentity(candidate.preservedPath, canonicalPath)
+    ));
+    if (checkpoint) checkpointByCanonical.set(canonicalPath, checkpoint.preservedPath);
+  }
+  const establishedWinners = canonicalSet.nonEmpty.filter(
+    (canonicalPath) => !checkpointByCanonical.has(canonicalPath),
+  );
+  if (establishedWinners.length !== 1) return canonicalSet;
+  const establishedWinner = establishedWinners[0];
+
+  for (const [canonicalPath, checkpointPath] of checkpointByCanonical) {
+    if (
+      readPrivateRolloutPathState(targetHome, canonicalPath) !== 'non-empty-file'
+      || readPrivateRolloutPathState(targetHome, checkpointPath) !== 'non-empty-file'
+      || !sameRegularFileIdentity(canonicalPath, checkpointPath)
+    ) {
+      throw resumePreparationBlocked(threadId, 'an interrupted canonical retirement changed');
+    }
+    try {
+      fs.unlinkSync(canonicalPath);
+    } catch (error) {
+      throw resumePreparationBlocked(
+        threadId,
+        `an interrupted canonical could not be retired (${(error as NodeJS.ErrnoException).code ?? 'unknown'})`,
+      );
+    }
+  }
+
+  const converged = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  if (
+    converged.nonEmpty.length !== 1
+    || !samePath(converged.nonEmpty[0], establishedWinner)
+  ) {
+    throw resumePreparationBlocked(threadId, 'interrupted canonical retirement did not converge');
+  }
+  log.info('completed interrupted canonical rollout retirement', {
+    threadId,
+    retainedRolloutPath: establishedWinner,
+    retiredRolloutPaths: [...checkpointByCanonical.keys()],
+  });
+  return converged;
+}
+
+/**
+ * A process exit can happen after the empty canonical name is moved aside but
+ * before a synthetic handoff. If the retained native writer then appends to
+ * that preserved inode, restore it as the authoritative canonical history.
+ */
+function restoreInterruptedNativeCanonicalWithoutState(
+  targetHome: string,
+  threadId: string,
+  opts: { requireAllNativePrecursorsConverged?: boolean } = {},
+): string | null {
+  let canonicalSet = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  canonicalSet = reconcileInterruptedCanonicalRetirements(targetHome, threadId, canonicalSet);
+  if (canonicalSet.empties.some((candidate) => !isStableEmptyRollout(candidate.snapshot))) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
+  }
+  if (canonicalSet.nonEmpty.length > 1) {
+    throw resumePreparationBlocked(threadId, 'multiple private canonical rollouts conflict');
+  }
+  if (canonicalSet.nonEmpty.length === 1) {
+    const existingWinner = canonicalSet.nonEmpty[0];
+    if (opts.requireAllNativePrecursorsConverged) {
+      for (const preservation of collectInterruptedEmptyPreservations(targetHome, threadId)) {
+        if (readPrivateRolloutPathState(targetHome, preservation.preservedPath) !== 'non-empty-file') {
+          continue;
+        }
+        if (
+          !samePath(preservation.canonicalPath, existingWinner)
+          || !sameRegularFileIdentity(preservation.preservedPath, existingWinner)
+        ) {
+          throw resumePreparationBlocked(
+            threadId,
+            'multiple native private rollouts conflict before state handoff',
+          );
+        }
+      }
+    }
+    preserveStableCanonicalEmptiesBesideWinner(
+      threadId,
+      targetHome,
+      canonicalSet.empties,
+    );
+    const converged = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+    if (
+      converged.empties.length > 0
+      || converged.nonEmpty.length !== 1
+      || !samePath(converged.nonEmpty[0], existingWinner)
+    ) {
+      throw resumePreparationBlocked(threadId, 'the private canonical winner changed during handoff');
+    }
+    return existingWinner;
+  }
+
+  let nativeWinner: InterruptedEmptyPreservation | null = null;
+  for (const preservation of collectInterruptedEmptyPreservations(targetHome, threadId)) {
+    const canonicalState = readPrivateRolloutPathState(targetHome, preservation.canonicalPath);
+    if (canonicalState === 'non-empty-file') continue;
+    const preservedState = readPrivateRolloutPathState(targetHome, preservation.preservedPath);
+    if (preservedState === 'empty-file') continue;
+    if (preservedState !== 'non-empty-file') {
+      throw resumePreparationBlocked(threadId, 'an interrupted preserved rollout became unsafe');
+    }
+    if (canonicalState !== 'missing') {
+      throw resumePreparationBlocked(
+        threadId,
+        'an interrupted native rollout conflicts with the canonical path',
+      );
+    }
+    if (nativeWinner) {
+      if (
+        !samePath(nativeWinner.canonicalPath, preservation.canonicalPath)
+        || !sameRegularFileIdentity(nativeWinner.preservedPath, preservation.preservedPath)
+      ) {
+        throw resumePreparationBlocked(threadId, 'multiple interrupted native rollouts conflict');
+      }
+      continue;
+    }
+    nativeWinner = preservation;
+  }
+  if (!nativeWinner) return null;
+  preserveStableCanonicalEmptiesBesideWinner(
+    threadId,
+    targetHome,
+    canonicalSet.empties,
+  );
+  const restored = restorePreservedCanonical(
+    threadId,
+    targetHome,
+    nativeWinner.preservedPath,
+    nativeWinner.canonicalPath,
+  );
+  const restoredSet = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  if (
+    restoredSet.empties.length > 0
+    || restoredSet.nonEmpty.length !== 1
+    || !samePath(restoredSet.nonEmpty[0], restored)
+  ) {
+    throw resumePreparationBlocked(threadId, 'interrupted native recovery did not converge');
+  }
+  log.info('restored native Codex rollout after interrupted state-less recovery', {
+    threadId,
+    preservedRolloutPath: nativeWinner.preservedPath,
+    restoredRolloutPath: restored,
+  });
+  return restored;
+}
+
+interface CanonicalEmptyObservation {
+  path: string;
+  snapshot: EmptyRolloutSnapshot;
+}
+
+function observeCurrentHomeCanonicalRollouts(
+  targetHome: string,
+  threadId: string,
+): { empties: CanonicalEmptyObservation[]; nonEmpty: string[] } {
+  const empties: CanonicalEmptyObservation[] = [];
+  const nonEmpty: string[] = [];
+  const candidates = collectNamedRolloutPaths(targetHome, threadId)
+    .filter((candidate) => isCanonicalCodexRolloutPath(candidate, threadId))
+    .sort();
+  for (const candidate of candidates) {
+    const state = readPrivateRolloutPathState(targetHome, candidate);
+    if (state === 'non-empty-file') {
+      nonEmpty.push(candidate);
+      continue;
+    }
+    if (state === 'empty-file') {
+      const snapshot = readEmptyRolloutSnapshot(candidate);
+      if (!snapshot) {
+        throw resumePreparationBlocked(threadId, 'a private canonical rollout changed during discovery');
+      }
+      empties.push({ path: candidate, snapshot });
+      continue;
+    }
+    throw resumePreparationBlocked(threadId, 'a private canonical rollout crossed its safe boundary');
+  }
+  return { empties, nonEmpty };
+}
+
+function createCanonicalNamespaceGuard(
+  threadId: string,
+  targetHome: string,
+  retainedEmpties: readonly CanonicalEmptyObservation[],
+): () => void {
+  return () => {
+    const current = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+    const matchesPlan = current.nonEmpty.length === 0
+      && current.empties.length === retainedEmpties.length
+      && retainedEmpties.every((expected) => current.empties.some((candidate) => (
+        samePath(candidate.path, expected.path)
+        && emptyRolloutStillMatches(candidate.path, expected.snapshot)
+      )));
+    if (!matchesPlan) {
+      throw resumePreparationBlocked(
+        threadId,
+        'the private canonical rollout namespace changed during recovery handoff',
+      );
+    }
+  };
+}
+
+/** Fail closed if a same-thread canonical name appeared after recovery planning. */
+function assertNoUnexpectedCanonicalRollouts(
+  threadId: string,
+  targetHome: string,
+  allowedPaths: readonly string[],
+): void {
+  const current = observeCurrentHomeCanonicalRollouts(targetHome, threadId);
+  const unexpected = [
+    ...current.empties.map((candidate) => candidate.path),
+    ...current.nonEmpty,
+  ].find((candidate) => !allowedPaths.some((allowed) => samePath(candidate, allowed)));
+  if (unexpected) {
+    throw resumePreparationBlocked(
+      threadId,
+      'the private canonical rollout namespace changed during recovery handoff',
+    );
+  }
+}
+
+function preserveStableCanonicalEmptiesBesideWinner(
+  threadId: string,
+  targetHome: string,
+  empties: readonly CanonicalEmptyObservation[],
+): void {
+  for (const empty of empties) {
+    const preservation = preserveStableEmptyCanonical(
+      threadId,
+      targetHome,
+      empty.path,
+      empty.snapshot,
+      { preserveLateNativeAsArtifact: true },
+    );
+    if (preservation.kind === 'native-winner') {
+      throw resumePreparationBlocked(
+        threadId,
+        'a private empty canonical materialized beside another winner',
+      );
+    }
+  }
+}
+
+function preserveAdditionalCanonicalEmptiesBeforeHandoff(
+  threadId: string,
+  targetHome: string,
+  empties: readonly CanonicalEmptyObservation[],
+): (() => void) | undefined {
+  // This batch can come from a second scan after the initial recovery preflight.
+  // Validate every candidate before moving any canonical name so a newly opened
+  // Codex writer keeps its discoverable path and a later recent candidate cannot
+  // leave earlier stable candidates partially preserved.
+  if (empties.some((candidate) => !isStableEmptyRollout(candidate.snapshot))) {
+    throw resumePreparationBlocked(threadId, 'private rollout may still be materializing');
+  }
+  const preserved: Array<{ path: string; snapshot: EmptyRolloutSnapshot }> = [];
+  for (const empty of empties) {
+    const preservation = preserveStableEmptyCanonical(
+      threadId,
+      targetHome,
+      empty.path,
+      empty.snapshot,
+    );
+    if (preservation.kind === 'native-winner') {
+      throw resumePreparationBlocked(
+        threadId,
+        'an additional private empty canonical materialized before handoff',
+      );
+    }
+    const snapshot = readRegularEmptyRolloutSnapshot(preservation.path);
+    if (!snapshot) {
+      throw resumePreparationBlocked(
+        threadId,
+        'an additional private empty canonical changed before handoff',
+      );
+    }
+    preserved.push({ path: preservation.path, snapshot });
+  }
+  if (preserved.length === 0) return undefined;
+  return () => {
+    for (const candidate of preserved) {
+      if (!regularEmptyRolloutStillMatches(candidate.path, candidate.snapshot)) {
+        throw resumePreparationBlocked(
+          threadId,
+          'an additional private rollout changed before canonical handoff',
+        );
+      }
+    }
+  };
+}
+
+function combineHandoffGuards(
+  ...guards: Array<(() => void) | undefined>
+): (() => void) | undefined {
+  const active = guards.filter((guard): guard is () => void => !!guard);
+  if (active.length === 0) return undefined;
+  return () => {
+    for (const guard of active) guard();
+  };
+}
+
 function isArchivedRolloutPath(file: string): boolean {
   return file.includes(`${path.sep}archived_sessions${path.sep}`);
 }
@@ -1455,6 +4422,79 @@ function findExternalThreadById(threadId: string): CodexThreadSummary | null {
     if (found && (!best || best.updatedAt < found.updatedAt)) best = found;
   }
   return best;
+}
+
+interface ExternalEmptyObservation {
+  path: string;
+  snapshot: EmptyRolloutSnapshot;
+}
+
+/**
+ * Enumerate same-thread rollout names without following file symlinks. This is
+ * intentionally separate from the normal parser scan: a zero-byte rollout has
+ * no session_meta yet, while a replaced symlink/non-file must fail closed.
+ */
+function collectNamedRolloutPaths(home: string, threadId: string): string[] {
+  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
+  const found: string[] = [];
+  const visit = (dir: string, depth: number): void => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(candidate, depth + 1);
+      } else if (
+        entry.name.endsWith('.jsonl')
+        && entry.name.includes('rollout-')
+        && !isCindyRolloutArtifactFileName(entry.name)
+        && threadIdFromRolloutPath(candidate) === threadId
+      ) {
+        found.push(candidate);
+      }
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  return found;
+}
+
+/** Capture raw external empties that cannot be normalized without session_meta/state. */
+function observeUnindexedExternalEmptyRolloutsById(
+  threadId: string,
+): ExternalEmptyObservation[] {
+  const observations: ExternalEmptyObservation[] = [];
+  for (const home of discoverExternalCodexHomesSync()) {
+    for (const candidate of collectNamedRolloutPaths(home, threadId)) {
+      const snapshot = readRegularEmptyRolloutSnapshot(candidate);
+      if (!snapshot) {
+        throw resumePreparationBlocked(
+          threadId,
+          'an external rollout changed during recovery discovery',
+        );
+      }
+      observations.push({ path: candidate, snapshot });
+    }
+  }
+  return observations;
+}
+
+function assertExternalEmptyObservationsUnchanged(
+  threadId: string,
+  observations: readonly ExternalEmptyObservation[],
+): void {
+  for (const observation of observations) {
+    if (!regularEmptyRolloutStillMatches(observation.path, observation.snapshot)) {
+      throw resumePreparationBlocked(
+        threadId,
+        'an external rollout changed before private recovery handoff',
+      );
+    }
+  }
 }
 
 function findThreadByIdInHome(home: string, threadId: string): CodexThreadSummary | null {
@@ -1696,6 +4736,8 @@ async function upsertLocalSession(thread: CodexThreadSummary): Promise<'inserted
 interface CopyThreadStateOptions {
   replaceExisting?: boolean;
   rolloutPathOverride?: string;
+  validateBeforeCopy?: () => boolean;
+  validateAfterCopy?: () => boolean;
 }
 
 function copyThreadStateToTarget(
@@ -1711,11 +4753,16 @@ function copyThreadStateToTarget(
     target = createBetterSqliteDatabase(targetDbPath);
     target.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     if (!tableExists(source, 'threads') || !tableExists(target, 'threads')) return false;
-    const existing = target.prepare('SELECT id FROM threads WHERE id = ? LIMIT 1').get(thread.threadId);
-    if (existing && !opts.replaceExisting) return false;
     const sourceDb = source;
     const targetDb = target;
     const copy = targetDb.transaction(() => {
+      const existing = targetDb
+        .prepare('SELECT id FROM threads WHERE id = ? LIMIT 1')
+        .get(thread.threadId);
+      if (existing && !opts.replaceExisting) return false;
+      if (opts.validateBeforeCopy && !opts.validateBeforeCopy()) {
+        throw new Error('rollout handoff validation failed before state copy');
+      }
       if (opts.replaceExisting) {
         upsertRowsByColumn(sourceDb, targetDb, 'threads', 'id', thread.threadId, {
           ...(opts.rolloutPathOverride ? { rollout_path: opts.rolloutPathOverride } : {}),
@@ -1729,10 +4776,14 @@ function copyThreadStateToTarget(
         copyRowsByColumn(sourceDb, targetDb, 'thread_dynamic_tools', 'thread_id', thread.threadId);
         copyRowsByColumn(sourceDb, targetDb, 'thread_spawn_edges', 'parent_thread_id', thread.threadId);
       }
+      if (opts.validateAfterCopy && !opts.validateAfterCopy()) {
+        throw new Error('rollout handoff validation failed after state copy');
+      }
+      return true;
     });
-    copy();
-    return true;
+    return copy.immediate();
   } catch (err) {
+    if (err instanceof CodexResumePreparationBlockedError) throw err;
     log.warn('failed to copy Codex thread state', {
       threadId: thread.threadId,
       targetDbPath,
@@ -1820,28 +4871,6 @@ function readThreadRolloutPath(dbPath: string, threadId: string): string | null 
     return row?.rolloutPath ?? null;
   } catch {
     return null;
-  } finally {
-    closeDbQuietly(db);
-  }
-}
-
-/** 已有 target row 只改 rollout_path,不拿较旧外部元数据覆盖当前状态。 */
-function pointThreadAtRollout(dbPath: string, threadId: string, rolloutPath: string): boolean {
-  let db: Database.Database | null = null;
-  try {
-    db = createBetterSqliteDatabase(dbPath);
-    db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
-    if (!tableExists(db, 'threads')) return false;
-    const result = db.prepare('UPDATE threads SET rollout_path = ? WHERE id = ?')
-      .run(rolloutPath, threadId);
-    return result.changes > 0;
-  } catch (err) {
-    log.warn('failed to point Codex thread at adopted rollout', {
-      threadId,
-      rolloutPath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
   } finally {
     closeDbQuietly(db);
   }

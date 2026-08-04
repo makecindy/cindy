@@ -1816,6 +1816,51 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('projects terminal 429 retries as rate-limit attempts only with their reason', () => {
+    const message =
+      'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)';
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message,
+          reason: 'terminal-rate-limit-retry',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 1,
+      maxAttempts: 2,
+      kind: 'rate-limit',
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: { message, isTerminal: false, willRetry: true },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message: 'provider failed (auto-retry 1/2)',
+          reason: 'terminal-rate-limit-retry',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toBeNull();
+  });
+
   it('tracks session running state from maker event push boundaries', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));

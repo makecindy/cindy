@@ -359,6 +359,11 @@ export class GoalController {
   private readonly turns = new Map<string, TurnAccumulator>();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
   private readonly firing = new Map<string, object>();
+  /** 尚在 Session.send 派发边界内的 Goal fire；Stop 必须能取消 dispatch 前的异步 gate。 */
+  private readonly goalDispatchAbortControllers = new Map<
+    string,
+    { owner: object; controller: AbortController }
+  >();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** goal controller 自己发起且尚未收到终止事件的 turn。用于编辑时区分 goal turn / user turn。 */
   private readonly goalTurnsInFlight = new Set<string>();
@@ -806,6 +811,10 @@ export class GoalController {
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelUsageResume(sessionId);
+    // 只中断 GoalController 自己发起的 turn。目标仍挂着时，用户可能已经让一条普通
+    // 消息进入队列；clear 必须保留它，并在旧 goal turn 终止后让 coordinator 正常
+    // drain。反过来，若当前跑的是用户 turn，清目标不应误停用户正在做的工作。
+    const hasActiveGoalTurn = this.goalTurnsInFlight.has(sessionId);
     const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
     const clearBoundary = freshTurn(
@@ -814,6 +823,21 @@ export class GoalController {
       previousBoundary?.pendingCompletion ?? null,
     );
     this.turns.set(sessionId, clearBoundary);
+    if (hasActiveGoalTurn) {
+      try {
+        // detach listener / 换 cancelled owner 必须早于 abort。否则 abort 的终态事件可能
+        // 被旧 Goal listener 消费，并与下面的 clear 持久化并发重建状态。生产依赖走
+        // input coordinator 的 Stop 边界，同时收口 vendor、输入锁和迟到事件。
+        this.deps.stopActiveGoalTurn(sessionId);
+      } catch (error) {
+        // 删除持久目标比中断回调更重要：即便停止协调器异常，也不能把 active 行留到
+        // 下次启动继续诈尸。异常留日志，存储 clear 仍继续执行。
+        this.deps.logger.warn('[goal] failed to stop active turn while clearing goal', {
+          sessionId,
+          error: String(error),
+        });
+      }
+    }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
@@ -1142,6 +1166,11 @@ export class GoalController {
       clearTimeout(timer);
       this.timers.delete(sessionId);
     }
+    const pendingDispatch = this.goalDispatchAbortControllers.get(sessionId);
+    if (pendingDispatch) {
+      this.goalDispatchAbortControllers.delete(sessionId);
+      pendingDispatch.controller.abort();
+    }
     this.firing.delete(sessionId);
     this.goalTurnsInFlight.delete(sessionId);
     this.turns.delete(sessionId);
@@ -1301,6 +1330,13 @@ export class GoalController {
         return;
       }
       case 'done': {
+        // AgentInputCoordinator releases the input boundary on the same terminal
+        // event and may immediately start a queued user turn. Drop Goal ownership
+        // synchronously here, before finalizeTurn awaits storage, so Clear cannot
+        // mistake that new user turn for the completed Goal turn and abort it.
+        if (event.turnOrigin?.kind === 'goal') {
+          this.goalTurnsInFlight.delete(sessionId);
+        }
         // Codex 的 per-turn 真实用量在 done.data.usage(promptTokens/completionTokens,
         // 见 maker-core codex/index.ts task_complete:"永远是 per-turn 增量")。优先用它覆盖
         // status 带来的累积上下文快照,避免 Codex 目标的 token 预算随上下文增长过早触顶。
@@ -1315,6 +1351,9 @@ export class GoalController {
       }
       default: {
         if (isTerminalAgentErrorEvent(event)) {
+          if (event.turnOrigin?.kind === 'goal') {
+            this.goalTurnsInFlight.delete(sessionId);
+          }
           void this.finalizeTurn(sessionId, event, true);
         }
         return;
@@ -1393,8 +1432,6 @@ export class GoalController {
           ? { errorKind: 'usage_limit' as const }
           : {}),
     };
-    if (origin === 'goal') this.goalTurnsInFlight.delete(sessionId);
-
     const decision = decideNextGoalState(
       {
         status: state.status,
@@ -1687,6 +1724,11 @@ export class GoalController {
     }
     const firingOwner = {};
     this.firing.set(sessionId, firingOwner);
+    const dispatchAbortController = new AbortController();
+    this.goalDispatchAbortControllers.set(sessionId, {
+      owner: firingOwner,
+      controller: dispatchAbortController,
+    });
     let dispatchBoundary: TurnAccumulator | undefined;
     let dispatchGeneration: number | undefined;
     const isCurrentDispatch = (): boolean =>
@@ -1753,7 +1795,24 @@ export class GoalController {
         : { type: 'user' as const, content };
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
-        { origin: { kind: 'goal', goalSessionId: sessionId }, planMode: false },
+        {
+          origin: { kind: 'goal', goalSessionId: sessionId },
+          planMode: false,
+          // Session.send 只在 vendor dispatch 前的最后一个同步边界调用它。不能等
+          // send Promise 返回后才登记：派发调用尚未返回时用户点清除，clearGoal 必须
+          // 已经知道这个 turn 属于目标模式，才能立即走 Stop 边界。
+          onDispatching: () => {
+            if (!isCurrentDispatch()) return;
+            this.goalTurnsInFlight.add(sessionId);
+            // signal 只负责取消 dispatch 前的 gate。跨过这个边界后由 coordinator Stop
+            // 负责 active turn；否则快速终态的 stopSession 会把真实已派发轮次误报为
+            // cancelled-before-dispatch。
+            if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
+              this.goalDispatchAbortControllers.delete(sessionId);
+            }
+          },
+          signal: dispatchAbortController.signal,
+        },
       );
       if (pendingHandoff && result.accepted) {
         agentHandoffPending.consume(sessionId);
@@ -1771,7 +1830,8 @@ export class GoalController {
           baselineStarted = false;
           return;
         }
-        this.goalTurnsInFlight.add(sessionId);
+        // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
+        // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
       }
     } catch (e) {
@@ -1786,6 +1846,9 @@ export class GoalController {
       this.deps.logger.warn('[goal] fireTurn send failed', { sessionId, kind, error: String(e) });
     } finally {
       releaseAgentSwitchLock();
+      if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
+        this.goalDispatchAbortControllers.delete(sessionId);
+      }
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }

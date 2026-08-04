@@ -2830,8 +2830,10 @@ describe('DeviceLinkClient', () => {
     const first = h.current();
     first.ack();
 
-    // ping 周期 8ms,pongMissLimit=1:第 2 个周期(~16ms)触发僵死
-    await tick(40);
+    // ping 周期 8ms,pongMissLimit=1:第 2 个周期(~16ms)触发僵死。
+    // 负载下(Windows CI 分片并跑)固定 tick(40) 不足以保证两个 ping 周期都已跑完 ——
+    // 有界等待到 terminate 真的发生,断言语义不变(僵死必须被判出来并进重连)。
+    for (let i = 0; i < 40 && !first.terminated; i++) await tick(10);
     expect(first.terminated).toBe(true);
     // 已进入重连(新 socket 已创建或定时器排队中)
     expect(h.client.getStatus()).toBe('connecting');
@@ -3004,7 +3006,7 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('connectNow:force 丢弃半开 socket 并复位所有 peer 的旧 link 状态', async () => {
+  it('restartConnection 丢弃半开 socket 并复位所有 peer 的旧 link 状态', async () => {
     const h = makeHarness();
     h.client.start();
     await tick();
@@ -3015,7 +3017,7 @@ describe('DeviceLinkClient', () => {
     expect(h.client.isLinkReady('ctrl-force-a')).toBe(true);
     expect(h.client.isLinkReady('ctrl-force-b')).toBe(true);
 
-    h.client.connectNow('system-resume', { force: true });
+    h.client.restartConnection('system-resume');
     expect(h.client.isLinkReady('ctrl-force-a')).toBe(false);
     expect(h.client.isLinkReady('ctrl-force-b')).toBe(false);
     await tick();
@@ -3139,7 +3141,10 @@ describe('DeviceLinkClient', () => {
     client.start();
     await tick(5);
     expect(sockets.length).toBe(0); // 第一轮卡在 getToken,没建 socket
-    await tick(30); // 10ms 超时 + ≤5ms 退避后第二轮拿到 token
+    // 负载下(Windows CI 分片并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(30) 不足以
+    // 保证 10ms getToken 超时 + ≤5ms 退避 + 第二轮 getToken 都已落地。有界等待到 socket
+    // 出现,断言语义不变(挂死的第一轮必须被超时掀掉、第二轮必须真的建出连接)。
+    for (let i = 0; i < 40 && sockets.length < 1; i++) await tick(10);
     expect(sockets.length).toBe(1);
     sockets[0].ack();
     expect(client.getStatus()).toBe('online');
@@ -3223,8 +3228,10 @@ describe('DeviceLinkClient', () => {
     await tick();
     const first = h.current();
     first.emit('open'); // upgrade 成功但对端不回 hello-ack(半开/服务假活)
-    await tick(50);
-    // watchdog 触发新建连接(测试窗口内后续连接可能再次超时,只断言 ≥2)
+    // 负载下(Windows CI 分片并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(50)
+    // 不足以保证 15ms 握手看门狗 + 退避重连都已落地。有界等待到第二个 socket 出现,
+    // 断言语义不变(watchdog 必须触发新建连接;测试窗口内后续连接可能再次超时,只断言 ≥2)。
+    for (let i = 0; i < 40 && h.sockets.length < 2; i++) await tick(10);
     expect(h.sockets.length).toBeGreaterThanOrEqual(2);
     expect(first.terminated || first.closed !== null).toBe(true); // 旧 socket 被回收
     // 负载下(全量并跑)事件循环调度可能远超名义毫秒数:current() 拿到的
@@ -3244,7 +3251,10 @@ describe('DeviceLinkClient', () => {
     h.client.start();
     await tick();
     expect(h.sockets.length).toBe(1); // socket 建了但 open 一直不来
-    await tick(50);
+    // 负载下(全量并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(50) 不足以
+    // 保证 15ms 握手看门狗 + 退避重连都已落地。有界等待到第二个 socket 出现,
+    // 断言语义不变(open 从未到来也必须换连接)。
+    for (let i = 0; i < 40 && h.sockets.length < 2; i++) await tick(10);
     expect(h.sockets.length).toBeGreaterThanOrEqual(2);
     h.client.stop();
   });
@@ -3462,6 +3472,67 @@ describe('DeviceLinkClient', () => {
       expect(issues).toHaveLength(2);
       expect(issues[1]).toBeNull();
     });
+
+    describe('unstable(反复连上又掉)', () => {
+      const flappy = () =>
+        makeHarness({ timing: { reconnectStableResetMs: 60, pingIntervalMs: 10_000 } });
+
+      async function flap(h: Harness, first = false): Promise<void> {
+        if (first) h.client.start();
+        await tick(first ? 0 : 45);
+        h.current().ack();
+        h.current().emit('close', 1006);
+      }
+
+      it('前两次短命不打扰用户,第三次连续才判 unstable', async () => {
+        const h = flappy();
+        await flap(h, true);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        h.client.stop();
+      });
+
+      it('hello-ack 不会立即清除 unstable,稳定在线满一个周期后才清除', async () => {
+        const h = flappy();
+        await flap(h, true);
+        await flap(h);
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        await tick(45);
+        h.current().ack();
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        await tick(80);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        h.current().emit('close', 1006);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        h.client.stop();
+      });
+
+      it('具体的 4409 replaced 优先于 unstable,主动 stop 不计入', async () => {
+        const h = flappy();
+        h.client.start();
+        await tick();
+        for (let i = 0; i < 3; i++) {
+          if (i > 0) await tick(45);
+          h.current().ack();
+          h.current().emit('close', 4409, 'replaced by new connection');
+        }
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'replaced', closeCode: 4409 });
+        h.client.stop();
+
+        const stopped = flappy();
+        for (let i = 0; i < 3; i++) {
+          stopped.client.start();
+          await tick();
+          stopped.current().ack();
+          stopped.client.stop();
+        }
+        expect(stopped.client.getConnectionIssue()).toBeNull();
+      });
+    });
   });
 
   describe('客户端主动重建(connect 重入丢弃在用 socket)', () => {
@@ -3482,7 +3553,7 @@ describe('DeviceLinkClient', () => {
       // 静默重建此前没有任何日志痕迹(旧 socket close 被 epoch 守卫屏蔽),这条 INFO
       // 是排障时区分「客户端主动重建」与「真实断连重连」的唯一锚点。
       expect(info).toHaveBeenCalledWith(
-        expect.stringContaining('discarding live socket for reconnect (reason=appstate-active, pending=0)'),
+        expect.stringContaining('discarding live socket for reconnect (reason=appstate-active, pending=0'),
       );
       h.current().ack();
       expect(h.client.getStatus()).toBe('online');
@@ -3630,6 +3701,203 @@ describe('DeviceLinkClient', () => {
         h.current().push({ ...frame, src: 'dev-b' });
         await tick();
         expect(notified).toEqual(['dev-b', 'dev-b']);
+        h.client.stop();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('C3:恢复动作(openLink)按 peer 隔离 —— 邻居的真实在途可靠请求照常完成、link 不被复位', async () => {
+      // 本例断言的是 peer 隔离,与心跳/超时无关:FakeWs 从不回 pong,若沿用
+      // harness 默认(pingIntervalMs 10 / pongMissLimit 2)则约 30ms 真实时间后
+      // 心跳看门狗就会拆连接、复位所有 peer link 并拒掉在途请求 —— 在负载高的
+      // CI runner 上会把隔离断言压成假失败。把这两个真实计时器推远。
+      const h = makeHarness({
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000, transportRetryIntervalMs: 60_000 },
+      });
+      h.client.start();
+      await tick();
+      h.current().ack();
+      await tick();
+      // 共享同一条 relay 的两个 peer:都完成可靠能力协商
+      await establishInboundReliableLink(h, 'stream-neighbor', 1, 'peer-neighbor');
+      await establishInboundReliableLink(h, 'stream-broken', 1, 'peer-broken');
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+      expect(h.client.isLinkReady('peer-broken')).toBe(true);
+
+      // 邻居上挂一个**真实**在途可靠 invoke(回包未到)
+      const neighborPending = h.client.invoke('peer-neighbor', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      });
+      const neighborInvoke = h.current().sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-neighbor')
+        .at(-1)!;
+      expect(neighborInvoke).toBeDefined();
+
+      // peer-broken 的 link 瞬时重置(transport-timeout 保留可靠层,是 before-link 现场)
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'peer-broken',
+        payload: { reason: 'transport-timeout' },
+      });
+      await tick();
+      expect(h.client.isLinkReady('peer-broken')).toBe(false);
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+
+      // 执行 host 恢复队列真正会做的动作:对 peer-broken 发起 openLink
+      const socketsBefore = h.sockets.length;
+      const reopened = h.client.openLink('peer-broken', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      const openFrame = h.current().sent
+        .filter((env) => env.kind === 'link-open' && env.dst === 'peer-broken')
+        .at(-1)!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: openFrame.id,
+        src: 'peer-broken',
+        payload: {
+          appVersion: '1.0.0',
+          allowlistHash: 'hash',
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: 'stream-broken-2',
+          transportBaseSeq: 1,
+        },
+      });
+      await expect(reopened).resolves.toMatchObject({ allowlistHash: 'hash' });
+      expect(h.client.isLinkReady('peer-broken')).toBe(true);
+
+      // 邻居零感知:link 未被复位、共享 relay 未重建、在途请求既未被拒也未丢
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+      expect(h.sockets.length).toBe(socketsBefore);
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: neighborInvoke.id,
+        src: 'peer-neighbor',
+        payload: { ok: true, result: ['neighbor-ok'] },
+      });
+      await expect(neighborPending).resolves.toMatchObject({
+        ok: true,
+        result: ['neighbor-ok'],
+      });
+      h.client.stop();
+    });
+
+    it('C4:方向证据访问器 —— 只认业务 invoke,显式关闭出站后一票否决', async () => {
+      // 同 C3:断言的是访问器语义。默认心跳会拆连接并拒掉在途 invoke,
+      // 使「在途业务 invoke → 算证据」在慢 runner 上假失败。
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000 } });
+      h.client.start();
+      await tick();
+      h.current().ack();
+      await tick();
+      await establishInboundReliableLink(h, 'stream-intent', 1, 'peer-intent');
+
+      // 无在途请求 → 无业务证据
+      expect(h.client.hasPendingRequestsTo('peer-intent')).toBe(false);
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(false);
+
+      // 在途业务 invoke → 算证据
+      const pending = h.client.invoke('peer-intent', {
+        channel: 'local-db:sessions:list',
+        args: [1],
+      });
+      expect(h.client.hasPendingRequestsTo('peer-intent')).toBe(true);
+
+      // 在途 link-open(协议请求)不算证据:重开动作本身就是发 link-open,
+      // 算进来会形成「重开在途 → 因此有权重开」的自我论证闭环。
+      const linkPending = h.client.openLink('peer-other', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      expect(h.client.hasPendingRequestsTo('peer-other')).toBe(false);
+
+      // 用户显式断开出站控制 → 一票否决(残留在途请求不得把链路拉回来)
+      h.client.closeLink('peer-intent', 'user');
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(true);
+
+      // openLink 是「意图续新」→ 清除该标记
+      const reopen = h.client.openLink('peer-intent', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(false);
+
+      h.client.stop();
+      await Promise.allSettled([pending, linkPending, reopen]);
+    });
+
+    it('C2:link 恢复即清节流 —— 恢复后 30s 内再次丢 link 时新帧立刻再通知一次', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      let nowMs = 4_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        // 断连由本例自己 emit('close') 驱动,不靠心跳:把心跳推远,避免慢 runner
+        // 上看门狗抢先拆连接把「恢复后 link 就绪」的中间断言压成假失败。
+        const h = makeHarness({
+          timing: {
+            reconnectBaseMs: 5,
+            reconnectMaxMs: 10,
+            pingIntervalMs: 60_000,
+            requestTimeoutMs: 60_000,
+          },
+        });
+        const notified: string[] = [];
+        h.client.onReliableFrameBeforeLink((deviceId) => notified.push(deviceId));
+        h.client.start();
+        await makeLinkDownPeer(h, 'dev-r');
+
+        const staleFrame = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-r',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-r',
+          1,
+          1,
+        )[0]!;
+
+        h.current().push({ ...staleFrame, src: 'dev-r' });
+        await tick();
+        expect(notified).toEqual(['dev-r']);
+
+        // host 重开成功(对端重新 link-open,本机 accept)→ link 就绪,节流应复位
+        await establishInboundReliableLink(h, 'stream-dev-r2', 1, 'dev-r');
+        expect(h.client.isLinkReady('dev-r')).toBe(true);
+
+        // 恢复后仍在 30s 节流窗口内(时钟只走 1s)再次丢 link:新帧必须立刻再通知,
+        // 否则 host 的唯一恢复出口最坏被推迟整个窗口。
+        nowMs += 1_000;
+        h.current().emit('close', 1006);
+        await tick(20);
+        h.current().ack();
+        await tick();
+        const staleFrame2 = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-r',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-r2',
+          2,
+          2,
+        )[0]!;
+        h.current().push({ ...staleFrame2, src: 'dev-r' });
+        await tick();
+        expect(notified).toEqual(['dev-r', 'dev-r']);
         h.client.stop();
       } finally {
         clock.mockRestore();

@@ -3,7 +3,7 @@
  *
  * This file wires the pure GitSnapshotCoordinator to desktop main-process
  * dependencies: maker session metadata, repo detection, local message lookup,
- * worktree dirty checks, and oneShot label generation.
+ * and oneShot label generation.
  */
 
 import type { AgentKind, Maker } from '@cindy/maker-core';
@@ -11,13 +11,12 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { ensureProjectGitInitialized } from '../git-snapshot/projectGitBootstrap.js';
-import { createSnapshot, createSnapshotMarker } from '../git-snapshot/gitSnapshotService.js';
+import { createShadowMarker, createShadowSavepoint } from '../git-snapshot/gitSnapshotService.js';
 import { extractUserPromptText } from '../git-snapshot/userPromptText.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
-import { isWorktreeDirty } from '../worktree/dirty.js';
 import { readGitSafetySettings } from './git-safety-settings-store.js';
 import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 
@@ -35,10 +34,9 @@ export interface GitSnapshotCoordinatorHostDeps {
   readAutoSnapshotEnabled?: () => boolean;
   detectRepoRoot?: (workingDir: string) => Promise<string | null>;
   initializeProjectGit?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['initializeProjectGit'];
-  isWorktreeDirty?: (repoRoot: string) => Promise<boolean>;
   getLatestUserMessage?: (sessionId: string) => Promise<LatestUserMessage | null>;
-  createSnapshot?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createSnapshot'];
-  createSnapshotMarker?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createSnapshotMarker'];
+  createShadowSavepoint?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createShadowSavepoint'];
+  createShadowMarker?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createShadowMarker'];
   logger?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['logger'];
 }
 
@@ -107,7 +105,6 @@ export function createGitSnapshotCoordinator(
           autoSnapshotEnabled: opts.autoSnapshotEnabled,
           source: 'git-snapshot:on-turn',
         })),
-    isWorktreeDirty: deps.isWorktreeDirty ?? isWorktreeDirty,
     getSessionContext: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId);
       if (!meta?.workDir || meta.remoteHostId) return null;
@@ -120,8 +117,8 @@ export function createGitSnapshotCoordinator(
     },
     resolveAnchor: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.clientId,
     getLastUserPrompt: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.text,
-    createSnapshot: deps.createSnapshot ?? createSnapshot,
-    createSnapshotMarker: deps.createSnapshotMarker ?? createSnapshotMarker,
+    createShadowSavepoint: deps.createShadowSavepoint ?? createShadowSavepoint,
+    createShadowMarker: deps.createShadowMarker ?? createShadowMarker,
     oneShot: async (agentKind, prompt) => {
       // 停用轴:快照标签是新的付费 one-shot,该 agent 的默认路由被停用时不派发 ——
       // 抛错让 labeler 走既有的确定性兜底标签(gitSnapshotLabeler:oneShot 失败即

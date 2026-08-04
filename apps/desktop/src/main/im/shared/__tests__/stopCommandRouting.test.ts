@@ -261,6 +261,118 @@ describe('messageHandler !stop routing', () => {
     });
   });
 
+  // ── 控制命令的主人门 ──────────────────────────────────────────────────────
+  // 群消息的 senderId 是群 lane, 所以任何群成员的 !stop 都会解析到同一个群会话,
+  // 等于掐掉主人正在跑的那一轮; slash 则会去动主人的目录/会话。speaker 存在即
+  // 代表这是群里的一次发言, 必须 isOwner 才放行(fail-closed)。
+  const groupSpeaker = (isOwner: boolean): IMMessageEvent['speaker'] => ({
+    id: 'member-9001',
+    name: '群友',
+    isOwner,
+  });
+
+  it('群成员的 !stop 静默丢弃: 不掐主人的 turn、不回提示、不落 agent', async () => {
+    deliver(makeEvent({ text: '!stop', speaker: groupSpeaker(false) }));
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('群成员的 slash 命令同样静默丢弃(不动主人的目录/会话)', async () => {
+    deliver(makeEvent({ text: '/project', speaker: groupSpeaker(false) }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('群主人的 !stop 照常执行', async () => {
+    deliver(makeEvent({ text: '!stop', speaker: groupSpeaker(true) }));
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('群主人的 slash 命令照常执行', async () => {
+    deliver(makeEvent({ text: '/project', speaker: groupSpeaker(true) }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('无 speaker(私聊/单人对话)放行: 各渠道入站已做过 owner 门', async () => {
+    deliver(makeEvent({ text: '!stop' }));
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('群成员的普通消息不受影响: 仍照常进 agent', async () => {
+    deliver(makeEvent({ text: '帮我看看这个', speaker: groupSpeaker(false) }));
+    await flushMicrotasks();
+
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+  });
+
+  // 文本 + unsupported(音视频/超限/未知类型)不是"裸命令": 必须留在原有的
+  // unsupportedNotice + agent 路径上, 否则连"你那个音频我处理不了"的反馈一起被吞。
+  const unsupportedEntry = [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'];
+
+  it('群成员发 !stop 但带 unsupported 内容: 不当命令, 照常走 unsupported + agent', async () => {
+    deliver(
+      makeEvent({ text: '!stop', speaker: groupSpeaker(false), unsupported: unsupportedEntry }),
+    );
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+    // 关键: 没有被主人门静默丢掉 —— 反馈与 agent 路径都还在。
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('群成员发 slash 但带 unsupported 内容: 不当命令, 照常走 unsupported + agent', async () => {
+    deliver(
+      makeEvent({ text: '/project', speaker: groupSpeaker(false), unsupported: unsupportedEntry }),
+    );
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('主人发 !stop 但带 unsupported 内容: 同样不当命令(判据与门逐字一致)', async () => {
+    deliver(
+      makeEvent({ text: '!stop', speaker: groupSpeaker(true), unsupported: unsupportedEntry }),
+    );
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('群成员带附件发 !stop: 不是命令, 照常进 agent(不被门误伤)', async () => {
+    deliver(
+      makeEvent({
+        text: '!stop',
+        speaker: groupSpeaker(false),
+        attachments: [{ kind: 'image', absPath: '/tmp/a.png' } as unknown as IMAttachment],
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(stopActiveTurn).not.toHaveBeenCalled();
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('treats !stop with attachments as a normal agent message', async () => {
     deliver(
       makeEvent({

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+  GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -10,10 +11,12 @@ import {
   ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
+  ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -120,6 +123,38 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
+  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
+    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
+      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
+      delete raw.panel;
+      const result = validateGhostManifest(raw);
+      if (!result.ok) throw new Error(result.reason);
+      return result.manifest;
+    };
+    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
+    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
+    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
+    const expandedPackage = makeToolManifest([
+      { name: 'gen_image', description: 'Generate images' },
+      { name: 'edit_image', description: 'Edit images' },
+    ]);
+    const changedPackage = makeToolManifest([
+      { name: 'gen_image', description: 'A third, unreviewed description' },
+    ]);
+
+    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
+    expect(
+      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
+    ).toEqual([
+      'tool:edit_image',
+    ]);
+    expect(
+      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
+    ).toEqual([
+      'tool:gen_image',
+    ]);
+  });
+
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);
@@ -1009,6 +1044,81 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
     ).toBe(false);
+  });
+
+  it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const valid = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(valid.ok).toBe(true);
+
+    const missing = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'missing' },
+    });
+    const extraField = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues', label: 'Issues' },
+    });
+    expect(missing.ok).toBe(true);
+    expect(extraField.ok).toBe(true);
+  });
+
+  it('忽略旧 manifest 中无效的同名未知字段', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    for (const legacyValue of [
+      null,
+      true,
+      'legacy',
+      [],
+      {},
+      { label: 'Issues' },
+    ]) {
+      const result = validateGhostManifest({
+        ...base,
+        atResourceProvider: legacyValue,
+      });
+      expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
+    }
+  });
+
+  it('@ 资源入口复用 tool 槽，不新增硬白名单 slot', () => {
+    expect(GHOST_SLOTS).not.toContain('at-resource');
+    expect(validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'tool', 'at-resource'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+      atResourceProvider: { tool: 'search_issues' },
+    }).ok).toBe(false);
+  });
+
+  it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
+    const raw = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const before = validateGhostManifest(raw);
+    const after = validateGhostManifest({
+      ...raw,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionBaselineKey(after.manifest)).toBe(
+      ghostPermissionBaselineKey(before.manifest),
+    );
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {

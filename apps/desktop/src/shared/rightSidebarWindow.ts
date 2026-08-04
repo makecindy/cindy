@@ -25,6 +25,8 @@ export interface RsbWindowContext {
   sessionId: string | null;
   workdir: string | null;
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
   /** 当前主窗视图是否有侧边栏语义(设置页等无会话视图为 false,子窗口显示占位空态)。 */
   available: boolean;
 }

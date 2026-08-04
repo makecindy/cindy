@@ -29,7 +29,7 @@ import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNav
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
-import { subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_TOOL_NAME, subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
 
 // 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
@@ -209,18 +209,31 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 原文),用户可见句子在这里按 locale 组装。判据与 mobile 卡模型共用
   // maker-shared 的 subagentSpawnReceiptName,不在端上内联复制。
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
+  // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
+  // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
   const summary = spawnReceiptName
-    ? t('chat.agentTask.subagentStarted', { name: spawnReceiptName })
+    ? (update
+        ? detailText(update.summary)
+        : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
     : detailText(result, update?.summary);
   const duration = formatDuration(update?.usage?.durationMs);
-  const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
+  // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
+  // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
+  const provider = update?.provider
+    ?? (toolCall?.toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME
+        ? 'pi'
+        : 'claude-code');
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
       ? t('chat.agentTask.provider.shell')
       : provider === 'codex'
         ? t('chat.agentTask.provider.codex')
-        : t('chat.agentTask.provider.claude');
+        : provider === 'pi'
+          ? t('chat.agentTask.provider.pi')
+          : t('chat.agentTask.provider.claude');
 
   // 停止按钮:running + 本会话可定位 + claude-code(codex 无 stopTask 通道)。
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification 事件流收口

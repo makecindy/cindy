@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   runningDetailBySession: new Map<string, string>(),
   pendingPluginSetupSessionIds: new Set<string>(),
   attentionKindBySession: new Map<string, 'done' | 'awaiting' | 'error'>(),
+  ensureInitialMessages: vi.fn(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -95,6 +96,7 @@ vi.mock('@/state/agentIslandActivity', () => ({
 
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
+    ensureInitialMessages: mocks.ensureInitialMessages,
     subscribeAll: () => () => {},
     getRunningSnapshot: () =>
       new Map(
@@ -187,6 +189,7 @@ describe('SessionCard visual cases', () => {
     mocks.runningDetailBySession.clear();
     mocks.pendingPluginSetupSessionIds.clear();
     mocks.attentionKindBySession.clear();
+    mocks.ensureInitialMessages.mockReset();
   });
 
   afterEach(() => {
@@ -210,6 +213,17 @@ describe('SessionCard visual cases', () => {
       'archived',
       'selected-active',
     ]);
+  });
+
+  it('prefetches a new task on primary pointerdown before navigation', () => {
+    renderCase('short-idle-cc');
+    const card = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
+    expect(card).not.toBeNull();
+
+    fireEvent.pointerDown(card!, { button: 0, pointerType: 'mouse' });
+
+    expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
   });
 
   it.each(sessionCardVisualCases.map((item) => [item.label, item.id] as const))(

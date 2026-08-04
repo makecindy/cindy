@@ -13,6 +13,11 @@ const watcherSource = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+const projectionSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'workerProjectionStore.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const orcaSplitViewSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'OrcaSplitView.tsx'),
   'utf8',
@@ -31,12 +36,12 @@ describe('Orca worker attention watcher mount', () => {
     expect(expandedBlock).not.toContain('useOrcaWorkerAttentionWatcher(');
   });
 
-  it('ignores refresh results older than the latest applied refresh', () => {
-    expect(watcherSource).toContain('const refreshGenerationRef = useRef(0);');
-    expect(watcherSource).toContain('const appliedRefreshGenerationRef = useRef(0);');
-    expect(watcherSource).toContain('const generation = ++refreshGenerationRef.current;');
-    expect(watcherSource).toContain('if (cancelled || generation < appliedRefreshGenerationRef.current) return;');
-    expect(watcherSource).toContain('appliedRefreshGenerationRef.current = generation;');
+  it('derives attention from the projection store, whose request sequence rejects stale results', () => {
+    expect(watcherSource).toContain('useWorkerProjectionVersion()');
+    expect(watcherSource).toContain('getWorkerProjectionSnapshot(leadSessionId)');
+    expect(watcherSource).not.toContain('listWorkersByLead(');
+    expect(projectionSource).toContain('if (item.entry.requestSeq !== item.requestId)');
+    expect(projectionSource).toContain('if (entry.requestSeq !== requestId)');
   });
 
   it('clears only visible non-done worker attention before paint in doc-mode toggle layout', () => {

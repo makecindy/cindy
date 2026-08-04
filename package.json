@@ -90,7 +90,7 @@
     "install:ripgrep": "node scripts/ensure-agent-binaries.mjs --kinds=ripgrep",
     "install:pi": "node scripts/ensure-agent-binaries.mjs --kinds=pi",
     "install:agent-binaries": "node scripts/ensure-agent-binaries.mjs",
-    "postinstall": "node scripts/ensure-agent-binaries.mjs --best-effort && node scripts/fix-node-pty-perms.mjs",
+    "postinstall": "node scripts/ensure-agent-binaries.mjs --best-effort && node scripts/fix-node-pty-perms.mjs && pnpm --filter @cindy/model-access-protocol build",
     "dev:desktop": "node scripts/ensure-deps.mjs && node scripts/ensure-dev-runtime-assets.mjs && pnpm --filter desktop dev",
     "dev:desktop:remote": "node scripts/ensure-deps.mjs && node scripts/ensure-dev-runtime-assets.mjs && pnpm --filter desktop dev:remote",
     "restart:desktop:remote": "node scripts/desktop-restart-runner.mjs --wait-ready",

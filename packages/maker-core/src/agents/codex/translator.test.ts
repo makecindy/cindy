@@ -437,6 +437,34 @@ describe('translateErrorNotification', () => {
     });
   });
 
+  it('终态 429 被 agent 接管时透成非终止限流进度且不冒充过载', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'exceeded retry limit, last status: 429 Too Many Requests',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverTerminalRateLimit: () => ({ attempt: 1, maxAttempts: 2 }),
+      },
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({
+      errorStatus: 429,
+      isTerminal: false,
+      willRetry: true,
+      reason: 'terminal-rate-limit-retry',
+    });
+    expect((events[0]!.data as { message: string }).message).toContain(
+      'rate-limit-retry 1/2',
+    );
+    expect((events[0]!.data as { message: string }).message).not.toContain('auto-retry');
+  });
+
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
     // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
     // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到
@@ -1139,7 +1167,7 @@ describe('translateItemNotification subAgentActivity', () => {
     };
   }
 
-  it('renders a self-closing spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
+  it('renders a running spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
@@ -1151,6 +1179,7 @@ describe('translateItemNotification subAgentActivity', () => {
       'tool_use',
       'tool_result_full',
       'tool_result',
+      'agent_task_update',
     ]);
     expect(events[0].data).toMatchObject({
       toolUseId: 'spawn-1',
@@ -1162,6 +1191,15 @@ describe('translateItemNotification subAgentActivity', () => {
       toolUseId: 'spawn-1',
       fullText: '/root/survey_startup',
       isError: false,
+    });
+    // tool_result 就地收口(不留悬空工具调用),卡片状态由 update 主导 → 仍显示运行中,
+    // 后续 tokens / 工具数 / 终态由子线程通知按同一 taskId 增量刷新。
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'spawn-1',
+      parentToolUseId: 'spawn-1',
+      status: 'running',
+      title: '/root/survey_startup',
     });
   });
 

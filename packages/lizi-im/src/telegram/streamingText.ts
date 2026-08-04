@@ -15,7 +15,10 @@
  *     (对齐 turnRunner 的 CARD_PATCH_THROTTLE_MS, 双层节流冗余但无害);
  *   - "message is not modified" 错误静默吞掉(内容未变的重复编辑);
  *   - 中间态超过单条上限后停止编辑(终稿由 finalize 分段补发), 与 Discord
- *     的 INTERMEDIATE_EDIT_LIMIT 行为一致。
+ *     的 INTERMEDIATE_EDIT_LIMIT 行为一致;
+ *   - **终稿的原位编辑必须有兜底**: 长轮次会对同一条消息累计上百次编辑, 撞
+ *     flood 时最后那次(携带答案)最容易失败。finalize 因此在编辑失败后把答案
+ *     新发一条消息承载, 见 finalizeInPlaceOrRepost。
  */
 
 import type { StreamingTextHandle } from '../types.js';
@@ -37,6 +40,17 @@ function isNoReply(text: string): boolean {
 export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
+  /**
+   * 终稿补送专用的发送(见 finalizeInPlaceOrRepost)。与 send 有两点不同, 都由实现方
+   * (index.ts)负责, 本模块只负责在编辑失败时调用它:
+   *   1. 沿用**本轮原始的回挂目标** —— 补送替换的是那条已经消耗掉目标的过程消息,
+   *      重新领取只会拿到空目标, 群里的答案就此脱离提问脉络;
+   *   2. 先核验**本轮身份仍然有效**(配置世代/api 客户端/主人未变、未被取消)。补送是
+   *      一次全新的出站, 会按"当前"状态取连接 —— 换主人之后旧回合的答案绝不能照发。
+   * 身份失效时本函数应当抛错: finalize 会据此抛回原始编辑错误并放弃整个收口, 后续
+   * 分段与图片一并不发。未提供时回落 send。
+   */
+  repost?: (markdown: string) => Promise<string>;
   /** 用 markdown 渲染结果覆盖既有消息。 */
   edit: (messageId: string, markdown: string) => Promise<void>;
   /** 终稿里的受管图片旁路上传(sendPhoto)。 */
@@ -168,14 +182,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       const upgraded = await this.deps.editFinal(this.messageIdValue, finalText);
       if (upgraded) return;
     }
-    if (firstChunk.trim().length > 0 && this.flushed !== firstChunk) {
-      await this.deps.edit(this.messageIdValue, firstChunk);
-    } else if (
-      firstChunk.trim().length === 0 &&
-      (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
-      this.flushed !== IMAGE_ONLY_PLACEHOLDER
-    ) {
-      await this.deps.edit(this.messageIdValue, IMAGE_ONLY_PLACEHOLDER);
+    // 原位定稿的目标文本(有正文用首段; 纯图轮次用占位符); null = 消息已是终态。
+    const inPlaceText =
+      firstChunk.trim().length > 0 && this.flushed !== firstChunk
+        ? firstChunk
+        : firstChunk.trim().length === 0 &&
+            (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
+            this.flushed !== IMAGE_ONLY_PLACEHOLDER
+          ? IMAGE_ONLY_PLACEHOLDER
+          : null;
+    if (inPlaceText !== null) {
+      await this.finalizeInPlaceOrRepost(inPlaceText);
     }
     for (const chunk of chunks.slice(1)) {
       await this.deps.send(chunk);
@@ -186,6 +203,50 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       ...imageUrls,
       ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
     ]);
+  }
+
+  /**
+   * 原位定稿(editMessageText 覆盖流式那条消息); 编辑失败则把终稿**新发**一条
+   * 消息承载, 落地后再撤掉停在过程态的旧消息。
+   *
+   * 为什么需要这条兜底: 过程区每 5s 重渲染一次(时长在变), 长轮次会对同一条
+   * 消息累计上百次 editMessageText, 迟早撞 Telegram 的编辑 flood。而携带答案
+   * 的这一次编辑排在整轮最后, 最容易被撞 —— 实测 2026-08-04 一个 11 分钟的
+   * 群轮次就是这样丢掉了整条终稿(`429 retry after 26`), 上游只会记一条
+   * non-fatal 警告, 聊天里只剩一条停在"⚙️ 工作中 · 10m44s"的僵尸消息。
+   *
+   * 顺序固定"先发新、后删旧", 不可对调:
+   *   - 先删旧: 一旦新发也失败, 答案与过程记录一起消失, 比现状更糟;
+   *   - 先删再发还会让客户端滚动跳位(与 openclaw 同一条纪律)。
+   * 删除是 best-effort —— 删不掉只是多留一条过程消息, 答案已经到了。
+   *
+   * 补送走 deps.repost(而非 send): 它替换的是那条已经消耗掉本轮回挂目标的过程
+   * 消息, 必须沿用同一个 reply 目标, 否则群里的答案会脱离提问脉络。
+   *
+   * repost 抛错(含"本轮身份已失效"——被取消/换主人/换代)一律按**放弃收口**处理:
+   * 抛回原始编辑错误, 且因为本函数抛出, finalize 后面的分段补发与图片上传都不会
+   * 执行 —— 它们同属这个已经作废的回合。生命周期取消不能被当成普通编辑失败。
+   */
+  private async finalizeInPlaceOrRepost(text: string): Promise<void> {
+    const staleMessageId = this.messageIdValue;
+    try {
+      await this.deps.edit(staleMessageId, text);
+      return;
+    } catch (editErr) {
+      // 新发失败就把原始编辑错误抛回上游(与改动前同语义), 不掩盖真实原因。
+      const repost = this.deps.repost ?? this.deps.send;
+      try {
+        this.messageIdValue = await repost(text);
+      } catch {
+        throw editErr;
+      }
+      this.flushed = text;
+    }
+    try {
+      await this.deps.deleteMessage?.(staleMessageId);
+    } catch {
+      /* 删不掉(权限/已删)就留着, 不影响已送达的答案 */
+    }
   }
 
   private scheduleFlush(): void {

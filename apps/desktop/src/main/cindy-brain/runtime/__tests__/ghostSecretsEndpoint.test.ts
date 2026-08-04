@@ -111,7 +111,7 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
   });
 
   it('login-email 键不可配置:PUT/POST/DELETE 一律 405', async () => {
-    for (const method of ['PUT', 'POST', 'DELETE']) {
+    for (const method of ['GET', 'PUT', 'POST', 'DELETE']) {
       const out = await handleGhostSecretsRequest({
         method,
         pathname: '/secrets/pages_token',
@@ -121,6 +121,34 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
         getLoginEmail: () => 'a@example.com',
         vault: memVault(),
         ghostId: 'demo',
+      });
+      expect(out.status, method).toBe(405);
+    }
+  });
+
+  it('oidc-token 只回 Host 托管就绪状态，不回 token/audience/身份资料且不可写删', async () => {
+    const base = {
+      readBodyText: () => Promise.resolve('{"value":"forged"}'),
+      userSecretKeys: [] as string[],
+      managedSecretStates: [{ key: 'cindy_identity', saved: true }],
+      vault: memVault(),
+      ghostId: 'demo',
+    };
+    const list = await handleGhostSecretsRequest({
+      ...base,
+      method: 'GET',
+      pathname: '/secrets',
+    });
+    expect(JSON.parse(list.body ?? '')).toEqual([
+      { key: 'cindy_identity', saved: true, managed: true },
+    ]);
+    expect(list.body).not.toMatch(/token|audience|membership|org-example/i);
+
+    for (const method of ['GET', 'PUT', 'POST', 'DELETE']) {
+      const out = await handleGhostSecretsRequest({
+        ...base,
+        method,
+        pathname: '/secrets/cindy_identity',
       });
       expect(out.status, method).toBe(405);
     }

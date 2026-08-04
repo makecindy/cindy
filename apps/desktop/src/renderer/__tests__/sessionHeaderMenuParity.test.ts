@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * 顶部会话标题菜单(SessionContentHeader)与侧栏会话右键菜单(SessionItem)
- * 的条目一致性回归:两边必须使用同一组 sessionMenu.* 动作(产品要求两处菜单
+ * 顶部会话标题菜单(SessionContentHeader)与侧栏会话右键菜单(SessionItem / SessionCard)
+ * 的条目一致性回归:三处必须使用同一组 sessionMenu.* 动作(产品要求各处菜单
  * 保持一致)。任何一边单独增删菜单项都会让本测试失败,提醒同步另一边。
  */
 const ccAgentDir = resolve(__dirname, '..', 'features', 'cc-agent');
@@ -14,8 +14,12 @@ const sessionItemSource = readFileSync(
   resolve(ccAgentDir, 'sidebar', 'SessionItem.tsx'),
   'utf8',
 );
+const sessionCardSource = readFileSync(
+  resolve(ccAgentDir, 'sidebar', 'SessionCard.tsx'),
+  'utf8',
+);
 
-// 非菜单条目的 sessionMenu.* 用法,两边都排除后再比较:
+// 非菜单条目的 sessionMenu.* 用法,各处都排除后再比较:
 //   - moreActions:SessionItem 行内 ··· 按钮的 aria-label(header 用自己的
 //     ccAgent.sessionHeader.moreActions)
 //   - *Done / *Failed / *Blocked / *Unsupported / *Nothing:动作的 toast 反馈文案
@@ -42,17 +46,20 @@ function collectSessionMenuKeys(source: string): Set<string> {
   return keys;
 }
 
-describe('SessionContentHeader menu parity with SessionItem', () => {
-  it('uses the same sessionMenu action keys as the sidebar context menu', () => {
+describe('session menu parity across header and sidebar variants', () => {
+  it('uses the same sessionMenu action keys across all menu variants', () => {
     const headerKeys = collectSessionMenuKeys(headerSource);
     const sidebarKeys = collectSessionMenuKeys(sessionItemSource);
+    const cardKeys = collectSessionMenuKeys(sessionCardSource);
     expect([...headerKeys].sort()).toEqual([...sidebarKeys].sort());
+    expect([...headerKeys].sort()).toEqual([...cardKeys].sort());
   });
 
   it('reuses the shared submenu / export dialog / menu style modules', () => {
     expect(headerSource).toContain("from './sidebar/menuStyles'");
     expect(sessionItemSource).toContain("from './menuStyles'");
-    for (const source of [headerSource, sessionItemSource]) {
+    expect(sessionCardSource).toContain("from './menuStyles'");
+    for (const source of [headerSource, sessionItemSource, sessionCardSource]) {
       expect(source).toContain('SessionProjectMoveSubmenu');
       expect(source).toContain('SessionShareExportDialog');
     }

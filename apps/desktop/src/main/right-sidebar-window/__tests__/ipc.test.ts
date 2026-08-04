@@ -15,7 +15,7 @@ vi.mock('electron', () => {
 
 import { ipcMain, type BrowserWindow } from 'electron';
 
-import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_SEND } from '../../maker-ipc/channels.js';
 import { registerRsbWindowIpc } from '../ipc.js';
 import type { RsbWindowController } from '../controller.js';
 
@@ -61,6 +61,37 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  it('forwards the optional device-link origin in window context', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: '/remote/workdir',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-1',
+        available: true,
+      },
+    );
+
+    expect(controller.setContext).toHaveBeenCalledWith({
+      sessionId: 's1',
+      workdir: '/remote/workdir',
+      remoteHostId: null,
+      deviceLinkDeviceId: 'device-1',
+      available: true,
+    });
+  });
+
   it('preserves missing vs explicit null worker focus hints in ensure commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);

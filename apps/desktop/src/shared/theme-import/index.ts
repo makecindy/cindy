@@ -6,6 +6,7 @@
  */
 
 import { buildThemeColorsFromPalette } from './palette';
+import { UnsupportedThemePaletteError } from './errors';
 import { stripProtectedTokens } from './protected-tokens';
 import type {
   ConvertedTheme,
@@ -16,6 +17,7 @@ import { collectObsidianVars, extractObsidianPalette } from './obsidian';
 import { extractVsCodePalette, parseVsCodeThemeJson } from './vscode';
 
 export type { ConvertedTheme, ThemeConversionResult } from './types';
+export { UnsupportedThemePaletteError };
 export { TEMPLATE_TOKEN_IDS, buildThemeColorsFromPalette } from './palette';
 export { isProtectedToken, stripProtectedTokens } from './protected-tokens';
 
@@ -114,11 +116,18 @@ export function convertObsidianTheme(
       unresolved.push(`mode:${mode.type}`);
       continue;
     }
-    const built = buildThemeColorsFromPalette(
-      extracted.palette,
-      extracted.type,
-      extracted.markdown,
-    );
+    let built: Record<string, string>;
+    try {
+      built = buildThemeColorsFromPalette(
+        extracted.palette,
+        extracted.type,
+        extracted.markdown,
+      );
+    } catch (error) {
+      if (!(error instanceof UnsupportedThemePaletteError)) throw error;
+      unresolved.push(`mode:${mode.type}`);
+      continue;
+    }
     const { colors, skipped } = stripProtectedTokens(built);
     themes.push({ name, type: extracted.type, colors });
     resolvedRoles = Math.max(resolvedRoles, extracted.resolvedRoles);

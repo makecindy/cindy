@@ -14,7 +14,6 @@ import '@google/model-viewer';
 import '@/i18n';
 import './themes/colors';
 
-import { App } from './App';
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { initTapdb } from './analytics/tapdbClient';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
@@ -213,6 +212,9 @@ void (async () => {
 
   // 顶层 boundary:App 内 RouterProvider 之上的 provider 链渲染崩溃时兜底
   // (路由子树的崩溃仍由 router.tsx 的 errorElement 就近接住)。
+  // App 必须延迟到辅助窗口分流之后再加载:完整 App 的 useApiKey 等模块会在
+  // ghost/secondary renderer 启动时触发 safe-storage-read,被 main 正确拒绝并制造噪声。
+  const { App } = await import('./App');
   root.render(
     <TopLevelErrorBoundary>
       <App />

@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
     persistedSdkSessionId: null,
   })),
   tapWindowBroadcast: vi.fn(),
+  summarizeSession: vi.fn(async () => undefined),
 }));
 
 vi.mock('electron', () => ({
@@ -46,6 +47,9 @@ vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => un
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: h.tapWindowBroadcast,
+}));
+vi.mock('../../../sessionTaskSummary.js', () => ({
+  maybeGenerateSessionTaskSummary: h.summarizeSession,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
@@ -169,6 +173,51 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { permissionMode: 'ask' },
       }),
     );
+  });
+
+  it('broadcasts pin and unpin patches to device-link subscribers', async () => {
+    const pinnedAt = '2026-08-03T04:08:26.000Z';
+    await invokeUpdate('codex-local', { pinnedAt });
+    await vi.dynamicImportSettled();
+
+    const pinned = h
+      .sqlite!.prepare('SELECT pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { pinnedAt: number | null };
+    expect(pinned.pinnedAt).toBe(Date.parse(pinnedAt));
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { pinnedAt, status: 'active' },
+    });
+    expect(h.summarizeSession).toHaveBeenCalledWith('codex-local');
+
+    h.tapWindowBroadcast.mockClear();
+    h.summarizeSession.mockClear();
+    await invokeUpdate('codex-local', { pinnedAt: null });
+
+    const unpinned = h
+      .sqlite!.prepare('SELECT pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { pinnedAt: number | null };
+    expect(unpinned.pinnedAt).toBeNull();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { pinnedAt: null },
+    });
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts the stored value and skips summary generation for an invalid pin date', async () => {
+    await invokeUpdate('codex-local', { pinnedAt: 'not-a-date' });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { pinnedAt: number | null };
+    expect(persisted.pinnedAt).toBeNull();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { pinnedAt: null },
+    });
+    expect(h.summarizeSession).not.toHaveBeenCalled();
   });
 
   it('relocates transcripts when workingDir actually changes on a local cc session', async () => {
