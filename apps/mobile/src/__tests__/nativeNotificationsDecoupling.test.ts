@@ -34,10 +34,16 @@ const SDK_ALLOWLIST = new Set([
   path.join(NOTIFICATIONS_DIR, 'nativeNotifications.types.ts'),
 ]);
 
-/** 只认真正的模块引用形态,散文里提到 SDK 名(注释)不算违规。 */
+/**
+ * 只认真正的模块引用形态,散文里提到 SDK 名(注释)不算违规。
+ *
+ * 关键字必须带 `\b`:否则 `perform('expo-notifications')` 之类会把 `form` 当成 `from`
+ * 误判。引号两种都收:漏掉一种会让守门在双引号写法下静默失效(漏判比误判更糟)。
+ */
 const SDK_MODULE_REFERENCE =
-  /(?:from|import|require)\s*\(?\s*['"]expo-notifications(?:\/[^'"]*)?['"]/;
-const NATIVE_NOTIFICATIONS_IMPORT = /from '(?:\.\/|@\/notifications\/)nativeNotifications'/;
+  /\b(?:from|import|require)\s*\(?\s*['"]expo-notifications(?:\/[^'"]*)?['"]/;
+const NATIVE_NOTIFICATIONS_IMPORT =
+  /\b(?:from|import|require)\s*\(?\s*['"](?:\.\/|@\/notifications\/)nativeNotifications['"]/;
 const NOTIFICATIONS_MEMBER = /\bNotifications\.([A-Za-z0-9_]+)/g;
 
 function* walkSourceFiles(dir: string): Generator<string> {
@@ -56,6 +62,37 @@ function allSourceFiles(): string[] {
 }
 
 describe('Android 不引用 expo-notifications 原生模块', () => {
+  // 守门自身的判据要有用例:正则悄悄失配会让上面两条断言变成永绿的假保险。
+  it('模块引用正则认得各种写法,且不被散文/相似词误命中', () => {
+    for (const violation of [
+      "import * as Notifications from 'expo-notifications';",
+      'import * as Notifications from "expo-notifications";',
+      "const n = await import('expo-notifications');",
+      "require('expo-notifications')",
+      "import { setBadgeCountAsync } from 'expo-notifications/build/BadgeModule';",
+    ]) {
+      expect(SDK_MODULE_REFERENCE.test(violation), violation).toBe(true);
+    }
+    for (const allowed of [
+      '// expo-notifications 的 JS 入口在 import 期就 requireNativeModule(...)',
+      "await perform('expo-notifications')", // form ≠ from:词边界必须挡住
+      "import * as Notifications from './nativeNotifications';",
+    ]) {
+      expect(SDK_MODULE_REFERENCE.test(allowed), allowed).toBe(false);
+    }
+
+    for (const consumer of [
+      "import Notifications from './nativeNotifications';",
+      'import Notifications from "./nativeNotifications";',
+      "import Notifications from '@/notifications/nativeNotifications';",
+    ]) {
+      expect(NATIVE_NOTIFICATIONS_IMPORT.test(consumer), consumer).toBe(true);
+    }
+    expect(
+      NATIVE_NOTIFICATIONS_IMPORT.test("import x from './nativeNotificationsHelper';"),
+    ).toBe(false);
+  });
+
   it('除接入点外没有文件直接 import expo-notifications', () => {
     const violations = allSourceFiles().filter(
       (file) =>
