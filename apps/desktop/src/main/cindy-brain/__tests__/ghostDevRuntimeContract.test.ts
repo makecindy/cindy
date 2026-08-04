@@ -11,7 +11,7 @@ describe('dev-only plugin QA call boundary', () => {
     );
     const preload = fs.readFileSync(path.resolve(process.cwd(), 'src/preload/preload.ts'), 'utf8');
     const devOnlyStart = main.indexOf("if (!app.isPackaged) {");
-    const handlerStart = main.indexOf("ipcMain.handle('ghosts:dev-runtime'", devOnlyStart);
+    const handlerStart = main.indexOf('ipcMain.handle(IPC_CHANNELS.GHOSTS.DEV_RUNTIME', devOnlyStart);
     const handlerEnd = main.indexOf("\n    });", handlerStart);
     const handler = main.slice(handlerStart, handlerEnd);
 
@@ -20,7 +20,7 @@ describe('dev-only plugin QA call boundary', () => {
     expect(handler).toContain('assertTrustedAppRendererEvent(event)');
     expect(handler).toContain("case 'call'");
     expect(handler).toContain('getGhostPipeDispatcher().callGhostTool');
-    expect(preload).toContain("ipcRenderer.invoke('ghosts:dev-runtime', 'call', id, { tool, args })");
+    expect(preload).toContain("ipcRenderer.invoke(IPC_CHANNELS.GHOSTS.DEV_RUNTIME, 'call', id, { tool, args })");
     expect(preload).not.toContain("devCall: (channel:");
   });
 });

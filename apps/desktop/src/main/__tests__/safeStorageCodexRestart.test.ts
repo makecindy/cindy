@@ -64,8 +64,8 @@ describe('safe storage Codex restart invariants', () => {
 
   it('keeps safe-storage-read fail-closed and downgrades expected permission denials', () => {
     const src = source();
-    const start = src.indexOf("'safe-storage-read'");
-    const end = src.indexOf("'safe-storage-remove'", start);
+    const start = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ');
+    const end = src.indexOf('IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
