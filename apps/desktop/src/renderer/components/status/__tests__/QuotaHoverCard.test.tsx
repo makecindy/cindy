@@ -14,6 +14,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.modelWeeklyLabel') return `${options.model} 周限`;
       if (key === 'quotaCard.windowsRegionLabel') return '配额窗口列表';
       if (key === 'quotaCard.usedPercent') return `已用 ${options.percent}%`;
+      if (key === 'quotaCard.limitWarning') return '接近套餐限额';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
@@ -250,7 +251,7 @@ describe('QuotaHoverCard', () => {
         nowMs={NOW_MS}
       />,
     );
-    expect(screen.getByText('quotaCard.limitWarning')).toBeTruthy();
+    expect(screen.getByText('接近套餐限额')).toBeTruthy();
     expect(screen.queryByText('quotaCard.limitRejected')).toBeNull();
 
     rerender(
@@ -559,6 +560,26 @@ describe('QuotaHoverCard', () => {
       expect(screen.getByRole('progressbar').getAttribute('data-severity')).toBe(expected);
     },
   );
+
+  it('为告警窗口提供非颜色提示，普通窗口不添加提示', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ fiveHour: { utilization: 50, severity: 'warning' } })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const warningHint = screen.getByText(/接近套餐限额/);
+    expect(warningHint.classList.contains('sr-only')).toBe(true);
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ fiveHour: { utilization: 50 } })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.queryByText(/接近套餐限额/)).toBeNull();
+  });
 
   it('marks a critical window title with the critical styling hook', () => {
     render(

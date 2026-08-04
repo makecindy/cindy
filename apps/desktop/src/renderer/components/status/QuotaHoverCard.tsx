@@ -184,6 +184,10 @@ function WindowBlock({
         )}
       >
         {title}
+        {severity !== 'normal' ? (
+          // 告警不能只依赖颜色；复用套餐限额文案供屏幕阅读器识别。
+          <span className="sr-only">，{t('quotaCard.limitWarning')}</span>
+        ) : null}
       </div>
       <QuotaBar usedPercent={window.utilization} severity={severity} ariaLabel={title} />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
