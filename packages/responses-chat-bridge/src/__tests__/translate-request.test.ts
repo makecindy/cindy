@@ -349,6 +349,37 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it('converts replayed agent messages to assistant text', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          content: [
+            { type: 'output_text', text: 'Findings' },
+            { type: 'encrypted_content', encrypted_content: 'opaque' },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'continue' },
+        {
+          type: 'agent_message',
+          author: 'reviewer',
+          content: [{ type: 'encrypted_content', encrypted_content: 'opaque' }],
+        },
+        { type: 'message', role: 'user', content: 'finish' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: '[collab researcher]\nFindings' },
+      { role: 'user', content: 'continue' },
+      { role: 'assistant', content: '[collab message from reviewer; encrypted payload omitted]' },
+      { role: 'user', content: 'finish' },
+    ]);
+  });
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [

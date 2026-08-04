@@ -299,6 +299,39 @@ function reasoningText(value: unknown): string {
   return '';
 }
 
+function agentMessageText(item: Record<string, unknown>, itemIndex: number): string {
+  const author = typeof item.author === 'string' && item.author.trim()
+    ? item.author.trim()
+    : 'agent';
+  let body = '';
+  if (typeof item.content === 'string') {
+    body = item.content;
+  } else if (Array.isArray(item.content)) {
+    const parts: string[] = [];
+    for (const part of item.content) {
+      if (!isPlainObject(part) || typeof part.type !== 'string') {
+        throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+      }
+      if (part.type === 'encrypted_content') continue;
+      if (
+        (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+        && typeof part.text === 'string'
+      ) {
+        parts.push(part.text);
+        continue;
+      }
+      throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
+    }
+    body = parts.join('\n');
+  } else {
+    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+  }
+  const text = body.trim();
+  return text
+    ? `[collab ${author}]\n${text}`
+    : `[collab message from ${author}; encrypted payload omitted]`;
+}
+
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
   mediaCapabilities: ChatMediaCapabilities;
@@ -552,6 +585,13 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
           pushBarrier({ role, content });
         }
       }
+      continue;
+    }
+
+    if (item.type === 'agent_message') {
+      if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
+      assistant ??= { role: 'assistant', content: null };
+      assistant.content = `${assistant.content ?? ''}${agentMessageText(record, index)}`;
       continue;
     }
 
