@@ -42,7 +42,12 @@ import type {
 } from './types/events.js';
 import { isTerminalAgentErrorEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
-import type { AgentSessionHandle, BackgroundTaskSnapshot, SendOptions } from './agents/base-agent.js';
+import type {
+  AgentSessionHandle,
+  BackgroundTaskSnapshot,
+  SendOptions,
+  TurnContinuationState,
+} from './agents/base-agent.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -621,6 +626,25 @@ export class Session {
     return this.handle.listBackgroundTasks?.() ?? [];
   }
 
+  /**
+   * Resolve the provider-owned continuation claim already attached to this
+   * exact `done`. Host observers must never infer this from the current task
+   * list: task state can change after the event was queued but before it is
+   * consumed.
+   */
+  beginTurnContinuationWait(continuationId?: number): TurnContinuationState | null {
+    if (this.status === 'closed' || this.status === 'error') return null;
+    if (continuationId === undefined) return null;
+    return this.handle.beginTurnContinuationWait?.(continuationId) ?? null;
+  }
+
+  /** Subscribe to provider-owned continuation lifecycle transitions. */
+  onTurnContinuationChange(
+    listener: (continuationId: number, state: TurnContinuationState) => void,
+  ): () => void {
+    return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
+  }
+
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
@@ -1153,7 +1177,21 @@ export class Session {
     ) {
       event.turnAttemptToken = this.currentTurnAttemptToken;
     }
-    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
+    // A provider continuation claim turns this `done` into an SDK-turn
+    // boundary, not a product-turn terminal. Keep the same origin/token and
+    // stall watchdog across the automatic continuation; only its later done
+    // (or a terminal error / explicit cancellation) ends the product turn.
+    const continuationState =
+      event.type === 'done' && event.turnContinuationId !== undefined
+        ? this.beginTurnContinuationWait(event.turnContinuationId)
+        : null;
+    // Any matching claim proves this event is the provider's first SDK-turn
+    // boundary, including a claim that was cancelled before the queue reached
+    // us. Claude appends a separate, unclaimed done after the stopped task
+    // event; that ordered boundary is what closes the Session generation.
+    const hasPendingContinuation = continuationState !== null;
+    const isTerminal =
+      (event.type === 'done' && !hasPendingContinuation) || isTerminalAgentErrorEvent(event);
     // A dispatching send is not enough evidence that a terminal event belongs
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
@@ -1191,9 +1229,10 @@ export class Session {
     // done / 终止型 error 自身已在上面打过 origin,清在它们之后安全。
     //
     // Bridge /compact 这类 agent 内部排队 turn 的边界应在 agent 层 suppress,
-    // 不应透传到 Session。凡是到达 Session 的 done / 终止型 error 都代表产品层
-    // turn 已结束,必须清 origin,避免后续 standalone auto-compact 等后台 turn 继承
-    // goal/scheduler origin。
+    // 不应透传到 Session。provider 明确附 continuation claim 的 done 是唯一例外:
+    // 它只结束当前 SDK turn，产品层 Agent 仍在执行；其余到达 Session 的 done /
+    // 终止型 error 才代表产品 turn 已结束，必须清 origin，避免后续 standalone
+    // auto-compact 等后台 turn 继承 goal/scheduler origin。
     if (isCurrentGeneration && isTerminal) {
       this.currentTurnOrigin = null;
       this.currentTurnAttemptToken = null;

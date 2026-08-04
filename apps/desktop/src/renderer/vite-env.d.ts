@@ -651,6 +651,8 @@ interface CCAgentStreamEvent {
    * stream_event 中的 delta 类事件无此字段。
    */
   agentMeta?: import('@/lib/ccAgent.types').AgentMeta;
+  /** Host-owned SDK boundary claim; claimed done/status events are not product completion. */
+  turnContinuationId?: number;
   /**
    * F1-a: 由 main 端 messagePersistBroadcaster 为这条消息分配的稳定 persistId,
    * 经 maker:event payload 透传。renderer 用它当在途气泡 clientId(不再自造随机),
@@ -729,6 +731,8 @@ interface CCAgentStatusUpdate {
   contextTokens: number;
   contextWindow: number;
   isRunning: boolean;
+  /** Host-owned SDK boundary claim; a claimed `status(false)` is not product idle. */
+  turnContinuationId?: number;
   /**
    * Side-channel running 标记 (mivo MJ 按钮等不走 LLM 的后台任务用)。
    * true 时:

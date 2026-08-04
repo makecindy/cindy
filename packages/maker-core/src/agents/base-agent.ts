@@ -1066,6 +1066,18 @@ export interface BackgroundTaskSnapshot {
 }
 
 /**
+ * Provider-owned lifecycle of the turn boundary after a foreground `done`.
+ *
+ * `awaiting` means the provider has an automatic continuation queued or still
+ * expected. `active` means that continuation has started. `cancelled` means
+ * the continuation was explicitly stopped; observers may settle immediately,
+ * while the provider appends an ordered terminal boundary for Session state.
+ * Provider/session failure settles via the normal terminal error and
+ * session-status paths instead.
+ */
+export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
@@ -1129,6 +1141,21 @@ export interface AgentSessionHandle {
    * 不支持的 agent 留空(Session 层回退为空数组)。
    */
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
+
+  /**
+   * Resolve the provider claim attached atomically to a specific `done` event.
+   * Returns null when that event has no matching continuation boundary.
+   */
+  beginTurnContinuationWait?(continuationId?: number): TurnContinuationState | null;
+
+  /**
+   * Observe provider-owned continuation cancellation/start transitions. The
+   * subscription is intentionally separate from task-card events: a stopped
+   * wake task does not necessarily produce another provider `done`.
+   */
+  onTurnContinuationChange?(
+    listener: (continuationId: number, state: TurnContinuationState) => void,
+  ): () => void;
 
   /** 关闭会话，清理子进程 */
   close(): Promise<void>;

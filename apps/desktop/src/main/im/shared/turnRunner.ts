@@ -45,6 +45,10 @@ const GROUP_APPROVAL_OWNER_DM_NOTE =
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { isCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
@@ -1602,7 +1606,7 @@ export function createTurnRunner(
         // done / 终止型 error 同时是"session 空闲了"的信号 — 触发排队消息派发。
         // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息（放行排队消息会让
         // 下一条撞上 SESSION_RUNNING）。
-        if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        if (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event)) {
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -1626,6 +1630,10 @@ export function createTurnRunner(
         case 'tool_result_full':
           return handleToolResultFullEvent(turn, event);
         case 'done':
+          // The provider may emit a claim-bearing SDK boundary before an
+          // automatic continuation. Keep the same IM turn/card alive; only
+          // the following unclaimed done is the product completion.
+          if (isTurnContinuationBoundaryEvent(event)) return;
           // silent-stop done(上游用空内容静默收尾): 不当普通 done 收口 —
           // 守卫可能自动续跑,续跑轮事件要继续流进本 turn 的卡片,
           // 见 handleSilentStopDone。
@@ -1884,6 +1892,11 @@ export function createTurnRunner(
     // A desktop-originated scheduler turn has no such token, so it cannot be
     // safely mirrored and must never fall through to rich-card primitives.
     if (output.kind === 'chunked-text') return;
+    // Lifecycle status is not user-facing scheduler content. In particular,
+    // the claim-bearing status(false) paired with an SDK boundary must not
+    // create or close a projection card.
+    if (event.type === 'status') return;
+    if (event.type === 'done' && isTurnContinuationBoundaryEvent(event)) return;
     // 首条事件惰性建转播态(避免给空 turn 开卡)。
     if (!state.scheduledTranspond) {
       const origin = event.turnOrigin;

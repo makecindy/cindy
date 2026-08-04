@@ -51,7 +51,7 @@ class FakeSession implements LearnSessionLike {
     }
     return this.sendResult;
   }
-  onEvent(listener: (ev: { type: string; data?: unknown }) => void): () => void {
+  onEvent(listener: (ev: { type: string; data?: unknown; turnContinuationId?: number }) => void): () => void {
     this.listeners.push(listener);
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
@@ -60,7 +60,7 @@ class FakeSession implements LearnSessionLike {
   async abort(): Promise<void> {
     this.aborted = true;
   }
-  emit(ev: { type: string; data?: unknown }): void {
+  emit(ev: { type: string; data?: unknown; turnContinuationId?: number }): void {
     for (const l of [...this.listeners]) l(ev);
   }
 }
@@ -235,6 +235,8 @@ describe('LearnController 状态机', () => {
     expect(h.session.sent[0]).not.toContain('THE CURRENT CONVERSATION');
 
     h.session.emit({ type: 'text', data: { text: 'created my-skill', isFinal: true } });
+    h.session.emit({ type: 'done', turnContinuationId: 1 });
+    expect(h.store.get(runId)!.status).toBe('distilling');
     h.session.emit({ type: 'done' });
 
     const run = await h.waitForStatus(runId, 'awaiting-review');
@@ -494,6 +496,32 @@ describe('LearnController 状态机', () => {
     });
     expect(h.store.get(runId)!.status).toBe('awaiting-review');
     expect(h.cleanupCalls).not.toContain(runId);
+  });
+
+  it('对话迭代:claimed SDK done 不会提前清活跃态或扫描未完成提案', async () => {
+    const h = makeHarness();
+    h.setScan(goodScan());
+    const { runId } = await h.controller.startLearn({ input: 'x', sourceKind: 'freetext' });
+    await h.waitForStatus(runId, 'distilling');
+    h.session.emit({ type: 'done' });
+    await h.waitForStatus(runId, 'awaiting-review');
+
+    const internals = h.controller as unknown as { revisionTurnActive: Set<string> };
+    let rescanStarts = 0;
+    h.setBeforeScan(async () => {
+      rescanStarts += 1;
+    });
+    h.session.emit({ type: 'text', data: { text: 'still revising' } });
+    expect(internals.revisionTurnActive.has(runId)).toBe(true);
+
+    h.session.emit({ type: 'done', turnContinuationId: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(rescanStarts).toBe(0);
+    expect(internals.revisionTurnActive.has(runId)).toBe(true);
+
+    h.session.emit({ type: 'done' });
+    await vi.waitFor(() => expect(rescanStarts).toBe(1));
+    expect(internals.revisionTurnActive.has(runId)).toBe(false);
   });
 
   it('对话迭代:rescan 未结束时收到后续 done 会排队补扫,不丢最新提案', async () => {

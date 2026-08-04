@@ -31,6 +31,10 @@ import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
+  isProductTurnCompletionTailEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
+import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
@@ -2653,9 +2657,7 @@ function handleAgentIslandEventAfterBroadcast(
 }
 
 function isAgentIslandCompletionTail(event: AgentEvent): boolean {
-  if (event.type === 'done') return true;
-  if (event.type !== 'status') return false;
-  return (event.data as { isRunning?: unknown } | undefined)?.isRunning === false;
+  return isProductTurnCompletionTailEvent(event);
 }
 
 function surfaceSuppressedAutoResumeErrorInAgentIsland(
@@ -3312,6 +3314,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId) {
         pendingCodexAccountUsageSnapshot = event.data;
       }
@@ -3361,7 +3364,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           ) {
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
           }
-        } else if (data.isRunning === false) {
+        } else if (data.isRunning === false && !isContinuationBoundary) {
           shouldMarkTurnStatusIdleAfterBroadcast = true;
         }
         if (
@@ -3379,7 +3382,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // turn 正常收尾但一路没有实质产出时,上一条重连记录同样不能停在"结果未回填":
         // 成功路径已在产出事件里 settle 成 succeeded(此处 no-op),走到这里就是没产出。
         const doneAttemptToken = event.turnAttemptToken;
-        if (typeof doneAttemptToken === 'number') {
+        if (typeof doneAttemptToken === 'number' && !isContinuationBoundary) {
           autoResumeBookkeeping.settleOutcome(session.id, doneAttemptToken, 'failed');
           interruptedTurnAutoResumeGuard.noteAttemptSettled(session.id, doneAttemptToken);
         }
@@ -3388,7 +3391,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // silent-stop done:自动续跑会在 1.5s 后启动新 turn(或弹耗尽横幅),
         // 不标 idle/不触发 goal idle/不通知 coordinator done——避免 renderer
         // 在 500ms 完成去抖窗口内显示假完成通知,下一个 turn 开始后又跳回 running。
-        if (!isSilentStopDone) {
+        if (isContinuationBoundary) {
+          // A claimed done only closes the current SDK segment. It must not enter
+          // silent-stop recovery or settle the auto-resume attempt; the later
+          // unclaimed product terminal owns those side effects.
+        } else if (!isSilentStopDone) {
           // 兜底: 有些 vendor 的 done 不必先发 status:isRunning=false。
           // 但 idle 恢复不能挡在 EVENT broadcast 前，否则隐藏窗口可能在 done
           // 还没进入 renderer 时就重新被 Chromium 节流。
@@ -3588,7 +3595,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         markTurnEndedAfterPersistDrain(session.id);
         noteClaudeSessionTurnState(session.id, false);
       }
-      if (event.type === 'done') {
+      if (event.type === 'done' && !isContinuationBoundary) {
         void gitSnapshotCoordinator?.onTurnEnd(session.id);
       }
       if (isTerminalTurnErrorEvent(event)) {
@@ -3695,14 +3702,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // error 行)已全部入队,在此统一定格并等排空后写。done 与 terminal error
         // 同一规则(planned upgrade close / remote auth retry 分支无 error 行,
         // drain 同样无害)。
-        markTurnEndedAfterPersistDrain(session.id);
+        // A claim-bearing done seals this SDK segment, but the product turn is
+        // still running and may emit another continuation segment. Reset the
+        // per-SDK-turn persistence maps while deferring the logical turn marker.
+        if (!isContinuationBoundary) {
+          markTurnEndedAfterPersistDrain(session.id);
+        }
         resetTurnPersistState(session.id);
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
         // done 早段、flush 之前触发,流式轮次会读到上一轮文本)。只在正常 done 触发。
         // codex review:flushAssistantBlock 仅把 assistant insert 入队 writeChain、未落库,
         // latestMessageText 立刻读库可能读到本轮 assistant 写入之前的旧状态;先 await
         // drainPersistQueue() 等持久化队列排空,确立"读在写后"的边界,再起摘要。
-        if (event.type === 'done') {
+        if (event.type === 'done' && !isContinuationBoundary) {
           void (async () => {
             await drainPersistQueue();
             // force:turn-done 是权威刷新点(本轮 assistant 已落库),必须以最新内容覆盖
@@ -3716,7 +3728,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 意识时,派一个独立异步续跑跑裁决并原地更新那条消息(rewrite 换文本 /
         // render 换自绘卡)。同步守卫 hasEnabledGhostAssistantHook 保证无此类意识时
         // 不 schedule —— 与今天行为逐字节一致,零额外开销(规则 10 不碰热路径)。
-        if (event.type === 'done' && turnAssistantPersistId) {
+        if (event.type === 'done' && !isContinuationBoundary && turnAssistantPersistId) {
           const doneResult = (event.data as { result?: unknown } | null)?.result;
           const replyText = typeof doneResult === 'string' ? doneResult : '';
           if (replyText.length > 0 && hasEnabledGhostAssistantHook()) {
@@ -3724,23 +3736,25 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           }
         }
         // Worker turn 结束后交给 OrcaTeamService 处理 DB status、广播与 auto-bridge。
-        void (async () => {
-          try {
-            const doneData = event.data as { result?: unknown } | null;
-            const finalText =
-              typeof doneData?.result === 'string' && doneData.result.length > 0
-                ? doneData.result
-                : '';
-            await workerTurnStartSequencer.waitForStart(session.id);
-            await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
-              sessionId: session.id,
-              status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-              finalText,
-            });
-          } catch {
-            /* non-fatal */
-          }
-        })();
+        if (!isContinuationBoundary) {
+          void (async () => {
+            try {
+              const doneData = event.data as { result?: unknown } | null;
+              const finalText =
+                typeof doneData?.result === 'string' && doneData.result.length > 0
+                  ? doneData.result
+                  : '';
+              await workerTurnStartSequencer.waitForStart(session.id);
+              await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
+                sessionId: session.id,
+                status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+                finalText,
+              });
+            } catch {
+              /* non-fatal */
+            }
+          })();
+        }
       }
       if (pendingContextSnapshot) {
         recordSessionContextSnapshot(

@@ -20,6 +20,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
   GHOST_HOOK_FUSE_THRESHOLD,
@@ -497,6 +499,7 @@ export interface MinimalAgentEvent {
   type: string;
   data?: unknown;
   source?: string;
+  turnContinuationId?: number;
 }
 
 export interface TurnEventSink {
@@ -847,6 +850,35 @@ export function normalizeTurnUsage(raw: unknown): GhostEventTurnEndData['usage']
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
+function mergeTurnUsage(
+  left: GhostEventTurnEndData['usage'],
+  right: GhostEventTurnEndData['usage'],
+): GhostEventTurnEndData['usage'] {
+  const compact = (
+    usage: GhostEventTurnEndData['usage'],
+  ): GhostEventTurnEndData['usage'] => {
+    if (!usage) return undefined;
+    const entries = Object.entries(usage).filter(([, value]) => value > 0);
+    return entries.length > 0
+      ? (Object.fromEntries(entries) as NonNullable<GhostEventTurnEndData['usage']>)
+      : undefined;
+  };
+  left = compact(left);
+  right = compact(right);
+  if (!left) return right;
+  if (!right) return left;
+  const merged = {
+    inputTokens: (left.inputTokens ?? 0) + (right.inputTokens ?? 0),
+    outputTokens: (left.outputTokens ?? 0) + (right.outputTokens ?? 0),
+    cacheReadTokens: (left.cacheReadTokens ?? 0) + (right.cacheReadTokens ?? 0),
+    cacheCreationTokens:
+      (left.cacheCreationTokens ?? 0) + (right.cacheCreationTokens ?? 0),
+  };
+  return Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => value > 0),
+  ) as NonNullable<GhostEventTurnEndData['usage']>;
+}
+
 /** status(false) 后等 done/error 定性的宽限窗:两个 agent 的真实事件序都是
  *  先 status(isRunning:false) 后 done(cc/codex translator 皆如此),status
  *  一到就收口会把所有正常完成误判成 interrupted。同队列的 done 毫秒级即到,
@@ -861,6 +893,8 @@ export class GhostTurnTranslator {
   /** closing 进入时刻(duration 以它为准,不算宽限等待)。 */
   private endedAt = 0;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Usage sealed by claimed SDK boundaries inside the still-running product turn. */
+  private continuationUsage: GhostEventTurnEndData['usage'];
   /** 本轮 did-turn-start 实际发出去的 agent(已含 ev.source 覆盖);拆线补发 end 要
    *  复用它,不能退回 opts.agent——两者取值域不同,见 dispose。 */
   private startedAgent: string | null = null;
@@ -885,6 +919,18 @@ export class GhostTurnTranslator {
       ...(model !== undefined ? { model } : {}),
     };
 
+    if (isTurnContinuationBoundaryEvent(ev)) {
+      if (this.state !== 'idle' && ev.type === 'done') {
+        const usage = normalizeTurnUsage(
+          typeof ev.data === 'object' && ev.data !== null
+            ? (ev.data as { usage?: unknown }).usage
+            : undefined,
+        );
+        this.continuationUsage = mergeTurnUsage(this.continuationUsage, usage);
+      }
+      return;
+    }
+
     if (ev.type === 'status') {
       const isRunning = readStatusIsRunning(ev) === true;
       if (isRunning) {
@@ -894,6 +940,7 @@ export class GhostTurnTranslator {
           this.state = 'running';
           this.startedAt = now();
           this.startedAgent = base.agent;
+          this.continuationUsage = undefined;
           sink.turnStart(base);
         }
       } else if (this.state === 'running') {
@@ -916,7 +963,7 @@ export class GhostTurnTranslator {
           ? (ev.data as { usage?: unknown }).usage
           : undefined,
       );
-      this.finish(base, 'completed', usage);
+      this.finish(base, 'completed', mergeTurnUsage(this.continuationUsage, usage));
     } else if (ev.type === 'error') {
       const isTerminal =
         typeof ev.data === 'object' && ev.data !== null
@@ -975,6 +1022,7 @@ export class GhostTurnTranslator {
     const endAt = this.state === 'closing' ? this.endedAt : this.opts.now();
     this.state = 'idle';
     this.startedAgent = null;
+    this.continuationUsage = undefined;
     this.opts.sink.turnEnd({
       ...base,
       durationMs: Math.max(0, endAt - this.startedAt),

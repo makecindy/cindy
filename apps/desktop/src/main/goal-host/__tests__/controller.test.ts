@@ -1121,6 +1121,53 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.tokensUsed).toBe(100);
   });
 
+  it('keeps a Goal turn open across claimed SDK boundaries and sums continuation usage', async () => {
+    await startGoal(h);
+    const internals = h.controller as unknown as { goalTurnsInFlight: Set<string> };
+
+    h.session.emit({
+      type: 'text',
+      data: { text: 'background work still running', isFinal: true },
+    } as never);
+    h.session.emit({
+      type: 'status',
+      data: { status: 'Done', isRunning: false, tokenUsage: 60 },
+      turnContinuationId: 1,
+    } as never);
+    h.session.emit({
+      type: 'done',
+      data: {},
+      turnOrigin: { kind: 'goal' },
+      turnContinuationId: 1,
+    } as never);
+
+    expect(internals.goalTurnsInFlight.has('s1')).toBe(true);
+    expect((await h.storage.get('s1'))?.turnsUsed).toBe(0);
+    expect(h.session.sends).toHaveLength(1);
+
+    h.session.emit({ type: 'status', data: { isRunning: true, status: 'Working' } } as never);
+    h.session.emit({
+      type: 'text',
+      data: {
+        text: '```json\n{"goal_status":"continue","reason":"wip"}\n```',
+        isFinal: true,
+      },
+    } as never);
+    h.session.emit({
+      type: 'status',
+      data: { status: 'Done', isRunning: false, tokenUsage: 40 },
+    } as never);
+    h.session.emit({
+      type: 'done',
+      data: {},
+      turnOrigin: { kind: 'goal' },
+    } as never);
+
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect((await h.storage.get('s1'))?.turnsUsed).toBe(1);
+    expect((await h.storage.get('s1'))?.tokensUsed).toBe(100);
+  });
+
   it('rewrites the objective when a goal turn reports refined_objective, persists an updated marker, and continues with the new goal', async () => {
     await startGoal(h, 'think about it');
     const sendsAfterFirst = h.session.sends.length; // 首轮已发
