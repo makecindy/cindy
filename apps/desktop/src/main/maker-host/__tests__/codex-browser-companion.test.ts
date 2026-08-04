@@ -5,8 +5,10 @@ import { promises as fs } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  buildOfficialMacBundleVerificationArgs,
   checkCodexBrowserCompanionConnection,
   hasOfficialMacTeamIdentifier,
+  OFFICIAL_MAC_BUNDLE_REQUIREMENT,
   prepareCodexBrowserCompanion,
   resolveCodexBrowserCompanionSpawnConfig,
 } from '../codex-browser-companion.js';
@@ -180,6 +182,30 @@ afterEach(async () => {
 });
 
 describe('prepareCodexBrowserCompanion', () => {
+  it('anchors macOS verification to the signed OpenAI Codex identity', () => {
+    const args = buildOfficialMacBundleVerificationArgs('/tmp/ChatGPT.app');
+
+    expect(args).toEqual([
+      '--verify',
+      '--deep',
+      '--strict',
+      '--test-requirement',
+      `=${OFFICIAL_MAC_BUNDLE_REQUIREMENT}`,
+      '/tmp/ChatGPT.app',
+    ]);
+    expect(OFFICIAL_MAC_BUNDLE_REQUIREMENT).toContain('anchor apple generic');
+    expect(OFFICIAL_MAC_BUNDLE_REQUIREMENT).toContain('identifier "com.openai.codex"');
+    expect(OFFICIAL_MAC_BUNDLE_REQUIREMENT).toContain(
+      'certificate leaf[subject.OU] = "2DC432GLL2"',
+    );
+    expect(OFFICIAL_MAC_BUNDLE_REQUIREMENT).toContain(
+      'certificate 1[field.1.2.840.113635.100.6.2.6] exists',
+    );
+    expect(OFFICIAL_MAC_BUNDLE_REQUIREMENT).toContain(
+      'certificate leaf[field.1.2.840.113635.100.6.1.13] exists',
+    );
+  });
+
   it('parses TeamIdentifier as a complete codesign field', () => {
     expect(hasOfficialMacTeamIdentifier(
       'Executable=/tmp/TeamIdentifier=2DC432GLL2/node_repl\nTeamIdentifier=OTHER',

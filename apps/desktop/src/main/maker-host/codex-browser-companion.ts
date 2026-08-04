@@ -12,6 +12,18 @@ const execFileAsync = promisify(execFile);
 const OPENAI_TEAM_ID = '2DC432GLL2';
 const SOURCE_PLUGIN_KEY = 'chrome@openai-bundled';
 
+/**
+ * Match the signed Codex app's designated requirement, not merely a valid
+ * self-signed bundle that happens to report OpenAI's TeamIdentifier.
+ */
+export const OFFICIAL_MAC_BUNDLE_REQUIREMENT = [
+  'anchor apple generic',
+  'identifier "com.openai.codex"',
+  'certificate 1[field.1.2.840.113635.100.6.2.6] exists',
+  'certificate leaf[field.1.2.840.113635.100.6.1.13] exists',
+  `certificate leaf[subject.OU] = "${OPENAI_TEAM_ID}"`,
+].join(' and ');
+
 export type CodexBrowserCompanionUnavailableReason =
   | 'provider_not_installed'
   | 'platform_unsupported'
@@ -94,7 +106,10 @@ async function exists(file: string, mode = fsConstants.F_OK): Promise<boolean> {
 
 async function runOfficialMacBundleVerification(appBundle: string): Promise<boolean> {
   try {
-    await execFileAsync('/usr/bin/codesign', ['--verify', '--deep', '--strict', appBundle]);
+    await execFileAsync(
+      '/usr/bin/codesign',
+      buildOfficialMacBundleVerificationArgs(appBundle),
+    );
     const { stderr } = await execFileAsync('/usr/bin/codesign', [
       '-dv',
       '--verbose=4',
@@ -104,6 +119,18 @@ async function runOfficialMacBundleVerification(appBundle: string): Promise<bool
   } catch {
     return false;
   }
+}
+
+/** Keep the privileged verifier's trust requirement visible and testable. */
+export function buildOfficialMacBundleVerificationArgs(appBundle: string): string[] {
+  return [
+    '--verify',
+    '--deep',
+    '--strict',
+    '--test-requirement',
+    `=${OFFICIAL_MAC_BUNDLE_REQUIREMENT}`,
+    appBundle,
+  ];
 }
 
 /** Parse the codesign descriptor as fields, never as an arbitrary substring. */
