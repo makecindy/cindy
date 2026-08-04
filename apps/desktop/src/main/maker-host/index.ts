@@ -1013,7 +1013,7 @@ export function getMaker(): Maker {
           ?? getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
         const cindyBrowserEnabled = !disabledPluginIds.includes('browser');
         let connectedCodexBrowserUse = codexBrowserUseProvisioned;
-        if (!cindyBrowserEnabled && connectedCodexBrowserUse && !remoteHostId) {
+        if (!remoteHostId && !cindyBrowserEnabled && connectedCodexBrowserUse) {
           connectedCodexBrowserUse = await ensureCodexBrowserUseReady();
         }
         return buildDesktopCapabilityRoutingPolicy({
@@ -1021,6 +1021,7 @@ export function getMaker(): Maker {
             getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
           cindyBrowserEnabled,
           codexBrowserUseAvailable: connectedCodexBrowserUse,
+          remoteHostId,
         });
       },
       makerMemory: makerMemoryManager,

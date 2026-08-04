@@ -194,15 +194,20 @@ export function buildDesktopCapabilityRoutingPolicy(opts: {
   /** Workspace-scoped Cindy Browser ownership snapshot. */
   cindyBrowserEnabled?: boolean;
   codexBrowserUseAvailable?: boolean;
+  /** Remote Codex cannot invoke the local Cindy Browser plugin bridge. */
+  remoteHostId?: string | null;
 }): CapabilityRoutingPolicy {
+  const cindyBrowserEnabled = opts.remoteHostId
+    ? undefined
+    : opts.cindyBrowserEnabled;
   const computerUseAvailable =
-    opts.cindyComputerAvailable ?? opts.cindyBrowserEnabled !== undefined;
+    opts.cindyComputerAvailable ?? cindyBrowserEnabled !== undefined;
   const computerOverrides = computerUseAvailable
     ? [CODEX_COMPUTER_USE_REPLACEMENT_ROUTE]
     : [];
-  const chromeOverrides = opts.cindyBrowserEnabled === undefined
+  const chromeOverrides = cindyBrowserEnabled === undefined
     ? []
-    : opts.cindyBrowserEnabled
+    : cindyBrowserEnabled
     ? CODEX_CHROME_USE_OVERRIDES
     : opts.codexBrowserUseAvailable === false
       ? CODEX_CHROME_USE_UNAVAILABLE_OVERRIDES
@@ -213,7 +218,7 @@ export function buildDesktopCapabilityRoutingPolicy(opts: {
       ...computerOverrides,
       {
         ...CODEX_IN_APP_BROWSER_UNAVAILABLE_OVERRIDE,
-        ...(opts.cindyBrowserEnabled === true
+        ...(cindyBrowserEnabled === true
           ? { replacement: { kind: 'cindy-plugin' as const, id: 'browser' } }
           : {}),
       },

@@ -79,4 +79,27 @@ describe('buildDesktopCapabilityRoutingPolicy', () => {
     });
     expect(nodeReplRoute?.replacement).toBeUndefined();
   });
+
+  it('keeps remote Chrome available without claiming the local Cindy Browser replacement', () => {
+    const policy = buildDesktopCapabilityRoutingPolicy({
+      cindyComputerAvailable: false,
+      cindyBrowserEnabled: true,
+      codexBrowserUseAvailable: true,
+      remoteHostId: 'remote-browser-host',
+    });
+    const browserRoutes = policy.overrides.filter(
+      (route) => route.capabilityId === 'browser-use',
+    );
+
+    expect(browserRoutes).toEqual([
+      expect.objectContaining({
+        invocation: 'disabled',
+        source: expect.objectContaining({
+          surface: 'plugin',
+          id: 'browser@openai-bundled',
+        }),
+      }),
+    ]);
+    expect(browserRoutes[0]?.replacement).toBeUndefined();
+  });
 });
