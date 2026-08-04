@@ -433,6 +433,39 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('holds the turn until an owed mode write has actually landed', async () => {
+    // 补推只"排进队列"不代表已生效。若本轮输入能抢在档位之前入队,这一轮就会先以旧档起跑,
+    // 前几个工具照旧撞在故障中的原生分类器上(codex P2)。这里钉住顺序:欠着一次收敛时,
+    // send 必须等它落地才继续。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    // 先制造欠账:第一次写入失败。
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
+    await handle.useCindyAutoReviewFallback?.();
+    await tick();
+
+    // 下一 turn 的补推挂住,send 不得先行返回。
+    let releaseOwedWrite!: () => void;
+    const owedGate = new Promise<void>((resolve) => { releaseOwedWrite = resolve; });
+    fakeQuery.setPermissionMode.mockImplementationOnce(async () => { await owedGate; });
+
+    let sendSettled = false;
+    const sendPromise = handle.send({ type: 'user', content: 'next turn' })
+      .then(() => { sendSettled = true; });
+    await tick();
+    await tick();
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    expect(sendSettled).toBe(false);
+
+    releaseOwedWrite();
+    await sendPromise;
+    expect(sendSettled).toBe(true);
+    await handle.close();
+  });
+
   it('does not touch the SDK mode on a turn with nothing owed', async () => {
     // 补推点必须是「有欠账才动」:每个 turn 无条件推一次档会给 send 入口加一个控制请求,
     // 也会掩盖真正的状态分叉。

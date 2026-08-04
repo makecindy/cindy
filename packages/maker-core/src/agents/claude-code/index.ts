@@ -4180,6 +4180,16 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
+          // 档位写入必须**先于本轮输入落地**。补推只是"排进队列"并不代表已生效;两者没有
+          // 先后约束时,这一轮可能先以旧档起跑、档位随后才到,前几个工具照旧撞在故障中的
+          // 原生分类器上(codex P2)。等待点刻意放在这里而不是 turn 起点:此刻 rewind /
+          // bridge 重建已经完成,队列里剩下的写入面向的是**当前**这个 Query。
+          //
+          // 不违反 §3.2 的"send 路径不加串行等待":没有欠账、也没有在飞的档位写入时
+          // `sdkPermissionModeQueueDepth` 为 0,这里一个 await 都不产生 —— 常态零开销。
+          // 队列本身永不 reject(见 enqueueSdkPermissionModePush),失败已在各自 settle
+          // 分支记了欠账,turn 照常继续,所以不需要 catch。
+          if (sdkPermissionModeQueueDepth > 0) await sdkPermissionModeQueue;
           const accepted = inputQueue.push(sdkInput);
           if (!accepted) {
             // close() can win while content conversion is still preparing files or
