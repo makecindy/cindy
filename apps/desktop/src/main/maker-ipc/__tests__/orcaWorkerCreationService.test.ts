@@ -732,21 +732,28 @@ describe('OrcaWorkerCreationService', () => {
 
       await expect(service.createWorker(workerParams())).resolves.toMatchObject({
         ok: true,
-        resolved: { model: canonicalId, providerId: null },
+        resolved: { model: canonicalId, providerId: 'xd' },
       });
 
       expect(legacyLead.model).toBe(shortId);
       expect(providerOnlyDefaults).toEqual({ providerId: 'deleted-custom' });
       expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
         model: canonicalId,
-        providerId: null,
+        providerId: 'xd',
       }));
     });
 
-    it('does not let a provider-only default override the paired Lead route', async () => {
+    it('does not let a provider-only default override the paired Lead route when another provider offers the same model', async () => {
       const customLead = leadWithLegacyModel('deepseek');
+      const otherCustom = {
+        ...customProvider(),
+        id: 'other-custom',
+        name: 'Other Custom',
+      };
       const { deps, service } = aliasHarness({
-        providers: [managedProvider(), customProvider()],
+        // Default-route lookup would choose this first exact Custom route if the stale
+        // provider-only default incorrectly triggered model route re-resolution.
+        providers: [managedProvider(), otherCustom, customProvider()],
         overrides: {
           getLeadSessionRow: vi.fn(async () => customLead),
           getWorkerDefaults: vi.fn(() => ({ providerId: 'xd' })),

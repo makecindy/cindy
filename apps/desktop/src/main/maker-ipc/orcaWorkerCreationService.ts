@@ -728,6 +728,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       ? undefined
       : agentProviders.find((provider) => provider.id === explicitModelDefaultProviderId);
     const cachedProviderRouteIsStale = params.model === undefined
+      && inheritedModelComesFromDefaults
       && defaults.providerId !== undefined
       && defaults.providerId !== null
       && !agentProviders.some(
