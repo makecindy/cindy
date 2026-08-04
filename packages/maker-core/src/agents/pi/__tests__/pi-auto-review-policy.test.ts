@@ -81,6 +81,24 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('read', { paths: [`${WS}/a.ts`, `${WS}/b.ts`] })).toBe('auto-approve');
   });
 
+  /**
+   * 如实钉住只读工具在本 adapter 的**可达面**:bridge 对 read/grep/find/ls 在非凭证路径时
+   * 直接放行、不冒泡(`cindy-bridge-source.ts` 的 READONLY_BUILTINS 快路径),所以能走到这里的
+   * 只读调用只有命中凭证路径那一类 —— 由凭证分支收成 prompt-each-time。
+   *
+   * 反过来说:区外目录级递归读在 Pi 当前**不经** host 审阅(与 Claude 存在行为差异),但那不是
+   * 本 adapter 能修的 —— 在这一层加 CC 那套 scope 区分只会得到永不执行的死代码。真修要动
+   * bridge 的只读快路径,属独立改动。这条用例的作用是防止后人再次在错误的层加"看起来对"的补丁。
+   */
+  it('keeps plain reads auto-approved regardless of root (bridge never bubbles them)', () => {
+    for (const tool of ['read', 'grep', 'find', 'ls']) {
+      expect(verdict(tool, { path: '/Users/t' })).toBe('auto-approve');
+      expect(verdict(tool, { path: `${WS}/src` })).toBe('auto-approve');
+    }
+    // 唯一真会到达这里的只读形态:入参命中凭证路径 → 必问、不可记住。
+    expect(verdict('grep', { path: '/Users/t/.aws/credentials' })).toBe('prompt-each-time');
+  });
+
   it('fails closed for MCP and unknown tools', () => {
     expect(verdict('mcp__cindy_orca__start_team', { anything: 1 })).toBe('prompt');
     expect(verdict('some_future_tool', {})).toBe('prompt');
