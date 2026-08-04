@@ -326,13 +326,16 @@ describe('TelegramIM', () => {
     await connect();
     const handler = vi.fn();
     im.onCardAction(handler);
+    const callback = encodeCallbackData('permission:allow:once', {
+      requestId: 'duplicate-request',
+    });
     api.pushUpdates([
       {
         update_id: 904,
         callback_query: {
           id: 'duplicate-1',
           from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
-          data: encodeCallbackData('permission:allow:once', { requestId: 'duplicate-request' }),
+          data: callback,
           message: { message_id: 904, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
         },
       },
@@ -341,7 +344,7 @@ describe('TelegramIM', () => {
         callback_query: {
           id: 'duplicate-2',
           from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
-          data: encodeCallbackData('permission:deny', { requestId: 'duplicate-request' }),
+          data: callback,
           message: { message_id: 904, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
         },
       },
@@ -349,6 +352,47 @@ describe('TelegramIM', () => {
 
     await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
+  it('同一消息重绘后相同 requestId 的新 callback token 仍可合法导航', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const firstRender = encodeCallbackData('control-pick', {
+      requestId: 'navigation-request',
+      workingDir: 'repo',
+    });
+    const rebuiltRender = encodeCallbackData('control-pick', {
+      requestId: 'navigation-request',
+      workingDir: 'repo',
+    });
+    expect(rebuiltRender).not.toBe(firstRender);
+    api.pushUpdates([
+      {
+        update_id: 906,
+        callback_query: {
+          id: 'navigation-1',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: firstRender,
+          message: { message_id: 906, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+      {
+        update_id: 907,
+        callback_query: {
+          id: 'navigation-2',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: rebuiltRender,
+          message: { message_id: 906, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    expect(handler.mock.calls.map(([event]) => event.payload.requestId)).toEqual([
+      'navigation-request',
+      'navigation-request',
+    ]);
   });
 
   it('set-config 失败(401): 状态 error 且凭证回滚', async () => {

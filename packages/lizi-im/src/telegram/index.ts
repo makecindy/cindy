@@ -285,7 +285,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
   private readonly ambientTriggerIds = new Set<string>();
-  /** Recent interaction callbacks already handed to desktop; suppress duplicate taps. */
+  /** Recent rendered callback tokens already handed to desktop; suppress duplicate taps. */
   private readonly handledInteractionCallbacks = new Map<string, number>();
   /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
   private readonly typingLoops = new Map<
@@ -1338,7 +1338,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       for (const [key, at] of this.handledInteractionCallbacks) {
         if (now - at > 5 * 60_000) this.handledInteractionCallbacks.delete(key);
       }
-      const callbackKey = `${event.messageId}|${requestId}`;
+      // requestId identifies the underlying interaction, not this rendered
+      // button instance: /ctr can rebuild the same message with the same
+      // requestId while presenting a new callback token. Telegram retries of
+      // one button keep q.data unchanged, so the raw token is the dedup key.
+      const callbackKey = `${event.messageId}|${q.data}`;
       if (this.handledInteractionCallbacks.has(callbackKey)) return;
       this.handledInteractionCallbacks.set(callbackKey, now);
       while (this.handledInteractionCallbacks.size > 512) {
