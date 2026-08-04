@@ -322,6 +322,7 @@ import {
   onToolResultEvent,
   onToolResultFullEvent,
   onToolUseEvent,
+  preserveTurnPersistStateForBackground,
   markAutoResumeOutcome,
   onTurnErrorEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -3490,7 +3491,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
-      if (eventAgentMeta) noteAgentMeta(session.id, eventAgentMeta);
+      if (eventAgentMeta && event.turnScope !== 'background') noteAgentMeta(session.id, eventAgentMeta);
       let persistId: string | undefined;
       // tool_result 家族:main 解析出的权威内容,盖进 payload 让 renderer 即时显示
       // (Option C:内容重排状态机只在 main 一份,与落库同源同值)。
@@ -3537,6 +3538,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           event.data as { summary?: unknown; toolUseIds?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -3545,6 +3547,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           event.data as { toolUseId?: unknown; fullText?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -3708,7 +3711,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
-        resetTurnPersistState(session.id);
+      preserveTurnPersistStateForBackground(session.id);
+      resetTurnPersistState(session.id);
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
         // done 早段、flush 之前触发,流式轮次会读到上一轮文本)。只在正常 done 触发。
         // codex review:flushAssistantBlock 仅把 assistant insert 入队 writeChain、未落库,

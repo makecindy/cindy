@@ -72,9 +72,11 @@ import {
   markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
+  noteAgentMeta,
   enqueueDurableWrite,
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
+  preserveTurnPersistStateForBackground,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -243,6 +245,56 @@ describe('tool_result 顺序:先 tool_result(摘要)后 tool_result_full(全文)
       broadcastGuard(),
     );
     expect(updateMessageContent).toHaveBeenCalledWith(SESSION, r1!.persistId, r2!.content);
+  });
+});
+
+describe('background tool_result persistence', () => {
+  it('keeps the completed turn context after the next turn resets live state', async () => {
+    const oldMeta = { uuid: 'old-turn' };
+    const nextMeta = { uuid: 'new-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child', toolName: 'collab', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    // Simulate the next turn repopulating the live fallback before the old
+    // child result arrives.
+    noteAgentMeta(SESSION, nextMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'next-turn-tool', toolName: 'Read', input: {} },
+      nextMeta,
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        agentMeta: oldMeta,
+      }),
+      broadcastGuard(),
+    );
   });
 });
 

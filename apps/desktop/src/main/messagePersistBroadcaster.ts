@@ -470,6 +470,59 @@ const toolUseCreatedAtBySession = new Map<string, Map<string, number>>();
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
 const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 
+interface BackgroundTurnPersistState {
+  agentMeta: AgentMeta | null;
+  knownToolUseIds: Set<string>;
+  toolUseCreatedAt: Map<string, number>;
+  toolResultIdByToolUseId: Map<string, string>;
+  pendingFullTextByToolUseId: Map<string, { text: string; createdAt: number }>;
+  toolResultContentByClientId: Map<string, string>;
+}
+
+/**
+ * Late child results are still useful after a parent turn has ended, but must
+ * not borrow the next turn's persistence context. Keep a bounded queue of
+ * completed-turn snapshots for events explicitly marked `turnScope=background`.
+ */
+const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
+
+export function preserveTurnPersistStateForBackground(sessionId: string): void {
+  const snapshot: BackgroundTurnPersistState = {
+    agentMeta: lastAgentMetaBySession.get(sessionId) ?? null,
+    knownToolUseIds: new Set(knownToolUseIdsBySession.get(sessionId) ?? []),
+    toolUseCreatedAt: new Map(toolUseCreatedAtBySession.get(sessionId) ?? []),
+    toolResultIdByToolUseId: new Map(toolResultIdByToolUseId.get(sessionId) ?? []),
+    pendingFullTextByToolUseId: new Map(pendingFullTextByToolUseId.get(sessionId) ?? []),
+    toolResultContentByClientId: new Map(toolResultContentByClientId.get(sessionId) ?? []),
+  };
+  const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
+  snapshots.push(snapshot);
+  // A session can have more than one late parent in flight, but unbounded
+  // retention here would turn this correctness guard into a memory leak.
+  if (snapshots.length > 4) snapshots.splice(0, snapshots.length - 4);
+  backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
+}
+
+function backgroundStateForToolUse(
+  sessionId: string,
+  toolUseIds: string[],
+): BackgroundTurnPersistState | null {
+  const snapshots = backgroundTurnPersistStatesBySession.get(sessionId);
+  if (!snapshots || snapshots.length === 0) return null;
+  for (let i = snapshots.length - 1; i >= 0; i -= 1) {
+    const state = snapshots[i];
+    if (toolUseIds.some((id) =>
+      state.knownToolUseIds.has(id) ||
+      state.toolResultIdByToolUseId.has(id) ||
+      state.pendingFullTextByToolUseId.has(id))) {
+      return state;
+    }
+  }
+  // The old tool_use may have been omitted by the provider. In that case the
+  // newest completed-turn context is still safer than borrowing the live turn.
+  return snapshots[snapshots.length - 1] ?? null;
+}
+
 function rememberToolUseId(sessionId: string, toolUseId: string, createdAt: number): void {
   let set = knownToolUseIdsBySession.get(sessionId);
   if (!set) {
@@ -485,14 +538,23 @@ function rememberToolUseId(sessionId: string, toolUseId: string, createdAt: numb
   createdAtMap.set(toolUseId, createdAt);
 }
 
-function clampAfterToolUse(sessionId: string, toolUseId: string, createdAt: number): number {
-  const toolUseCreatedAt = toolUseCreatedAtBySession.get(sessionId)?.get(toolUseId);
+function clampAfterToolUse(
+  sessionId: string,
+  toolUseId: string,
+  createdAt: number,
+  createdAtMap = toolUseCreatedAtBySession.get(sessionId),
+): number {
+  const toolUseCreatedAt = createdAtMap?.get(toolUseId);
   if (toolUseCreatedAt === undefined || createdAt > toolUseCreatedAt) return createdAt;
   return toolUseCreatedAt + 1;
 }
 
-function clampAfterLatestToolUse(sessionId: string, toolUseIds: string[], createdAt: number): number {
-  const createdAtMap = toolUseCreatedAtBySession.get(sessionId);
+function clampAfterLatestToolUse(
+  sessionId: string,
+  toolUseIds: string[],
+  createdAt: number,
+  createdAtMap = toolUseCreatedAtBySession.get(sessionId),
+): number {
   if (!createdAtMap) return createdAt;
   let latestToolUseCreatedAt: number | undefined;
   for (const toolUseId of toolUseIds) {
@@ -690,15 +752,25 @@ export function onToolResultEvent(
   sessionId: string,
   data: { summary?: unknown; toolUseIds?: unknown },
   agentMeta: AgentMeta | null,
+  scope: 'turn' | 'background' = 'turn',
 ): { persistId: string; content: string } | null {
   const summary = typeof data.summary === 'string' ? data.summary : '';
   const ids = Array.isArray(data.toolUseIds)
     ? data.toolUseIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
     : [];
+  if (scope === 'background' && ids.length === 0) return null;
 
-  const idMap = getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
-  const pending = getOrCreateSessionMap(pendingFullTextByToolUseId, sessionId);
-  const contentMap = getOrCreateSessionMap(toolResultContentByClientId, sessionId);
+  const backgroundState = scope === 'background'
+    ? backgroundStateForToolUse(sessionId, ids)
+    : null;
+  if (scope === 'background' && !backgroundState) return null;
+  const idMap = backgroundState?.toolResultIdByToolUseId ??
+    getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
+  const pending = backgroundState?.pendingFullTextByToolUseId ??
+    getOrCreateSessionMap(pendingFullTextByToolUseId, sessionId);
+  const contentMap = backgroundState?.toolResultContentByClientId ??
+    getOrCreateSessionMap(toolResultContentByClientId, sessionId);
+  const createdAtMap = backgroundState?.toolUseCreatedAt ?? toolUseCreatedAtBySession.get(sessionId);
   let createdAt = Date.now();
   let usedBufferedContent = false;
 
@@ -708,13 +780,13 @@ export function onToolResultEvent(
     const buffered = pending.get(id);
     if (buffered && buffered.text.length > content.length) {
       content = buffered.text;
-      createdAt = clampAfterToolUse(sessionId, id, buffered.createdAt);
+      createdAt = clampAfterToolUse(sessionId, id, buffered.createdAt, createdAtMap);
       usedBufferedContent = true;
     }
     pending.delete(id);
   }
   if (usedBufferedContent) {
-    createdAt = clampAfterLatestToolUse(sessionId, ids, createdAt);
+    createdAt = clampAfterLatestToolUse(sessionId, ids, createdAt, createdAtMap);
   }
   const primaryToolUseId = ids[0];
 
@@ -739,7 +811,7 @@ export function onToolResultEvent(
     enqueueWrite(`tool_result_update:${sessionId}:${existing}`, () =>
       updateDbMessageContent(sessionId, existing!, content),
     );
-    notePersistedMessage(sessionId, 'tool_result', existing);
+    if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', existing);
     return { persistId: existing, content };
   }
 
@@ -751,10 +823,10 @@ export function onToolResultEvent(
     role: 'tool_result',
     content,
     toolUseId: primaryToolUseId,
-    agentMeta: toolResultMeta(sessionId, agentMeta),
+    agentMeta: backgroundState ? backgroundState.agentMeta : toolResultMeta(sessionId, agentMeta),
     createdAt,
   });
-  notePersistedMessage(sessionId, 'tool_result', persistId);
+  if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', persistId);
   return { persistId, content };
 }
 
@@ -770,19 +842,27 @@ export function onToolResultFullEvent(
   sessionId: string,
   data: { toolUseId?: unknown; fullText?: unknown },
   agentMeta: AgentMeta | null,
+  scope: 'turn' | 'background' = 'turn',
 ): { persistId: string; content: string } | null {
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const fullText = typeof data.fullText === 'string' ? data.fullText : null;
   if (!toolUseId || fullText === null) return null; // guard,对齐老 renderer
 
-  const idMap = getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
-  const pending = getOrCreateSessionMap(pendingFullTextByToolUseId, sessionId);
-  const contentMap = getOrCreateSessionMap(toolResultContentByClientId, sessionId);
+  const backgroundState = scope === 'background'
+    ? backgroundStateForToolUse(sessionId, [toolUseId])
+    : null;
+  if (scope === 'background' && !backgroundState) return null;
+  const idMap = backgroundState?.toolResultIdByToolUseId ??
+    getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
+  const pending = backgroundState?.pendingFullTextByToolUseId ??
+    getOrCreateSessionMap(pendingFullTextByToolUseId, sessionId);
+  const contentMap = backgroundState?.toolResultContentByClientId ??
+    getOrCreateSessionMap(toolResultContentByClientId, sessionId);
   const createdAt = Date.now();
 
   const target = idMap.get(toolUseId);
   if (!target) {
-    const known = knownToolUseIdsBySession.get(sessionId);
+    const known = backgroundState?.knownToolUseIds ?? knownToolUseIdsBySession.get(sessionId);
     if (known?.has(toolUseId)) {
       // tool_use 已到但还没 tool_result 摘要 → 直接建一条带全文的 tool_result。
       const persistId = createId();
@@ -794,10 +874,15 @@ export function onToolResultFullEvent(
         role: 'tool_result',
         content: fullText,
         toolUseId,
-        agentMeta: toolResultMeta(sessionId, agentMeta),
-        createdAt,
+        agentMeta: backgroundState ? backgroundState.agentMeta : toolResultMeta(sessionId, agentMeta),
+        createdAt: clampAfterToolUse(
+          sessionId,
+          toolUseId,
+          createdAt,
+          backgroundState?.toolUseCreatedAt ?? toolUseCreatedAtBySession.get(sessionId),
+        ),
       });
-      notePersistedMessage(sessionId, 'tool_result', persistId);
+      if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', persistId);
       return { persistId, content: fullText };
     }
     // tool_use 也没到 → buffer,等 tool_result 摘要 / done 兜底消费;renderer 不显示。
@@ -811,7 +896,7 @@ export function onToolResultFullEvent(
   enqueueWrite(`tool_result_full:${sessionId}:${target}`, () =>
     updateDbMessageContent(sessionId, target, fullText),
   );
-  notePersistedMessage(sessionId, 'tool_result', target);
+  if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', target);
   return { persistId: target, content: fullText };
 }
 
@@ -1290,6 +1375,7 @@ export function onTurnErrorEvent(
 /** session 关闭时清掉该会话所有 per-session 持久化状态,避免 Map 泄漏 / 跨会话串状态。 */
 export function clearSessionPersistState(sessionId: string): void {
   assistantBlocks.delete(sessionId);
+  backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
   knownToolUseIdsBySession.delete(sessionId);
   toolUseCreatedAtBySession.delete(sessionId);
