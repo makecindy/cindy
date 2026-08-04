@@ -11,7 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IMHost, IMMessageEvent } from '../../types.js';
-import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
+import { TelegramApiError, type TelegramApiClient, type TgUpdate, type TgUser } from '../api.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
 import { encodeCallbackData } from '../codec.js';
 
@@ -19,6 +19,7 @@ const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bo
 const OWNER_ID = '111';
 
 interface FakeApi extends TelegramApiClient {
+  bot: TgUser;
   calls: Array<{ method: string; params: Record<string, unknown> }>;
   hangMethods: Set<string>;
   pushUpdates(updates: TgUpdate[]): void;
@@ -32,6 +33,7 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
   let sentSeq = 1000;
 
   const api: FakeApi = {
+    bot: BOT,
     calls: [],
     hangMethods: new Set(),
     pushUpdates(updates) {
@@ -63,7 +65,7 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
       if (api.hangMethods.has(method)) return new Promise(() => undefined) as never;
       if (method === 'getMe') {
         if (opts.getMeError) throw opts.getMeError;
-        return BOT as never;
+        return api.bot as never;
       }
       if (method === 'getUpdates') {
         if (nextFailure) {
@@ -503,6 +505,45 @@ describe('TelegramIM', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it('同一 bot 轮换 token 后保留近期 callback 去重状态', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const callback = encodeCallbackData('permission:allow:once', {
+      requestId: 'token-rotation-request',
+    });
+    api.pushUpdates([
+      {
+        update_id: 908,
+        callback_query: {
+          id: 'token-rotation-first',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 908, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+    await connectWithToken('999:rotated-token-abcdefghijk');
+    api.pushUpdates([
+      {
+        update_id: 909,
+        callback_query: {
+          id: 'token-rotation-duplicate',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 908, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+    });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it('切换 bot 账号后清除旧账号 callback 去重状态', async () => {
     await connect();
     const handler = vi.fn();
@@ -523,6 +564,7 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
 
+    api.bot = { ...BOT, id: 888, username: 'replacement_bot' };
     await connectWithToken('888:replacement-token-abcdefghijk');
     api.pushUpdates([
       {

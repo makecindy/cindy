@@ -501,6 +501,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       const previousOwnerUserId =
         previousOwnerResult.kind === 'value' ? previousOwnerResult.value : null;
       const previousRuntimeOwnerUserId = this.ownerUserId;
+      // Callback deduplication follows the bot identity, not the secret string.
+      // BotFather can rotate a token without changing the bot that owns already
+      // queued callbacks. Keep the connected identity when available; the token
+      // prefix is the only safe fallback while this instance is offline.
+      const previousBotId = this.botId || botIdFromToken(previousToken?.trim() ?? '');
 
       const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
       const ownerSaved = ownerUserId
@@ -518,8 +523,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
       const nextOwnerUserId = ownerUserId || this.ownerUserId;
       if (token) {
-        const accountChanged =
-          token !== (previousToken?.trim() ?? '') || nextOwnerUserId !== this.ownerUserId;
         this.configVersion += 1;
         await this.stopPolling();
         this.ownerUserId = nextOwnerUserId;
@@ -553,6 +556,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           }
           return configResult(failedStatus);
         }
+        const botChanged = previousBotId !== 0
+          ? this.botId !== previousBotId
+          : (previousToken?.trim() ?? '') !== token;
+        const accountChanged = botChanged || nextOwnerUserId !== previousRuntimeOwnerUserId;
         if (accountChanged) this.clearInteractionCallbackDedup();
         const noticeConfigVersion = this.configVersion;
         await this.sendOwnerNoticeWithTimeout(
