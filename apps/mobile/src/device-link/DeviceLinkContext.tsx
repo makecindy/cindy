@@ -111,6 +111,7 @@ import {
 import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
@@ -799,7 +800,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           sendInvokeWithAccessHandling<DeviceProvidersPayload>(
             client,
             deviceId,
-            'maker:provider:list',
+            IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST,
             [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
           )
         ).catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
@@ -1078,11 +1079,11 @@ export function routeFrame(env: Envelope, handlers: {
   if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
-  if (push.channel === 'maker:provider:changed') {
+  if (push.channel === IPC_CHANNELS.MAKER_PUSH.PROVIDER_CHANGED) {
     handlers.onProviderChanged?.(env.src);
     return;
   }
-  if (push.channel === 'maker:schedule:event') {
+  if (push.channel === IPC_CHANNELS.MAKER_PUSH.SCHEDULE_EVENT) {
     remoteScheduleEventStore.apply(env.src, push.payload);
   }
   if (push.channel === FILE_BROWSER_EVENT_CHANNEL) {
@@ -1104,7 +1105,7 @@ async function refreshDeviceCapabilities(
       const raw = await sendInvokeWithAccessHandling<unknown>(
         client,
         deviceId,
-        'maker:get-capabilities',
+        IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES,
         [agentKind],
       );
       const normalized = normalizeMobileAgentCapabilities(raw);
@@ -1132,28 +1133,28 @@ async function rebuildSessionSnapshot(
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
   // 暂不在补齐范围(需扩桌面端 invoke 白名单)。
   const [history, pending, projection, goal] = await Promise.allSettled([
-    sendInvokeWithAccessHandling<RemoteMessage[]>(client, deviceId, 'local-db:messages:list', [
+    sendInvokeWithAccessHandling<RemoteMessage[]>(client, deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, [
       sessionId,
       { limit: RECONNECT_MESSAGE_WINDOW_LIMIT },
     ], sendOpts),
     sendInvokeWithAccessHandling<PendingInteraction[]>(
       client,
       deviceId,
-      'maker:get-pending-interactions',
+      IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS,
       [sessionId],
       sendOpts,
     ),
     sendInvokeWithAccessHandling<InputProjection>(
       client,
       deviceId,
-      'maker:input:get-projection',
+      IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION,
       [sessionId],
       sendOpts,
     ),
     sendInvokeWithAccessHandling<MobileGoalStatusPayload | null | undefined>(
       client,
       deviceId,
-      'maker:goal:get-status',
+      IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS,
       [sessionId],
       sendOpts,
     ),

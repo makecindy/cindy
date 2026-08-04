@@ -28,6 +28,7 @@ import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 import { compareMessageOrder } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 interface DeviceShard {
   deviceId: string;
@@ -1993,22 +1994,22 @@ export const remoteSessionStore = {
       this.applySessionActivity(deviceId, payload);
       return;
     }
-    if (channel === 'maker:new-maker-draft:changed') {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED) {
       const enabled = readPushedNewMakerWorktreeEnabled(payload);
       if (enabled !== null) this.setNewMakerWorktreePreference(deviceId, enabled);
       return;
     }
-    if (channel === 'local-db:sessions:created') {
+    if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED) {
       reseedHandlers.get(deviceId)?.forEach((handler) => handler());
       return;
     }
-    if (channel === 'maker:session-model-pref:changed') {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.SESSION_MODEL_PREF_CHANGED) {
       // 被控端会话「非选中模型」effort/fast 变更(被控端本地改 / 应用了任一控制端写穿)→
       // 刷新会话模型列表镜像(payload 自带 sessionId,镜像按会话隔离,非法 payload 静默忽略)。
       applySessionModelPrefPush(payload);
       return;
     }
-    if (channel === 'local-db:sessions:patched' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
       if (sessionId && patch) {
@@ -2028,13 +2029,13 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'local-db:messages:created' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const message = isRecord(payload.message) ? (payload.message as unknown as RemoteMessage) : null;
       if (sessionId && message) this.appendMessage(sessionId, message);
       return;
     }
-    if (channel === 'local-db:messages:deleted' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const clientId = readString(payload, 'clientId');
       const clientIds = Array.isArray(payload.clientIds)
@@ -2049,7 +2050,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'local-db:session:error-persisted' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       if (sessionId) {
         if (messages.has(sessionId)) {
@@ -2079,20 +2080,20 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'maker:event' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.EVENT && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const event = isRecord(payload.event) ? payload.event : null;
       const persistId = readString(payload, 'persistId') ?? undefined;
       if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
       return;
     }
-    if (channel === 'maker:status-changed' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const status = readString(payload, 'status');
       if (sessionId && status === 'closed') this.setSessionRunning(sessionId, false);
       return;
     }
-    if (channel === 'usage:message-turn-cost' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.USAGE.MESSAGE_TURN_COST && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const clientId = readString(payload, 'clientId');
       const turnMoney = normalizeRemoteMoney(payload.turnMoney);
@@ -2141,7 +2142,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'usage:session-spend-changed' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.USAGE.SESSION_SPEND_CHANGED && isRecord(payload)) {
       // session 终身累计 cost 镜像:被控端 sessionSpendBroadcaster 走裸 UPDATE、不发
       // sessions:patched,这条(sessions topic,列表订阅常开)是唯一更新通道;不处理则
       // 会话菜单用量摘要停在旧值直到 reseed。readNumber 已挡 NaN,负数不入镜像。
@@ -2158,7 +2159,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'usage:session-tokens-changed' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.USAGE.SESSION_TOKENS_CHANGED && isRecord(payload)) {
       // 同上:session 终身累计 token 镜像。
       const sessionId = readString(payload, 'sessionId');
       const totalTokens = readNumber(payload, 'totalTokens');
@@ -2167,7 +2168,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'usage:message-model-mismatch' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH && isRecord(payload)) {
       // 本轮模型降级标记(桌面被控端 turn 结束检测命中时推送):patch 进
       // agent_meta,messageNormalize 的 readModelMismatch 据此渲染降级提示行。
       const sessionId = readString(payload, 'sessionId');
@@ -2182,7 +2183,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'maker:interaction-request' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const request = isRecord(payload.request) ? payload.request : null;
       if (sessionId && request) {
@@ -2193,7 +2194,7 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'maker:interaction-dismissed' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId) {
@@ -2206,12 +2207,12 @@ export const remoteSessionStore = {
       }
       return;
     }
-    if (channel === 'maker:input:projection' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       if (sessionId) this.setInputProjection(sessionId, payload);
       return;
     }
-    if (channel === 'maker:goal:status-changed' && isRecord(payload)) {
+    if (channel === IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       if (sessionId) {
         this.setGoalStatus(

@@ -15,6 +15,7 @@ import {
   type BreakerSendSlot,
   type BreakerSettleOutcome,
 } from '@cindy/maker-shared/device-responsiveness';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 const unresponsive = new Set<string>();
 let snapshot: ReadonlySet<string> = new Set();
@@ -103,7 +104,7 @@ export function isDeviceProbeDue(deviceId: string): boolean {
  * 是最便宜的真实 DB 读,恰好就是事故里被卡死的那类请求;args 形状与
  * devices 页的正常拉取一致([limit, statusFilter, opts])。
  */
-export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
+export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST;
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
   return [1, 'all', { includePinned: true }];
@@ -175,10 +176,10 @@ export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome 
  * 仍是有效恢复证据。超时分类不受影响(classifyDeviceSendFailure)。
  */
 export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
-  'device-link:media:fetch',
-  'device-link:voice:credential-sync',
-  'device-link:voice:dictionary-learning',
-  'device-link:voice:transcribe',
+  IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_CREDENTIAL_SYNC,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING,
+  IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE,
 ]);
 
 /**

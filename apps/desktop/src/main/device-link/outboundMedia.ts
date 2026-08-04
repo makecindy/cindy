@@ -371,7 +371,7 @@ export async function rewriteOutboundMedia(channel: string, args: unknown[]): Pr
     // Rewrite both with one ref map so every file uploads exactly once.
     const refMap = new Map<string, string>();
     next[1] = await rewriteMessage(next[1], refMap);
-    if (channel === 'maker:send') {
+    if (channel === IPC_CHANNELS.MAKER_INVOKE.SEND) {
       const sendOpts = next[3];
       if (sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)) {
         const persist = (sendOpts as { persistUserMessage?: unknown }).persistUserMessage;

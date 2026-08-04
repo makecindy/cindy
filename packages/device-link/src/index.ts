@@ -9,6 +9,10 @@
  */
 export * from './protocol.js';
 export * from './allowlist.js';
+// mobile 经此引用 channel 常量:apps/mobile 不能直接依赖 @cindy/cindy-ipc
+// (动 apps/mobile/package.json 依赖会改 runtime fingerprint 触发冷更),
+// 而 device-link 已是 mobile 的既有依赖,借道 re-export 指纹中性。
+export { IPC_CHANNELS } from '@cindy/cindy-ipc';
 export * from './client.js';
 export * from './transport.js';
 export * from './topics.js';

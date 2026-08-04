@@ -81,5 +81,8 @@ test('loadKnownChannels reads the cindy-ipc channel tables', () => {
   const known = loadKnownChannels();
   assert.ok(known.has('desktop-cmd:run'));
   assert.ok(known.has('worktree:create'));
+  // maker.ts 的表不叫 *_CHANNELS(MAKER_INVOKE / MAKER_PUSH),同样必须进已登记集合。
+  assert.ok(known.has('maker:create-session'));
+  assert.ok(known.has('maker:event'));
   assert.ok(!known.has('not-a-channel'));
 });

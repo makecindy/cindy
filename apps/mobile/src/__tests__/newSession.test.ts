@@ -477,7 +477,7 @@ describe('new session model', () => {
     // 传输层 passthrough 到 allowlisted channel。
     const transportSource = readTextLf(
       resolve(process.cwd(), 'src/device-link/mobileMakerTransport.ts'), 'utf8');
-    expect(transportSource).toContain("listAvailableAgents: () => call('maker:list-available-agents', [])");
+    expect(transportSource).toContain('listAvailableAgents: () => call(IPC_CHANNELS.MAKER_INVOKE.LIST_AVAILABLE_AGENTS, [])');
   });
 
   it('uses safe per-agent permission defaults for new interactive sessions', () => {

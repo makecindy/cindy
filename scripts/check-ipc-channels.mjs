@@ -15,6 +15,10 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const SOURCE_ROOTS = Object.freeze([
   'apps/desktop/src',
   'packages/device-link/src',
+  // mobile 走 device-link 隧道调用同一批 channel;字面量漂移(如 cindy-ipc 改名后
+  // mobile 还调旧名)不扫这里就发现不了。常量经 @cindy/device-link re-export 获取。
+  'apps/mobile/app',
+  'apps/mobile/src',
 ]);
 const ALLOW_COMMENT = 'ipc-channel-literal-ok';
 
@@ -134,13 +138,17 @@ export function loadKnownChannels(root = path.join(REPO_ROOT, CHANNEL_TABLE_ROOT
       true,
     );
     const visit = (node) => {
+      // cindy-ipc 是纯常量包,不限定 *_CHANNELS 命名:maker.ts 的表叫
+      // MAKER_INVOKE / MAKER_PUSH 等,漏掉它们等于放走最大的 channel 命名空间。
+      // 用 isIpcChannelLiteral 过滤掉万一混入的非 channel 字符串。
       if (
         ts.isVariableDeclaration(node)
         && ts.isIdentifier(node.name)
-        && isChannelLikeName(node.name.text)
         && node.initializer
       ) {
-        for (const literal of collectStringLiterals(node.initializer)) known.add(literal.text);
+        for (const literal of collectStringLiterals(node.initializer)) {
+          if (isIpcChannelLiteral(literal.text)) known.add(literal.text);
+        }
       }
       ts.forEachChild(node, visit);
     };

@@ -39,6 +39,7 @@ import type {
   RemoteScheduleWriteInput,
   ScheduleListFilter,
 } from '@/scheduler/types';
+import { IPC_CHANNELS } from '@cindy/device-link';
 
 export type RemoteInvoke = <T = unknown>(
   deviceId: string,
@@ -607,33 +608,33 @@ export function createMobileMakerTransport({
   };
 
   return {
-    createSession: (opts) => call('maker:create-session', [opts]),
-    getCapabilities: (agentKind) => call('maker:get-capabilities', [agentKind]),
-    listAvailableAgents: () => call('maker:list-available-agents', []),
+    createSession: (opts) => call(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [opts]),
+    getCapabilities: (agentKind) => call(IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, [agentKind]),
+    listAvailableAgents: () => call(IPC_CHANNELS.MAKER_INVOKE.LIST_AVAILABLE_AGENTS, []),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
     // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
-    getSessionTree: (sessionId) => call('maker:get-session-tree', [sessionId]),
+    getSessionTree: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GET_SESSION_TREE, [sessionId]),
     navigateSessionTree: (sessionId, entryId, options) =>
-      call('maker:navigate-session-tree', [sessionId, entryId, options]),
-    listProviders: () => call('maker:provider:list', [{
+      call(IPC_CHANNELS.MAKER_INVOKE.NAVIGATE_SESSION_TREE, [sessionId, entryId, options]),
+    listProviders: () => call(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, [{
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),
-    getSession: (sessionId) => call('local-db:sessions:get', [sessionId]),
-    patchSessionMeta: (sessionId, patch) => call('local-db:sessions:patch-meta', [sessionId, patch]),
+    getSession: (sessionId) => call(IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [sessionId]),
+    patchSessionMeta: (sessionId, patch) => call(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, [sessionId, patch]),
     dismissErrorMessage: (sessionId, clientId) =>
-      call('local-db:messages:dismiss-error', [sessionId, clientId]),
-    ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
-    regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
-    listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
+      call(IPC_CHANNELS.LOCAL_DB.MESSAGES_DISMISS_ERROR, [sessionId, clientId]),
+    ackInterruptedTurn: (sessionId) => call(IPC_CHANNELS.LOCAL_DB.SESSIONS_ACK_INTERRUPTED, [sessionId]),
+    regenerateSessionTitle: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.REGENERATE_TITLE, [{ sessionId }]),
+    listMessages: (sessionId, opts) => call(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, [sessionId, opts]),
     aroundMessages: (sessionId, messageId, opts) =>
-      call('local-db:messages:around', [sessionId, messageId, opts]),
+      call(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND, [sessionId, messageId, opts]),
     aroundMessagesByClientId: (sessionId, clientId, opts) =>
-      call('local-db:messages:around-client-id', [sessionId, clientId, opts]),
+      call(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, [sessionId, clientId, opts]),
     send: (sessionId, message, createOpts, sendOpts) =>
-      call('maker:send', [sessionId, message, createOpts, sendOpts]),
-    listActiveSessions: () => call('maker:list-active'),
+      call(IPC_CHANNELS.MAKER_INVOKE.SEND, [sessionId, message, createOpts, sendOpts]),
+    listActiveSessions: () => call(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE),
     setModel: (sessionId, model, providerId) =>
-      call('maker:set-model', providerId ? [sessionId, model, providerId] : [sessionId, model]),
+      call(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, providerId ? [sessionId, model, providerId] : [sessionId, model]),
     switchSessionAgent: (
       sessionId,
       targetAgentKind,
@@ -641,7 +642,7 @@ export function createMobileMakerTransport({
       providerId,
       effort,
       fastMode,
-    ) => call('maker:switch-session-agent', [
+    ) => call(IPC_CHANNELS.MAKER_INVOKE.SWITCH_SESSION_AGENT, [
       sessionId,
       targetAgentKind,
       model,
@@ -650,35 +651,35 @@ export function createMobileMakerTransport({
       fastMode,
     ]),
     getSessionAgentSwitchIntent: (sessionId) =>
-      call('maker:get-session-agent-switch-intent', [sessionId]),
-    setEffort: (sessionId, effort) => call('maker:set-effort', [sessionId, effort]),
-    setPermissionMode: (sessionId, mode) => call('maker:set-permission-mode', [sessionId, mode]),
-    setPlanMode: (sessionId, enabled) => call('maker:set-plan-mode', [sessionId, enabled]),
-    setFastMode: (sessionId, enabled) => call('maker:set-fast-mode', [sessionId, enabled]),
-    setExtraDirs: (sessionId, dirs) => call('maker:set-extra-dirs', [sessionId, dirs]),
-    getModelPricing: () => call('maker:usage:model-pricing'),
-    getAccountUsage: (agentKind) => call('maker:usage:account', [agentKind]),
-    getCodexRateLimits: () => call('maker:usage:codex-rate-limits'),
+      call(IPC_CHANNELS.MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, [sessionId]),
+    setEffort: (sessionId, effort) => call(IPC_CHANNELS.MAKER_INVOKE.SET_EFFORT, [sessionId, effort]),
+    setPermissionMode: (sessionId, mode) => call(IPC_CHANNELS.MAKER_INVOKE.SET_PERMISSION_MODE, [sessionId, mode]),
+    setPlanMode: (sessionId, enabled) => call(IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE, [sessionId, enabled]),
+    setFastMode: (sessionId, enabled) => call(IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, [sessionId, enabled]),
+    setExtraDirs: (sessionId, dirs) => call(IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS, [sessionId, dirs]),
+    getModelPricing: () => call(IPC_CHANNELS.MAKER_INVOKE.USAGE_MODEL_PRICING),
+    getAccountUsage: (agentKind) => call(IPC_CHANNELS.MAKER_INVOKE.USAGE_ACCOUNT, [agentKind]),
+    getCodexRateLimits: () => call(IPC_CHANNELS.MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS),
     resetCodexRateLimits: (idempotencyKey) => (
-      call('maker:usage:codex-rate-limit-reset', [idempotencyKey])
+      call(IPC_CHANNELS.MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET, [idempotencyKey])
     ),
-    getApiKeyPresent: () => call('maker:api-key:present'),
-    setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
-    applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),
-    getNewMakerDefaults: (agentKind) => call('maker:get-new-maker-defaults', [agentKind]),
+    getApiKeyPresent: () => call(IPC_CHANNELS.MAKER_INVOKE.API_KEY_PRESENT),
+    setSessionModelPref: (pref) => call(IPC_CHANNELS.MAKER_INVOKE.SET_SESSION_MODEL_PREF, [pref]),
+    applyNewMakerDraftPref: (pref) => call(IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, [pref]),
+    getNewMakerDefaults: (agentKind) => call(IPC_CHANNELS.MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, [agentKind]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
-      call('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled }]),
+      call(IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, [{ worktreeEnabled }]),
     worktree: {
-      detectCwd: (cwd) => call('worktree:detect-cwd', [{ cwd }]),
-      suggestName: (baseRepo) => call('worktree:suggest-name', [{ baseRepo }]),
-      create: (req) => call('worktree:create', [req]),
-      discardPrecreated: (input) => call('worktree:discard-precreated', [input]),
+      detectCwd: (cwd) => call(IPC_CHANNELS.WORKTREE.DETECT_CWD, [{ cwd }]),
+      suggestName: (baseRepo) => call(IPC_CHANNELS.WORKTREE.SUGGEST_NAME, [{ baseRepo }]),
+      create: (req) => call(IPC_CHANNELS.WORKTREE.CREATE, [req]),
+      discardPrecreated: (input) => call(IPC_CHANNELS.WORKTREE.DISCARD_PRECREATED, [input]),
     },
-    listAgentCommands: (agentKind) => call('maker:list-agent-commands', [agentKind]),
-    listDesktopCommands: () => call('maker:list-desktop-commands', []),
-    learnStart: (req) => call('learn:start', [req]),
-    listAgentSkills: (agentKind, opts) => call('maker:list-agent-skills', [agentKind, opts]),
-    scanAtResources: (agentKind, opts) => call('maker:scan-at-resources', [agentKind, opts]),
+    listAgentCommands: (agentKind) => call(IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS, [agentKind]),
+    listDesktopCommands: () => call(IPC_CHANNELS.MAKER_INVOKE.LIST_DESKTOP_COMMANDS, []),
+    learnStart: (req) => call(IPC_CHANNELS.LEARN.START, [req]),
+    listAgentSkills: (agentKind, opts) => call(IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS, [agentKind, opts]),
+    scanAtResources: (agentKind, opts) => call(IPC_CHANNELS.MAKER_INVOKE.SCAN_AT_RESOURCES, [agentKind, opts]),
     // skipCache:上次拿到的 ossKey 已悬空(对象被删)时,强制被控端绕过上传去重缓存重传。
     // thumbnail:聊天列表只要缩略图,被控端缩到 1024px webp inline 回包(老被控端
     // 不识别该字段,回落原图 ossKey,消费方两种回包都兼容)。
@@ -693,95 +694,95 @@ export function createMobileMakerTransport({
     transcribeVoice: (input) => call(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL, [input]),
     recordVoiceDictionaryLearning: (input) => call(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL, [input]),
     getVoiceDictionary: () => call(DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL, []),
-    getPendingInteractions: (sessionId) => call('maker:get-pending-interactions', [sessionId]),
+    getPendingInteractions: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS, [sessionId]),
     resolveInteraction: (requestId, decision) =>
-      call('maker:resolve-interaction', [requestId, decision]),
+      call(IPC_CHANNELS.MAKER_INVOKE.RESOLVE_INTERACTION, [requestId, decision]),
     getContextUsage: (sessionId, createOpts) =>
-      call('maker:get-context-usage', [sessionId, createOpts]),
+      call(IPC_CHANNELS.MAKER_INVOKE.GET_CONTEXT_USAGE, [sessionId, createOpts]),
     fork: (sourceSessionId, messageClientId) =>
-      call('maker:fork', [sourceSessionId, messageClientId]),
-    rewindPreview: (sessionId, clientId) => call('maker:rewind:preview', [sessionId, clientId]),
-    rewindCommit: (sessionId, clientId) => call('maker:rewind:commit', [sessionId, clientId]),
-    deleteMessage: (sessionId, clientId) => call('maker:message:delete', [sessionId, clientId]),
-    closeSession: (sessionId) => call('maker:close-session', [sessionId]),
+      call(IPC_CHANNELS.MAKER_INVOKE.FORK, [sourceSessionId, messageClientId]),
+    rewindPreview: (sessionId, clientId) => call(IPC_CHANNELS.MAKER_INVOKE.REWIND_PREVIEW, [sessionId, clientId]),
+    rewindCommit: (sessionId, clientId) => call(IPC_CHANNELS.MAKER_INVOKE.REWIND_COMMIT, [sessionId, clientId]),
+    deleteMessage: (sessionId, clientId) => call(IPC_CHANNELS.MAKER_INVOKE.DELETE_MESSAGE, [sessionId, clientId]),
+    closeSession: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.CLOSE_SESSION, [sessionId]),
     clearSessionAttention: (sessionId, intent) =>
-      call('notification:clear-session-attention', [sessionId, intent]),
+      call(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION, [sessionId, intent]),
     goal: {
-      set: (input) => call('maker:goal:set', [input]),
-      clear: (sessionId) => call('maker:goal:clear', [sessionId]),
-      getStatus: (sessionId) => call('maker:goal:get-status', [sessionId]),
-      pause: (sessionId) => call('maker:goal:pause', [sessionId]),
-      resume: (sessionId) => call('maker:goal:resume', [sessionId]),
-      update: (sessionId, patch) => call('maker:goal:update', [{ sessionId, patch }]),
+      set: (input) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_SET, [input]),
+      clear: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR, [sessionId]),
+      getStatus: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS, [sessionId]),
+      pause: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_PAUSE, [sessionId]),
+      resume: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME, [sessionId]),
+      update: (sessionId, patch) => call(IPC_CHANNELS.MAKER_INVOKE.GOAL_UPDATE, [{ sessionId, patch }]),
     },
     schedule: {
-      list: (filter) => call('maker:schedule:list', filter ? [filter] : []),
-      get: (id) => call('maker:schedule:get', [id]),
-      listTemplates: () => call('maker:schedule:list-templates'),
-      createFromTemplate: (input) => call('maker:schedule:create-from-template', [input]),
-      create: (input) => call('maker:schedule:create', [input]),
-      update: (id, patch) => call('maker:schedule:update', [id, patch]),
-      listRuns: (id, limit) => call('maker:schedule:list-runs', [id, limit]),
-      runNow: (id) => call('maker:schedule:run-now', [id]),
-      pause: (id) => call('maker:schedule:pause', [id]),
-      resume: (id) => call('maker:schedule:resume', [id]),
-      delete: (id) => call('maker:schedule:delete', [id]),
-      getInflightCount: (id) => call('maker:schedule:get-inflight-count', [id]),
-      markRunRead: (runId) => call('maker:schedule:mark-run-read', [runId]),
+      list: (filter) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST, filter ? [filter] : []),
+      get: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_GET, [id]),
+      listTemplates: () => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST_TEMPLATES),
+      createFromTemplate: (input) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_CREATE_FROM_TEMPLATE, [input]),
+      create: (input) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_CREATE, [input]),
+      update: (id, patch) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_UPDATE, [id, patch]),
+      listRuns: (id, limit) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_LIST_RUNS, [id, limit]),
+      runNow: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_RUN_NOW, [id]),
+      pause: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_PAUSE, [id]),
+      resume: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_RESUME, [id]),
+      delete: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_DELETE, [id]),
+      getInflightCount: (id) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_GET_INFLIGHT_COUNT, [id]),
+      markRunRead: (runId) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_MARK_RUN_READ, [runId]),
       markScheduleRunsRead: (scheduleId) =>
-        call('maker:schedule:mark-schedule-runs-read', [scheduleId]),
-      deleteRun: (runId) => call('maker:schedule:delete-run', [runId]),
+        call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_MARK_SCHEDULE_RUNS_READ, [scheduleId]),
+      deleteRun: (runId) => call(IPC_CHANNELS.MAKER_INVOKE.SCHEDULE_DELETE_RUN, [runId]),
     },
     projectAutomation: {
-      removeSchedule: (input) => call('maker:project-automation:remove-schedule', [input]),
+      removeSchedule: (input) => call(IPC_CHANNELS.MAKER_INVOKE.PROJECT_AUTOMATION_REMOVE_SCHEDULE, [input]),
     },
     input: {
-      getProjection: (sessionId) => call('maker:input:get-projection', [sessionId]),
-      enqueue: (sessionId, item, opts) => call('maker:input:enqueue', [sessionId, item, opts]),
-      compact: (sessionId) => call('maker:input:compact', [sessionId]),
-      steer: (sessionId, item, opts) => call('maker:input:steer', [sessionId, item, opts]),
-      stop: (sessionId, opts) => call('maker:input:stop', [sessionId, opts]),
-      resume: (sessionId) => call('maker:input:resume', [sessionId]),
-      retryLastError: (sessionId) => call('maker:input:retry-last-error', [sessionId]),
-      clearError: (sessionId) => call('maker:input:clear-error', [sessionId]),
-      remove: (sessionId, clientId) => call('maker:input:remove', [sessionId, clientId]),
+      getProjection: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION, [sessionId]),
+      enqueue: (sessionId, item, opts) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [sessionId, item, opts]),
+      compact: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_COMPACT, [sessionId]),
+      steer: (sessionId, item, opts) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER, [sessionId, item, opts]),
+      stop: (sessionId, opts) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_STOP, [sessionId, opts]),
+      resume: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_RESUME, [sessionId]),
+      retryLastError: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_RETRY_LAST_ERROR, [sessionId]),
+      clearError: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_ERROR, [sessionId]),
+      remove: (sessionId, clientId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_REMOVE, [sessionId, clientId]),
       updateText: (sessionId, clientId, newText, sessionRefs, trustedContexts) =>
         call(
-          'maker:input:update-text',
+          IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT,
           sessionRefs
             ? [sessionId, clientId, newText, sessionRefs, trustedContexts]
             : [sessionId, clientId, newText],
         ),
       updateContent: (sessionId, clientId, item) =>
-        call('maker:input:update-content', [sessionId, clientId, item]),
+        call(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT, [sessionId, clientId, item]),
       move: (sessionId, clientId, targetIndex) =>
-        call('maker:input:move', [sessionId, clientId, targetIndex]),
+        call(IPC_CHANNELS.MAKER_INVOKE.INPUT_MOVE, [sessionId, clientId, targetIndex]),
       setExpanded: (sessionId, expanded) =>
-        call('maker:input:set-expanded', [sessionId, expanded]),
+        call(IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_EXPANDED, [sessionId, expanded]),
       setInteractionLock: (sessionId, lockId, locked) =>
-        call('maker:input:set-interaction-lock', [sessionId, lockId, locked]),
+        call(IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_INTERACTION_LOCK, [sessionId, lockId, locked]),
       setEditLock: (sessionId, clientId, locked) =>
-        call('maker:input:set-edit-lock', [sessionId, clientId, locked]),
-      clearSession: (sessionId) => call('maker:input:clear-session', [sessionId]),
+        call(IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_EDIT_LOCK, [sessionId, clientId, locked]),
+      clearSession: (sessionId) => call(IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_SESSION, [sessionId]),
     },
     fs: {
-      listDir: (path) => call('fs:list-dir', [{ path }]),
-      statPath: (path) => call('fs:stat-path', [{ path }]),
-      mkdirP: (path) => call('fs:mkdir-p', [{ path }]),
-      readTextFilePreview: (filePath) => call('text-file:read-preview', [{ filePath }]),
+      listDir: (path) => call(IPC_CHANNELS.FS.LIST_DIR, [{ path }]),
+      statPath: (path) => call(IPC_CHANNELS.FS.STAT_PATH, [{ path }]),
+      mkdirP: (path) => call(IPC_CHANNELS.FS.MKDIR_P, [{ path }]),
+      readTextFilePreview: (filePath) => call(IPC_CHANNELS.TEXT_FILE.READ_PREVIEW, [{ filePath }]),
     },
     fileBrowser: {
-      caps: (workdir) => call('file-browser:remote-op', [{ op: 'caps', workdir }]),
+      caps: (workdir) => call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'caps', workdir }]),
       listDir: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'listDir', workdir, relPath }]),
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'listDir', workdir, relPath }]),
       readFile: (workdir, relPath, opts) =>
-        call('file-browser:remote-op', [
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [
           { op: 'readFile', workdir, relPath, ...(opts?.acceptGzip ? { acceptGzip: true } : {}) },
         ]),
       listAllFiles: (workdir, cap) =>
-        call('file-browser:remote-op', [{ op: 'listAllFiles', workdir, ...(cap ? { cap } : {}) }]),
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'listAllFiles', workdir, ...(cap ? { cap } : {}) }]),
       searchCollect: (workdir, query, opts) =>
-        call('file-browser:remote-op', [{
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{
           op: 'searchCollect',
           workdir,
           query,
@@ -789,11 +790,11 @@ export function createMobileMakerTransport({
           ...(opts?.maxMatches ? { maxMatches: opts.maxMatches } : {}),
         }]),
       thumbnail: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'thumbnail', workdir, relPath }]),
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'thumbnail', workdir, relPath }]),
       exportFileStart: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'exportFileStart', workdir, relPath }]),
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'exportFileStart', workdir, relPath }]),
       exportFileStatus: (workdir, transferId) =>
-        call('file-browser:remote-op', [{ op: 'exportFileStatus', workdir, transferId }]),
+        call(IPC_CHANNELS.FILE_BROWSER.REMOTE_OP, [{ op: 'exportFileStatus', workdir, transferId }]),
     },
   };
 }

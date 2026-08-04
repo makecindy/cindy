@@ -49,7 +49,7 @@ export function stripOutboundSessionReferenceSideChannels(
   channel: string,
   args: unknown[],
 ): unknown[] {
-  if (channel === 'maker:input:update-text') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT) {
     if (!Array.isArray(args[3])) return args;
     const next = [...args];
     next[3] = [];
@@ -57,7 +57,7 @@ export function stripOutboundSessionReferenceSideChannels(
     return next;
   }
   if (!QUEUED_CHANNELS.has(channel)) return args;
-  const itemIndex = channel === 'maker:input:update-content' ? 2 : 1;
+  const itemIndex = channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_CONTENT ? 2 : 1;
   const item = args[itemIndex];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return args;
   const nextItem: AgentInputQueuedMessage = { ...(item as AgentInputQueuedMessage) };

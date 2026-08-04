@@ -388,7 +388,7 @@ export async function createRemoteSessionWithPrecreatedWorktree(
   let createFailure: unknown;
   try {
     assertCurrent(input.isCurrent);
-    const result = await input.invoke('maker:create-session', [input.createArgs]);
+    const result = await input.invoke(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, [input.createArgs]);
     assertCurrent(input.isCurrent);
     const sessionId = matchingSessionId(result, input.sessionId);
     if (sessionId) {

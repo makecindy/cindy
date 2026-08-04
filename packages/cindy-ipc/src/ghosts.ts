@@ -1,8 +1,6 @@
 export const GHOSTS_CHANNELS = {
   ASSISTANT_PENDING: "ghosts:assistant-message-pending",
   ASSISTANT_REWRITTEN: "ghosts:assistant-message-rewritten",
-  AT_RESOURCE_PROVIDERS_LIST: "ghosts:at-resource-providers:list",
-  AT_RESOURCES_QUERY: "ghosts:at-resources:query",
   BADGE: "ghosts:badge",
   BUILTIN_STATUS: "ghosts:builtin-status",
   CARD_ACTION: "ghosts:card:action",

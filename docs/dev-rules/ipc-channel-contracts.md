@@ -44,7 +44,16 @@ channel 字符串。
 
 channel-keyed 的映射表（如 device-link 的 invoke 超时覆盖表）同样必须用
 `[IPC_CHANNELS.X.Y]` 计算键，不得写字符串键：guard 会把生产代码里与已登记 channel
-等值的任何字符串字面量（对象 key、Set 成员、任意实参位置）判为违规。
+等值的任何字符串字面量（对象 key、Set 成员、case 标签、任意实参位置）判为违规。
+已登记 channel 的判定覆盖 `@cindy/cindy-ipc` 里**全部**常量表（含 `MAKER_INVOKE` /
+`MAKER_PUSH` 等非 `*_CHANNELS` 命名的表）。
+
+Mobile（`apps/mobile/app`、`apps/mobile/src`）同样在 guard 扫描范围内：mobile 经
+device-link 隧道调用的就是同一批 channel，字面量漂移（cindy-ipc 改名后 mobile 还调
+旧名）只有扫这里才能拦住。mobile 取常量一律
+`import { IPC_CHANNELS } from '@cindy/device-link'`（re-export）；**不得**给
+`apps/mobile/package.json` 直接加 `@cindy/cindy-ipc` 依赖——那会改 runtime
+fingerprint 触发冷更（见 `mobile-development.md` 冷更边界）。
 
 测试里需要构造非法未知 channel 时，使用明显非法值并在同一行或上一行标注
 `ipc-channel-literal-ok`。该例外只用于负例测试，不得用于真实 handler、bridge 或
