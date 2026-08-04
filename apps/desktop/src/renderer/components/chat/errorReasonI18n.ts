@@ -19,6 +19,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
+  codex_compaction_not_converging: 'logic.errors.codexCompactionNotConverging',
   session_event_loop_crashed: 'logic.errors.turnFailed',
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',

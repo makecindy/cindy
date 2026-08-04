@@ -124,6 +124,10 @@ import {
   buildBackendUnreachableMessage,
   type OutboundPathFact,
 } from './retry-escalation.js';
+import {
+  CompactionStormTracker,
+  buildCompactionStormMessage,
+} from './compaction-storm.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -2372,7 +2376,19 @@ export class CodexAgent extends BaseAgent {
      *
      * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
      * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
-     * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
+     * memory flush 阈值也跟着推迟。
+     *
+     * **已核实窗口存在时一律用它, 不与上报值取小** (2026-08-04 修正)。原先取
+     * `min(verified, reported)` 隐含「上报值可信, 只是可能虚高」; 实测证伪了这个
+     * 前提 —— 会话中途切模型后 codex 不刷新 modelContextWindow, 整个会话继续上报
+     * **切换前**那个模型的窗口, 于是 min() 把我们已经算对的新模型窗口又拉回旧值,
+     * 上下文占比与 memory flush 阈值全程按错的窗口走。取小本是为了防虚高, 而
+     * verified 本身就是这条路由的核实上限, 直接用它不会虚高。
+     *
+     * 代价说清楚: 上游「路由真被降窗」而报出更小值的情形不再被采纳。这个场景与
+     * 「上报值陈旧」在协议上无法区分 (两者都只是一个更小的数字), 二选一时优先信
+     * 我们自己按 (provider, model) 核实过的那份 —— 它至少不会指向一个用户已经切走
+     * 的模型。
      *
      * 两个约束都不是可省的细节:
      * - **按 turn 归属模型**, 不读 mutableModel: 见 activeTurnModel 注释。
@@ -2384,16 +2400,14 @@ export class CodexAgent extends BaseAgent {
      *   (模型发现 / 切账号 / 自定义 provider 增删改都即时反映), 见该 dep 的注释。
      *
      * 拿不到已核实窗口时(host 未注入、目录未覆盖、'gpt-5' 这类 server 默认哨兵、只有
-     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为; 上报值反过来比它小时
-     * 同样取上报值(路由真被降窗)。
+     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为。
      */
     const capContextWindow = (reported: number | null): number | null => {
       const verified = activeTurnModel
         ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
       if (!verified || verified <= 0) return reported;
-      if (!reported || reported <= 0) return verified;
-      return Math.min(verified, reported);
+      return verified;
     };
 
     let sdkSessionId: string | undefined;
@@ -2441,6 +2455,28 @@ export class CodexAgent extends BaseAgent {
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
     const turnRetryTracker = new TurnRetryTracker();
+    // 上下文压缩不收敛的终局升级 (见 compaction-storm.ts): codex 按陈旧窗口反复
+    // 压缩、每次压完水位纹丝不动时, 本地熔断并合成终态错误, 与上面的 retry-loop
+    // 升级同路径 (onUpstreamIdleTimeout)。
+    const compactionStormTracker = new CompactionStormTracker();
+    /**
+     * 会话中途切过模型的记录 (from = 本会话最初那个模型)。只服务压缩风暴的诊断
+     * 消息 —— 它是这个故障唯一已知的触发路径, 也是用户唯一能自己动手绕开的。
+     * `from` 一旦记下就不再更新: 多次切换后要提示的仍是那个「codex 还在按它算窗口」
+     * 的最初模型, 而不是中间某一跳。
+     */
+    let modelSwitchRecord: { from: string; to: string } | null = null;
+    /**
+     * codex 投出 contextCompaction 边界时的统一入口。
+     *
+     * 无条件注册: 压缩风暴熔断与 Maker Memory 是否开启无关, 而这个回调此前只在
+     * memoryFlushController 存在时才挂上去 —— 关掉 Maker Memory 的用户会连熔断
+     * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
+     */
+    const handleCompactBoundary = (): void => {
+      compactionStormTracker.noteCompaction();
+      memoryFlushController?.onCompactBoundary();
+    };
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -7343,6 +7379,41 @@ export class CodexAgent extends BaseAgent {
           const snap = usageTracker.snapshot();
           memoryFlushController.onUsageUpdate(snap.contextTokens, snap.contextWindow);
         }
+        // 压缩风暴熔断 (见 compaction-storm.ts)。喂**上报的 input 总量**而不是
+        // usageTracker 快照: 判据比的是「压缩前后同一口径的水位」, 而 tracker 的
+        // contextTokens 掺了本地口径的换算与跨 turn 累计, 拿它比会把口径差当成压缩效果。
+        const stormDecision = compactionStormTracker.noteUsage(totalInput, Date.now());
+        if (stormDecision?.escalate) {
+          const message = buildCompactionStormMessage({
+            ineffectiveCount: stormDecision.ineffectiveCount,
+            contextTokens: stormDecision.contextTokens,
+            elapsedMs: stormDecision.elapsedMs,
+            switchedModel: modelSwitchRecord,
+          });
+          log.error('codex compaction storm escalated to terminal error (compaction not converging)', {
+            threadId,
+            turnId: params.turnId,
+            ineffectiveCount: stormDecision.ineffectiveCount,
+            contextTokens: stormDecision.contextTokens,
+            elapsedMs: stormDecision.elapsedMs,
+            reportedContextWindow: params.tokenUsage?.modelContextWindow ?? null,
+            effectiveContextWindow: lastModelContextWindow,
+            ...(modelSwitchRecord ? { modelSwitch: modelSwitchRecord } : {}),
+          });
+          // 熔断后重新计数: 用户若选择继续 (发新消息前上游又压了几轮), 不会因为
+          // 残留计数在下一条 usage 上立刻二次熔断。
+          compactionStormTracker.reset();
+          // 复用 idle watchdog 的收口路径 (终态墓碑 + error + turn 收口 + interrupt)。
+          // ignorePendingTools: idle watchdog 停表是因为"球在 daemon 手里, 不该算它
+          // 超时"; 而这里的判据是"压缩本身失效了", 与球在谁手里无关。留着那道闸只会
+          // 让残留的未收口工具条目把熔断挡在门外, 用户继续看着它循环。
+          onUpstreamIdleTimeout({
+            reason: 'codex_compaction_not_converging',
+            message,
+            logLabel: 'compaction storm — interrupting current turn',
+            ignorePendingTools: true,
+          });
+        }
       },
       turnCompleted: (params) => {
         // buffered turn 的终态同样进队列等对账 (greptile R11 P1 + codex R12 P1):
@@ -7381,9 +7452,7 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         emitReplayedSubagentUpdate?.();
@@ -7405,9 +7474,7 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         emitReplayedSubagentUpdateOnUpdated?.();
       },
@@ -7425,9 +7492,7 @@ export class CodexAgent extends BaseAgent {
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
-          ...(memoryFlushController
-            ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
-            : {}),
+          onCompactBoundary: handleCompactBoundary,
         });
         emitReplayedSubagentUpdateOnCompleted?.();
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
@@ -7888,6 +7953,9 @@ export class CodexAgent extends BaseAgent {
         // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
         // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
         discardOverloadRetry('new send');
+        // 压缩风暴计数按用户消息归零: 每条消息都重新获得一次完整的判定机会, 熔断
+        // 过一次不会让后续消息一压就断; 反过来病因没解决时也只要几轮就会再次熔断。
+        compactionStormTracker.reset();
         // 产出记账不需要按 send 归零: 它按 turn id 存, 新一轮读的是新 turn 的账。
         // 早先的标量要在这里清, 是因为"新 turn 的响应 / 容量错误先于它的 turnStarted
         // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
@@ -8798,6 +8866,10 @@ export class CodexAgent extends BaseAgent {
         const prevModel = mutableModel;
         const prevCatalogModel = mutableCatalogModel;
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
+        // 压缩风暴诊断用 (见 modelSwitchRecord): 首个 from 是 codex 一直拿来算窗口
+        // 的那个模型, 后续切换只更新 to。
+        const prevSwitchRecord = modelSwitchRecord;
+        modelSwitchRecord = { from: modelSwitchRecord?.from ?? prevModel, to: newModel };
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
@@ -8822,6 +8894,7 @@ export class CodexAgent extends BaseAgent {
           mutableProviderId = prevProviderId;
           mutableModel = prevModel;
           mutableCatalogModel = prevCatalogModel;
+          modelSwitchRecord = prevSwitchRecord;
           throw e;
         }
       },
