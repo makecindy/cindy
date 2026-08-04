@@ -366,6 +366,11 @@ describe('translateResponsesRequest', () => {
           author: 'reviewer',
           content: [{ type: 'encrypted_content', encrypted_content: 'opaque' }],
         },
+        {
+          type: 'agent_message',
+          author: 'observer',
+          content: [{ type: 'output_text', text: '   ' }],
+        },
         { type: 'message', role: 'user', content: 'finish' },
       ],
     }));
@@ -374,7 +379,11 @@ describe('translateResponsesRequest', () => {
       { role: 'user', content: 'start' },
       {
         role: 'assistant',
-        content: '[collab researcher]\n  Findings\n[collab message from reviewer; encrypted payload omitted]',
+        content: [
+          '[collab researcher]\n  Findings',
+          '[collab message from reviewer; encrypted payload omitted]',
+          '[collab message from observer; empty content]',
+        ].join('\n'),
       },
       { role: 'user', content: 'finish' },
     ]);

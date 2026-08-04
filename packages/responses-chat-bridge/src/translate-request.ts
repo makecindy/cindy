@@ -304,6 +304,7 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
     ? item.author.trim()
     : 'agent';
   let body = '';
+  let omittedEncryptedContent = false;
   if (typeof item.content === 'string') {
     body = item.content;
   } else if (Array.isArray(item.content)) {
@@ -312,7 +313,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
       if (!isPlainObject(part) || typeof part.type !== 'string') {
         throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
       }
-      if (part.type === 'encrypted_content') continue;
+      if (part.type === 'encrypted_content') {
+        omittedEncryptedContent = true;
+        continue;
+      }
       if (
         (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
         && typeof part.text === 'string'
@@ -328,7 +332,9 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
   }
   return body.trim()
     ? `[collab ${author}]\n${body}`
-    : `[collab message from ${author}; encrypted payload omitted]`;
+    : omittedEncryptedContent
+      ? `[collab message from ${author}; encrypted payload omitted]`
+      : `[collab message from ${author}; empty content]`;
 }
 
 interface TranslateInputOptions {
