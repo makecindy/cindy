@@ -3845,7 +3845,7 @@
     "windowsRegionLabel": "クォータ期間の一覧",
     "usedPercent": "使用済み {{percent}}%",
     "resetAt": "{{at}} にリセット",
-    "noWindows": "使用量枠のデータはありません",
+    "noWindows": "クォータ期間のデータはありません",
     "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
     "limitWarning": "プランの上限に近づいています",
     "extraUsageEnabled": "追加使用量が有効です",

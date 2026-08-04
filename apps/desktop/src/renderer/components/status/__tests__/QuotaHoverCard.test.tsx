@@ -14,6 +14,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.modelWeeklyLabel') return `${options.model} 周限`;
       if (key === 'quotaCard.windowsRegionLabel') return '配额窗口列表';
       if (key === 'quotaCard.usedPercent') return `已用 ${options.percent}%`;
+      if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
       if (key === 'quotaCard.limitWarning') return '接近套餐限额';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
       if (key === 'quotaCard.tokenBreakdown') {
@@ -102,7 +103,9 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByRole('progressbar', { name: '5 小时' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: '周限' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: 'Fable 周限' })).toBeTruthy();
-    expect(screen.getByRole('progressbar', { name: 'Opus 周限' })).toBeTruthy();
+    expect(
+      screen.getByRole('progressbar', { name: /Opus 周限.*接近套餐限额/ }),
+    ).toBeTruthy();
     expect(screen.getByText('5 小时')).toBeTruthy();
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
@@ -243,7 +246,7 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    expect(screen.getByText('quotaCard.limitRejected')).toBeTruthy();
+    expect(screen.getByText('已触发套餐限额，请求可能被拒绝')).toBeTruthy();
 
     rerender(
       <QuotaHoverCard
@@ -252,7 +255,7 @@ describe('QuotaHoverCard', () => {
       />,
     );
     expect(screen.getByText('接近套餐限额')).toBeTruthy();
-    expect(screen.queryByText('quotaCard.limitRejected')).toBeNull();
+    expect(screen.queryByText('已触发套餐限额，请求可能被拒绝')).toBeNull();
 
     rerender(
       <QuotaHoverCard
@@ -561,8 +564,45 @@ describe('QuotaHoverCard', () => {
     },
   );
 
-  it('为告警窗口提供非颜色提示，普通窗口不添加提示', () => {
+  it('将脏快照中的非字符串 severity 当作缺失值，不让分模型窗口崩溃或升级', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          scoped: [
+            {
+              modelDisplayName: 'Opus',
+              utilization: 50,
+              severity: 123 as unknown as string,
+            },
+          ],
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.getByText('Opus 周限').getAttribute('data-severity')).toBe('normal');
+    expect(
+      screen.getByRole('progressbar', { name: 'Opus 周限' }).getAttribute('data-severity'),
+    ).toBe('normal');
+  });
+
+  it('按告警级别播报对应措辞，并让进度条使用同一可访问名称', () => {
     const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ fiveHour: { utilization: 50, severity: 'critical' } })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const criticalHint = screen.getByText(/已触发套餐限额，请求可能被拒绝/);
+    expect(criticalHint.classList.contains('sr-only')).toBe(true);
+    expect(
+      screen.getByRole('progressbar', {
+        name: /5 小时.*已触发套餐限额，请求可能被拒绝/,
+      }),
+    ).toBeTruthy();
+
+    rerender(
       <QuotaHoverCard
         snapshot={makeSnapshot({ fiveHour: { utilization: 50, severity: 'warning' } })}
         nowMs={NOW_MS}
@@ -571,14 +611,9 @@ describe('QuotaHoverCard', () => {
 
     const warningHint = screen.getByText(/接近套餐限额/);
     expect(warningHint.classList.contains('sr-only')).toBe(true);
-
-    rerender(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ fiveHour: { utilization: 50 } })}
-        nowMs={NOW_MS}
-      />,
-    );
-    expect(screen.queryByText(/接近套餐限额/)).toBeNull();
+    expect(
+      screen.getByRole('progressbar', { name: /5 小时.*接近套餐限额/ }),
+    ).toBeTruthy();
   });
 
   it('marks a critical window title with the critical styling hook', () => {

@@ -79,15 +79,16 @@ const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
 };
 
 /**
- * 空值或 normal 才是无告警；未知非空值至少保留为 warn。
+ * 非字符串按缺失处理；字符串空值或 normal 才是无告警，未知非空值至少保留为 warn。
  * 这与共享告警谓词“任何非 normal severity 均告警”保持一致，
  * 避免新增的上游级别在卡片里被静默降成正常。
  */
-function serverQuotaSeverity(value: string | null | undefined): QuotaSeverity {
-  const normalized = value?.trim().toLowerCase();
+function serverQuotaSeverity(value: unknown): QuotaSeverity {
+  if (typeof value !== 'string') return 'normal';
+  const normalized = value.trim().toLowerCase();
   if (!normalized || normalized === 'normal') return 'normal';
   if (normalized === 'warning') return 'warn';
-  const parts = normalized?.split(/[^a-z]+/).filter(Boolean) ?? [];
+  const parts = normalized.split(/[^a-z]+/).filter(Boolean);
   if (parts.includes('exceeded') || parts.includes('critical')) return 'crit';
   return 'warn';
 }
@@ -168,13 +169,21 @@ function WindowBlock({
   locale: string | undefined;
   t: TFunction;
 }) {
+  const titleId = React.useId();
   const usedPercent = clampPercent(window.utilization);
   const severity = effectiveQuotaSeverity(window);
+  const severityAnnouncement =
+    severity === 'crit'
+      ? t('quotaCard.limitRejected')
+      : severity === 'warn'
+        ? t('quotaCard.limitWarning')
+        : null;
   const resetAt = formatResetAt(window.resetsAt, nowMs, locale);
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
       <div
+        id={titleId}
         data-severity={severity}
         className={cn(
           'mb-2 text-sm font-medium tracking-[-0.005em]',
@@ -184,12 +193,16 @@ function WindowBlock({
         )}
       >
         {title}
-        {severity !== 'normal' ? (
-          // 告警不能只依赖颜色；复用套餐限额文案供屏幕阅读器识别。
-          <span className="sr-only">，{t('quotaCard.limitWarning')}</span>
+        {severityAnnouncement !== null ? (
+          // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
+          <span className="sr-only">，{severityAnnouncement}</span>
         ) : null}
       </div>
-      <QuotaBar usedPercent={window.utilization} severity={severity} ariaLabel={title} />
+      <QuotaBar
+        usedPercent={window.utilization}
+        severity={severity}
+        aria-labelledby={titleId}
+      />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--text-primary)]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}

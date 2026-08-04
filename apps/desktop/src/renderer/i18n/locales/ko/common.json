@@ -3845,7 +3845,7 @@
     "windowsRegionLabel": "할당량 구간 목록",
     "usedPercent": "사용 {{percent}}%",
     "resetAt": "{{at}} 재설정",
-    "noWindows": "사용량 한도 구간 데이터가 없습니다",
+    "noWindows": "할당량 구간 데이터가 없습니다",
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
     "limitWarning": "플랜 한도에 근접했습니다",
     "extraUsageEnabled": "추가 사용량 활성화됨",
