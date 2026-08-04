@@ -1033,8 +1033,10 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 /** Claude 订阅额度段合并本地利用率与服务端等级着色，不影响相邻窗口与会话金额。 */
 function renderClaudeQuotaSegment(
   content: React.ReactNode,
+  visibleText: string,
   usedPercent: number,
   serverSeverity: string | null | undefined,
+  t: TFunction,
 ): React.ReactNode {
   const severity = effectiveQuotaSeverity(usedPercent, serverSeverity);
   const colorClass = severity === 'warn'
@@ -1042,6 +1044,14 @@ function renderClaudeQuotaSegment(
     : severity === 'crit'
       ? 'text-[var(--quota-bar-crit)]'
       : undefined;
+  // 普通段沿用可见文字，只有告警段补充非颜色信号；严重级必须与警告级读出不同语义。
+  const ariaLabel = severity === 'normal'
+    ? undefined
+    : `${visibleText} ${t(
+        severity === 'warn'
+          ? 'todaySpend.claude.limitWarning'
+          : 'todaySpend.claude.limitRejected',
+      )}`;
 
   return (
     <>
@@ -1049,10 +1059,16 @@ function renderClaudeQuotaSegment(
         <span
           aria-hidden="true"
           data-quota-critical-dot
-          className="mr-1 inline-block size-1.5 rounded-full bg-[var(--quota-bar-crit)] align-middle animate-pulse motion-reduce:animate-none"
+          className="session-status-breathing mr-1 inline-block size-1.5 rounded-full bg-[var(--quota-bar-crit)] align-middle"
         />
       )}
-      <span data-quota-severity={severity} className={colorClass}>{content}</span>
+      <span
+        aria-label={ariaLabel}
+        data-quota-severity={severity}
+        className={colorClass}
+      >
+        {content}
+      </span>
     </>
   );
 }
@@ -1480,12 +1496,14 @@ export function TodaySpendChip({
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
-    const renderWindowContent = (content: React.ReactNode) => (
+    const renderWindowContent = (content: React.ReactNode, visibleText: string) => (
       usesClaudeQuotaChipSegments
         ? renderClaudeQuotaSegment(
             content,
+            visibleText,
             100 - window.remainingPercent,
             window.serverSeverity,
+            t,
           )
         : content
     );
@@ -1501,6 +1519,7 @@ export function TodaySpendChip({
               {t('todaySpend.resetPendingSegment', { label: window.label })}
               <span className="motion-safe:animate-pulse">…</span>
             </>,
+            `${t('todaySpend.resetPendingSegment', { label: window.label })}…`,
           )}
         </React.Fragment>
       );
@@ -1522,7 +1541,7 @@ export function TodaySpendChip({
           segmentElsRef.current[window.key] = el;
         }}
       >
-        {renderWindowContent(text)}
+        {renderWindowContent(text, text)}
       </span>
     );
   });

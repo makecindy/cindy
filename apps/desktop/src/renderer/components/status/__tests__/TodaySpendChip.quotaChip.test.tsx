@@ -23,6 +23,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.claude.weeklyLabel': '周限',
         'todaySpend.claude.modelWeeklyLabel': '{{model}} 周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
+        'todaySpend.claude.limitWarning': '接近套餐限额',
+        'todaySpend.claude.limitRejected': '已触发套餐限额，请求可能被拒绝',
         'todaySpend.codex.limitWindow': '限额',
         'todaySpend.codex.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
@@ -176,6 +178,9 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 50%');
     expect(warningSegment?.className).toContain('text-[var(--quota-bar-warn)]');
+    expect(warningSegment?.getAttribute('aria-label')).toBe(
+      '5小时 剩余 50% 接近套餐限额',
+    );
     expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
       .not.toContain('--error-fg');
   });
@@ -188,6 +193,9 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
     expect(criticalSegment?.textContent).toBe('5小时 剩余 50%');
     expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
+    expect(criticalSegment?.getAttribute('aria-label')).toBe(
+      '5小时 剩余 50% 已触发套餐限额，请求可能被拒绝',
+    );
     expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
       .not.toContain('--error-fg');
   });
@@ -199,6 +207,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const normalSegment = container.querySelector<HTMLElement>('[data-quota-severity="normal"]');
     expect(normalSegment?.textContent).toBe('5小时 剩余 50%');
     expect(normalSegment?.getAttribute('class')).toBeNull();
+    expect(normalSegment?.getAttribute('aria-label')).toBeNull();
   });
 
   it('93% 已用量只把对应段染红并显示可降级的 6px 呼吸圆点', () => {
@@ -215,8 +224,8 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(dot).toBeTruthy();
     expect(dot?.className).toContain('size-1.5');
     expect(dot?.className).toContain('rounded-full');
-    expect(dot?.className).toContain('animate-pulse');
-    expect(dot?.className).toContain('motion-reduce:animate-none');
+    expect(dot?.className).toContain('session-status-breathing');
+    expect(dot?.className).not.toContain('animate-pulse');
     expect(dot?.getAttribute('aria-hidden')).toBe('true');
 
     const normalSegment = container.querySelector<HTMLElement>('[data-quota-severity="normal"]');
