@@ -116,8 +116,8 @@ export interface ImChannelAdapter {
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
   /**
-   * 交互卡的 callback 能送达、但对应的 pending interaction 已经不在了(重启 / 已被
-   * 别处解决)时, 把卡片正文改写成的过期提示。缺省 = 不改写(该渠道保持原行为)。
+   * 交互被作废(turn 收口 / session 清理 / 抢跑)时, 把它那张卡片正文改写成的失效
+   * 提示。缺省 = 不改写(该渠道保持原行为)。
    */
   interactionExpiredNotice?: string;
   /**

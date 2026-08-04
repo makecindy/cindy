@@ -872,7 +872,8 @@ export function createTurnRunner(
                     interactionSurface: 'channel-card',
                   },
                   handle: handleInteractionFor(rowId, userId, state.scopeKey),
-                  onCancel: (requestId) => cancelPending(requestId, 'interaction_route_released'),
+                  onCancel: (requestId) =>
+                    dropInteractionCard(requestId, 'interaction_route_released'),
                 });
           await item.beforeProviderStart?.();
           acceptedAt = Date.now();
@@ -2013,6 +2014,29 @@ export function createTurnRunner(
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
+  }
+
+  /**
+   * 交互被作废(turn 收口 / session 清理 / 抢跑)时把它的卡片一起收口。
+   *
+   * 只删 pending 不动卡片, 卡片就会带着可点按钮留在会话里, 而它背后的交互已经
+   * 没了 —— 用户点下去不会有任何反应, 也没有任何提示。群里的授权卡转投宿主私聊
+   * 后这条路径尤其致命: 群里那轮已经收口, 私聊里的卡片却看不出任何变化。
+   */
+  function dropInteractionCard(requestId: string, reason: string): boolean {
+    const cancelled = cancelPending(requestId, reason);
+    // 返回值是 router 的契约: true = 渠道侧已收口这次交互, router 不再自行 cancel。
+    // 丢掉它会让同一个 requestId 被取消两次(第二次落到 SDK 的默认拒绝路径)。
+    if (!cancelled) return false;
+    const notice = adapter.interactionExpiredNotice;
+    if (!notice || !richIm) return true;
+    void richIm
+      .updateInteractiveCard(cancelled.messageId, cards.buildResolvedCard(notice))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
+      });
+    return true;
   }
 
   function settleTurnTerminal(turn: TurnState): void {
