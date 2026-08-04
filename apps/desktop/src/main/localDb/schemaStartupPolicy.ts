@@ -33,7 +33,10 @@ export async function runSchemaStartupPolicy<T extends SchemaCompatibilityResult
 ): Promise<SchemaStartupPolicyResult<T>> {
   if (options.sharedPassive || options.readOnly) {
     const compatibility = options.checkCompatibility();
-    if (compatibility.compatible && options.readOnly && options.checkReadOnlyInvariants) {
+    if (options.readOnly) {
+      if (!compatibility.compatible || !options.checkReadOnlyInvariants) {
+        return { ready: false, compatibility: { ...compatibility, compatible: false } };
+      }
       const invariant = options.checkReadOnlyInvariants();
       if (!invariant.compatible) {
         return { ready: false, compatibility: { ...compatibility, compatible: false } };

@@ -16,7 +16,7 @@ export function buildPackagedReadOnlyCompatibilityMessage(
     .join(', ');
   return (
     '当前安装版无法安全打开共享数据库。请关闭其它开发实例后重试，或安装包含该本地数据 schema 的更新版本。' +
-    `（详情：${issueSummary || 'unknown'}）`
+    `（详情：${issueSummary || '未知原因'}）`
   );
 }
 

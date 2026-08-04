@@ -171,7 +171,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       : '';
     const waitingForWriter = startupLease.reason === 'writer-active';
     const message = waitingForWriter
-      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试。'
+      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试，或改用 --isolated 启动独立数据。'
       : `当前不能执行数据库 schema 启动维护${readerHint}。` +
         '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
     showFatalDialog(
