@@ -422,6 +422,8 @@ describe('MarketPluginCard', () => {
     expect((conflictAction as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('status').textContent).toBe('settings.ghosts.market.conflict');
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
+    expect(screen.getByText('settings.ghosts.market.conflictDescription')).toBeTruthy();
+    expect(screen.queryByText(marketPlugin.description ?? '')).toBeNull();
 
     rerender(
       <MarketPluginCard

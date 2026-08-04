@@ -1970,7 +1970,9 @@ export function MarketPluginCard({
             ) : null}
           </span>
           <span className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">
-            {item.description || item.ghostId}
+            {item.installState === 'conflict'
+              ? t('settings.ghosts.market.conflictDescription')
+              : item.description || item.ghostId}
           </span>
         </span>
       </button>
