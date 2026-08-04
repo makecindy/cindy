@@ -4,6 +4,25 @@ import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js'
 import { buildCodexCapabilityConfigOverrides } from './capability-routing.js';
 
 describe('buildCodexCapabilityConfigOverrides', () => {
+  it('can fail closed a host MCP server for one thread', () => {
+    const policy = {
+      overrides: [{
+        capabilityId: 'browser-use',
+        source: {
+          kind: 'harness-plugin' as const,
+          harness: 'codex',
+          surface: 'mcp' as const,
+          id: 'node_repl',
+        },
+        invocation: 'disabled' as const,
+      }],
+    };
+
+    expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
+      'mcp_servers."node_repl".enabled': false,
+    });
+  });
+
   it('disables the selected Codex plugin with a per-thread config override', () => {
     const policy = {
       overrides: [

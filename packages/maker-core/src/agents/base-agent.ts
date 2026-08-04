@@ -213,6 +213,12 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /** Whether this exact app-server spawn was provisioned with Codex Chrome. */
+  codexBrowserUseAvailable?: boolean;
+  /** Exact verified Chrome plugin version provisioned into this app-server. */
+  codexBrowserUseVersion?: string;
+  /** Maximum startup wait copied from the verified companion descriptor. */
+  codexBrowserUseStartupTimeoutMs?: number;
   /**
    * Build per-thread config overrides that bind host-owned HTTP MCP URLs to one
    * in-memory Session instance. The app-server process is shared, so the spawn
@@ -383,6 +389,23 @@ export interface AgentDeps {
    * product policy.
    */
   capabilityRouting?: CapabilityRoutingPolicy;
+
+  /**
+   * Resolve capability arbitration once for a new session. Use this for
+   * workspace-scoped sources whose effective state is already frozen into
+   * vendorOptions by the host. Static capabilityRouting remains the fallback.
+   */
+  resolveCapabilityRouting?: (ctx: {
+    workingDir: string;
+    remoteHostId?: string | null;
+    vendorOptions: Readonly<Record<string, unknown>>;
+    /** Frozen fact: the concrete app-server was provisioned with the companion. */
+    codexBrowserUseProvisioned: boolean;
+    /** Exact Chrome plugin version bound to that host, when provisioned. */
+    codexBrowserUseVersion: string | null;
+    /** Post-start readiness check, invoked only when this session needs the fallback. */
+    ensureCodexBrowserUseReady: () => Promise<boolean>;
+  }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
   /**
    * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。

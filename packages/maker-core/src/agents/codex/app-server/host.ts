@@ -40,6 +40,7 @@ import {
   type FileChangeRequestApprovalResponse,
   type McpServerElicitationRequestParams,
   type McpServerElicitationRequestResponse,
+  type CodexMcpServerStatusListResponse,
   type PermissionsRequestApprovalParams,
   type PermissionsRequestApprovalResponse,
   type ServerRequestResolvedNotification,
@@ -239,6 +240,12 @@ export interface AppServerHostOptions {
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
    */
   codexProxyActive?: boolean;
+  /** Host creation snapshot: this exact process received the Browser companion. */
+  codexBrowserUseAvailable?: boolean;
+  /** Exact verified Chrome plugin version provisioned into this process. */
+  codexBrowserUseVersion?: string;
+  /** Maximum wait for the provisioned Browser companion to publish its MCP tools. */
+  codexBrowserUseStartupTimeoutMs?: number;
   /**
    * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
    * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
@@ -267,6 +274,10 @@ export class AppServerHost {
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
+  /** Server request may race the child thread/started notification that establishes lineage. */
+  private readonly threadHandlerWaiters = new Map<string, Set<() => void>>();
+  /** One post-start MCP inventory probe per server/tool for this concrete process. */
+  private readonly mcpToolAvailability = new Map<string, Promise<boolean>>();
   /** 找不到 subscriber 时按 threadId 暂存的 notification, drain on subscribe。 */
   private readonly buffered = new Map<string, BufferedNotification[]>();
   /** 血缘迭代重建的重入闸(routeDescendantThreadStarted 与重建互相调用)。 */
@@ -292,6 +303,84 @@ export class AppServerHost {
 
   isCodexProxyActive(): boolean {
     return this.opts.codexProxyActive === true;
+  }
+
+  isCodexBrowserUseAvailable(): boolean {
+    return this.opts.codexBrowserUseAvailable === true;
+  }
+
+  getCodexBrowserUseVersion(): string | null {
+    return this.opts.codexBrowserUseVersion ?? null;
+  }
+
+  /**
+   * Verify that an MCP server connected and published a concrete tool. Static
+   * spawn provisioning is not enough: this is the post-initialize gate that
+   * prevents a Skill from being shown when its runtime tool never registered.
+   */
+  waitForMcpTool(
+    serverName: string,
+    toolName: string,
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<boolean> {
+    const key = `${serverName}\0${toolName}`;
+    const cached = this.mcpToolAvailability.get(key);
+    if (cached) return cached;
+    const probe = this.probeMcpTool(
+      serverName,
+      toolName,
+      opts.timeoutMs ?? this.opts.codexBrowserUseStartupTimeoutMs ?? 10_000,
+      opts.pollIntervalMs ?? 100,
+    );
+    this.mcpToolAvailability.set(key, probe);
+    // A negative readiness probe is a point-in-time result, not a permanent
+    // host capability fact. The MCP child may finish starting later, so the
+    // next session must be allowed to retry. Successful probes stay cached.
+    void probe.then((available) => {
+      if (!available && this.mcpToolAvailability.get(key) === probe) {
+        this.mcpToolAvailability.delete(key);
+      }
+    });
+    return probe;
+  }
+
+  private async probeMcpTool(
+    serverName: string,
+    toolName: string,
+    timeoutMs: number,
+    pollIntervalMs: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    try {
+      while (!this.shuttingDown && Date.now() < deadline) {
+        let cursor: string | null = null;
+        do {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) return false;
+          const response: CodexMcpServerStatusListResponse =
+            await this.request<CodexMcpServerStatusListResponse>(
+              Method.McpServerStatusList,
+              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId: null },
+              { timeoutMs: remaining },
+            );
+          const server = response.data.find((entry) => entry.name === serverName);
+          if (server && Object.hasOwn(server.tools, toolName)) return true;
+          cursor = response.nextCursor;
+        } while (cursor !== null);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.min(pollIntervalMs, remaining));
+        });
+      }
+    } catch (error) {
+      this.logger.warn('MCP tool readiness probe failed', {
+        serverName,
+        toolName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return false;
   }
 
   /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
@@ -429,7 +518,11 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const handlers =
+        this.handlersForThread(params.threadId)
+        ?? (this.subscribers.size > 0
+          ? await this.waitForThreadHandlers(params.threadId)
+          : undefined);
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -618,6 +711,9 @@ export class AppServerHost {
     this.subscribers.clear();
     this.lineageRoots.clear();
     this.buffered.clear();
+    for (const threadId of this.threadHandlerWaiters.keys()) {
+      this.notifyThreadHandlerWaiters(threadId);
+    }
     const c = this.client;
     this.client = null;
     this.startPromise = null;
@@ -680,6 +776,7 @@ export class AppServerHost {
     }
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
+    this.notifyThreadHandlerWaiters(threadId);
 
     // 排空缓存 (thread/started 比 subscribe 早到的固有竞争)
     const buf = this.buffered.get(threadId);
@@ -828,6 +925,43 @@ export class AppServerHost {
     return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
+  /**
+   * Give an already-owned descendant a short window for its thread/started
+   * notification to establish lineage. This closes an observed ordering race
+   * for node_repl elicitation while preserving fail-closed routing: unknown
+   * threads still decline after the bounded wait and can never fan out to an
+   * arbitrary subscriber.
+   */
+  private waitForThreadHandlers(threadId: string): Promise<ThreadEventHandlers | undefined> {
+    const current = this.handlersForThread(threadId);
+    if (current) return Promise.resolve(current);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const waiters = this.threadHandlerWaiters.get(threadId);
+        waiters?.delete(finish);
+        if (waiters?.size === 0) this.threadHandlerWaiters.delete(threadId);
+        resolve(this.handlersForThread(threadId));
+      };
+      // Use the same bounded lineage window as early thread notifications.
+      // Both races are caused by thread/started crossing the subscribe/request
+      // boundary, so they should expire together instead of using a shorter
+      // empirical timeout that can fail only under load.
+      const timer = setTimeout(finish, this.bufferTtlMs);
+      timer.unref?.();
+      const waiters = this.threadHandlerWaiters.get(threadId) ?? new Set<() => void>();
+      waiters.add(finish);
+      this.threadHandlerWaiters.set(threadId, waiters);
+    });
+  }
+
+  private notifyThreadHandlerWaiters(threadId: string): void {
+    for (const finish of [...(this.threadHandlerWaiters.get(threadId) ?? [])]) finish();
+  }
+
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
     const childThreadId = params.thread.id;
     const parentThreadId = params.thread.parentThreadId;
@@ -842,6 +976,7 @@ export class AppServerHost {
     if (!handlers) return;
 
     this.lineageRoots.set(childThreadId, rootThreadId);
+    this.notifyThreadHandlerWaiters(childThreadId);
     if (handlers.descendantThreadStarted) {
       try {
         handlers.descendantThreadStarted(params);

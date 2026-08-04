@@ -83,6 +83,15 @@ export function buildCodexCapabilityConfigOverrides(
     }
     if (
       directive.source.surface === 'mcp' &&
+      directive.invocation === 'disabled'
+    ) {
+      config[
+        `mcp_servers.${quoteTomlKeySegment(directive.source.id)}.enabled`
+      ] = false;
+      continue;
+    }
+    if (
+      directive.source.surface === 'mcp' &&
       directive.invocation === 'explicit-only' &&
       directive.source.containerId
     ) {

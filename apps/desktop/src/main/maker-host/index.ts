@@ -54,6 +54,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
+  getCodexHome,
   readClaudeApiKey,
 } from './auth-adapters.js';
 import {
@@ -164,7 +165,10 @@ import {
   invalidateRemoteCcQueriesForMcpGenerationChange,
   maybeDetachStaleRemoteCcQuery,
 } from './remote-codex-mcp-recovery.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
+import {
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  readDisabledBuiltinPluginIds,
+} from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
 import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
@@ -185,7 +189,14 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
-import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
+import {
+  buildDesktopCapabilityRoutingPolicy,
+  DESKTOP_CAPABILITY_ROUTING_POLICY,
+} from './capability-routing.js';
+import {
+  checkCodexBrowserCompanionConnection,
+  prepareCodexBrowserCompanion,
+} from './codex-browser-companion.js';
 export { withRehydrateCloseSuppressed };
 
 type RemoteCcQuery = Awaited<
@@ -981,6 +992,34 @@ export function getMaker(): Maker {
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
       capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+      resolveCapabilityRouting: async ({
+        workingDir,
+        vendorOptions,
+        codexBrowserUseProvisioned,
+        codexBrowserUseVersion,
+        ensureCodexBrowserUseReady,
+      }) => {
+        const disabledPluginIds =
+          readDisabledBuiltinPluginIds(vendorOptions)
+          ?? getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
+        const cindyBrowserEnabled = !disabledPluginIds.includes('browser');
+        let connectedCodexBrowserUse = codexBrowserUseProvisioned;
+        if (!cindyBrowserEnabled && connectedCodexBrowserUse) {
+          connectedCodexBrowserUse = await ensureCodexBrowserUseReady();
+        }
+        if (!cindyBrowserEnabled && connectedCodexBrowserUse) {
+          const connection = await checkCodexBrowserCompanionConnection({
+            codexHome: getCodexHome(),
+          });
+          connectedCodexBrowserUse =
+            connection.status === 'ready'
+            && connection.version === codexBrowserUseVersion;
+        }
+        return buildDesktopCapabilityRoutingPolicy({
+          cindyBrowserEnabled,
+          codexBrowserUseAvailable: connectedCodexBrowserUse,
+        });
+      },
       makerMemory: makerMemoryManager,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
@@ -1066,6 +1105,24 @@ export function getMaker(): Maker {
           // bridge 整体缺席 = cindy_contacts 必然不可达
           codexAppliedContactsEnabled = false;
         }
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        const browserCompanion = isControlPlane
+          ? null
+          : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
+        const codexBrowserUseAvailable = browserCompanion?.status === 'ready';
+        if (browserCompanion?.status === 'ready') {
+          mcpExtraArgs.push(...browserCompanion.extraArgs);
+        } else {
+          // Neutralize a stale/manual node_repl entry in the isolated config.
+          // Ordinary Codex remains available; only the unverified companion is off.
+          mcpExtraArgs.push('-c', 'mcp_servers.node_repl.enabled=false');
+          if (browserCompanion) {
+            desktopMakerLogger.warn('Codex Browser companion unavailable', {
+              reason: browserCompanion.reason,
+              detail: browserCompanion.detail,
+            });
+          }
+        }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
         // 关掉 API 模式则不带这些 flag —— 天然可逆 (见 codex-gateway-config.ts)。
@@ -1085,7 +1142,6 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        const isControlPlane = ctx.hostPurpose === 'control-plane';
         if (!isControlPlane) {
           setCodexProxyAuthInjection(authInjection);
           await broadcastCodexRuntimeRoute();
@@ -1128,6 +1184,13 @@ export function getMaker(): Maker {
           extraEnv: mcpExtraEnv,
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexBrowserUseAvailable,
+          ...(browserCompanion?.status === 'ready'
+            ? {
+                codexBrowserUseVersion: browserCompanion.version,
+                codexBrowserUseStartupTimeoutMs: browserCompanion.startupTimeoutMs,
+              }
+            : {}),
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
           // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
           ...(useOAuthBearer && ready
@@ -1139,7 +1202,9 @@ export function getMaker(): Maker {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
-        const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
+        const disabledPluginIds =
+          readDisabledBuiltinPluginIds(vendorOptions)
+          ?? getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
@@ -1375,6 +1440,15 @@ export function getMaker(): Maker {
             );
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          if (opts.agentKind === 'codex') {
+            const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
+              opts.workingDir,
+            );
+            opts.vendorOptions = {
+              ...(opts.vendorOptions ?? {}),
+              [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
+            };
+          }
         },
         onBeforeStart: async ({ agentKind, workingDir, remoteHostId }) => {
           // 延迟记忆重启 pending 时,本地 Codex 新会话加入 shared host 前先尝试

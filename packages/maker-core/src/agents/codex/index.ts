@@ -1999,6 +1999,9 @@ export class CodexAgent extends BaseAgent {
     let env: Record<string, string> = {};
     let extraArgs: string[] = [];
     let codexProxyActive = false;
+    let codexBrowserUseAvailable = false;
+    let codexBrowserUseVersion: string | undefined;
+    let codexBrowserUseStartupTimeoutMs: number | undefined;
     let remoteCompactionProviderId: string | undefined;
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     for (;;) {
@@ -2020,6 +2023,9 @@ export class CodexAgent extends BaseAgent {
 
       extraArgs = [];
       codexProxyActive = false;
+      codexBrowserUseAvailable = false;
+      codexBrowserUseVersion = undefined;
+      codexBrowserUseStartupTimeoutMs = undefined;
       remoteCompactionProviderId = undefined;
       buildSessionMcpConfig = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
@@ -2037,6 +2043,14 @@ export class CodexAgent extends BaseAgent {
           extraArgs = cfg.extraArgs;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
+          codexBrowserUseAvailable =
+            cfg.codexBrowserUseAvailable === true && !remoteHostId;
+          codexBrowserUseVersion = !remoteHostId
+            ? cfg.codexBrowserUseVersion
+            : undefined;
+          codexBrowserUseStartupTimeoutMs = !remoteHostId
+            ? cfg.codexBrowserUseStartupTimeoutMs
+            : undefined;
           // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
           // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
           if (codexProxyActive && cfg.codexRemoteCompactionProviderId) {
@@ -2110,6 +2124,9 @@ export class CodexAgent extends BaseAgent {
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
       clientInfo: { name: 'cindy', version: '0.0.0' },
       codexProxyActive,
+      codexBrowserUseAvailable,
+      codexBrowserUseVersion,
+      codexBrowserUseStartupTimeoutMs,
       remoteCompactionProviderId,
       buildSessionMcpConfig,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
@@ -2944,7 +2961,20 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
-    const capabilityRoutingPolicy = this.deps.capabilityRouting;
+    const codexBrowserUseProvisioned = host.isCodexBrowserUseAvailable();
+    const capabilityRoutingPolicy =
+      await this.deps.resolveCapabilityRouting?.({
+        workingDir: opts.workingDir,
+        remoteHostId: opts.remoteHostId,
+        vendorOptions: vo,
+        codexBrowserUseProvisioned,
+        codexBrowserUseVersion: host.getCodexBrowserUseVersion(),
+        ensureCodexBrowserUseReady: async () => (
+          codexBrowserUseProvisioned
+          && await host.waitForMcpTool('node_repl', 'js')
+        ),
+      }) ?? this.deps.capabilityRouting;
+    assertCurrentHost('capability routing resolution');
     const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
       capabilityRoutingPolicy,
       {
@@ -5138,7 +5168,7 @@ export class CodexAgent extends BaseAgent {
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
-        this.deps.capabilityRouting,
+        capabilityRoutingPolicy,
         {
           harness: 'codex',
           surface: 'mcp',

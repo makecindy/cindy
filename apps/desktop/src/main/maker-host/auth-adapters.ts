@@ -108,7 +108,7 @@ const log = createLogger('auth-adapters');
 export { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 
 /** Codex CLI 的 HOME 目录, auth.json 放在根, sessions 子目录放会话 jsonl。 */
-function getCodexHome(): string {
+export function getCodexHome(): string {
   return path.join(app.getPath('userData'), 'codex-home');
 }
 

@@ -112,3 +112,81 @@ export const DESKTOP_CAPABILITY_ROUTING_POLICY = {
     },
   ],
 } as const satisfies CapabilityRoutingPolicy;
+
+const CODEX_IN_APP_BROWSER_UNAVAILABLE_OVERRIDE = {
+  capabilityId: 'browser-use',
+  source: {
+    kind: 'harness-plugin',
+    harness: 'codex',
+    surface: 'plugin',
+    id: 'browser@openai-bundled',
+  },
+  invocation: 'disabled',
+  reason: 'Cindy does not host the ChatGPT in-app browser runtime.',
+} as const satisfies CapabilityRoutingPolicy['overrides'][number];
+
+const CODEX_CHROME_USE_OVERRIDES = [
+  {
+    capabilityId: 'browser-use',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'plugin',
+      id: 'chrome@openai-bundled',
+    },
+    invocation: 'disabled',
+    replacement: {
+      kind: 'cindy-plugin',
+      id: 'browser',
+    },
+    reason: 'Cindy Browser owns browser automation while it is enabled for this workspace.',
+  },
+  {
+    capabilityId: 'browser-use',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'mcp',
+      id: 'node_repl',
+    },
+    invocation: 'disabled',
+    replacement: {
+      kind: 'cindy-plugin',
+      id: 'browser',
+    },
+    reason: 'Cindy Browser owns browser automation while it is enabled for this workspace.',
+  },
+] as const satisfies CapabilityRoutingPolicy['overrides'];
+
+const CODEX_CHROME_USE_UNAVAILABLE_OVERRIDES = CODEX_CHROME_USE_OVERRIDES.map(
+  (override) => ({
+    capabilityId: override.capabilityId,
+    source: override.source,
+    invocation: override.invocation,
+    reason: 'The official Codex Browser companion is unavailable in this runtime.',
+  }),
+) satisfies CapabilityRoutingPolicy['overrides'];
+
+/** Freeze workspace-scoped capability arbitration for one new runtime. */
+export function buildDesktopCapabilityRoutingPolicy(opts: {
+  cindyBrowserEnabled: boolean;
+  codexBrowserUseAvailable?: boolean;
+}): CapabilityRoutingPolicy {
+  const chromeOverrides = opts.cindyBrowserEnabled
+    ? CODEX_CHROME_USE_OVERRIDES
+    : opts.codexBrowserUseAvailable === false
+      ? CODEX_CHROME_USE_UNAVAILABLE_OVERRIDES
+      : [];
+  return {
+    overrides: [
+      ...DESKTOP_CAPABILITY_ROUTING_POLICY.overrides,
+      {
+        ...CODEX_IN_APP_BROWSER_UNAVAILABLE_OVERRIDE,
+        ...(opts.cindyBrowserEnabled
+          ? { replacement: { kind: 'cindy-plugin' as const, id: 'browser' } }
+          : {}),
+      },
+      ...chromeOverrides,
+    ],
+  };
+}
