@@ -78,8 +78,11 @@ async function callGhostForScript(
   // POSIX 允许首尾空白的目录名,trim 后登记会让授权根与脚本实际 cwd 分叉
   // (review)。trim 只用于「全空白 = 未配置」判空;相对/畸形按 null 登记
   // (fs 槽会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响)。
-  // grantWorkdir=false(纯写方法,如 add_comment):不挂写盘授权——结果体小
-  // 不可能泄洪,给了写窗只是白白扩大在途暴露面(review P1 第三轮)。
+  // grantWorkdir=false:不挂写盘授权。收窄口径(经四轮 review 收敛):只有
+  // 显式带 out_file 的读调用才挂写窗——纯写方法(add_comment)结果体小
+  // 不可能泄洪,feishu 方法没有 out_file 契约;不带 out_file 的读调用若
+  // 触发插件自动泄洪,只是回落 truncated,与不支持写窗前的行为一致,无回归。
+  // 最小授权:只授 jira.read 的 schedule 不给插件开出任何项目目录写窗。
   const rawWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir : '';
   const scriptWorkdir = grantWorkdir && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
   const cardService = getGhostCardService();
@@ -137,8 +140,9 @@ async function callFeishu(
     schedule,
     runId,
     active,
-    // 读方法可能超限自动泄洪(不带 out_file 也落盘),写窗保留。
-    true,
+    // feishu 方法没有 out_file 契约,不挂写窗(收窄口径见 callGhostForScript
+    // 头注释;插件若自动泄洪会回落 truncated,与未挂写窗前的行为一致)。
+    false,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   const payload = result.result as { data?: unknown } | null | undefined;
@@ -243,7 +247,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           issue_key: requireString(params, 'issue_key'),
           ...(fields ? { fields } : {}),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds, true);
+        }, context.schedule, runId, this.activeScriptCallIds, outFile !== undefined);
       }
       case 'jira.search_jql': {
         requireCapability(granted, 'jira.read');
@@ -269,7 +273,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           // 或传 out_file 让意识把整包落盘到 schedule 工作目录,脚本自己读回。
           ...(nextPageToken === undefined ? {} : { next_page_token: nextPageToken }),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds, true);
+        }, context.schedule, runId, this.activeScriptCallIds, outFile !== undefined);
       }
       case 'jira.add_comment': {
         requireCapability(granted, 'jira.comment');

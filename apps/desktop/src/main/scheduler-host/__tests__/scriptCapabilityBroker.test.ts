@@ -167,6 +167,35 @@ describe('SchedulerScriptCapabilityBroker', () => {
     }
   });
 
+  it('read-method without out_file: jira.search_jql 在途同样不持写窗(review P1 第四轮)', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-read-grantless-'));
+    const { fsSlot } = wireRealChannel(tmp);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    callGhostToolMock.mockImplementationOnce(async () => { await gate; return { ok: true, result: {} }; });
+    const p = new SchedulerScriptCapabilityBroker()
+      .call(
+        { method: 'jira.search_jql', params: { jql: 'project = DING' } },
+        new Set(['jira.read']),
+        { schedule: schedule({ workingDir: tmp }), runId: 'run-r' },
+      )
+      .catch((err: unknown) => err);
+    try {
+      // 读方法不带 out_file:写窗不挂——只授 jira.read 的 schedule 不能让插件
+      // 在调用在途期间写项目目录;插件若自动泄洪只是回落 truncated(与收窄前
+      // 一致,无回归)。
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId, path: 'poison.json', content: 'x',
+      })).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'poison.json'))).toBe(false);
+    } finally {
+      release();
+      await p;
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('forwards ADF comment bodies untouched for real @mentions', async () => {
     // 2026-08-04 DING-179498:决策评论带 mention 的 ADF 曾被白名单拒收导致丢单。
     // fixture 用真实 mention 形态(text/accessLevel 等 attrs 全带),防「只透传
@@ -492,11 +521,12 @@ describe('SchedulerScriptCapabilityBroker', () => {
     // POSIX 上不算绝对,会拿到不同的登记形状)。
     const absWorkdir = path.resolve(path.sep);
     await broker.call(
-      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'r.json' } },
       new Set(['jira.read']),
       { schedule: schedule({ workingDir: absWorkdir }) },
     );
-    // 登记形状:无会话、脚本通道标记、带 schedule.workingDir 作为落盘根。
+    // 登记形状:无会话、脚本通道标记、带 schedule.workingDir 作为落盘根
+    // (仅显式带 out_file 的调用才挂写窗,review P1 第四轮)。
     expect(registerCallMock).toHaveBeenCalledTimes(1);
     const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(info).toEqual({
@@ -511,6 +541,16 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(finalizeCallMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       callGhostToolMock.mock.invocationCallOrder[0],
     );
+
+    // 不带 out_file 的读调用不挂写窗(review P1 第四轮):scriptWorkdir null,
+    // 登记/下发/finalize 生命周期不变。
+    registerCallMock.mockClear();
+    await broker.call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']),
+      { schedule: schedule({ workingDir: absWorkdir }) },
+    );
+    expect(registerCallMock.mock.calls[0][1]).toMatchObject({ scriptWorkdir: null, channel: 'script' });
 
     // 失败路径同样 finalize——不 finalize 条目永驻,callId 永久有效(破"用完即废")。
     registerCallMock.mockClear();
@@ -527,9 +567,10 @@ describe('SchedulerScriptCapabilityBroker', () => {
 
     // 畸形 workingDir(相对路径/首尾空白)按 null 登记:fs 槽拒写但查询
     // 不受影响;条目的 channel:'script' 标记不受影响(review m2/m3/n2)。
+    // 带 out_file 调用才挂写窗,否则畸形校验根本不执行(第四轮收窄)。
     registerCallMock.mockClear();
     await broker.call(
-      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'x.json' } },
       new Set(['jira.read']),
       { schedule: schedule({ workingDir: 'relative/dir' }) },
     );
@@ -540,7 +581,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
     registerCallMock.mockClear();
     const padded = `${absWorkdir}${path.sep}padded `;
     await broker.call(
-      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'x.json' } },
       new Set(['jira.read']),
       { schedule: schedule({ workingDir: padded }) },
     );
@@ -665,11 +706,12 @@ describe('SchedulerScriptCapabilityBroker', () => {
     });
     const broker = new SchedulerScriptCapabilityBroker();
     const granted = new Set(['jira.read'] as const);
+    // 带 out_file 才挂写窗(第四轮收窄),本用例测的是 run 粒度收口。
     const pA = broker
-      .call({ method: 'jira.get', params: { issue_key: 'DING-1' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-A' })
+      .call({ method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'a.json' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-A' })
       .catch((err: unknown) => err);
     const pB = broker
-      .call({ method: 'jira.get', params: { issue_key: 'DING-2' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-B' })
+      .call({ method: 'jira.get', params: { issue_key: 'DING-2', out_file: 'b.json' } }, granted, { schedule: schedule({ workingDir: tmp }), runId: 'run-B' })
       .catch((err: unknown) => err);
     try {
       const callIdA = registerCallMock.mock.calls[0][0] as string;
@@ -717,8 +759,9 @@ describe('SchedulerScriptCapabilityBroker', () => {
         .mockImplementationOnce(async () => ({ ok: true, result: {} }));
       const broker = new SchedulerScriptCapabilityBroker();
       const granted = new Set(['jira.read'] as const);
-      const p1 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-1' } }, granted, { schedule: schedule({ workingDir: tmp }) });
-      const p2 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-2' } }, granted, { schedule: schedule({ workingDir: tmp }) });
+      // 带 out_file 才挂写窗(第四轮收窄),本用例测的是并发 callId 隔离。
+      const p1 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'a.json' } }, granted, { schedule: schedule({ workingDir: tmp }) });
+      const p2 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-2', out_file: 'b.json' } }, granted, { schedule: schedule({ workingDir: tmp }) });
       await p2;
       const firstCallId = registerCallMock.mock.calls[0][0] as string;
       const secondCallId = registerCallMock.mock.calls[1][0] as string;
