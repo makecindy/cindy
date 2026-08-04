@@ -81,6 +81,22 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('read', { paths: [`${WS}/a.ts`, `${WS}/b.ts`] })).toBe('auto-approve');
   });
 
+  /**
+   * 与 Claude 的 READ_ONLY_TOOLS scope 判定对齐:目录级递归读(grep/find/ls)的根在工作区外时
+   * 必须升级 —— 根路径本身不含凭证名(过不了 isSensitiveCredentialPath),但递归能捞出区外凭证
+   * 子路径。Pi 此前不传 scope,这类调用被静默 auto-approve,比同输入下的 Claude 更宽松。
+   */
+  it('escalates out-of-workspace recursive reads but keeps single-file reads cheap', () => {
+    for (const tool of ['grep', 'find', 'ls']) {
+      expect(verdict(tool, { path: '/Users/t' })).toBe('prompt');
+      expect(verdict(tool, { path: `${WS}/src` })).toBe('auto-approve');
+    }
+    // 单文件读只碰一个具名文件,区外也不因"能遍历"而升级(凭证路径另有必问规则兜住)。
+    expect(verdict('read', { path: '/tmp/notes.txt' })).toBe('auto-approve');
+    // 路径缺失(如只给 pattern)时无根可判,保持原有放行语义。
+    expect(verdict('grep', { pattern: 'TODO' })).toBe('auto-approve');
+  });
+
   it('fails closed for MCP and unknown tools', () => {
     expect(verdict('mcp__cindy_orca__start_team', { anything: 1 })).toBe('prompt');
     expect(verdict('some_future_tool', {})).toBe('prompt');

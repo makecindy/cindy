@@ -45,6 +45,14 @@ function describeOtherTool(toolName: string, input: Record<string, unknown>): st
 /** pi 只读内置工具(与 cindy-bridge READONLY_BUILTINS 同集)。入参路径字段统一为 `path`。 */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'ls']);
 
+/**
+ * 单文件读 vs 目录级递归读 —— 与 CC 的 READ_ONLY_TOOLS scope 判定同口径。
+ * `read` 只读一个具名文件;`grep`/`find`/`ls` 会从给定根递归遍历,根在工作区外时能捞出区外
+ * 凭证子路径(如 `grep {path:'/Users/me', pattern:'AKIA'}` 命中 ~/.aws/credentials,而 path
+ * 本身不含凭证名、过不了 isSensitiveCredentialPath)→ 必须交 core 按边界升级。
+ */
+const TREE_SCOPE_READ_TOOLS: ReadonlySet<string> = new Set(['grep', 'find', 'ls']);
+
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */
 const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
 
@@ -87,7 +95,11 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
     // 的 touchesCredentialPath 同口径递归扫全字段;命中的字符串作为 path 交 core 判必问。
     const credentialHit = findCredentialLeaf(input);
-    return { kind: 'read', path: credentialHit ?? stringField(input, 'path') };
+    return {
+      kind: 'read',
+      path: credentialHit ?? stringField(input, 'path'),
+      scope: TREE_SCOPE_READ_TOOLS.has(toolName) ? 'tree' : 'file',
+    };
   }
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return { kind: 'file-write', path: stringField(input, 'path') };
