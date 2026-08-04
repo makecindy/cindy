@@ -222,7 +222,8 @@ describe('SessionCard visual cases', () => {
 
     fireEvent.pointerDown(card!, { button: 0 });
 
-    expect(mocks.ensureInitialMessages).toHaveBeenCalledExactlyOnceWith('short-idle-cc');
+    expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
   });
 
   it.each(sessionCardVisualCases.map((item) => [item.label, item.id] as const))(

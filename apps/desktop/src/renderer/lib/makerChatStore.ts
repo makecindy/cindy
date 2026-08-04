@@ -5907,6 +5907,13 @@ function releaseCacheHydrationAfterFailure(sessionId: string): void {
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
   requestInputProjection(sessionId);
+  // Prefetch and other non-mounted callers still create a cache entry. Give
+  // that entry the same bounded lifetime as a viewed session so a cancelled
+  // navigation cannot leave messages permanently exempt from soft eviction.
+  if (!_activeViewSessions.has(sessionId)) {
+    _lastViewedAt.set(sessionId, Date.now());
+    _ensureDemoteTimer();
+  }
   if (state.historyLoaded) return;
   if (_historyFetchInFlight.has(sessionId)) return;
   // 行水合并行异步读的陈旧性守卫: fetch 启动时定格 rev, 应用时比对(见 planModeRev)。

@@ -1094,4 +1094,29 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
   });
+
+  it('demotes a prefetched session that never enters a mounted view', async () => {
+    const sessionId = sid('prefetch-demote');
+    addMessage(sessionId);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(BASE_TIME.getTime());
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+
+    vi.advanceTimersByTime(4 * 60_000);
+    makerChatStore.ensureInitialMessages(sessionId);
+    expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(
+      BASE_TIME.getTime() + 4 * 60_000,
+    );
+
+    vi.advanceTimersByTime(4 * 60_000 + 59_000);
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_000);
+
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
+  });
 });

@@ -111,7 +111,8 @@ describe('runMessagesListImportSideEffects (injectable)', () => {
       { deviceLinkFirstPage: true },
     );
 
-    expect(importCodex).toHaveBeenCalledExactlyOnceWith('codex-s1');
+    expect(importCodex).toHaveBeenCalledTimes(1);
+    expect(importCodex).toHaveBeenCalledWith('codex-s1');
     expect(importClaude).not.toHaveBeenCalled();
   });
 
@@ -126,7 +127,8 @@ describe('runMessagesListImportSideEffects (injectable)', () => {
     });
 
     expect(importCodex).not.toHaveBeenCalled();
-    expect(importClaude).toHaveBeenCalledExactlyOnceWith('claude-s1');
+    expect(importClaude).toHaveBeenCalledTimes(1);
+    expect(importClaude).toHaveBeenCalledWith('claude-s1');
   });
 
   it('普通任务 → 两个 importer 都跳过', async () => {
@@ -191,7 +193,8 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
       () => listHandler?.({}, 'codex-s1', { limit: 10 }),
     );
 
-    expect(codexMock).toHaveBeenCalledExactlyOnceWith('codex-s1');
+    expect(codexMock).toHaveBeenCalledTimes(1);
+    expect(codexMock).toHaveBeenCalledWith('codex-s1');
     expect(claudeMock).not.toHaveBeenCalled();
     expect(Array.isArray(rows)).toBe(true);
   });

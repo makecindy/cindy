@@ -41,7 +41,8 @@ describe('sessionService.get in-flight deduplication', () => {
 
     const first = service.get('session-1');
     const second = service.get('session-1');
-    expect(get).toHaveBeenCalledExactlyOnceWith('session-1');
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('session-1');
     expect(first).toBe(second);
 
     const session = { id: 'session-1' };
