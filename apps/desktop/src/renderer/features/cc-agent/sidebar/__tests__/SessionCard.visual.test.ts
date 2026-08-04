@@ -220,7 +220,7 @@ describe('SessionCard visual cases', () => {
     const card = screen.getByTestId('visual-case').querySelector('[data-sidebar-session-row="true"]');
     expect(card).not.toBeNull();
 
-    fireEvent.pointerDown(card!, { button: 0 });
+    fireEvent.pointerDown(card!, { button: 0, pointerType: 'mouse' });
 
     expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
     expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
