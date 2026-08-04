@@ -230,6 +230,71 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
+
+  it('retries the owed mode push on the next turn when the control request failed', async () => {
+    // 这是 main 上的真实缺陷:降级把状态置成「走 Cindy 审阅」,但档位推送失败后没有任何
+    // 补推点 —— SDK 留在 auto,工具继续进**故障中的**原生分类器,正是降级要消除的硬拒绝。
+    const { handle, canUseTool, fakeQuery, reviewAutoPermissionAction } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'allow',
+    });
+
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
+    await handle.useCindyAutoReviewFallback?.();
+    // 状态本身不受推送失败影响:审批已经落到 Cindy reviewer 上。
+    await canUseTool('Bash', { command: 'npx tsc --noEmit' }, { toolUseID: 'after-failed-push' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+
+    // 欠账留着 → 下一个 turn 起点补推,SDK 与状态重新对齐。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
+  it('serializes the fallback push behind an in-flight user mode change', async () => {
+    // 两个并发的档位控制请求,落地顺序不由 harness 保证,后到的会盖掉先到的。这里的不变量
+    // 是:同一时刻只有一个在飞,且最后落地的一定是**当前状态**现算出来的档位。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    let releaseUserPush!: () => void;
+    const userPushGate = new Promise<void>((resolve) => { releaseUserPush = resolve; });
+    fakeQuery.setPermissionMode.mockClear();
+    fakeQuery.setPermissionMode.mockReturnValueOnce(userPushGate);
+
+    const userChange = handle.setPermissionMode?.('auto');
+    await new Promise((resolve) => setImmediate(resolve));
+    // 用户那次 push 还在飞 → 降级只记欠账,不并发推第二个控制请求。
+    await handle.useCindyAutoReviewFallback?.();
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledTimes(1);
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+
+    releaseUserPush();
+    await userChange;
+    await new Promise((resolve) => setImmediate(resolve));
+    // 收尾时兑欠账,现算出的目标是 default(降级已落地),顺序确定。
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledTimes(2);
+    expect(fakeQuery.setPermissionMode).toHaveBeenNthCalledWith(1, 'auto');
+    expect(fakeQuery.setPermissionMode).toHaveBeenNthCalledWith(2, 'default');
+    await handle.close();
+  });
+
+  it('does not touch the SDK mode on a turn with nothing owed', async () => {
+    // 补推点必须是「有欠账才动」:每个 turn 无条件推一次档会给 send 入口加一个控制请求,
+    // 也会掩盖真正的状态分叉。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'nothing owed' });
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
 });
 
 describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {

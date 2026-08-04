@@ -1553,7 +1553,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             eventQueue.push({ type: 'plan_mode_changed', data: { enabled: false }, source: 'claude-code' });
           }
           sdkInPlanMode = false;
-          void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+          void pushSdkPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
             log.warn('post-plan-approval setPermissionMode failed', { error: String(e) });
           });
         }
@@ -3074,7 +3074,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         planTurnActive = false;
         if (!mutablePlanMode) {
           sdkInPlanMode = false;
-          void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+          void pushSdkPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
             log.warn('plan turn end setPermissionMode failed', { error: String(e) });
           });
         }
@@ -3641,6 +3641,73 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 主动 close 并登记到 canceledBridgeQueries 时才阻塞 control request。
     const controlRequestsBlocked = (): boolean =>
       pendingRewindTo !== undefined || acceptingRebuiltSend || idleResumeRebuildGate !== null || canceledBridgeQueries.has(q);
+    /**
+     * ── SDK 权限档的收敛推送 ────────────────────────────────────────────────
+     *
+     * 目标档**永远现算**:`effectiveSdkPermissionMode()` 已经把 auto-review 状态算进去了
+     * (`toSdkPermissionMode` 读 `usesNativeClaudeAutoReview()`)。所以这里不记"要推成什么",
+     * 只记"还欠一次推送"。欠账 + 现算 = 不管中间发生过什么,最后落地的一定是**当前**状态
+     * 对应的档位,不需要任何人去追认"我这次的结果还算不算最新"。
+     *
+     * 为什么需要它:auto-review 状态可以在**推不动档的窗口里**改变 —— rewind / bridge 重建
+     * / invalid-resume 期间 control request 不可写,plan 档恒在 plan。原先这些窗口里只改
+     * 标记、不推档,而且没有任何补推点,于是留下「标记说走 Cindy 审阅、SDK 实际还在 auto
+     * 档」的分叉:工具继续进故障中的原生分类器,正是降级本身要消除的硬拒绝。
+     *
+     * 串行(`sdkPermissionModePushInFlight`)不是性能考虑:两个并发 push 的落地顺序不由这里
+     * 保证,后到的会盖掉先到的,而"谁后到"不可知。串行 + 现算之后,完成顺序不再进入判据。
+     */
+    let sdkPermissionModeSyncOwed = false;
+    let sdkPermissionModePushInFlight = false;
+    /**
+     * 把一次档位控制请求纳入串行域。各调用点自己的 await / fire-and-forget 与错误处理都
+     * 不变,只是在飞期间挡住收敛推送(反之亦然)。
+     */
+    const pushSdkPermissionMode = async (target: SdkPermissionMode): Promise<void> => {
+      sdkPermissionModePushInFlight = true;
+      try {
+        await q.setPermissionMode(target);
+      } finally {
+        sdkPermissionModePushInFlight = false;
+      }
+    };
+    /**
+     * 状态变更后请求一次收敛。**同步返回、不 await** —— 它可能在 canUseTool 回调里被调用
+     * (SDK 正等这个回调返回),也在 send 入口被调用(`docs/dev-rules/maker-core-and-agent-
+     * behavior.md` §3.2 禁止在 send 路径上加串行等待)。
+     */
+    const syncSdkPermissionMode = (reason: string): void => {
+      sdkPermissionModeSyncOwed = true;
+      // 推不动的窗口:留着欠账,由下一个补推点(turn 起点 / 用户改档收尾 / 在飞 push 收尾)兑。
+      if (sdkPermissionModePushInFlight) return;
+      if (mutablePlanMode || planTurnActive || controlRequestsBlocked()) return;
+      sdkPermissionModeSyncOwed = false;
+      const target = effectiveSdkPermissionMode();
+      void pushSdkPermissionMode(target).then(
+        () => {
+          sdkInPlanMode = target === 'plan';
+          // 在飞期间状态又变了 → 再收敛一次。**只有成功路径自我重试**:控制通道持续故障
+          // 时自我重试会变成紧循环,所以失败只留欠账、等外部补推点。
+          if (sdkPermissionModeSyncOwed) syncSdkPermissionMode(`${reason}:follow-up`);
+        },
+        (e: unknown) => {
+          sdkPermissionModeSyncOwed = true;
+          log.warn('sdk permission mode sync failed; will retry at the next opportunity', {
+            reason,
+            target,
+            error: String(e),
+          });
+        },
+      );
+    };
+    /**
+     * 到了能推档的时机时兑掉欠账。没有欠账时**同步 no-op** —— 不新增 await、不多让一个
+     * microtask tick(send 入口的 tick 数是 rewind / bridge 重建窗口判据的基础)。
+     */
+    const flushOwedSdkPermissionModeSync = (reason: string): void => {
+      if (!sdkPermissionModeSyncOwed) return;
+      syncSdkPermissionMode(reason);
+    };
     type QueryRuntimeSnapshot = {
       model: string;
       effort: Effort;
@@ -3699,7 +3766,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetSdkMode = sdkMode;
           try {
-            await q.setPermissionMode(targetSdkMode);
+            await pushSdkPermissionMode(targetSdkMode);
             sdkInPlanMode = targetSdkMode === 'plan';
             snapshot.sdkPermissionMode = targetSdkMode;
             log.debug(`${label}: replayed setPermissionMode`, { sdkMode: targetSdkMode });
@@ -3753,7 +3820,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             sdkInPlanMode = false;
             // rewind 窗口期旧 q 不可写, 跳过 — 档位由下方重建的 buildQuery 决定。
             if (!controlRequestsBlocked()) {
-              void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+              void pushSdkPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
                 log.warn('stale plan turn cleanup setPermissionMode failed', { error: String(e) });
               });
             }
@@ -3774,7 +3841,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // effectiveSdkPermissionMode()(planTurnActive 已置 true → 'plan') 起档。
           if (!sdkInPlanMode && !controlRequestsBlocked()) {
             try {
-              await q.setPermissionMode('plan');
+              await pushSdkPermissionMode('plan');
               sdkInPlanMode = true;
             } catch (e) {
               log.warn('deferred plan-mode SDK switch failed — sending as a normal turn', { error: String(e) });
@@ -3787,12 +3854,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           sdkInPlanMode = false;
           if (!controlRequestsBlocked()) {
             try {
-              await q.setPermissionMode(toSdkPermissionMode(mutablePermissionMode));
+              await pushSdkPermissionMode(toSdkPermissionMode(mutablePermissionMode));
             } catch (e) {
               log.warn('plan-armed SDK downgrade for explicit normal turn failed', { error: String(e) });
             }
           }
         }
+        // turn 起点是最可靠的补推点:此刻 plan 归属已定、上一轮的重建窗口通常已关。若上一
+        // 个 turn 里 auto-review 状态在推不动档的窗口中变过,欠账在这里兑上,不让 SDK 与
+        // 逻辑状态跨 turn 分叉。**没有欠账时是同步 no-op**,不给 send 入口新增 microtask
+        // tick(那个 tick 数是 rewind / bridge 重建窗口判据的基础)。
+        flushOwedSdkPermissionModeSync('turn-start');
         // turn 入口先打一行参数快照, 让日志能从一句 "send" 看清这轮是用哪个 model/effort/mode 跑的;
         // 不打消息全文 (Session.send 已经打过 summary 了, 这里只补 runtime params)
         log.debug('send ▶ user message', {
@@ -4432,7 +4504,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 路由错配。与其它 post-hoc setPermissionMode 调用点(plan 审批后 / plan turn 结束)
           // 同款 best-effort:失败只 warn,不回退已成功的切模,让持久配置与运行态保持一致
           // (codex review)。
-          await q.setPermissionMode(toSdkPermissionMode('auto')).catch((e) => {
+          await pushSdkPermissionMode(toSdkPermissionMode('auto')).catch((e) => {
             log.warn('setModel: auto-review permission-mode reapply failed; model switch kept', {
               model: newModel,
               error: String(e),
@@ -4539,23 +4611,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
-          await q.setPermissionMode(sdkMode);
+          await pushSdkPermissionMode(sdkMode);
         }
         mutablePermissionMode = newMode;
+        // 用户改档期间落下的 auto-review 欠账在这里兑:此刻 `mutablePermissionMode` 已是新值,
+        // 收敛推送现算出的目标档才是用户要的那个(不会把刚被改掉的旧档推回去)。
+        flushOwedSdkPermissionModeSync('permission-mode-change');
       },
 
       async useCindyAutoReviewFallback() {
         if (nativeAutoReviewUnavailable) return;
+        // **状态先落地、档位交给收敛推送**。原先是在这里就地 `await q.setPermissionMode`,
+        // 而推不动的窗口(plan 档、rewind / bridge 重建、invalid-resume)只改标记不推档、
+        // 又没有补推点 —— SDK 留在 `auto` 而标记说走 Cindy 审阅,工具继续进故障中的原生
+        // 分类器,正是降级要消除的硬拒绝。现在标记是唯一真相,SDK 由 syncSdkPermissionMode
+        // 收敛过去;推不动就记欠账,下一个补推点兑。
         nativeAutoReviewUnavailable = true;
         autoReviewDecisionCache.clear();
-        if (
-          mutablePermissionMode === 'auto'
-          && !mutablePlanMode
-          && !planTurnActive
-          && !controlRequestsBlocked()
-        ) {
-          await q.setPermissionMode('default');
-        }
+        syncSdkPermissionMode('auto-review-fallback');
         log.warn('Claude native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           providerId: mutableProviderId,
           model: mutableModel,
@@ -4584,8 +4657,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 重建时 buildQuery 以 effectiveSdkPermissionMode() 起档并回写 sdkInPlanMode
           return;
         }
-        await q.setPermissionMode(sdkMode);
+        await pushSdkPermissionMode(sdkMode);
         sdkInPlanMode = sdkMode === 'plan';
+        // 退出 plan 时补推点:plan 档期间 auto-review 状态变过的话,欠账在这里兑。
+        if (!enabled) flushOwedSdkPermissionModeSync('plan-mode-disabled');
       },
 
       getPlanMode() {
