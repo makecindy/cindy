@@ -10,18 +10,27 @@ import {
 
 describe('sent message atoms', () => {
   it('keeps atom chips while rendering ordinary chunks with full Markdown semantics', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const bodyStart = source.indexOf('function SentInlineAtomBody');
-    const bodyEnd = source.indexOf('function MarkdownBody', bodyStart);
-    const bodySource = source.slice(bodyStart, bodyEnd);
+    const atomSource = readFileSync(resolve(process.cwd(), 'src/session/SentInlineAtomBody.tsx'), 'utf8');
+    const rendererSource = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
 
-    expect(bodySource).toContain('<InlineQuoteChip');
-    expect(bodySource).toContain('<InlineReferenceChip');
-    expect(bodySource).toContain('<MarkdownBody');
-    expect(bodySource).toContain('text={token.text}');
-    expect(bodySource).not.toContain('splitAnchoredSessionMessageLinks');
-    expect(bodySource).not.toContain('<SentMessageAnchorChip');
-    expect(bodySource).not.toContain('parseMobileMarkdownInlines(part.text)');
+    expect(atomSource).toContain('<InlineQuoteChip');
+    expect(atomSource).toContain('<InlineReferenceChip');
+    expect(atomSource).toContain('renderText(token.text, index)');
+    expect(rendererSource).toContain('<MarkdownBody');
+    expect(rendererSource).toContain('text={text}');
+    expect(atomSource).not.toContain('splitAnchoredSessionMessageLinks');
+    expect(atomSource).not.toContain('<SentMessageAnchorChip');
+    expect(atomSource).not.toContain('parseMobileMarkdownInlines(part.text)');
+  });
+
+  it('keeps atomized messages out of the plain-text long-message collapse path', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+    const collapseStart = source.indexOf('const collapseMeasureEnabled =');
+    const collapseEnd = source.indexOf(';', collapseStart);
+
+    expect(collapseStart).toBeGreaterThan(-1);
+    expect(collapseEnd).toBeGreaterThan(collapseStart);
+    expect(source.slice(collapseStart, collapseEnd)).toContain('&& !rendersSentInlineBody');
   });
 
   it('splits exact pasted-text and slash ranges without guessing', () => {

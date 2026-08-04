@@ -16,7 +16,6 @@ import {
   Ellipsis,
   ExternalLink,
   File as FileIcon,
-  FileText,
   Layers,
   ListTodo,
   LoaderCircle,
@@ -72,8 +71,7 @@ import { motionDuration, motionEasing } from '@/theme/tokens';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
-import { InlineQuoteChip } from '@/session/InlineQuoteChip';
-import { InlineReferenceChip } from '@/session/InlineReferenceChip';
+import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   composerDocumentFromSerializedMessage,
   type ComposerDocument,
@@ -106,7 +104,6 @@ import {
   buildFilePayload,
   buildMediaPayload,
   buildMermaidPayload,
-  buildTextPayload,
   buildToolResultPayload,
   formatDiffPayloadView,
   payloadMediaKindLabel,
@@ -1741,9 +1738,13 @@ function MessageBubble({
   // hook 来源消息在 RenderItemView 中会降级为左对齐 system kind，避免暴露
   // 本地 user 消息的 fork / rewind / delete 操作；它仍可能携带至多 20k 文本，
   // 因此必须继续复用长消息的有界测量与折叠保护。
+  // 引用 / 粘贴文本 / Slash 等结构化 atom 已由 chip 自带紧凑呈现，不能再走
+  // 纯文本收起分支：后者会把 chip 背后的完整 payload 摊开，造成「收起后反而
+  // 更高」且丢失结构。含 atom 的消息保持结构化渲染；普通长文本继续自动收起。
   const collapseMeasureEnabled = (isUser || hookSource !== undefined)
     && (item.message.kind === 'user' || hookSource !== undefined)
     && !item.message.systemCardType
+    && !rendersSentInlineBody
     && !!displayBubbleBody
     && mayExceedVisualLineThreshold(displayBubbleBody, collapseThreshold);
   // 实测行数与被测 body 绑定存储:FlatList 复用组件实例时 body 可能原地变化
@@ -1954,12 +1955,21 @@ function MessageBubble({
           </MarkdownSelectableText>
         ) : rendersSentInlineBody ? (
           <SentInlineAtomBody
-            layout={contentLayout}
-            markdownImageCacheKey={item.message.key}
             onOpenPayload={actions.onOpenPayload}
-            onOpenSessionLink={actions.onOpenSessionLink}
-            selectable={canSelectVisibleText}
-            sessionReferences={item.message.sessionReferences}
+            renderText={(text, index) => (
+              <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
+                <MarkdownBody
+                  layout={contentLayout}
+                  markdownImageCacheKey={item.message.key}
+                  onOpenPayload={actions.onOpenPayload}
+                  onOpenSessionLink={actions.onOpenSessionLink}
+                  selectable={canSelectVisibleText}
+                  sessionReferences={item.message.sessionReferences}
+                  streaming={false}
+                  text={text}
+                />
+              </View>
+            )}
             tokens={sentInlineTokens}
           />
         ) : (
@@ -3259,80 +3269,6 @@ function OrcaCollabCard({ card, screenWidth }: { card: OrcaCollabCardModel; scre
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
 // 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
-/** Sent user atoms stay compact while their full wire text remains copyable/sendable. */
-function SentInlineAtomBody({
-  layout,
-  markdownImageCacheKey,
-  onOpenPayload,
-  onOpenSessionLink,
-  selectable,
-  sessionReferences,
-  tokens,
-}: {
-  layout: MessageContentLayout;
-  markdownImageCacheKey?: string;
-  onOpenPayload?: (payload: MessagePayload) => void;
-  onOpenSessionLink?: (url: string) => void;
-  selectable: boolean;
-  sessionReferences?: readonly MobilePersistedSessionReferenceMetadata[];
-  tokens: readonly SentInlineToken[];
-}) {
-  const { colors } = useTheme();
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <View style={styles.sentInlineAtomBody} testID="message.sentInlineAtoms">
-      {tokens.map((token, index) => {
-        if (token.kind === 'quote') {
-          return (
-            <InlineQuoteChip
-              key={`quote:${token.quote.sourcePath ?? 'chat'}:${index}:${token.quote.text}`}
-              quote={token.quote}
-            />
-          );
-        }
-        if (token.kind === 'pasted') {
-          return (
-            <InlineReferenceChip
-              accessibilityLabel={token.display}
-              icon={<FileText color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
-              key={`pasted:${index}`}
-              label={token.display}
-              onPress={onOpenPayload
-                ? () => onOpenPayload(buildTextPayload('Pasted text', token.text))
-                : undefined}
-              testID="message.pastedTextChip"
-            />
-          );
-        }
-        if (token.kind === 'slash') {
-          return (
-            <InlineReferenceChip
-              accessibilityLabel={token.text}
-              key={`slash:${index}`}
-              label={token.text}
-              testID="message.slashCommandChip"
-            />
-          );
-        }
-        return token.text ? (
-          <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
-            <MarkdownBody
-              layout={layout}
-              markdownImageCacheKey={markdownImageCacheKey}
-              onOpenPayload={onOpenPayload}
-              onOpenSessionLink={onOpenSessionLink}
-              selectable={selectable}
-              sessionReferences={sessionReferences}
-              streaming={false}
-              text={token.text}
-            />
-          </View>
-        ) : null;
-      })}
-    </View>
-  );
-}
-
 function MarkdownBody({
   allowIosUITextView = true,
   markdownImageCacheKey,
@@ -5952,13 +5888,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageItem: {
     gap: 2,
     width: '100%',
-  },
-  sentInlineAtomBody: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    maxWidth: '100%',
   },
   sentInlineTextChunk: {
     flexBasis: '100%',
