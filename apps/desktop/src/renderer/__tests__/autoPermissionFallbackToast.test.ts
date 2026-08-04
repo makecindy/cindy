@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  __testing as dataOwnerGenerationTesting,
+  setDataOwnerGeneration,
+} from '../contexts/dataOwnerGeneration';
+import { __testing as remoteDataOwnerPushFenceTesting } from '../lib/remoteDataOwnerPushFence';
 
 const mocks = vi.hoisted(() => ({
   translate: vi.fn((key: string) => key),
@@ -25,9 +30,14 @@ const payload: AutoPermissionFallbackPayload = {
 beforeEach(() => {
   mocks.translate.mockClear();
   mocks.warning.mockClear();
+  dataOwnerGenerationTesting.reset();
+  remoteDataOwnerPushFenceTesting.reset();
+  setDataOwnerGeneration('owner-a', 1);
 });
 
 afterEach(() => {
+  remoteDataOwnerPushFenceTesting.reset();
+  dataOwnerGenerationTesting.reset();
   vi.unstubAllGlobals();
 });
 

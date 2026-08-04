@@ -1,4 +1,7 @@
-import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush';
 
@@ -38,6 +41,19 @@ export function isRemoteDataOwnerPushCurrent(
 
   remoteOwnerStamps.set(remoteDeviceId, ownerStamp);
   return true;
+}
+
+/** Validate both the controller's local owner boundary and the controlled device's source owner. */
+export function isDeviceLinkRemotePushCurrent(
+  push: { deviceId: string; ownerStamp?: unknown },
+  localOwnerStamp: unknown,
+): boolean {
+  if (!isDataOwnerPushCurrent(localOwnerStamp)) return false;
+  return isRemoteDataOwnerPushCurrent(
+    push.deviceId,
+    push.ownerStamp,
+    Object.prototype.hasOwnProperty.call(push, 'ownerStamp'),
+  );
 }
 
 export function resetRemoteDataOwnerPushFence(remoteDeviceId?: string): void {

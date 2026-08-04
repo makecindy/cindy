@@ -107,6 +107,7 @@ import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -754,8 +755,9 @@ export function CCAgentSessionView({
         // 旧版被控端无该 channel / 离线:保持空镜像,非选中行回落模型默认。
       });
 
-    const off = window.electronAPI.deviceLink.onRemotePush((push) => {
+    const off = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (push.deviceId !== deviceId || push.channel !== 'maker:new-maker-draft:changed') return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       const payload = push.payload as Record<
         string,
         { providerModelMemory?: RemoteModelMemorySnapshot } | undefined

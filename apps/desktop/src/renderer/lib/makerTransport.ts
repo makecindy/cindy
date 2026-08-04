@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   invalidationAtRequestStart,
   persistCachedMessages,
@@ -587,8 +588,9 @@ export function subscribeGoalStatusChanged(
       });
     }
     return (
-      window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+      window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
         if (push.deviceId !== deviceId || push.channel !== 'maker:goal:status-changed') return;
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         const payload = push.payload as { sessionId?: string; goal?: GoalStatusPayload | null };
         if (payload?.sessionId !== sessionId) return;
         cb(payload as { sessionId: string; goal: GoalStatusPayload | null });
@@ -722,11 +724,13 @@ export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void
     );
   }
   return (
-    window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+    window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
       if (
+        push.deviceId === deviceId &&
         push.channel === 'maker:orca:worker-changed' &&
         (push.payload as { leadSessionId?: string })?.leadSessionId === leadSessionId
       ) {
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         cb();
       }
     }) ?? (() => {})

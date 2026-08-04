@@ -133,7 +133,7 @@ let onEvent: ((data: unknown) => void) | undefined;
 let onStatusChanged: ((data: unknown) => void) | undefined;
 let onDeviceLinkStatusChanged: ((data: unknown) => void) | undefined;
 let onPresenceChanged: ((data: unknown) => void) | undefined;
-let onRemotePush: ((data: unknown) => void) | undefined;
+let onRemotePush: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
@@ -287,7 +287,7 @@ function installElectronBridge(): void {
           onPresenceChanged = cb;
           return vi.fn();
         },
-        onRemotePush: (cb: (data: unknown) => void) => {
+        onRemotePush: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
           onRemotePush = cb;
           return vi.fn();
         },
@@ -4407,6 +4407,33 @@ describe('makerChatStore text delta batching', () => {
     expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe(
       'generation-1-after-restart',
     );
+  });
+
+  it('rejects stale local-owner frames before they can advance the remote fence', () => {
+    const deviceId = 'device-1';
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Test Mac', [
+      { id: SESSION_ID, status: 'active', title: 'initial' } as Session,
+    ]);
+    setDataOwnerGeneration('owner-a', 2);
+
+    const stalePush = {
+      deviceId,
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { title: 'stale' } },
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 5 },
+    };
+    onRemotePush?.(stalePush, { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe('initial');
+
+    onRemotePush?.(
+      {
+        ...stalePush,
+        payload: { sessionId: SESSION_ID, patch: { title: 'updated' } },
+        ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+      },
+      { dataOwnerId: 'owner-a', ownerGeneration: 2 },
+    );
+    expect(remoteProjectsStore.getDeviceSessions(deviceId)[0]?.title).toBe('updated');
   });
 
   it.each(['send', 'steer'] as const)(

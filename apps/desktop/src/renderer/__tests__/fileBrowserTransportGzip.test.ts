@@ -31,7 +31,7 @@ const BIG = 'markdown 正文内容\n'.repeat(8000); // ~144K chars,> 64K 压缩�
 const SMALL = 'short content';
 
 let invokeMock: InvokeMock;
-let remotePushHandler: ((push: RemotePush) => void) | undefined;
+let remotePushHandler: ((push: RemotePush, localOwnerStamp?: unknown) => void) | undefined;
 let transport: typeof import('../lib/fileBrowserTransport');
 
 /** 取第 n 次 remote-op invoke 的 op args(invoke(deviceId, channel, [args])) */
@@ -48,7 +48,7 @@ beforeEach(async () => {
     electronAPI: {
       deviceLink: {
         invoke: invokeMock,
-        onRemotePush: (handler: (push: RemotePush) => void) => {
+        onRemotePush: (handler: (push: RemotePush, localOwnerStamp?: unknown) => void) => {
           remotePushHandler = handler;
           return () => {
             if (remotePushHandler === handler) remotePushHandler = undefined;
@@ -212,6 +212,34 @@ describe('fileBrowserTransport gzip read decode', () => {
 });
 
 describe('fileBrowserTransport owner fence', () => {
+  it('rejects stale local-owner frames before they can advance the remote fence', () => {
+    const cb = vi.fn();
+    setDataOwnerGeneration('owner-b', 8);
+    transport.onFileTreeEventFor('device-1', cb);
+
+    const stalePush = {
+      deviceId: 'device-1',
+      channel: 'maker:file-browser:event',
+      payload: {
+        workdir: '/w',
+        type: 'change' as const,
+        relPath: 'src/a.ts',
+      },
+      ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 5 },
+    };
+    remotePushHandler?.(stalePush, { dataOwnerId: 'owner-b', ownerGeneration: 7 });
+    expect(cb).not.toHaveBeenCalled();
+
+    remotePushHandler?.(
+      {
+        ...stalePush,
+        ownerStamp: { dataOwnerId: 'owner-b', ownerGeneration: 1 },
+      },
+      { dataOwnerId: 'owner-b', ownerGeneration: 8 },
+    );
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
   it('tracks remote generations per device and closes legacy downgrade after a stamp', () => {
     const cb = vi.fn();
     setDataOwnerGeneration('owner-b', 8);

@@ -174,6 +174,7 @@ import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import { extractIpcError } from '@/utils/ipcError';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -1232,8 +1233,9 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
     const vendorSlot = capabilityAgentKind === 'claude-code' ? 'claudeCode' : capabilityAgentKind;
-    return window.electronAPI.deviceLink.onRemotePush((push) => {
+    return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (push.deviceId !== effectiveDeviceLinkDeviceId) return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (push.channel !== 'maker:new-maker-draft:changed') return;
       const payload = push.payload as Record<string, RemoteDraftDefaults | undefined> | null;
       const next = payload?.[vendorSlot] ?? null;

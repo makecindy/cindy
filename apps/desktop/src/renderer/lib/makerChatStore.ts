@@ -6422,7 +6422,8 @@ function initGlobalListeners(): void {
     // 直接取 .onRemotePush 会让 initGlobalListeners 整体崩掉(与下方 onUsageMessageTurnCost 同款防御)。
     (cb: (data: unknown, ownerStamp?: unknown) => void) =>
       window.electronAPI.deviceLink?.onRemotePush?.(cb),
-    (raw) => {
+    (raw, localOwnerStamp) => {
+      if (!isCurrentLocalLiveIngress(localOwnerStamp)) return;
       const push = raw as {
         deviceId?: string;
         channel?: string;
