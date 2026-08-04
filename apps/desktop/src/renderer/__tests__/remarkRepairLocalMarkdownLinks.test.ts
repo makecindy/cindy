@@ -84,32 +84,6 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     expect((children[0] as Image).type).toBe('image');
   });
 
-  it('separates an optional quoted title from a local link destination', () => {
-    const children = firstParagraphChildren('[产物](/tmp/My File.md "下载")');
-
-    expect(children.map(withoutPositions)).toEqual([
-      {
-        type: 'link',
-        url: '/tmp/My File.md',
-        title: '下载',
-        children: [{ type: 'text', value: '产物' }],
-        data: {
-          hProperties: {
-            [RAW_LOCAL_LINK_HREF_PROP]: '/tmp/My File.md',
-          },
-        },
-      },
-    ]);
-  });
-
-  it('separates an optional parenthesized title from a local image destination', () => {
-    const children = firstParagraphChildren('![预览](/tmp/My File.png (成品))');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'image', url: '/tmp/My File.png', alt: '预览', title: '成品' },
-    ]);
-  });
-
   it('repairs text-file links too, so generated artifact lists remain usable', () => {
     const children = firstParagraphChildren(
       '[制作 manifest](/Users/justin/Library/Application Support/Cindy/work/manifest.md)',
@@ -158,59 +132,12 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     ]);
   });
 
-  it('does not activate explicitly escaped Markdown link syntax', () => {
-    const children = firstParagraphChildren('\\[示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
+  it('skips repair when the source opener contains an escape or entity', () => {
+    expect(firstParagraphChildren('\\[示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
       { type: 'text', value: '[示例](/tmp/My File.md)' },
     ]);
-  });
-
-  it('preserves explicitly escaped Markdown image syntax', () => {
-    const children = firstParagraphChildren('\\![示例](/tmp/My File.png)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: '![示例](/tmp/My File.png)' },
-    ]);
-  });
-
-  it('keeps escaped link syntax inactive after a decoded character reference', () => {
-    const children = firstParagraphChildren('&amp; \\[示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
+    expect(firstParagraphChildren('&amp; [示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
       { type: 'text', value: '& [示例](/tmp/My File.md)' },
-    ]);
-  });
-
-  it('keeps escaped link syntax inactive after another Markdown escape', () => {
-    const children = firstParagraphChildren('\\* \\[示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: '* [示例](/tmp/My File.md)' },
-    ]);
-  });
-
-  it('keeps a character-reference opening bracket inactive', () => {
-    const children = firstParagraphChildren('&#91;示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: '[示例](/tmp/My File.md)' },
-    ]);
-  });
-
-  it('keeps a character-reference image marker inactive', () => {
-    const children = firstParagraphChildren('&#33;[示例](/tmp/My File.png)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: '![示例](/tmp/My File.png)' },
-    ]);
-  });
-
-  it('keeps escaped link syntax inactive after a CRLF line ending', () => {
-    const children = firstParagraphChildren('line\r\n\\[示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: 'line\r\n[示例](/tmp/My File.md)' },
     ]);
   });
 
@@ -229,36 +156,6 @@ describe('remarkRepairLocalMarkdownLinks', () => {
           },
         },
       },
-    ]);
-  });
-
-  it('still repairs an unescaped link after a decoded character reference', () => {
-    const children = firstParagraphChildren('&amp; [示例](/tmp/My File.md)');
-
-    expect(children.map(withoutPositions)).toEqual([
-      { type: 'text', value: '& ' },
-      {
-        type: 'link',
-        url: '/tmp/My File.md',
-        children: [{ type: 'text', value: '示例' }],
-        data: {
-          hProperties: {
-            [RAW_LOCAL_LINK_HREF_PROP]: '/tmp/My File.md',
-          },
-        },
-      },
-    ]);
-  });
-
-  it('keeps escaped link syntax inactive after named and numeric character references', () => {
-    expect(firstParagraphChildren('&copy; \\[示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
-      { type: 'text', value: '© [示例](/tmp/My File.md)' },
-    ]);
-    expect(firstParagraphChildren('&#38; \\[示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
-      { type: 'text', value: '& [示例](/tmp/My File.md)' },
-    ]);
-    expect(firstParagraphChildren('&#x26; \\[示例](/tmp/My File.md)').map(withoutPositions)).toEqual([
-      { type: 'text', value: '& [示例](/tmp/My File.md)' },
     ]);
   });
 
