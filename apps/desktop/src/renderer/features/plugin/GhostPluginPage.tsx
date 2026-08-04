@@ -1914,6 +1914,11 @@ export function MarketPluginCard({
 }) {
   const { t } = useTranslation();
   const unavailable = busy || item.installState === 'conflict';
+  const conflictDescriptionId = useId();
+  const conflictDescription =
+    item.installState === 'conflict'
+      ? t('settings.ghosts.market.conflictDescription')
+      : undefined;
   return (
     <article
       className={cn(
@@ -1928,6 +1933,7 @@ export function MarketPluginCard({
         onClick={onSelect}
         disabled={unavailable}
         aria-label={item.name}
+        aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
         className={cn(
           'flex min-w-0 flex-1 items-start gap-4 self-stretch text-left',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -1969,10 +1975,11 @@ export function MarketPluginCard({
               </>
             ) : null}
           </span>
-          <span className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">
-            {item.installState === 'conflict'
-              ? t('settings.ghosts.market.conflictDescription')
-              : item.description || item.ghostId}
+          <span
+            id={conflictDescription ? conflictDescriptionId : undefined}
+            className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]"
+          >
+            {conflictDescription ?? (item.description || item.ghostId)}
           </span>
         </span>
       </button>
@@ -1987,6 +1994,7 @@ export function MarketPluginCard({
               : 'settings.ghosts.market.detailsAria',
             { name: item.name },
           )}
+          aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
           className={cn(
             'group/market-details absolute inset-0 flex items-start justify-end rounded-xl text-[var(--text-tertiary)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
@@ -2017,6 +2025,7 @@ export function MarketPluginCard({
             }}
             disabled={unavailable}
             aria-label={t('settings.ghosts.page.installAria', { name: item.name })}
+            aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
             className={cn(
               'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
               'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',

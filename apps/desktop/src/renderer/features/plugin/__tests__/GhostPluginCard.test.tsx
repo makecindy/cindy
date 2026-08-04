@@ -416,13 +416,18 @@ describe('MarketPluginCard', () => {
     expect((cardBody as HTMLButtonElement).disabled).toBe(true);
     expect(cardBody.className).toContain('cursor-not-allowed');
     expect(cardBody.className).not.toContain('cursor-wait');
+    const conflictDescription = screen.getByText(
+      'settings.ghosts.market.conflictDescription',
+    );
+    expect(conflictDescription.id).toBeTruthy();
+    expect(cardBody.getAttribute('aria-describedby')).toBe(conflictDescription.id);
     const conflictAction = screen.getByRole('button', {
       name: 'settings.ghosts.market.conflictAria:Google Calendar',
     });
     expect((conflictAction as HTMLButtonElement).disabled).toBe(true);
+    expect(conflictAction.getAttribute('aria-describedby')).toBe(conflictDescription.id);
     expect(screen.getByRole('status').textContent).toBe('settings.ghosts.market.conflict');
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
-    expect(screen.getByText('settings.ghosts.market.conflictDescription')).toBeTruthy();
     expect(screen.queryByText(marketPlugin.description ?? '')).toBeNull();
 
     rerender(
