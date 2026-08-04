@@ -70,7 +70,7 @@ function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
       if (char === '\n') break;
     }
 
-    if (hrefEnd < 0) continue;
+    if (hrefEnd < 0) break;
     const href = value.slice(hrefStart, hrefEnd).trim();
     const kind = classifyMarkdownHref(href);
     if (/\s/.test(href) && kind !== 'external' && kind !== 'directory') {
