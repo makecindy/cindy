@@ -60,6 +60,7 @@ vi.mock('../download.js', () => ({
 import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
+import { GhostPackagePermissionReviewRequiredError } from '../../cindy-brain/packagePermissionReview';
 import { PluginMarketLedger } from '../ledger';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
@@ -423,14 +424,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
       },
     );
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
-    expect(ghost.enabled).toBe(true);
+    expect(ghost?.enabled).toBe(true);
   });
 
   // 装入确认框渲染的是**服务端给的** manifest,真正落地的是 .cindy 包里的
   // ghost.json。服务端投影层与客户端清单契约漂移时(cindy-protocol 那份平行
   // 校验器已经缺了 confirm 槽,新字段按「忽略未知字段」被静默丢掉),包会带着
   // 用户没审过的权限装进来。出口处需要这份 reviewedManifest 才能逐项比对拦下。
-  it('passes the reviewed server manifest to the install entry so unreviewed package permissions can be blocked', async () => {
+  it('passes the reviewed server manifest to the install entry so package permissions can be re-reviewed', async () => {
     const item = summary();
     runtime.install.mockResolvedValue({
       manifest: manifest(),
@@ -448,6 +449,63 @@ describe('PluginMarketService migration and defaultInstall', () => {
       id: item.ghostId,
       version: item.currentRelease.version,
     });
+  });
+
+  it('returns a recoverable package review result and forwards the bound approval on retry', async () => {
+    const item = summary();
+    const review = {
+      manifest: manifest('cindy-test', '1.0.0', ['notify', 'fs']),
+      packageSha256: 'a'.repeat(64),
+      installedBaseline: null,
+    };
+    runtime.install.mockRejectedValueOnce(
+      new GhostPackagePermissionReviewRequiredError(review),
+    );
+    const h = harness([item]);
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).resolves.toEqual({ reviewRequired: review });
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+
+    runtime.install.mockResolvedValueOnce({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    await expect(
+      h.service.install(item.id, {
+        expectedReleaseId: item.currentRelease.id,
+        approvedPackageSha256: review.packageSha256,
+      }),
+    ).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+    expect(runtime.install).toHaveBeenLastCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ approvedPackageSha256: review.packageSha256 }),
+    );
+  });
+
+  it('does not return package review details after the active owner changes', async () => {
+    const item = summary();
+    const review = {
+      manifest: manifest('cindy-test', '1.0.0', ['notify', 'fs']),
+      packageSha256: 'a'.repeat(64),
+      installedBaseline: null,
+    };
+    runtime.install.mockImplementationOnce(async () => {
+      runtime.session = {
+        mode: 'cloud',
+        dataOwnerId: 'user-2',
+        generation: 2,
+      };
+      throw new GhostPackagePermissionReviewRequiredError(review);
+    });
+    const h = harness([item]);
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
   });
 
   it('installs and enables a public defaultInstall package in local mode', async () => {

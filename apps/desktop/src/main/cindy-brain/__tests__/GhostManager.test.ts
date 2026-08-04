@@ -535,6 +535,37 @@ describe('GhostManager · inspect(只验不装)', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  it('本地化展示清单与包内 canonical 清单分离', async () => {
+    hostLocale = 'zh-CN';
+    const base = {
+      ...goodManifest(),
+      name: 'Base name',
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+      },
+    };
+    const cindy = await makeCindy('canonical.cindy', base, {
+      'locales/en.json': JSON.stringify({ name: 'English name' }),
+      'locales/zh-CN.json': JSON.stringify({
+        name: '中文名称',
+        tools: { do_thing: { description: '中文工具说明' } },
+      }),
+    });
+
+    const inspected = await manager.inspect(cindy);
+    expect(inspected).toMatchObject({
+      manifest: {
+        name: '中文名称',
+        tools: [{ name: 'do_thing', description: '中文工具说明' }],
+      },
+      canonicalManifest: {
+        name: 'Base name',
+        tools: [{ name: 'do_thing', description: '做点事' }],
+      },
+    });
+  });
+
   it('确认后源文件被替换时，整包指纹不一致会拒绝安装', async () => {
     const cindy = await makeCindy('swap.cindy', goodManifest(), { 'payload.txt': 'before' });
     const inspected = await manager.inspect(cindy);

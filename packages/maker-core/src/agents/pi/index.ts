@@ -76,6 +76,7 @@ import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../typ
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import {
@@ -896,6 +897,7 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    const registeredMcpServerNames = new Set<string>();
     if (this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
@@ -907,6 +909,13 @@ export class PiAgent extends BaseAgent {
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
+        // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
+        for (const server of mcpBridge?.servers ?? []) {
+          if (typeof server.name === 'string' && server.name.length > 0) {
+            registeredMcpServerNames.add(server.name);
+          }
+        }
       } catch (err) {
         this.deps.logger.error('pi MCP bridge prep failed, continuing without cindy tools', {
           message: err instanceof Error ? err.message : String(err),
@@ -1000,6 +1009,40 @@ export class PiAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+    };
+    /**
+     * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
+     * 与 Claude / Codex 的 `dismissAllPending` 同口径(Pi 此前是唯一没有这套的 harness)。
+     *
+     * 没有它的后果:用户看到卡之后切到 Full access,`resolver` 仍只挂在那张卡上,不会被唤醒,
+     * 于是「Full access 不该再问」永远等不到生效 —— 工具调用一直卡住,直到用户手动回答一张
+     * 已经失效的卡(codex review P1)。
+     */
+    type PendingPrompt = {
+      settle: (resolveAs: 'allow' | 'deny') => void;
+      /** 高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧):放宽档位不得批量放行。 */
+      forcePrompt: boolean;
+    };
+    const pendingPrompts = new Map<string, PendingPrompt>();
+    const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
+      pendingPrompts.set(requestId, entry);
+      return () => pendingPrompts.delete(requestId);
+    };
+    const dismissAllPendingPrompts = (reason: string, resolveAs: 'allow' | 'deny'): void => {
+      if (pendingPrompts.size === 0) return;
+      for (const [requestId, entry] of Array.from(pendingPrompts.entries())) {
+        // 放宽档位不能替用户批准他还没表态的高风险调用:没拿到这一次的明确确认就 fail-closed
+        // (与 CC / Codex 的同名逻辑一致 —— 否则 pending 期间切档能让破坏性调用自动过)。
+        const effectiveResolveAs: 'allow' | 'deny' =
+          resolveAs === 'allow' && entry.forcePrompt ? 'deny' : resolveAs;
+        pendingPrompts.delete(requestId);
+        entry.settle(effectiveResolveAs);
+        queue.push({
+          type: 'interaction_dismissed',
+          data: { requestId, reason, resolvedAs: effectiveResolveAs },
+          source: 'pi',
+        });
+      }
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
@@ -1127,6 +1170,8 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              registeredMcpServerNames,
+              registerPendingPrompt,
             }));
             return;
           }
@@ -1610,6 +1655,8 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        // 会话结束时挂起的卡已经不可能有人回答:强制 deny,别让等它的调用悬着(同 CC / Codex)。
+        dismissAllPendingPrompts('session_closed', 'deny');
         // 先注销 bridge 身份注册(幂等),再关子进程。放前面:即便 proc.close 抛错
         // 也不泄漏 ctx —— 该 sessionId 的 `?session=` 路由必须随会话结束失效。
         try {
@@ -1671,10 +1718,30 @@ export class PiAgent extends BaseAgent {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
         }
+        const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           mode: nextMode,
         });
+        // 写入成功后才 settle 挂起的卡(写失败会 fail-closed 抛出,档位没真变就不该收卡)。
+        // 没有这一步,用户切到 Full access 后仍要手动回答一张已失效的卡,调用一直卡着。
+        //
+        // 只有**最新且已落盘**的那次切换可以收卡:被更晚意图取代的写会在代际检查处提前
+        // 返回、但 promise 仍 resolve 成功(见 writePermissionFile 的 `gen !== permissionWriteGen`),
+        // 旧 continuation 若照自己捕获的 transition 收卡,就会用一次早已作废的放宽把 pending
+        // 调用错误放行,而真正生效的收紧只能看到卡已经没了(codex review P1)。
+        const stillLatestIntent = requestedPermissionSnapshot.mode === nextMode;
+        const persisted = persistedPermissionSnapshot.mode === nextMode;
+        if (nextMode !== previousMode && stillLatestIntent && persisted) {
+          // **只有 bypassPermissions 算「放宽」**。Auto 的语义是「区内放行、越界升级」而不是
+          // 全放行,而挂起的卡本就是被升级的越界/风险动作 —— 切到 Auto 若替用户 allow,等于
+          // 把待确认的越界动作橡皮图章掉;应当 deny,让模型重试时重新过一遍 fail-closed 的
+          // Auto dispatcher。与 CC / Codex 的同名裁决一致(claude-code/index.ts 的 moreOpen)。
+          dismissAllPendingPrompts(
+            `permission_mode_changed_to_${nextMode}`,
+            nextMode === 'bypassPermissions' ? 'allow' : 'deny',
+          );
+        }
       },
 
       async setExtraDirs(dirs: string[]): Promise<void> {
@@ -2111,6 +2178,16 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
+      registeredMcpServerNames: ReadonlySet<string>;
+      /**
+       * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
+       * `dismissAllPendingPrompts` 强制 settle,避免放宽档位后调用仍卡在失效的卡上。
+       */
+      registerPendingPrompt: (
+        requestId: string,
+        entry: { settle: (resolveAs: 'allow' | 'deny') => void; forcePrompt: boolean },
+      ) => () => void;
     },
   ): void {
     const method = typeof event.method === 'string' ? event.method : '';
@@ -2137,29 +2214,151 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        registeredMcpServerNames,
+        registerPendingPrompt,
       } = getPermissionCtx();
-      const requestUserConfirmation = async (): Promise<boolean> => {
+      /**
+       * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
+       * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
+       * 不能把用户的明确拒绝也一并翻转。
+       */
+      const requestUserDecision = async (
+        opts: { forcePrompt: boolean },
+      ): Promise<{ decided: boolean; approved: boolean }> => {
         if (!resolver) {
-          this.deps.logger.warn('pi permission request denied: no interaction resolver', { toolName });
-          return false;
+          this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
+          return { decided: false, approved: false };
         }
-        try {
-          const decision = await resolver({
+        // 登记进会话级 pending 表:等卡期间用户切档(或关会话)时由 dismissAllPendingPrompts
+        // 强制 settle,不再干等一张已经失效的卡。settled 门防止两边重复 resolve。
+        return new Promise<{ decided: boolean; approved: boolean }>((resolve) => {
+          let settled = false;
+          let unregister: (() => void) | null = null;
+          const finalize = (outcome: { decided: boolean; approved: boolean }): void => {
+            if (settled) return;
+            settled = true;
+            unregister?.();
+            resolve(outcome);
+          };
+          unregister = registerPendingPrompt(id, {
+            forcePrompt: opts.forcePrompt,
+            // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
+            settle: (resolveAs) => finalize({ decided: true, approved: resolveAs === 'allow' }),
+          });
+          // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
+          // `.then` 会让同步异常绕过下面的 finalize —— pending 条目永不注销、这次请求永不
+          // settle,调用就此悬挂(copilot 报)。包一层把同步失败也收进 fail-closed 分支。
+          Promise.resolve().then(() => resolver({
             kind: 'permission',
             requestId: id,
             toolName,
             input,
+          })).then((decision) => {
+            if (decision.kind !== 'permission') {
+              this.deps.logger.warn('pi permission got mismatched decision kind', {
+                toolName,
+                decisionKind: decision.kind,
+              });
+              finalize({ decided: false, approved: false });
+              return;
+            }
+            finalize({ decided: true, approved: decision.behavior === 'allow' });
+          }).catch((err) => {
+            this.deps.logger.warn('pi permission resolver failed', {
+              toolName,
+              message: err instanceof Error ? err.message : String(err),
+            });
+            finalize({ decided: false, approved: false });
           });
-          return decision.kind === 'permission' && decision.behavior === 'allow';
-        } catch (err) {
-          this.deps.logger.warn('pi permission resolver failed; denying', {
-            toolName,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return false;
-        }
+        });
+      };
+      /**
+       * Full access 的语义是「不问、全放行」。档位支持会话中途热切换(bridge 每次 tool_call
+       * 现读 perm 文件),所以必须**按最新档位**判断,不能用请求冒泡那一刻的快照。
+       */
+      const isFullAccessNow = (): boolean =>
+        getPermissionCtx().permissionMode === 'bypassPermissions';
+      /**
+       * `forcePrompt` 标记高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧档位):
+       * 等卡期间用户把档位放宽,这类**不**接受批量放行,仍按 fail-closed 拒绝 —— 与 CC /
+       * Codex 的 dismissAllPending 同口径。
+       */
+      const requestUserConfirmation = async (
+        opts?: { forcePrompt?: boolean },
+      ): Promise<boolean> => {
+        // 发起确认前:已切到 Full access 就不该再弹卡。
+        if (isFullAccessNow()) return true;
+        const outcome = await requestUserDecision({ forcePrompt: opts?.forcePrompt === true });
+        // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
+        if (outcome.decided) return outcome.approved;
+        // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
+        return isFullAccessNow();
       };
       void (async () => {
+        // Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读已把 bypass
+        // 拦在冒泡之前,但档位是热切换的:confirm 冒泡之后用户仍可能切到 Full access。此时
+        // MCP 策略 / 灰区审阅 / 弹窗都不该再改变「全放行」语义,也不该因为没有 resolver 就
+        // 拒掉工具调用(与 auto 分支既有的 modeAfterReview bypass 收口同口径)。
+        if (isFullAccessNow()) {
+          proc.send({ type: 'extension_ui_response', id, confirmed: true });
+          return;
+        }
+        // 桥接 MCP 工具走 host 审批策略,**不进 Auto-review 灰区** —— 与 Claude Code /
+        // Codex 同一份真源(`getDesktopMcpToolApprovalPolicy`)。
+        //
+        // 为什么不能交模型判:auto-review 是安全分类器,而"要不要开协同团队 / 该不该用
+        // 某个 MCP 工具"是做法选择,不是安全判断。实测把 `mcp__cindy_orca__start_team`
+        // 送去审阅时,模型会按 prompt 里"有更安全替代方案就 block"的字面判成"这点小事
+        // 不必开团队"→ block 对用户静默 → 冒泡回 bridge 就是
+        // "User denied this tool call via Cindy",团队永远建不起来且没有任何弹窗。
+        // 同一个第一方 MCP 在三个 harness 下必须给出同一个答案(base-agent.ts
+        // getMcpToolApprovalPolicy 注释),此前 Pi 是唯一没接这条的。
+        //
+        // 位置与 CC 一致:策略判定在档位分支**之前** —— auto-approve 的第一方 server 在
+        // ask 档也不弹窗(CC claude-code/index.ts 的 mcpApprovalPolicy 分支同义)。
+        //
+        // 返回 null = 不查策略,**回落原有权限链**(ask 档弹窗 / auto 档进灰区审阅),行为与
+        // 接策略之前完全一致:host 没提供 classifier,或工具名对不上任何本会话已注册的
+        // server(认不出归属就不敢按第一方放行)。策略抛错或返回非法值则不回落 ——
+        // 那是策略本身故障,按 prompt-each-time fail-closed 收口。
+        const mcpPolicy = ((): 'auto-approve' | 'prompt' | 'prompt-each-time' | null => {
+          const classifier = this.deps.getMcpToolApprovalPolicy;
+          if (!classifier) return null;
+          const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+          if (!target) return null;
+          try {
+            const policy = classifier({
+              serverName: target.serverName,
+              toolName: target.toolName,
+              toolParams: input,
+            });
+            if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+              return policy;
+            }
+            this.deps.logger.error('invalid MCP approval policy -> user confirmation', {
+              serverName: target.serverName,
+              policy,
+            });
+          } catch (err) {
+            this.deps.logger.error('MCP approval policy threw -> user confirmation', {
+              serverName: target.serverName,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return 'prompt-each-time';
+        })();
+        if (mcpPolicy !== null) {
+          // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
+          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。
+          proc.send({
+            type: 'extension_ui_response',
+            id,
+            confirmed: mcpPolicy === 'auto-approve'
+              ? true
+              : await requestUserConfirmation({ forcePrompt: mcpPolicy === 'prompt-each-time' }),
+          });
+          return;
+        }
         if (permissionMode !== 'auto') {
           proc.send({
             type: 'extension_ui_response',
@@ -2188,10 +2387,12 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (modeAfterReview !== 'auto') {
+            // 审查期间用户主动收紧了档位 → 这一次必须拿到明确确认,等卡期间再放宽也不追认
+            // (forcePrompt,与 CC 对 AI ask / 确定性红线的处理同口径)。
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: await requestUserConfirmation(),
+              confirmed: await requestUserConfirmation({ forcePrompt: true }),
             });
             return;
           }
@@ -2199,7 +2400,7 @@ export class PiAgent extends BaseAgent {
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: await requestUserConfirmation(),
+              confirmed: await requestUserConfirmation({ forcePrompt: true }),
             });
             return;
           }

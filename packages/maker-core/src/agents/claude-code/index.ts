@@ -85,6 +85,7 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -251,34 +252,6 @@ const READ_ONLY_CLAUDE_TOOLS: ReadonlySet<string> = new Set([
 /** canUseTool fail-closed 分支用: 判断工具是否属于已知只读工具(见上方白名单注释)。 */
 function isReadOnlyClaudeTool(toolName: string): boolean {
   return READ_ONLY_CLAUDE_TOOLS.has(toolName);
-}
-
-/**
- * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
- *
- * SDK 命名格式为 `mcp__<server>__<tool>`, 但**不能**按 `__` 盲切首段当 server ——
- * server 名自身可以含 `__`(自定义 MCP 的 id 正则是 `/^[a-z0-9_-]+$/`, 下划线合法)。
- * 盲切会让 id 为 `cindy_browser__evil` 的第三方 server 被识别成第一方 `cindy_browser`,
- * 直接继承信任表里的静默放行 —— 这是一条实打实的提权路径。
- *
- * 因此只在**本 session 实际注册过**的 server 名里做前缀匹配, 命中多个时取最长者
- * (`cindy_browser__evil` 胜过 `cindy_browser`), 保证归属唯一。名字对不上任何已注册
- * server 时返回 null, 调用方按"不查策略"处理 —— 走原有权限链, 不放行。
- */
-function resolveMcpToolTarget(
-  toolName: string,
-  registeredServerNames: ReadonlySet<string>,
-): { serverName: string; toolName: string } | null {
-  if (!toolName.startsWith('mcp__')) return null;
-  let best: { serverName: string; toolName: string } | null = null;
-  for (const serverName of registeredServerNames) {
-    const prefix = `mcp__${serverName}__`;
-    if (!toolName.startsWith(prefix) || toolName.length <= prefix.length) continue;
-    if (!best || serverName.length > best.serverName.length) {
-      best = { serverName, toolName: toolName.slice(prefix.length) };
-    }
-  }
-  return best;
 }
 
 /**

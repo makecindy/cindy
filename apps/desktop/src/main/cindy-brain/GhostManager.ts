@@ -316,6 +316,8 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        /** 包内原始清单，仅供 Main 安全比较。 */
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -326,6 +328,7 @@ export class GhostManager {
     if ('rejection' in parsed) return parsed;
     return {
       manifest: parsed.manifest,
+      canonicalManifest: parsed.canonicalManifest,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
@@ -338,6 +341,7 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -614,6 +618,7 @@ export class GhostManager {
 
     return {
       manifest: localizedManifest,
+      canonicalManifest: v.manifest,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),

@@ -14,6 +14,7 @@ import {
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
   diffGhostPermissionItems,
+  ghostPermissionBaselineKey,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -28,6 +29,7 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import type { PluginMarketPackageReview } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   activeOwnerScopeKey,
@@ -41,6 +43,7 @@ import { GhostManager, type InstallRejection, type UninstallRejection } from './
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
+import { GhostPackagePermissionReviewRequiredError } from './packagePermissionReview.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -3167,10 +3170,13 @@ export async function installOrUpdateMarketGhostPackage(
     version: string;
     /**
      * 装入确认框实际展示给用户的那份 manifest(来源方给的)。给了就逐项比对:
-     * 包里多出来的权限一律拒装(见 Locked 版里的说明)。两条市场路径都必须给;
+     * 包里多出来的权限会暂停落位并交由上层复核。两条市场路径都必须给;
      * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
      */
     reviewedManifest?: GhostManifest;
+    /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
+    approvedPackageSha256?: string;
+    reviewedBaseline?: string;
   },
 ): Promise<InstalledGhost> {
   // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
@@ -3187,6 +3193,8 @@ async function installOrUpdateMarketGhostPackageLocked(
     ghostId: string;
     version: string;
     reviewedManifest?: GhostManifest;
+    approvedPackageSha256?: string;
+    reviewedBaseline?: string;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -3196,8 +3204,8 @@ async function installOrUpdateMarketGhostPackageLocked(
     const inspected = await manager.inspect(cindyFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
     if (
-      inspected.manifest.id !== expected.ghostId ||
-      inspected.manifest.version !== expected.version
+      inspected.canonicalManifest.id !== expected.ghostId ||
+      inspected.canonicalManifest.version !== expected.version
     ) {
       throwIpcError(
         'GHOST_FILE_INVALID',
@@ -3215,29 +3223,49 @@ async function installOrUpdateMarketGhostPackageLocked(
      * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
      * 它装进来,用户**从没审过就多出一个常驻能力面**。
      *
-     * 这里按权限项逐项比对,包里多出来的一律拒装——不是只挡 badge,是把这一整类
-     * 「来源投影漏字段」的洞一次封死。落在 inspect 之后、任何落地动作之前,所以
-     * 拒绝时磁盘上什么都没动,不需要回滚。
+     * 这里按权限项逐项比对。包里多出来的权限先暂停落位,由 Renderer 按真实包
+     * 重新展示；用户批准后携带包 SHA 和已装权限基线重试。
+     * 卡点落在 inspect 之后、任何落地动作之前,所以等待复核时磁盘上什么都没动。
      */
+    const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.reviewedManifest) {
-      const unreviewed = diffGhostPermissionItems(
-        expected.reviewedManifest,
-        inspected.manifest,
-      ).added;
-      if (unreviewed.length > 0) {
-        log.warn('market package declares unreviewed permissions', {
-          ghostId: expected.ghostId,
-          keys: unreviewed.map((item) => item.key),
-        });
+      const installedBaseline = installed
+        ? ghostPermissionBaselineKey(installed.manifest)
+        : null;
+      // 真实包复核的批准必须始终绑定当时那份包与已装权限面，不能只在
+      // 当前仍存在来源清单差异时才校验。否则两次请求间包字节发生变化、
+      // 新包恰好不再多权限时，会绕过旧批准的 SHA/基线绑定直接落位。
+      if (
+        expected.approvedPackageSha256 !== undefined &&
+        (expected.approvedPackageSha256 !== inspected.packageSha256 ||
+          (expected.reviewedBaseline ?? null) !== installedBaseline)
+      ) {
         throwIpcError(
           'PRECONDITION_FAILED',
-          '下载包申请的权限多于安装确认框展示的内容,已阻止安装(请向插件来源反馈)',
+          'Downloaded Plugin package changed after permission review',
         );
       }
+      const added = diffGhostPermissionItems(
+        expected.reviewedManifest,
+        inspected.canonicalManifest,
+      ).added;
+      if (added.length > 0) {
+        const review: PluginMarketPackageReview = {
+          manifest: inspected.manifest,
+          packageSha256: inspected.packageSha256,
+          installedBaseline,
+        };
+        if (expected.approvedPackageSha256 === undefined) {
+          log.warn('market package declares unreviewed permissions', {
+            ghostId: expected.ghostId,
+            keys: added.map((item) => item.key),
+          });
+          throw new GhostPackagePermissionReviewRequiredError(review);
+        }
+      }
     }
-    rejectUnauthorizedTokenBroker(inspected.manifest);
+    rejectUnauthorizedTokenBroker(inspected.canonicalManifest);
 
-    const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     // Node 高风险条目由 renderer 装入确认卡权限清单如实展示;
     // 2026-07-24 Lizi 定案:不再有 Main 侧原生二次确认弹窗(PR #333,本处为其
     // 漏删的市场安装路径调用点,一并对齐)。
@@ -4522,7 +4550,12 @@ export function registerGhostIpc(): void {
     // 官方前缀在 inspect 就拒(确认弹窗都不该弹出来),install/update 双保险再拦。
     rejectReservedGhostId(result.manifest.id);
     rejectUnauthorizedTokenBroker(result.manifest);
-    return result;
+    return {
+      manifest: result.manifest,
+      trust: result.trust,
+      packageSha256: result.packageSha256,
+      ...(result.iconDataUrl !== undefined ? { iconDataUrl: result.iconDataUrl } : {}),
+    };
   });
 
   ipcMain.handle('ghosts:uninstall', async (_event, id: unknown) => {

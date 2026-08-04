@@ -1083,14 +1083,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     install: (
       pluginId: string,
-      options: {
-        expectedReleaseId: string;
-        expectedManifest?: import('../shared/ghost').GhostManifest;
-        allowPermissionExpansion?: boolean;
-        /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
-        reviewedBaseline?: string;
-      },
-    ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
+      options: import('../shared/pluginMarket').PluginMarketInstallOptions,
+    ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),

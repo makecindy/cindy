@@ -22,8 +22,12 @@ const PYTHON_CLIENT_DIR = fileURLToPath(new URL('../python-client/', import.meta
 function detectPython(): string | null {
   for (const cmd of ['python', 'python3']) {
     try {
-      const probe = spawnSync(cmd, ['--version'], { windowsHide: true, timeout: 10_000 });
-      if (probe.status === 0) return cmd;
+      const probe = spawnSync(cmd, ['-c', 'import sys; sys.stdout.write("cindy-python-probe")'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10_000,
+      });
+      if (probe.status === 0 && probe.stdout === 'cindy-python-probe') return cmd;
     } catch {
       // try next candidate
     }

@@ -21,6 +21,8 @@ import type {
   MarketSourceConfig,
   MarketSourceSummary,
   PluginMarketDetail,
+  PluginMarketInstallOptions,
+  PluginMarketInstallResult,
   PluginMarketItem,
   PluginMarketSnapshot,
 } from '../../shared/pluginMarket.js';
@@ -52,6 +54,7 @@ import {
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
+import { GhostPackagePermissionReviewRequiredError } from '../cindy-brain/packagePermissionReview.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
@@ -405,23 +408,8 @@ export class PluginMarketService {
 
   async install(
     pluginId: string,
-    options: {
-      /** Renderer 确认框实际展示过的 release。Main 重拉详情后必须仍一致,
-       *  否则用户审阅 A、实际安装/启用 B(review P1)。 */
-      expectedReleaseId: string;
-      /** 自定义市场插件：Renderer 确认框实际审阅过的完整 manifest。 */
-      expectedManifest?: GhostManifest;
-      allowPermissionExpansion?: boolean;
-      /**
-       * 扩权批准所依据的**已装 manifest 权限指纹**
-       * (`ghostPermissionBaselineKey`)。带 allowPermissionExpansion 时应一并
-       * 传入:Main 在安装锁内用当前已装 manifest 重算比对,不一致说明审阅与
-       * 现实已经脱节(典型是审阅期间「从文件更新」换了包),此时拒绝这次批准
-       * 而不是拿旧批准放行相对新 manifest 的全部新增权限。
-       */
-      reviewedBaseline?: string;
-    },
-  ): Promise<{ ghost: InstalledGhost }> {
+    options: PluginMarketInstallOptions,
+  ): Promise<PluginMarketInstallResult> {
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
       if (!options.expectedManifest) {
@@ -484,6 +472,9 @@ export class PluginMarketService {
             ...(options.reviewedBaseline !== undefined
               ? { reviewedBaseline: options.reviewedBaseline }
               : {}),
+            ...(options.approvedPackageSha256 !== undefined
+              ? { approvedPackageSha256: options.approvedPackageSha256 }
+              : {}),
             // 下载可能持续数分钟,提交副作用前按当前事实再算一次。
             recheckOwnership: assertOwnership,
           },
@@ -491,6 +482,12 @@ export class PluginMarketService {
           ledger,
         ),
       };
+    }).catch((error: unknown) => {
+      if (error instanceof GhostPackagePermissionReviewRequiredError) {
+        requireSameMarketOwner(owner);
+        return { reviewRequired: error.review };
+      }
+      throw error;
     });
   }
 
@@ -1084,6 +1081,8 @@ export class PluginMarketService {
       allowPermissionExpansion?: boolean;
       /** 扩权批准所依据的已装权限指纹;安装锁内复核,详见 install() 的说明。 */
       reviewedBaseline?: string;
+      /** 用户确认过的真实下载包 SHA。 */
+      approvedPackageSha256?: string;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
       /**
@@ -1188,10 +1187,16 @@ export class PluginMarketService {
           const installed = await installOrUpdateMarketGhostPackage(tempPath, {
             ghostId: plugin.ghostId,
             version: plugin.currentRelease.version,
-            // 确认框渲染的就是这份服务端 manifest;包里若多出权限项,出口处拒装
-            // ——服务端投影层与客户端清单契约漂移时,用户会在没审过的情况下多拿
-            // 一个能力面(codex review P1)。
+            // 确认框渲染的就是这份服务端 manifest;包里若多出权限项,出口处先
+            // 暂停落位并返回真实包权限——服务端投影层与客户端清单契约漂移时,
+            // 必须让用户按实际要安装的能力面重新确认。
             reviewedManifest: compatible.manifest,
+            ...(options.approvedPackageSha256 !== undefined
+              ? {
+                  approvedPackageSha256: options.approvedPackageSha256,
+                  reviewedBaseline: options.reviewedBaseline,
+                }
+              : {}),
           });
           // Once the package directory is committed, finish provenance against
           // the owner captured at operation start even if the active session
