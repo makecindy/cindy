@@ -1945,6 +1945,7 @@ function MessageBubble({
               interactiveAtoms={false}
               maxVisibleLines={collapsedLineCount}
               numberOfLines={collapsedLineCount}
+              selectable={canSelectVisibleText}
               testID="message.collapsedSentInlineAtoms"
               textStyle={styles.messageText}
               tokens={sentInlineTokens}

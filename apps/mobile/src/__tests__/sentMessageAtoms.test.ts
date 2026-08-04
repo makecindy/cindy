@@ -16,6 +16,7 @@ describe('sent message atoms', () => {
     expect(atomSource).toContain('<InlineQuoteChip');
     expect(atomSource).toContain('<InlineReferenceChip');
     expect(atomSource).toContain('renderText(token.text, index)');
+    expect(atomSource).toContain('selectable={selectable}');
     expect(rendererSource).toContain('<MarkdownBody');
     expect(rendererSource).toContain('text={text}');
     expect(atomSource).not.toContain('splitAnchoredSessionMessageLinks');
@@ -33,6 +34,7 @@ describe('sent message atoms', () => {
     expect(source.slice(collapseStart, collapseEnd)).not.toContain('!rendersSentInlineBody');
     expect(source).toContain('maxVisibleLines={collapsedLineCount}');
     expect(source).toContain('testID="message.collapsedSentInlineAtoms"');
+    expect(source).toContain('selectable={canSelectVisibleText}');
     expect(source).toContain('interactiveAtoms={false}');
   });
 

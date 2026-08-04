@@ -39,6 +39,7 @@ export function SentInlineAtomBody({
   numberOfLines,
   onOpenPayload,
   renderText,
+  selectable,
   textStyle,
   testID = "message.sentInlineAtoms",
   tokens,
@@ -48,6 +49,7 @@ export function SentInlineAtomBody({
   numberOfLines?: number;
   onOpenPayload?: (payload: MessagePayload) => void;
   renderText?: (text: string, index: number) => ReactNode;
+  selectable?: boolean;
   textStyle?: StyleProp<TextStyle>;
   testID?: string;
   tokens: readonly SentInlineToken[];
@@ -113,6 +115,7 @@ export function SentInlineAtomBody({
           <View key={`text:${index}`} style={styles.textChunk}>
             <Text
               numberOfLines={numberOfLines}
+              selectable={selectable}
               style={[styles.defaultText, textStyle]}
             >
               {token.text}
