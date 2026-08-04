@@ -2516,6 +2516,70 @@ describe('ghost · network 详单校验', () => {
     expect(dup.ok).toBe(false);
   });
 
+  it('secrets.inject.paths/methods 精确限制凭证范围并稳定归一化', () => {
+    const r = validateGhostManifest(
+      withNet({
+        hosts: ['api.example.com'],
+        secrets: [{
+          ...goodSecret(),
+          inject: {
+            header: 'Authorization',
+            format: 'Bearer {value}',
+            paths: ['/v1/z', '/v1/convert'],
+            methods: ['POST', 'GET'],
+          },
+        }],
+      }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.network?.secrets?.[0]?.inject).toEqual({
+      header: 'Authorization',
+      format: 'Bearer {value}',
+      paths: ['/v1/convert', '/v1/z'],
+      methods: ['GET', 'POST'],
+    });
+    expect(
+      ghostPermissionItems(r.manifest).find((i) => i.key === 'network:secret:api_token')?.detail,
+    ).toContain('Paths: /v1/convert, /v1/z');
+  });
+
+  it('secrets.inject.paths/methods 非空、无重复且只接受规范精确值', () => {
+    const inject = (extra: Record<string, unknown>) =>
+      validateGhostManifest(withNet({
+        hosts: ['api.example.com'],
+        secrets: [{ ...goodSecret(), inject: { header: 'X-Token', format: '{value}', ...extra } }],
+      }));
+    for (const paths of [[], ['v1/convert'], ['/v1/convert?x=1'], ['/a/../b'], ['/%2Fsecret'], ['/x', '/x']]) {
+      expect(inject({ paths }).ok, JSON.stringify(paths)).toBe(false);
+    }
+    for (const methods of [[], ['post'], ['HEAD'], ['POST', 'POST']]) {
+      expect(inject({ methods }).ok, JSON.stringify(methods)).toBe(false);
+    }
+  });
+
+  it('旧 host-only secret 不改变权限 baseline；显式 endpoint 范围变化进入更新 diff', () => {
+    const before = validateGhostManifest(
+      withNet({ hosts: ['api.example.com'], secrets: [goodSecret()] }),
+    );
+    const scoped = validateGhostManifest(
+      withNet({
+        hosts: ['api.example.com'],
+        secrets: [{
+          ...goodSecret(),
+          inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/v1/convert'], methods: ['POST'] },
+        }],
+      }),
+    );
+    expect(before.ok && scoped.ok).toBe(true);
+    if (!before.ok || !scoped.ok) return;
+    expect(ghostPermissionItems(before.manifest).find((i) => i.key === 'network:secret:api_token')?.detail).toBeUndefined();
+    const narrowed = diffGhostPermissionItems(before.manifest, scoped.manifest);
+    expect(narrowed.added.map((i) => i.key)).toContain('network:secret:api_token');
+    const expanded = diffGhostPermissionItems(scoped.manifest, before.manifest);
+    expect(expanded.added.map((i) => i.key)).toContain('network:secret:api_token');
+  });
+
   it('secrets.inject.hosts 必须是 hosts 声明条目的子集(逐字)', () => {
     const ok = validateGhostManifest(
       withNet({

@@ -243,6 +243,57 @@ describe('networkSlot · headers 消毒与凭证注入', () => {
     expect(JSON.stringify(r2)).not.toContain('tvly-secret');
   });
 
+  it('凭证 endpoint allowlist 同时匹配精确 pathname 与 method；query 不参与', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          paths: ['/v1/convert'],
+          methods: ['POST'],
+        },
+      }],
+    };
+    const scopedReadSecret = vi.fn(() => 'scoped-secret');
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: scopedReadSecret,
+    });
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/mcp' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(scopedReadSecret).not.toHaveBeenCalled();
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/v1/convert', method: 'GET' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBeUndefined();
+
+    expect((await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/v1/convert?output=pdf', method: 'POST', body: '{}' })).ok).toBe(true);
+    expect((fetchImpl.mock.calls[2][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+    expect(scopedReadSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it('endpoint 未命中仍剥除意识伪造的主机托管凭证头', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/private'] },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({ network }) });
+    const r = await slot.handleFetchRequest('web-search', {
+      url: 'https://api.example.com/public',
+      headers: { authorization: 'Bearer forged' },
+    });
+    expect(r.ok).toBe(true);
+    expect(Object.keys(fetchImpl.mock.calls[0][1].headers as Record<string, string>)
+      .some((key) => key.toLowerCase() === 'authorization')).toBe(false);
+  });
+
   it('命中域名的凭证未配置 → 快速失败并指引设置页,不发请求', async () => {
     const { slot, fetchImpl } = makeSlot({ readSecret: () => null });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
@@ -326,6 +377,65 @@ describe('networkSlot · 重定向逐跳守门', () => {
     const hop2 = fetchImpl.mock.calls[1][1].headers as Record<string, string>;
     expect(hop2['X-Subscription-Token']).toBeUndefined();
     expect(hop2['X-Api-Key']).toBe('Bearer tvly-secret');
+  });
+
+  it('同域重定向逐跳按 path/method 重算凭证', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          paths: ['/private'],
+          methods: ['GET'],
+        },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: () => 'scoped-secret',
+    });
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/public'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/private' });
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBeUndefined();
+
+    fetchImpl.mockReset();
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/private'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', { url: 'https://api.example.com/public' });
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBeUndefined();
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
+  });
+
+  it('302 把 POST 降为 GET 后按下一跳实际 method 匹配 endpoint', async () => {
+    const network: GhostNetworkNeeds = {
+      hosts: ['api.example.com'],
+      secrets: [{
+        key: 'api_key',
+        label: 'API Key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', paths: ['/private'], methods: ['GET'] },
+      }],
+    };
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network }),
+      readSecret: () => 'scoped-secret',
+    });
+    fetchImpl
+      .mockResolvedValueOnce(redirectTo('https://api.example.com/private'))
+      .mockResolvedValueOnce(fakeResponse());
+    await slot.handleFetchRequest('web-search', {
+      url: 'https://api.example.com/public',
+      method: 'POST',
+      body: '{}',
+    });
+    expect(fetchImpl.mock.calls[1][1].method).toBe('GET');
+    expect((fetchImpl.mock.calls[1][1].headers as Record<string, string>).Authorization).toBe('Bearer scoped-secret');
   });
 
   it('重定向次数超上限阻断', async () => {

@@ -1291,7 +1291,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
-      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "hosts": ["api.example.com"],                 // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "paths": ["/v1/convert"],                     // 可选:精确 URL.pathname 白名单(大小写/尾斜杠敏感,不含 query);缺省=全部路径
+      "methods": ["POST"]                           // 可选:GET/POST/PUT/PATCH/DELETE 白名单;缺省=全部支持的方法
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)
@@ -2245,9 +2247,14 @@ settingsHtml,校验强制):你在 settingsHtml 里画输入框供用户主动添
 \`[{key, saved, tail?}]\` 状态、**永远拿不回值**(tail 是主机截存的**尾 4 位
 指纹**,仅够用户回忆"填的是哪个 key";值不足 12 字符时不产——UI 要按没有
 tail 也能画来写),DELETE 清除。红线:收单即交,不许把 key 落进 /kv、
-BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注入到它
-\`inject.hosts\` 声明的域名请求,重定向出域也不会跟着走。用户没填时 cindy.fetch
-返回结构化错误,把 message 原样告诉用户即可(里面带了去哪填的指引)。
+BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会在
+\`inject.hosts\` 命中，并且可选的 \`inject.paths\`（精确 URL.pathname）与
+\`inject.methods\` 同时命中时注入；三者是 AND 关系。省略 paths/methods 保持旧语义：
+该域名下全部路径、全部支持的方法。paths 大小写与尾斜杠敏感，query/fragment 不参与；
+初始请求、每次重定向和 401 重试都会按目标 URL 与实际 method 重新判断。未命中只是不带
+该凭证，仍可无凭证访问白名单 host；上一跳和插件自带的同名请求头都会先被主机清除。
+用户没填时，只有请求命中完整注入范围才会返回结构化错误；把 message 原样告诉用户即可
+(里面带了去哪填的指引)。
 无论走 Setup 卡还是 settingsHtml，入库成功时主机会自动弹一条「凭证已保存」的系统提示(带你的身份头,
 文案跟随用户语言;无需声明 notify 槽)——设置页里画个就地的轻反馈即可,
 不用自己想办法做全局提示。
