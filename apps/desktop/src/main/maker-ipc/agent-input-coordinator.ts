@@ -1248,6 +1248,12 @@ export class AgentInputCoordinator {
 
   private rememberEnqueuedClientId(state: SessionInputState, clientId: string): void {
     if (!clientId) return;
+    // Treat the bounded list as an MRU window. A queued item may be accepted
+    // later as a same-turn steer; refreshing it here keeps the post-acceptance
+    // weak-link retry window intact without growing a second dedupe mechanism.
+    state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+      (knownClientId) => knownClientId !== clientId,
+    );
     state.recentEnqueuedClientIds.push(clientId);
     if (
       state.recentEnqueuedClientIds.length > AgentInputCoordinator.RECENT_ENQUEUED_CLIENT_IDS_LIMIT
@@ -1540,9 +1546,11 @@ export class AgentInputCoordinator {
     // the token from the moment it entered the steer transaction.
     const steerClearBoundaryMs = state.clearBoundaryMs;
     let itemAlreadyOwnedByHost = false;
+    let steersStoredQueueItem = false;
     if (opts?.removeFromQueue) {
       const storedItem = state.pendingQueue.find((queued) => queued.clientId === item.clientId);
       if (storedItem) {
+        steersStoredQueueItem = true;
         // Renderer projections intentionally omit trusted reference bodies. The main-owned
         // queue row is authoritative for identity/text. A restored device-link row can retain
         // only the fail-closed marker, though; in that case the validated inbound snapshot is
@@ -1573,6 +1581,20 @@ export class AgentInputCoordinator {
         itemAlreadyOwnedByHost =
           typeof item.hostAcceptedAtMs === 'number' && Number.isFinite(item.hostAcceptedAtMs);
       }
+    }
+    if (state.steeringQueueClientIds.includes(item.clientId)) {
+      log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
+        sessionId,
+        clientId: item.clientId,
+      });
+      return true;
+    }
+    if (!steersStoredQueueItem && this.isDuplicateEnqueueClientId(state, item.clientId)) {
+      log.info('steer ignored: duplicate clientId (control-side resend)', {
+        sessionId,
+        clientId: item.clientId,
+      });
+      return true;
     }
     // A row already owned by the host keeps its original receipt.  A direct
     // composer steer has no host-owned row yet, so stamp it before any async
@@ -1801,9 +1823,10 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return false;
     }
-    accepted.steeringQueueClientIds = accepted.steeringQueueClientIds.filter(
-      (id) => id !== item.clientId,
-    );
+    // steerToAgent has crossed the irreversible delivery boundary. Keep the
+    // clientId known even if the subsequent user-row persistence or terminal
+    // event fails, otherwise an ACK-loss retry can inject the same text twice.
+    this.rememberEnqueuedClientId(accepted, item.clientId);
     if (opts?.removeFromQueue) {
       accepted.pendingQueue = accepted.pendingQueue.filter((q) => q.clientId !== item.clientId);
       this.removePendingCompactWaitClientId(accepted, item.clientId);
@@ -1844,7 +1867,23 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     const persisted = await this.persistAcceptedUserMessage(sessionId, accepted.activeTurn);
-    if (persisted !== 'persisted') return false;
+    const settled = this.getState(sessionId);
+    let releasedSteerMarker = false;
+    if (settled.generation === steerGeneration) {
+      const remainingSteeringClientIds = settled.steeringQueueClientIds.filter(
+        (id) => id !== item.clientId,
+      );
+      releasedSteerMarker =
+        remainingSteeringClientIds.length !== settled.steeringQueueClientIds.length;
+      if (releasedSteerMarker) {
+        settled.steeringQueueClientIds = remainingSteeringClientIds;
+        this.emit(sessionId);
+      }
+    }
+    if (persisted !== 'persisted') {
+      if (releasedSteerMarker) this.scheduleDrain(sessionId, 'steer-persistence-settled');
+      return false;
+    }
     if (opts?.touchUserSend) this.touchUserSend(sessionId);
     // 已投递收口(review #939 第二轮 P1):steer ack 可能与 turn 终态乱序——
     // maker-core 对"server 已接受注入但本地 turn 已终结"按已投递成功返回

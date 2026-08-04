@@ -10335,16 +10335,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await restoreQueue.catch(() => undefined);
       }
       assertCurrentInputGeneration();
-      if (!steerOpts?.removeFromQueue && inputCoordinator.hasKnownClientId(sid, parsed.clientId)) {
-        // Idempotent resend of a steer that is already in-flight or recently
-        // accepted. Do not materialise a second local attachment copy.
+      const isKnownSteerDuplicate = (): boolean => {
+        const projection = inputCoordinator.getProjection(sid);
+        const steeringStoredQueueItem =
+          steerOpts?.removeFromQueue === true &&
+          projection.pendingQueue.some((queued) => queued.clientId === parsed.clientId);
+        return (
+          projection.steeringQueueClientIds.includes(parsed.clientId) ||
+          (!steeringStoredQueueItem && inputCoordinator.hasKnownClientId(sid, parsed.clientId))
+        );
+      };
+      if (isKnownSteerDuplicate()) {
+        // Only a still-present main-owned queue row may pass through the
+        // remove-from-queue path. An in-flight promotion or any other known
+        // clientId is a resend and must stop before attachment materialisation.
         return true;
       }
       if (deviceLinkInvoke && (await remoteInputClientIdWasPersisted(sid, parsed.clientId))) {
-        // The in-memory marker is intentionally short-lived.  A controller can
-        // retry after an ACK loss or a host restart, so the durable user row is
-        // the final idempotency boundary for every remote steer variant,
-        // including a stale remove-from-queue projection.
+        // In-memory markers and the accepted-clientId window do not survive a
+        // host restart, so the durable user row is the final idempotency boundary
+        // for every remote steer variant, including a stale queue projection.
         inputSessionRow = await getInputSessionRow(sid);
         inputCoordinator.observeClearBoundary(sid, inputSessionRow.clearedAt);
         assertCurrentInputGeneration();
@@ -10352,6 +10362,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertExpectedRemoteInputClearBoundary(sid, clearBoundaryPrecondition, inputSessionRow);
         return true;
       }
+      // The durable lookup above is an await boundary. Recheck coordinator
+      // ownership before materialising so a concurrent first delivery cannot
+      // make this retry create an unnecessary second local copy.
+      if (isKnownSteerDuplicate()) return true;
       const steeringStoredQueueItem =
         steerOpts?.removeFromQueue === true &&
         inputCoordinator.hasPendingQueueItem(sid, parsed.clientId);
@@ -10410,6 +10424,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         assertCurrentInputGeneration();
         assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
+        // Attachment hydration, auto-title preparation and the final session
+        // lookup all yield. Close the last race before activating ownership:
+        // coordinator.steer sets its marker synchronously, so after this check
+        // only one request can become the current owner for this clientId.
+        if (isKnownSteerDuplicate()) {
+          await materialized.cleanupBeforeAcceptance?.();
+          if (attachmentOwnerId) {
+            await discardSpecificQueuedAttachmentOwnership(
+              sid,
+              parsed.clientId,
+              attachmentOwnerId,
+            );
+          }
+          return true;
+        }
         // steer 与 enqueue 不同:它会因同会话已有在飞 steer / Stop 边界 / 输入锁而
         // 返回 false。必须等它落定、受理了才改名 —— 被拒的文本改掉默认名 / 合成占位 /
         // fork 占位就是凭空改名(review P1)。

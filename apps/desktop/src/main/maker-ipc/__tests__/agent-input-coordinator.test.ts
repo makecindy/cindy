@@ -5046,6 +5046,73 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.errorRetryText).toBeNull();
   });
 
+  it('deduplicates an accepted steer after persistence and terminal failure', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-accepted-persist-failure-dedup';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    mocks.createMessage.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('db down'));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+
+    // The accepted vendor injection has no durable row, and the terminal event
+    // releases activeTurn. The bounded accepted-clientId window must still stop
+    // an ACK-loss resend from injecting the same content a second time.
+    h.coordinator.onTurnEvent(sid, 'error', 'terminal after persist failure');
+    await flush();
+    expect(h.coordinator.hasKnownClientId(sid, second.clientId)).toBe(true);
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(true);
+    await flush();
+
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+  });
+
+  it('keeps an accepted steer serialized until its user row is durable', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'steer-accepted-persisting-serialized';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    const third = makeItem('q-3', 'third');
+    const persistStarted = deferred<void>();
+    const persistSucceeded = deferred<void>();
+    mocks.createMessage.mockResolvedValueOnce({}).mockImplementationOnce(async () => {
+      persistStarted.resolve();
+      await persistSucceeded.promise;
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    h.coordinator.enqueue(sid, third);
+    await flush();
+
+    const steerPromise = h.coordinator.steer(sid, second, { removeFromQueue: true });
+    await persistStarted.promise;
+
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual(['q-2']);
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(true);
+    await expect(h.coordinator.steer(sid, third, { removeFromQueue: true })).resolves.toBe(false);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+
+    persistSucceeded.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).steeringQueueClientIds).toEqual([]);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps active-turn retry when terminal error arrives before successful steer persistence settles', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
