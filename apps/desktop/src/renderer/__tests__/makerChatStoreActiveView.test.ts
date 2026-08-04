@@ -316,6 +316,9 @@ describe('makerChatStore active view tracking', () => {
 
   it('initial history load treats swallowed plan tool rows as non-anchor rows', async () => {
     const sessionId = sid('initial-plan-non-anchor');
+    // Preserve a local-only row so loadOlderMessages would have a beforeTs
+    // cursor if the initial non-anchor backfill failed to acquire its lock.
+    addMessage(sessionId);
     vi.mocked(messageService.list).mockClear();
     const latestPage = Array.from({ length: 50 }, (_, i) =>
       dbToolUseMessage(
@@ -326,21 +329,37 @@ describe('makerChatStore active view tracking', () => {
         new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
       ),
     );
+    let resolveOlderPage!: (rows: Message[]) => void;
     vi.mocked(messageService.list)
       .mockResolvedValueOnce(latestPage)
-      .mockResolvedValueOnce([
-        dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
-      ]);
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
 
     makerChatStore.ensureInitialMessages(sessionId);
-    await flushPromises();
+    await flushPromises(4);
 
     expect(messageService.list).toHaveBeenCalledTimes(2);
     expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
       limit: 50,
       before: 'plan-00',
     });
-    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-visible');
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
+
+    makerChatStore.loadOlderMessages(sessionId);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    resolveOlderPage([
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ]);
+    await flushPromises();
+
+    const snapshot = makerChatStore.getSnapshot(sessionId);
+    expect(snapshot.oldestMessageId).toBe('older-visible');
+    expect(snapshot.historyLoaded).toBe(true);
+    expect(snapshot.isLoadingMore).toBe(false);
   });
 
   it('continues initial history backfill until the latest plan boundary is found', async () => {

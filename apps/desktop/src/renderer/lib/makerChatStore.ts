@@ -6132,6 +6132,12 @@ function ensureInitialMessages(sessionId: string): void {
           hasMoreMessages: hasMore,
           isLoadingMore: initialNeedsBackfill,
         }));
+      } else if (initialNeedsBackfill) {
+        // The newest page has no renderable anchor, so there is nothing useful
+        // to publish yet. Still acquire the shared pagination lock before the
+        // first background await: a stale/local-only row may already give
+        // loadOlderMessages a cursor, and it must not race this backfill.
+        setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
       }
       let pagesFetched = 0;
       let planResolutionPagesFetched = 0;
