@@ -142,9 +142,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     setClaudeUsage(1, 4);
     const { container } = renderClaudeSubscriptionChip();
 
-    const segments = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
-    );
+    const segments = Array.from(container.querySelectorAll<HTMLElement>('[data-quota-severity]'));
     expect(segments.map((segment) => segment.textContent)).toEqual([
       '5小时 剩余 99%',
       '6天 剩余 96%',
@@ -167,9 +165,11 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(warningSegment?.className).toContain('text-[var(--quota-bar-warn)]');
-    expect(screen.getByRole('button', {
-      name: '打开 Claude 用量页面 接近套餐限额',
-    })).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: '打开 Claude 用量页面 接近套餐限额',
+      }),
+    ).toBeTruthy();
     expect(container.querySelector('[data-quota-critical-dot]')).toBeNull();
   });
 
@@ -181,11 +181,10 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 50%');
     expect(warningSegment?.className).toContain('text-[var(--quota-bar-warn)]');
-    expect(warningSegment?.getAttribute('aria-label')).toBe(
-      '5小时 剩余 50% 接近套餐限额',
+    expect(warningSegment?.getAttribute('aria-label')).toBe('5小时 剩余 50% 接近套餐限额');
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className).not.toContain(
+      '--error-fg',
     );
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
   });
 
   it('可见窗口利用率 50% 但服务端为 critical 时段显示红色', () => {
@@ -199,8 +198,9 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(criticalSegment?.getAttribute('aria-label')).toBe(
       '5小时 剩余 50% 已触发套餐限额，请求可能被拒绝',
     );
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className).not.toContain(
+      '--error-fg',
+    );
   });
 
   it('可见窗口利用率 50% 且服务端等级缺省时保持普通段', () => {
@@ -220,9 +220,11 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
     expect(criticalSegment?.textContent).toBe('5小时 剩余 7%');
     expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
-    expect(screen.getByRole('button', {
-      name: '打开 Claude 用量页面 已触发套餐限额，请求可能被拒绝',
-    })).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: '打开 Claude 用量页面 已触发套餐限额，请求可能被拒绝',
+      }),
+    ).toBeTruthy();
 
     const dot = criticalSegment?.parentElement?.querySelector<HTMLElement>(
       '[data-quota-critical-dot]',
@@ -238,46 +240,52 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(normalSegment?.textContent).toBe('6天 剩余 80%');
     expect(normalSegment?.getAttribute('class')).toBeNull();
     expect(normalSegment?.parentElement?.querySelector('[data-quota-critical-dot]')).toBeNull();
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className).not.toContain(
+      '--error-fg',
+    );
   });
 
   it('可见段仅为警告色但隐藏总周限已严重告警时保留整 chip 告警兜底', () => {
     setClaudeUsage(76, 95);
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 20,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 20,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
-    const segments = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
-    );
+    const segments = Array.from(container.querySelectorAll<HTMLElement>('[data-quota-severity]'));
     expect(segments).toHaveLength(2);
     expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['warn', 'normal']);
     expect(container.textContent).toContain('5小时 剩余 24%');
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('剩余 5%');
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .toContain('text-[var(--quota-bar-crit)]');
+    // 兜底告警只染色不加段落，等级文案必须并入 trigger 可达名称供读屏播报。
+    const button = screen.getByRole('button', {
+      name: '打开 Claude 用量页面 接近套餐限额 已触发套餐限额，请求可能被拒绝',
+    });
+    expect(button.className).toContain('text-[var(--quota-bar-crit)]');
   });
 
   it('可见窗口均正常但隐藏总周限为 warning 时显示琥珀色兜底', () => {
     setClaudeUsage(20, 20);
     mocks.claudeSnapshot!.sevenDay!.severity = 'warning';
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 20,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 20,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
-    const segments = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
-    );
+    const segments = Array.from(container.querySelectorAll<HTMLElement>('[data-quota-severity]'));
     expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
-    const buttonClass = screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className;
+    const buttonClass = screen.getByRole('button', {
+      name: '打开 Claude 用量页面 接近套餐限额',
+    }).className;
     expect(buttonClass).toContain('text-[var(--quota-bar-warn)]');
     expect(buttonClass).not.toContain('--quota-bar-crit');
     expect(buttonClass).not.toContain('--error-fg');
@@ -288,11 +296,11 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     mocks.claudeSnapshot!.rateLimitStatus = 'rejected';
     const { container } = renderClaudeSubscriptionChip();
 
-    const segments = Array.from(
-      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
-    );
+    const segments = Array.from(container.querySelectorAll<HTMLElement>('[data-quota-severity]'));
     expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
-    const buttonClass = screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className;
+    const buttonClass = screen.getByRole('button', {
+      name: '打开 Claude 用量页面 已触发套餐限额，请求可能被拒绝',
+    }).className;
     expect(buttonClass).toContain('text-[var(--quota-bar-crit)]');
     expect(buttonClass).not.toContain('--quota-bar-warn');
   });
@@ -300,68 +308,83 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
   it('隐藏总周限利用率仅 50% 但服务端为 critical 时仍显示红色兜底', () => {
     setClaudeUsage(76, 50);
     mocks.claudeSnapshot!.sevenDay!.severity = 'critical';
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 20,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 20,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
     expect(container.textContent).toContain('5小时 剩余 24%');
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('周限 剩余 50%');
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .toContain('text-[var(--quota-bar-crit)]');
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className).toContain(
+      'text-[var(--quota-bar-crit)]',
+    );
   });
 
   it('隐藏总周限利用率 50% 且服务端为 normal 时保持原有警告段展示', () => {
     setClaudeUsage(76, 50);
     mocks.claudeSnapshot!.sevenDay!.severity = 'normal';
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 20,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 20,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(container.textContent).not.toContain('周限 剩余 50%');
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className).not.toContain(
+      '--error-fg',
+    );
   });
 
   it('当前模型 scoped 周限已有红色段时不重复显示整 chip 告警兜底', () => {
     setClaudeUsage(20, 95);
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 93,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 93,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
     const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
     expect(criticalSegment?.textContent).toBe('Opus 6天 剩余 7%');
     expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
+    // 兜底被可见红段压制时，可达名称也只保留可见段的一份等级文案。
+    expect(
+      screen.getByRole('button', {
+        name: '打开 Claude 用量页面 已触发套餐限额，请求可能被拒绝',
+      }).className,
+    ).not.toContain('--error-fg');
   });
 
   it('可见警告段与隐藏窗口的警告级告警等强时不重复显示整 chip 告警兜底', () => {
     setClaudeUsage(76, 20);
     mocks.claudeSnapshot!.sevenDay!.severity = 'warning';
-    mocks.claudeSnapshot!.scoped = [{
-      utilization: 20,
-      modelDisplayName: 'Opus',
-      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
-    }];
+    mocks.claudeSnapshot!.scoped = [
+      {
+        utilization: 20,
+        modelDisplayName: 'Opus',
+        resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+      },
+    ];
     const { container } = renderClaudeSubscriptionChip();
 
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(container.textContent).not.toContain('周限 剩余 80%');
-    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
-      .not.toContain('--error-fg');
+    expect(
+      screen.getByRole('button', { name: '打开 Claude 用量页面 接近套餐限额' }).className,
+    ).not.toContain('--error-fg');
   });
 
   it('非 Claude 订阅计费形态不挂载额度严重度 span', () => {

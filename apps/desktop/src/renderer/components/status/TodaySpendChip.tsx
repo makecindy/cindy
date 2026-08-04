@@ -1766,8 +1766,12 @@ export function TodaySpendChip({
           : highestSeverity;
       }, 'normal')
     : 'normal';
+  const showClaudeSubscriptionFallbackAlert =
+    QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
+      < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
   // button 自身的 aria-label 会覆盖后代段落的 accessible name；把每个升级段使用的
   // 同一份严重度文案提升到 trigger，确保读屏仍能听见 warn / crit 的区别。
+  // 兜底告警（隐藏窗口告警 / rejected 状态）只染色不加段落，等级文案也要并入名称。
   const triggerAccessibleName = usageDashboardLabel
     ? [
         usageDashboardLabel,
@@ -1782,11 +1786,12 @@ export function TodaySpendChip({
               ))
               .filter((label): label is string => label !== null)
           : []),
+        ...(showClaudeSubscriptionFallbackAlert
+          ? [getClaudeQuotaSeverityLabel(claudeSubscriptionAlertSeverity, t)]
+              .filter((label): label is string => label !== null)
+          : []),
       ].join(' ')
     : null;
-  const showClaudeSubscriptionFallbackAlert =
-    QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
-      < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
   // 隐藏窗口 / 状态告警的整 chip 兜底也保留最终等级：
   // warn 用琥珀色，crit 才用红色，与可见额度段共用语义 token。
   const claudeSubscriptionFallbackToneClass = showClaudeSubscriptionFallbackAlert
