@@ -355,7 +355,7 @@ describe('translateResponsesRequest', () => {
         { type: 'message', role: 'user', content: 'start' },
         {
           type: 'agent_message',
-          author: 'researcher',
+          author: 'researcher\r\nreviewer',
           content: [
             { type: 'output_text', text: '  Findings' },
             { type: 'encrypted_content', encrypted_content: 'opaque' },
@@ -380,7 +380,7 @@ describe('translateResponsesRequest', () => {
       {
         role: 'assistant',
         content: [
-          '[collab researcher]\n  Findings',
+          '[collab researcher reviewer]\n  Findings',
           '[collab message from reviewer; encrypted payload omitted]',
           '[collab message from observer; empty content]',
         ].join('\n'),

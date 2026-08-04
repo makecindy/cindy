@@ -300,9 +300,10 @@ function reasoningText(value: unknown): string {
 }
 
 function agentMessageText(item: Record<string, unknown>, itemIndex: number): string {
-  const author = typeof item.author === 'string' && item.author.trim()
-    ? item.author.trim()
-    : 'agent';
+  const normalizedAuthor = typeof item.author === 'string'
+    ? item.author.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+    : '';
+  const author = normalizedAuthor || 'agent';
   let body = '';
   let omittedEncryptedContent = false;
   if (typeof item.content === 'string') {
