@@ -7299,8 +7299,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async () => {
-      const views = await getDesktopProviderService().listProviders({ allowSideEffects: true });
-      const modelRegistry = getActiveCatalog().modelRegistry;
+      const catalog = getDesktopSelectableCatalog();
+      const views = await getDesktopProviderService().listProviders({
+        allowSideEffects: true,
+        catalog,
+      });
+      const modelRegistry = catalog.modelRegistry;
       // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
       // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
       // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
