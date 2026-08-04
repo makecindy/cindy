@@ -1083,12 +1083,14 @@ export function createCardActionHandler(
 
   // ── /project 项目切换(projectSwitching 渠道专用)────────────────────────────
 
-  async function patchProjectCard(im: ChannelIM, messageId: string, label: string): Promise<void> {
+  async function patchProjectCard(im: ChannelIM, messageId: string, label: string): Promise<boolean> {
     try {
       await im.updateInteractiveCard(messageId, cards.buildResolvedCard(label));
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`project card patch failed (non-fatal): ${msg}`);
+      return false;
     }
   }
 
@@ -1363,7 +1365,7 @@ export function createCardActionHandler(
           if (event.buttonId === 'project:cancel') {
             const projectUi = adapter.ui.cards.project;
             if (projectUi) {
-              await patchProjectCard(im, event.messageId, projectUi.resolvedCancel);
+              return patchProjectCard(im, event.messageId, projectUi.resolvedCancel);
             }
             return;
           }

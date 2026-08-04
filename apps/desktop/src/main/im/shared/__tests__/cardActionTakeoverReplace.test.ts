@@ -158,8 +158,8 @@ const adapter = {
 } as unknown as ImChannelAdapter;
 
 function registeredHandler(
-  handler: ((e: IMCardActionEvent) => Promise<void>) | null,
-): (e: IMCardActionEvent) => Promise<void> {
+  handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null,
+): (e: IMCardActionEvent) => Promise<void | boolean> {
   if (!handler) throw new Error('card action handler 未注册');
   return handler;
 }
@@ -513,6 +513,57 @@ describe('Telegram 失效交互卡', () => {
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
       '111|42',
       expect.objectContaining({ body: '卡片已过期', buttons: [] }),
+    );
+  });
+
+  it('project:cancel 在卡片收口失败时返回可重试结果', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const projectAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      projectSwitching: true,
+      ui: {
+        ...adapter.ui,
+        cards: {
+          ...adapter.ui.cards,
+          project: {
+            title: '项目',
+            hint: (name: string) => name,
+            emptyBody: 'empty',
+            btnDialogue: 'dialogue',
+            btnCancel: 'cancel',
+            resolvedPick: (name: string) => name,
+            resolvedDialogue: 'dialogue-resolved',
+            resolvedCancel: 'cancelled',
+            switchFailed: (reason: string) => reason,
+            attachedUnsupported: 'unsupported',
+            dialogueName: '对话',
+          },
+        },
+      },
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(projectAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const result = await registeredHandler(handler)({
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'project:cancel',
+      payload: { requestId: 'project-cancel-retry' },
+    });
+
+    expect(result).toBe(false);
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      '111|42',
+      expect.objectContaining({ body: 'cancelled', buttons: [] }),
     );
   });
 });
