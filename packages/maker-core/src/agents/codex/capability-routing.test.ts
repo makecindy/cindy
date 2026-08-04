@@ -19,7 +19,7 @@ describe('buildCodexCapabilityConfigOverrides', () => {
     };
 
     expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
-      'mcp_servers."node_repl".enabled': false,
+      'mcp_servers.node_repl.enabled': false,
     });
   });
 

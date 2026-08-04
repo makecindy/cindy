@@ -26,6 +26,14 @@ function quoteTomlKeySegment(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+function renderThreadConfigKeySegment(value: string): string {
+  // app-server's thread config takes flattened paths, but unlike CLI `-c` it
+  // does not parse quotes around a bare-safe segment. Quoting `node_repl`
+  // therefore addresses a literal `"node_repl"` server and makes transport
+  // resolution fail. Keep quoting only for names that TOML cannot render bare.
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : quoteTomlKeySegment(value);
+}
+
 function isCodexHarnessPluginDirective(
   directive: CapabilityRouteOverride,
 ): boolean {
@@ -86,7 +94,7 @@ export function buildCodexCapabilityConfigOverrides(
       directive.invocation === 'disabled'
     ) {
       config[
-        `mcp_servers.${quoteTomlKeySegment(directive.source.id)}.enabled`
+        `mcp_servers.${renderThreadConfigKeySegment(directive.source.id)}.enabled`
       ] = false;
       continue;
     }

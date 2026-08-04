@@ -143,7 +143,7 @@ async function probeCodexChrome(
   });
   // The child emits diagnostics on stderr. Drain the pipe so a noisy failure
   // cannot block shutdown; the caller reports only the stable availability fact.
-  transport.stderr?.resume();
+  transport.stderr?.on('data', () => undefined);
   const client = new Client({ name: 'cindy-browser-preflight', version: '0.0.0' });
   const probeTimeoutMs = Math.min(companion.startupTimeoutMs, 10_000);
   try {
@@ -189,8 +189,16 @@ async function probeCodexChrome(
         },
         _meta: turnMetadata,
       });
-      return result.isError !== true && result.content.some((item) => (
-        item.type === 'text' && item.text.trim() === 'true'
+      if (
+        result.isError === true
+        || !('content' in result)
+        || !Array.isArray(result.content)
+      ) return false;
+      return result.content.some((item: unknown) => (
+        isRecord(item)
+        && item.type === 'text'
+        && typeof item.text === 'string'
+        && item.text.trim() === 'true'
       ));
     })(), probeTimeoutMs, 'Chrome browser connection probe');
   } catch {
