@@ -9,10 +9,15 @@ export interface SchemaCompatibilityResult {
   compatible: boolean;
 }
 
+export interface SchemaReadOnlyInvariantCheck {
+  compatible: boolean;
+}
+
 interface RunSchemaStartupPolicyOptions<T extends SchemaCompatibilityResult> {
   sharedPassive: boolean;
   readOnly?: boolean;
   checkCompatibility: () => T;
+  checkReadOnlyInvariants?: () => SchemaReadOnlyInvariantCheck;
   prepareRuntimeManifest: () => void;
   runMigrations: () => Promise<void>;
   handleSchemaDrift: () => Promise<void>;
@@ -27,6 +32,12 @@ export async function runSchemaStartupPolicy<T extends SchemaCompatibilityResult
 ): Promise<SchemaStartupPolicyResult<T>> {
   if (options.sharedPassive || options.readOnly) {
     const compatibility = options.checkCompatibility();
+    if (compatibility.compatible && options.readOnly && options.checkReadOnlyInvariants) {
+      const invariant = options.checkReadOnlyInvariants();
+      if (!invariant.compatible) {
+        return { ready: false, compatibility: { ...compatibility, compatible: false } };
+      }
+    }
     return compatibility.compatible
       ? { ready: true, compatibility }
       : { ready: false, compatibility };

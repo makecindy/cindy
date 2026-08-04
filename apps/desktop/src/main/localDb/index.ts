@@ -41,7 +41,7 @@ import { tryRestoreWithFallback, backupDb, restrictLegacyBackupPermissions } fro
 import { detectSchemaDrift } from './schemaDriftDetector';
 import { repairSchemaDriftWithBackup } from './schemaDriftRepair';
 import { reconcileKnownEquivalentMigrationHashes } from './schemaDriftCompatibility';
-import { cleanupStaleOrcaLeadIndex } from './orcaStaleIndexCleanup';
+import { cleanupStaleOrcaLeadIndex, hasStaleOrcaLeadIndex } from './orcaStaleIndexCleanup';
 import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
 import { dialogueWorkspaceRootDir } from './dialogueWorkspace';
@@ -283,6 +283,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       sharedPassive: passiveSharedUserData,
       readOnly: schemaMaintenanceReadOnly,
       checkCompatibility: () => checkMigrationCompatibility(db, getDrizzleDir(), filePath),
+      checkReadOnlyInvariants: () => ({ compatible: !hasStaleOrcaLeadIndex(db) }),
       prepareRuntimeManifest: () => {
         const prepared = prepareMigrationRuntimeManifest(
           filePath,
