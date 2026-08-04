@@ -130,6 +130,7 @@ const getPendingInteractions = vi.fn<
     }>
   >
 >(async () => []);
+const resolveInteraction = vi.fn(async () => {});
 
 const input = {
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
@@ -206,7 +207,7 @@ function installElectronBridge(): void {
           return vi.fn();
         },
         send: vi.fn(async () => ({ accepted: true })),
-        resolveInteraction: vi.fn(async () => {}),
+        resolveInteraction,
         submitPluginSetupInline: vi.fn(async () => {}),
         getPendingInteractions,
         steer: vi.fn(async () => true),
@@ -1977,7 +1978,7 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
-  it('preserves terminal interaction state on late initial DB-created echoes', () => {
+  it('preserves terminal interaction state on late initial DB-created echoes', async () => {
     emitInteractionRequest(
       {
         kind: 'ask_user_question',
@@ -1998,6 +1999,7 @@ describe('makerChatStore text delta batching', () => {
 
     makerChatStore.answerUserQuestion(SESSION_ID, 'ask-terminal', { 'Continue?': 'Yes' });
     makerChatStore.respondToPlanReview(SESSION_ID, 'plan-terminal', false, 'Needs more detail');
+    await flushPromises();
 
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(
       expect.arrayContaining([
@@ -2059,6 +2061,50 @@ describe('makerChatStore text delta batching', () => {
         createdAt: '2026-06-15T00:00:04.000Z',
       }),
     );
+  });
+
+  it('keeps ask_user_question pending when answer delivery fails and allows retry', async () => {
+    emitInteractionRequest(
+      {
+        kind: 'ask_user_question',
+        requestId: 'ask-retry',
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }],
+      },
+      'ask-retry-message',
+    );
+    resolveInteraction.mockRejectedValueOnce(new Error('device link unavailable'));
+
+    makerChatStore.answerUserQuestion(SESSION_ID, 'ask-retry', { 'Continue?': 'Yes' });
+    makerChatStore.answerUserQuestion(SESSION_ID, 'ask-retry', { 'Continue?': 'Yes' });
+    await flushPromises();
+
+    expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      pendingAskUser: { requestId: 'ask-retry' },
+      messages: [
+        expect.objectContaining({
+          clientId: 'ask-retry-message',
+          askUserStatus: 'pending',
+          askUserReply: null,
+        }),
+      ],
+    });
+
+    makerChatStore.answerUserQuestion(SESSION_ID, 'ask-retry', { 'Continue?': 'Yes' });
+    await flushPromises();
+
+    expect(resolveInteraction).toHaveBeenCalledTimes(2);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      pendingAskUser: null,
+      messages: [
+        expect.objectContaining({
+          clientId: 'ask-retry-message',
+          askUserStatus: 'answered',
+          askUserReply: 'Continue?: Yes',
+          askUserAnswers: { 'Continue?': 'Yes' },
+        }),
+      ],
+    });
   });
 
   it('preserves dismissed interaction state on stale pending hydration', () => {

@@ -8876,6 +8876,8 @@ function updateSystemCardData(
  * F7.4/F7.5: Send all user answers for ask-user-question to the main process.
  * Updates the corresponding ask_user message to 'answered' state.
  */
+const askUserAnswerInFlight = new Set<string>();
+
 function answerUserQuestion(
   sessionId: string,
   requestId: string,
@@ -8886,6 +8888,10 @@ function answerUserQuestion(
   if (!state.pendingAskUser) return;
   if (state.pendingAskUser.requestId !== requestId) return;
 
+  const inFlightKey = `${sessionId}\0${requestId}`;
+  if (askUserAnswerInFlight.has(inFlightKey)) return;
+  askUserAnswerInFlight.add(inFlightKey);
+
   // Build a human-readable reply summary
   const replySummary = formatAskUserReply(answers);
 
@@ -8894,45 +8900,47 @@ function answerUserQuestion(
     (m) => m.askUserRequestId === requestId && m.askUserStatus === 'pending',
   );
 
-  // Update message to answered + clear pendingAskUser
-  setState(sessionId, (s) => ({
-    ...s,
-    pendingAskUser: null,
-    // F-AUQ-MIN-5: question resolved — reset viewer for the next one.
-    askUserViewerState: 'expanded',
-    // F-AUQ-DRAFT: question resolved — drop the draft so a future question
-    // (potentially with the same questions[] payload) starts at step 1.
-    askUserDraft: null,
-    messages: s.messages.map((m) =>
-      m.askUserRequestId === requestId && m.askUserStatus === 'pending'
-        ? {
-            ...m,
-            askUserStatus: 'answered' as const,
-            askUserReply: replySummary,
-            askUserAnswers: answers,
-          }
-        : m,
-    ),
-  }));
-
   // F7.6: Persist answered state via PATCH API。
   // device-link 远程会话:被控端在 RESOLVE_INTERACTION 里权威落库(onInteractionResolved),
   // 控制端再写就是写自己的空库(dead write + 错误日志)→ 远程跳过,只本机会话走这条。
-  if (askMsg && !isRemoteSession(sessionId)) {
-    messageService
-      .updateContent(sessionId, askMsg.clientId, {
-        requestId,
-        questions: askMsg.askUserQuestions ?? null,
-        status: 'answered',
-        answers,
-      })
-      .catch((err) => log.error('Failed to persist ask_user answered state:', err));
-  }
-
-  // Send to maker (InteractionDecision kind: 'ask_user_question')
+  // Deliver before committing the terminal UI state. If the IPC/device-link
+  // call fails, keep the pending card so the user can safely retry.
   makerApiFor(sessionId)
     .resolveInteraction(requestId, { kind: 'ask_user_question', answers })
-    .catch((err) => log.error('Failed to answer user question:', err));
+    .then(() => {
+      setState(sessionId, (s) => {
+        const resolvesCurrent = s.pendingAskUser?.requestId === requestId;
+        return {
+          ...s,
+          pendingAskUser: resolvesCurrent ? null : s.pendingAskUser,
+          askUserViewerState: resolvesCurrent ? 'expanded' : s.askUserViewerState,
+          askUserDraft: resolvesCurrent ? null : s.askUserDraft,
+          messages: s.messages.map((m) =>
+            m.askUserRequestId === requestId && m.askUserStatus === 'pending'
+              ? {
+                  ...m,
+                  askUserStatus: 'answered' as const,
+                  askUserReply: replySummary,
+                  askUserAnswers: answers,
+                }
+              : m,
+          ),
+        };
+      });
+
+      if (askMsg && !isRemoteSession(sessionId)) {
+        messageService
+          .updateContent(sessionId, askMsg.clientId, {
+            requestId,
+            questions: askMsg.askUserQuestions ?? null,
+            status: 'answered',
+            answers,
+          })
+          .catch((err) => log.error('Failed to persist ask_user answered state:', err));
+      }
+    })
+    .catch((err) => log.error('Failed to answer user question:', err))
+    .finally(() => askUserAnswerInFlight.delete(inFlightKey));
 }
 
 function respondToPluginSetup(
