@@ -708,6 +708,10 @@ export class AppServerHost {
   async shutdown(reason = 'AppServerHost.shutdown()'): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    // MCP readiness is scoped to the concrete app-server process. A normal
+    // transport recovery reuses this host object, so never carry a positive
+    // probe result into the replacement process.
+    this.mcpToolAvailability.clear();
     this.subscribers.clear();
     this.lineageRoots.clear();
     this.buffered.clear();

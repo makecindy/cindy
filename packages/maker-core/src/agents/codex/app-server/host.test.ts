@@ -144,6 +144,40 @@ describe('AppServerHost MCP readiness', () => {
 
     await host.shutdown();
   });
+
+  it('re-probes MCP readiness after the app-server respawns', async () => {
+    const firstTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: { js: {} }, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const secondTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: {}, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const transports = [firstTransport, secondTransport];
+    const createTransport = vi.fn(() => transports.shift() ?? secondTransport);
+    const host = new AppServerHost({
+      createTransport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexBrowserUseStartupTimeoutMs: 10,
+    });
+
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+    await host.shutdown();
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
+
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
 });
 
 const logger: Logger = {
