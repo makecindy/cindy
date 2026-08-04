@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -69,27 +69,6 @@ describe('project plugin policy handlers', () => {
       teams: [{ id: 'team-1', status: 'active', completed_at: null }],
       workers: [{ id: 'worker-1', status: 'running' }],
     });
-  });
-
-  it('refreshes the Codex Browser companion when project ownership changes', async () => {
-    workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-browser-policy-'));
-    const pluginRegistry = new PluginRegistry({
-      settingsReader: new SettingsReader({
-        userDataPath: workingDir,
-        logger: { warn: () => undefined },
-      }),
-    });
-    const refreshBrowserRuntime = vi.fn(async () => undefined);
-    const harness = new IpcHarness();
-    registerProjectPluginPolicyHandlers(harness, {
-      getPluginRegistry: () => pluginRegistry,
-      refreshBrowserRuntime,
-    });
-
-    await harness.invoke(MAKER_INVOKE.PLUGINS_SET_PROJECT_ENABLED, workingDir, 'browser', false);
-    await harness.invoke(MAKER_INVOKE.PLUGINS_CLEAR_PROJECT_ENABLED, workingDir, 'browser');
-
-    expect(refreshBrowserRuntime).toHaveBeenCalledTimes(2);
   });
 
   function createTestDbClient(): DbClient {

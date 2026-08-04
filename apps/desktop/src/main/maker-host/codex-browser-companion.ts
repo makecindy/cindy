@@ -19,6 +19,7 @@ export type CodexBrowserCompanionUnavailableReason =
   | 'provider_untrusted'
   | 'runtime_missing'
   | 'browser_client_untrusted'
+  | 'plugin_package_untrusted'
   | 'extension_host_missing'
   | 'browser_unavailable';
 
@@ -68,10 +69,18 @@ async function runOfficialMacBundleVerification(appBundle: string): Promise<bool
       '--verbose=4',
       appBundle,
     ]);
-    return stderr.includes(`TeamIdentifier=${OPENAI_TEAM_ID}`);
+    return hasOfficialMacTeamIdentifier(stderr);
   } catch {
     return false;
   }
+}
+
+/** Parse the codesign descriptor as fields, never as an arbitrary substring. */
+export function hasOfficialMacTeamIdentifier(descriptor: string): boolean {
+  return descriptor.split(/\r?\n/).some((line) => {
+    const match = /^TeamIdentifier=([A-Za-z0-9]+)$/.exec(line.trim());
+    return match?.[1] === OPENAI_TEAM_ID;
+  });
 }
 
 function verifyOfficialMacBundle(appBundle: string): Promise<boolean> {
@@ -101,6 +110,50 @@ function extensionHostPath(
 
 async function sha256(file: string): Promise<string> {
   return createHash('sha256').update(await fsp.readFile(file)).digest('hex');
+}
+
+async function collectPackageTree(
+  root: string,
+  relativeRoot = '',
+): Promise<Map<string, string>> {
+  const entries = await fsp.readdir(root, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  const tree = new Map<string, string>();
+  for (const entry of entries) {
+    const absolutePath = path.join(root, entry.name);
+    const relativePath = relativeRoot
+      ? `${relativeRoot}/${entry.name}`
+      : entry.name;
+    if (entry.isDirectory()) {
+      tree.set(`${relativePath}/`, 'directory');
+      for (const [childPath, childHash] of await collectPackageTree(absolutePath, relativePath)) {
+        tree.set(childPath, childHash);
+      }
+      continue;
+    }
+    if (entry.isFile()) {
+      tree.set(relativePath, `file:${await sha256(absolutePath)}`);
+      continue;
+    }
+    throw new Error(`unsupported package entry: ${relativePath}`);
+  }
+  return tree;
+}
+
+async function packageTreesMatch(activeRoot: string, signedRoot: string): Promise<boolean> {
+  try {
+    const [activeTree, signedTree] = await Promise.all([
+      collectPackageTree(activeRoot),
+      collectPackageTree(signedRoot),
+    ]);
+    if (activeTree.size !== signedTree.size) return false;
+    for (const [relativePath, signedHash] of signedTree) {
+      if (activeTree.get(relativePath) !== signedHash) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function withTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -287,7 +340,9 @@ async function inspectCodexBrowserCompanion(
     codexCliPath: path.join(resources, 'codex'),
   };
   const requiredPaths = [
-    ['/usr/bin/env', fsConstants.X_OK],
+    // Tests may simulate a macOS target on a Windows runner. The production
+    // macOS path is still checked against the real system executable.
+    ...(platform === process.platform ? [['/usr/bin/env', fsConstants.X_OK] as const] : []),
     [nodeRepl.command, fsConstants.X_OK],
     [nodePath as string, fsConstants.X_OK],
     [codexCliPath as string, fsConstants.X_OK],
@@ -320,7 +375,6 @@ async function inspectCodexBrowserCompanion(
       'the companion descriptor points outside its signed app bundle runtime',
     );
   }
-
   const signedPluginRoot = path.join(
     resources,
     'plugins',
@@ -414,6 +468,12 @@ async function inspectCodexBrowserCompanion(
     return unavailable(
       'extension_host_missing',
       `Chrome extension host is missing for ${platform}/${arch}`,
+    );
+  }
+  if (!(await packageTreesMatch(pluginRoot, signedPluginRoot))) {
+    return unavailable(
+      'plugin_package_untrusted',
+      `the active Chrome plugin package does not match the signed version ${version}`,
     );
   }
 

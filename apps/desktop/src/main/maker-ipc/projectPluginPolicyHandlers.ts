@@ -1,9 +1,8 @@
 /**
  * Project-level plugin policy IPC handlers.
  *
- * These handlers persist the policy used when future agent sessions are
- * created. Browser ownership also invalidates Codex's frozen companion
- * inventory; runtime lifecycles such as an active Orca team otherwise remain
+ * These handlers only persist the policy used when future agent sessions are
+ * created. Runtime lifecycles such as an active Orca team deliberately remain
  * outside this boundary.
  */
 
@@ -21,8 +20,6 @@ export type ProjectPluginPolicyRegistry = Pick<
 /** Host dependencies for project-level plugin policy IPC handlers. */
 export interface ProjectPluginPolicyHandlerDeps {
   getPluginRegistry(): ProjectPluginPolicyRegistry;
-  /** Browser ownership changes must rebuild Codex's frozen companion inventory. */
-  refreshBrowserRuntime?: () => Promise<void>;
 }
 
 /** Register project policy writes without coupling them to active runtimes. */
@@ -47,9 +44,6 @@ export function registerProjectPluginPolicyHandlers(
       if (!ok) {
         throwIpcError('PERMISSION_DENIED', `Cannot modify essential plugin: ${id}`);
       }
-      if (id === 'browser') {
-        await deps.refreshBrowserRuntime?.();
-      }
     },
   );
 
@@ -60,9 +54,6 @@ export function registerProjectPluginPolicyHandlers(
     const ok = await deps.getPluginRegistry().clearProjectEnabled(id, workingDir);
     if (!ok) {
       throwIpcError('PERMISSION_DENIED', `Cannot modify essential plugin: ${id}`);
-    }
-    if (id === 'browser') {
-      await deps.refreshBrowserRuntime?.();
     }
   });
 }

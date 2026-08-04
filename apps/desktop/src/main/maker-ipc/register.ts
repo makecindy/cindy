@@ -10490,14 +10490,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   registerProjectPluginPolicyHandlers(createElectronIpcHandlerRegistry(), {
     getPluginRegistry,
-    refreshBrowserRuntime: async () => {
-      await refreshCodexMcpEnvironment({
-        restartCodex: restartCodexAfterAuthModeChange,
-        shutdownCodexEnvironment,
-        onDeferred: () => deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
-        logger: log,
-      });
-    },
   });
 
   // ── Android automation (Settings →「电脑使用」) ──────────────────────────

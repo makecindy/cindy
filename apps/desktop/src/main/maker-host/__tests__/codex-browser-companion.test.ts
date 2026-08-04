@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkCodexBrowserCompanionConnection,
+  hasOfficialMacTeamIdentifier,
   prepareCodexBrowserCompanion,
 } from '../codex-browser-companion.js';
 
@@ -41,6 +42,7 @@ async function setup(overrides: {
     version,
   );
   const browserClient = path.join(pluginRoot, 'scripts', 'browser-client.mjs');
+  const packageAsset = path.join(pluginRoot, 'skills', 'browser.md');
   const browserClientContent = 'export const browserClient = true;\n';
   const actualHash = createHash('sha256').update(browserClientContent).digest('hex');
   const extensionHost = path.join(
@@ -58,6 +60,7 @@ async function setup(overrides: {
     'chrome',
   );
   const signedBrowserClient = path.join(signedPluginRoot, 'scripts', 'browser-client.mjs');
+  const signedPackageAsset = path.join(signedPluginRoot, 'skills', 'browser.md');
   const signedExtensionHost = path.join(
     signedPluginRoot,
     'extension-host',
@@ -65,15 +68,19 @@ async function setup(overrides: {
     'arm64',
     'ChatGPT for Chrome',
   );
+  const pluginManifest = path.join(pluginRoot, '.codex-plugin', 'plugin.json');
   const signedManifest = path.join(signedPluginRoot, '.codex-plugin', 'plugin.json');
 
   await Promise.all([
     fs.mkdir(path.dirname(nodeRepl), { recursive: true }),
     fs.mkdir(moduleDirs, { recursive: true }),
     fs.mkdir(path.dirname(browserClient), { recursive: true }),
+    fs.mkdir(path.dirname(packageAsset), { recursive: true }),
     fs.mkdir(path.dirname(extensionHost), { recursive: true }),
     fs.mkdir(path.dirname(signedBrowserClient), { recursive: true }),
+    fs.mkdir(path.dirname(signedPackageAsset), { recursive: true }),
     fs.mkdir(path.dirname(signedExtensionHost), { recursive: true }),
+    fs.mkdir(path.dirname(pluginManifest), { recursive: true }),
     fs.mkdir(path.dirname(signedManifest), { recursive: true }),
   ]);
   await Promise.all([
@@ -81,8 +88,11 @@ async function setup(overrides: {
     fs.writeFile(nodePath, 'node'),
     fs.writeFile(codexCli, 'codex'),
     fs.writeFile(browserClient, browserClientContent),
+    fs.writeFile(packageAsset, 'signed browser skill'),
     fs.writeFile(signedBrowserClient, browserClientContent),
+    fs.writeFile(signedPackageAsset, 'signed browser skill'),
     fs.writeFile(signedExtensionHost, 'extension-host'),
+    fs.writeFile(pluginManifest, JSON.stringify({ name: 'chrome', version })),
     fs.writeFile(signedManifest, JSON.stringify({ name: 'chrome', version })),
     ...(overrides.includeExtensionHost === false
       ? []
@@ -160,6 +170,25 @@ afterEach(async () => {
 });
 
 describe('prepareCodexBrowserCompanion', () => {
+  it('parses TeamIdentifier as a complete codesign field', () => {
+    expect(hasOfficialMacTeamIdentifier(
+      'Executable=/tmp/TeamIdentifier=2DC432GLL2/node_repl\nTeamIdentifier=OTHER',
+    )).toBe(false);
+    expect(hasOfficialMacTeamIdentifier(
+      'Executable=/tmp/node_repl\nTeamIdentifier=2DC432GLL2',
+    )).toBe(true);
+  });
+
+  it('reports unsupported host platforms without claiming a verified companion', async () => {
+    await expect(
+      prepareCodexBrowserCompanion({
+        codexHome: '/tmp/cindy-codex-home',
+        platform: 'win32',
+        arch: 'x64',
+      }),
+    ).resolves.toMatchObject({ status: 'unavailable', reason: 'platform_unsupported' });
+  });
+
   it('injects an allowlisted Chrome-only companion config for the isolated Codex home', async () => {
     const { appBundle, codexHome, homeDir, nodeRepl } = await setup({
       extraEnv: 'MALICIOUS_SECRET = "must-not-cross"',
@@ -308,6 +337,24 @@ describe('prepareCodexBrowserCompanion', () => {
     });
   });
 
+  it('rejects a tampered signed package asset beyond browser-client.mjs', async () => {
+    const { codexHome, homeDir, pluginRoot } = await setup();
+    await fs.writeFile(path.join(pluginRoot, 'skills', 'browser.md'), 'tampered browser skill');
+
+    const result = await prepareCodexBrowserCompanion({
+      codexHome,
+      homeDir,
+      platform: 'darwin',
+      arch: 'arm64',
+      verifyMacBundle: async () => true,
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: 'plugin_package_untrusted',
+    });
+  });
+
   it('fails closed when the verified runtime has no connected Chrome browser', async () => {
     const { codexHome, homeDir } = await setup();
 
@@ -328,7 +375,7 @@ describe('prepareCodexBrowserCompanion', () => {
     });
   });
 
-  it('probes Chrome through the clean node_repl transport at session time', async () => {
+  it.skipIf(process.platform === 'win32')('probes Chrome through the clean node_repl transport at session time', async () => {
     const fakeNodeRepl = [
       `#!${process.execPath}`,
       "const readline = require('node:readline');",

@@ -97,8 +97,8 @@ describe('buildCodexCapabilityConfigOverrides', () => {
     } as const satisfies CapabilityRoutingPolicy;
 
     expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
     });
   });

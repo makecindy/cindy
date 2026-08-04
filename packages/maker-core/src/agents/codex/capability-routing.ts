@@ -110,11 +110,11 @@ export function buildCodexCapabilityConfigOverrides(
         // same name. Disabling the original name also makes overlay failures
         // fail closed for the MCP surface.
         config[
-          `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${quoteTomlKeySegment(artifactId)}.enabled`
+          `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${renderThreadConfigKeySegment(artifactId)}.enabled`
         ] = false;
       }
       config[
-        `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${quoteTomlKeySegment(directive.source.id)}.default_tools_approval_mode`
+        `plugins.${quoteTomlKeySegment(directive.source.containerId)}.mcp_servers.${renderThreadConfigKeySegment(directive.source.id)}.default_tools_approval_mode`
       ] = 'prompt';
     }
   }

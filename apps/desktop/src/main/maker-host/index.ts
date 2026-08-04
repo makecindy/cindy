@@ -194,7 +194,6 @@ import {
   DESKTOP_CAPABILITY_ROUTING_POLICY,
 } from './capability-routing.js';
 import {
-  checkCodexBrowserCompanionConnection,
   prepareCodexBrowserCompanion,
 } from './codex-browser-companion.js';
 export { withRehydrateCloseSuppressed };
@@ -994,9 +993,9 @@ export function getMaker(): Maker {
       capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
       resolveCapabilityRouting: async ({
         workingDir,
+        remoteHostId,
         vendorOptions,
         codexBrowserUseProvisioned,
-        codexBrowserUseVersion,
         ensureCodexBrowserUseReady,
       }) => {
         const disabledPluginIds =
@@ -1004,16 +1003,8 @@ export function getMaker(): Maker {
           ?? getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
         const cindyBrowserEnabled = !disabledPluginIds.includes('browser');
         let connectedCodexBrowserUse = codexBrowserUseProvisioned;
-        if (!cindyBrowserEnabled && connectedCodexBrowserUse) {
+        if (!cindyBrowserEnabled && connectedCodexBrowserUse && !remoteHostId) {
           connectedCodexBrowserUse = await ensureCodexBrowserUseReady();
-        }
-        if (!cindyBrowserEnabled && connectedCodexBrowserUse) {
-          const connection = await checkCodexBrowserCompanionConnection({
-            codexHome: getCodexHome(),
-          });
-          connectedCodexBrowserUse =
-            connection.status === 'ready'
-            && connection.version === codexBrowserUseVersion;
         }
         return buildDesktopCapabilityRoutingPolicy({
           cindyBrowserEnabled,
@@ -1078,7 +1069,15 @@ export function getMaker(): Maker {
       },
       prepareCodexExtraSpawnConfig: async (providers, ctx) => {
         if (ctx.remoteHostId) {
-          return { extraArgs: [], extraEnv: {}, codexProxyActive: false };
+          // The remote daemon owns its own CODEX_HOME and Chrome companion.
+          // Do not let the local Desktop platform or local companion probe
+          // disable a remote runtime that is already configured there.
+          return {
+            extraArgs: [],
+            extraEnv: {},
+            codexProxyActive: false,
+            codexBrowserUseAvailable: true,
+          };
         }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
@@ -1109,10 +1108,12 @@ export function getMaker(): Maker {
         const browserCompanion = isControlPlane
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
-        const codexBrowserUseAvailable = browserCompanion?.status === 'ready';
+        const codexBrowserUseAvailable =
+          browserCompanion?.status === 'ready'
+          || browserCompanion?.reason === 'platform_unsupported';
         if (browserCompanion?.status === 'ready') {
           mcpExtraArgs.push(...browserCompanion.extraArgs);
-        } else {
+        } else if (browserCompanion?.reason !== 'platform_unsupported') {
           // Neutralize a stale/manual node_repl entry in the isolated config.
           // Ordinary Codex remains available; only the unverified companion is off.
           mcpExtraArgs.push('-c', 'mcp_servers.node_repl.enabled=false');

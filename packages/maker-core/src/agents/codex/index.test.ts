@@ -644,6 +644,50 @@ describe('CodexAgent capability routing', () => {
     await handle.close();
   });
 
+  it('preserves the remote daemon Browser companion snapshot', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => {
+      expect(ctx?.remoteHostId).toBe('remote-browser-host');
+      return {
+        extraArgs: [],
+        extraEnv: {},
+        codexBrowserUseAvailable: true,
+        codexBrowserUseVersion: '26.727.51351',
+        codexBrowserUseStartupTimeoutMs: 120_000,
+      };
+    });
+    const remoteTransport = new MockCodexTransport();
+    const getRemoteCodexTransport = vi.fn(() => remoteTransport);
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      getRemoteCodexTransport,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-browser-companion',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-browser-host',
+    });
+    const hosts = (agent as unknown as {
+      hosts: Map<string, {
+        isCodexBrowserUseAvailable(): boolean;
+        getCodexBrowserUseVersion(): string | null;
+      }>;
+    }).hosts;
+
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: 'remote-browser-host',
+      credentialMode: undefined,
+    });
+    expect(getRemoteCodexTransport).toHaveBeenCalledWith('remote-browser-host');
+    expect([...hosts.values()]).toHaveLength(1);
+    expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
+    expect([...hosts.values()][0]?.getCodexBrowserUseVersion()).toBe('26.727.51351');
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('fails closed when a provisioned companion does not publish the js tool', async () => {
     let ready: boolean | undefined;
     const resolveCapabilityRouting = vi.fn(async (
@@ -689,8 +733,8 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(startParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
     });
 
@@ -709,8 +753,8 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
     });
 
@@ -753,7 +797,7 @@ describe('CodexAgent capability routing', () => {
       'plugins."computer-use@openai-bundled".enabled': false,
     });
     expect(params.config).not.toHaveProperty(
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode',
     );
 
     await handle.close();

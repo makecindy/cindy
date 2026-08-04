@@ -2043,14 +2043,12 @@ export class CodexAgent extends BaseAgent {
           extraArgs = cfg.extraArgs;
           buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
-          codexBrowserUseAvailable =
-            cfg.codexBrowserUseAvailable === true && !remoteHostId;
-          codexBrowserUseVersion = !remoteHostId
-            ? cfg.codexBrowserUseVersion
-            : undefined;
-          codexBrowserUseStartupTimeoutMs = !remoteHostId
-            ? cfg.codexBrowserUseStartupTimeoutMs
-            : undefined;
+          // Remote daemons own their browser companion and its CODEX_HOME;
+          // preserve the host-provided availability snapshot instead of
+          // forcing every remote target into the local fail-closed state.
+          codexBrowserUseAvailable = cfg.codexBrowserUseAvailable === true;
+          codexBrowserUseVersion = cfg.codexBrowserUseVersion;
+          codexBrowserUseStartupTimeoutMs = cfg.codexBrowserUseStartupTimeoutMs;
           // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
           // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
           if (codexProxyActive && cfg.codexRemoteCompactionProviderId) {
