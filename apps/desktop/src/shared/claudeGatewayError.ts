@@ -1,6 +1,6 @@
 /**
  * Claude Code 会把部分上游 400 统一翻译成 Claude.ai 套餐提示。Cindy 必须按实际
- * 请求路由归因：Gateway 路由的 Pro/Max 判断不属于用户的 Claude.ai 账号，而订阅
+ * 请求路由归因：Gateway 路由的 Pro 判断不属于用户的 Claude.ai 账号，而订阅
  * 直连路由则确实反映 Claude.ai 账号的套餐限制。
  */
 

@@ -1,5 +1,5 @@
 /**
- * Claude XD Gateway 错误观察器。
+ * Claude Opus 套餐错误观察器。
  *
  * 路由 transform 与响应 observer 通过 proxy reqId 关联，只有同一个 Opus 请求
  * 确认走 Gateway 或 Claude.ai 订阅且收到特定 400 套餐错误时才留下待消费证据。

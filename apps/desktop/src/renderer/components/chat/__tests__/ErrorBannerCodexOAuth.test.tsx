@@ -838,6 +838,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
 
     expect(screen.getByText('chat.errorBanner.claudeSubscriptionOpusPlanMismatch')).toBeTruthy();
     expect(screen.queryByText(/logout|login/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
   it('switches the conversation to Claude.ai through the explicit recovery action', async () => {
