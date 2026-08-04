@@ -805,6 +805,60 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   /**
+   * 弹卡**等待中**切到 Full access:必须当场 settle 那张卡让调用继续,而不是干等用户回答一张
+   * 已经失效的卡。此前 resolver 只挂在卡上、切档不会唤醒它,工具调用会一直卡住(codex P1)。
+   * 与 Claude / Codex 的 dismissAllPending 同口径,并发 interaction_dismissed 让 UI 收卡。
+   */
+  it('settles an in-flight permission card when the mode widens to Full access', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_browser'],
+      // prompt(非 prompt-each-time)→ 放宽档位时接受替用户放行。
+      policy: () => 'prompt',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const e of handle.events()) events.push(e as Record<string, unknown>);
+    })();
+    let cardShown = false;
+    handle.setInteractionResolver?.(async () => {
+      cardShown = true;
+      // 卡挂着不回答 —— 模拟用户没点按钮,直接去改权限档。
+      return await new Promise(() => {});
+    });
+    firePermissionRequest('r26', 'mcp__cindy_browser__call_tool', { name: 'browser' });
+    await flush();
+    expect(cardShown).toBe(true);
+    // 此刻还没有回帧:调用正等在卡上。
+    expect(captured.sent.find((m) => m.id === 'r26')).toBeUndefined();
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('r26')).toEqual({
+      type: 'extension_ui_response', id: 'r26', confirmed: true,
+    });
+    // UI 侧必须收到 dismissed,否则卡会留在界面上而工具已经继续执行。
+    const dismissed = events.find((e) => e.type === 'interaction_dismissed');
+    expect(dismissed?.data).toMatchObject({ requestId: 'r26', resolvedAs: 'allow' });
+  });
+
+  /**
+   * 放宽档位不得替用户批准他还没表态的**高风险**调用:prompt-each-time 的挂起卡在切到
+   * Full access 时仍按 fail-closed 拒绝(与 CC / Codex 的 forcePrompt 语义一致)。
+   */
+  it('keeps a pending prompt-each-time card fail-closed even when the mode widens', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt-each-time',
+    });
+    handle.setInteractionResolver?.(async () => await new Promise(() => {}));
+    firePermissionRequest('r27', 'mcp__cindy_ssh__ssh_exec', { command: 'rm -rf /' });
+    await flush();
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('r27')).toEqual({
+      type: 'extension_ui_response', id: 'r27', confirmed: false,
+    });
+  });
+
+  /**
    * 反向边界:用户明确拒绝之后再切到 Full access,不能把这次拒绝追认成放行 —— 档位放宽只
    * 影响「拿不到决策」的情形,不覆盖用户已经表过的态。
    */
