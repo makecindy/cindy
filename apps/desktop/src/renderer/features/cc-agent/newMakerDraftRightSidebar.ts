@@ -15,6 +15,8 @@ export interface NewMakerDraftRightSidebarState {
   sessionId: string | null;
   workdir: string | null;
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
 }
 
 export const DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE = {
@@ -59,6 +61,7 @@ export function resolveNewMakerDraftRightSidebar(
       sessionId: null,
       workdir: null,
       remoteHostId: null,
+      deviceLinkDeviceId,
     };
   }
 
@@ -67,5 +70,6 @@ export function resolveNewMakerDraftRightSidebar(
     sessionId: makeProjectDraftRightSidebarSessionId(workdir),
     workdir,
     remoteHostId: null,
+    deviceLinkDeviceId: null,
   };
 }

@@ -21,6 +21,12 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './local
 /** 清单文件名(zip 根部)。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
+/**
+ * 安装器读取包内 ghost.json 的硬上限。源码目录的发现/预读取可以使用更宽的
+ * 安全预算，但最终写进 .cindy 的清单必须落在这个上限内。
+ */
+export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
+
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
 
@@ -380,6 +386,19 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+}
+
+/**
+ * 把一个已经声明、已经过权限确认的工具接入 Composer `@` 资源搜索。
+ *
+ * 这不是新卡槽，也不扩大底层工具权限：旧宿主会按顶层未知字段兼容忽略；新版宿主
+ * 仅在用户明确选中该插件的资源入口后，以固定 `{ query, limit }` 参数调用该工具。
+ * 调用入口会单独进入安装/更新权限清单；工具必须无副作用，返回值由宿主按固定
+ * 资源摘要协议裁剪。
+ */
+export interface GhostAtResourceProviderDecl {
+  /** 必须逐字引用同一 manifest 的 tools[].name。 */
+  tool: string;
 }
 
 /** cindy 槽·图像类可申请的动作(主机代办菜单的"图像"类目)。 */
@@ -1206,6 +1225,8 @@ export interface GhostManifest {
   card?: GhostCardNeeds;
   /** 注册给 agent 的工具声明(与 slots 含 'tool' 成对)。 */
   tools?: GhostToolDecl[];
+  /** 可选的 `@` 业务资源搜索入口；复用已声明工具并单独披露调用入口。 */
+  atResourceProvider?: GhostAtResourceProviderDecl;
   /**
    * cindy 槽能力详单(与 slots 含 'cindy' 成对;缺省 = 零能力,任何代办
    * 都会被拒并提示作者补声明)。清单里的旧字段名 model 在校验层作别名
@@ -1417,7 +1438,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'at-resource' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1687,6 +1708,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detail: tool.description,
     });
   }
+  if (manifest.atResourceProvider) {
+    items.push({
+      key: `at-resource:${manifest.atResourceProvider.tool}`,
+      kind: 'at-resource',
+      labelKey: 'atResourceProvider',
+      labelArgs: { name: manifest.atResourceProvider.tool },
+      detailKey: 'atResourceProviderDetail',
+    });
+  }
   if (manifest.command) {
     items.push({
       key: `command:${manifest.command}`,
@@ -1864,6 +1894,26 @@ export function diffGhostPermissionItems(
 }
 
 /**
+ * 返回未被发布清单或已批准旧版本覆盖的包权限。
+ *
+ * 第二个来源用于兼容旧市场元数据：旧详情投影可能漏掉已存在的权限，
+ * 但这些权限此前已经被用户批准，更新时应继续保留。
+ */
+export function unreviewedGhostPermissionItems(
+  reviewed: GhostManifest,
+  previouslyInstalled: GhostManifest | undefined,
+  actual: GhostManifest,
+): GhostPermissionItem[] {
+  const approvalKey = (item: GhostPermissionItem): string =>
+    JSON.stringify([item.key, item.detail ?? '']);
+  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
+    approved.add(approvalKey(item));
+  }
+  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+}
+
+/**
  * icon 允许的图片扩展名 → mime(校验与 main 读盘供图共用同一口径)。
  * 不收 svg:svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面。
  */
@@ -1874,6 +1924,12 @@ const GHOST_ICON_MIME_BY_EXT: Record<string, string> = {
   '.webp': 'image/webp',
   '.gif': 'image/gif',
 };
+
+/**
+ * icon 字节上限。icon 会以 data URL 形态同步下发给 Renderer，因此安装、
+ * 本地读取与 Forge overlay 必须共用同一硬顶，避免“能打包但不能安装”。
+ */
+export const GHOST_ICON_MAX_BYTES = 512 * 1024;
 
 /** icon 路径 → mime;扩展名不在白名单返回 null(即校验不通过)。 */
 export function ghostIconMimeType(p: string): string | null {
@@ -2822,6 +2878,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (slots.includes('tool') && tools === undefined) {
     return { ok: false, reason: 'slots 声明了 "tool" 但缺少 tools(注册什么工具要写清楚)' };
+  }
+
+  /**
+   * `@` 资源入口复用 `tool` 槽，不另造硬白名单 slot：旧版宿主会接受这类包，
+   * 并像其它未知顶层字段一样忽略 atResourceProvider。这个字段在本版之前也可能被
+   * 存量包当作自定义元数据使用，因此这里仅收窄出待审声明；安装运行时还必须命中
+   * Main 在 install/update 后写下的 host receipt。其它历史形态继续忽略，避免客户端
+   * 升级后让已安装插件消失或凭字段形状自动扩权。
+   */
+  let atResourceProvider: GhostAtResourceProviderDecl | undefined;
+  if (isPlainObject(raw.atResourceProvider)) {
+    const providerRaw = raw.atResourceProvider as Record<string, unknown>;
+    if (
+      Object.keys(providerRaw).length === 1
+      && typeof providerRaw.tool === 'string'
+      && tools?.some((tool) => tool.name === providerRaw.tool)
+    ) {
+      atResourceProvider = { tool: providerRaw.tool };
+    }
   }
 
   // cindy 槽能力详单:与 slots 含 'cindy' 成对(有详单必有槽;有槽无详单
@@ -4180,6 +4255,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       slots,
       ...(tools !== undefined ? { tools } : {}),
+      ...(atResourceProvider !== undefined ? { atResourceProvider } : {}),
       ...(card !== undefined ? { card } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(agent !== undefined ? { agent } : {}),

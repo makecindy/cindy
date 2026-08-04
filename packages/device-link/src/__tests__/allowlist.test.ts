@@ -33,6 +33,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
+      'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
       'local-db:messages:around',
@@ -71,6 +72,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:orca-workflows:list-workers-by-leads')).toBe(false);
   });
 
   it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {

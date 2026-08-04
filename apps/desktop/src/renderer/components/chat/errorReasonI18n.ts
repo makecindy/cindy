@@ -1,4 +1,7 @@
-import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '../../../shared/claudeGatewayError';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 /**
@@ -20,4 +23,6 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
+  [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
+    'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
 };

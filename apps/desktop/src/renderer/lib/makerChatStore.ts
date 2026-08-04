@@ -105,6 +105,7 @@ import {
   emitPatch,
 } from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -162,6 +163,15 @@ const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
 ] as const);
+/**
+ * 非 `REMOTE_*` / 非 device-link 的会话级提示码 —— agent runtime 用同一套
+ * `[CODE] fallback text` 约定把「这件事用户该知道」告诉 renderer,不新增事件类型。
+ * 未登记的 code 仍然回退到英文兜底文案(绝不把 `[CODE]` 裸露给用户)。
+ */
+const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  // Auto 档下审阅器没跑起来(与「模型判定动作危险」不同,后者刻意保持静默)。
+  'AUTO_REVIEW_UNAVAILABLE',
+] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
   'maker:status-changed',
@@ -193,7 +203,11 @@ function resolveEstimatedTurnCostUsd(
 export function decodeRemoteErrorMessage(msg: string): string {
   const bracketMatch = BRACKET_ERROR_CODE_RE.exec(msg);
   const bracketCode = bracketMatch?.[1];
-  if (bracketCode && DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode)) {
+  if (
+    bracketCode
+    && (DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode)
+      || AGENT_RUNTIME_CHAT_ERROR_CODES.has(bracketCode))
+  ) {
     return i18n.t(`chat.remoteError.${bracketCode}`, {
       defaultValue: bracketMatch[2] || msg,
     });
@@ -1410,6 +1424,9 @@ function _purgeSession(sessionId: string): void {
   lightSnapshotCache.delete(sessionId);
   titleUpdateCallbacks.delete(sessionId);
   _historyFetchInFlight.delete(sessionId);
+  // 会话已被永久移出缓存:在途请求由 sessions.has(sessionId) 守卫作废,token 条目无需
+  // 留作墓碑;新建同 id 会用全局递增 token,不会重新放行旧响应。
+  _historyFetchToken.delete(sessionId);
   _historyLoadOrigin.delete(sessionId);
   // 冷缓存 hydrate 的两个守卫随会话一起收掉(会话都没了,守卫留着只是无用条目)。
   _cacheHydrateStarted.delete(sessionId);
@@ -5513,6 +5530,13 @@ function reconcilePendingInteractions(sessionId: string): Promise<number> {
  */
 // Guard set to prevent concurrent fetches (historyLoaded stays false until data arrives)
 const _historyFetchInFlight = new Set<string>();
+/** 首拉请求 token:origin 变化 / reload / purge 时作废旧 Promise,防本机竞态响应回写远程会话。 */
+const _historyFetchToken = new Map<string, number>();
+let _nextHistoryFetchToken = 0;
+
+function invalidateHistoryFetch(sessionId: string): void {
+  _historyFetchToken.set(sessionId, ++_nextHistoryFetchToken);
+}
 
 /**
  * device-link:记录每个 session 的历史「按哪个 origin(deviceId)加载」。
@@ -5712,6 +5736,52 @@ function bumpMessagesEpoch(sessionId: string): void {
   _messagesEpoch.set(sessionId, (_messagesEpoch.get(sessionId) ?? 0) + 1);
 }
 
+function isCurrentHistoryFetch(
+  sessionId: string,
+  token: number,
+  origin: string | undefined,
+  epoch: number,
+): boolean {
+  return (
+    sessions.has(sessionId) &&
+    _historyFetchToken.get(sessionId) === token &&
+    (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
+    remoteProjectsStore.getSessionDeviceId(sessionId) === origin
+  );
+}
+
+/** 只释放仍属于这次请求的首拉占用,不误伤 reload 后已经接管的新请求。 */
+function releaseHistoryFetchIfCurrent(sessionId: string, token: number): void {
+  if (_historyFetchToken.get(sessionId) === token) {
+    _historyFetchInFlight.delete(sessionId);
+  }
+}
+
+/**
+ * 释放一条被代际作废的首拉,并在没有新请求接管时补发当前代的首拉。
+ *
+ * 消息删除 / clear / trim 等路径会 bump `_messagesEpoch` 令在途响应失效,但它们
+ * 不一定会主动重载。若这里仅释放 in-flight 占用,会留下 historyLoaded=false 的
+ * 会话,而挂载中的视图不会再次触发 ensureInitialMessages。只有这次请求仍持有
+ * token、代际确实变化、会话仍存在且没有其它请求接管时才重试,避免与 reload / purge
+ * 或新一轮首拉重复发起。
+ */
+function retryInvalidatedInitialHistoryFetchIfNeeded(
+  sessionId: string,
+  token: number,
+  origin: string | undefined,
+  epoch: number,
+): void {
+  const ownsFetch = _historyFetchToken.get(sessionId) === token;
+  const epochChanged = (_messagesEpoch.get(sessionId) ?? 0) !== epoch;
+  const originUnchanged = remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+  releaseHistoryFetchIfCurrent(sessionId, token);
+  if (!ownsFetch || !epochChanged || !originUnchanged || !sessions.has(sessionId)) return;
+  const state = sessions.get(sessionId);
+  if (!state || state.historyLoaded || _historyFetchInFlight.has(sessionId)) return;
+  ensureInitialMessages(sessionId);
+}
+
 /**
  * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
@@ -5845,9 +5915,13 @@ function ensureInitialMessages(sessionId: string): void {
   // Mark in-flight to prevent concurrent callers from double-fetching.
   // historyLoaded stays false until data actually arrives.
   _historyFetchInFlight.add(sessionId);
+  const historyFetchToken = ++_nextHistoryFetchToken;
+  _historyFetchToken.set(sessionId, historyFetchToken);
+  const historyEpochAtStart = _messagesEpoch.get(sessionId) ?? 0;
+  const historyOriginAtStart = remoteProjectsStore.getSessionDeviceId(sessionId);
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
-  _historyLoadOrigin.set(sessionId, remoteProjectsStore.getSessionDeviceId(sessionId));
+  _historyLoadOrigin.set(sessionId, historyOriginAtStart);
 
   // 远程会话:与 fresh 首拉**并行**从冷缓存乐观 hydrate,让冷启动 / 被控端离线时
   // 立刻看到上次看到的最近一页(而不是空白 + spinner)。不设 historyLoaded ——
@@ -5858,6 +5932,12 @@ function ensureInitialMessages(sessionId: string): void {
   // device-link 远程 session 经隧道读被控端 row(本地 DB 没有,直接 get 会 404)。
   getSessionFor(sessionId)
     .then((session) => {
+      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        // The history list owns the shared in-flight guard and will settle the
+        // invalidated generation. Do not release it while that request is still
+        // pending, otherwise a caller could start a second initial fetch beside it.
+        return;
+      }
       setState(sessionId, (s) => {
         const updates: Partial<SessionChatState> = {};
         // agentKind 是真实 reducer 路由,始终跟随 DB；乐观切换展示单独放在
@@ -5907,11 +5987,41 @@ function ensureInitialMessages(sessionId: string): void {
         return Object.keys(updates).length > 0 ? { ...s, ...updates } : s;
       });
     })
-    .catch((err) => log.warn('Failed to fetch session for sdkSessionId:', err));
+    .catch((err) => {
+      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        // See the resolve branch above: let listMessagesFor settle the shared
+        // initial-fetch guard and decide whether the current generation retries.
+        return;
+      }
+      const ipcError = extractIpcError(err);
+      if (ipcError?.code === 'NOT_FOUND') {
+        log.debug('session metadata unavailable during initial routing', ipcError.code);
+      } else {
+        log.warn('Failed to fetch session for sdkSessionId:', err);
+      }
+    });
 
   listMessagesFor(sessionId)
     .then(async (existing) => {
+      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
+        return;
+      }
       if (existing.length === 0) {
+        if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+          retryInvalidatedInitialHistoryFetchIfNeeded(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          );
+          return;
+        }
         // 权威侧确认这个会话没有可见消息(被控端 /clear、rewind 到头、消息被删干净)。
         // 冷缓存 hydrate 出来的行必须在这里一并抹掉,否则控制端会一直显示被清掉的正文。
         // 盘上那份不用在这里单独删:listMessagesFor 的写点收到空页时就把缓存清了。
@@ -5950,6 +6060,15 @@ function ensureInitialMessages(sessionId: string): void {
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
+        if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+          retryInvalidatedInitialHistoryFetchIfNeeded(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          );
+          return;
+        }
         setState(sessionId, (s) => ({
           ...s,
           historyLoaded: true,
@@ -5985,6 +6104,15 @@ function ensureInitialMessages(sessionId: string): void {
             limit: 50,
             before: oldestRow.id,
           });
+          if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+            retryInvalidatedInitialHistoryFetchIfNeeded(
+              sessionId,
+              historyFetchToken,
+              historyOriginAtStart,
+              historyEpochAtStart,
+            );
+            return;
+          }
           if (older.length === 0) {
             hasMore = false;
             break;
@@ -6001,6 +6129,15 @@ function ensureInitialMessages(sessionId: string): void {
       // perf/session-switch 探针纯诊断:整段测量走 import.meta.env.DEV,生产
       // 构建里 Vite 把常量折成 false 后 dead-code 消除,零开销。
       const ingestStartMs = import.meta.env.DEV ? performance.now() : 0;
+      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
+        return;
+      }
       const mapped = mapServerMessages(merged);
       const oldestId = oldestRow.id;
       settleCacheHydration(sessionId);
@@ -6057,6 +6194,15 @@ function ensureInitialMessages(sessionId: string): void {
       reconcilePendingInteractions(sessionId);
     })
     .catch(() => {
+      if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
+        return;
+      }
       // Allow retry on next mount
       _historyFetchInFlight.delete(sessionId);
       // 首拉失败(典型:被控端离线)→ 放开「本轮已发起」的守卫以便下次重试,但**不解除**
@@ -6078,6 +6224,7 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
   bumpMessagesEpoch(sessionId);
+  invalidateHistoryFetch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
   // 默认**不借**冷缓存:rewind 截断这类重载的起因恰恰意味着盘上那份缓存已经过期,

@@ -2,7 +2,7 @@
 
 > 状态：待实施。
 > 范围：当前只落地 Phase 1——把 Codex 的 OpenAI Responses 请求桥接到供应商的 OpenAI Chat Completions 接口；Phase 2 及其它协议按真实需求后续实施。
-> 相关现状：[`subscription-bridge.md`](./subscription-bridge.md) 记录了 Claude Code 侧已有 Anthropic Messages → OpenAI Responses bridge；本文补齐 Codex 访问 Chat-only 上游的方向。
+> 相关现状：`packages/anthropic-responses-bridge` 实现了 Claude Code 侧已有的 Anthropic Messages → OpenAI Responses bridge；本文补齐 Codex 访问 Chat-only 上游的方向。
 
 ## 1. 目标与最终结论
 
@@ -149,7 +149,7 @@ export type ProviderWireProtocol =
 - `providerViewToConfig`、wizard、DB JSON normalize 不能在创建、编辑、重启后丢字段；
 - device-link 对执行字段做剥离，只保留展示所需的兼容类型。
 
-配置语义遵守 [`configuration-design-principles.md`](./configuration-design-principles.md)：Codex 上游协议是创建自定义端点时必须理解的常规字段，系统默认 Responses；存量用户未设置 override 时行为完全不变，恢复默认即清除 override、重新跟随 Responses 默认。
+配置语义遵守 [`configuration-and-overrides.md`](./dev-rules/configuration-and-overrides.md)：Codex 上游协议是创建自定义端点时必须理解的常规字段，系统默认 Responses；存量用户未设置 override 时行为完全不变，恢复默认即清除 override、重新跟随 Responses 默认。
 
 ### 4.2 native fast path 与 bridge path
 

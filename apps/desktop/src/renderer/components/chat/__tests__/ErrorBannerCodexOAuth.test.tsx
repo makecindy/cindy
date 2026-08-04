@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ErrorBanner } from '../ErrorBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
-import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../../shared/claudeGatewayError';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '../../../../shared/claudeGatewayError';
 
 type AuthStateChangedPayload = {
   agentKind: 'claude-code' | 'codex';
@@ -819,6 +822,23 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(
       screen.queryByRole('button', { name: 'chat.errorBanner.switchClaudeSubscription' }),
     ).toBeNull();
+  });
+
+  it('replaces unsupported Claude slash-command advice for subscription errors', () => {
+    render(
+      <ErrorBanner
+        error="Claude Opus is not available with the Claude Pro plan. Run /logout and /login."
+        errorReason={CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        modelId="claude-opus-5"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.claudeSubscriptionOpusPlanMismatch')).toBeTruthy();
+    expect(screen.queryByText(/logout|login/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
   it('switches the conversation to Claude.ai through the explicit recovery action', async () => {

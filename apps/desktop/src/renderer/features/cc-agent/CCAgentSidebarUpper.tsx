@@ -54,7 +54,11 @@ import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useModifierHold } from '@/hooks/useModifierHold';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { getAppShortcutCombos, getAppShortcutPlatform } from '@/lib/appShortcutStore';
-import { formatAppShortcutCombo, SWITCH_SESSION_SHORTCUT_IDS } from '../../../shared/appShortcuts';
+import {
+  formatAppShortcutCombo,
+  matchesKeyboardEvent,
+  SWITCH_SESSION_SHORTCUT_IDS,
+} from '../../../shared/appShortcuts';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useSidebarCollapsedState } from '../feature-context';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
@@ -1808,7 +1812,17 @@ function ExpandedView({
   // 重排前的行。标签取生效组合的显示形(mac '⌘1' / win 'Ctrl+1',跟随用户
   // 改绑),删除绑定或让位后的槽位无徽标。写入 sessionOrdinalBadges 模块
   // store,由 SessionItem / SessionCard 精准订阅。
-  const switchModifierHeld = useModifierHold({ enabled: sessionSwitchEnabled });
+  const preserveSwitchHintOnKeyDown = useCallback(
+    (event: KeyboardEvent) =>
+      SWITCH_SESSION_SHORTCUT_IDS.some((shortcutId) =>
+        getAppShortcutCombos(shortcutId).some((combo) => matchesKeyboardEvent(event, combo)),
+      ),
+    [],
+  );
+  const switchModifierHeld = useModifierHold({
+    enabled: sessionSwitchEnabled,
+    preserveOnKeyDown: preserveSwitchHintOnKeyDown,
+  });
   useEffect(() => {
     if (!switchModifierHeld) return;
     let lastSerialized: string | null = null;

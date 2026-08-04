@@ -541,6 +541,7 @@ const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-
 const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
+const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
 
@@ -914,6 +915,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
+    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }): Promise<{
+      items: Array<{ ghostId: string; name: string; description?: string }>;
+    }> => ipcRenderer.invoke('ghosts:at-resource-providers:list', params),
+    queryAtResources: (params: {
+      ghostId: string;
+      sessionId?: string;
+      workingDir?: string;
+      query?: string;
+      limit?: number;
+    }): Promise<{
+      success: boolean;
+      error?: string;
+      pluginName?: string;
+      items: Array<{ id: string; label: string; description?: string; href: string }>;
+      truncated: boolean;
+    }> => ipcRenderer.invoke('ghosts:at-resources:query', params),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },
@@ -1066,14 +1083,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     install: (
       pluginId: string,
-      options: {
-        expectedReleaseId: string;
-        expectedManifest?: import('../shared/ghost').GhostManifest;
-        allowPermissionExpansion?: boolean;
-        /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
-        reviewedBaseline?: string;
-      },
-    ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
+      options: import('../shared/pluginMarket').PluginMarketInstallOptions,
+    ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
@@ -1325,6 +1336,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 子窗口根组件挂载握手(main 侧 ensureOpen 等它)。 */
@@ -1337,6 +1349,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     }): void => ipcRenderer.send('maker:rsb-window:set-context', ctx),
     onStateChanged: fanOutRsbWindowStateChanged,
@@ -2669,6 +2682,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       success: boolean;
       path: string | null;
     }> => ipcRenderer.invoke('dialog:show-open-file', params ?? {}),
+    /** 打开 @ 资源系统选择器；macOS 可选文件或目录，Windows/Linux 选择文件。 */
+    showOpenResource: (params?: { defaultPath?: string }): Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
+    }> => ipcRenderer.invoke('dialog:show-open-resource', params ?? {}),
   },
 
   // Open URL in system default browser
@@ -2678,11 +2697,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openChatGPTApp: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('shell:open-chatgpt-app'),
 
-  // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
-  // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。main 端会再做
-  // 一次扩展名白名单校验和 isPathAllowed 安全校验。
-  openFileInBrowser: (filePath: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('shell:open-file-in-browser', filePath),
+  // file-chip 传绝对路径;内置浏览器传完整本地 file:// URL 以保留 query/hash。
+  // main 端统一解析并做扩展名白名单与 isPathAllowed 安全校验。
+  openFileInBrowser: (filePathOrUrl: string): Promise<{ success: true }> =>
+    ipcRenderer.invoke('shell:open-file-in-browser', filePathOrUrl),
 
   // ── 系统级通知（CC Agent session 状态变更）──
   // kind: 'done' = 真正完成；'error' = 执行失败；'needs-reply' = 等用户回复 ask/permission/plan-review。
@@ -3273,11 +3291,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       keepAwake: boolean;
       linkStatus: 'stopped' | 'connecting' | 'online';
       connectionIssue: {
-        kind: 'auth-failed' | 'replaced' | 'too-many-connections' | 'version-mismatch';
+        kind: 'auth-failed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
         closeCode?: number;
         detail?: string;
         at: number;
       } | null;
+      standby: boolean;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
@@ -3353,6 +3372,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlTargetChanged: fanOutDeviceLinkControlTargetChanged,
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送,payload: { keepAwake: boolean } */
     onKeepAwakeChanged: fanOutDeviceLinkKeepAwakeChanged,
+    /** 同机单持有者仲裁角色变化,payload: { standby: boolean }。 */
+    onOwnershipChanged: fanOutDeviceLinkOwnershipChanged,
     /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
     onResponsivenessChanged: fanOutDeviceLinkResponsivenessChanged,
     /**
@@ -3683,8 +3704,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
     setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
-    setXDefaultWorkspace: (alias: string | null): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:set-x-default-workspace', { alias }),
+    setProviderDefaultWorkspace: (
+      provider: 'telegram' | 'x',
+      alias: string | null,
+    ): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-provider-default-workspace', { provider, alias }),
     // SIWS OIDC 绑定: 无参数; main 发 bind.start, server 回 pending + 授权链接
     bindStart: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:hook-control:bind-start', {}),
@@ -4067,6 +4091,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ),
       listWorkersByLead: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-lead', leadSessionId),
+      listWorkersByLeads: (leadSessionIds: string[]): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-leads', leadSessionIds),
       updateWorkerStatus: (workerId: string, status: string): Promise<void> =>
         ipcRenderer.invoke(
           'local-db:orca-workflows:update-worker-status',
@@ -4597,6 +4623,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       >;
       truncated?: boolean;
     }> => ipcRenderer.invoke('maker:scan-at-resources', agentKind, params),
+
+    listAtContext: (params: {
+      sessionId?: string;
+      workingDir?: string;
+      query?: string;
+      limit?: number;
+    }): Promise<{
+      success: true;
+      browserTabs: Array<{ tabId: string; title: string; url: string }>;
+      desktopWindows: Array<{
+        windowId: number;
+        pid: number;
+        appName: string;
+        title: string;
+      }>;
+      unavailable: Array<'browser-tabs' | 'desktop-windows'>;
+    }> => ipcRenderer.invoke('maker:at-context:list', params),
 
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */

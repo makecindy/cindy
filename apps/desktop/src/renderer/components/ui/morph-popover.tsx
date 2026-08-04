@@ -85,6 +85,14 @@ interface MorphPopoverProps {
    * 换行内容无法稳定收敛;不提供则按 max-content 自适应(仅限 nowrap / 自带定宽的内容)。
    */
   panelWidth?: number;
+  /**
+   * 'trigger' = 面板宽度**严格等于** trigger 的实测宽度(忽略 panelWidth
+   * 与内容宽)。设置页的字段形态必须用它 —— DESIGN.md §4 Select & Dropdown:
+   * 「Panel width must bind to the trigger width — never narrower or wider than the
+   * control that opened it」。工具条形态保持 'content'(默认): trigger 按内容
+   * hug, 面板按内容/panelWidth 展开。
+   */
+  panelWidthMode?: 'content' | 'trigger';
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -119,6 +127,7 @@ export function MorphPopover({
   side = 'top',
   align = 'start',
   panelWidth,
+  panelWidthMode = 'content',
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -159,7 +168,11 @@ export function MorphPopover({
       const prevH = panel.style.height;
       panel.style.height = 'auto';
       let desiredW: number;
-      if (panelWidth) {
+      if (panelWidthMode === 'trigger') {
+        // 字段形态: 面板与 trigger 逐像素同宽(不取 max —— 内容再宽也不得溢出
+        // 字段, 选项行自己 truncate)。
+        desiredW = chipRect.width;
+      } else if (panelWidth) {
         desiredW = Math.max(panelWidth, chipRect.width);
       } else {
         panel.style.width = 'max-content';
@@ -187,7 +200,7 @@ export function MorphPopover({
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, side],
+    [align, panelWidth, panelWidthMode, side],
   );
 
   /**

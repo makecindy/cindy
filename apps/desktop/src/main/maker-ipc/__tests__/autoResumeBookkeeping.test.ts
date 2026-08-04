@@ -356,6 +356,71 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     expect(h.persisted, '旧 completion 不得补落或删除手动 replacement 的错误').toEqual([]);
   });
 
+  it('tokenized async callback 保持 lease，且业务 finalize 先释放 attempt 也能清自己的 lease', async () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'old interruption' }, 7);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let callbackAttempt!: { isCurrent: () => boolean };
+
+    h.book.schedule('s1', 7, 1_000, async (attempt) => {
+      callbackAttempt = attempt;
+      await gate;
+      expect(attempt.isCurrent()).toBe(true);
+      h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: false });
+    });
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(h.book.hasSchedule('s1')).toBe(true);
+    expect(callbackAttempt.isCurrent()).toBe(true);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.book.hasSchedule('s1')).toBe(false);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'old interruption' } }]);
+  });
+
+  it('结算 undispatched outcome 时保留 suppressed-error attempt lease 直到 finalize', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'boom' }, 7);
+    h.book.registerPendingOutcome('s1', 7, 'retry-1');
+
+    h.book.settleOutcomeForClient('s1', 7, 'retry-1', 'failed');
+    expect(h.book.isCurrentAttempt('s1', 7), 'suppressed owner 仍在时不能提前删 attempt').toBe(true);
+
+    h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: true });
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(false);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'boom' } }]);
+    expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'retry-1', outcome: 'failed' }]);
+  });
+
+  it('deferred owner 精确 flush 不会被 newer attempt 拦截或误删', () => {
+    const h = createHarness();
+    const oldOwner = { generation: 3, clientId: 'old-turn' };
+    const newOwner = { generation: 4, clientId: 'new-turn' };
+    h.book.stashSuppressedError('s1', { message: 'deferred error' }, null, oldOwner);
+    h.book.beginAttempt('s1', 9);
+
+    expect(h.book.flushSuppressedError('s1', { deferredOwner: newOwner })).toBe(false);
+    expect(h.book.hasSuppressedError('s1')).toBe(true);
+    expect(h.book.flushSuppressedError('s1', { deferredOwner: oldOwner })).toBe(true);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'deferred error' } }]);
+  });
+
+  it('释放 suppressed error 后回收无其它 owner 的 current attempt', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 11);
+    h.book.stashSuppressedError('s1', { message: 'boom' }, 11);
+
+    expect(h.book.flushSuppressedError('s1', { attemptToken: 11 })).toBe(true);
+    h.book.stashSuppressedError('s1', { message: 'next' });
+    expect(h.book.flushSuppressedError('s1')).toBe(true);
+  });
+
   it('clearError / 新输入接管 → 同步释放旧 Island filter，已 fire 回调随即失效', async () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'old interruption' });

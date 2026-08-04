@@ -17,6 +17,10 @@ describe('Plugin Market IPC error boundary', () => {
     resolve(process.cwd(), 'src/main/plugin-market/service.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const bootstrapSource = readFileSync(
+    resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('preserves structured errors and normalizes unexpected failures', () => {
     const start = registerSource.indexOf('async function invokePluginMarket');
@@ -42,5 +46,39 @@ describe('Plugin Market IPC error boundary', () => {
     expect(serviceSource).not.toContain('throw new Error(');
     expect(serviceSource).toContain("throwIpcError('PRECONDITION_FAILED'");
     expect(serviceSource).toContain("throwIpcError('PERMISSION_DENIED'");
+  });
+
+  it('runs default plugin reconciliation on cold start and stable owner changes', () => {
+    const syncStart = registerSource.indexOf(
+      'export async function syncDefaultMarketPlugins(): Promise<void>',
+    );
+    const syncEnd = registerSource.indexOf('\n}\n\n/**\n * Preserve stable IPC errors', syncStart);
+    const syncBody = registerSource.slice(syncStart, syncEnd);
+    expect(syncBody).toContain('await service().snapshot();');
+    expect(syncBody).toContain("log.warn('default plugin startup sync failed'");
+
+    const ownerSyncStart = bootstrapSource.indexOf(
+      'function syncDefaultPluginsForActiveOwner(): void',
+    );
+    const ownerSyncEnd = bootstrapSource.indexOf('\n}\n\nconst registerIpcHandlers', ownerSyncStart);
+    const ownerSyncBody = bootstrapSource.slice(ownerSyncStart, ownerSyncEnd);
+    expect(ownerSyncBody).toContain(
+      'if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;',
+    );
+    expect(ownerSyncBody).toContain('if (scope === defaultPluginSyncInFlightScope) return;');
+    expect(ownerSyncBody).toContain('void syncDefaultMarketPlugins().finally(() => {');
+    expect(ownerSyncBody).toContain('defaultPluginSyncInFlightScope = null;');
+
+    const listenerStart = bootstrapSource.indexOf(
+      'disposePluginMarketAuthListener = authManager.onAuthStateChange',
+    );
+    expect(listenerStart).toBeGreaterThan(-1);
+    expect(
+      bootstrapSource.indexOf(
+        'queueMicrotask(syncDefaultPluginsForActiveOwner);',
+        listenerStart,
+      ),
+    ).toBeGreaterThan(listenerStart);
+    expect(bootstrapSource).toContain("'plugin-market-auth-listener'");
   });
 });

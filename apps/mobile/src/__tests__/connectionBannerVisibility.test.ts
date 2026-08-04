@@ -9,6 +9,7 @@ const base = {
   offlineLongEnough: false,
   hasError: false,
   hasIssue: false,
+  hasUnstableIssue: false,
   deviceUnresponsive: false,
 };
 
@@ -34,6 +35,10 @@ describe('resolveConnectionBannerVisibility', () => {
 
   it('可分类连接问题(鉴权失效 / 被顶号等)在断线时立即显示,不等防闪窗口', () => {
     expect(resolveConnectionBannerVisibility({ ...base, offline: true, hasIssue: true })).toBe(true);
+  });
+
+  it('unstable 即使 relay 瞬时 online 也保持可见', () => {
+    expect(resolveConnectionBannerVisibility({ ...base, hasUnstableIssue: true })).toBe(true);
   });
 });
 

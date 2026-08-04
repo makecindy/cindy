@@ -57,6 +57,7 @@ import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
@@ -125,6 +126,21 @@ function hasNewerTrigger(queue: Array<{ id: string }>, current: string): boolean
   const currentId = Number(current);
   if (!Number.isFinite(currentId)) return true;
   return queue.some((entry) => Number(entry.id) > currentId);
+}
+
+/**
+ * 调用方给的「本轮触发消息」编码 id → 同群的原生 message_id(给私聊授权卡拼深链)。
+ *
+ * 解不开、或解出来属于**别的 chat** 时返回 null(不渲染深链): 链到别的会话比没有链更糟。
+ */
+function sourceMessageIdIn(chatId: string, encoded: string | undefined): string | null {
+  if (encoded === undefined) return null;
+  try {
+    const decoded = decodeMessageId(encoded);
+    return decoded.chatId === chatId ? decoded.messageId : null;
+  } catch {
+    return null;
+  }
 }
 
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
@@ -639,7 +655,54 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
+    opts?: {
+      threadTs?: string;
+      deliverToOwnerDm?: boolean;
+      ownerDmNote?: string;
+      ownerDmSourceMessageId?: string;
+    },
   ): Promise<{ messageId: string }> {
+    // **只有授权类卡片**转宿主私聊(调用方用 deliverToOwnerDm 点名): 群里的授权卡消不掉,
+    // 且只有 owner 能回答它。命令卡 / 会话选择卡(/ctr 等)不传这个开关 —— 它们的回调必须
+    // 落在原群 lane, 否则 exitControl 释放的是宿主私聊那把锁而不是原群锁。
+    // owner 未知时(理论上不该发生: 群 lane 的触发条件本身就是 owner @bot / reply)保持原
+    // lane 投递, 不吞掉这次交互。
+    const groupLane =
+      opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
+    if (groupLane) {
+      // 来源深链只认调用方给的那条触发消息 id —— 只有它知道这张卡属于哪一轮业务 turn。
+      // 传输层能看到的两个信号都不等于业务轮次: 回挂目标在 'first' 档发出首条回复即被
+      // consumeReplyParams 消耗, 而调用方在发卡前会主动收口流式 handle(turnRunner 的
+      // finalizeActiveStream), 所以"有活动流式回合"同样为假。宁可不渲染深链, 不猜。
+      const link = groupMessageLink(
+        groupLane.chatId,
+        sourceMessageIdIn(groupLane.chatId, opts?.ownerDmSourceMessageId),
+      );
+      // 卡片不再发到群里 —— callSend 只停它自己那条 chat 的 typing loop(这里是宿主私聊),
+      // 群里那条会继续每 4.5s 打一次 sendChatAction, 于是群里一直显示「正在输入…」。
+      // 手动停掉原群的那条(review 指出的回归)。
+      this.stopTypingLoopsForChat(groupLane.chatId);
+      // 说明文案由调用方给(传输层不造用户可见措辞); 深链是 URL 不是文案, 在这里拼。
+      const notice = [opts?.ownerDmNote, link].filter((line) => line).join('\n');
+      const { html, replyMarkup } = buildCardPayload({
+        ...spec,
+        body: notice.length > 0 ? `${notice}\n\n${spec.body}` : spec.body,
+      });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      // 刻意不动群 lane 的回挂目标: 那条触发消息在私聊里不存在, 消耗掉还会让本轮真正的
+      // 回答失去引用。回声按**实际落地**的私聊维度记, 否则群窗口会以为 bot 在群里说过这段。
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
     this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
@@ -1962,6 +2025,20 @@ export type { TelegramGroupWindowEntry } from './inbound.js';
  * reason 保留原文供日志/诊断; code 是给 UI 用的稳定分类 —— 渲染层按 code 取
  * i18n 文案, 不再把这些英文技术串直接怼给用户看。
  */
+/**
+ * 私有超级群里某条消息的深链(`t.me/c/<internal>/<messageId>`) —— 授权卡改投宿主私聊后,
+ * 用它告诉宿主「是哪个群的哪条消息」。
+ *
+ * 只对 `-100` 前缀的私有超级群成立(公开群要 username, 这一层没有持久化群名/username)。
+ * 形状对不上返回 null, 调用方省掉那一行, 不拼一个点不开的链接。
+ */
+function groupMessageLink(chatId: string, messageId: string | null): string | null {
+  if (messageId === null || !chatId.startsWith('-100')) return null;
+  const internal = chatId.slice(4);
+  if (!/^\d+$/.test(internal) || !/^\d+$/.test(messageId)) return null;
+  return `https://t.me/c/${internal}/${messageId}`;
+}
+
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {

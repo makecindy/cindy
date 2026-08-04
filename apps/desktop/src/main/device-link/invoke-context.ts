@@ -9,6 +9,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { isMobilePlatform } from './controllerPlatform';
+import * as subscriptions from './subscriptions.js';
 
 export interface DeviceLinkInvokeContext {
   controllerDeviceId: string;
@@ -63,4 +64,16 @@ export function isDeviceLinkInvoke(): boolean {
  */
 export function isMobileControllerInvoke(): boolean {
   return isMobilePlatform(storage.getStore()?.controllerPlatform);
+}
+
+/**
+ * 查询当前可信 device-link 控制端在 link-open / subscribe 中声明的能力。
+ * 本地 IPC、缺少上下文或未知控制端均 fail closed。
+ */
+export function deviceLinkInvokeControllerSupports(capability: string): boolean {
+  const context = storage.getStore();
+  return (
+    context !== undefined &&
+    subscriptions.controllerSupports(context.controllerDeviceId, capability)
+  );
 }

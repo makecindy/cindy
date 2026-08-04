@@ -13,6 +13,7 @@ import {
 } from '@cindy/maker-shared/device-responsiveness';
 import {
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
+  OPEN_LINK_OBSERVATION_CHANNEL,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
@@ -289,6 +290,49 @@ describe('responsivenessTracker', () => {
     expect(h.tracker.isUnresponsive(DEV)).toBe(false);
   });
 
+  it('多 peer 隔离:peer A 静默(熔断 open)期间,peer B 的在途请求、新请求与建链零感知', async () => {
+    // 故障半径回归(remote-and-mobile-adaptation「故障半径三问」):控制端的多个
+    // 目标设备共享本机唯一 relay 连接,单 peer 静默的全部恢复动作(熔断快速拒绝、
+    // 探测退避)必须收在该 deviceId 内——A 的 open 若泄漏到 B,就是把一台设备的
+    // 故障放大成所有设备不可用(#1187 判例的控制端对偶形态)。
+    const DEV_B = 'device-bystander';
+    const h = harness();
+    // A 发生故障时 B 正有请求在飞
+    let resolveB!: (v: unknown) => void;
+    const inflightB = h.tracker.guardInvoke(
+      DEV_B,
+      'local-db:sessions:list',
+      () =>
+        new Promise((res) => {
+          resolveB = res;
+        }),
+    );
+    await openBreaker(h); // A 连续超时至熔断 open
+    expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([DEV]);
+
+    // B 的在途请求照常返回,B 熔断保持关闭
+    resolveB('ok');
+    await expect(inflightB).resolves.toBe('ok');
+    expect(h.tracker.isUnresponsive(DEV_B)).toBe(false);
+
+    // A open 期间,B 的新业务请求与建链(openLink 观测,本 PR 新增的门禁路径)
+    // 都照常直通上管道,不被 A 的 open 快速拒绝
+    const runB = vi.fn(async () => 'fresh');
+    await expect(h.tracker.guardInvoke(DEV_B, 'local-db:sessions:list', runB)).resolves.toBe(
+      'fresh',
+    );
+    const openLinkB = vi.fn(async () => 'accepted');
+    await expect(
+      h.tracker.guardInvoke(DEV_B, OPEN_LINK_OBSERVATION_CHANNEL, openLinkB),
+    ).resolves.toBe('accepted');
+    expect(runB).toHaveBeenCalledTimes(1);
+    expect(openLinkB).toHaveBeenCalledTimes(1);
+
+    // 状态翻转通知只发给 A,B 从未被标记
+    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true);
+    expect(h.onUnresponsiveChanged).not.toHaveBeenCalledWith(DEV_B, expect.anything());
+  });
+
   it('clearDevice 清理在途 recovery 后允许再次触发恢复', async () => {
     const recoverLink = vi.fn(() => new Promise<void>(() => {}));
     const h = harness({ recoverLink });
@@ -313,12 +357,81 @@ describe('responsivenessTracker', () => {
 });
 
 describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
-  it('仅 INVOKE_TIMEOUT 计失败,其余不定论', () => {
+  it('INVOKE_TIMEOUT 计失败;终态 relay 应答是恢复证据;其余不定论', () => {
     expect(classifyDeviceSendFailure(timeoutError())).toBe('timeout');
+    // 终态 = relay/对端在明确应答,「无响应」不成立;presence 竞态下归不定论
+    // 会让熔断 open 后的周期探测永远关不上(review P2)。
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
+    ).toBe('responded');
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('REMOTE_DISABLED', 'disabled')),
+    ).toBe('responded');
+    expect(
+      classifyDeviceSendFailure(new DeviceLinkError('VERSION_MISMATCH', 'v mismatch')),
+    ).toBe('responded');
     expect(
       classifyDeviceSendFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
     ).toBe('inconclusive');
     expect(classifyDeviceSendFailure(new Error('random'))).toBe('inconclusive');
+  });
+
+  it('结算所有权:同一错误对象只有第一个 settle 的 guard 记账,后续 guard 不定论', async () => {
+    // 观测唯一性不变量:openLink in-flight 复用会让同一物理失败冒泡进任意多个
+    // guard(跨 250ms cohort 窗口时不同批)。guardInvoke 结算后立刻打标,后续
+    // guard 见标一律不定论——三个 guard 共享同一超时,只记 1 个 strike,
+    // 熔断保持关闭(无标记时 3 个独立批次恰好误开,review P2 收敛检查点)。
+    const h = harness();
+    const sharedErr = timeoutError();
+    const failing = (): Promise<never> => Promise.reject(sharedErr);
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', failing),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100); // 越过 cohort 归批窗口:各 guard 确为独立批次
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    // 标记只影响熔断结算,不改变错误本体(上层错误协议照常)
+    expect(sharedErr.code).toBe('INVOKE_TIMEOUT');
+    // 独立的新错误对象照常累计:共享错误已记的 1 strike + 两批新超时 = 阈值,
+    // 熔断打开——证明标记只去重「同一物理失败」,不吞真实的后续失败。
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD - 1; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () => Promise.reject(timeoutError())),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100);
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
+  });
+
+  it('openLink 观测:成功不定论(link-accept 不作恢复证据),超时照常计失败', async () => {
+    // link-accept 在被控端 dispatch 于 runInvoke 之前特判应答,IPC/DB 卡死时照常
+    // 回包——若凭它关熔断,恢复流程会放进订阅+快照突发再连超时,形成周期性风暴。
+    expect(classifyDeviceSendSuccess(OPEN_LINK_OBSERVATION_CHANNEL)).toBe('inconclusive');
+    const h = harness();
+    await openBreaker(h);
+    // open 态下 openLink 走 guardInvoke 会被快速拒绝,不上管道
+    const run = vi.fn(async () => 'accepted');
+    await expect(
+      h.tracker.guardInvoke(DEV, OPEN_LINK_OBSERVATION_CHANNEL, run),
+    ).rejects.toThrow('unresponsive');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('熔断 open 后探测收到终态 relay 应答 → 关熔断(终态 UI 不被「无响应」遮蔽)', async () => {
+    // presence 未及时翻转的竞态下,终态应答(DEVICE_OFFLINE 等)是「链路在明确
+    // 应答」的恢复证据。open 期间业务 guard 一律快速失败,探测是唯一上管道的
+    // 流量,终态应答经探测失败路径进入 classifyDeviceSendFailure 关熔断,让位
+    // 给对应终态自己的 UI。
+    const h = harness();
+    await openBreaker(h);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    h.probeInvoke.mockRejectedValueOnce(new DeviceLinkError('DEVICE_OFFLINE', 'target offline'));
+    h.tracker.probeTick();
+    await vi.waitFor(() => {
+      expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    });
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
   });
 
   it('控制帧 / dispatch 特判通道的成功不定论;业务 DB 通道的成功是恢复证据', () => {

@@ -68,6 +68,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     bindingsCache: initial.bindingsCache ?? [],
     lifecycleAnnouncementOverride: initial.lifecycleAnnouncementOverride ?? null,
     telegramBindingCache: initial.telegramBindingCache ?? null,
+    telegramDefaultWorkspace: initial.telegramDefaultWorkspace ?? null,
     xBindingCache: initial.xBindingCache ?? null,
     xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
   };
@@ -115,8 +116,11 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
           : { ...state, telegramBindingCache: entry ? { ...entry } : null };
       return state;
     },
-    setXDefaultWorkspace(alias) {
-      state = { ...state, xDefaultWorkspace: alias };
+    setProviderDefaultWorkspace(provider: 'telegram' | 'x', alias: string | null) {
+      state =
+        provider === 'x'
+          ? { ...state, xDefaultWorkspace: alias }
+          : { ...state, telegramDefaultWorkspace: alias };
       return state;
     },
   };
@@ -1745,6 +1749,51 @@ describe('Telegram provider capability, binding and prefs', () => {
         lastError: 'Telegram service endpoint is not configured',
       },
     });
+  });
+
+  it('provider lane 的 hello 各带自己那份默认工作目录, 互不串', async () => {
+    // 目录清单是设备级共享的同一份, 但默认值按 provider 各存一份 —— 泛化前只有
+    // 一个 xDefaultWorkspace 字段, 很容易写成两条 lane 共用同一个值。
+    const { wss, url } = await startServer();
+    const store = memoryStore({
+      url,
+      enabled: false,
+      telegramEnabled: true,
+      workspaces: WORKSPACES,
+      telegramDefaultWorkspace: 'blog',
+      xDefaultWorkspace: 'xdmaker',
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.defaultWorkspace).toBe('blog');
+  });
+
+  it('未设默认工作目录时 hello 不带该字段(而不是带 null)', async () => {
+    // 协议上"没有默认值"就是字段缺省; 显式送 null 会让老 server 的校验分叉。
+    const { wss, url } = await startServer();
+    const store = memoryStore({
+      url,
+      enabled: false,
+      telegramEnabled: true,
+      workspaces: WORKSPACES,
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect('defaultWorkspace' in hello.payload).toBe(false);
   });
 
   it('账号 drain 等待 recent-session 查询，并丢弃旧代 query.response', async () => {

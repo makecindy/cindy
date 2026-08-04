@@ -596,6 +596,8 @@ export const MAKER_INVOKE = {
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
+  // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
+  AT_CONTEXT_LIST: 'maker:at-context:list',
   // cua-driver installer for direct computer control.
   COMPUTER_INSTALL_DRIVER: 'maker:computer:install-driver',
   // Quiet cua-driver update check (Settings-open triggered only, never polls).
@@ -625,7 +627,7 @@ export const MAKER_INVOKE = {
    *  - GET_STATE: renderer 启动期拉 { detached, lastOpen, open }
    *  - OPEN / CLOSE: 幂等开(已开则 focus)/ 关子窗口,写 lastOpen
    *  - SET_DETACHED(boolean): 落盘偏好;true 附带开窗,false 附带关窗;返回新 state
-   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, available }
+   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    *  - READY: 子窗口根组件挂载握手(resolve main 侧 ensureOpen 等待)
    *  - SEND_COMMAND: 主窗把命令(如 open-terminal 快捷键)转发给子窗口,必要时先开窗
    */
@@ -703,7 +705,7 @@ export const MAKER_SEND = {
    */
   SYNC_SESSION_MODEL_PREF: 'maker:sync-session-model-pref',
   /**
-   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, available }
+   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    * 变化时无条件推(main 只在 detached 时消费,开偏好瞬间就有 context 可转发)。
    * main 校验 sender 必须是主窗,其它窗口的推送丢弃。fire-and-forget。
    */

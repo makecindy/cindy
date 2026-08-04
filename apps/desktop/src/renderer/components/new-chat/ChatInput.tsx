@@ -162,6 +162,7 @@ import {
   pastedSessionChipAttrs,
   resolveSessionMessageReferencesForSend,
   resolveSessionChipTitles,
+  sanitizeSessionChipTitle,
 } from './sessionLinkPaste';
 import {
   isLongPasteText,
@@ -188,11 +189,23 @@ import {
 import { QuickStartPillMark } from './QuickStartPillMark';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Selection, TextSelection } from '@tiptap/pm/state';
+import { Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
-import { scanAtResources, filterAtResources, type AtResourceItem } from '@/lib/atResourceService';
+import {
+  AT_FILE_PICKER_RESOURCE,
+  AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
+  AT_MENTION_SEARCH_RESULT_LIMIT,
+  createAtResourceFromNativePath,
+  getAtDirectoryCompletionQuery,
+  mergeAtResourceItems,
+  scanAtResources,
+  scanPluginAtResources,
+  filterAtResources,
+  type AtResourceItem,
+} from '@/lib/atResourceService';
+import { isAtResourceInsertTargetCurrent } from '@/lib/atResourceInsertionGuard';
 import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -224,7 +237,12 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
-import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
+import {
+  deriveModelsFromProviders,
+  filterChatBridgedCodexProviders,
+  resolveFastSupported,
+  resolveProviderModelEfforts,
+} from '@/lib/providerModels';
 import {
   getProviderModelEffort,
   setProviderModelChoice,
@@ -745,7 +763,7 @@ type TriggerState = TriggerSlash | TriggerAt | { kind: 'none' };
  */
 const GHOST_SIGIL_CHARS = ['$', '＄', '¥', '￥'] as const;
 
-function detectTrigger(editor: Editor): TriggerState {
+function detectTrigger(editor: Editor, activeAtScopeFrom?: number): TriggerState {
   const { state } = editor;
   const { selection } = state;
   if (!selection.empty) return { kind: 'none' };
@@ -831,11 +849,19 @@ function detectTrigger(editor: Editor): TriggerState {
     const before = atIdx === 0 ? '' : textSoFar[atIdx - 1];
     const allowed = atIdx === 0 || /\s/.test(before);
     const after = textSoFar.slice(atIdx + 1);
+    const from = pos - (textSoFar.length - atIdx);
+    if (allowed && activeAtScopeFrom === from && !/[\r\n]/.test(after)) {
+      return {
+        kind: 'at',
+        query: after,
+        from,
+      };
+    }
     if (allowed && !/\s/.test(after)) {
       return {
         kind: 'at',
         query: after,
-        from: pos - (textSoFar.length - atIdx),
+        from,
       };
     }
   }
@@ -2449,6 +2475,8 @@ export function ChatInput({
   const disableAutofocusRef = useRef(disableAutofocus);
   const focusOnStorageKeyChangeRef = useRef(focusOnStorageKeyChange);
   const latestStorageKeyRef = useRef<string | undefined>(storageKey);
+  const currentStorageKeyRef = useRef<string | undefined>(storageKey);
+  currentStorageKeyRef.current = storageKey;
   const storageKeyTransitionSeqRef = useRef(0);
   const sendButtonRef = useRef<HTMLElement | null>(null);
   const voiceShortcutPressRef = useRef<{
@@ -3174,7 +3202,14 @@ export function ChatInput({
   );
 
   // ── Slash / At panel state ─────────────────────────────────────────
-  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
+  const [atPluginScope, setAtPluginScope] = useState<{
+    provider: AtResourceItem;
+    triggerFrom: number;
+  } | null>(null);
+  const activeAtScopeFrom = atPluginScope?.triggerFrom;
+  const trigger: TriggerState = editor
+    ? detectTrigger(editor, activeAtScopeFrom)
+    : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
@@ -3251,29 +3286,33 @@ export function ChatInput({
   // At-panel scan state
   const [atState, setAtState] = useState<AtPanelState>({ kind: 'loading' });
   const atScanSeqRef = useRef(0);
-  const atFallbackScanTimerRef = useRef<number | null>(null);
+  const atLastScanQueryRef = useRef('');
+  const atQueryScanTimerRef = useRef<number | null>(null);
   useEffect(
     () => () => {
       atScanSeqRef.current += 1;
-      if (atFallbackScanTimerRef.current !== null) {
-        window.clearTimeout(atFallbackScanTimerRef.current);
+      if (atQueryScanTimerRef.current !== null) {
+        window.clearTimeout(atQueryScanTimerRef.current);
       }
     },
     [],
   );
 
   const runAtScan = useCallback(
-    (query?: string) => {
+    (query?: string, reservedSeq?: number) => {
       // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
-      if (!workingDir || isRemoteSession) return;
+      if (isRemoteSession) return;
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
       // 本机会话 deviceId 为 undefined → 本地扫描。
       // 远程**草稿**(NewMakerDraftRoute)此时 sessionId 还是 undefined、但 deviceLinkDeviceId prop 已设——
       // 必须优先用 prop,否则 @ 扫描落到控制端本机 FS(扫到同名目录的错文件),插进首条远程消息的 mention 不可用。
       const remoteDeviceId =
         deviceLinkDeviceId ?? (sessionId ? getSessionDeviceId(sessionId) : undefined);
-      const seq = ++atScanSeqRef.current;
+      const seq = reservedSeq ?? ++atScanSeqRef.current;
+      if (atScanSeqRef.current !== seq) return;
       const normalizedQuery = query?.trim() ?? '';
+      const preservePreviousItems = reservedSeq !== undefined && !!normalizedQuery;
+      atLastScanQueryRef.current = normalizedQuery;
       setAtState((prev) => {
         if (prev.kind === 'ready' && normalizedQuery) {
           return { ...prev, searching: true };
@@ -3281,11 +3320,28 @@ export function ChatInput({
         return { kind: 'loading' };
       });
       scanAtResources(
-        workingDir,
+        workingDir ?? '',
         paletteAgentKind,
-        2000,
+        normalizedQuery ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
         normalizedQuery || undefined,
         remoteDeviceId,
+        {
+          sessionId,
+          includeLocalContext: !remoteDeviceId,
+          includeTaskHistory: !!normalizedQuery,
+          unnamedLabel: t('ccAgent.common.unnamedSession'),
+          onPartial: (partial) => {
+            if (atScanSeqRef.current !== seq || !partial.success) return;
+            setAtState((prev) => ({
+              kind: 'ready',
+              items: preservePreviousItems && prev.kind === 'ready'
+                ? mergeAtResourceItems(prev.items, partial.items)
+                : partial.items,
+              truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
+              searching: true,
+            }));
+          },
+        },
       )
         .then((res) => {
           if (atScanSeqRef.current !== seq) return;
@@ -3301,25 +3357,98 @@ export function ChatInput({
           setAtState({ kind: 'error', message: m });
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t],
+  );
+
+  useEffect(() => {
+    if (!editor || !atPluginScope) return;
+    const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
+      // A caret-only move makes the end of a multi-word query ambiguous.
+      // Leave Plugin scope before the user can select a row against a prefix
+      // and accidentally leave the query suffix behind.
+      if (!transaction.docChanged && transaction.selectionSet) {
+        atScanSeqRef.current += 1;
+        setAtPluginScope(null);
+        runAtScan();
+      }
+    };
+    editor.on('transaction', handleTransaction);
+    return () => {
+      editor.off('transaction', handleTransaction);
+    };
+  }, [editor, atPluginScope, runAtScan]);
+
+  const runAtPluginScan = useCallback(
+    (provider: AtResourceItem, query: string, reservedSeq?: number) => {
+      const seq = reservedSeq ?? ++atScanSeqRef.current;
+      if (atScanSeqRef.current !== seq) return;
+      setAtState((prev) => prev.kind === 'ready'
+        ? { ...prev, searching: true }
+        : { kind: 'loading' });
+      scanPluginAtResources(provider, query, workingDir ?? undefined, sessionId)
+        .then((res) => {
+          if (atScanSeqRef.current !== seq) return;
+          if (!res.success) {
+            setAtState({ kind: 'error', message: res.error ?? 'Plugin resource search failed' });
+            return;
+          }
+          setAtState({ kind: 'ready', items: res.items, truncated: res.truncated });
+        })
+        .catch((error: unknown) => {
+          if (atScanSeqRef.current !== seq) return;
+          setAtState({
+            kind: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    },
+    [workingDir, sessionId],
   );
 
   const atQuery = trigger.kind === 'at' ? trigger.query : '';
+  const atTriggerFrom = trigger.kind === 'at' ? trigger.from : null;
 
   // When `@` panel opens, rescan so newly created files/agents show immediately.
   useEffect(() => {
     if (trigger.kind !== 'at') return;
-    if (!workingDir) return;
     runAtScan();
   }, [trigger.kind, workingDir, runAtScan]);
+
+  useEffect(() => {
+    if (
+      !atPluginScope
+      || trigger.kind !== 'at'
+      || atTriggerFrom !== atPluginScope.triggerFrom
+    ) {
+      if (atPluginScope) {
+        atScanSeqRef.current += 1;
+        setAtPluginScope(null);
+        if (trigger.kind === 'at') runAtScan(atQuery);
+      }
+      return;
+    }
+    // Never leave stale results selectable while a new scoped query is waiting
+    // for its debounce or network response.
+    const seq = ++atScanSeqRef.current;
+    setAtState({ kind: 'ready', items: [], truncated: false, searching: true });
+    const timer = window.setTimeout(
+      () => runAtPluginScan(atPluginScope.provider, atQuery, seq),
+      atQuery ? 200 : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [atPluginScope, trigger.kind, atTriggerFrom, atQuery, runAtPluginScan, runAtScan]);
 
   // Derive query string for stable memo deps — avoids re-filtering on
   // every editor tick when only the caret moved but the query didn't change.
   const filteredAt = useMemo(() => {
     if (!atQuery && trigger.kind !== 'at') return [];
     if (atState.kind !== 'ready') return [];
-    return filterAtResources(atState.items, atQuery);
-  }, [atState, atQuery, trigger.kind]);
+    if (atPluginScope) return atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
+    const items = workingDir && localAttachmentPickerEnabled
+      ? [AT_FILE_PICKER_RESOURCE, ...atState.items]
+      : atState.items;
+    return filterAtResources(items, atQuery);
+  }, [atState, atQuery, trigger.kind, atPluginScope, workingDir, localAttachmentPickerEnabled]);
 
   // Focused row index for each palette
   const [slashFocus, setSlashFocus] = useState(0);
@@ -3332,28 +3461,35 @@ export function ChatInput({
   useEffect(() => {
     if (atFocus >= filteredAt.length) setAtFocus(0);
   }, [filteredAt.length, atFocus]);
+  useEffect(() => {
+    if (atPluginScope) setAtFocus(0);
+  }, [atPluginScope?.provider.pluginId, atQuery]);
 
   useEffect(() => {
-    if (atFallbackScanTimerRef.current !== null) {
-      window.clearTimeout(atFallbackScanTimerRef.current);
-      atFallbackScanTimerRef.current = null;
+    if (atQueryScanTimerRef.current !== null) {
+      window.clearTimeout(atQueryScanTimerRef.current);
+      atQueryScanTimerRef.current = null;
     }
     if (trigger.kind !== 'at') return;
-    if (!workingDir) return;
-    if (!atQuery.trim()) return;
-    if (atState.kind !== 'ready') return;
-    if (filteredAt.length > 0) return;
-    atFallbackScanTimerRef.current = window.setTimeout(() => {
-      atFallbackScanTimerRef.current = null;
-      runAtScan(atQuery);
-    }, 200);
+    if (atPluginScope) return;
+    const normalizedQuery = atQuery.trim();
+    if (normalizedQuery === atLastScanQueryRef.current) return;
+    atLastScanQueryRef.current = normalizedQuery;
+    const seq = ++atScanSeqRef.current;
+    setAtState((prev) => prev.kind === 'ready'
+      ? { ...prev, searching: true }
+      : prev);
+    atQueryScanTimerRef.current = window.setTimeout(() => {
+      atQueryScanTimerRef.current = null;
+      runAtScan(normalizedQuery, seq);
+    }, normalizedQuery ? 200 : 0);
     return () => {
-      if (atFallbackScanTimerRef.current !== null) {
-        window.clearTimeout(atFallbackScanTimerRef.current);
-        atFallbackScanTimerRef.current = null;
+      if (atQueryScanTimerRef.current !== null) {
+        window.clearTimeout(atQueryScanTimerRef.current);
+        atQueryScanTimerRef.current = null;
       }
     };
-  }, [trigger.kind, workingDir, atQuery, atState.kind, filteredAt.length, runAtScan]);
+  }, [trigger.kind, workingDir, atQuery, runAtScan, atPluginScope]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3380,7 +3516,7 @@ export function ChatInput({
 
   const slashOpen = trigger.kind === 'slash' && suppressedSlashAt !== trigger.from;
   const atOpen =
-    trigger.kind === 'at' && !!workingDir && !isRemoteSession && suppressedAtAt !== trigger.from;
+    trigger.kind === 'at' && !isRemoteSession && suppressedAtAt !== trigger.from;
 
   useEffect(() => {
     if (!slashOpen) return;
@@ -3429,6 +3565,9 @@ export function ChatInput({
               insertAtResource(filteredAt[atFocus]);
               return true;
             }
+            // A scoped Plugin search owns Enter/Tab even while loading or
+            // empty; keep accidental sends from bypassing resource selection.
+            if (atOpen && atPluginScope) return true;
             return false;
           case 'Escape':
             if (slashOpen && trigger.kind === 'slash') {
@@ -3436,7 +3575,18 @@ export function ChatInput({
               return true;
             }
             if (atOpen && trigger.kind === 'at') {
+              if (atPluginScope) {
+                exitAtPluginScope(true);
+                return true;
+              }
               setSuppressedAtAt(trigger.from);
+              return true;
+            }
+            return false;
+          case 'ArrowLeft':
+          case 'Backspace':
+            if (atOpen && atPluginScope && !atQuery) {
+              exitAtPluginScope(false);
               return true;
             }
             return false;
@@ -3498,7 +3648,7 @@ export function ChatInput({
   );
 
   const insertAtResource = useCallback(
-    (item: AtResourceItem) => {
+    async (item: AtResourceItem) => {
       if (!editor || trigger.kind !== 'at') return;
       const { from } = trigger;
       // Extend replace-range to the end of the @-run (up to whitespace /
@@ -3507,36 +3657,123 @@ export function ChatInput({
       const $from = editor.state.doc.resolve(from);
       const parent = $from.parent;
       const parentStart = $from.start();
-      let runEnd = from + 1; // skip the `@` itself
+      // Scoped Plugin queries may contain spaces. Their explicit end is the
+      // current caret, so ordinary composer text after the caret is preserved.
+      const isAtScoped = activeAtScopeFrom === from;
+      let runEnd = isAtScoped ? editor.state.selection.from : from + 1;
       const offset = from - parentStart + 1;
-      parent.forEach((child, childOffset) => {
-        if (childOffset + child.nodeSize <= offset) return;
-        if (child.type.name === 'mentionChip') return;
-        if (!child.isText) return;
-        const localStart = Math.max(0, offset - childOffset);
-        const text = child.text ?? '';
-        for (let i = localStart; i < text.length; i++) {
-          if (/\s/.test(text[i])) {
-            runEnd = parentStart + childOffset + i;
+      if (!isAtScoped) {
+        let stopped = false;
+        parent.forEach((child, childOffset) => {
+          if (stopped || childOffset + child.nodeSize <= offset) return;
+          if (child.type.name === 'mentionChip' || !child.isText) {
+            stopped = true;
             return;
           }
-        }
-        runEnd = parentStart + childOffset + text.length;
-      });
+          const localStart = Math.max(0, offset - childOffset);
+          const text = child.text ?? '';
+          for (let i = localStart; i < text.length; i++) {
+            if (/\s/.test(text[i])) {
+              runEnd = parentStart + childOffset + i;
+              stopped = true;
+              return;
+            }
+          }
+          runEnd = parentStart + childOffset + text.length;
+        });
+      }
       const to = runEnd;
+      let selectedItem = item;
+      let selectedByNativePicker = false;
+      if (selectedItem.type === 'file-picker') {
+        const originDoc = editor.state.doc;
+        const originStorageKey = storageKey;
+        try {
+          const picked = await window.electronAPI.dialog.showOpenResource(
+            workingDir ? { defaultPath: workingDir } : undefined,
+          );
+          if (!picked.success || !picked.path || !picked.kind) return;
+          if (!isAtResourceInsertTargetCurrent(
+            editor,
+            editorRef.current,
+            originDoc,
+            originStorageKey,
+            currentStorageKeyRef.current,
+          )) return;
+          const nativeResource = createAtResourceFromNativePath(
+            picked.path,
+            picked.kind,
+            workingDir,
+          );
+          if (!nativeResource) return;
+          selectedItem = nativeResource;
+          selectedByNativePicker = true;
+        } catch (error) {
+          log.warn(
+            'native @ file picker failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+          return;
+        }
+      }
+      // The synthetic action must always resolve to a concrete file/directory
+      // before it can reach mention serialization.
+      if (selectedItem.type === 'file-picker') return;
+      if (selectedItem.type === 'plugin-provider') {
+        if (!selectedItem.pluginId) return;
+        editor
+          .chain()
+          .focus()
+          .command(({ tr }) => {
+            // The provider lives only in React state. Keeping ordinary `@`
+            // text means drafts and sends can never leak an internal sentinel.
+            tr.replaceWith(from, to, editor.schema.text('@'));
+            return true;
+          })
+          .run();
+        atScanSeqRef.current += 1;
+        setAtPluginScope({ provider: selectedItem, triggerFrom: from });
+        setAtState({ kind: 'loading' });
+        return;
+      }
+      const directoryQuery = selectedByNativePicker
+        ? null
+        : getAtDirectoryCompletionQuery(selectedItem);
+      if (directoryQuery) {
+        editor
+          .chain()
+          .focus()
+          .command(({ tr }) => {
+            tr.replaceWith(from, to, editor.schema.text(`@${directoryQuery}`));
+            return true;
+          })
+          .run();
+        setAtFocus(0);
+        setAtPluginScope(null);
+        return;
+      }
       const attrs: MentionChipAttrs = {
-        kind: item.type,
-        label: item.name.replace(/\.md$/, ''),
+        kind: selectedItem.type,
+        label: selectedItem.name.replace(/\.md$/, ''),
         // For agent chips we stash the bare name so serialization can
         // degrade to `@{name}` if the host can't map it; for files/dirs
         // we stash the relative path as-is.
-        path: item.type === 'agent' ? item.name : item.relPath,
+        path: selectedItem.type === 'agent' ? selectedItem.name : selectedItem.relPath,
+        ...(selectedItem.type === 'plugin-resource' && selectedItem.sourceLabel
+          ? { sourceLabel: selectedItem.sourceLabel }
+          : {}),
+        ...(selectedItem.type === 'plugin-resource' && selectedItem.description
+          ? { sourceDescription: selectedItem.description }
+          : {}),
       };
       // For agent: store final canonical path in `path` if we know it maps
       // to an existing file. Here we DO know (we just scanned), so use the
       // canonical form.
-      if (item.type === 'agent') {
-        attrs.path = item.relPath; // .claude/agents/<name>.md
+      if (selectedItem.type === 'agent') {
+        attrs.path = selectedItem.relPath; // .claude/agents/<name>.md
+      } else if (selectedItem.type === 'session') {
+        attrs.label = sanitizeSessionChipTitle(selectedItem.name);
+        attrs.titled = true;
       }
       editor
         .chain()
@@ -3548,9 +3785,34 @@ export function ChatInput({
           return true;
         })
         .run();
+      setAtPluginScope(null);
     },
-    [editor, trigger],
+    [editor, trigger, activeAtScopeFrom, workingDir, storageKey],
   );
+
+  const exitAtPluginScope = useCallback((closePanel: boolean) => {
+    if (!editor || trigger.kind !== 'at') return;
+    const { from } = trigger;
+    if (!closePanel) {
+      const runEnd = editor.state.selection.from;
+      editor
+        .chain()
+        .focus()
+        .command(({ tr }) => {
+          tr.replaceWith(from, runEnd, editor.schema.text('@'));
+          return true;
+        })
+        .run();
+    }
+    setAtPluginScope(null);
+    atScanSeqRef.current += 1;
+    if (closePanel) {
+      setAtState({ kind: 'loading' });
+      setSuppressedAtAt(from);
+    } else {
+      runAtScan();
+    }
+  }, [editor, trigger, runAtScan]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
@@ -3565,6 +3827,10 @@ export function ChatInput({
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
       if (dispatchSendInFlightRef.current) return;
+      if (atPluginScope) {
+        atScanSeqRef.current += 1;
+        setAtPluginScope(null);
+      }
       const sourceSessionId = sessionId;
       const finishAgentSendDispatch = sourceSessionId
         ? tryBeginAgentSendDispatch(sourceSessionId)
@@ -3814,7 +4080,7 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
-      sessionId,
+      atPluginScope,
     ],
   );
   useEffect(() => {
@@ -3913,19 +4179,38 @@ export function ChatInput({
     [onRememberedEffortChange],
   );
 
-  // 解析某模型的 effort 档 / 默认档 —— **本地会话走 provider catalog**(deriveModelsFromProviders,
-  // 含自定义供应商模型),而非 getModelById(只懂 maker-core 内置;自定义模型查不到 → 之前 effort
-  // 被错误压成 'low'、记忆无法恢复)。device-link 远程会话仍按被控端能力(getModelById(id, deviceId)),
-  // 行为字节级不变(自定义供应商不经隧道,被控端能力才是权威)。
+  // 解析某模型的 effort 档 / 默认档 —— **本地显式来源按 (provider, agent, model) 精确查目录**。
+  // picker 用的 deriveModelsFromProviders 是跨来源 first-wins，并不适合运行时能力解析：Pi BYOM
+  // 与内置来源复用 model id 时，二者可有不同的显式 effort 子集。没有来源上下文的旧入口才保留
+  // 拍平回退。device-link 远程会话仍按被控端能力(getModelById(id, deviceId))，行为不变。
   const resolveModelEfforts = useCallback(
-    (modelId: string): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
+    (
+      modelId: string,
+      providerId?: string | null,
+      targetAgentKind?: AgentKind,
+    ): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
       if (deviceLinkDeviceId) {
         const m = getModelById(modelId, deviceLinkDeviceId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
-      const kinds: readonly AgentKind[] = currentModelAgentKind
-        ? [currentModelAgentKind]
-        : ['claude-code', 'codex', 'pi'];
+      const kinds: readonly AgentKind[] = targetAgentKind
+        ? [targetAgentKind]
+        : currentModelAgentKind
+          ? [currentModelAgentKind]
+          : ['claude-code', 'codex', 'pi'];
+      if (providerId) {
+        for (const kind of kinds) {
+          const scoped = resolveProviderModelEfforts({
+            providers,
+            providerId,
+            modelId,
+            agentKind: kind,
+          });
+          if (scoped) return scoped;
+        }
+        // 显式目标来源却找不到对应条目时 fail closed，不能回退到同 id 的另一来源能力。
+        return { efforts: [], defaultEffort: null };
+      }
       for (const kind of kinds) {
         const found = deriveModelsFromProviders(providers, kind).find((x) => x.id === modelId);
         if (found) return { efforts: found.efforts, defaultEffort: found.defaultEffort ?? null };
@@ -4220,15 +4505,13 @@ export function ChatInput({
       const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);
       try {
         await exclusiveTurn.ready;
-        // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
-        // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
+        // effort 档按**目标引擎 + 目标来源**目录解析（同 id 模型跨来源档位可不同）；浏览态
         // 悬浮面板写下的 per-(目标引擎,来源,模型) 预设在此恢复。
-        const targetCatalog = deriveModelsFromProviders(providers, targetAgentKind).find(
-          (x) => x.id === newModelId,
+        const { efforts, defaultEffort } = resolveModelEfforts(
+          newModelId,
+          providerId,
+          targetAgentKind,
         );
-        const { efforts, defaultEffort } = targetCatalog
-          ? { efforts: targetCatalog.efforts, defaultEffort: targetCatalog.defaultEffort ?? null }
-          : resolveModelEfforts(newModelId);
         const providerEffort =
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
@@ -4428,9 +4711,12 @@ export function ChatInput({
         setRememberedEffort(activeModel, committedActiveEffort);
       }
 
-      // effort 档走 catalog(含自定义供应商模型);恢复优先级:
-      // (agent,model) 全局预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId);
+      // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
+      // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -4469,7 +4755,7 @@ export function ChatInput({
               const remoteSetModelResult = await remoteMaker.setModel(
                 sessionId,
                 newModelId,
-                undefined,
+                selectedProviderId,
                 expectedAgentSwitchRevision,
                 useAtomicSelection
                   ? { effort: newEffort, fastMode: restoredFast }
@@ -4755,7 +5041,7 @@ export function ChatInput({
   // per-model 记忆 > 沿用当前 > 模型默认。effort 档走 catalog(含自定义供应商模型)。
   const resolveSwitchEffort = useCallback(
     (targetModelId: string, providerId: string | null, preferred?: Effort): Effort => {
-      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId);
+      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId, providerId);
       const providerEffort =
         modelMemory && currentModelAgentKind && providerId
           ? modelMemory.getEffort(currentModelAgentKind, providerId, targetModelId)
@@ -5002,7 +5288,7 @@ export function ChatInput({
         // 同模型只切来源:effort/fast 采用同一份 (agent,model) 全局预设,但仍按新来源 capability
         // 校验;不支持的档位回落模型默认。reconciledEffort(来源切换 hint,当前 picker 不传)
         // 仍受支持时优先。
-        const { efforts, defaultEffort } = resolveModelEfforts(activeModel);
+        const { efforts, defaultEffort } = resolveModelEfforts(activeModel, newProviderId);
         const providerEffort =
           modelMemory && currentModelAgentKind && newProviderId
             ? modelMemory.getEffort(currentModelAgentKind, newProviderId, activeModel)
@@ -5936,9 +6222,21 @@ export function ChatInput({
               onFocusedIndexChange={setAtFocus}
               onSelect={(item) => insertAtResource(item)}
               onClose={() => {
-                if (trigger.kind === 'at') setSuppressedAtAt(trigger.from);
+                if (trigger.kind !== 'at') return;
+                if (atPluginScope) {
+                  exitAtPluginScope(true);
+                } else {
+                  setSuppressedAtAt(trigger.from);
+                }
               }}
-              onRetry={() => runAtScan(atQuery)}
+              onRetry={() => atPluginScope
+                ? runAtPluginScan(atPluginScope.provider, atQuery)
+                : runAtScan(atQuery)}
+              scopedProviderName={atPluginScope?.provider.name}
+              filePickerEnabled={!!workingDir && localAttachmentPickerEnabled}
+              onBack={atPluginScope
+                ? () => exitAtPluginScope(false)
+                : undefined}
               maxHeight={paletteMaxHeight}
             />
           )}

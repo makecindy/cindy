@@ -35,6 +35,9 @@ import {
   isAgentPlanToolName,
   isDeliveryProseText,
 } from '@cindy/maker-shared/message-render';
+// 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
+// (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
+import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
 
 import type {
   AgentTaskUpdate,
@@ -827,11 +830,6 @@ export function collectSessionImageSrcs(
     }
   }
   return out;
-}
-
-// export 仅供单测(`buildRenderItemsKeyStability.test.ts`)使用,运行时无外部消费者。
-function isAgentTaskToolName(toolName: string): boolean {
-  return toolName === 'Agent' || toolName === 'Task' || toolName.startsWith('collab:');
 }
 
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow

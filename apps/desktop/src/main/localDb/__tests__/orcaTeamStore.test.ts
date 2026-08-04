@@ -116,6 +116,40 @@ describe('orcaTeamStore', () => {
       .toBe('pi');
   });
 
+  it('returns complete active worker projections grouped by lead in one batch', async () => {
+    const { listWorkersByLeads } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    const now = Date.now();
+    await client.exec(
+      'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['lead-session-2', 'Lead 2', 'codex', 'lead', now, now],
+    );
+    await client.exec(
+      'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['worker-session-3', 'Worker 3', 'claude-code', 'worker', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-2', 'lead-session-2', 'active', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['worker-3', 'team-2', 'worker-session-3', now, now],
+    );
+
+    const grouped = await listWorkersByLeads(['lead-session-1', 'lead-session-2', 'lead-empty']);
+
+    expect(grouped['lead-session-1'].map((worker) => worker.id).sort()).toEqual([
+      'worker-1',
+      'worker-2',
+    ]);
+    expect(grouped['lead-session-2'].map((worker) => worker.id)).toEqual(['worker-3']);
+    expect(grouped['lead-empty']).toEqual([]);
+  });
+
   it('executes worker status CAS updates and only rolls back idle acknowledgements', async () => {
     const { markWorkerIdleIfStatus, restoreWorkerDoneIfIdle } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();

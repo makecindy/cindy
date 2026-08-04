@@ -47,6 +47,10 @@ import {
 } from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
+import {
+  formatTerminalRateLimitRetryMessage,
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
+} from './terminal-rate-limit-retry.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -137,6 +141,14 @@ export interface CodexTranslateContext {
    * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
    */
   tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
+  /**
+   * daemon 已耗尽内部 retry budget 的终态 429 接管钩子。agent 层负责严格分类、
+   * turn 归属、产出守卫与预算；translator 只编码独立 reason / 进度契约。
+   */
+  tryTakeOverTerminalRateLimit?: () => {
+    attempt: number;
+    maxAttempts: number;
+  } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -363,6 +375,27 @@ export function translateErrorNotification(
           ...safeErrorData,
           ...overloadReason,
           message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
+  if (!params.willRetry && !isCapacityError) {
+    const progress = ctx.tryTakeOverTerminalRateLimit?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          reason: TERMINAL_RATE_LIMIT_RETRY_REASON,
+          message: formatTerminalRateLimitRetryMessage(
+            safeMessage,
+            progress.attempt,
+            progress.maxAttempts,
+          ),
           isTerminal: false,
           willRetry: true,
         },
@@ -1531,16 +1564,19 @@ function handleCollabAgentToolCall(
   });
 }
 
-// ── subAgentActivity → tool_use + tool_result(spawn 可见性) ────────────────
+// ── subAgentActivity → tool_use + agent_task_update(spawn 可见性) ───────────
 // codex 0.145 multi-agent v2:spawn_agent 不发 collabAgentToolCall,只发瞬时
 // SubAgentActivityItem(kind=started/interacted/interrupted,无完成事件——子代理
 // 的等待与收口由后续 wait_agent 的 collab 卡承载)。不处理它,子代理启动在 UI
 // 完全不可见(实测:探索型任务 spawn 3 个子代理,等待窗口内聊天流零卡片)。
-// started 渲染成一张即时收口的「子代理已启动」卡;interacted 是 followup/send
-// 调用的伴生事件、interrupted 由 interrupt 调用自身承载,均显式静默不再落
-// unhandled 告警。协议只给 id/kind/agentThreadId/agentPath,没有 prompt/model/
-// effort(上游 main 已改为 spawn 直发 collabAgentToolCall 富卡,vendored codex
-// 升级后自动走上面 handleCollabAgentToolCall,本函数届时按 id 去重自然让位)。
+// started 渲染成子代理卡并置 running:卡片本体与 Claude 子代理共用
+// AgentTaskCard,后续 tokens / 工具调用数 / 耗时与终态由 codex/index.ts 消费子
+// 线程 notification 后按同一 taskId 增量更新(见 descendantNotification)。
+// interacted 是 followup/send 调用的伴生事件、interrupted 由 interrupt 调用自身
+// 承载,均显式静默不再落 unhandled 告警。协议只给 id/kind/agentThreadId/
+// agentPath,没有 prompt/model/effort(上游 main 已改为 spawn 直发
+// collabAgentToolCall 富卡,vendored codex 升级后自动走上面
+// handleCollabAgentToolCall,本函数届时按 id 去重自然让位)。
 
 interface SubAgentActivityItem {
   type: 'subAgentActivity';
@@ -1548,6 +1584,59 @@ interface SubAgentActivityItem {
   kind: string;
   agentThreadId?: string;
   agentPath?: string;
+}
+
+/**
+ * 从 spawn 类 item 抽出「子线程 id → 子代理卡 taskId」的登记信息,双轨通用:
+ * - V2(0.145):`subAgentActivity` kind=started,带 agentThreadId
+ * - V1 与上游 main:`collabAgentToolCall` 的 spawn 工具,派发目标在 receiverThreadIds
+ *
+ * 放在 translator 是因为 item 形状知识归它所有;codex/index.ts 只消费结果,不再
+ * 自己 narrow item 字段。返回 null = 不是 spawn(调用方直接忽略)。
+ */
+export function readCodexSubagentSpawnRegistration(item: unknown): {
+  taskId: string;
+  childThreadIds: string[];
+  agentPath?: string;
+  /**
+   * spawn **本身**收口为失败(V1 `collabAgentToolCall.status === 'failed'`)。
+   * translator 此时已推过 failed 帧,聚合器据此不得再用快照(仍是 running)盖回去。
+   * V2 的 subAgentActivity 没有 status 字段,恒为 undefined。
+   */
+  failed?: boolean;
+} | null {
+  if (!item || typeof item !== 'object') return null;
+  const record = item as Record<string, unknown>;
+  const taskId = typeof record.id === 'string' && record.id ? record.id : null;
+  if (!taskId) return null;
+
+  if (record.type === 'subAgentActivity') {
+    if (record.kind !== 'started') return null;
+    const childThreadId = typeof record.agentThreadId === 'string' ? record.agentThreadId : '';
+    if (!childThreadId) return null;
+    return {
+      taskId,
+      childThreadIds: [childThreadId],
+      ...(typeof record.agentPath === 'string' && record.agentPath ? { agentPath: record.agentPath } : {}),
+    };
+  }
+
+  if (record.type === 'collabAgentToolCall') {
+    // 工具名两轨拼写不同(V1 spawnAgent / 上游 main spawn),都以 spawn 前缀判定。
+    const tool = typeof record.tool === 'string' ? record.tool : '';
+    if (!tool.toLowerCase().startsWith('spawn')) return null;
+    const receivers = Array.isArray(record.receiverThreadIds)
+      ? record.receiverThreadIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (receivers.length === 0) return null;
+    return {
+      taskId,
+      childThreadIds: receivers,
+      ...(record.status === 'failed' ? { failed: true } : {}),
+    };
+  }
+
+  return null;
 }
 
 function handleSubAgentActivity(
@@ -1585,6 +1674,19 @@ function handleSubAgentActivity(
   queue.push({
     type: 'tool_result',
     data: { summary: 'started', toolUseIds: [item.id] },
+    source: 'codex',
+  });
+  // 卡片置 running:tool_result 已就地收口(不留悬空工具调用),而 AgentTaskCard 的
+  // status 以 update 优先,子代理仍显示为运行中,直到子线程 turn 收口把它翻成终态。
+  queue.push({
+    type: 'agent_task_update',
+    data: {
+      provider: 'codex',
+      taskId: item.id,
+      parentToolUseId: item.id,
+      status: 'running',
+      ...(agentPath ? { title: agentPath } : {}),
+    },
     source: 'codex',
   });
 }

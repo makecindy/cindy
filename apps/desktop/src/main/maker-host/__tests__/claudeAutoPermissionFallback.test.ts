@@ -296,6 +296,226 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     ]);
   });
 
+  /**
+   * 漏检可观测性(issue #1579):这条链路是 Auto 档唯一的自救通道,它的两个前置条件
+   * (会话请求头、id 反解)任一不满足就整条静默失效。以前两处 early return 什么都不记,
+   * 排障时日志里没有任何线索指向这里。
+   */
+  describe('missed-detection visibility', () => {
+    function createObserver(resolve: (sdkSessionId: string) => string | null, t: () => number) {
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      return { logger, observer: createClaudeAutoClassifierFailureObserver(resolve, { now: t, logger }) };
+    }
+
+    /** 取某条 warn 携带的计数快照。 */
+    function warnCounters(logger: { warn: ReturnType<typeof vi.fn> }, callIndex = 0) {
+      return (logger.warn.mock.calls[callIndex]?.[1] as { counters?: Record<string, number> })?.counters;
+    }
+
+    it('warns when an error response carries no session header', () => {
+      const listener = vi.fn();
+      setClaudeAutoClassifierUnavailableListener(listener);
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      expect(observer(ctx({ status: 429, requestHeaders: {} }))).toBeUndefined();
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('without session header');
+      expect(warnCounters(logger)).toMatchObject({
+        errorsMissingSessionHeader: 1,
+        classifierFailures: 0,
+      });
+    });
+
+    it('warns when the sdk session id cannot be resolved', () => {
+      const { logger, observer } = createObserver(() => null, () => 0);
+
+      expect(observer(ctx({ status: 500 }))).toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('unresolvable sdk session id');
+      expect(warnCounters(logger)).toMatchObject({ errorsUnresolvedSession: 1 });
+    });
+
+    it('counts non-classifier error responses without warning about them', () => {
+      // 普通 turn 的错误响应也流经这里,是正常大头 —— 只计数,不刷 warn。
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      observer(ctx({ status: 429, requestBody: requestBody({ system: 'ordinary assistant' }) }));
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      // 让它随下一条真漏检的 warn 一起显形,充当识别率的分母。
+      observer(ctx({ status: 429, requestHeaders: {} }));
+      expect(warnCounters(logger)).toMatchObject({
+        errorsNotClassifier: 1,
+        errorsMissingSessionHeader: 1,
+      });
+    });
+
+    /**
+     * 「识别规则本身失效」必须能独立发现:CC 若改了分类器的 system 前缀或 max_tokens
+     * 上界,所有真实分类器请求都会掉进 errorsNotClassifier —— 那时既没有漏检 warn
+     * (它们在身份判据之后)、也没有升级 debug(永远识别不出来),整条链路重新全静默。
+     * 所以这个计数要有自己的周期性快照(codex P2)。
+     */
+    /**
+     * 三条漏检 warn 都可能不触发(比如分类器前缀变了 → 全部落 errorsNotClassifier),
+     * 那时只有这条周期快照能保证「分类器在报错但我们没识别出来」在日志里留下痕迹。
+     *
+     * **刻意不做自动判定** —— 判定需要「本该被识别的请求数」作分母,而漏检时这个分母
+     * 拿不到:连续计数会被任意形态的命中清零、比例判据对部分形态漂移不敏感、全局计数又会
+     * 被共享 proxy 上无关 runtime 的错误推进。改为只落原始计数,判断交给看日志的人。
+     */
+    it('periodically snapshots the raw tallies at a production-visible level', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(() => 'session-1', () => t);
+      const notClassifier = requestBody({ system: 'ordinary assistant' });
+
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      // info 级:打包版默认 level=info,debug 会被 logger 的 shouldLog 丢掉。
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info.mock.calls[0][0]).toContain('observation snapshot');
+      // **首条快照必须带上触发它的样本** —— 放在分类之前的话这里会是全零,而后续样本
+      // 又都被限流吞掉,短时故障等于什么都没留下(codex P2)。
+      expect((logger.info.mock.calls[0][1] as { counters?: Record<string, number> })?.counters)
+        .toMatchObject({ errorsNotClassifier: 1 });
+
+      // 30 分钟窗口内限流,不刷屏。
+      for (let i = 0; i < 20; i += 1) {
+        t += 60_000;
+        observer(ctx({ status: 429, requestBody: notClassifier }));
+      }
+      expect(logger.info).toHaveBeenCalledTimes(1);
+
+      // 越窗后再落一条,快照里 classifierFailures 恒为 0 而 errorsNotClassifier 在涨 ——
+      // 这就是排障时判断「身份判据变了」的依据,不需要代码替他判定。
+      t += 30 * 60_000;
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.info).toHaveBeenCalledTimes(2);
+      expect((logger.info.mock.calls[1]?.[1] as { counters?: Record<string, number> })?.counters)
+        .toMatchObject({ classifierFailures: 0, errorsNotClassifier: 22 });
+      // 全程不刷 warn —— 它只留给真正的归属漏检。
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    /**
+     * observer 挂在**共享**的 anthropic-compat-proxy 上(见 anthropic-compat-proxy-host
+     * 的 composeResponseObservers):普通 turn、PI 以及其它复用该 proxy 的 runtime 的响应
+     * 全都流经这里。身份判据必须最先过,否则这些无关响应会把漏检计数顶满,而那两个计数
+     * 存在的唯一目的就是回答「分类器在报错但我们没识别出来吗」。
+     */
+    describe('does not let unrelated runtimes pollute the tallies', () => {
+      /** PI 等其它 runtime 的请求:既不是分类器身份,也不带 cc 会话头。 */
+      const foreignBody = Buffer.from(JSON.stringify({
+        model: 'gpt-5.5',
+        max_tokens: 64_000,
+        messages: [],
+      }));
+
+      it('ignores a headerless error response that is not a classifier request', () => {
+        const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+        observer(ctx({ status: 429, requestHeaders: {}, requestBody: foreignBody }));
+        observer(ctx({ status: 500, requestHeaders: {}, requestBody: foreignBody }));
+
+        // 只算分母,不算漏检、不刷 warn。
+        expect(logger.warn).not.toHaveBeenCalled();
+        // 用一条真漏检把计数带出来核对。
+        observer(ctx({ status: 429, requestHeaders: {} }));
+        expect(warnCounters(logger)).toMatchObject({
+          errorsNotClassifier: 2,
+          errorsMissingSessionHeader: 1,
+          errorsUnresolvedSession: 0,
+        });
+      });
+
+      it('ignores an error response whose session id is unresolvable but is not a classifier request', () => {
+        const { logger, observer } = createObserver(() => null, () => 0);
+
+        observer(ctx({ status: 429, requestBody: foreignBody }));
+
+        expect(logger.warn).not.toHaveBeenCalled();
+      });
+
+      it('ignores headerless success responses from other runtimes while a Claude tally exists', () => {
+        let t = 0;
+        const { logger, observer } = createObserver(() => 'session-1', () => t);
+
+        observer(ctx({ status: 429 })); // 某个 Claude 会话留下记账 → observer 级 size 非零
+        t += 1_000;
+
+        // 混合运行时:PI 的 SSE 成功响应不带 cc 会话头,不得记成「恢复漏检」。
+        observer(ctx({ status: 200, requestHeaders: {}, requestBody: foreignBody }));
+        expect(logger.warn).not.toHaveBeenCalled();
+
+        // 真正的分类器 2xx 缺头才算。
+        observer(ctx({ status: 200, requestHeaders: {} }));
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(warnCounters(logger)).toMatchObject({ recoveryMissingSessionHeader: 1 });
+      });
+    });
+
+    it('throttles the same reason but keeps different reasons independent', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(
+        (sdkId) => (sdkId === 'sdk-known' ? 'session-1' : null),
+        () => t,
+      );
+
+      // 同一原因连发:60s 窗口内只出一条。
+      for (let i = 0; i < 5; i += 1) {
+        t += 1_000;
+        observer(ctx({ status: 429, requestHeaders: {} }));
+      }
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+
+      // 另一个原因不被前者的限流窗口饿死。
+      observer(ctx({ status: 429, requestHeaders: { 'x-claude-code-session-id': 'sdk-unknown' } }));
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+
+      // 越过窗口后同一原因重新可见 —— 持续故障不能只报一次就消失。
+      t += 60_000; // OBSERVER_WARN_THROTTLE_MS(与 TRANSIENT_* 同款:常量不导出,测试写字面量)
+      observer(ctx({ status: 429, requestHeaders: {} }));
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+      expect(warnCounters(logger, 2)).toMatchObject({ errorsMissingSessionHeader: 6 });
+    });
+
+    it('warns when a success response cannot clear an existing transient tally', () => {
+      let t = 0;
+      const { logger, observer } = createObserver(() => 'session-1', () => t);
+
+      observer(ctx({ status: 429 })); // 建立一条记账
+      t += 1_000;
+      // 恢复响应缺 header → 找不到要清哪一条账。
+      expect(observer(ctx({ status: 200, requestHeaders: {} }))).toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('recovery reset skipped');
+      expect(warnCounters(logger)).toMatchObject({ recoveryMissingSessionHeader: 1 });
+    });
+
+    it('logs the escalation with the full tally and stays silent without a logger', () => {
+      const signals: unknown[] = [];
+      setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+      observer(ctx({ status: 400 })); // 确定性 4xx → 立即升级
+      expect(signals).toHaveLength(1);
+      // info 上现在有两类:入口的周期快照 + 这条升级记录。按消息挑出升级那条。
+      const escalation = logger.info.mock.calls.find(
+        ([message]) => String(message).includes('escalated'),
+      );
+      expect(escalation).toBeDefined();
+      expect((escalation?.[1] as { counters?: Record<string, number> })?.counters)
+        .toMatchObject({ classifierFailures: 1 });
+
+      // 不注入 logger 时整段退化为纯计数,不得抛。
+      const silent = createClaudeAutoClassifierFailureObserver(() => null);
+      expect(() => silent(ctx({ status: 429, requestHeaders: {} }))).not.toThrow();
+    });
+  });
+
   it('does not parse/report success, redirects, non-classifier bodies, or unresolved sessions', () => {
     const listener = vi.fn();
     setClaudeAutoClassifierUnavailableListener(listener);

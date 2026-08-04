@@ -63,6 +63,8 @@ interface RightSidebarProps {
   workdir: string;
   /** 非空 = SSH remote 会话(workdir 为远端路径),透传给 Shell → plugin ctx。 */
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
   /** Maximize 态(Phase 6):RSB 撑满整个非左栏区,主区 hidden。本组件用来隐藏
    *  resize handle(maximize 不允许拖宽)+ 把 TabBar maximize 按钮图标切到"还原"。 */
   isMaximized?: boolean;
@@ -93,6 +95,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     sessionId,
     workdir,
     remoteHostId,
+    deviceLinkDeviceId,
     onDetach,
     panelSide,
     onAllTabsClosed,
@@ -254,6 +257,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           sessionId={sessionId}
           workdir={workdir}
           remoteHostId={remoteHostId}
+          deviceLinkDeviceId={deviceLinkDeviceId}
           shellVisible={!displayCollapsed}
           isMac={isMac}
           unifiedTopbar={isMac}

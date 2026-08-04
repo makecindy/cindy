@@ -21,6 +21,21 @@ function service(): PluginMarketService {
 }
 
 /**
+ * Reuse the market snapshot reconciliation outside the Plugins page so
+ * default-install plugins are provisioned as soon as an app owner is ready.
+ * The Plugins page keeps the same call as a later retry path.
+ */
+export async function syncDefaultMarketPlugins(): Promise<void> {
+  try {
+    await service().snapshot();
+  } catch (error) {
+    log.warn('default plugin startup sync failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Preserve stable IPC errors and hide internal/network messages from the
  * renderer. Detailed failures stay in main logs; the renderer localizes by
  * code and uses a generic fallback for INTERNAL.
@@ -65,6 +80,7 @@ export function registerPluginMarketIpc(): void {
               expectedManifest?: unknown;
               allowPermissionExpansion?: unknown;
               reviewedBaseline?: unknown;
+              approvedPackageSha256?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
@@ -76,12 +92,23 @@ export function registerPluginMarketIpc(): void {
       // 扩权批准的审阅基线:只收字符串,野值按缺席处理(缺席 = 保持旧行为)。
       const reviewedBaseline =
         typeof obj?.reviewedBaseline === 'string' ? obj.reviewedBaseline : undefined;
+      const approvedPackageSha256 =
+        typeof obj?.approvedPackageSha256 === 'string'
+          ? obj.approvedPackageSha256
+          : undefined;
+      if (
+        approvedPackageSha256 !== undefined &&
+        !/^[a-f0-9]{64}$/.test(approvedPackageSha256)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'approvedPackageSha256 is invalid');
+      }
       return invokePluginMarket(() =>
         service().install(requireString(pluginId, 'pluginId'), {
           expectedReleaseId,
           ...(expectedManifest ? { expectedManifest: expectedManifest as unknown as GhostManifest } : {}),
           allowPermissionExpansion,
           ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
+          ...(approvedPackageSha256 !== undefined ? { approvedPackageSha256 } : {}),
         }),
       );
     },

@@ -894,9 +894,9 @@ export default function HomeScreen() {
     setRestoredDeviceName(null);
     void saveHomeViewPreferences({ selectedDevice: null });
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
-  // 连接层失败原因(鉴权失效/被顶号/超限/版本不符)比请求级 error 更根因:非 online 时优先展示。
-  const activeConnectionIssue = status !== 'online' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online';
+  // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
+  const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
+  const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
   const connectionTone = activeConnectionIssue
     ? 'off'
     : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';

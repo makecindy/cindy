@@ -6,7 +6,12 @@ import {
 } from '../transportTimeoutReopen';
 
 describe('shouldAbortTransportTimeoutReopen', () => {
-  const base = { clientOnline: true, isOwner: true, controlDisabledLocally: false };
+  const base = {
+    clientOnline: true,
+    isOwner: true,
+    controlDisabledLocally: false,
+    hasOutboundControlIntent: true,
+  };
 
   it('本机禁用控制/离线/待命才终止;授权输入里没有「对方被本机撤权」维度', () => {
     expect(shouldAbortTransportTimeoutReopen(base)).toBe(false);
@@ -17,7 +22,49 @@ describe('shouldAbortTransportTimeoutReopen', () => {
     // 与本机主动控制对方无关,输入契约上根本不存在该维度——重建照常。
     // (目标侧撤销本机控制权走入站 link-close('revoked') → cancel,见下组。)
     const keys = Object.keys(base);
-    expect(keys).toEqual(['clientOnline', 'isOwner', 'controlDisabledLocally']);
+    expect(keys).toEqual([
+      'clientOnline',
+      'isOwner',
+      'controlDisabledLocally',
+      'hasOutboundControlIntent',
+    ]);
+  });
+
+  it('失去出站控制意图(退订最后一个 topic / 关掉最后一个窗口)即终止 —— 不在本机毫无控制意图时把链路建起来', () => {
+    expect(shouldAbortTransportTimeoutReopen({
+      ...base,
+      hasOutboundControlIntent: false,
+    })).toBe(true);
+  });
+});
+
+describe('每次尝试前复查授权(而非只在 trigger 时过一次)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('退避等待期间失去出站控制意图 → 下一次尝试不再 reopen', async () => {
+    let intent = true;
+    const reopen = vi.fn().mockRejectedValue(new Error('peer busy'));
+    const loop = createTransportTimeoutReopenLoop({
+      reopen,
+      shouldAbort: () => shouldAbortTransportTimeoutReopen({
+        clientOnline: true,
+        isOwner: true,
+        controlDisabledLocally: false,
+        hasOutboundControlIntent: intent,
+      }),
+      baseDelayMs: 10,
+    });
+
+    loop.trigger('dev-a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reopen).toHaveBeenCalledTimes(1);
+
+    // 用户关掉最后一个远程会话窗口 / 退订最后一个 topic
+    intent = false;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(reopen).toHaveBeenCalledTimes(1); // 复查失败 → 不再尝试
+    expect(loop.isActive('dev-a')).toBe(false); // 循环已终止
   });
 });
 

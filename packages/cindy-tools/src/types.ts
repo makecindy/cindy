@@ -287,7 +287,14 @@ export interface CindyGhostsMcpDeps {
    * 装入(同 id 已装则更新)确认框——装不装永远由用户决定,agent 只能
    * 递到用户面前。
    */
-  forgePack(request: { dir: string }): Promise<CindyForgePackResult>;
+  forgePack(request: {
+    dir: string;
+    /**
+     * 用户明确选择 AI 图标后，由图片工具返回的 cindy-media 地址。Host
+     * best-effort 把它嵌入包内；失败保留源码里的默认图标，不阻塞打包。
+     */
+    iconSource?: string;
+  }): Promise<CindyForgePackResult>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

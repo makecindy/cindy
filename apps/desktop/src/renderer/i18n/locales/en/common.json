@@ -1,5 +1,6 @@
 {
   "ipcError": {
+    "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -396,6 +397,7 @@
         "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
         "importFailed": "Import failed: {{error}}",
         "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importContrastUnsupported": "The theme colors cannot keep unchecked switches visible. Adjust its background or secondary text colors, then import it again.",
         "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
         "importNotAFile": "Select a file, not a folder.",
         "importTooLarge": "File is too large to import as a theme.",
@@ -1322,6 +1324,9 @@
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
+          "modelSupportsReasoning": "Supports reasoning",
+          "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
+          "modelReasoningEfforts": "Supported reasoning effort levels",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1641,7 +1646,7 @@
     "gitSafety": {
       "title": "Git Safety",
       "autoSnapshotTitle": "Git safety snapshots",
-      "description": "Create automatic savepoint commits after agent edits. Codex rewind is shown only when this is enabled.",
+      "description": "Automatically record hidden savepoints in the project's Git repository after agent edits — no commits are added to your branch. Codex rewind is shown only when this is enabled.",
       "toggleAria": "Toggle Git safety snapshots",
       "saveFailed": "Failed to save Git safety setting"
     },
@@ -2695,7 +2700,23 @@
           "removeWorkspace": "Remove this working directory",
           "changeDir": "Click to change directory (alias and preferences kept)",
           "defaultWorkspaceChip": "Default: {{name}}",
-          "defaultWorkspaceAria": "Choose the default working directory for tasks dispatched from X"
+          "defaultWorkspaceAria": "Choose the default working directory for dispatched tasks",
+          "defaultWorkspaceRadioAria": "Set \"{{name}}\" as the default working directory",
+          "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository.",
+          "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
+          "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for directories without their own settings (official Telegram and X share one copy). These values are now set per directory. Restoring defaults clears all of the following:",
+          "legacyDefaultsRow": {
+            "agentKind": "Default agent: {{current}} → {{fallback}}",
+            "permissionMode": "Permission mode: {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
+          "legacyDefaultsField": {
+            "model": "model {{current}} → {{fallback}}",
+            "effort": "reasoning effort {{current}} → {{fallback}}",
+            "source": "model source {{current}} → {{fallback}}"
+          },
+          "legacyDefaultsFieldSeparator": ", ",
+          "legacyDefaultsSourceFollowsGlobal": "follows global settings"
         },
         "binding": {
           "copyLink": "Copy link",
@@ -2919,7 +2940,8 @@
         "auth-failed": "Sign-in expired — please sign in again",
         "replaced": "Connection replaced by another instance of this device",
         "too-many-connections": "Connection limit reached for this account",
-        "version-mismatch": "Protocol version mismatch — please update the app"
+        "version-mismatch": "Protocol version mismatch — please update the app",
+        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -2960,7 +2982,8 @@
         "disconnectFailed": "Failed to disconnect remote connection",
         "remoteSessionEnded": "The remote device ended this session"
       },
-      "control": "Control"
+      "control": "Control",
+      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
     },
     "imBot": {
       "beta": "Beta",
@@ -3374,6 +3397,8 @@
         "nodeResident": "The Node program can stay running in the background",
         "nodeResidentDetail": "Runs while the plugin is enabled and stops when disabled, updated, uninstalled, or when Cindy exits.",
         "tool": "Tool \"{{name}}\"",
+        "atResourceProvider": "Can search Plugin resources in @ using \"{{name}}\"",
+        "atResourceProviderDetail": "The tool runs only after you explicitly select this Plugin in @. Plugin authors must keep this search free of side effects.",
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
@@ -5272,10 +5297,18 @@
       }
     },
     "atMention": {
-      "scanFailed": "Failed to scan working directory",
+      "filesAndFolders": "Files and folders",
+      "browserTab": "Browser tab",
+      "desktopWindow": "App window",
+      "task": "Task",
+      "pluginResources": "Plugin resources",
+      "pluginResource": "Plugin resource",
+      "backToAll": "Back to all @ resources",
+      "scanFailed": "Failed to load @ resources",
       "retry": "Retry",
       "searching": "Searching…",
-      "noMatch": "No matching files",
+      "noMatch": "No matching items",
+      "typeToSearchFiles": "Type a keyword to search files and sessions",
       "keepTyping": "Keep typing to narrow down…"
     },
     "planReview": {
@@ -5460,6 +5493,7 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
+        "pi": "Pi",
         "workflow": "Workflow",
         "shell": "Background command"
       },
@@ -5540,6 +5574,7 @@
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway, not your Claude.ai subscription. That gateway route rejected the model. Switch to your Claude.ai subscription and retry, or choose another model.",
+      "claudeSubscriptionOpusPlanMismatch": "Opus isn't available on the connected Claude Pro plan. Switch to a model included in your plan. If you recently upgraded, reconnect Anthropic in Settings, then retry.",
       "switchClaudeSubscription": "Switch to Claude.ai & Retry",
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
@@ -5566,6 +5601,7 @@
       "networkAutoRetrying": "Network error — retrying automatically…",
       "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "networkShowRaw": "Show raw error",
@@ -5916,6 +5952,11 @@
       "openInBrowser": "Open in browser",
       "fileCopied": "File copied",
       "pathCopied": "Path copied",
+      "BROWSER_FILE_INVALID_TARGET": "The local page path is invalid",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "This path is not allowed",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "This file type cannot be opened in a browser",
+      "BROWSER_FILE_NOT_FOUND": "The local page was not found",
+      "BROWSER_FILE_OPEN_FAILED": "Failed to open in browser",
       "openInBrowserFailed": "Failed to open in browser",
       "openLinkFailed": "Failed to open link",
       "anchorNotFound": "Heading not found",
@@ -6034,6 +6075,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_UNAVAILABLE": "Auto-review is temporarily unavailable, so actions that need review are being denied. Switch this task to Default permissions if you want to approve them yourself.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
@@ -6149,7 +6191,8 @@
         "auth-failed": "Sign-in has expired — sign in again to restore the remote connection",
         "replaced": "This connection was replaced by another instance of the same device — reconnecting…",
         "too-many-connections": "Too many devices online for this account — the server refused the connection",
-        "version-mismatch": "Protocol version doesn't match the server — update the app and retry"
+        "version-mismatch": "Protocol version doesn't match the server — update the app and retry",
+        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry"
       }
     },
     "common": {

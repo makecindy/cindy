@@ -8,7 +8,7 @@
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
- *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/复制ID/新窗口/Archive/Delete，
+ *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/移动到项目/复制任务链接/新窗口/导出/Archive/Delete，
  *     archived / draft 变体同款分支）
  *   - hover 右上角仅 More（⋮）快捷钮；存档收进 ⋮ / 右键展开菜单的 Archive 项
  *     （卡片不再出现独立的存档快捷钮）。已归档卡片保留"取消归档"快捷钮。
@@ -65,6 +65,7 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
+import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
 import type { SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
@@ -210,6 +211,7 @@ export function SessionCard({
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [archivePending, setArchivePending] = useState(false);
+  const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -384,6 +386,12 @@ export function SessionCard({
     void window.electronAPI.maker.openSessionInNewWindow(session.id);
   }, [remoteWritesBlocked, session.id, t]);
 
+  // 「导出会话…」——打成 .cshare 分享给同事。空草稿、remote / orca / device-link 会话不显示此入口
+  // (转录在远端或协同关系不可移植，main 侧同样有双保险拒绝)。
+  const handleExportShareSelect = useCallback(() => {
+    setShareExportOpen(true);
+  }, []);
+
   const handleAutomationIconClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -415,6 +423,15 @@ export function SessionCard({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
+
+  const canExportShare =
+    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+
+  const exportShareMenuItem = canExportShare ? (
+    <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
+      {t('ccAgent.sidebar.sessionMenu.exportShare')}
+    </DropdownMenuItem>
+  ) : null;
 
   // 「移动到项目」子菜单(main 既有功能;本次侧栏重设保留)。
   const canMoveToProject =
@@ -894,6 +911,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -949,6 +967,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -968,6 +987,14 @@ export function SessionCard({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+      )}
+
+      {shareExportOpen && (
+        <SessionShareExportDialog
+          open={shareExportOpen}
+          sessionId={session.id}
+          onOpenChange={setShareExportOpen}
+        />
       )}
     </div>
   );
