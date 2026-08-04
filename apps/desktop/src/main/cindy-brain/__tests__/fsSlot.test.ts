@@ -38,6 +38,8 @@ interface HarnessOverrides {
   callGhostId?: string;
   /** 脚本通道条目的落盘根(schedule.workingDir);undefined = 会话调用不带。 */
   callScriptWorkdir?: string | null;
+  /** 条目通道;缺省按 callSessionId 推导(null ⇒ script,否则 session)。 */
+  callChannel?: 'session' | 'script';
   /** 严格在途查询结果:false = 模拟已交卷/已清扫(返回 null)。缺省 true。 */
   inFlight?: boolean;
 }
@@ -50,6 +52,7 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
           ghostId: overrides.callGhostId ?? GHOST_ID,
           sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
           scriptWorkdir: overrides.callScriptWorkdir ?? null,
+          channel: overrides.callChannel ?? (overrides.callSessionId === null ? 'script' as const : 'session' as const),
         }
       : null;
   const deps: FsSlotDeps = {
@@ -379,6 +382,17 @@ describe('GhostFsSlot', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('未配置有效的工作目录');
+  });
+
+  it('workdir:会话通道的无会话调用(sessionId null)报「无会话上下文」,不冒名脚本通道(review nit)', async () => {
+    // resolveSessionContext 查无时会登记 channel:'session' + sessionId:null——
+    // 照拒,但话术必须保住「无会话上下文」,不能误报「脚本通道」。
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callChannel: 'session' });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('无会话上下文');
   });
 
   it('workdir(脚本通道):已交卷/已清扫的 callId 立即失效(用完即废,review M1)', async () => {

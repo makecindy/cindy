@@ -290,10 +290,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; channel: 'session' | 'script' } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, channel: e.channel };
   }
 
   /**

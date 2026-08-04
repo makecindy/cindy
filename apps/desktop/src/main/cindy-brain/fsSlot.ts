@@ -86,8 +86,14 @@ export interface FsSlotDeps {
    * 已清扫的条目返回 null。脚本通道(root:'workdir' 无会话分支)必须走它——
    * 目录授权上下文在工具调用结束后不得继续有效(用完即废);会话通道沿用
    * callInfo 宽限窗口径(有 permission 裁决第二道闸,既有行为不变)。
+   * channel 用于拒绝话术分流(会话通道的无会话调用 ≠ 脚本通道)。
    */
-  inFlightCallInfo(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir?: string | null } | null;
+  inFlightCallInfo(callId: string): {
+    ghostId: string;
+    sessionId: string | null;
+    scriptWorkdir?: string | null;
+    channel?: 'session' | 'script';
+  } | null;
   /** sessionId → 会话快照(生产查 localDb sessions 行;查无返回 null)。 */
   getSessionSnapshot(sessionId: string): Promise<FsSessionSnapshot | null>;
   /**
@@ -520,7 +526,11 @@ export class GhostFsSlot {
         workdirSource = 'script';
         workingDir = inFlight.scriptWorkdir;
       } else {
-        return fail('脚本通道未配置有效的工作目录,无法定位写入根');
+        // 话术按通道分流:会话通道的无会话调用(resolveSessionContext 查无)
+        // 不是脚本通道,别报「脚本通道」误导(review nit)。
+        return fail(inFlight.channel === 'script'
+          ? '脚本通道未配置有效的工作目录,无法定位写入根'
+          : '本次调用无会话上下文,无法定位工作目录');
       }
     }
 
