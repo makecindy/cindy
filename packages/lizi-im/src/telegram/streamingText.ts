@@ -40,6 +40,12 @@ function isNoReply(text: string): boolean {
 export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
+  /**
+   * 终稿补送专用的发送(见 finalizeInPlaceOrRepost): 与 send 的区别是它必须沿用
+   * **本轮原始的回挂目标** —— 补送替换的是那条已经消耗掉目标的过程消息, 重新领取
+   * 只会拿到空目标, 群里的答案就此脱离提问脉络。未提供时回落 send。
+   */
+  repost?: (markdown: string) => Promise<string>;
   /** 用 markdown 渲染结果覆盖既有消息。 */
   edit: (messageId: string, markdown: string) => Promise<void>;
   /** 终稿里的受管图片旁路上传(sendPhoto)。 */
@@ -208,6 +214,9 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
    *   - 先删旧: 一旦新发也失败, 答案与过程记录一起消失, 比现状更糟;
    *   - 先删再发还会让客户端滚动跳位(与 openclaw 同一条纪律)。
    * 删除是 best-effort —— 删不掉只是多留一条过程消息, 答案已经到了。
+   *
+   * 补送走 deps.repost(而非 send): 它替换的是那条已经消耗掉本轮回挂目标的过程
+   * 消息, 必须沿用同一个 reply 目标, 否则群里的答案会脱离提问脉络。
    */
   private async finalizeInPlaceOrRepost(text: string): Promise<void> {
     const staleMessageId = this.messageIdValue;
@@ -216,8 +225,9 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       return;
     } catch (editErr) {
       // 新发失败就把原始编辑错误抛回上游(与改动前同语义), 不掩盖真实原因。
+      const repost = this.deps.repost ?? this.deps.send;
       try {
-        this.messageIdValue = await this.deps.send(text);
+        this.messageIdValue = await repost(text);
       } catch {
         throw editErr;
       }

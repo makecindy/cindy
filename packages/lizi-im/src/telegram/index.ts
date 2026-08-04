@@ -122,6 +122,16 @@ type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
  */
 type ReplyTargetLease = { userId: string; messageId: string } | null;
 
+type TelegramReplyParams =
+  | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
+  | Record<string, never>;
+
+/** 回挂目标 id → 出站请求参数; null/空 = 不挂回。 */
+function replyParamsFor(targetId: string | null | undefined): TelegramReplyParams {
+  if (!targetId) return {};
+  return { reply_parameters: { message_id: Number(targetId), allow_sending_without_reply: true } };
+}
+
 /**
  * 队列里是否存在比 current 更新的触发消息 —— Telegram 同一 chat 内 message_id
  * 单调递增, 因此更大的 id 就意味着槽位里那个已经过时。
@@ -239,6 +249,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private ownerUserId = '';
   private configVersion = 0;
   private pollAbort: AbortController | null = null;
+  /**
+   * 实例级取消源(dispose 时 abort)。pollAbort 只覆盖"正在轮询"的时段, 而出站也
+   * 会发生在连接建立中与下线收尾这类没有轮询的窗口 —— 那时退避等待要靠这个收口。
+   */
+  private readonly lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
@@ -427,6 +442,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
   async dispose(): Promise<void> {
     this.disposing = true;
+    // 在途的 429 退避等待就此收口 —— 否则一个最长一分钟的定时器会活过 dispose。
+    this.lifetimeAbort.abort();
     this.configVersion += 1;
     this.clearAllTypingLoops();
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
@@ -768,10 +785,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     userId: string,
     initial?: string,
   ): Promise<StreamingTextHandle> {
+    // 本轮的回挂目标在此刻还没被任何出站消耗(claimTurnReplyTarget 刚领完) —— 记下来
+    // 给终稿补送用: 'first' 档下过程消息一发就把槽位耗掉了, 补送若重新 lease 会拿到
+    // 空目标, 于是那条答案在群里脱离提问脉络(旧过程消息随后还会被删)。
+    const roundReplyTargetId = this.turnReplyTargets.get(userId) ?? null;
     return startTelegramStreaming(
       {
         send: async (markdown) => {
           const { messageId } = await this.sendRenderedChunk(userId, markdown);
+          return messageId;
+        },
+        repost: async (markdown) => {
+          const { messageId } = await this.sendRenderedChunk(userId, markdown, roundReplyTargetId);
           return messageId;
         },
         edit: async (messageId, markdown) => {
@@ -1486,19 +1511,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 做的, DM 改走经典路径后该语义必须留在共用发送入口上。
    */
   private leaseReplyTarget(userId: string): {
-    params:
-      | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
-      | Record<string, never>;
+    params: TelegramReplyParams;
     lease: ReplyTargetLease;
   } {
     const target = this.turnReplyTargets.get(userId);
     if (!target) return { params: {}, lease: null };
-    return {
-      params: {
-        reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
-      },
-      lease: { userId, messageId: target },
-    };
+    return { params: replyParamsFor(target), lease: { userId, messageId: target } };
   }
 
   /**
@@ -1531,9 +1549,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 于是 `retry_after` 更大的 flood 窗口里重试必然二次失败(实测 2026-08-04:
    * 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试, 再次 429
    * 后整条答案丢失)。上限只用来兜住异常大的 `retry_after`, 不参与正常判断。
+   *
+   * 退避必须绑定连接生命周期: 等待期可能长达一分钟, 期间实例完全可能被
+   * dispose / 下线 / 换配置重连。等待本身用当前世代的 AbortSignal 取消(否则
+   * 定时器会活过 dispose), 醒来后再核验一次仍是同一条连接 —— 少了这道核验,
+   * 停止后仍会用**旧 api 客户端**补发一次请求, 且这次重试已经脱离调用方
+   * (外层如 owner 通知的 4.5s 超时早就返回了), 变成没人收口的后台任务。
    */
   private async callSend<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const api = this.requireApi();
+    const generation = this.configVersion;
+    const abortSignal = this.outboundAbortSignal();
     // 首条真实消息即将出现 — typing 使命完成(客户端收到消息也会自动清)。
     if (typeof params.chat_id === 'string' || typeof params.chat_id === 'number') {
       this.stopTypingLoopsForChat(String(params.chat_id));
@@ -1542,11 +1568,42 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return await api.call<T>(method, params);
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 429) {
-        await sleep(Math.min((err.retryAfterSec ?? 3) * 1000, RETRY_AFTER_MAX_WAIT_MS));
+        // sleep 在 abort 时提前 resolve(不 reject), 所以醒来后必须显式核验。
+        await sleep(
+          Math.min((err.retryAfterSec ?? 3) * 1000, RETRY_AFTER_MAX_WAIT_MS),
+          abortSignal,
+        );
+        // 已停止 → 放弃重试并抛回原始 429, 不再发出任何请求。
+        if (!this.isLiveConnection(api, generation, abortSignal)) throw err;
         return api.call<T>(method, params);
       }
       throw err;
     }
+  }
+
+  /**
+   * 出站退避的取消信号: 轮询期用当前世代的 pollAbort(下线/重连即 abort),
+   * 并始终叠加实例级 lifetimeAbort(覆盖没有轮询的出站窗口)。
+   */
+  private outboundAbortSignal(): AbortSignal {
+    const poll = this.pollAbort?.signal;
+    if (poll === undefined) return this.lifetimeAbort.signal;
+    return AbortSignal.any([poll, this.lifetimeAbort.signal]);
+  }
+
+  /**
+   * 退避醒来后的重试前置校验: 仍是同一条连接、同一配置世代、未被取消、未在销毁。
+   * `this.api !== api` 覆盖「重连换了客户端」——世代号相同也不能用旧客户端发。
+   */
+  private isLiveConnection(
+    api: TelegramApiClient,
+    generation: number,
+    abortSignal: AbortSignal,
+  ): boolean {
+    if (this.disposing) return false;
+    if (this.configVersion !== generation) return false;
+    if (this.api !== api) return false;
+    return !abortSignal.aborted;
   }
 
   /**
@@ -1574,13 +1631,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  /** 单段 markdown → HTML 发送; parse 失败回退纯文本(agent 输出偶发怪标记)。 */
+  /**
+   * 单段 markdown → HTML 发送; parse 失败回退纯文本(agent 输出偶发怪标记)。
+   *
+   * `reuseReplyTargetId` 给终稿补送用: 那一轮的回挂目标已经被过程消息消耗掉了
+   * ('first' 档用后即耗), 补送是**替换那条消息**而不是新增一条输出, 所以要沿用
+   * 同一个目标、且不再走 lease/commit(既不重新领取也不二次消耗)。传 null =
+   * 本轮没有目标(如 replyQuote 档位为 off), 按不挂回处理。
+   */
   private async sendRenderedChunk(
     userId: string,
     markdownChunk: string,
+    reuseReplyTargetId?: string | null,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
-    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
+    const reusing = reuseReplyTargetId !== undefined;
+    const { params: replyParams, lease } = reusing
+      ? { params: replyParamsFor(reuseReplyTargetId), lease: null }
+      : this.leaseReplyTarget(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {

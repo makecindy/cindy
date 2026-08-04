@@ -14,6 +14,7 @@ interface Harness {
   /** 按发生顺序记录的出站动作, 用于断言"先发新、后删旧"。 */
   calls: string[];
   sent: string[];
+  reposted: string[];
   deleted: string[];
   uploadAnchors: string[];
 }
@@ -25,10 +26,13 @@ function makeHarness(
     deleteImpl?: (messageId: string) => Promise<void>;
     chunk?: (text: string) => string[];
     extractImageUrls?: (markdown: string) => string[];
+    /** 不提供 repost 时用于验证回落 send 的行为。 */
+    withoutRepost?: boolean;
   } = {},
 ): Harness {
   const calls: string[] = [];
   const sent: string[] = [];
+  const reposted: string[] = [];
   const deleted: string[] = [];
   const uploadAnchors: string[] = [];
   let nextId = 1;
@@ -57,7 +61,15 @@ function makeHarness(
       if (overrides.deleteImpl) return overrides.deleteImpl(messageId);
     },
   };
-  return { deps, calls, sent, deleted, uploadAnchors };
+  if (overrides.withoutRepost !== true) {
+    deps.repost = async (markdown) => {
+      calls.push(`repost:${markdown}`);
+      reposted.push(markdown);
+      if (overrides.sendImpl) return overrides.sendImpl(markdown);
+      return `msg-${nextId++}`;
+    };
+  }
+  return { deps, calls, sent, reposted, deleted, uploadAnchors };
 }
 
 describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
@@ -81,15 +93,30 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
 
     await expect(handle.finalize('完整的最终答案')).resolves.toBeUndefined();
 
-    // 答案确实发出去了(不是只剩一条僵尸过程消息)。
-    expect(h.sent).toContain('完整的最终答案');
+    // 答案确实发出去了(不是只剩一条僵尸过程消息), 且走的是保留回挂目标的 repost。
+    expect(h.reposted).toEqual(['完整的最终答案']);
+    expect(h.sent).not.toContain('完整的最终答案');
     // 顺序不可对调: 新消息落地在删除之前。
     expect(h.calls).toEqual([
       'send:⚙️ 工作中 · 10m44s',
       'edit:msg-1',
-      'send:完整的最终答案',
+      'repost:完整的最终答案',
       'delete:msg-1',
     ]);
+    expect(h.deleted).toEqual(['msg-1']);
+  });
+
+  it('未提供 repost 时回落 send(兼容不关心回挂语义的调用方)', async () => {
+    const h = makeHarness({
+      editImpl: async () => {
+        throw new Error('429');
+      },
+      withoutRepost: true,
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 6s');
+
+    await expect(handle.finalize('答案')).resolves.toBeUndefined();
+    expect(h.sent).toContain('答案');
     expect(h.deleted).toEqual(['msg-1']);
   });
 
@@ -126,7 +153,7 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 2m');
 
     await expect(handle.finalize('答案')).resolves.toBeUndefined();
-    expect(h.sent).toContain('答案');
+    expect(h.reposted).toContain('答案');
   });
 
   it('补送后受管图片锚定到新消息, 不挂在已删的过程消息上', async () => {
@@ -155,7 +182,9 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
 
     await handle.finalize('第一段|第二段|第三段');
 
-    expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第一段', '第二段', '第三段']);
+    // 首段走 repost(承载答案、保留回挂), 其余分段照常 send 追加。
+    expect(h.reposted).toEqual(['第一段']);
+    expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第二段', '第三段']);
   });
 
   it('rich 原位定稿成功时既不走 HTML 编辑也不补送', async () => {

@@ -1588,6 +1588,193 @@ describe('TelegramIM', () => {
       .toBe(401);
   });
 
+  it("群默认 'first' 档: 终稿编辑失败后, 补送仍引用原触发消息", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 80, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    // 过程消息先落地 —— 'first' 档下它已经把回挂目标 80 消耗掉了。
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 11m');
+    const progressSend = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    );
+    expect((progressSend[0].params.reply_parameters as { message_id: number }).message_id).toBe(80);
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('flood 下补送出来的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 补送的答案不能脱离提问脉络 —— 重新 lease 会拿到空目标, 必须沿用本轮的 80。
+    const answer = api.calls.find(
+      (c) =>
+        c.method === 'sendMessage' && String(c.params.text ?? '').includes('补送出来的答案'),
+    );
+    expect(answer).toBeDefined();
+    expect((answer!.params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(80);
+  });
+
+  it("回挂档位 off 时, 补送不带 reply_parameters", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'off', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 81, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 3m');
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('off 档的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const answer = api.calls.find(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('off 档的答案'),
+    );
+    expect(answer).toBeDefined();
+    expect(answer!.params.reply_parameters).toBeUndefined();
+  });
+
+  it("群 'all' 档: 补送同样挂回, 档位语义不被补送破坏", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 82, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 2m');
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('all 档补送的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const groupSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    );
+    expect(groupSends.length).toBeGreaterThanOrEqual(2);
+    for (const call of groupSends) {
+      expect((call.params.reply_parameters as { message_id: number } | undefined)?.message_id)
+        .toBe(82);
+    }
+  });
+
+  it('429 退避期间被 dispose: 不再发第二次请求, 也不留后台重试', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '停止边界').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sendAttempts).toBe(1);
+      // 退避还没走完就销毁 —— 等待必须被取消, 且醒来后不得用旧 api 补发。
+      await im.dispose();
+      await vi.advanceTimersByTimeAsync(120_000);
+      const outcome = await sending;
+      expect(outcome).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    // 后台没有遗留任务: 再放一段时间也不会冒出新的请求。
+    await vi.waitFor(() => expect(sendAttempts).toBe(1));
+  });
+
+  it('429 退避期间下线(stopPolling): 不再发第二次请求', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '下线边界').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sendAttempts).toBe(1);
+      // 主动下线: stopPolling 会 abort 当前世代并把 this.api 置空 —— 退避必须
+      // 就此放弃, 不能用那个已经作废的客户端补发。
+      await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await sending).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("群 'all' 档: 目标保留整轮, 每条出站都挂回", async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
