@@ -326,9 +326,8 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
   } else {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
-  const text = body.trim();
-  return text
-    ? `[collab ${author}]\n${text}`
+  return body.trim()
+    ? `[collab ${author}]\n${body}`
     : `[collab message from ${author}; encrypted payload omitted]`;
 }
 
