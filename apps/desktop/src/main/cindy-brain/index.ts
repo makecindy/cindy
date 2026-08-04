@@ -13,8 +13,8 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
-  diffGhostPermissionItems,
   ghostPermissionBaselineKey,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -3174,6 +3174,11 @@ export async function installOrUpdateMarketGhostPackage(
      * 本地 `.cindy` 装入不经此出口,确认框读的就是包本身,没有这层漂移。
      */
     reviewedManifest?: GhostManifest;
+    /**
+     * 经市场账本摘要认证的旧版已安装清单。历史详情投影漏掉、但用户此前
+     * 已批准的权限可继续作为基线；未被该基线覆盖的真实包权限仍走复核。
+     */
+    previouslyInstalledManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
@@ -3193,6 +3198,7 @@ async function installOrUpdateMarketGhostPackageLocked(
     ghostId: string;
     version: string;
     reviewedManifest?: GhostManifest;
+    previouslyInstalledManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
   },
@@ -3245,10 +3251,11 @@ async function installOrUpdateMarketGhostPackageLocked(
           'Downloaded Plugin package changed after permission review',
         );
       }
-      const added = diffGhostPermissionItems(
+      const added = unreviewedGhostPermissionItems(
         expected.reviewedManifest,
+        expected.previouslyInstalledManifest,
         inspected.canonicalManifest,
-      ).added;
+      );
       if (added.length > 0) {
         const review: PluginMarketPackageReview = {
           manifest: inspected.manifest,

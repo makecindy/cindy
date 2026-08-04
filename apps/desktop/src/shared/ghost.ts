@@ -1894,6 +1894,27 @@ export function diffGhostPermissionItems(
 }
 
 /**
+ * Returns package permissions not covered by the reviewed release manifest or
+ * by permissions already approved on the installed version.
+ *
+ * The second source is important for updates from older marketplace metadata
+ * that omitted permissions which were already present in the installed pack.
+ */
+export function unreviewedGhostPermissionItems(
+  reviewed: GhostManifest,
+  previouslyInstalled: GhostManifest | undefined,
+  actual: GhostManifest,
+): GhostPermissionItem[] {
+  const approvalKey = (item: GhostPermissionItem): string =>
+    JSON.stringify([item.key, item.detail ?? '']);
+  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
+    approved.add(approvalKey(item));
+  }
+  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+}
+
+/**
  * icon 允许的图片扩展名 → mime(校验与 main 读盘供图共用同一口径)。
  * 不收 svg:svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面。
  */

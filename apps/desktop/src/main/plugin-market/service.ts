@@ -158,7 +158,9 @@ function defaultInstallSubject(owner: ActiveAppSession): string {
 function recordFrom(
   plugin: VisiblePluginSummary | VisiblePluginDetail,
   source: PluginMarketInstallationRecord['source'],
+  installed?: InstalledGhost,
 ): PluginMarketInstallationRecord {
+  const rawManifest = installed ? installedGhostRawManifest(installed.dir) : null;
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -170,6 +172,7 @@ function recordFrom(
     source,
     installed: true,
     updatedAt: new Date().toISOString(),
+    ...(rawManifest ? { manifestDigest: ghostManifestDigest(rawManifest) } : {}),
   };
 }
 
@@ -183,6 +186,7 @@ function legacyRecordFrom(
   plugin: VisiblePluginSummary,
   ghost: InstalledGhost,
 ): PluginMarketInstallationRecord {
+  const rawManifest = installedGhostRawManifest(ghost.dir);
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -194,6 +198,7 @@ function legacyRecordFrom(
     source: 'legacy-adopted',
     installed: true,
     updatedAt: new Date().toISOString(),
+    ...(rawManifest ? { manifestDigest: ghostManifestDigest(rawManifest) } : {}),
   };
 }
 
@@ -244,7 +249,7 @@ function stripDirectionalControls(text: string): string {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
 }
 
-function installedGhostRawManifestDigest(dir: string): string | null {
+function installedGhostRawManifest(dir: string): GhostManifest | null {
   try {
     // 安装目录也可能被外部进程/同步盘改动,且本函数每次市场快照都会执行:
     // 与市场目录同一把单句柄限量闸,拒链接、超限即拒,不让无界字节进快照路径。
@@ -255,10 +260,15 @@ function installedGhostRawManifestDigest(dir: string): string | null {
     if (bytes === null) return null;
     const raw = JSON.parse(bytes.toString('utf8')) as unknown;
     const validated = validateGhostManifest(raw);
-    return validated.ok ? ghostManifestDigest(validated.manifest) : null;
+    return validated.ok ? validated.manifest : null;
   } catch {
     return null;
   }
+}
+
+function installedGhostRawManifestDigest(dir: string): string | null {
+  const manifest = installedGhostRawManifest(dir);
+  return manifest ? ghostManifestDigest(manifest) : null;
 }
 
 /** Stable local facts reused while projecting one market catalog response. */
@@ -1177,11 +1187,21 @@ export class PluginMarketService {
           // 权限扩权的**权威**判定点:锁内按当前已装 manifest 重算。锁外那次
           // 只是快速失败;下载窗口期本地装入/更新若换掉了已装包,旧批准在这里
           // 被基线比对拦下,并发替换绕不过去(落位就在下面几行)。
-          assertExpansionApproved(
-            getGhostManager()
-              .list()
-              .find((ghost) => ghost.manifest.id === plugin.ghostId)?.manifest ?? null,
-          );
+          const installedNow = getGhostManager()
+            .list()
+            .find((ghost) => ghost.manifest.id === plugin.ghostId);
+          assertExpansionApproved(installedNow?.manifest ?? null);
+          const currentRecordNow = ledger.installationForGhost(plugin.ghostId);
+          const installedRawManifest = installedNow
+            ? installedGhostRawManifest(installedNow.dir)
+            : null;
+          const previouslyInstalledManifest =
+            installedRawManifest &&
+            currentRecordNow?.installed &&
+            (currentRecordNow.source === 'market' || currentRecordNow.source === 'legacy-adopted') &&
+            currentRecordNow.manifestDigest === ghostManifestDigest(installedRawManifest)
+              ? installedRawManifest
+              : undefined;
           // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
           // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
           const installed = await installOrUpdateMarketGhostPackage(tempPath, {
@@ -1191,6 +1211,7 @@ export class PluginMarketService {
             // 暂停落位并返回真实包权限——服务端投影层与客户端清单契约漂移时,
             // 必须让用户按实际要安装的能力面重新确认。
             reviewedManifest: compatible.manifest,
+            ...(previouslyInstalledManifest ? { previouslyInstalledManifest } : {}),
             ...(options.approvedPackageSha256 !== undefined
               ? {
                   approvedPackageSha256: options.approvedPackageSha256,
@@ -1203,7 +1224,7 @@ export class PluginMarketService {
           // changes. The bound ledger prevents this write from leaking into the
           // new owner.
           await this.withCapturedLedgerMutation(ledger, () => {
-            ledger.upsertInstallation(recordFrom(plugin, 'market'));
+            ledger.upsertInstallation(recordFrom(plugin, 'market', installed));
           });
           return installed;
         }),
