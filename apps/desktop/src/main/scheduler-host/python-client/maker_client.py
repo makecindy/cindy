@@ -60,8 +60,19 @@ def jira_issues_search_jql(
     return call_rpc("jira.search_jql", params)
 
 
-def jira_issue_add_comment(issue_key: str, body_text: str) -> dict:
-    return call_rpc("jira.add_comment", {"issue_key": issue_key, "body_text": body_text})
+def jira_issue_add_comment(
+    issue_key: str,
+    body_text: str | None = None,
+    body_adf: dict | None = None,
+) -> dict:
+    """向 Jira issue 添加评论。body_text(纯文本)与 body_adf(ADF 文档对象,
+    支持真实 @mention)恰好二选一;两个都传或都不传宿主会拒收(INVALID_ARGS)。"""
+    params: dict[str, Any] = {"issue_key": issue_key}
+    if body_text is not None:
+        params["body_text"] = body_text
+    if body_adf is not None:
+        params["body_adf"] = body_adf
+    return call_rpc("jira.add_comment", params)
 
 
 def feishu_recent_chats(count: int = 20) -> dict:

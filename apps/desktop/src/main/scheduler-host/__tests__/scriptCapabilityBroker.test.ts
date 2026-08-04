@@ -116,6 +116,58 @@ describe('SchedulerScriptCapabilityBroker', () => {
     ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
   });
 
+  it('adds Jira comments with plain text exactly as before', async () => {
+    const result = await new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.add_comment', params: { issue_key: 'DING-1', body_text: 'done' } },
+      new Set(['jira.comment']),
+      { schedule: schedule() },
+    );
+    expect(result).toMatchObject({
+      ghostId: 'xd-atlassian',
+      tool: 'jira_issues',
+      args: { action: 'add_comment', issue_key: 'DING-1', body_text: 'done' },
+    });
+  });
+
+  it('forwards ADF comment bodies untouched for real @mentions', async () => {
+    // 2026-08-04 DING-179498:决策评论带 mention 的 ADF 曾被白名单拒收导致丢单。
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'mention', attrs: { id: 'acc-1' } }] }],
+    };
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.add_comment', params: { issue_key: 'DING-2', body_adf: adf } },
+      new Set(['jira.comment']),
+      { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith({
+      ghostId: 'xd-atlassian',
+      tool: 'jira_issues',
+      args: { action: 'add_comment', issue_key: 'DING-2', body_adf: adf },
+      callId: expect.any(String),
+    });
+  });
+
+  it('requires exactly one of body_text and body_adf, and body_adf must be an object', async () => {
+    const broker = new SchedulerScriptCapabilityBroker();
+    const call = (params: Record<string, unknown>) =>
+      broker.call(
+        { method: 'jira.add_comment', params: { issue_key: 'DING-3', ...params } },
+        new Set(['jira.comment']),
+        { schedule: schedule() },
+      );
+    await expect(call({ body_text: 'x', body_adf: { type: 'doc' } })).rejects.toMatchObject({
+      code: 'INVALID_ARGS',
+    });
+    await expect(call({})).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    // 非 plain object 的 body_adf 全部拒收(结构深校验留给 Jira 侧)
+    await expect(call({ body_adf: '{"type":"doc"}' })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(call({ body_adf: [{ type: 'doc' }] })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(call({ body_adf: null })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
   it('lists recently-active feishu chats and forwards incremental start_time', async () => {
     const broker = new SchedulerScriptCapabilityBroker();
     await broker.call(

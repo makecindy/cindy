@@ -31,7 +31,7 @@ spawn 你的脚本;脚本通过 stdin/stdout 的 JSONL 协议(`cindy-script/1`)�
 |---|---|---|
 | (免授权) | `host_capabilities()` | 自省:返回本任务已授予的能力与完整方法目录,脚本先 list 再决定怎么 call |
 | `jira.read` | `jira_issue_get(key, fields?)` / `jira_issues_search_jql(jql, fields, max_results, next_page_token?)` | 读 Jira(走已连接的 Atlassian 账号;**需要 XD Atlassian 意识装入且唤醒**) |
-| `jira.comment` | `jira_issue_add_comment(key, body_text)` | 写 Jira 评论(同上) |
+| `jira.comment` | `jira_issue_add_comment(key, body_text=…, body_adf=…)` | 写 Jira 评论(同上);`body_text` 纯文本与 `body_adf`(ADF 文档对象,支持真实 @mention)恰好二选一 |
 | `feishu.read` | `feishu_recent_chats(count≤50)` / `feishu_recent_messages(chat_id, count≤50, start_time?)` | 按活跃倒序列最近会话;拉指定会话最近消息(新→旧,含 sender_name,`start_time` 做增量游标)。走应用内飞书登录态,token 不下发脚本 |
 | `sessions.dispatch` | `sessions_dispatch(message, title?, target_session_id?)` | 创建或唤醒 Cindy 会话并投递消息;新会话配置继承任务本身(agent/model/目录),脚本无法伪造 |
 
