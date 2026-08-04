@@ -530,7 +530,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(registerCallMock).toHaveBeenCalledTimes(1);
     const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(info).toEqual({
-      ghostId: 'xd-atlassian', toolUseId: null, sessionId: null, scriptWorkdir: absWorkdir, channel: 'script',
+      ghostId: 'xd-atlassian', toolUseId: null, sessionId: null, scriptWorkdir: absWorkdir, scriptWritePath: 'r.json', channel: 'script',
     });
     // 同一 callId 下行给意识;顺序:register → dispatch → finalize。
     expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ callId }));
@@ -593,7 +593,9 @@ describe('SchedulerScriptCapabilityBroker', () => {
     try {
       const { fsSlot } = wireRealChannel(tmp);
       // 模拟意识行为(xd-atlassian 的 deliver 路径):收到 tool-call 后按 out_file
-      // 经 fs 槽 root:'workdir' 泄洪写盘,回 saved_to 相对路径。
+      // 经 fs 槽 root:'workdir' 泄洪写盘,回 saved_to 相对路径。在途期间顺带
+      // 试探写根内其它路径——白名单必须拒(断言在下方)。
+      let offPathResult: { ok: boolean } | null = null;
       callGhostToolMock.mockImplementation(async (request: unknown) => {
         const { callId, args } = request as { callId: string; args: Record<string, unknown> };
         const outFile = args.out_file as string;
@@ -601,6 +603,9 @@ describe('SchedulerScriptCapabilityBroker', () => {
           op: 'write', root: 'workdir', callId, path: outFile, content: '{"issues":[1,2,3]}',
         });
         if (!w.ok) return { ok: false, errorCode: 'INTERNAL', message: w.message ?? 'write failed' };
+        offPathResult = await fsSlot.handleFsRequest('xd-atlassian', {
+          op: 'write', root: 'workdir', callId, path: 'src/evil.ts', content: 'x',
+        });
         return { ok: true, result: { saved_to: outFile } };
       });
 
@@ -612,6 +617,9 @@ describe('SchedulerScriptCapabilityBroker', () => {
       expect(result).toMatchObject({ saved_to: 'reports/jira.json' });
       // 字节真身落在 schedule 工作目录内,脚本可按相对路径从自己 cwd 读回。
       expect(await fs.promises.readFile(path.join(tmp, 'reports', 'jira.json'), 'utf8')).toBe('{"issues":[1,2,3]}');
+      // 路径白名单(review P1 第五轮):在途期间写 out_file 之外的根内路径被拒。
+      expect(offPathResult).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'src', 'evil.ts'))).toBe(false);
       // 用完即废(review M1 真断言):broker 已 finalize,同一 callId 再经 fs 槽
       // 写盘必须被拒——插件在交卷后(含 TIMEOUT 后仍在后台跑的场景)持有的
       // 旧 callId 不再授权任何写入。
@@ -732,7 +740,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
         op: 'write', root: 'workdir', callId: callIdA, path: 'a-late.json', content: 'x',
       })).toMatchObject({ ok: false });
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
-        op: 'write', root: 'workdir', callId: callIdB, path: 'b2.json', content: 'x',
+        op: 'write', root: 'workdir', callId: callIdB, path: 'b.json', content: 'x',
       })).toMatchObject({ ok: true });
       // run-B 终结后同样失效。
       broker.finalizeActiveCalls('run-B');
@@ -770,7 +778,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
         op: 'write', root: 'workdir', callId: secondCallId, path: 'second.json', content: 'x',
       })).toMatchObject({ ok: false });
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
-        op: 'write', root: 'workdir', callId: firstCallId, path: 'first.json', content: 'x',
+        op: 'write', root: 'workdir', callId: firstCallId, path: 'a.json', content: 'x',
       })).toMatchObject({ ok: true });
       releaseFirst();
       await p1;

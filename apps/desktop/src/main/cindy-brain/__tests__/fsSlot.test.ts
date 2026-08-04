@@ -38,6 +38,8 @@ interface HarnessOverrides {
   callGhostId?: string;
   /** 脚本通道条目的落盘根(schedule.workingDir);undefined = 会话调用不带。 */
   callScriptWorkdir?: string | null;
+  /** 脚本声明的唯一可写相对路径(out_file);非 null 时只放行该路径。 */
+  callScriptWritePath?: string | null;
   /** 条目通道;缺省按 callSessionId 推导(null ⇒ script,否则 session)。 */
   callChannel?: 'session' | 'script';
   /** 严格在途查询结果:false = 模拟已交卷/已清扫(返回 null)。缺省 true。 */
@@ -52,6 +54,7 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
           ghostId: overrides.callGhostId ?? GHOST_ID,
           sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
           scriptWorkdir: overrides.callScriptWorkdir ?? null,
+          scriptWritePath: overrides.callScriptWritePath ?? null,
           channel: overrides.callChannel ?? (overrides.callSessionId === null ? 'script' as const : 'session' as const),
         }
       : null;
@@ -448,5 +451,25 @@ describe('GhostFsSlot', () => {
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('脚本工作目录不存在');
     expect(fs.existsSync(doomed)).toBe(false);
+  });
+
+  it('workdir(脚本通道):路径白名单——只放行恰好等于 out_file 的写入(review P1 第五轮)', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+      callScriptWritePath: 'reports/result.json',
+    });
+    // 声明路径:放行。
+    const ok = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'reports/result.json', content: '{}', callId: 'call-1',
+    });
+    expect(ok).toMatchObject({ ok: true });
+    // 根内其它路径(合法相对路径但未声明):拒——在途插件写不了 src/ 等无关文件。
+    const denied = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'src/evil.ts', content: 'x', callId: 'call-1',
+    });
+    expect(denied).toMatchObject({ ok: false });
+    expect((denied as { message: string }).message).toContain('仅授权写入');
+    expect(fs.existsSync(path.join(workdir, 'src', 'evil.ts'))).toBe(false);
   });
 });

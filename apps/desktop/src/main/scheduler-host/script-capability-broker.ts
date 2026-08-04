@@ -71,26 +71,27 @@ async function callGhostForScript(
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
   active: Map<string, Set<string>>,
-  grantWorkdir: boolean,
+  writePath: string | null,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
   // 登记值与 script-runner 的 spawn cwd 严格同源(同一字符串,不 trim 改写):
   // POSIX 允许首尾空白的目录名,trim 后登记会让授权根与脚本实际 cwd 分叉
   // (review)。trim 只用于「全空白 = 未配置」判空;相对/畸形按 null 登记
   // (fs 槽会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响)。
-  // grantWorkdir=false:不挂写盘授权。收窄口径(经四轮 review 收敛):只有
-  // 显式带 out_file 的读调用才挂写窗——纯写方法(add_comment)结果体小
-  // 不可能泄洪,feishu 方法没有 out_file 契约;不带 out_file 的读调用若
-  // 触发插件自动泄洪,只是回落 truncated,与不支持写窗前的行为一致,无回归。
-  // 最小授权:只授 jira.read 的 schedule 不给插件开出任何项目目录写窗。
+  // writePath(= 脚本显式声明的 out_file)是唯一可写目标:只有显式带 out_file
+  // 的调用才挂写窗,且 fs 槽只放行恰好等于它的路径——调用在途期间插件也
+  // 写不了根内其它文件(经四轮 review 收敛的最小授权口径)。纯写方法
+  // (add_comment)与无 out_file 契约的 feishu 方法传 null:不挂写窗;读调用
+  // 不带 out_file 时若触发插件自动泄洪,只是回落 truncated,无回归。
   const rawWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir : '';
-  const scriptWorkdir = grantWorkdir && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
+  const scriptWorkdir = writePath !== null && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
   const cardService = getGhostCardService();
   cardService.registerCall(callId, {
     ghostId: request.ghostId,
     toolUseId: null,
     sessionId: null,
     scriptWorkdir,
+    scriptWritePath: scriptWorkdir === null ? null : writePath,
     channel: 'script',
   });
   let bucket = active.get(runId);
@@ -142,7 +143,7 @@ async function callFeishu(
     active,
     // feishu 方法没有 out_file 契约,不挂写窗(收窄口径见 callGhostForScript
     // 头注释;插件若自动泄洪会回落 truncated,与未挂写窗前的行为一致)。
-    false,
+    null,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   const payload = result.result as { data?: unknown } | null | undefined;
@@ -154,14 +155,14 @@ async function callJira(
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
   active: Map<string, Set<string>>,
-  grantWorkdir: boolean,
+  writePath: string | null,
 ): Promise<unknown> {
   const result = await callGhostForScript(
     { ghostId: 'xd-atlassian', tool: 'jira_issues', args },
     schedule,
     runId,
     active,
-    grantWorkdir,
+    writePath,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   return result.result;
@@ -247,7 +248,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           issue_key: requireString(params, 'issue_key'),
           ...(fields ? { fields } : {}),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds, outFile !== undefined);
+        }, context.schedule, runId, this.activeScriptCallIds, outFile ?? null);
       }
       case 'jira.search_jql': {
         requireCapability(granted, 'jira.read');
@@ -273,7 +274,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           // 或传 out_file 让意识把整包落盘到 schedule 工作目录,脚本自己读回。
           ...(nextPageToken === undefined ? {} : { next_page_token: nextPageToken }),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds, outFile !== undefined);
+        }, context.schedule, runId, this.activeScriptCallIds, outFile ?? null);
       }
       case 'jira.add_comment': {
         requireCapability(granted, 'jira.comment');
@@ -292,13 +293,13 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           if (typeof bodyAdf !== 'object' || bodyAdf === null || Array.isArray(bodyAdf)) {
             fail('INVALID_ARGS', 'body_adf must be an ADF document object');
           }
-          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds, false);
+          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds, null);
         }
         return callJira({
           action: 'add_comment',
           issue_key: issueKey,
           body_text: requireString(params, 'body_text'),
-        }, context.schedule, runId, this.activeScriptCallIds, false);
+        }, context.schedule, runId, this.activeScriptCallIds, null);
       }
       case 'feishu.recent_chats': {
         // 按活跃时间倒序列最近会话(群/单聊)。配合 feishu.recent_messages 的

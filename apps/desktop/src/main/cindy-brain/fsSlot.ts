@@ -86,12 +86,14 @@ export interface FsSlotDeps {
    * 已清扫的条目返回 null。脚本通道(root:'workdir' 无会话分支)必须走它——
    * 目录授权上下文在工具调用结束后不得继续有效(用完即废);会话通道沿用
    * callInfo 宽限窗口径(有 permission 裁决第二道闸,既有行为不变)。
-   * channel 用于拒绝话术分流(会话通道的无会话调用 ≠ 脚本通道)。
+   * channel 用于拒绝话术分流(会话通道的无会话调用 ≠ 脚本通道);
+   * scriptWritePath(脚本声明的 out_file)非空时只放行该路径。
    */
   inFlightCallInfo(callId: string): {
     ghostId: string;
     sessionId: string | null;
     scriptWorkdir: string | null;
+    scriptWritePath: string | null;
     channel: 'session' | 'script';
   } | null;
   /** sessionId → 会话快照(生产查 localDb sessions 行;查无返回 null)。 */
@@ -506,6 +508,7 @@ export class GhostFsSlot {
     let workdirSource: 'session' | 'script';
     let session: FsSessionSnapshot | null = null;
     let workingDir: string;
+    let scriptWritePath: string | null = null;
     if (info.sessionId) {
       workdirSource = 'session';
       session = await this.deps.getSessionSnapshot(info.sessionId);
@@ -525,6 +528,7 @@ export class GhostFsSlot {
       if (inFlight.scriptWorkdir && path.isAbsolute(inFlight.scriptWorkdir)) {
         workdirSource = 'script';
         workingDir = inFlight.scriptWorkdir;
+        scriptWritePath = inFlight.scriptWritePath;
       } else {
         // 话术按通道分流:会话通道的无会话调用(resolveSessionContext 查无)
         // 不是脚本通道,别报「脚本通道」误导(review nit)。
@@ -537,6 +541,11 @@ export class GhostFsSlot {
     const reason = validateFsRelPath(req.path);
     if (reason) return fail(reason);
     const relPath = req.path as string;
+    // 脚本通道的路径白名单(review P1 第五轮):只能写脚本显式声明的
+    // out_file——调用在途期间插件也写不了根内其它文件(src/ 等)。
+    if (workdirSource === 'script' && scriptWritePath !== null && relPath !== scriptWritePath) {
+      return fail(`本次调用仅授权写入脚本声明的 out_file(${scriptWritePath})`);
+    }
     const decoded = decodeContent(req.content, req.encoding);
     if ('error' in decoded) return fail(decoded.error);
 

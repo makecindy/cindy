@@ -166,6 +166,12 @@ interface CallEntry {
    * 写入根(授权来源 = schedule 自身的工作目录配置,意识自报路径被钳在根内)。
    */
   scriptWorkdir: string | null;
+  /**
+   * 脚本声明的唯一可写相对路径(broker 登记的 out_file 原值):非 null 时
+   * fs 槽只放行恰好等于它的写入——调用在途期间插件也写不了根内其它文件
+   * (review P1 第五轮:写窗收窄到脚本声明的单个文件)。
+   */
+  scriptWritePath: string | null;
   hasCard: boolean;
   lastAcceptedAt: number | null;
   settledAt: number | null;
@@ -229,6 +235,8 @@ export class GhostCardService {
       sessionId: string | null;
       /** 脚本通道调用方传入 schedule.workingDir;普通会话调用省略。 */
       scriptWorkdir?: string | null;
+      /** 脚本通道调用方传入脚本声明的 out_file(唯一可写相对路径);无写窗时省略。 */
+      scriptWritePath?: string | null;
       /** 脚本通道调用方传 'script';缺省 'session'(会话内 ghost_call)。 */
       channel?: 'script';
     },
@@ -240,6 +248,7 @@ export class GhostCardService {
       sessionId: info.sessionId,
       channel: info.channel ?? 'session',
       scriptWorkdir: info.scriptWorkdir ?? null,
+      scriptWritePath: info.scriptWritePath ?? null,
       hasCard: false,
       lastAcceptedAt: null,
       settledAt: null,
@@ -290,10 +299,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
   }
 
   /**
@@ -320,6 +329,7 @@ export class GhostCardService {
       // 交互卡重开只发生在会话通道(脚本通道条目拒供片,无卡可点)。
       channel: 'session',
       scriptWorkdir: null,
+      scriptWritePath: null,
       hasCard: true,
       lastAcceptedAt: null,
       settledAt: null,
