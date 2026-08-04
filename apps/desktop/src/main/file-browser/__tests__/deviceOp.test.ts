@@ -31,6 +31,10 @@ const guardMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>(a
   source: 'filesystem',
 }));
 const sshRequestMock = vi.fn();
+const sshListenerState = vi.hoisted(() => ({
+  hostEventHandlers: [] as Array<(event: unknown) => void>,
+  hostConnectedHandlers: [] as Array<() => void>,
+}));
 const dbRowsMock = vi.fn((): Array<{ remoteHostId: string | null }> => []);
 const dbWhereMock = vi.fn(async (_condition: unknown) => dbRowsMock());
 
@@ -95,8 +99,20 @@ vi.mock('../../maker-host/runtime-configs.js', () => ({
 vi.mock('../remote-deps.js', () => ({
   getRemoteFileBrowser: () => ({
     request: sshRequestMock,
-    onHostEvent: vi.fn(() => () => {}),
-    onHostConnected: vi.fn(() => () => {}),
+    onHostEvent: vi.fn((_hostId: string, cb: (event: unknown) => void) => {
+      sshListenerState.hostEventHandlers.push(cb);
+      return () => {
+        const index = sshListenerState.hostEventHandlers.indexOf(cb);
+        if (index >= 0) sshListenerState.hostEventHandlers.splice(index, 1);
+      };
+    }),
+    onHostConnected: vi.fn((_hostId: string, cb: () => void) => {
+      sshListenerState.hostConnectedHandlers.push(cb);
+      return () => {
+        const index = sshListenerState.hostConnectedHandlers.indexOf(cb);
+        if (index >= 0) sshListenerState.hostConnectedHandlers.splice(index, 1);
+      };
+    }),
   }),
 }));
 
@@ -110,6 +126,8 @@ describe('file-browser device-op', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     ownerStampState.current = { dataOwnerId: 'owner-a', ownerGeneration: 7 };
+    sshListenerState.hostEventHandlers.length = 0;
+    sshListenerState.hostConnectedHandlers.length = 0;
     guardMock.mockResolvedValue({ allowed: true, source: 'filesystem' });
     dbRowsMock.mockReturnValue([]);
     workdir = await mkdtemp(path.join(os.tmpdir(), 'device-op-'));
@@ -591,6 +609,190 @@ describe('file-browser device-op', () => {
     });
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: a released SSH registration ignores a late reconnect callback', async () => {
+    const sshWorkdir = '/remote/home/user/released-reconnect-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart') watchStartCount += 1;
+      return Promise.resolve({ ok: true });
+    });
+
+    await onFsWatchSubscribed(sshWorkdir);
+    const staleReconnect = sshListenerState.hostConnectedHandlers[0]!;
+    onFsWatchReleased(sshWorkdir);
+    staleReconnect();
+    await Promise.resolve();
+
+    expect(watchStartCount).toBe(1);
+  });
+
+  it('watch: release during SSH reconnect stops a late successful watcher', async () => {
+    const sshWorkdir = '/remote/home/user/reconnect-release-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let resolveReconnect!: () => void;
+    const reconnectPending = new Promise<void>((resolve) => {
+      resolveReconnect = resolve;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart') {
+        watchStartCount += 1;
+        if (watchStartCount === 2) return reconnectPending;
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    await onFsWatchSubscribed(sshWorkdir);
+    sshListenerState.hostConnectedHandlers[0]!();
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    onFsWatchReleased(sshWorkdir);
+    const stopCountBeforeSettle = sshRequestMock.mock.calls.filter(
+      ([, op]) => op === 'watchStop',
+    ).length;
+    resolveReconnect();
+
+    await vi.waitFor(() => {
+      expect(sshRequestMock.mock.calls.filter(([, op]) => op === 'watchStop').length).toBe(
+        stopCountBeforeSettle + 1,
+      );
+    });
+    expect(sshListenerState.hostConnectedHandlers).toHaveLength(0);
+    expect(sshListenerState.hostEventHandlers).toHaveLength(0);
+  });
+
+  it('watch: a late old reconnect does not stop the replacement registration', async () => {
+    const sshWorkdir = '/remote/home/user/reconnect-replaced-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let resolveOldReconnect!: () => void;
+    const oldReconnectPending = new Promise<void>((resolve) => {
+      resolveOldReconnect = resolve;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart') {
+        watchStartCount += 1;
+        if (watchStartCount === 2) return oldReconnectPending;
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    await onFsWatchSubscribed(sshWorkdir);
+    sshListenerState.hostConnectedHandlers[0]!();
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    onFsWatchReleased(sshWorkdir);
+    ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
+    await onFsWatchSubscribed(sshWorkdir);
+    expect(watchStartCount).toBe(3);
+    const stopCountWithReplacement = sshRequestMock.mock.calls.filter(
+      ([, op]) => op === 'watchStop',
+    ).length;
+
+    resolveOldReconnect();
+    await Promise.resolve();
+    expect(sshRequestMock.mock.calls.filter(([, op]) => op === 'watchStop')).toHaveLength(
+      stopCountWithReplacement,
+    );
+    const event = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/replacement-owner.ts' },
+    };
+    sshListenerState.hostEventHandlers.at(-1)?.(event);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event.data, {
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 8,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: owner change after a failed initial SSH start rebuilds current listeners', async () => {
+    const sshWorkdir = '/remote/home/user/owner-reject-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let rejectFirstStart!: (error: Error) => void;
+    const firstStart = new Promise<never>((_resolve, reject) => {
+      rejectFirstStart = reject;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart' && watchStartCount++ === 0) return firstStart;
+      return Promise.resolve({ ok: true });
+    });
+
+    const starting = onFsWatchSubscribed(sshWorkdir);
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(1);
+    });
+    ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
+    rejectFirstStart(new Error('connection reset'));
+    await starting;
+
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    const event = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/current-owner.ts' },
+    };
+    sshListenerState.hostEventHandlers.at(-1)?.(event);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event.data, {
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 8,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: owner change during SSH reconnect retires the stale registration', async () => {
+    const sshWorkdir = '/remote/home/user/owner-reconnect-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let resolveReconnect!: () => void;
+    const reconnectPending = new Promise<void>((resolve) => {
+      resolveReconnect = resolve;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart') {
+        watchStartCount += 1;
+        if (watchStartCount === 2) return reconnectPending;
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    await onFsWatchSubscribed(sshWorkdir);
+    const staleReconnect = sshListenerState.hostConnectedHandlers[0]!;
+    staleReconnect();
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
+    resolveReconnect();
+
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(3);
+    });
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir: sshWorkdir,
+    });
+    const event = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/reconnected-owner.ts' },
+    };
+    sshListenerState.hostEventHandlers.at(-1)?.(event);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event.data, {
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 8,
     });
     onFsWatchReleased(sshWorkdir);
   });
