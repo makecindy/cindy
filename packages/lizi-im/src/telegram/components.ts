@@ -84,6 +84,7 @@ export function parseCallbackQuery(q: TgCallbackQuery): IMCardActionEvent | null
     chatId: String(chat.id),
     messageId: encodeMessageId(String(chat.id), String(q.message.message_id)),
     buttonId: decoded.buttonId,
+    callbackToken: q.data,
     payload: decoded.payload,
     threadTs: undefined,
     scopeKey: undefined,

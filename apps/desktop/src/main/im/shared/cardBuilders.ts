@@ -250,7 +250,7 @@ export function createCardBuilders(
                 // requestId is only for InteractionRequest binding — model:pick
                 // doesn't go through pendingInteractions. Use a sentinel so card
                 // action parser still recognises it as a valid action.
-                requestId: `model-pick:${sessionId}`,
+                requestId: `model-pick:${sessionId}:${sec.provider.id}:${m.id}:${effort}`,
                 sessionId,
                 modelId: m.id,
                 modelLabel: m.displayName,
@@ -282,7 +282,7 @@ export function createCardBuilders(
           type: m.id === currentMode ? ('primary' as const) : ('default' as const),
           payload: {
             // Sentinel — permmode:pick doesn't go through pendingInteractions.
-            requestId: `permmode-pick:${sessionId}`,
+            requestId: `permmode-pick:${sessionId}:${m.id}`,
             sessionId,
             agentKind,
             mode: m.id,

@@ -103,7 +103,9 @@ function isTerminalInteractionButton(buttonId: string): boolean {
   return (
     buttonId.startsWith('permission:') ||
     buttonId.startsWith('plan:') ||
-    buttonId.startsWith('ask:')
+    buttonId.startsWith('ask:') ||
+    buttonId === 'permmode:confirm-full-access' ||
+    buttonId === 'permmode:cancel-full-access'
   );
 }
 
@@ -775,7 +777,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
     const { chatId, messageId: nativeId } = decodeMessageId(messageId);
     const { html } = markdownToTelegramHtml(markdown);
-    await this.editHtml(chatId, nativeId, html, undefined);
+    await this.editHtml(chatId, nativeId, html, { inline_keyboard: [] });
   }
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
@@ -1414,7 +1416,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             Promise.resolve().then(() => handler(event)),
           ),
         );
-        const succeeded = results.every(
+        const succeeded = results.length > 0 && results.every(
           (result) => result.status === 'fulfilled' && result.value !== false,
         );
         if (succeeded) {

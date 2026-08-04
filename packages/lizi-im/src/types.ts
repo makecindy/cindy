@@ -235,6 +235,8 @@ export interface IMCardActionEvent {
   messageId: string;
   /** The button id business code put into `button.value.id`. */
   buttonId: string;
+  /** Rendered callback token, when the channel exposes one (Telegram callback_data). */
+  callbackToken?: string;
   /** Remaining fields of the button's value JSON (business-defined payload). */
   payload: Record<string, unknown>;
   /** 卡片所在 thread root ts(卡片在 thread 内时有值)。 */

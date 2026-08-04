@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   readModelRouteSnapshot: vi.fn(
     async (): Promise<{ model: string; effort: string; providerId: string | null } | null> => null,
   ),
+  switchSessionWorkingDir: vi.fn(async () => {}),
   readPermissionMode: vi.fn(async () => 'auto'),
   updatePermissionMode: vi.fn(async () => {}),
   updateModelEffort: vi.fn(async () => {}),
@@ -78,6 +79,7 @@ vi.mock('../sessionRepo', () => ({
   readModelRouteSnapshot: mocks.readModelRouteSnapshot,
   readPermissionMode: mocks.readPermissionMode,
   touchUserSent: vi.fn(async () => {}),
+  switchSessionWorkingDir: mocks.switchSessionWorkingDir,
   updateModelEffort: mocks.updateModelEffort,
   updatePermissionMode: mocks.updatePermissionMode,
 }));
@@ -511,6 +513,53 @@ describe('control:session-pick 重复接管替换', () => {
     expect(mocks.executeDetach).not.toHaveBeenCalled();
     expect(mocks.bindingAttachWithResult).toHaveBeenCalled();
   });
+
+  it('普通接管业务成功但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.patchMarkdownCard
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      threadScoped: false,
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'control:session-pick',
+      payload: {
+        requestId: 'control-session-pick:sess-target',
+        botAppId: 'BOT1',
+        sessionId: 'sess-target',
+        sessionTitle: 'My Session',
+        displayName: 'proj',
+      },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(mocks.bindingAttach).toHaveBeenCalledOnce();
+    expect(im.patchMarkdownCard).toHaveBeenCalledTimes(2);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({
+        body: expect.stringContaining('brief'),
+        buttons: [],
+      }),
+    );
+  });
 });
 
 describe('control:start 按钮(免打字重新发起远程控制)', () => {
@@ -669,6 +718,153 @@ describe('Telegram 失效交互卡', () => {
       expect.objectContaining({ body: 'cancelled', buttons: [] }),
     );
   });
+
+  it('model:pick 业务成功但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'model:pick',
+      callbackToken: 'model-token-1',
+      payload: {
+        requestId: 'model-pick:sess-target:anthropic:claude-opus-4-7:high',
+        sessionId: 'sess-target',
+        modelId: 'claude-opus-4-7',
+        modelLabel: 'Opus 4.7',
+        effort: 'high',
+        providerId: 'anthropic',
+      },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(mocks.updateModelEffort).toHaveBeenCalledTimes(1);
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledTimes(1);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ body: slackUi.cards.model.resolved('Opus 4.7', 'high') }),
+    );
+  });
+
+  it('Telegram 卡片重绘后相同 requestId 的新 token 不会命中旧终态缓存', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const baseEvent = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'model:pick',
+      payload: {
+        requestId: 'model-pick:sess-target:anthropic:claude-opus-4-7:high',
+        sessionId: 'sess-target',
+        modelId: 'claude-opus-4-7',
+        modelLabel: 'Opus 4.7',
+        effort: 'high',
+        providerId: 'anthropic',
+      },
+    } as const;
+
+    expect(await registeredHandler(handler)({ ...baseEvent, callbackToken: 'model-token-1' })).toBe(
+      false,
+    );
+    expect(await registeredHandler(handler)({ ...baseEvent, callbackToken: 'model-token-2' })).toBe(
+      true,
+    );
+    expect(mocks.updateModelEffort).toHaveBeenCalledTimes(2);
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('project 切换业务成功但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const projectAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      projectSwitching: true,
+      sessions: { ensureWorkingDir: vi.fn(() => '/tmp/dialogue') },
+      ui: {
+        ...adapter.ui,
+        cards: {
+          ...adapter.ui.cards,
+          project: {
+            title: '项目',
+            hint: (name: string) => name,
+            emptyBody: 'empty',
+            btnDialogue: 'dialogue',
+            btnCancel: 'cancel',
+            resolvedPick: (name: string) => name,
+            resolvedDialogue: 'dialogue-resolved',
+            resolvedCancel: 'cancelled',
+            switchFailed: (reason: string) => reason,
+            attachedUnsupported: 'unsupported',
+            dialogueName: '对话',
+          },
+        },
+      },
+    } as unknown as ImChannelAdapter;
+    const resolveRouteTarget = vi.fn(async () => ({ row: { id: 'sess-target' } }));
+    const disposeOneSession = vi.fn(async () => {});
+    (turnRunner as unknown as { resolveRouteTarget: typeof resolveRouteTarget }).resolveRouteTarget =
+      resolveRouteTarget;
+    (turnRunner as unknown as { disposeOneSession: typeof disposeOneSession }).disposeOneSession =
+      disposeOneSession;
+    const attach = createCardActionHandler(projectAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'project:dialogue',
+      payload: { requestId: 'project-dialogue', botAppId: 'BOT1' },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(resolveRouteTarget).toHaveBeenCalledOnce();
+    expect(disposeOneSession).toHaveBeenCalledOnce();
+    expect(mocks.switchSessionWorkingDir).toHaveBeenCalledOnce();
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ body: 'dialogue-resolved', buttons: [] }),
+    );
+  });
 });
 
 describe('/permission Full access 确认', () => {
@@ -710,6 +906,7 @@ describe('/permission Full access 确认', () => {
           expect.objectContaining({
             id: 'permmode:confirm-full-access',
             type: 'danger',
+            payload: expect.objectContaining({ requestId: 'permmode-confirm:sess-target' }),
           }),
           expect.objectContaining({
             id: 'permmode:cancel-full-access',
@@ -782,6 +979,49 @@ describe('/permission Full access 确认', () => {
 
     expect(result).toBe(false);
     expect(mocks.updatePermissionMode).not.toHaveBeenCalled();
+  });
+
+  it('确认已生效但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'permmode:confirm-full-access',
+      payload: {
+        requestId: 'permmode-confirm:sess-target',
+        sessionId: 'sess-target',
+        mode: 'bypassPermissions',
+        modeLabel: 'Full access',
+        agentKind: 'codex',
+      },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(mocks.updatePermissionMode).toHaveBeenCalledTimes(1);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({
+        body: slackUi.cards.permissionMode.resolved('Full access'),
+        buttons: [],
+      }),
+    );
   });
 });
 
@@ -1134,6 +1374,92 @@ describe('control:new 新建会话来源持久化', () => {
       'picker-msg',
       expect.objectContaining({ body: slackUi.cards.control.attachFailed('db locked') }),
     );
+  });
+
+  it('新建业务成功但卡片收口失败后重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      threadScoped: false,
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'control:new',
+      payload: {
+        requestId: 'control-new:E:\\proj',
+        botAppId: 'BOT1',
+        workingDir: 'E:\\proj',
+        displayName: 'proj',
+      },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(mocks.getMaker().createSession).toHaveBeenCalledOnce();
+    expect(im.updateInteractiveCard).toHaveBeenCalledTimes(2);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ buttons: [] }),
+    );
+  });
+
+  it('thread 新建卡片收口失败仍完成 prewire, 重试只重放终态卡', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'control:new',
+      scopeKey: 'anchor-new.ts',
+      payload: {
+        requestId: 'control-new:E:\\proj',
+        botAppId: 'BOT1',
+        workingDir: 'E:\\proj',
+        displayName: 'proj',
+        anchorMessageId: 'anchor-new',
+      },
+    } as unknown as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(mocks.getMaker().createSession).toHaveBeenCalledOnce();
+    expect(turnRunner.prewireAttachedSession).toHaveBeenCalledWith(
+      'BOT1',
+      '111',
+      'anchor-new.ts',
+    );
+    expect(im.updateInteractiveCard).toHaveBeenCalledTimes(3);
   });
 });
 

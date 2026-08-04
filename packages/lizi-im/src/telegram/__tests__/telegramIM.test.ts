@@ -329,6 +329,24 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('Markdown 卡片收口也通过 editMessageText 显式清空旧键盘', async () => {
+    await connect();
+    const sent = await im.sendInteractiveCard(OWNER_ID, {
+      body: '继续吗？',
+      buttons: [{ id: 'control:pick', label: '继续', payload: { requestId: 'markdown-clear' } }],
+    });
+    api.calls.length = 0;
+
+    await im.patchMarkdownCard(sent.messageId, '已完成');
+
+    expect(api.calls).toContainEqual({
+      method: 'editMessageText',
+      params: expect.objectContaining({
+        reply_markup: { inline_keyboard: [] },
+      }),
+    });
+  });
+
   it('同一 interaction 的重复 callback 只派发一次', async () => {
     await connect();
     const handler = vi.fn();
@@ -426,6 +444,41 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 
+  it('没有挂载 card handler 时不应把 callback 记为已处理', async () => {
+    await connect();
+    const callback = encodeCallbackData('control:back', { requestId: 'late-handler' });
+    api.pushUpdates([
+      {
+        update_id: 911,
+        callback_query: {
+          id: 'late-handler-first',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 911, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(1),
+    );
+
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    api.pushUpdates([
+      {
+        update_id: 912,
+        callback_query: {
+          id: 'late-handler-retry',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: callback,
+          message: { message_id: 911, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+  });
+
   it('权限确认卡的取消 callback 带 requestId 时收口失败可重试', async () => {
     await connect();
     const handler = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(undefined);
@@ -453,6 +506,45 @@ describe('TelegramIM', () => {
     pushCallback(910, 'permission-cancel-second');
 
     await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
+  it('Full access 确认与取消共享同一终态去重键', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    const confirm = encodeCallbackData('permmode:confirm-full-access', {
+      requestId: 'permmode-confirm:sess-target',
+      sessionId: 'sess-target',
+      mode: 'bypassPermissions',
+    });
+    const cancel = encodeCallbackData('permmode:cancel-full-access', {
+      requestId: 'permmode-confirm:sess-target',
+      sessionId: 'sess-target',
+    });
+    expect(cancel).not.toBe(confirm);
+    api.pushUpdates([
+      {
+        update_id: 913,
+        callback_query: {
+          id: 'full-access-confirm',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: confirm,
+          message: { message_id: 913, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+      {
+        update_id: 914,
+        callback_query: {
+          id: 'full-access-cancel',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: cancel,
+          message: { message_id: 913, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 

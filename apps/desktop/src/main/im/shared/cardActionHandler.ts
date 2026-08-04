@@ -123,7 +123,59 @@ export function createCardActionHandler(
   }
 
   function resolvedCardRetryKey(event: IMCardActionEvent, requestId: string): string {
-    return `${event.messageId}|${requestId}`;
+    const isTerminalDecision =
+      event.buttonId.startsWith('permission:') ||
+      event.buttonId.startsWith('plan:') ||
+      event.buttonId.startsWith('ask:') ||
+      event.buttonId === 'permmode:confirm-full-access' ||
+      event.buttonId === 'permmode:cancel-full-access';
+    const renderedToken = event.callbackToken?.trim();
+    const identity =
+      renderedToken && !isTerminalDecision ? `token:${renderedToken}` : `request:${requestId}`;
+    return `${event.messageId}|${identity}`;
+  }
+
+  function rememberResolvedCardRetry(
+    event: IMCardActionEvent,
+    accountGeneration: number,
+    label: string,
+  ): void {
+    const requestId = String(event.payload.requestId ?? '');
+    if (!requestId) return;
+    const key = resolvedCardRetryKey(event, requestId);
+    resolvedCardRetries.delete(key);
+    resolvedCardRetries.set(key, { label, accountGeneration, at: Date.now() });
+    while (resolvedCardRetries.size > MAX_RESOLVED_CARD_RETRIES) {
+      const oldest = resolvedCardRetries.keys().next().value;
+      if (oldest === undefined) break;
+      resolvedCardRetries.delete(oldest);
+    }
+  }
+
+  async function retryResolvedCardIfPending(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean | null> {
+    const requestId = String(event.payload.requestId ?? '');
+    if (!requestId) return null;
+    const key = resolvedCardRetryKey(event, requestId);
+    pruneResolvedCardRetries(Date.now());
+    const retry = resolvedCardRetries.get(key);
+    if (!retry) return null;
+    if (retry.accountGeneration !== accountGeneration) {
+      resolvedCardRetries.delete(key);
+      return null;
+    }
+    try {
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(retry.label));
+      resolvedCardRetries.delete(key);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`resolved interaction card retry failed (non-fatal): ${msg}`);
+      return false;
+    }
   }
 
   function requireThreadUi() {
@@ -268,7 +320,11 @@ export function createCardActionHandler(
     return { scopeKey, rootMessageId, displaced: attachResult.displaced };
   }
 
-  async function handleModelPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleModelPick(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean> {
     const sessionId = String(event.payload.sessionId ?? '');
     const modelId = String(event.payload.modelId ?? '');
     const modelLabel = String(event.payload.modelLabel ?? modelId);
@@ -281,18 +337,20 @@ export function createCardActionHandler(
 
     if (!sessionId || !modelId) {
       log.warn('model:pick missing sessionId/modelId — ignoring');
-      return;
+      return true;
     }
 
-    const patchModelPickFailed = async (reason: string): Promise<void> => {
+    const patchModelPickFailed = async (reason: string): Promise<boolean> => {
       try {
         await im.updateInteractiveCard(
           event.messageId,
           cards.buildResolvedCard(ui.cards.model.failed(reason)),
         );
+        return true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`model:pick failure card patch failed (non-fatal): ${msg}`);
+        return false;
       }
     };
 
@@ -392,22 +450,29 @@ export function createCardActionHandler(
     });
 
     if (failureReason !== null) {
-      await patchModelPickFailed(failureReason);
-      return;
+      return patchModelPickFailed(failureReason);
     }
 
+    const resolvedLabel = ui.cards.model.resolved(modelLabel, effort);
     try {
       await im.updateInteractiveCard(
         event.messageId,
-        cards.buildResolvedCard(ui.cards.model.resolved(modelLabel, effort)),
+        cards.buildResolvedCard(resolvedLabel),
       );
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`model:pick card patch failed (non-fatal): ${msg}`);
+      rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+      return false;
     }
   }
 
-  async function handlePermissionModePick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handlePermissionModePick(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean> {
     const sessionId = String(event.payload.sessionId ?? '');
     const mode = String(event.payload.mode ?? '') as PermissionMode;
     const modeLabel = String(event.payload.modeLabel ?? mode);
@@ -416,7 +481,7 @@ export function createCardActionHandler(
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);
-      return;
+      return true;
     }
 
     // Validate against the bound agent's actual capabilities — single source of
@@ -442,7 +507,13 @@ export function createCardActionHandler(
               id: 'permmode:confirm-full-access',
               label: ui.cards.permissionMode.btnConfirmFullAccess,
               type: 'danger',
-              payload: { sessionId, mode, modeLabel, agentKind },
+              payload: {
+                requestId: confirmationRequestId,
+                sessionId,
+                mode,
+                modeLabel,
+                agentKind,
+              },
             },
             {
               id: 'permmode:cancel-full-access',
@@ -455,13 +526,14 @@ export function createCardActionHandler(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`permmode:pick confirmation card patch failed: ${msg}`);
+        return false;
       }
-      return;
+      return true;
     }
 
     if (result.kind === 'invalid') {
       log.warn(`permmode:pick invalid sessionId=${sessionId} mode=${mode}: ${result.reason}`);
-      return;
+      return true;
     }
 
     if (result.kind === 'failed') {
@@ -471,23 +543,28 @@ export function createCardActionHandler(
           event.messageId,
           cards.buildResolvedCard(ui.cards.permissionMode.failed(result.reason)),
         );
+        return true;
       } catch {
         /* non-fatal: update failure is already logged */
+        return false;
       }
-      return;
     }
 
     if (!result.live) {
       log.info(`permmode:pick: no live session for ${sessionId.slice(-8)} — DB updated only`);
     }
+    const resolvedLabel = ui.cards.permissionMode.resolved(modeLabel);
     try {
       await im.updateInteractiveCard(
         event.messageId,
-        cards.buildResolvedCard(ui.cards.permissionMode.resolved(modeLabel)),
+        cards.buildResolvedCard(resolvedLabel),
       );
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`permmode:pick card patch failed (non-fatal): ${msg}`);
+      rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+      return false;
     }
   }
 
@@ -592,7 +669,11 @@ export function createCardActionHandler(
     return true;
   }
 
-  async function handleControlSessionPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleControlSessionPick(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean> {
     // Terminal: 把 binding 写入, 之后该 (bot, owner) 在渠道发的消息会被 turnRunner
     // 入口的 binding.resolve 路由到这个 desktop sessionId。无论 attach 成败都解锁
     // controlState (失败时用户至少能继续别的操作)。
@@ -608,7 +689,7 @@ export function createCardActionHandler(
     const displayName = String(event.payload.displayName ?? '');
     if (!sessionId || !botContextId) {
       log.warn('control:session-pick missing sessionId/botAppId — ignoring');
-      return;
+      return true;
     }
     log.info(`control:session-pick sessionId=...${sessionId.slice(-8)} displayName=${displayName}`);
 
@@ -654,15 +735,19 @@ export function createCardActionHandler(
       }
       exitControl(botContextId, event.senderId);
       if (!established) {
+        const failedLabel = ui.cards.control.attachFailed('takeover failed');
         try {
           await im.updateInteractiveCard(
             event.messageId,
-            cards.buildResolvedCard(ui.cards.control.attachFailed('takeover failed')),
+            cards.buildResolvedCard(failedLabel),
           );
-        } catch {
-          /* swallow */
+          return true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`session-pick takeover failure card patch failed (non-fatal): ${msg}`);
+          rememberResolvedCardRetry(event, accountGeneration, failedLabel);
+          return false;
         }
-        return;
       }
 
       // New binding is committed now. Only after that point may the old root
@@ -688,14 +773,18 @@ export function createCardActionHandler(
       }
 
       // picker 卡收口(顶层) — root 卡才是这次接管的"家"
+      const resolvedLabel = ui.cards.control.resolvedSessionPick(sessionTitle, displayName);
+      let pickerPatched = true;
       try {
         await im.updateInteractiveCard(
           event.messageId,
-          cards.buildResolvedCard(ui.cards.control.resolvedSessionPick(sessionTitle, displayName)),
+          cards.buildResolvedCard(resolvedLabel),
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`session-pick picker resolve patch failed (non-fatal): ${msg}`);
+        rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+        pickerPatched = false;
       }
 
       // brief 总结发进新 thread — 失败 fallback 提示, 不阻塞
@@ -724,7 +813,7 @@ export function createCardActionHandler(
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`session-pick prewire failed (non-fatal): ${msg}`);
       }
-      return;
+      return pickerPatched;
     }
 
     // 立刻 patch loading 卡 — 抢在 attach 之前,目的有两个:
@@ -761,16 +850,19 @@ export function createCardActionHandler(
     // attach 失败: 走快速路径 — patch 卡片报错 + 立刻 exitControl, 没总结要等。
     if (attachErr) {
       exitControl(botContextId, event.senderId);
+      const failedLabel = ui.cards.control.attachFailed(attachErr);
       try {
         await im.updateInteractiveCard(
           event.messageId,
-          cards.buildResolvedCard(ui.cards.control.attachFailed(attachErr)),
+          cards.buildResolvedCard(failedLabel),
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`control:session-pick card patch failed (non-fatal): ${msg}`);
+        rememberResolvedCardRetry(event, accountGeneration, failedLabel);
+        return false;
       }
-      return;
+      return true;
     }
 
     // attach 成功路径: loading 卡已在前面 patch 上, 现在取该 session 最后一条
@@ -790,11 +882,14 @@ export function createCardActionHandler(
     const summaryBody = summary
       ? `${headerText}\n\n${summary}`
       : `${headerText}\n\n_(回顾失败了, 直接发消息接着聊就行)_`;
+    let pickerPatched = true;
     try {
       await im.patchMarkdownCard(event.messageId, summaryBody);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`control:session-pick final patch failed (non-fatal): ${msg}`);
+      rememberResolvedCardRetry(event, accountGeneration, summaryBody);
+      pickerPatched = false;
     }
 
     // 总结卡片 patch 完之后立刻 prewire — 把 setInteractionListener 切到本渠道
@@ -812,9 +907,14 @@ export function createCardActionHandler(
     }
 
     exitControl(botContextId, event.senderId);
+    return pickerPatched;
   }
 
-  async function handleControlNewSession(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleControlNewSession(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    accountGeneration: number,
+  ): Promise<boolean> {
     // Terminal: 在指定 workingDir 下用 desktop 默认参数新建一个 session,
     // 然后 attach binding 把后续渠道消息路由到这个新 session。
     // session 创建参数:
@@ -828,7 +928,7 @@ export function createCardActionHandler(
     const displayName = String(event.payload.displayName ?? workingDir);
     if (!botContextId || !workingDir) {
       log.warn('control:new missing botAppId/workingDir — ignoring');
-      return;
+      return true;
     }
     log.info(
       `control:new workingDir=${workingDir} displayName=${displayName} sender=...${event.senderId.slice(-8)}`,
@@ -946,18 +1046,21 @@ export function createCardActionHandler(
         }
       }
       exitControl(botContextId, event.senderId);
+      const resolvedLabel =
+        createErr || !established
+          ? ui.cards.control.attachFailed(createErr ?? 'takeover failed')
+          : ui.cards.control.resolvedNewSession(displayName);
+      let pickerPatched = true;
       try {
         await im.updateInteractiveCard(
           event.messageId,
-          cards.buildResolvedCard(
-            createErr || !established
-              ? ui.cards.control.attachFailed(createErr ?? 'takeover failed')
-              : ui.cards.control.resolvedNewSession(displayName),
-          ),
+          cards.buildResolvedCard(resolvedLabel),
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`control:new(thread) picker patch failed (non-fatal): ${msg}`);
+        rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+        pickerPatched = false;
       }
       if (established) {
         try {
@@ -971,7 +1074,7 @@ export function createCardActionHandler(
           log.warn(`control:new(thread) prewire failed (non-fatal): ${msg}`);
         }
       }
-      return;
+      return pickerPatched;
     }
 
     let newSessionId: string | null = null;
@@ -1032,19 +1135,21 @@ export function createCardActionHandler(
     }
 
     exitControl(botContextId, event.senderId);
+    const resolvedLabel = attachErr
+      ? ui.cards.control.attachFailed(attachErr)
+      : pickRandom(ui.cards.control.newSessionWelcomePrompts)(displayName);
     try {
       await im.updateInteractiveCard(
         event.messageId,
-        cards.buildResolvedCard(
-          attachErr
-            ? ui.cards.control.attachFailed(attachErr)
-            : pickRandom(ui.cards.control.newSessionWelcomePrompts)(displayName),
-        ),
+        cards.buildResolvedCard(resolvedLabel),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`control:new card patch failed (non-fatal): ${msg}`);
+      rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+      return false;
     }
+    return true;
   }
 
   /**
@@ -1132,13 +1237,14 @@ export function createCardActionHandler(
     im: ChannelIM,
     event: IMCardActionEvent,
     kind: 'project' | 'dialogue',
-  ): Promise<void> {
+    accountGeneration: number,
+  ): Promise<boolean> {
     const projectUi = adapter.ui.cards.project;
-    if (!projectUi) return;
+    if (!projectUi) return true;
     const botContextId = String(event.payload.botAppId ?? '');
     if (!botContextId) {
       log.warn('project switch missing botAppId — ignoring');
-      return;
+      return true;
     }
     // 接管期间语义冲突(slash 层已拦, 这里兜旧卡片迟到按压)。
     const attached = bindingStore.get({
@@ -1147,8 +1253,7 @@ export function createCardActionHandler(
       userId: event.senderId,
     });
     if (attached) {
-      await patchProjectCard(im, event.messageId, projectUi.attachedUnsupported);
-      return;
+      return patchProjectCard(im, event.messageId, projectUi.attachedUnsupported);
     }
 
     let workingDir: string;
@@ -1160,7 +1265,7 @@ export function createCardActionHandler(
       workspaceKind = 'project';
       if (!workingDir) {
         log.warn('project:pick missing workingDir — ignoring');
-        return;
+        return true;
       }
       // 项目清单来自历史会话行, 目录可能已被移动/删除/被同名文件顶替 —
       // 必须确认是目录才切(fail-closed), 否则会话会切进非法 cwd 难以排障。
@@ -1171,8 +1276,7 @@ export function createCardActionHandler(
         isDirectory = false;
       }
       if (!isDirectory) {
-        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
-        return;
+        return patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
       }
     } else {
       workingDir = adapter.sessions.ensureWorkingDir(botContextId);
@@ -1182,8 +1286,7 @@ export function createCardActionHandler(
 
     const target = await turnRunner.resolveRouteTarget(botContextId, event.senderId);
     if (!target) {
-      await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
-      return;
+      return patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
     }
     log.info(
       `project switch session=...${target.row.id.slice(-8)} kind=${workspaceKind} sender=...${event.senderId.slice(-8)}`,
@@ -1191,11 +1294,11 @@ export function createCardActionHandler(
     await switchSessionWorkingDir(target.row.id, workingDir, workspaceKind);
     // 旧目录的 live session(含进行中 turn)必须丢弃 — 下一条消息在新目录重建。
     await turnRunner.disposeOneSession(target.row.id);
-    await patchProjectCard(
-      im,
-      event.messageId,
-      kind === 'project' ? projectUi.resolvedPick(displayName) : projectUi.resolvedDialogue,
-    );
+    const resolvedLabel =
+      kind === 'project' ? projectUi.resolvedPick(displayName) : projectUi.resolvedDialogue;
+    const patched = await patchProjectCard(im, event.messageId, resolvedLabel);
+    if (!patched) rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
+    return patched;
   }
 
   async function handleControlExit(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
@@ -1333,12 +1436,14 @@ export function createCardActionHandler(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
 
+          const retryResult = await retryResolvedCardIfPending(im, event, accountGeneration);
+          if (retryResult !== null) return retryResult;
+
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it
           // separately: update DB + live session, patch card to "已切换".
           if (event.buttonId === 'model:pick') {
-            await handleModelPick(im, event);
-            return;
+            return handleModelPick(im, event, accountGeneration);
           }
 
           // Same shape as model:pick — direct command from /permission picker card.
@@ -1346,8 +1451,7 @@ export function createCardActionHandler(
             event.buttonId === 'permmode:pick'
             || event.buttonId === 'permmode:confirm-full-access'
           ) {
-            await handlePermissionModePick(im, event);
-            return;
+            return handlePermissionModePick(im, event, accountGeneration);
           }
           if (event.buttonId === 'permmode:cancel-full-access') {
             return handlePermissionModeCancel(im, event);
@@ -1366,12 +1470,10 @@ export function createCardActionHandler(
             return handleControlBack(im, event);
           }
           if (event.buttonId === 'control:session-pick') {
-            await handleControlSessionPick(im, event);
-            return;
+            return handleControlSessionPick(im, event, accountGeneration);
           }
           if (event.buttonId === 'control:new') {
-            await handleControlNewSession(im, event);
-            return;
+            return handleControlNewSession(im, event, accountGeneration);
           }
           if (event.buttonId === 'control:exit') {
             await handleControlExit(im, event);
@@ -1388,12 +1490,10 @@ export function createCardActionHandler(
 
           // /project picker — pick(项目) / dialogue(回托管对话目录) / cancel
           if (event.buttonId === 'project:pick') {
-            await handleProjectSwitch(im, event, 'project');
-            return;
+            return handleProjectSwitch(im, event, 'project', accountGeneration);
           }
           if (event.buttonId === 'project:dialogue') {
-            await handleProjectSwitch(im, event, 'dialogue');
-            return;
+            return handleProjectSwitch(im, event, 'dialogue', accountGeneration);
           }
           if (event.buttonId === 'project:cancel') {
             const projectUi = adapter.ui.cards.project;
@@ -1416,24 +1516,6 @@ export function createCardActionHandler(
           }
 
           const retryKey = resolvedCardRetryKey(event, requestId);
-          const now = Date.now();
-          pruneResolvedCardRetries(now);
-          const retry = resolvedCardRetries.get(retryKey);
-          if (retry && retry.accountGeneration === accountGeneration) {
-            try {
-              await im.updateInteractiveCard(
-                event.messageId,
-                cards.buildResolvedCard(retry.label),
-              );
-              resolvedCardRetries.delete(retryKey);
-              return true;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`resolved interaction card retry failed (non-fatal): ${msg}`);
-              return false;
-            }
-          }
-          if (retry) resolvedCardRetries.delete(retryKey);
 
           const resolved = resolvePending(requestId, decision);
           if (!resolved) {
@@ -1455,16 +1537,7 @@ export function createCardActionHandler(
             // still exposes its callback. Let Telegram release its dedup key and
             // remember the completed outcome so a retry can finish the same card
             // update instead of reporting the already-applied decision as expired.
-            resolvedCardRetries.set(retryKey, {
-              label: resolvedLabel,
-              accountGeneration,
-              at: Date.now(),
-            });
-            while (resolvedCardRetries.size > MAX_RESOLVED_CARD_RETRIES) {
-              const oldest = resolvedCardRetries.keys().next().value;
-              if (oldest === undefined) break;
-              resolvedCardRetries.delete(oldest);
-            }
+            rememberResolvedCardRetry(event, accountGeneration, resolvedLabel);
             return false;
           }
         });

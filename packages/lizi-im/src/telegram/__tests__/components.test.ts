@@ -81,6 +81,7 @@ describe('parseCallbackQuery', () => {
       chatId: '111',
       messageId: '111|9',
       buttonId: 'perm:allow',
+      callbackToken: data,
       payload: { requestId: 'r1' },
     });
   });

@@ -57,3 +57,23 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
     expect(b.body).toBe(a.body);
   });
 });
+
+describe('buildPermissionModePickerCard — 重试键隔离', () => {
+  it('不同权限模式使用不同 sentinel requestId, 不会重放另一项终态', () => {
+    const spec = cards.buildPermissionModePickerCard({
+      sessionId: 'sess-1',
+      agentKind: 'claude-code',
+      currentMode: 'auto',
+      modes: [
+        { id: 'auto', displayName: 'Auto' },
+        { id: 'bypassPermissions', displayName: 'Full access' },
+      ],
+    });
+
+    const requestIds = spec.buttons.map((button) => button.payload?.requestId);
+    expect(requestIds).toEqual([
+      'permmode-pick:sess-1:auto',
+      'permmode-pick:sess-1:bypassPermissions',
+    ]);
+  });
+});
