@@ -3303,7 +3303,10 @@ export class CodexAgent extends BaseAgent {
     let emittingDescendantUpdate = false;
     const subagentLiveCards = createSubagentLiveCardTracker();
 
-    const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
+    const emitSubagentCardUpdate = (
+      update: SubagentLiveCardUpdate,
+      turnScope: AgentEvent['turnScope'] = 'turn',
+    ): void => {
       // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
       // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
       // 而 `agent_task_update` 正在 isReconnectRecoveryEvent 的白名单里(那对 Claude 的主线程
@@ -3329,6 +3332,7 @@ export class CodexAgent extends BaseAgent {
           },
         },
           source: 'codex',
+          ...(turnScope === 'background' ? { turnScope } : {}),
         });
       } finally {
         emittingDescendantUpdate = false;
@@ -3354,10 +3358,13 @@ export class CodexAgent extends BaseAgent {
      *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
-    const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
+    const noteSubagentSpawnItem = (
+      item: unknown,
+      turnScope: AgentEvent['turnScope'] = 'turn',
+    ): (() => void) | null => {
       const replayed = subagentLiveCards.noteSpawnItem(item);
       if (!replayed) return null;
-      return () => emitSubagentCardUpdate(replayed);
+      return () => emitSubagentCardUpdate(replayed, turnScope);
     };
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
@@ -7729,8 +7736,20 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'completed');
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
-        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(params.item);
-        translateItemNotification('completed', params, eventQueue, {
+        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
+          params.item,
+          isLateCollabTerminal ? 'background' : 'turn',
+        );
+        const itemEventQueue = isLateCollabTerminal
+          ? {
+            push: (event: AgentEvent) => eventQueue.push({ ...event, turnScope: 'background' }),
+            end: () => eventQueue.end(),
+            clear: () => eventQueue.clear(),
+            get pending() { return eventQueue.pending; },
+            [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
+          } as AsyncQueue<AgentEvent>
+          : eventQueue;
+        translateItemNotification('completed', params, itemEventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,

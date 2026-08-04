@@ -15797,14 +15797,17 @@ describe('CodexAgent turn lifecycle', () => {
 
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'tool_result_full',
+      turnScope: 'background',
       data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'tool_result',
+      turnScope: 'background',
       data: { toolUseIds: ['collab-1'] },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'agent_task_update',
+      turnScope: 'background',
       data: { taskId: 'collab-1', status: 'completed' },
     });
 
@@ -15899,18 +15902,22 @@ describe('CodexAgent turn lifecycle', () => {
 
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'tool_result_full',
+      turnScope: 'background',
       data: { toolUseId: 'collab-running', fullText: 'child-thread: running' },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'tool_result',
+      turnScope: 'background',
       data: { toolUseIds: ['collab-running'] },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'agent_task_update',
+      turnScope: 'background',
       data: { taskId: 'collab-running', status: 'completed' },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'agent_task_update',
+      turnScope: 'background',
       data: { taskId: 'collab-running', status: 'running' },
     });
 
