@@ -101,9 +101,10 @@ function effectiveQuotaSeverity(window: ClaudeUsageWindow): QuotaSeverity {
     : localSeverity;
 }
 
-/** 未知套餐保留原始拼写，只补齐首字母大写。 */
-function formatPlanType(subscriptionType: string | null | undefined): string | null {
-  const trimmed = subscriptionType?.trim();
+/** 未知套餐保留原始拼写，只补齐首字母大写；非字符串脏值按缺失处理。 */
+function formatPlanType(subscriptionType: unknown): string | null {
+  if (typeof subscriptionType !== 'string') return null;
+  const trimmed = subscriptionType.trim();
   if (!trimmed) return null;
 
   const knownPlans: Record<string, string> = {
@@ -148,12 +149,7 @@ function formatResetAt(
 }
 
 function CardDivider() {
-  return (
-    <div
-      aria-hidden="true"
-      className="mx-4 my-1.5 h-px bg-[var(--border-default)]"
-    />
-  );
+  return <div aria-hidden="true" className="mx-4 my-1.5 h-px bg-[var(--border-default)]" />;
 }
 
 function WindowBlock({
@@ -187,9 +183,7 @@ function WindowBlock({
         data-severity={severity}
         className={cn(
           'mb-2 text-sm font-medium tracking-[-0.005em]',
-          severity === 'crit'
-            ? 'text-[var(--quota-bar-crit)]'
-            : 'text-[var(--text-primary)]',
+          severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
         )}
       >
         {title}
@@ -198,11 +192,7 @@ function WindowBlock({
           <span className="sr-only">，{severityAnnouncement}</span>
         ) : null}
       </div>
-      <QuotaBar
-        usedPercent={window.utilization}
-        severity={severity}
-        aria-labelledby={titleId}
-      />
+      <QuotaBar usedPercent={window.utilization} severity={severity} aria-labelledby={titleId} />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--text-primary)]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
@@ -218,8 +208,7 @@ function WindowBlock({
 }
 
 function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage; t: TFunction }) {
-  const hasTokenBreakdown =
-    turnUsage.inputTokensText != null && turnUsage.outputTokensText != null;
+  const hasTokenBreakdown = turnUsage.inputTokensText != null && turnUsage.outputTokensText != null;
   const showModelCostBreakdown = (turnUsage.perModelCost?.length ?? 0) >= 2;
 
   const renderCostLine = (
@@ -284,9 +273,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {turnUsage.totalTokensText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
-          <span className="text-[var(--text-secondary)]">
-            {t('quotaCard.tokenLabel')}
-          </span>
+          <span className="text-[var(--text-secondary)]">{t('quotaCard.tokenLabel')}</span>
           <span className="text-right font-medium text-[var(--text-primary)]">
             {turnUsage.totalTokensText}
             {hasTokenBreakdown ? (
@@ -303,9 +290,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {turnUsage.cacheLineText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
-          <span className="text-[var(--text-secondary)]">
-            {t('quotaCard.cacheLabel')}
-          </span>
+          <span className="text-[var(--text-secondary)]">{t('quotaCard.cacheLabel')}</span>
           <span className="text-right font-medium text-[var(--text-primary)]">
             {turnUsage.cacheLineText}
           </span>
@@ -314,9 +299,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {!showModelCostBreakdown && turnUsage.model != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3">
-          <span className="text-[var(--text-secondary)]">
-            {t('quotaCard.modelLabel')}
-          </span>
+          <span className="text-[var(--text-secondary)]">{t('quotaCard.modelLabel')}</span>
           <span className="min-w-0 break-words text-right font-medium text-[var(--text-primary)]">
             {turnUsage.model}
           </span>
@@ -346,9 +329,7 @@ function SessionUsageSection({
   sessionUsage: QuotaHoverCardSessionUsage;
   t: TFunction;
 }) {
-  const hasMixedBreakdown = Boolean(
-    sessionUsage.actualCostText && sessionUsage.estimatedValueText,
-  );
+  const hasMixedBreakdown = Boolean(sessionUsage.actualCostText && sessionUsage.estimatedValueText);
   const totalKey = hasMixedBreakdown
     ? 'todaySpend.sessionCostLabel'
     : sessionUsage.costIsEstimate
@@ -362,9 +343,7 @@ function SessionUsageSection({
       </div>
       {hasMixedBreakdown ? (
         <div className="mt-1 space-y-0.5 text-xs text-[var(--text-secondary)]">
-          <div>
-            {t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}
-          </div>
+          <div>{t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}</div>
           <div>
             {t('todaySpend.codex.sessionValueLabel', {
               cost: sessionUsage.estimatedValueText,
@@ -406,7 +385,9 @@ export function QuotaHoverCard({
       window: snapshot.sevenDay,
     });
   }
-  for (const [index, scoped] of (snapshot?.scoped ?? []).entries()) {
+  // 持久化旧快照可能把 scoped 写成非数组；脏容器按缺失处理，避免 .entries() 崩溃。
+  const scopedWindows = Array.isArray(snapshot?.scoped) ? snapshot.scoped : [];
+  for (const [index, scoped] of scopedWindows.entries()) {
     if (!isDisplayableWindow(scoped)) continue;
     windows.push({
       key: `scoped-${scoped.modelId ?? scoped.modelDisplayName}-${index}`,
@@ -415,7 +396,9 @@ export function QuotaHoverCard({
     });
   }
 
-  const normalizedStatus = snapshot?.rateLimitStatus?.trim().toLowerCase();
+  const rawRateLimitStatus = snapshot?.rateLimitStatus;
+  const normalizedStatus =
+    typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined;
   const status =
     normalizedStatus === 'rejected'
       ? { key: 'quotaCard.limitRejected', tone: 'crit' as const }
@@ -506,9 +489,7 @@ export function QuotaHoverCard({
             ) : null}
           </>
         ) : (
-          <div className="px-4 py-2 text-[var(--text-secondary)]">
-            {t('quotaCard.waiting')}
-          </div>
+          <div className="px-4 py-2 text-[var(--text-secondary)]">{t('quotaCard.waiting')}</div>
         )}
 
         {sessionUsage ? (

@@ -103,9 +103,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByRole('progressbar', { name: '5 小时' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: '周限' })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: 'Fable 周限' })).toBeTruthy();
-    expect(
-      screen.getByRole('progressbar', { name: /Opus 周限.*接近套餐限额/ }),
-    ).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: /Opus 周限.*接近套餐限额/ })).toBeTruthy();
     expect(screen.getByText('5 小时')).toBeTruthy();
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
@@ -207,10 +205,7 @@ describe('QuotaHoverCard', () => {
 
   it('clamps dirty utilization for both the bar and used-percent text', () => {
     render(
-      <QuotaHoverCard
-        nowMs={NOW_MS}
-        snapshot={makeSnapshot({ fiveHour: { utilization: 250 } })}
-      />,
+      <QuotaHoverCard nowMs={NOW_MS} snapshot={makeSnapshot({ fiveHour: { utilization: 250 } })} />,
     );
 
     const bar = screen.getByRole('progressbar');
@@ -221,29 +216,20 @@ describe('QuotaHoverCard', () => {
 
   it('omits a null subscription badge and maps max to Max', () => {
     const { rerender } = render(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ subscriptionType: null })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ subscriptionType: null })} nowMs={NOW_MS} />,
     );
 
     expect(screen.queryByTestId('quota-plan-badge')).toBeNull();
 
     rerender(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ subscriptionType: 'max' })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ subscriptionType: 'max' })} nowMs={NOW_MS} />,
     );
     expect(screen.getByTestId('quota-plan-badge').textContent).toBe('Max');
   });
 
   it('renders rejected and warning statuses while omitting allowed', () => {
     const { rerender } = render(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ rateLimitStatus: 'rejected' })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ rateLimitStatus: 'rejected' })} nowMs={NOW_MS} />,
     );
 
     expect(screen.getByText('已触发套餐限额，请求可能被拒绝')).toBeTruthy();
@@ -258,10 +244,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText('已触发套餐限额，请求可能被拒绝')).toBeNull();
 
     rerender(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ rateLimitStatus: 'allowed' })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ rateLimitStatus: 'allowed' })} nowMs={NOW_MS} />,
     );
     expect(screen.queryByTestId('quota-status')).toBeNull();
   });
@@ -452,9 +435,9 @@ describe('QuotaHoverCard', () => {
     expect(button.getAttribute('type')).toBe('button');
     expect(button.classList.contains('hover:bg-[var(--surface-hover)]')).toBe(true);
     expect(button.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
-    expect(
-      button.classList.contains('focus-visible:ring-offset-[var(--surface-elevated)]'),
-    ).toBe(true);
+    expect(button.classList.contains('focus-visible:ring-offset-[var(--surface-elevated)]')).toBe(
+      true,
+    );
     fireEvent.click(button);
     expect(onOpenDashboard).toHaveBeenCalledTimes(1);
 
@@ -512,20 +495,14 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('quotaCard.staleData:10')).toBeTruthy();
 
     rerender(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ updatedAt: NOW_MS - 60_000 })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ updatedAt: NOW_MS - 60_000 })} nowMs={NOW_MS} />,
     );
     expect(screen.queryByText('quotaCard.staleData:10')).toBeNull();
   });
 
   it('shows the stale footnote only after the strict five-minute boundary', () => {
     const { rerender } = render(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ updatedAt: NOW_MS - 5 * 60_000 })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ updatedAt: NOW_MS - 5 * 60_000 })} nowMs={NOW_MS} />,
     );
 
     expect(screen.queryByText('quotaCard.staleData:5')).toBeNull();
@@ -586,6 +563,26 @@ describe('QuotaHoverCard', () => {
     ).toBe('normal');
   });
 
+  it('将脏快照中的非数组 scoped 与非字符串套餐/限额字段当作缺失值，卡片不崩溃', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          fiveHour: { utilization: 50 },
+          scoped: { corrupted: true } as unknown as ClaudeSubscriptionUsageSnapshot['scoped'],
+          subscriptionType: 123 as unknown as string,
+          rateLimitStatus: 456 as unknown as string,
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    // 有效窗口照常渲染；脏容器与脏字符串字段不产生分模型窗口、套餐徽章或限额行。
+    expect(screen.getByText('5 小时')).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+    expect(screen.queryByTestId('quota-plan-badge')).toBeNull();
+    expect(screen.queryByTestId('quota-status')).toBeNull();
+  });
+
   it('按告警级别播报对应措辞，并让进度条使用同一可访问名称', () => {
     const { rerender } = render(
       <QuotaHoverCard
@@ -611,17 +608,12 @@ describe('QuotaHoverCard', () => {
 
     const warningHint = screen.getByText(/接近套餐限额/);
     expect(warningHint.classList.contains('sr-only')).toBe(true);
-    expect(
-      screen.getByRole('progressbar', { name: /5 小时.*接近套餐限额/ }),
-    ).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: /5 小时.*接近套餐限额/ })).toBeTruthy();
   });
 
   it('marks a critical window title with the critical styling hook', () => {
     render(
-      <QuotaHoverCard
-        snapshot={makeSnapshot({ sevenDay: { utilization: 93 } })}
-        nowMs={NOW_MS}
-      />,
+      <QuotaHoverCard snapshot={makeSnapshot({ sevenDay: { utilization: 93 } })} nowMs={NOW_MS} />,
     );
 
     const title = screen.getByText('周限');
