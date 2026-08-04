@@ -2151,10 +2151,15 @@ export class PiAgent extends BaseAgent {
         notifyAutoReviewUnavailable,
         registeredMcpServerNames,
       } = getPermissionCtx();
-      const requestUserConfirmation = async (): Promise<boolean> => {
+      /**
+       * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
+       * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
+       * 不能把用户的明确拒绝也一并翻转。
+       */
+      const requestUserDecision = async (): Promise<{ decided: boolean; approved: boolean }> => {
         if (!resolver) {
-          this.deps.logger.warn('pi permission request denied: no interaction resolver', { toolName });
-          return false;
+          this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
+          return { decided: false, approved: false };
         }
         try {
           const decision = await resolver({
@@ -2163,16 +2168,46 @@ export class PiAgent extends BaseAgent {
             toolName,
             input,
           });
-          return decision.kind === 'permission' && decision.behavior === 'allow';
+          if (decision.kind !== 'permission') {
+            this.deps.logger.warn('pi permission got mismatched decision kind', {
+              toolName,
+              decisionKind: decision.kind,
+            });
+            return { decided: false, approved: false };
+          }
+          return { decided: true, approved: decision.behavior === 'allow' };
         } catch (err) {
-          this.deps.logger.warn('pi permission resolver failed; denying', {
+          this.deps.logger.warn('pi permission resolver failed', {
             toolName,
             message: err instanceof Error ? err.message : String(err),
           });
-          return false;
+          return { decided: false, approved: false };
         }
       };
+      /**
+       * Full access 的语义是「不问、全放行」。档位支持会话中途热切换(bridge 每次 tool_call
+       * 现读 perm 文件),所以必须**按最新档位**判断,不能用请求冒泡那一刻的快照。
+       */
+      const isFullAccessNow = (): boolean =>
+        getPermissionCtx().permissionMode === 'bypassPermissions';
+      const requestUserConfirmation = async (): Promise<boolean> => {
+        // 发起确认前:已切到 Full access 就不该再弹卡。
+        if (isFullAccessNow()) return true;
+        const outcome = await requestUserDecision();
+        // 用户已明确表态 → 以用户为准。拒绝不该被随后的档位切换追认成放行。
+        if (outcome.decided) return outcome.approved;
+        // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
+        return isFullAccessNow();
+      };
       void (async () => {
+        // Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读已把 bypass
+        // 拦在冒泡之前,但档位是热切换的:confirm 冒泡之后用户仍可能切到 Full access。此时
+        // MCP 策略 / 灰区审阅 / 弹窗都不该再改变「全放行」语义,也不该因为没有 resolver 就
+        // 拒掉工具调用(与 auto 分支既有的 modeAfterReview bypass 收口同口径)。
+        if (isFullAccessNow()) {
+          proc.send({ type: 'extension_ui_response', id, confirmed: true });
+          return;
+        }
         // 桥接 MCP 工具走 host 审批策略,**不进 Auto-review 灰区** —— 与 Claude Code /
         // Codex 同一份真源(`getDesktopMcpToolApprovalPolicy`)。
         //
@@ -2186,7 +2221,11 @@ export class PiAgent extends BaseAgent {
         //
         // 位置与 CC 一致:策略判定在档位分支**之前** —— auto-approve 的第一方 server 在
         // ask 档也不弹窗(CC claude-code/index.ts 的 mcpApprovalPolicy 分支同义)。
-        // 认不出归属(server 未注册)或 host 没提供策略时不放行,继续走用户确认。
+        //
+        // 返回 null = 不查策略,**回落原有权限链**(ask 档弹窗 / auto 档进灰区审阅),行为与
+        // 接策略之前完全一致:host 没提供 classifier,或工具名对不上任何本会话已注册的
+        // server(认不出归属就不敢按第一方放行)。策略抛错或返回非法值则不回落 ——
+        // 那是策略本身故障,按 prompt-each-time fail-closed 收口。
         const mcpPolicy = ((): 'auto-approve' | 'prompt' | 'prompt-each-time' | null => {
           const classifier = this.deps.getMcpToolApprovalPolicy;
           if (!classifier) return null;

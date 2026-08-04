@@ -195,6 +195,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   }
 
+  /**
+   * 等某个权限请求的回帧落地。用「等信号 + 有界超时」而不是固定 flush ——
+   * 档位热切换会多经一次串行写入队列,靠 setTimeout(0) 的轮数猜等待就是计时型脆弱用例。
+   */
+  async function waitForResponse(id: string): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + 2_000;
+    for (;;) {
+      const hit = captured.sent.find((m) => m.id === id);
+      if (hit) return hit;
+      if (Date.now() > deadline) throw new Error(`no extension_ui_response for ${id}`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
   function firePermissionRequest(id: string, toolName: string, input: Record<string, unknown>): void {
     captured.onEvent!({
       type: 'extension_ui_request',
@@ -750,6 +764,64 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await flush();
     expect(resolverCalls).toBe(1);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r5', confirmed: true });
+  });
+
+  /**
+   * Full access 的语义是「不问、全放行」,必须压在 MCP 策略分支与灰区审阅之前。bridge 按 perm
+   * 文件现读本已把 bypass 拦在冒泡前,但档位可热切换 —— confirm 冒泡后用户仍可能切到 Full
+   * access,此时不该再弹卡,也不该因为没有 resolver 就把工具调用拒掉(review P1)。
+   */
+  it('honors a hot switch to Full access ahead of the MCP policy branch', async () => {
+    const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    const handle = await start('ask', review, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt-each-time',
+    });
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    await handle.setPermissionMode?.('bypassPermissions');
+    firePermissionRequest('r23', 'mcp__cindy_ssh__ssh_exec', { command: 'uptime' });
+    expect(await waitForResponse('r23')).toEqual({
+      type: 'extension_ui_response', id: 'r23', confirmed: true,
+    });
+    expect(resolverCalls).toBe(0);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('allows a Full access call whose session has no interaction resolver at all', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt',
+    });
+    await handle.setPermissionMode?.('bypassPermissions');
+    // 没有 setInteractionResolver:Full access 下不能因为拿不到决策就中断工具调用。
+    firePermissionRequest('r24', 'mcp__cindy_ssh__ssh_exec', { command: 'uptime' });
+    expect(await waitForResponse('r24')).toEqual({
+      type: 'extension_ui_response', id: 'r24', confirmed: true,
+    });
+  });
+
+  /**
+   * 反向边界:用户明确拒绝之后再切到 Full access,不能把这次拒绝追认成放行 —— 档位放宽只
+   * 影响「拿不到决策」的情形,不覆盖用户已经表过的态。
+   */
+  it('does not let a later Full access switch overturn an explicit denial', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt-each-time',
+    });
+    handle.setInteractionResolver?.(async () => {
+      // 用户点「拒绝」的同一时刻切到 Full access。
+      await handle.setPermissionMode?.('bypassPermissions');
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    firePermissionRequest('r25', 'mcp__cindy_ssh__ssh_exec', { command: 'rm -rf /' });
+    expect(await waitForResponse('r25')).toEqual({
+      type: 'extension_ui_response', id: 'r25', confirmed: false,
+    });
   });
 
   it('hot-switching to auto via setPermissionMode takes effect for subsequent calls', async () => {
