@@ -302,9 +302,10 @@ Worker 创建与默认模型继承边界对历史短 ID 做 provider-aware 兼�
 必须保持不变；候选为零、多个或目录身份不一致时 fail-closed，不猜测、不改写已有 Lead、
 Session 或默认配置的持久化值。
 Worker defaults 中单独缓存的 `providerId` 不约束从 Lead / 硬编码默认值继承模型的规范化；
-它只有在仍提供最终精确模型 ID 时才参与最终路由。缓存来源已失效或不提供该模型时，创建
-边界可回退搜索当前已连接来源，但最终仍必须得到精确路由或唯一 managed 规范候选，否则
-在 reservation / bootstrap 前拒绝。
+它只有在仍提供最终精确模型 ID 时才参与最终路由。反过来，旧 defaults 只缓存 `model` 而
+没有 `providerId` 时也不能借用 Lead 来源，必须按当前已连接来源解析默认路由。缓存来源已失效
+或不提供该模型时，创建边界可回退搜索当前已连接来源，但最终仍必须得到精确路由或唯一
+managed 规范候选，否则在 reservation / bootstrap 前拒绝。
 
 #### 7. Prompt / tool / MCP 注册路径必须评估 maker-core 四指标（状态：不变量）
 

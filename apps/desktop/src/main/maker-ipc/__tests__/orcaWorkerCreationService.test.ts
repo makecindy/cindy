@@ -1497,7 +1497,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('falls back to the Lead provider for a same-agent worker when older defaults omit providerId', async () => {
+  it('keeps a model-only legacy default on the current native default route', async () => {
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.5' })),
     });
@@ -1509,11 +1509,44 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: 'xd', model: 'gpt-5.5' },
+      resolved: { providerId: null, model: 'gpt-5.5' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: 'xd',
+      providerId: null,
+    }));
+  });
+
+  it('routes a model-only legacy default through another connected provider', async () => {
+    const { deps, service } = createDeps({
+      getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.4' })),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          {
+            id: 'current-custom',
+            name: 'Current Custom',
+            models: ['gpt-5.4'],
+            requiresExplicitRoute: true,
+          },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'current-custom', model: 'gpt-5.4' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'current-custom',
+      model: 'gpt-5.4',
     }));
   });
 

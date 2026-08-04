@@ -472,8 +472,9 @@ function resolveWorkerConfig(params: {
   defaults: OrcaWorkerDefaultsSnapshot;
   availableModels: OrcaWorkerModelCapabilities[];
   model: string;
+  providerId: string | null;
 }): ResolveWorkerConfigResult {
-  const { input, lead, defaults, availableModels, model } = params;
+  const { input, lead, defaults, availableModels, model, providerId } = params;
   const modelCapabilities = availableModels.find((candidate) => candidate.id === model);
   if (!modelCapabilities) {
     return {
@@ -493,9 +494,7 @@ function resolveWorkerConfig(params: {
     // 来源的档位表裁决(见 pendingEffortError 注);其余字段照常解析。
     effort: normalizedEffort.ok ? normalizedEffort.effort : null,
     ...(normalizedEffort.ok ? {} : { pendingEffortError: normalizedEffort.message }),
-    providerId: defaults.providerId !== undefined
-      ? defaults.providerId
-      : (input.agent === lead.agentKind ? lead.providerId : null),
+    providerId,
     fastMode: modelCapabilities.supportsFastMode === false
       ? false
       : ((agentConsumesExplicitFast(input.agent) && input.fast !== undefined)
@@ -689,8 +688,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       defaults,
     });
     const inheritedProviderId = explicitSourceId
-      ?? (inheritedModelComesFromDefaults && defaults.providerId !== undefined
-        ? defaults.providerId
+      ?? (inheritedModelComesFromDefaults
+        ? (defaults.providerId ?? null)
         : (params.agent === lead.agentKind ? lead.providerId : null));
     const cachedProviderMayFallback =
       explicitSourceId === null
@@ -714,6 +713,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       defaults,
       availableModels,
       model: modelResolution.model,
+      providerId: inheritedProviderId,
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -733,12 +733,17 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       && !agentProviders.some(
         (provider) => provider.id === defaults.providerId && provider.models.includes(resolvedConfig.model),
       );
-    const cachedProviderFallbackId = cachedProviderRouteIsStale
+    const modelOnlyDefaultNeedsRouteResolution = params.model === undefined
+      && inheritedModelComesFromDefaults
+      && (defaults.providerId === undefined || defaults.providerId === null);
+    const inheritedDefaultNeedsRouteResolution =
+      cachedProviderRouteIsStale || modelOnlyDefaultNeedsRouteResolution;
+    const inheritedDefaultProviderId = inheritedDefaultNeedsRouteResolution
       ? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model)
       : null;
-    const cachedProviderFallback = cachedProviderFallbackId === null
+    const inheritedDefaultProvider = inheritedDefaultProviderId === null
       ? undefined
-      : agentProviders.find((provider) => provider.id === cachedProviderFallbackId);
+      : agentProviders.find((provider) => provider.id === inheritedDefaultProviderId);
     const resolved = {
       ...resolvedConfig,
       // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
@@ -751,8 +756,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           ? explicitModelProvider.id
           : params.model !== undefined
             ? null
-            : cachedProviderRouteIsStale
-              ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
+            : inheritedDefaultNeedsRouteResolution
+              ? (inheritedDefaultProvider?.requiresExplicitRoute ? inheritedDefaultProvider.id : null)
               : resolvedConfig.providerId,
     };
     // Fast 与 effort 都按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存
@@ -803,7 +808,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       ? explicitSourceId
       : params.model !== undefined
         ? explicitModelDefaultProviderId
-        : (cachedProviderRouteIsStale ? cachedProviderFallbackId : resolved.providerId);
+        : (inheritedDefaultNeedsRouteResolution ? inheritedDefaultProviderId : resolved.providerId);
 
     // codex/ 预算模型依赖 Cindy AI API key；XD/default 路由即使因 provider 缺失，
     // 也要先返回这条可操作的凭证错误，避免被下方通用的精确路由失败遮蔽。
@@ -869,7 +874,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       };
     }
 
-    if (cachedProviderRouteIsStale && cachedProviderFallbackId === null) {
+    if (cachedProviderRouteIsStale && inheritedDefaultProviderId === null) {
       return {
         ok: false,
         errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
