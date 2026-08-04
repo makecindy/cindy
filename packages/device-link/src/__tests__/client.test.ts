@@ -3223,8 +3223,10 @@ describe('DeviceLinkClient', () => {
     await tick();
     const first = h.current();
     first.emit('open'); // upgrade 成功但对端不回 hello-ack(半开/服务假活)
-    await tick(50);
-    // watchdog 触发新建连接(测试窗口内后续连接可能再次超时,只断言 ≥2)
+    // 负载下(Windows CI 分片并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(50)
+    // 不足以保证 15ms 握手看门狗 + 退避重连都已落地。有界等待到第二个 socket 出现,
+    // 断言语义不变(watchdog 必须触发新建连接;测试窗口内后续连接可能再次超时,只断言 ≥2)。
+    for (let i = 0; i < 40 && h.sockets.length < 2; i++) await tick(10);
     expect(h.sockets.length).toBeGreaterThanOrEqual(2);
     expect(first.terminated || first.closed !== null).toBe(true); // 旧 socket 被回收
     // 负载下(全量并跑)事件循环调度可能远超名义毫秒数:current() 拿到的
