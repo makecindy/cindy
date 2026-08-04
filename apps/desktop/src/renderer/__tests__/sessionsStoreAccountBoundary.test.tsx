@@ -9,13 +9,14 @@ type SpendPayload = {
   totalMoney?: Session['totalMoney'];
   totalCostUsd?: number;
 };
+type OwnerStamp = { dataOwnerId: string | null; ownerGeneration: number };
 
 const mocks = vi.hoisted(() => {
   let spendListener:
-    | ((payload: SpendPayload) => void)
+    | ((payload: SpendPayload, ownerStamp?: OwnerStamp) => void)
     | undefined;
   const onUsageSessionSpendChanged = vi.fn(
-    (listener: (payload: SpendPayload) => void) => {
+    (listener: (payload: SpendPayload, ownerStamp?: OwnerStamp) => void) => {
       spendListener = listener;
       return vi.fn();
     },
@@ -26,8 +27,8 @@ const mocks = vi.hoisted(() => {
   });
   return {
     list: vi.fn(),
-    emitSessionSpend(payload: SpendPayload): void {
-      spendListener?.(payload);
+    emitSessionSpend(payload: SpendPayload, ownerStamp?: OwnerStamp): void {
+      spendListener?.(payload, ownerStamp);
     },
   };
 });
@@ -38,6 +39,10 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 import { sessionsStore } from '@/lib/sessionsStore';
 
 function deferred<T>(): {
@@ -64,6 +69,7 @@ describe('sessionsStore account boundaries', () => {
   afterEach(() => {
     cleanup();
     sessionsStore.reset();
+    dataOwnerTesting.reset();
   });
 
   it('does not let a request started before reset repopulate the cache', async () => {
@@ -166,6 +172,34 @@ describe('sessionsStore account boundaries', () => {
     expect(subscriber).toHaveBeenCalledTimes(1);
     expect(mocks.list).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it('ignores a delayed spend push stamped for the previous owner', async () => {
+    setDataOwnerGeneration('owner-b', 2);
+    mocks.list.mockResolvedValueOnce([session('same-id', { totalCostUsd: 1 })]);
+    await sessionsStore.ensureByFilter('active');
+
+    act(() => {
+      mocks.emitSessionSpend(
+        { sessionId: 'same-id', totalCostUsd: 9 },
+        { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+      );
+    });
+
+    expect(sessionsStore.getByFilter('active')).toEqual([
+      expect.objectContaining({ id: 'same-id', totalCostUsd: 1 }),
+    ]);
+
+    act(() => {
+      mocks.emitSessionSpend(
+        { sessionId: 'same-id', totalCostUsd: 2 },
+        { dataOwnerId: 'owner-b', ownerGeneration: 2 },
+      );
+    });
+
+    expect(sessionsStore.getByFilter('active')).toEqual([
+      expect.objectContaining({ id: 'same-id', totalCostUsd: 2 }),
+    ]);
   });
 
   it('patches structured CNY spend without fabricating a USD projection', async () => {

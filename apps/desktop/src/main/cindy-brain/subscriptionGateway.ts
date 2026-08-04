@@ -85,7 +85,7 @@ export interface GhostSubscriptionGatewayDeps {
   sendToGhost(ghostId: string, payload: GhostPipeEventPush): void;
   now(): number;
   /** 钩子熔断回调(通知 renderer + 日志;每意识只触发一次)。 */
-  onHookFused?(ghost: InstalledGhost): void;
+  onHookFused?(ghost: InstalledGhost, ownerStamp?: unknown): void;
   /** hookId 生成(测试注入固定序列;缺省 randomUUID)。 */
   newHookId?(): string;
   log?: {
@@ -228,7 +228,10 @@ export class GhostSubscriptionGateway {
    * (currentText 累积)。block 即短路返回;任何异常都不外抛——本方法在发送
    * 热路径上,只能收敛为 allow / 累积 rewrite。
    */
-  async screenUserMessage(input: { sessionId: string; text: string }): Promise<GhostScreenResult> {
+  async screenUserMessage(
+    input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
+  ): Promise<GhostScreenResult> {
     let currentText = input.text;
     let rewritten = false;
     let lastRewriteGhost: InstalledGhost | null = null;
@@ -242,7 +245,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-user-message', {
         sessionId: input.sessionId,
         text: currentText,
-      });
+      }, ownerStamp);
       if (verdict?.action === 'block') {
         const reason = (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS);
         this.deps.log?.info('ghost hook blocked user message', { ghostId, sessionId: input.sessionId });
@@ -281,10 +284,10 @@ export class GhostSubscriptionGateway {
    * (无 rewrite 即等于 AI 原文)。本方法在 turn 结束的独立续跑里跑,异常绝不
    * 外抛,只收敛为 allow / rewrite / render。
    */
-  async screenAssistantMessage(input: {
-    sessionId: string;
-    text: string;
-  }): Promise<GhostAssistantScreenResult> {
+  async screenAssistantMessage(
+    input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
+  ): Promise<GhostAssistantScreenResult> {
     let currentText = input.text;
     let lastRewriteGhost: InstalledGhost | null = null;
     let renderGhost: InstalledGhost | null = null;
@@ -300,7 +303,7 @@ export class GhostSubscriptionGateway {
       const verdict = await this.askOne(ghost, e, 'will-assistant-message', {
         sessionId: input.sessionId,
         text: currentText,
-      });
+      }, ownerStamp);
       if (verdict?.action === 'rewrite' && typeof verdict.text === 'string') {
         const next = verdict.text.slice(0, GHOST_HOOK_REWRITE_MAX_CHARS).trim();
         // 空改写(意识把正文清空)视为无意义,忽略此次 rewrite 保原文。
@@ -351,6 +354,7 @@ export class GhostSubscriptionGateway {
     e: SubEntry,
     hookName: 'will-user-message' | 'will-assistant-message',
     input: { sessionId: string; text: string },
+    ownerStamp?: unknown,
   ): Promise<HookVerdict | null> {
     const ghostId = ghost.manifest.id;
     const hookId = this.deps.newHookId?.() ?? randomUUID();
@@ -389,14 +393,19 @@ export class GhostSubscriptionGateway {
     const verdict = await verdictPromise;
     clearTimeout(timer);
     if (verdict === null) {
-      this.noteHookFailure(ghost, e, deliverFailure ?? 'timeout');
+      this.noteHookFailure(ghost, e, deliverFailure ?? 'timeout', ownerStamp);
       return null;
     }
     e.hookFails = 0;
     return verdict;
   }
 
-  private noteHookFailure(ghost: InstalledGhost, e: SubEntry, why: string): void {
+  private noteHookFailure(
+    ghost: InstalledGhost,
+    e: SubEntry,
+    why: string,
+    ownerStamp?: unknown,
+  ): void {
     e.hookFails += 1;
     this.deps.log?.warn('ghost hook failed (fail-open)', {
       ghostId: ghost.manifest.id,
@@ -408,7 +417,7 @@ export class GhostSubscriptionGateway {
       this.deps.log?.warn('ghost hook fused: degraded to observe-only', {
         ghostId: ghost.manifest.id,
       });
-      this.deps.onHookFused?.(ghost);
+      this.deps.onHookFused?.(ghost, ownerStamp);
     }
   }
 

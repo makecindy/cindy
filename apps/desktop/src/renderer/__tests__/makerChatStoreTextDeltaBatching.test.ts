@@ -138,6 +138,13 @@ let onDbMessageCreated: ((data: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
+let onGhostMessageBlocked: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostMessageRewritten: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostAssistantRewritten: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostAssistantPending: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostHookFused: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostNotify: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
+let onGhostPreviewOpen: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 const getPendingInteractions = vi.fn<
   (sessionId: string) => Promise<
     Array<{
@@ -204,6 +211,13 @@ function installElectronBridge(): void {
   onInputProjection = undefined;
   onInteractionRequest = undefined;
   onInteractionDismissed = undefined;
+  onGhostMessageBlocked = undefined;
+  onGhostMessageRewritten = undefined;
+  onGhostAssistantRewritten = undefined;
+  onGhostAssistantPending = undefined;
+  onGhostHookFused = undefined;
+  onGhostNotify = undefined;
+  onGhostPreviewOpen = undefined;
   for (const fn of Object.values(input) as Array<{ mockClear: () => void }>) {
     fn.mockClear();
   }
@@ -275,6 +289,36 @@ function installElectronBridge(): void {
         },
         onRemotePush: (cb: (data: unknown) => void) => {
           onRemotePush = cb;
+          return vi.fn();
+        },
+      },
+      ghosts: {
+        onUserMessageBlocked: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostMessageBlocked = cb;
+          return vi.fn();
+        },
+        onUserMessageRewritten: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostMessageRewritten = cb;
+          return vi.fn();
+        },
+        onAssistantMessageRewritten: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostAssistantRewritten = cb;
+          return vi.fn();
+        },
+        onAssistantMessagePending: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostAssistantPending = cb;
+          return vi.fn();
+        },
+        onHookFused: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostHookFused = cb;
+          return vi.fn();
+        },
+        onNotify: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostNotify = cb;
+          return vi.fn();
+        },
+        onPreviewOpen: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onGhostPreviewOpen = cb;
           return vi.fn();
         },
       },
@@ -463,6 +507,55 @@ describe('makerChatStore text delta batching', () => {
     ]);
 
     unsubscribe();
+  });
+
+  it('drops stale ghost pushes before they mutate the current owner slice', () => {
+    const staleOwnerStamp = { dataOwnerId: 'owner-b', ownerGeneration: 1 };
+    const currentOwnerStamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    const blockedPayload = {
+      sessionId: SESSION_ID,
+      clientId: 'ghost-client-1',
+      ghostId: 'ghost-a',
+      ghostName: 'Ghost A',
+      reason: 'blocked',
+      text: 'original text',
+    };
+
+    onGhostMessageBlocked?.(blockedPayload, staleOwnerStamp);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+
+    onGhostMessageBlocked?.(blockedPayload, currentOwnerStamp);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        clientId: 'ghost-client-1',
+        content: 'original text',
+        blockedByGhost: expect.objectContaining({ ghostId: 'ghost-a' }),
+      }),
+    ]);
+
+    onGhostMessageRewritten?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-1', text: 'stale rewrite' },
+      staleOwnerStamp,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]?.content).toBe('original text');
+
+    onGhostMessageRewritten?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-1', text: 'current rewrite' },
+      currentOwnerStamp,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]?.content).toBe('current rewrite');
+
+    onGhostAssistantPending?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-1', pending: true },
+      staleOwnerStamp,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]?.ghostReplyPending).toBeUndefined();
+
+    onGhostAssistantPending?.(
+      { sessionId: SESSION_ID, clientId: 'ghost-client-1', pending: true },
+      currentOwnerStamp,
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]?.ghostReplyPending).toBe(true);
   });
 
   it('flushes pending text before the next non-delta event', () => {
@@ -962,6 +1055,31 @@ describe('makerChatStore text delta batching', () => {
           requestId: 'permission-late',
           toolName: 'Read',
           input: { file_path: 'late.ts' },
+        },
+      },
+    ]);
+
+    await expect(reconcile).resolves.toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toBeNull();
+  });
+
+  it('does not replay an interaction snapshot across a data-owner boundary', async () => {
+    let resolveSnapshot!: (items: Awaited<ReturnType<typeof getPendingInteractions>>) => void;
+    getPendingInteractions.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+
+    const reconcile = makerChatStore.reconcilePendingInteractions(SESSION_ID);
+    setDataOwnerGeneration('owner-b');
+    resolveSnapshot([
+      {
+        request: {
+          kind: 'permission',
+          requestId: 'permission-old-owner',
+          toolName: 'Read',
+          input: { file_path: 'old-owner.ts' },
         },
       },
     ]);
@@ -2043,6 +2161,157 @@ describe('makerChatStore text delta batching', () => {
     ).toBeUndefined();
   });
 
+  it('reuses a hydrated remote clear token for the first optimistic dispatch', async () => {
+    const clearBoundaryMs = Date.parse('2026-08-03T00:00:00.000Z');
+    let projectionProbes = 0;
+    let enqueueOpts: unknown;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:get-projection') {
+        projectionProbes += 1;
+        return projection(SESSION_ID, { clearBoundaryMs });
+      }
+      if (channel === 'maker:input:enqueue') {
+        enqueueOpts = args[2];
+        const item = args[1] as AgentInputQueuedMessage;
+        return projection(SESSION_ID, { clearBoundaryMs, pendingQueue: [item] });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs }));
+    projectionProbes = 0;
+    deviceLinkInvoke.mockClear();
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'probe before dispatch',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+
+    // pinSessionOrigin starts the normal remote-origin reconciliation probe;
+    // the outbox itself must reuse the hydrated token rather than issue another
+    // probe before enqueue.
+    expect(projectionProbes).toBe(1);
+    expect(enqueueOpts).toEqual(
+      expect.objectContaining({ expectedClearBoundaryMs: clearBoundaryMs }),
+    );
+  });
+
+  it('keeps a probe alive when the remote clear is sealing, then retries it', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    let projectionProbes = 0;
+    let enqueueCalls = 0;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:get-projection') {
+        projectionProbes += 1;
+        if (projectionProbes === 1) {
+          throw new Error('REMOTE_OPTIMISTIC_INPUT_CLEARED: session clear is still sealing');
+        }
+        return projection(SESSION_ID);
+      }
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        return projection(SESSION_ID, { pendingQueue: [args[1] as AgentInputQueuedMessage] });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'retry after sealing',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+    expect(enqueueCalls).toBe(0);
+
+    onDeviceLinkStatusChanged?.({ status: 'online' });
+    await flushPromises();
+    expect(projectionProbes).toBe(2);
+    expect(enqueueCalls).toBe(1);
+  });
+
+  it('rejects a stale modern projection before it can overwrite the new clear epoch', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const clearBoundaryMs = Date.parse('2026-08-03T00:00:00.000Z');
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        clearBoundaryMs,
+        error: 'current epoch error',
+        queueInteractionLocks: ['current-lock'],
+      }),
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('current epoch error');
+
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        clearBoundaryMs: null,
+        error: 'stale epoch error',
+        queueInteractionLocks: ['stale-lock'],
+      }),
+    );
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('current epoch error');
+    expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual(['current-lock']);
+  });
+
+  it('accepts a source-tagged projection from the sticky origin after the mirror cache is cleared', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    let resolveProbe!: (value: AgentInputProjection) => void;
+    const restore = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel) => {
+      if (channel === 'maker:input:get-projection') {
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveProbe = resolve;
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'sticky projection boundary',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        { onRemoteOptimisticFailure: restore },
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ content: 'sticky projection boundary', isPendingPersist: true }),
+    ]);
+
+    // Reconnect clears the live mirror before the first fresh projection arrives,
+    // but the sticky origin still identifies the controlled device.
+    remoteProjectsStore.clear();
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'maker:input:projection',
+      payload: projection(SESSION_ID, { clearBoundaryMs: Date.parse('2026-08-03T00:01:00.000Z') }),
+    });
+
+    expect(restore).toHaveBeenCalledWith(expect.any(String), undefined);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+
+    resolveProbe(projection(SESSION_ID));
+    await flushPromises();
+  });
+
   it('accepts a second remote send while the first enqueue invoke is still unresolved', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
@@ -2826,12 +3095,16 @@ describe('makerChatStore text delta batching', () => {
     ).resolves.toBe(true);
     await flushPromises();
 
-    expect(steerCalls).toBe(1);
+    // Unknown clear tokens are fenced before the first steer. While the relay
+    // is offline the optimistic bubble remains local and the steer invoke is
+    // deferred until a projection probe succeeds after reconnect.
+    expect(steerCalls).toBe(0);
     expect(enqueueCalls).toBe(0);
     expect(onRemoteOptimisticFailure).not.toHaveBeenCalled();
 
     online = true;
     onDeviceLinkStatusChanged?.({ status: 'online' });
+    await flushPromises();
     await flushPromises();
     await flushPromises();
 
@@ -2851,6 +3124,7 @@ describe('makerChatStore text delta batching', () => {
       isRunning: true,
     });
     let queued: AgentInputQueuedMessage | undefined;
+    let projectionCalls = 0;
     let resolveProjection!: (value: AgentInputProjection) => void;
     let resolvePersisted!: (value: Message[]) => void;
     let enqueueCalls = 0;
@@ -2861,6 +3135,8 @@ describe('makerChatStore text delta batching', () => {
         throw new Error('[DEVICE_LINK_NOT_CONNECTED] relay connection lost');
       }
       if (channel === 'maker:input:get-projection') {
+        projectionCalls += 1;
+        if (projectionCalls === 1) return projection(SESSION_ID);
         return new Promise<AgentInputProjection>((resolve) => {
           resolveProjection = resolve;
         });
@@ -2892,6 +3168,7 @@ describe('makerChatStore text delta batching', () => {
     ).resolves.toBe(true);
     await flushPromises();
 
+    expect(queued).toBeDefined();
     emitDbMessageCreated({
       clientId: queued!.clientId,
       role: 'user',
@@ -2907,6 +3184,122 @@ describe('makerChatStore text delta batching', () => {
     const persisted = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(persisted).toEqual([expect.objectContaining({ clientId: queued?.clientId })]);
     expect(persisted[0]).not.toHaveProperty('isPendingPersist');
+  });
+
+  it('retires an unfenced steer when first numeric clear hydration races its dispatch', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    const clearBoundaryMs = Date.now() - 5_000;
+    // The controller clock is ahead of the remote host. A wall-clock
+    // comparison would incorrectly classify this pre-hydration record as
+    // clear-after input.
+    vi.setSystemTime(clearBoundaryMs + 10_000);
+    let queued: AgentInputQueuedMessage | undefined;
+    let resolveSteer!: (accepted: boolean) => void;
+    const onRemoteOptimisticFailure = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      if (channel === 'maker:input:steer') {
+        queued = args[1] as AgentInputQueuedMessage;
+        return new Promise<boolean>((resolve) => {
+          resolveSteer = resolve;
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.steerMessage(
+        SESSION_ID,
+        'pre-clear steer',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        { onRemoteOptimisticFailure },
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+    expect(queued).toBeDefined();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: queued?.clientId, isPendingPersist: true }),
+    ]);
+
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs }));
+    expect(onRemoteOptimisticFailure).toHaveBeenCalledWith(queued?.clientId, undefined);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+
+    resolveSteer(true);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+  });
+
+  it('retires an unknown-token steer even while the first clear probe is in flight', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    const clearBoundaryMs = Date.parse('2026-08-03T00:00:00.000Z');
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    let steerCalls = 0;
+    let queued: AgentInputQueuedMessage | undefined;
+    const onRemoteOptimisticFailure = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'maker:input:get-projection') {
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        });
+      }
+      if (channel === 'maker:input:steer') {
+        steerCalls += 1;
+        queued = args[1] as AgentInputQueuedMessage;
+        return true;
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.steerMessage(
+        SESSION_ID,
+        'probe still pending',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        { onRemoteOptimisticFailure },
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+
+    expect(steerCalls).toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ isPendingPersist: true }),
+    ]);
+
+    onInputProjection?.(projection(SESSION_ID, { clearBoundaryMs }));
+    expect(onRemoteOptimisticFailure).toHaveBeenCalledWith(expect.any(String), undefined);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+
+    resolveProjection(projection(SESSION_ID, { clearBoundaryMs }));
+    await flushPromises();
+    expect(steerCalls).toBe(0);
+    expect(queued).toBeUndefined();
   });
 
   it('rolls back only the failed device-link optimistic item when reconciliation is empty', async () => {
@@ -3106,6 +3499,68 @@ describe('makerChatStore text delta batching', () => {
     expect(projectionRequests).toBe(1);
   });
 
+  it('does not re-enqueue a steer when clear supersedes its preparation', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let steerAttempts = 0;
+    let enqueueAttempts = 0;
+    let queued: AgentInputQueuedMessage | undefined;
+    const channels: string[] = [];
+    const onRemoteOptimisticFailure = vi.fn();
+    deviceLinkInvoke.mockImplementation(async (deviceId, channel, args) => {
+      expect(deviceId).toBe('device-1');
+      channels.push(channel);
+      if (channel === 'maker:input:steer') {
+        steerAttempts += 1;
+        queued = args[1] as AgentInputQueuedMessage;
+        throw new Error(
+          'Error invoking remote method: Error: [PRECONDITION_FAILED] REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded',
+        );
+      }
+      if (channel === 'maker:input:enqueue') {
+        enqueueAttempts += 1;
+        return projection(SESSION_ID);
+      }
+      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.steerMessage(
+        SESSION_ID,
+        'superseded remote steer',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+        undefined,
+        undefined,
+        { onRemoteOptimisticFailure },
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+
+    expect(steerAttempts).toBe(1);
+    expect(enqueueAttempts).toBe(0);
+    expect(channels).not.toContain('local-db:messages:around-client-id');
+    expect(onRemoteOptimisticFailure).toHaveBeenCalledWith(queued?.clientId, undefined);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+
+    onDeviceLinkStatusChanged?.({ status: 'online' });
+    await flushPromises();
+    expect(steerAttempts).toBe(1);
+    expect(enqueueAttempts).toBe(0);
+  });
+
   it('cancels an old-owner outbox before publishing the next data owner', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const ownerAttachmentUrl = 'cindy-media://blobs/owner-a-pending.png';
@@ -3176,6 +3631,70 @@ describe('makerChatStore text delta batching', () => {
       deviceLinkInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue'),
     ).toBe(false);
     expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a standalone late projection when the data owner changes', async () => {
+    remoteProjectsStore.setDeviceSessions('device-1', 'Test Mac', [
+      { id: SESSION_ID, status: 'active', title: 'Remote task' } as Session,
+    ]);
+    expect(getStickySessionDeviceId(SESSION_ID)).toBe('device-1');
+    remoteProjectsStore.clear();
+
+    onInputProjection?.(
+      projection(SESSION_ID, {
+        error: 'new-owner-state',
+        queueInteractionLocks: ['new-owner-lock'],
+        steeringQueueClientIds: ['already-steering'],
+      }),
+    );
+
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    deviceLinkInvoke.mockImplementation(async (deviceId, channel) => {
+      expect(deviceId).toBe('device-1');
+      if (channel === 'maker:input:get-projection') {
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await expect(
+      makerChatStore.steerMessage(
+        SESSION_ID,
+        'late projection probe',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(false);
+    await flushPromises();
+    expect(deviceLinkInvoke).toHaveBeenCalledWith(
+      'device-1',
+      'maker:input:get-projection',
+      [SESSION_ID],
+    );
+
+    makerChatStore.cancelRemoteOptimisticSendsForDataOwnerBoundary();
+    setDataOwnerGeneration('owner-b');
+    resolveProjection(
+      projection(SESSION_ID, {
+        error: 'old-owner-state',
+        queueInteractionLocks: ['old-owner-lock'],
+        steeringQueueClientIds: [],
+      }),
+    );
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('new-owner-state');
+    expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual([
+      'new-owner-lock',
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).steeringQueueClientIds).toEqual([
+      'already-steering',
+    ]);
+    expect(input.getProjection).not.toHaveBeenCalled();
   });
 
   it('retries a deferred remote steer through steer instead of degrading it to enqueue', async () => {
@@ -3745,7 +4264,7 @@ describe('makerChatStore text delta batching', () => {
     },
   );
 
-  it('rejects a send started while clear is waiting for its remote guard', async () => {
+  it('keeps a send local while clear is waiting for its remote guard', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     let resolveClear!: (value: AgentInputProjection) => void;
     let enqueueCalls = 0;
@@ -3774,11 +4293,77 @@ describe('makerChatStore text delta batching', () => {
         PERMISSION_MODE,
         WORKING_DIR,
       ),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
     expect(enqueueCalls).toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ content: 'blocked during clear', isPendingPersist: true }),
+    ]);
 
     resolveClear(projection(SESSION_ID));
     await flushPromises();
+    await flushPromises();
+    expect(enqueueCalls).toBe(1);
+  });
+
+  it('keeps a clear-fenced send local after invoke rejection and dispatches it on reconnect ACK', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    let clearAttempts = 0;
+    let clearedAt: string | undefined;
+    let enqueueCalls = 0;
+    let enqueueOpts: unknown;
+    deviceLinkInvoke.mockImplementation(async (deviceId, channel, args) => {
+      expect(deviceId).toBe('device-1');
+      if (channel === 'maker:input:clear-session') {
+        clearAttempts += 1;
+        clearedAt = args[1] as string;
+        if (clearAttempts === 1) throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] offline');
+        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt) });
+      }
+      if (channel === 'maker:close-session') return undefined;
+      if (channel === 'maker:input:enqueue') {
+        enqueueCalls += 1;
+        enqueueOpts = args[2];
+        return projection(SESSION_ID, {
+          clearBoundaryMs: Date.parse(clearedAt!),
+          pendingQueue: [args[1] as AgentInputQueuedMessage],
+        });
+      }
+      if (channel === 'maker:input:get-projection') {
+        return projection(SESSION_ID, { clearBoundaryMs: Date.parse(clearedAt!) });
+      }
+      throw new Error(`unexpected remote channel: ${channel}`);
+    });
+
+    await makerChatStore.clearSession(SESSION_ID);
+    expect(clearAttempts).toBe(1);
+
+    await expect(
+      makerChatStore.sendMessage(
+        SESSION_ID,
+        'send after offline clear',
+        MODEL,
+        EFFORT,
+        PERMISSION_MODE,
+        WORKING_DIR,
+      ),
+    ).resolves.toBe(true);
+    await flushPromises();
+
+    expect(enqueueCalls).toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ content: 'send after offline clear', isPendingPersist: true }),
+    ]);
+
+    onPresenceChanged?.({ deviceId: 'device-1', online: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(clearAttempts).toBe(2);
+    expect(enqueueCalls).toBe(1);
+    expect(enqueueOpts).toEqual({
+      sendAtMs: expect.any(Number),
+      expectedClearBoundaryMs: Date.parse(clearedAt!),
+    });
   });
 
   it.each(['send', 'steer'] as const)(

@@ -59,7 +59,7 @@ describe('device-link auto-title wiring', () => {
     // 改掉默认名 / 合成占位 / fork 占位就是凭空改名(review P1)。
     const body = handlerBody('INPUT_STEER', 'INPUT_STOP');
     expect(body).toMatch(/const accepted = await inputCoordinator\.steer\(/);
-    expect(body).toMatch(/if \(accepted\) commitAutoTitle\(\);/);
+    expect(body).toMatch(/if \(accepted\)\s*\{[\s\S]*?commitAutoTitle\(\);/);
     const acceptAt = body.indexOf('await inputCoordinator.steer(');
     expect(body.indexOf('commitAutoTitle()')).toBeGreaterThan(acceptAt);
   });
@@ -76,22 +76,23 @@ describe('device-link auto-title wiring', () => {
         'INPUT_STEER',
         'INPUT_STOP',
         'await inputCoordinator.steer(',
-        'if (!isCurrentInputGeneration())',
+        'assertCurrentInputGeneration();',
       ],
     ] as const) {
       const body = handlerBody(channel, nextChannel);
       const deviceLinkAt = body.indexOf('const deviceLinkInvoke = isDeviceLinkInvoke();');
-      const earlySessionGuardAt = body.indexOf(
-        'if (deviceLinkInvoke) await getInputSessionRow(sid);',
+      const sessionRowMatches = [...body.matchAll(/await getInputSessionRow\(sid\)/g)].map(
+        (match) => match.index ?? -1,
       );
+      const earlySessionGuardAt = sessionRowMatches[0] ?? -1;
       const generationAt = body.indexOf(
         'const inputGeneration = inputCoordinator.getGeneration(sid);',
       );
       const stages = [
-        'await inputCoordinator.ensureQueueRestored(sid)',
-        'await materializeQueuedOssAttachments',
-        'await hydrateQueuedAgentReferences',
-        'await prepareDeviceLinkAutoTitle(sid, queued)',
+        /(?:await\s+)?inputCoordinator\.ensureQueueRestored\(sid\)/,
+        /await materializeQueuedOssAttachments/,
+        /await hydrateQueuedAgentReferences/,
+        /await prepareDeviceLinkAutoTitle\(sid, queued\)/,
       ];
       const acceptAt = body.indexOf(acceptToken);
 
@@ -104,32 +105,26 @@ describe('device-link auto-title wiring', () => {
       let cursor = earlyGenerationGuardAt;
       let finalGuardAt = -1;
       for (const stage of stages) {
-        const awaitAt = body.indexOf(stage, cursor);
+        const stageMatch = stage.exec(body.slice(cursor));
+        const awaitAt = stageMatch?.index === undefined ? -1 : cursor + stageMatch.index;
         const guardAt = body.indexOf(generationGuardToken, awaitAt);
         expect(awaitAt, `missing ${stage}`).toBeGreaterThan(cursor);
         expect(guardAt, `missing generation guard after ${stage}`).toBeGreaterThan(awaitAt);
         cursor = guardAt;
         finalGuardAt = guardAt;
       }
-      const finalSessionGuardAt = body.indexOf(
-        'if (deviceLinkInvoke) await getInputSessionRow(sid);',
-        cursor,
-      );
+      const finalSessionGuardAt = sessionRowMatches.find((index) => index > cursor) ?? -1;
       expect(finalSessionGuardAt).toBeGreaterThan(cursor);
       finalGuardAt = body.indexOf(generationGuardToken, finalSessionGuardAt);
       expect(finalGuardAt).toBeGreaterThan(finalSessionGuardAt);
       expect(acceptAt).toBeGreaterThan(finalGuardAt);
-      expect(body.match(/if \(deviceLinkInvoke\) await getInputSessionRow\(sid\);/g)).toHaveLength(
-        2,
-      );
+      expect(sessionRowMatches.length).toBeGreaterThanOrEqual(2);
 
-      if (channel === 'INPUT_ENQUEUE') {
+      if (channel === 'INPUT_ENQUEUE' || channel === 'INPUT_STEER') {
         expect(body).toContain('REMOTE_OPTIMISTIC_INPUT_SUPERSEDED');
         expect(body).not.toContain(
           'if (!isCurrentInputGeneration()) return inputCoordinator.getProjection(sid);',
         );
-      } else {
-        expect(body).toContain('if (!isCurrentInputGeneration()) return false;');
       }
 
       if (channel === 'INPUT_STEER') {
@@ -137,11 +132,12 @@ describe('device-link auto-title wiring', () => {
           'allowMissingTrustedContexts: deviceLinkInvoke && steerOpts?.removeFromQueue === true',
         );
         const steerAt = body.indexOf('await inputCoordinator.steer(', finalGuardAt);
-        const postSteerGuard = body.indexOf('if (!isCurrentInputGeneration())', steerAt);
-        const commitAt = body.indexOf('if (accepted) commitAutoTitle();', postSteerGuard);
+        const postSteerGuard = body.indexOf('assertCurrentInputGeneration();', steerAt);
+        const commitAt = body.indexOf('commitAutoTitle();', postSteerGuard);
         expect(steerAt).toBeGreaterThan(finalGuardAt);
         expect(postSteerGuard).toBeGreaterThan(steerAt);
         expect(commitAt).toBeGreaterThan(postSteerGuard);
+        expect(body.slice(postSteerGuard, commitAt)).toMatch(/if \(accepted\)\s*\{/);
       }
     }
     expect(registerSource).toContain("if (!row || row.status === 'deleted')");
@@ -156,21 +152,21 @@ describe('device-link auto-title wiring', () => {
     const generationAt = body.indexOf(
       'const inputGeneration = inputCoordinator.getGeneration(sid);',
     );
-    const earlySessionGuardAt = body.indexOf('if (remote) await getInputSessionRow(sid);');
+    const sessionRowMatches = [...body.matchAll(/await getInputSessionRow\(sid\)/g)].map(
+      (match) => match.index ?? -1,
+    );
+    const earlySessionGuardAt = sessionRowMatches[0] ?? -1;
     const earlyGenerationGuardAt = body.indexOf(
       'if (!isCurrentInputGeneration())',
       earlySessionGuardAt,
     );
     const materializeAt = body.indexOf('await materializeQueuedOssAttachments');
-    const materializeGuardAt = body.indexOf('if (!isCurrentInputGeneration())', materializeAt);
+    const materializeGuardAt = body.indexOf('assertCurrentInputGeneration();', materializeAt);
     const hydrateAt = body.indexOf('await hydrateQueuedAgentReferences', materializeAt);
-    const hydrateGuardAt = body.indexOf('if (!isCurrentInputGeneration())', hydrateAt);
-    const finalSessionGuardAt = body.indexOf(
-      'if (remote) await getInputSessionRow(sid);',
-      hydrateAt,
-    );
+    const hydrateGuardAt = body.indexOf('assertCurrentInputGeneration();', hydrateAt);
+    const finalSessionGuardAt = sessionRowMatches.find((index) => index > hydrateAt) ?? -1;
     const finalGenerationGuardAt = body.indexOf(
-      'if (!isCurrentInputGeneration())',
+      'assertCurrentInputGeneration();',
       finalSessionGuardAt,
     );
     const updateAt = body.indexOf('inputCoordinator.updateContent', finalSessionGuardAt);
@@ -186,6 +182,7 @@ describe('device-link auto-title wiring', () => {
     expect(finalGenerationGuardAt).toBeGreaterThan(finalSessionGuardAt);
     expect(updateAt).toBeGreaterThan(finalGenerationGuardAt);
     expect(body).toContain('queued.clientId must match clientId');
+    expect(body).toContain('await materialized.cleanupBeforeAcceptance?.()');
   });
 
   it('只对远控调用生效:本机 renderer 走 maker:auto-title,不在这里重复起名', () => {

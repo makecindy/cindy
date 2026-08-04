@@ -88,12 +88,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const log = createLogger('AuthContext');
 
-function publishDataOwnerGeneration(dataOwnerId: string | null): void {
+function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   if (previousOwnerId !== dataOwnerId) {
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
-  setDataOwnerGeneration(dataOwnerId);
+  setDataOwnerGeneration(dataOwnerId, ownerGeneration);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
 
@@ -120,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const activeUserIdRef = useRef<string | null>(null);
   const activeDataOwnerIdRef = useRef<string | null>(null);
+  const activeDataOwnerGenerationRef = useRef(0);
   const authStateVersionRef = useRef(0);
 
   // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
@@ -130,7 +131,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       return await operation();
     } catch (error) {
-      publishDataOwnerGeneration(activeDataOwnerIdRef.current);
+      // Restore the exact main-owned generation. Recomputing it locally would
+      // make every stamped push from the still-active owner look stale after a
+      // rejected auth transition.
+      publishDataOwnerGeneration(
+        activeDataOwnerIdRef.current,
+        activeDataOwnerGenerationRef.current,
+      );
       setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
       throw error;
@@ -152,12 +159,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyIncomingState = useCallback(
     (state: AuthState) => {
       const ownerChanged = activeDataOwnerIdRef.current !== state.dataOwnerId;
-      publishDataOwnerGeneration(state.dataOwnerId);
+      publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
       if (ownerChanged) {
         sessionsStore.reset();
         clearWorkersCache();
       }
       activeDataOwnerIdRef.current = state.dataOwnerId;
+      activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
@@ -321,8 +329,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const enterLocalMode = useCallback(async () => {
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId);
+    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
+    activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -334,8 +343,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const exitLocalMode = useCallback(async () => {
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.exitLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId);
+    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
+    activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);

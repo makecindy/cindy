@@ -336,6 +336,7 @@ async function materializeQueuedOssAttachmentsInternal(
   item: unknown;
   cleanupAfterAcceptance?: () => void;
   cleanupBeforeAcceptance?: () => Promise<void>;
+  cleanupLocalMaterialization?: () => Promise<void>;
 }> {
   if (!item || typeof item !== 'object') return { item };
   const it = item as { files?: unknown; persistedContent?: unknown };
@@ -402,7 +403,10 @@ async function materializeQueuedOssAttachmentsInternal(
     if (refId) {
       localCleanupCallbacks.push(async () => {
         await cindyMediaLedger.removeRefById(refId);
-        const removed = await cindyMediaLedger.deleteZeroRefBlobRecord(written.hash, Date.now() + 1);
+        const removed = await cindyMediaLedger.deleteZeroRefBlobRecord(
+          written.hash,
+          Date.now() + 1,
+        );
         if (removed) await cindyMediaBlobStore.deleteBlobFile(written.hash, written.ext);
       });
     }
@@ -523,6 +527,9 @@ async function materializeQueuedOssAttachmentsInternal(
         ? {
             cleanupAfterAcceptance: cleanupOss,
             cleanupBeforeAcceptance,
+            ...(localCleanupCallbacks.length > 0
+              ? { cleanupLocalMaterialization: cleanupLocalMaterializations }
+              : {}),
           }
         : {}),
     };
@@ -539,6 +546,27 @@ export async function materializeQueuedOssAttachments(
   item: unknown,
 ): Promise<unknown> {
   return (await materializeQueuedOssAttachmentsInternal(sessionId, item, false)).item;
+}
+
+/**
+ * Deferred variant for content-bearing input handlers.
+ *
+ * Materialisation may create cindy-media ledger refs or image-cache files before
+ * the handler finishes its generation / clear-boundary checks.  Callers must
+ * keep the returned cleanup callbacks until the input is accepted; a rejected
+ * preparation must run `cleanupBeforeAcceptance`, while an accepted input may
+ * release the remote OSS object with `cleanupAfterAcceptance`.
+ */
+export async function materializeQueuedOssAttachmentsDeferred(
+  sessionId: string,
+  item: unknown,
+): Promise<{
+  item: unknown;
+  cleanupAfterAcceptance?: () => void;
+  cleanupBeforeAcceptance?: () => Promise<void>;
+  cleanupLocalMaterialization?: () => Promise<void>;
+}> {
+  return materializeQueuedOssAttachmentsInternal(sessionId, item, true);
 }
 
 /**
@@ -560,6 +588,7 @@ export async function materializeDirectSendOssAttachments(
   sendOpts: unknown;
   cleanupAfterAcceptance?: () => void;
   cleanupBeforeAcceptance?: () => Promise<void>;
+  cleanupLocalMaterialization?: () => Promise<void>;
 }> {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return { message, sendOpts };
@@ -577,8 +606,7 @@ export async function materializeDirectSendOssAttachments(
       raw &&
       typeof raw === 'object' &&
       !Array.isArray(raw) &&
-      (((raw as { type?: unknown }).type === 'image') ||
-        (raw as { type?: unknown }).type === 'file')
+      ((raw as { type?: unknown }).type === 'image' || (raw as { type?: unknown }).type === 'file')
     ) {
       attachmentIndexes.push(index);
       const block = raw as Record<string, unknown>;
@@ -620,7 +648,12 @@ export async function materializeDirectSendOssAttachments(
   for (let index = 0; index < attachmentIndexes.length; index += 1) {
     const original = msg.content[attachmentIndexes[index]];
     const materialized = materializedFiles[index];
-    if (!original || typeof original !== 'object' || !materialized || typeof materialized !== 'object') {
+    if (
+      !original ||
+      typeof original !== 'object' ||
+      !materialized ||
+      typeof materialized !== 'object'
+    ) {
       continue;
     }
     const originalPath = (original as { path?: unknown }).path;
@@ -666,6 +699,9 @@ export async function materializeDirectSendOssAttachments(
       : {}),
     ...(materialized.cleanupBeforeAcceptance
       ? { cleanupBeforeAcceptance: materialized.cleanupBeforeAcceptance }
+      : {}),
+    ...(materialized.cleanupLocalMaterialization
+      ? { cleanupLocalMaterialization: materialized.cleanupLocalMaterialization }
       : {}),
   };
 }

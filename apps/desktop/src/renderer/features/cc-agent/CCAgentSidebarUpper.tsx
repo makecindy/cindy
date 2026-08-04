@@ -48,6 +48,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -863,7 +864,8 @@ function ExpandedView({
           off();
           if (timer) clearTimeout(timer);
         };
-        const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+        const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+          if (!isDataOwnerPushCurrent(ownerStamp)) return;
           const event = raw as SchedulerEvent;
           if (done) return;
           // 全局事件不含 scheduleId，提前过滤。

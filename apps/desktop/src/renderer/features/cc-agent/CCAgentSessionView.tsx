@@ -106,6 +106,7 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -841,7 +842,8 @@ export function CCAgentSessionView({
     const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
     if (!sessionsPush) return;
     const refreshSequence = sessionRefreshSequenceRef.current;
-    const unsub = sessionsPush.onPatched(({ sessionId: patchedId, patch }) => {
+    const unsub = sessionsPush.onPatched(({ sessionId: patchedId, patch }, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (patchedId !== sessionId || !refreshSequence.isCurrentSession(patchedId)) return;
       const patchBuffer = sessionSnapshotPatchBufferRef.current;
       patchBuffer.stage(patchedId, patch);

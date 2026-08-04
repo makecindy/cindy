@@ -19,6 +19,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { Session } from '@/lib/ccAgent.types';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -53,7 +57,13 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import * as messageService from '@/lib/messageService';
 import { getIssueConfirmDraft, saveIssueConfirmDraft } from '@/lib/issueConfirmDraftStore';
 
-type RemotePush = { deviceId: string; channel: string; payload: unknown };
+const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
+type RemotePush = {
+  deviceId: string;
+  channel: string;
+  payload: unknown;
+  ownerStamp?: typeof TEST_OWNER_STAMP;
+};
 type ResolveCall = { requestId: string; decision: Record<string, unknown> };
 
 /** 被控端内存替身:转发 interaction push,记录 resolve-interaction,并提供挂起交互快照。 */
@@ -96,7 +106,7 @@ function makeFakeHost(deviceId: string) {
       pending.set(sessionId, arr);
     },
     registerPush(cb: (p: RemotePush) => void): () => void {
-      pushCb = cb;
+      pushCb = (push) => cb({ ...push, ownerStamp: push.ownerStamp ?? TEST_OWNER_STAMP });
       return () => {
         pushCb = null;
       };
@@ -208,6 +218,8 @@ function openRemoteSession(): string {
 }
 
 beforeEach(() => {
+  dataOwnerTesting.reset();
+  setDataOwnerGeneration(TEST_OWNER_STAMP.dataOwnerId, TEST_OWNER_STAMP.ownerGeneration);
   host = makeFakeHost(DEVICE_ID);
   local = stubElectronApi(host);
   makerChatStore.initGlobalListeners();
@@ -218,6 +230,7 @@ afterEach(() => {
   remoteProjectsStore.clear();
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
+  dataOwnerTesting.reset();
 });
 
 describe('device-link 远程交互往返 — permission', () => {

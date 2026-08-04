@@ -18,6 +18,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
 const pushSpy = vi.fn();
+const ownerStampState = vi.hoisted(() => ({
+  current: { dataOwnerId: 'owner-a', ownerGeneration: 7 },
+}));
 const guardMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>(async () => ({
   allowed: true,
   source: 'filesystem',
@@ -53,8 +56,12 @@ vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
     checkRemoteWorkingDir: (dir: string) => guardMock(dir),
   };
 });
+vi.mock('../../device-link/broadcast-tap.js', () => ({
+  getSafeDataOwnerPushStamp: () => ownerStampState.current,
+}));
 vi.mock('../../device-link/dispatch.js', () => ({
-  pushToTopicSubscribers: (channel: string, payload: unknown) => pushSpy(channel, payload),
+  pushToTopicSubscribers: (channel: string, payload: unknown, ownerStamp?: unknown) =>
+    pushSpy(channel, payload, ownerStamp),
 }));
 vi.mock('../../device-link/subscriptions.js', () => ({
   setTopicsSubscribedListener: vi.fn(),
@@ -97,6 +104,7 @@ describe('file-browser device-op', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    ownerStampState.current = { dataOwnerId: 'owner-a', ownerGeneration: 7 };
     guardMock.mockResolvedValue({ allowed: true, source: 'filesystem' });
     dbRowsMock.mockReturnValue([]);
     workdir = await mkdtemp(path.join(os.tmpdir(), 'device-op-'));
@@ -341,6 +349,7 @@ describe('file-browser device-op', () => {
   it('watch: subscribe starts local watch and pushes fileTree events to topic subscribers', async () => {
     await onFsWatchSubscribed(workdir);
     await new Promise((r) => setTimeout(r, 100));
+    ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
     await fsWriteFile(path.join(workdir, 'src', 'watched.ts'), 'w\n', 'utf8');
     await vi.waitFor(
       () => {
@@ -353,10 +362,11 @@ describe('file-browser device-op', () => {
       },
       { timeout: 3000, interval: 50 },
     );
-    const [, payload] = pushSpy.mock.calls.find(
+    const [, payload, ownerStamp] = pushSpy.mock.calls.find(
       ([, p]) => (p as { relPath?: string }).relPath === 'src/watched.ts',
     )!;
     expect((payload as { workdir: string }).workdir).toBe(workdir);
+    expect(ownerStamp).toEqual({ dataOwnerId: 'owner-a', ownerGeneration: 7 });
     onFsWatchReleased(workdir);
   });
 

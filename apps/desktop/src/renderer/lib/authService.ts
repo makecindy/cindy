@@ -36,6 +36,7 @@ export interface AuthState {
   user: User | null;
   mode: 'signed-out' | 'local' | 'cloud';
   dataOwnerId: string | null;
+  ownerGeneration: number;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   isCanary: boolean;
@@ -69,6 +70,7 @@ export function createAuthService(): AuthService {
       user: rawState.user as User | null,
       mode: rawState.mode,
       dataOwnerId: rawState.dataOwnerId,
+      ownerGeneration: rawState.ownerGeneration,
       canEnterApp: rawState.canEnterApp,
       isAuthenticated: rawState.isAuthenticated,
       isCanary: rawState.isCanary === true,
@@ -86,6 +88,7 @@ export function createAuthService(): AuthService {
         user: raw.user as User | null,
         mode: raw.mode,
         dataOwnerId: raw.dataOwnerId,
+        ownerGeneration: raw.ownerGeneration,
         canEnterApp: raw.canEnterApp,
         isAuthenticated: raw.isAuthenticated,
         isCanary: raw.isCanary === true,

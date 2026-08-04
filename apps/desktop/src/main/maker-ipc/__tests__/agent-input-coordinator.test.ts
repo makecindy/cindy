@@ -101,19 +101,24 @@ async function persistQueuedUserMessage(
   const persist = sendOpts.persistUserMessage;
   if (!persist) return;
   (persist as { onPersisting?: () => void }).onPersisting?.();
-  await mocks.createMessage(
-    sessionId,
-    {
-      clientId: persist.clientId,
-      role: 'user',
-      content: persist.content,
-      agentMeta: {
-        delivery: persist.delivery,
-        sdkSessionId: persist.sdkSessionId,
+  try {
+    await mocks.createMessage(
+      sessionId,
+      {
+        clientId: persist.clientId,
+        role: 'user',
+        content: persist.content,
+        agentMeta: {
+          delivery: persist.delivery,
+          sdkSessionId: persist.sdkSessionId,
+        },
       },
-    },
-    { shouldBroadcast: persist.shouldBroadcast },
-  );
+      { shouldBroadcast: persist.shouldBroadcast },
+    );
+  } catch (err) {
+    (persist as { onPersistFailed?: () => void }).onPersistFailed?.();
+    throw err;
+  }
   await persist.onPersisted?.();
 }
 
@@ -186,6 +191,15 @@ function createHarness() {
   >(() => {});
   const onUndispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>
+  >(() => {});
+  const onUserMessagePersisting = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUserMessagePersisting']>
+  >(() => {});
+  const onUserMessagePersisted = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUserMessagePersisted']>
+  >(() => {});
+  const onUserMessagePersistenceFailed = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUserMessagePersistenceFailed']>
   >(() => {});
   const onAcceptedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
@@ -274,6 +288,9 @@ function createHarness() {
         : Promise.resolve(false),
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
+    onUserMessagePersisting,
+    onUserMessagePersisted,
+    onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
@@ -305,6 +322,9 @@ function createHarness() {
     reconcileTurnIdle,
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
+    onUserMessagePersisting,
+    onUserMessagePersisted,
+    onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
@@ -1532,7 +1552,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, item);
     await flush();
 
-    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(sid, item);
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining(item));
   });
 
   it('awaits async onAcceptedQueuedMessage side effects before the accepted boundary resolves', async () => {
@@ -1586,7 +1606,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, item);
     await flush();
 
-    expect(h.beforeDispatchUserTurn).toHaveBeenCalledWith(sid, item);
+    expect(h.beforeDispatchUserTurn).toHaveBeenCalledWith(sid, expect.objectContaining(item));
     expect(events).toEqual([
       'before-dispatch:start',
       'before-dispatch:end',
@@ -3260,6 +3280,21 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
   });
 
+  it('keeps the clear boundary monotonic when an older clear arrives later', () => {
+    const h = createHarness();
+    const sid = 'clear-boundary-monotonic';
+    const newerBoundary = Date.parse('2026-06-20T12:00:00.000Z');
+    const olderBoundary = Date.parse('2026-06-20T11:00:00.000Z');
+
+    h.coordinator.clearSession(sid, newerBoundary);
+    const generationAfterNewerClear = h.coordinator.getGeneration(sid);
+    h.coordinator.clearSession(sid, olderBoundary);
+
+    expect(h.coordinator.getGeneration(sid)).toBe(generationAfterNewerClear + 1);
+    expect(h.coordinator.getClearBoundaryMs(sid)).toBe(newerBoundary);
+    expect(latestProjection(h.projections).clearBoundaryMs).toBe(newerBoundary);
+  });
+
   it('invalidates an IPC preparation generation when clearSession wins', () => {
     const h = createHarness();
     const sid = 'clear-invalidates-ipc-preparation';
@@ -3289,6 +3324,31 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     expect(shouldBroadcastResult).toBe(false);
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+  });
+
+  it('settles a persistence failure after clear without treating the row as durable', async () => {
+    const h = createHarness();
+    const sid = 'clear-during-persist-failure';
+    const first = makeItem('q-1', 'first');
+    mocks.createMessage.mockImplementationOnce(async () => {
+      h.coordinator.clearSession(sid);
+      throw new Error('sqlite write failed');
+    });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+
+    expect(h.onUserMessagePersisting).toHaveBeenCalledWith(sid, expect.objectContaining(first));
+    expect(h.onUserMessagePersistenceFailed).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      {
+        retainForRetry: true,
+      },
+    );
+    expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining(first));
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
   });
 
@@ -3343,7 +3403,11 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBe('turn/start failed');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'failed',
+    );
   });
 
   it('recovers a persisted turn when terminal error arrives before send resolves', async () => {
@@ -3487,7 +3551,11 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'failed',
+    );
   });
 
   it('keeps a persisted ordinary send recoverable when a host failure is reported late', async () => {
@@ -3518,7 +3586,11 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('WORKDIR_MISSING');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'failed',
+    );
   });
 
   it('keeps ordinary send DB writes linear while draining queued turns', async () => {
@@ -3580,7 +3652,11 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'cancelled',
+    );
     expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
 
     h.coordinator.resume(sid);
@@ -3752,7 +3828,11 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining(first),
+      'cancelled',
+    );
 
     h.coordinator.resume(sid);
     await flush();

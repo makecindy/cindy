@@ -25,8 +25,13 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  isDataOwnerPushStampCurrent,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import {
+  isDataOwnerPushStamp,
+  type DataOwnerPushStamp,
+} from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
@@ -53,6 +58,7 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
+import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
 import { hasUserVisibleText } from '../../shared/visibleText';
 import {
   deriveAutoTitleSeed,
@@ -832,6 +838,19 @@ interface RemoteOptimisticSendRecord {
   dataOwner: DataOwnerGeneration;
   /** 首次解析到的被控设备；重试期间绝不重新按 sessionId 路由。 */
   deviceId: string;
+  /** Click-time remote `/clear` token; null means the controller knew no clear yet. */
+  /** `undefined` means the controller has not observed a boundary yet. */
+  expectedClearBoundaryMs: number | null | undefined;
+  /** Clear generation captured at click time, used when the token was unknown. */
+  clearGeneration: number;
+  /** An unknown-token record is probing the pinned host before first dispatch. */
+  clearBoundaryProbeInFlight: boolean;
+  /** The first probe settled, including the legacy projection-without-token path. */
+  clearBoundaryProbeCompleted: boolean;
+  /** A stale-token rejection may reopen the boundary probe at most once. */
+  clearBoundaryRecoveryAttempted: boolean;
+  /** Skip the cached boundary once after a stale-token rejection. */
+  forceClearBoundaryProbe: boolean;
   deliveryMode: MessageDeliveryMode;
   accepted: boolean;
   currentlyQueued: boolean;
@@ -863,6 +882,9 @@ interface RemoteOptimisticSendScope {
   recoverySequence: number;
   /** 点击时的 /clear 代际；预注册等待期间发生 clear 时旧发送必须失效。 */
   clearGeneration: number;
+  /** Click-time remote `/clear` token used as the main-side precondition. */
+  /** `undefined` means the controller has not observed a boundary yet. */
+  expectedClearBoundaryMs: number | null | undefined;
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
@@ -878,6 +900,7 @@ function captureRemoteOptimisticSendScope(
       dataOwner: transition.dataOwner,
       recoverySequence: transition.recoverySequence,
       clearGeneration: transition.clearGeneration,
+      expectedClearBoundaryMs: transition.expectedClearBoundaryMs,
     };
   }
   const deviceId = getStickySessionDeviceId(sessionId);
@@ -887,6 +910,7 @@ function captureRemoteOptimisticSendScope(
         dataOwner: getDataOwnerGeneration(),
         recoverySequence: nextRemoteOptimisticRecoverySequence++,
         clearGeneration: rendererClearGenerationBySession.get(sessionId) ?? 0,
+        expectedClearBoundaryMs: getKnownRemoteInputClearBoundary(sessionId),
       }
     : null;
 }
@@ -898,6 +922,8 @@ interface RemoteOptimisticMaterializationRecovery {
   dataOwner: DataOwnerGeneration;
   recoverySequence: number;
   clearGeneration: number;
+  /** `undefined` means the controller has not observed a boundary yet. */
+  expectedClearBoundaryMs: number | null | undefined;
   attachmentUrls: string[];
   kind: 'composer-transition' | 'materialization';
   /** Delete/archive ended the task; a late ChatInput continuation must not restore it. */
@@ -907,6 +933,43 @@ interface RemoteOptimisticMaterializationRecovery {
 
 /** device-link 乐观发送事实账本，独立于可被 projection 覆盖的 pendingQueue。 */
 const remoteOptimisticSends = new Map<string, Map<string, RemoteOptimisticSendRecord>>();
+/**
+ * Last clear token observed from the remote mirror/projection. Missing map entry
+ * means unknown (for example an older controlled desktop omitted the field);
+ * an entry with `null` is an explicit "never cleared" boundary.
+ */
+const remoteInputClearBoundaryBySession = new Map<string, number | null>();
+type RemoteInputProjectionProbeState = {
+  deviceId: string;
+  dataOwner: DataOwnerGeneration;
+  clearGeneration: number;
+  status: 'ready' | 'blocked';
+  /** `undefined` is a successful legacy projection with no boundary field. */
+  boundary: number | null | undefined;
+  error?: unknown;
+};
+
+type RemoteInputProjectionRequest = {
+  deviceId: string;
+  dataOwner: DataOwnerGeneration;
+  clearGeneration: number;
+  settled: boolean;
+  promise: Promise<InputProjectionRequestResult>;
+};
+
+type InputProjectionRequestResult = {
+  projection: AgentInputProjection;
+  current: boolean;
+};
+
+/**
+ * Projection reads are shared between the normal session hydration path and
+ * the optimistic outbox preflight. Auto-title / origin reconciliation can
+ * start a read in the same tick as a send; issuing a second read here both
+ * wastes a weak-link round trip and can consume a different transient result.
+ */
+const remoteInputProjectionProbeStateBySession = new Map<string, RemoteInputProjectionProbeState>();
+const remoteInputProjectionRequests = new Map<string, RemoteInputProjectionRequest>();
 const remoteOptimisticMaterializationRecoveries = new Map<
   string,
   RemoteOptimisticMaterializationRecovery
@@ -922,12 +985,172 @@ const REMOTE_OUTBOX_RETRY_DELAY_MS = 1_500;
 const remoteOptimisticPumps = new Map<string, Promise<void>>();
 const remoteOptimisticRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const remoteClearInFlight = new Set<string>();
+/**
+ * A remote clear is a content fence, not just a renderer-side reset.  When the
+ * controlled device is offline the local UI may still accept new messages, but
+ * those messages must not be sent until the host has acknowledged the clear.
+ * Keep this state separate from `remoteClearInFlight`: the latter only covers
+ * the initial invoke, while this fence survives a timeout/rejection and retries
+ * on reconnect.
+ */
+interface RemoteClearFence {
+  sessionId: string;
+  deviceId: string;
+  dataOwner: DataOwnerGeneration;
+  clearedAt: string;
+  clearGeneration: number;
+  dispatching: boolean;
+}
+
+const remoteClearFences = new Map<string, RemoteClearFence>();
+const remoteClearRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const REMOTE_CLEAR_RETRY_DELAY_MS = 1_500;
 const DEFINITELY_UNDELIVERED_REMOTE_STEER_MARKERS = [
   'DEVICE_LINK_DEVICE_OFFLINE',
   'DEVICE_UNRESPONSIVE',
 ] as const;
 const REMOTE_OPTIMISTIC_DATA_OWNER_BOUNDARY_ERROR_CODE = 'REMOTE_OPTIMISTIC_DATA_OWNER_BOUNDARY';
 const REMOTE_OPTIMISTIC_SESSION_PURGED_ERROR_CODE = 'REMOTE_OPTIMISTIC_SESSION_PURGED';
+
+function clearRemoteClearRetryTimer(sessionId: string): void {
+  const timer = remoteClearRetryTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  remoteClearRetryTimers.delete(sessionId);
+}
+
+function isRemoteClearFenceCurrent(sessionId: string, fence?: RemoteClearFence): boolean {
+  const current = fence ?? remoteClearFences.get(sessionId);
+  return Boolean(
+    current &&
+      remoteClearFences.get(sessionId) === current &&
+      isDataOwnerGenerationCurrent(current.dataOwner) &&
+      getStickySessionDeviceId(sessionId) === current.deviceId &&
+      (rendererClearGenerationBySession.get(sessionId) ?? 0) === current.clearGeneration,
+  );
+}
+
+function hasPendingRemoteClearFence(sessionId: string): boolean {
+  const fence = remoteClearFences.get(sessionId);
+  if (!fence) return false;
+  if (isRemoteClearFenceCurrent(sessionId, fence)) return true;
+  clearRemoteClearRetryTimer(sessionId);
+  remoteClearFences.delete(sessionId);
+  return false;
+}
+
+function scheduleRemoteClearRetry(sessionId: string): void {
+  if (!hasPendingRemoteClearFence(sessionId) || remoteClearRetryTimers.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    remoteClearRetryTimers.delete(sessionId);
+    void retryRemoteClearFence(sessionId);
+  }, REMOTE_CLEAR_RETRY_DELAY_MS);
+  remoteClearRetryTimers.set(sessionId, timer);
+}
+
+function armRemoteClearFence(sessionId: string, deviceId: string, clearedAt: string): void {
+  const dataOwner = getDataOwnerGeneration();
+  const clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
+  const normalized = normalizeAgentInputClearBoundaryMs(clearedAt);
+  const previous = remoteInputClearBoundaryBySession.get(sessionId);
+  // The renderer-created boundary is only a local hint until the host ACKs it,
+  // but recording it here prevents the first ACK projection from being treated
+  // as historical hydration and deleting messages created after this clear.
+  if (
+    typeof normalized === 'number' &&
+    (previous === undefined || previous === null || normalized > previous)
+  ) {
+    remoteInputClearBoundaryBySession.set(sessionId, normalized);
+  }
+  clearRemoteClearRetryTimer(sessionId);
+  remoteClearFences.set(sessionId, {
+    sessionId,
+    deviceId,
+    dataOwner,
+    clearedAt,
+    clearGeneration,
+    dispatching: false,
+  });
+}
+
+function clearRemoteClearFence(sessionId: string, opts: { pump?: boolean } = {}): void {
+  clearRemoteClearRetryTimer(sessionId);
+  if (!remoteClearFences.delete(sessionId)) return;
+  if (opts.pump !== false) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+}
+
+function resolveRemoteClearFenceFromProjection(
+  sessionId: string,
+  deviceId: string,
+  clearedAt: string,
+  projection: AgentInputProjection,
+  opts: { pump?: boolean } = {},
+): boolean {
+  const fence = remoteClearFences.get(sessionId);
+  if (
+    !fence ||
+    fence.deviceId !== deviceId ||
+    fence.clearedAt !== clearedAt ||
+    !isRemoteClearFenceCurrent(sessionId, fence)
+  ) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')) {
+    const observed = normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs);
+    const requested = normalizeAgentInputClearBoundaryMs(clearedAt);
+    if (
+      typeof observed !== 'number' ||
+      typeof requested !== 'number' ||
+      observed < requested
+    ) {
+      return false;
+    }
+  }
+  clearRemoteClearFence(sessionId, opts);
+  return true;
+}
+
+async function retryRemoteClearFence(sessionId: string): Promise<void> {
+  const fence = remoteClearFences.get(sessionId);
+  if (!isRemoteClearFenceCurrent(sessionId, fence) || fence!.dispatching) return;
+  const current = fence!;
+  current.dispatching = true;
+  const operation = beginInputProjectionOperation(sessionId, current.deviceId);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      operation.api.input.clearSession(sessionId, current.clearedAt).then(
+        (projection) => ({ kind: 'projection' as const, projection }),
+        (error) => ({ kind: 'error' as const, error }),
+      ),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        timeoutId = setTimeout(() => resolve({ kind: 'timeout' }), CLEAR_SESSION_GUARD_TIMEOUT_MS);
+      }),
+    ]);
+    if (!isRemoteClearFenceCurrent(sessionId, current)) return;
+    if (result.kind === 'projection') {
+      const resolved = resolveRemoteClearFenceFromProjection(
+        sessionId,
+        current.deviceId,
+        current.clearedAt,
+        result.projection,
+        { pump: false },
+      );
+      applyInputProjectionOperationResponse(sessionId, operation, result.projection);
+      if (resolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+      else scheduleRemoteClearRetry(sessionId);
+    } else {
+      scheduleRemoteClearRetry(sessionId);
+    }
+  } catch (error) {
+    if (isRemoteClearFenceCurrent(sessionId, current)) {
+      log.warn('remote clear retry failed; keeping clear fence:', error);
+      scheduleRemoteClearRetry(sessionId);
+    }
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (remoteClearFences.get(sessionId) === current) current.dispatching = false;
+  }
+}
 
 function createRemoteOptimisticSessionPurgedError(): Error {
   return Object.assign(
@@ -1042,6 +1265,7 @@ function registerRemoteOptimisticSend(
   deliveryMode: MessageDeliveryMode,
   dataOwner: DataOwnerGeneration,
   recoverySequence: number,
+  expectedClearBoundaryMs: number | null | undefined,
   opts?: SendMessageOpts,
   recoveryFiles?: readonly AttachedFile[],
   materializationPending = false,
@@ -1051,6 +1275,12 @@ function registerRemoteOptimisticSend(
     recoverySequence,
     dataOwner,
     deviceId,
+    expectedClearBoundaryMs,
+    clearGeneration: rendererClearGenerationBySession.get(sessionId) ?? 0,
+    clearBoundaryProbeInFlight: false,
+    clearBoundaryProbeCompleted: false,
+    clearBoundaryRecoveryAttempted: false,
+    forceClearBoundaryProbe: false,
     deliveryMode,
     accepted: false,
     currentlyQueued: false,
@@ -1120,6 +1350,7 @@ function registerRemoteOptimisticMaterializationRecovery(
     dataOwner: scope.dataOwner,
     recoverySequence: scope.recoverySequence,
     clearGeneration: scope.clearGeneration,
+    expectedClearBoundaryMs: scope.expectedClearBoundaryMs,
     attachmentUrls: collectRemoteOptimisticAttachmentUrls(recoveryFiles),
     kind,
     invalidatedByPurge: false,
@@ -1268,8 +1499,12 @@ function isRemoteInputStateUnavailableError(error: unknown): boolean {
   return formatRemoteError(error).includes('REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE');
 }
 
-function isRemoteInputSupersededError(error: unknown): boolean {
+function isRemoteInputPreparationSupersededError(error: unknown): boolean {
   return formatRemoteError(error).includes('REMOTE_OPTIMISTIC_INPUT_SUPERSEDED');
+}
+
+function isRemoteInputClearBoundaryError(error: unknown): boolean {
+  return formatRemoteError(error).includes('REMOTE_OPTIMISTIC_INPUT_CLEARED');
 }
 
 /**
@@ -1481,6 +1716,8 @@ function clearRemoteOptimisticSend(sessionId: string, clientId: string): void {
 
 function clearRemoteOptimisticSendsForSession(sessionId: string): void {
   const deleted = remoteOptimisticSends.delete(sessionId);
+  remoteInputProjectionRequests.delete(sessionId);
+  remoteInputProjectionProbeStateBySession.delete(sessionId);
   clearRemoteOptimisticRetryTimer(sessionId);
   remoteOptimisticPumps.delete(sessionId);
   const timers = remoteOptimisticSettlingTimers.get(sessionId);
@@ -1501,6 +1738,15 @@ function clearRemoteOptimisticSendsForSession(sessionId: string): void {
  * 都会同时被 Map identity 与 data-owner generation 挡住，不能跨账号继续投递或恢复。
  */
 export function cancelRemoteOptimisticSendsForDataOwnerBoundary(): void {
+  invalidateLiveIngressForDataOwnerBoundary();
+  // Invalidate standalone projection reads/operations before restoring drafts
+  // or publishing the next owner. Their promises may settle independently of
+  // the optimistic outbox and must not write old-owner state into the new slice.
+  invalidateInputProjectionRequestsForDataOwnerBoundary();
+  for (const sessionId of remoteClearFences.keys()) {
+    clearRemoteClearFence(sessionId, { pump: false });
+  }
+
   const recoveries: Array<{
     clientId: string;
     recoverySequence: number;
@@ -1586,8 +1832,20 @@ export function cancelRemoteOptimisticSendsForDataOwnerBoundary(): void {
   }
 }
 
+/** Clear deferred live ingress work before AuthContext publishes a new owner. */
+export function invalidateLiveIngressForDataOwnerBoundary(): void {
+  clearTextDeltaFlushTimer();
+  pendingTextDeltaBatches.clear();
+  clearDeferredStateNotificationTimer();
+  pendingDeferredStateNotifications.clear();
+  pendingMessageCreatedPatches.clear();
+  remoteOwnerStamps.clear();
+  remoteStampedDevices.clear();
+}
+
 function cancelRemoteOptimisticSendsForSessionPurge(sessionId: string): void {
   bumpInteractionReconcileEpoch(sessionId);
+  clearRemoteClearFence(sessionId, { pump: false });
   const recoveries: Array<{
     clientId: string;
     recoverySequence: number;
@@ -1637,6 +1895,154 @@ function cancelRemoteOptimisticSendsForSessionPurge(sessionId: string): void {
   }
 
   clearRemoteOptimisticSendsForSession(sessionId);
+}
+
+/**
+ * A remote `/clear` is a non-terminal owner boundary. Drop only the optimistic
+ * state that predates the new token, restore drafts with the ordinary failure
+ * callback, and leave a composer-transition tombstone for late ChatInput
+ * continuations. Unlike purge/delete this must not surface a purge error.
+ */
+function cancelRemoteOptimisticSendsForRemoteClear(
+  sessionId: string,
+  clearBoundaryMs: number,
+  opts: { historicalHydration?: boolean } = {},
+): void {
+  bumpMessagesEpoch(sessionId);
+  bumpInteractionReconcileEpoch(sessionId);
+  invalidateInputProjectionRequests(sessionId);
+  const pinnedDeviceId = getStickySessionDeviceId(sessionId);
+  invalidateRemoteMessageCache(sessionId, pinnedDeviceId);
+
+  const recoveries: Array<{
+    clientId: string;
+    recoverySequence: number;
+    callback: NonNullable<SendMessageOpts['onRemoteOptimisticFailure']>;
+  }> = [];
+  const recordClientIds = new Set<string>();
+  const currentClearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
+  const isRecordSupersededByClear = (record: RemoteOptimisticSendRecord): boolean => {
+    if (opts.historicalHydration) {
+      // This is the first numeric token observed after a controller restart.
+      // The token and click timestamps may come from different devices, so no
+      // wall-clock comparison can prove that an existing optimistic record was
+      // created after the clear. Retire every pre-hydration record; sends made
+      // after this observation capture the known token synchronously.
+      return true;
+    }
+    // A generation change is the authoritative click-time ordering signal. It
+    // handles unknown-token records without misclassifying a send created after
+    // a historical clear was first observed.
+    if (record.clearGeneration < currentClearGeneration) return true;
+    // The record was created after this clear was observed but the controller
+    // still has no token (legacy host or a pending probe). Let its own probe /
+    // main-side precondition decide; it belongs to the new generation.
+    if (record.expectedClearBoundaryMs === undefined) return false;
+    if (record.expectedClearBoundaryMs === null) return true;
+    return (
+      typeof record.expectedClearBoundaryMs === 'number' &&
+      record.expectedClearBoundaryMs < clearBoundaryMs
+    );
+  };
+  const isRecoverySupersededByClear = (
+    recovery: RemoteOptimisticMaterializationRecovery,
+  ): boolean => {
+    if (opts.historicalHydration) {
+      // Materialisation has no authoritative remote token until dispatch. For
+      // the same clock-independent first-hydration rule as queue records,
+      // retire every recovery that predates this observation; new recoveries
+      // capture the known token in their scope.
+      return true;
+    }
+    if (recovery.clearGeneration < currentClearGeneration) return true;
+    if (recovery.expectedClearBoundaryMs === undefined) return false;
+    if (recovery.expectedClearBoundaryMs === null) return true;
+    return (
+      typeof recovery.expectedClearBoundaryMs === 'number' &&
+      recovery.expectedClearBoundaryMs < clearBoundaryMs
+    );
+  };
+  for (const recovery of remoteOptimisticMaterializationRecoveries.values()) {
+    if (recovery.sessionId !== sessionId || !recovery.callback) continue;
+    if (!isDataOwnerGenerationCurrent(recovery.dataOwner)) continue;
+    if (!isRecoverySupersededByClear(recovery)) continue;
+    recoveries.push({
+      clientId: recovery.clientId,
+      recoverySequence: recovery.recoverySequence,
+      callback: recovery.callback,
+    });
+  }
+  for (const record of remoteOptimisticSendRecords(sessionId)?.values() ?? []) {
+    if (!isRecordSupersededByClear(record)) continue;
+    recordClientIds.add(record.queued.clientId);
+    if (
+      !record.accepted &&
+      record.composerResolvedOptimistically &&
+      record.onRemoteOptimisticFailure &&
+      isDataOwnerGenerationCurrent(record.dataOwner)
+    ) {
+      recoveries.push({
+        clientId: record.queued.clientId,
+        recoverySequence: record.recoverySequence,
+        callback: record.onRemoteOptimisticFailure,
+      });
+    }
+  }
+
+  for (const [clientId, recovery] of remoteOptimisticMaterializationRecoveries) {
+    if (recovery.sessionId !== sessionId || !isRecoverySupersededByClear(recovery)) continue;
+    if (recovery.kind === 'composer-transition') {
+      // Keep a tombstone until the late ChatInput continuation releases it; it
+      // must not capture the post-clear generation and recreate the send.
+      recovery.attachmentUrls = [];
+      recovery.invalidatedByPurge = true;
+    } else {
+      remoteOptimisticMaterializationRecoveries.delete(clientId);
+    }
+  }
+  syncRemoteOptimisticAttachmentUrls();
+  recoveries.sort((left, right) => left.recoverySequence - right.recoverySequence);
+  const restored = new Set<string>();
+  for (const recovery of recoveries) {
+    if (restored.has(recovery.clientId)) continue;
+    restored.add(recovery.clientId);
+    try {
+      recovery.callback(recovery.clientId, undefined);
+    } catch (error) {
+      log.warn('remote optimistic composer restore failed at clear boundary:', error);
+    }
+  }
+  for (const clientId of recordClientIds) {
+    clearRemoteOptimisticSend(sessionId, clientId);
+  }
+
+  if (sessions.has(sessionId)) {
+    setState(sessionId, (state) => {
+      const pendingQueue = state.pendingQueue.filter((item) => !recordClientIds.has(item.clientId));
+      const messages = state.messages.filter(
+        (message) => !(recordClientIds.has(message.clientId) && message.isPendingPersist),
+      );
+      const steeringQueueClientIds = state.steeringQueueClientIds.filter(
+        (clientId) => !recordClientIds.has(clientId),
+      );
+      if (
+        pendingQueue === state.pendingQueue &&
+        messages === state.messages &&
+        steeringQueueClientIds === state.steeringQueueClientIds
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        pendingQueue,
+        messages,
+        steeringQueueClientIds,
+        queueAbortPending: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+      };
+    });
+  }
 }
 
 function markRemoteOptimisticLocallyRemoved(sessionId: string, clientId: string): void {
@@ -2266,6 +2672,195 @@ const _lastInboundEventAt = new Map<string, number>();
 const rendererClearBoundaryBySession = new Map<string, number>();
 const rendererClearGenerationBySession = new Map<string, number>();
 
+type RemoteInputClearBoundary = number | null | undefined;
+
+function observeRemoteInputClearBoundary(
+  sessionId: string,
+  rawBoundary: unknown,
+): RemoteInputClearBoundary {
+  const normalized = normalizeAgentInputClearBoundaryMs(rawBoundary);
+  if (normalized === undefined) {
+    return remoteInputClearBoundaryBySession.has(sessionId)
+      ? remoteInputClearBoundaryBySession.get(sessionId)
+      : undefined;
+  }
+
+  const hadPrevious = remoteInputClearBoundaryBySession.has(sessionId);
+  const previous = remoteInputClearBoundaryBySession.get(sessionId);
+  const pendingFence = remoteClearFences.get(sessionId);
+  const pendingFenceBoundary = pendingFence
+    ? normalizeAgentInputClearBoundaryMs(pendingFence.clearedAt)
+    : undefined;
+  const acknowledgesPendingFence = Boolean(
+    pendingFence &&
+      isRemoteClearFenceCurrent(sessionId, pendingFence) &&
+      typeof normalized === 'number' &&
+      typeof pendingFenceBoundary === 'number' &&
+      normalized >= pendingFenceBoundary,
+  );
+  let advanced = false;
+  if (!hadPrevious) {
+    remoteInputClearBoundaryBySession.set(sessionId, normalized);
+    // The first numeric token may describe a historical clear that happened
+    // before this controller received its first snapshot. The controller and
+    // the controlled host do not share a clock, so timestamps cannot establish
+    // ordering here. Retire every record/recovery that has not already captured
+    // an authoritative token; a record created after hydration captures the
+    // known token synchronously and is therefore preserved.
+    if (typeof normalized === 'number') {
+      cancelRemoteOptimisticSendsForRemoteClear(sessionId, normalized, {
+        historicalHydration: true,
+      });
+    }
+    advanced = false;
+  } else if (
+    typeof normalized === 'number' &&
+    (previous === null || (typeof previous === 'number' && normalized > previous))
+  ) {
+    // Clear boundaries are an append-only log. A delayed /clear patch or an
+    // older reseed must never move the controller back to an earlier epoch.
+    remoteInputClearBoundaryBySession.set(sessionId, normalized);
+    advanced = true;
+  }
+
+  if (typeof normalized === 'number') {
+    const rendererBoundary = rendererClearBoundaryBySession.get(sessionId);
+    if (rendererBoundary === undefined || normalized > rendererBoundary) {
+      rendererClearBoundaryBySession.set(sessionId, normalized);
+    }
+  }
+
+  // A projection/session patch carrying the boundary requested by this
+  // renderer is the remote clear ACK. Resolve the fence before the generic
+  // "new boundary" path can invalidate messages created after the local clear.
+  if (acknowledgesPendingFence) {
+    clearRemoteClearFence(sessionId, { pump: false });
+  }
+
+  if (advanced && typeof normalized === 'number' && !acknowledgesPendingFence) {
+    remoteInputProjectionProbeStateBySession.delete(sessionId);
+    remoteInputProjectionRequests.delete(sessionId);
+    bumpRendererClearGeneration(sessionId);
+    // A clear received from another controller invalidates the local outbox at
+    // the same boundary. This is deliberately scoped to the session; it must
+    // not tear down the device-link/relay shared connection.
+    cancelRemoteOptimisticSendsForRemoteClear(sessionId, normalized);
+  }
+  return remoteInputClearBoundaryBySession.get(sessionId);
+}
+
+function isRemoteInputProjectionProbeStateCurrent(
+  sessionId: string,
+  state: RemoteInputProjectionProbeState,
+  deviceId: string,
+): boolean {
+  return (
+    state.deviceId === deviceId &&
+    isDataOwnerGenerationCurrent(state.dataOwner) &&
+    getStickySessionDeviceId(sessionId) === deviceId &&
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) === state.clearGeneration
+  );
+}
+
+function isAcceptedRemoteProjectionBoundary(
+  sessionId: string,
+  projection: AgentInputProjection,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')) return true;
+  const incoming = normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs);
+  if (incoming === undefined) return false;
+  const known = remoteInputClearBoundaryBySession.get(sessionId);
+  return !(
+    typeof known === 'number' &&
+    (incoming === null || (typeof incoming === 'number' && incoming < known))
+  );
+}
+
+function noteRemoteInputProjectionSuccess(
+  sessionId: string,
+  deviceId: string,
+  dataOwner: DataOwnerGeneration,
+  clearGeneration: number,
+  projection: AgentInputProjection,
+): void {
+  if (
+    !isDataOwnerGenerationCurrent(dataOwner) ||
+    getStickySessionDeviceId(sessionId) !== deviceId ||
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGeneration ||
+    !isAcceptedRemoteProjectionBoundary(sessionId, projection)
+  ) {
+    return;
+  }
+  const boundary = Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')
+    ? normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs)
+    : undefined;
+  remoteInputProjectionProbeStateBySession.set(sessionId, {
+    deviceId,
+    dataOwner,
+    clearGeneration,
+    status: 'ready',
+    boundary,
+  });
+}
+
+function noteRemoteInputProjectionFailure(
+  sessionId: string,
+  deviceId: string,
+  dataOwner: DataOwnerGeneration,
+  clearGeneration: number,
+  error: unknown,
+): void {
+  if (
+    !isDataOwnerGenerationCurrent(dataOwner) ||
+    getStickySessionDeviceId(sessionId) !== deviceId ||
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGeneration
+  ) {
+    return;
+  }
+  remoteInputProjectionProbeStateBySession.set(sessionId, {
+    deviceId,
+    dataOwner,
+    clearGeneration,
+    status: 'blocked',
+    boundary: undefined,
+    error,
+  });
+}
+
+function clearRemoteInputProjectionProbeFailure(sessionId: string, deviceId?: string): void {
+  const state = remoteInputProjectionProbeStateBySession.get(sessionId);
+  if (!state || state.status !== 'blocked' || (deviceId && state.deviceId !== deviceId)) return;
+  remoteInputProjectionProbeStateBySession.delete(sessionId);
+}
+
+function getKnownRemoteInputClearBoundary(sessionId: string): RemoteInputClearBoundary {
+  if (remoteInputClearBoundaryBySession.has(sessionId)) {
+    return remoteInputClearBoundaryBySession.get(sessionId);
+  }
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return undefined;
+  const session = remoteProjectsStore
+    .getDeviceSessions(deviceId)
+    .find((candidate) => candidate.id === sessionId);
+  if (!session || !Object.prototype.hasOwnProperty.call(session, 'clearedAt')) return undefined;
+  return observeRemoteInputClearBoundary(sessionId, session.clearedAt);
+}
+
+function getRemoteInputClearBoundaryOpts(
+  sessionId: string,
+): { expectedClearBoundaryMs: number | null } | undefined {
+  if (!getStickySessionDeviceId(sessionId)) return undefined;
+  const boundary = getKnownRemoteInputClearBoundary(sessionId);
+  return boundary === undefined ? undefined : { expectedClearBoundaryMs: boundary };
+}
+
+function observeRemoteInputClearBoundariesFromSnapshot(): void {
+  for (const session of remoteProjectsStore.getMergedRemoteSessions()) {
+    if (!Object.prototype.hasOwnProperty.call(session, 'clearedAt')) continue;
+    observeRemoteInputClearBoundary(session.id, session.clearedAt);
+  }
+}
+
 /** 标记该 session 刚收到一帧入站事件(O(1) 原始数写入,无分配、无 notify)。 */
 function _markInboundEvent(sessionId: string): void {
   _lastInboundEventAt.set(sessionId, Date.now());
@@ -2288,12 +2883,12 @@ function bumpRendererClearGeneration(sessionId: string): void {
 }
 
 function noteRendererClearBoundary(sessionId: string, clearedAt: string): void {
-  bumpRendererClearGeneration(sessionId);
-  const parsed = new Date(clearedAt).getTime();
-  if (!Number.isFinite(parsed)) return;
+  const parsed = normalizeAgentInputClearBoundaryMs(clearedAt);
+  if (typeof parsed !== 'number') return;
   const current = rendererClearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
     rendererClearBoundaryBySession.set(sessionId, parsed);
+    bumpRendererClearGeneration(sessionId);
   }
 }
 
@@ -2340,7 +2935,6 @@ function _purgeSession(sessionId: string): void {
   _cacheHydrateSuppressed.delete(sessionId);
   _lastViewedAt.delete(sessionId);
   _lastInboundEventAt.delete(sessionId);
-  rendererClearBoundaryBySession.delete(sessionId);
   const i = _accessOrder.indexOf(sessionId);
   if (i !== -1) _accessOrder.splice(i, 1);
 }
@@ -2632,6 +3226,29 @@ function applyInputProjection(
   opts: { supersedeQueries?: boolean } = {},
 ): void {
   if (!projection.sessionId) return;
+  const knownClearBoundary = remoteInputClearBoundaryBySession.get(projection.sessionId);
+  if (typeof knownClearBoundary === 'number') {
+    const hasBoundary = Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs');
+    const incomingBoundary = hasBoundary
+      ? normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs)
+      : undefined;
+    // Once a numeric clear token is known, a modern projection carrying an
+    // older/null token is not authoritative for *any* field. Even an empty
+    // stale projection could otherwise overwrite the new epoch's error or
+    // lock state. An omitted field is the legacy-client compatibility path.
+    if (
+      hasBoundary &&
+      (typeof incomingBoundary !== 'number' || incomingBoundary < knownClearBoundary)
+    ) {
+      return;
+    }
+  }
+  // A clear projection is emitted before the sessions row patch. Observe it
+  // before applying queue state or pumping the optimistic outbox, otherwise an
+  // old local item can be re-enqueued into the freshly cleared context.
+  if (Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs')) {
+    observeRemoteInputClearBoundary(projection.sessionId, projection.clearBoundaryMs);
+  }
   if (opts.supersedeQueries !== false) {
     supersedeInputProjectionRequests(projection.sessionId);
   }
@@ -2846,19 +3463,100 @@ function markSessionHasUserMessage(sessionId: string): void {
   });
 }
 
-function requestInputProjection(sessionId: string): void {
-  if (!sessionId) return;
-  if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
-  const origin = getStickySessionDeviceId(sessionId);
+function requestInputProjection(
+  sessionId: string,
+  pinnedDeviceId?: string,
+): Promise<InputProjectionRequestResult | undefined> {
+  if (!sessionId) return Promise.resolve(undefined);
+  const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
+  if (origin) {
+    const existing = remoteInputProjectionRequests.get(sessionId);
+    if (
+      existing &&
+      !existing.settled &&
+      existing.deviceId === origin &&
+      isDataOwnerGenerationCurrent(existing.dataOwner) &&
+      (rendererClearGenerationBySession.get(sessionId) ?? 0) === existing.clearGeneration
+    ) {
+      return existing.promise;
+    }
+  } else if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) {
+    return Promise.resolve(undefined);
+  }
+
+  const dataOwner = getDataOwnerGeneration();
   const epoch = beginInputProjectionRequest(sessionId, origin);
+  const clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
   const api = origin ? makerApiForDevice(origin) : makerApiFor(sessionId);
-  api.input
-    .getProjection(sessionId)
-    .then((projection) => {
-      if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
-      applyInputProjection(projection, { supersedeQueries: false });
-    })
-    .catch((err) => log.warn('get input projection failed:', err));
+  let request!: RemoteInputProjectionRequest;
+  let promise: Promise<InputProjectionRequestResult>;
+  try {
+    promise = api.input.getProjection(sessionId).then(
+      (projection) => {
+        request.settled = true;
+        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner);
+        if (origin && current) {
+          noteRemoteInputProjectionSuccess(
+            sessionId,
+            origin,
+            dataOwner,
+            clearGeneration,
+            projection,
+          );
+        }
+        if (current) {
+          applyInputProjection(projection, { supersedeQueries: false });
+        }
+        return { projection, current };
+      },
+      (error) => {
+        request.settled = true;
+        if (origin && isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner)) {
+          noteRemoteInputProjectionFailure(sessionId, origin, dataOwner, clearGeneration, error);
+        }
+        throw error;
+      },
+    );
+  } catch (error) {
+    const rejected = Promise.reject<InputProjectionRequestResult>(error);
+    request = {
+      deviceId: origin ?? '',
+      dataOwner,
+      clearGeneration,
+      settled: true,
+      promise: rejected,
+    };
+    if (origin && isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner)) {
+      noteRemoteInputProjectionFailure(sessionId, origin, dataOwner, clearGeneration, error);
+    }
+    void rejected.catch((err) => log.warn('get input projection failed:', err));
+    return rejected;
+  }
+  request = {
+    deviceId: origin ?? '',
+    dataOwner,
+    clearGeneration,
+    settled: false,
+    promise,
+  };
+  if (origin) remoteInputProjectionRequests.set(sessionId, request);
+  // Keep cleanup/logging detached from the returned chain. The outbox awaits
+  // the one-hop result above, so a fast projection still reaches dispatch in
+  // the same microtask budget as the former direct probe.
+  void promise.then(
+    () => {
+      if (origin && remoteInputProjectionRequests.get(sessionId) === request) {
+        remoteInputProjectionRequests.delete(sessionId);
+      }
+    },
+    (err) => {
+      if (origin && remoteInputProjectionRequests.get(sessionId) === request) {
+        remoteInputProjectionRequests.delete(sessionId);
+      }
+      log.warn('get input projection failed:', err);
+    },
+  );
+  return promise;
 }
 
 // ---------------------------------------------------------------------------
@@ -4486,8 +5184,72 @@ type MakerEventPayload = {
   resolvedContent?: string;
 } | null;
 
+/** Metadata carried beside a live main → renderer or device-link push. */
+type LiveIngressContext = {
+  ownerStamp?: unknown;
+  remoteDeviceId?: string;
+  ownerStampPresent?: boolean;
+};
+
+/** Last stamped source boundary observed from each controlled device. */
+const remoteOwnerStamps = new Map<string, DataOwnerPushStamp>();
+/** Devices that have emitted at least one stamped frame in this connection. */
+const remoteStampedDevices = new Set<string>();
+
+function isCurrentLiveIngress(context?: LiveIngressContext): boolean {
+  if (!context) return true;
+  const hasStamp = context.ownerStampPresent ?? context.ownerStamp !== undefined;
+  if (!context.remoteDeviceId) {
+    // Older preload builds did not expose Electron's third IPC argument. Keep
+    // their local event stream compatible; stamped frames are fail-closed.
+    return !hasStamp || isDataOwnerPushStampCurrent(context.ownerStamp);
+  }
+
+  const current = getDataOwnerGeneration();
+  // A signed-out renderer has no remote session shard to mutate.
+  if (current.dataOwnerId === null) return false;
+  // Older controlled desktops omit ownerStamp. Accept that legacy stream only
+  // until this device has emitted a stamped frame; after that, an unframed
+  // late packet cannot cross an owner boundary.
+  if (!hasStamp) return !remoteStampedDevices.has(context.remoteDeviceId);
+  if (!isDataOwnerPushStamp(context.ownerStamp)) return false;
+  const stamp = context.ownerStamp;
+  remoteStampedDevices.add(context.remoteDeviceId);
+  if (stamp.dataOwnerId !== current.dataOwnerId) return false;
+  const previous = remoteOwnerStamps.get(context.remoteDeviceId);
+  if (
+    previous &&
+    previous.dataOwnerId === stamp.dataOwnerId &&
+    stamp.ownerGeneration < previous.ownerGeneration
+  ) {
+    return false;
+  }
+  remoteOwnerStamps.set(context.remoteDeviceId, stamp);
+  return true;
+}
+
+function isCurrentLocalLiveIngress(ownerStamp: unknown): boolean {
+  return isCurrentLiveIngress({
+    ownerStamp,
+    ownerStampPresent: ownerStamp !== undefined,
+  });
+}
+
+function sameLiveIngressScope(a: LiveIngressContext, b: LiveIngressContext): boolean {
+  if (a.remoteDeviceId !== b.remoteDeviceId) return false;
+  const aStamp = isDataOwnerPushStamp(a.ownerStamp) ? a.ownerStamp : null;
+  const bStamp = isDataOwnerPushStamp(b.ownerStamp) ? b.ownerStamp : null;
+  if (aStamp === null || bStamp === null) return aStamp === bStamp;
+  return (
+    aStamp.dataOwnerId === bStamp.dataOwnerId &&
+    aStamp.ownerGeneration === bStamp.ownerGeneration
+  );
+}
+
 type PendingTextDeltaBatch = {
   text: string;
+  dataOwner: DataOwnerGeneration;
+  ingress: LiveIngressContext;
   source?: 'claude-code' | 'codex' | 'pi';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
@@ -4502,11 +5264,20 @@ let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
  * the teardown list.
  */
 function bindIpc(
-  subscribe: (cb: (data: unknown) => void) => unknown,
-  handler: (data: unknown) => void,
+  subscribe: unknown,
+  handler: (data: unknown, ownerStamp?: unknown) => void,
   label: string,
 ): void {
-  const result = subscribe(handler);
+  if (typeof subscribe !== 'function') {
+    log.warn(`${label}: subscribe is not available; teardown will no-op`);
+    ipcUnsubscribers.push(() => {});
+    return;
+  }
+  const result = (
+    subscribe as (
+      cb: (data: unknown, ownerStamp?: unknown) => void,
+    ) => unknown
+  )(handler);
   if (typeof result === 'function') {
     ipcUnsubscribers.push(result as () => void);
   } else {
@@ -4569,6 +5340,13 @@ function flushPendingTextDelta(sessionId: string, deferNotification = false): vo
   pendingTextDeltaBatches.delete(sessionId);
   if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
 
+  if (
+    !isDataOwnerGenerationCurrent(pending.dataOwner) ||
+    !isCurrentLiveIngress(pending.ingress)
+  ) {
+    return;
+  }
+
   dispatchStreamEventPayload(
     sessionId,
     {
@@ -4603,11 +5381,21 @@ function enqueueTextDeltaPayload(
   sessionId: string,
   event: NonNullable<MakerEventPayload>['event'],
   persistId?: string,
+  ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
   const data = event.data as { text?: unknown };
   const text = typeof data.text === 'string' ? data.text : '';
-  const existing = pendingTextDeltaBatches.get(sessionId);
+  const dataOwner = getDataOwnerGeneration();
+  let existing = pendingTextDeltaBatches.get(sessionId);
+  if (
+    existing &&
+    (!isDataOwnerGenerationCurrent(existing.dataOwner) ||
+      !sameLiveIngressScope(existing.ingress, ingress))
+  ) {
+    discardPendingTextDelta(sessionId);
+    existing = undefined;
+  }
   if (existing) {
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
@@ -4616,6 +5404,8 @@ function enqueueTextDeltaPayload(
   } else {
     pendingTextDeltaBatches.set(sessionId, {
       text,
+      dataOwner,
+      ingress,
       source: event.source,
       persistId,
       ...(event.agentMeta ? { agentMeta: event.agentMeta } : {}),
@@ -4855,7 +5645,9 @@ function initGlobalListeners(): void {
   // handleStreamEvent / handleStatusUpdate 不需改动。
   // device-link:同一个 handler 既接本机 maker:event,也接被控端经 onRemotePush
   // 转发回来的远程 maker:event(按 sessionId 命中同一 reducer,与来源无关)。
-  const handleMakerEventRaw = (raw: unknown) => {
+  const handleMakerEventRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
+    if (!isCurrentLiveIngress(ingress)) return;
+    const dataOwnerAtIngress = getDataOwnerGeneration();
     const payload = raw as MakerEventPayload;
     if (!payload?.sessionId || !payload.event) return;
     const { sessionId, event } = payload;
@@ -4863,7 +5655,7 @@ function initGlobalListeners(): void {
     const resolvedContent = payload.resolvedContent;
 
     if (isTextDeltaEvent(event)) {
-      enqueueTextDeltaPayload(sessionId, event, persistId);
+      enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
       return;
     }
     const deferNotification = isHighFrequencyStreamEvent(event);
@@ -4876,6 +5668,7 @@ function initGlobalListeners(): void {
       const current = getOrCreateState(sessionId);
       if (current.sdkSessionId === sdkSessionId) return;
       setState(sessionId, (s) => ({ ...s, sdkSessionId }));
+      if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
       sessionService
         .update(sessionId, { sdkSessionId })
         .catch((err) => log.warn('Failed to persist sdkSessionId:', err));
@@ -4951,20 +5744,24 @@ function initGlobalListeners(): void {
           );
           void (async () => {
             try {
+              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
               // 本地 only:网关 key 不再有服务器副本可拉。改为校验本机 safeStorage 是否
               // 有 key —— 有则关闭并重发会话(重连时把本机 key 重新下发给 remote host);
               // 没有则中止重试,让 error banner 浮现,提示用户在本机重填 key。
               const localKey = await window.electronAPI.safeStorageRead(
                 providerSecretStorageKey('xd'),
               );
+              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
               if (!localKey) {
                 throw new Error('no local api key available');
               }
               // preserveWorkspace: 鉴权重连是瞬态 close+resend,会话继续,工作区必须保留。
               await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
               await new Promise((r) => setTimeout(r, 1500));
+              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
               if (hasRetryPayload) {
                 const row = await sessionService.get(sessionId);
+                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
                 if (row.workingDir && row.model) {
                   const retryAccepted = await sendMessage(
                     sessionId,
@@ -4995,6 +5792,7 @@ function initGlobalListeners(): void {
                 throw new Error('no retry payload');
               }
             } catch {
+              if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
               // 重试失败——main 侧已跳过持久化（isRemoteAuthRetry），在此补落。
               // device-link 控制端经 makerApiFor 路由到被控端 main（不直调本地 IPC）;
               // 同时透传 agentMeta 供 flushAssistantBlock 边界 meta 兜底与 dedup key。
@@ -5011,7 +5809,9 @@ function initGlobalListeners(): void {
               supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
               setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
             } finally {
-              setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
+              if (isDataOwnerGenerationCurrent(dataOwnerAtIngress)) {
+                setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
+              }
             }
           })();
           return;
@@ -5100,7 +5900,15 @@ function initGlobalListeners(): void {
       // 本地会话则直接让 error banner 浮现,提示用户在设置里重填 key。
     }
   };
-  bindIpc(window.electronAPI.maker.onEvent, handleMakerEventRaw, 'maker-event');
+  bindIpc(
+    window.electronAPI.maker.onEvent,
+    (raw, ownerStamp) =>
+      handleMakerEventRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
+    'maker-event',
+  );
 
   // ── Maker session status: 兜底护栏, 防 "Generating..." 永久卡死 ────────────
   // main 端 session.close() 跑完会 broadcast status_changed: closed; renderer
@@ -5111,7 +5919,8 @@ function initGlobalListeners(): void {
   // 触发 close 的路径很多(rehydrate / disableOrca / shutdown / 隐藏的 IPC 调用),
   // 真正的"凶手"还在用 [DEBUG-TEMP] 日志追。这条护栏不依赖修好 close 路径,
   // 只要 main 端把 closed 状态广播出来, 就保证 UI 一定能解锁。
-  const handleMakerStatusRaw = (raw: unknown) => {
+  const handleMakerStatusRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as { sessionId?: string; status?: string } | null;
     if (!payload?.sessionId || payload.status !== 'closed') return;
     bumpInteractionReconcileEpoch(payload.sessionId);
@@ -5119,9 +5928,22 @@ function initGlobalListeners(): void {
     flushPendingTextDelta(payload.sessionId);
     setState(payload.sessionId, forceFinalizeOnSessionClosed);
   };
-  bindIpc(window.electronAPI.maker.onStatusChanged, handleMakerStatusRaw, 'maker-status-changed');
+  bindIpc(
+    window.electronAPI.maker.onStatusChanged,
+    (raw, ownerStamp) =>
+      handleMakerStatusRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
+    'maker-status-changed',
+  );
 
-  const handleInputProjectionRaw = (raw: unknown, sourceDeviceId?: string) => {
+  const handleInputProjectionRaw = (
+    raw: unknown,
+    sourceDeviceId?: string,
+    ingress: LiveIngressContext = {},
+  ) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const projection = raw as AgentInputProjection | null;
     if (!projection?.sessionId) return;
     if (
@@ -5134,12 +5956,20 @@ function initGlobalListeners(): void {
   };
   bindIpc(
     window.electronAPI.maker.onInputProjection,
-    handleInputProjectionRaw,
+    (raw, ownerStamp) =>
+      handleInputProjectionRaw(raw, undefined, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'maker-input-projection',
   );
 
   // ── Maker interaction request: permission/ask/plan 三合一,按 kind 分发 ──
-  const handleInteractionRequestRaw = (raw: unknown) => {
+  const handleInteractionRequestRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
       request?: { kind: string; requestId: string; [k: string]: unknown };
@@ -5305,16 +6135,24 @@ function initGlobalListeners(): void {
     }
   };
 
-  const handleLiveInteractionRequestRaw = (raw: unknown) => {
+  const handleLiveInteractionRequestRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       bumpInteractionReconcileEpoch(sessionId);
     }
-    handleInteractionRequestRaw(raw);
+    handleInteractionRequestRaw(raw, ingress);
   };
   bindIpc(
     window.electronAPI.maker.onInteractionRequest,
-    handleLiveInteractionRequestRaw,
+    (raw, ownerStamp) =>
+      handleLiveInteractionRequestRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'maker-interaction-request',
   );
   // 模块级桥接:供 reconcilePendingInteractions(打开/重连会话时的快照重建)复用同一套
@@ -5322,7 +6160,11 @@ function initGlobalListeners(): void {
   applyInteractionRequestRef = handleInteractionRequestRaw;
 
   // ── Maker interaction dismissed: setPermissionMode 切换 / close 时关掉对话框 ──
-  const handleInteractionDismissedRaw = (raw: unknown) => {
+  const handleInteractionDismissedRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as { sessionId?: string; requestId?: string; reason?: string } | null;
     if (!payload?.sessionId || !payload.requestId) return;
     // 老 CCAgentPermissionDismissedPayload 要 reason / resolvedAs union 字面值。
@@ -5349,22 +6191,34 @@ function initGlobalListeners(): void {
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
   };
-  const handleLiveInteractionDismissedRaw = (raw: unknown) => {
+  const handleLiveInteractionDismissedRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ) => {
+    if (!isCurrentLiveIngress(ingress)) return;
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       bumpInteractionReconcileEpoch(sessionId);
     }
-    handleInteractionDismissedRaw(raw);
+    handleInteractionDismissedRaw(raw, ingress);
   };
   bindIpc(
     window.electronAPI.maker.onInteractionDismissed,
-    handleLiveInteractionDismissedRaw,
+    (raw, ownerStamp) =>
+      handleLiveInteractionDismissedRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'maker-interaction-dismissed',
   );
 
   // Main 端写库的消息推送(接管路径 persistUserMessage / persistAssistantMessage),也复用给
   // device-link 远程会话(被控端 messages:created 经 onRemotePush 转发,注入同一套 in-memory state)。
-  function handleMessageCreatedRaw(raw: unknown): void {
+  function handleMessageCreatedRaw(
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ): void {
+    if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as { sessionId?: string; message?: Message } | null;
     if (!payload?.sessionId || !payload.message) return;
     const { sessionId, message } = payload;
@@ -5430,7 +6284,11 @@ function initGlobalListeners(): void {
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
   // 新 payload 一次带齐整轮 clientIds；旧 host 仍回退到单个 clientId。
-  function handleMessageDeletedRaw(raw: unknown): void {
+  function handleMessageDeletedRaw(
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ): void {
+    if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
       clientId?: string;
@@ -5447,7 +6305,11 @@ function initGlobalListeners(): void {
     removeMessagesByClientIds(payload.sessionId, clientIds);
   }
 
-  function handleUsageMessageTurnCostRaw(raw: unknown): void {
+  function handleUsageMessageTurnCostRaw(
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ): void {
+    if (!isCurrentLiveIngress(ingress)) return;
     const p = raw as {
       sessionId?: string;
       clientId?: string;
@@ -5528,7 +6390,11 @@ function initGlobalListeners(): void {
 
   // 模型降级标记实时推送(main 的 modelMismatchBroadcaster,与 turn-cost 同款
   // 「落库 agent_meta + 广播」两路;历史加载路径由 buildChatMessages 兜底)。
-  function handleUsageMessageModelMismatchRaw(raw: unknown): void {
+  function handleUsageMessageModelMismatchRaw(
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ): void {
+    if (!isCurrentLiveIngress(ingress)) return;
     const p = raw as {
       sessionId?: string;
       clientId?: string;
@@ -5563,10 +6429,24 @@ function initGlobalListeners(): void {
   bindIpc(
     // 可选调用兜底:测试 / HMR 先于 main 重启时 window.electronAPI.deviceLink 可能尚未注入,
     // 直接取 .onRemotePush 会让 initGlobalListeners 整体崩掉(与下方 onUsageMessageTurnCost 同款防御)。
-    (cb) => window.electronAPI.deviceLink?.onRemotePush?.(cb),
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.deviceLink?.onRemotePush?.(cb),
     (raw) => {
-      const push = raw as { deviceId?: string; channel?: string; payload?: unknown } | null;
+      const push = raw as {
+        deviceId?: string;
+        channel?: string;
+        payload?: unknown;
+        ownerStamp?: unknown;
+      } | null;
       if (!push?.channel) return;
+      const remoteIngress: LiveIngressContext = push.deviceId
+        ? {
+            remoteDeviceId: push.deviceId,
+            ownerStamp: push.ownerStamp,
+            ownerStampPresent: Object.prototype.hasOwnProperty.call(push, 'ownerStamp'),
+          }
+        : {};
+      if (!isCurrentLiveIngress(remoteIngress)) return;
       const inboundPayload = push.payload as {
         sessionId?: string;
         patch?: Record<string, unknown>;
@@ -5605,33 +6485,33 @@ function initGlobalListeners(): void {
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
       switch (push.channel) {
         case 'maker:event':
-          handleMakerEventRaw(push.payload);
+          handleMakerEventRaw(push.payload, remoteIngress);
           break;
         case 'maker:status-changed':
-          handleMakerStatusRaw(push.payload);
+          handleMakerStatusRaw(push.payload, remoteIngress);
           break;
         case 'maker:input:projection':
           if (!push.deviceId) break;
-          handleInputProjectionRaw(push.payload, push.deviceId);
+          handleInputProjectionRaw(push.payload, push.deviceId, remoteIngress);
           break;
         case 'maker:interaction-request':
-          handleLiveInteractionRequestRaw(push.payload);
+          handleLiveInteractionRequestRaw(push.payload, remoteIngress);
           break;
         case 'maker:interaction-dismissed':
-          handleLiveInteractionDismissedRaw(push.payload);
+          handleLiveInteractionDismissedRaw(push.payload, remoteIngress);
           break;
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
-          handleMessageCreatedRaw(push.payload);
+          handleMessageCreatedRaw(push.payload, remoteIngress);
           break;
         case 'local-db:messages:deleted':
-          handleMessageDeletedRaw(push.payload);
+          handleMessageDeletedRaw(push.payload, remoteIngress);
           break;
         case 'usage:message-turn-cost':
-          handleUsageMessageTurnCostRaw(push.payload);
+          handleUsageMessageTurnCostRaw(push.payload, remoteIngress);
           break;
         case 'usage:message-model-mismatch':
-          handleUsageMessageModelMismatchRaw(push.payload);
+          handleUsageMessageModelMismatchRaw(push.payload, remoteIngress);
           break;
         case 'usage:session-spend-changed': {
           // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
@@ -5683,6 +6563,9 @@ function initGlobalListeners(): void {
               break;
             }
             const ownsSession = getStickySessionDeviceId(p.sessionId) === push.deviceId;
+            if (Object.prototype.hasOwnProperty.call(p.patch, 'clearedAt')) {
+              observeRemoteInputClearBoundary(p.sessionId, p.patch.clearedAt);
+            }
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, p.patch);
             if (terminal && ownsSession) {
               // A background task can be deleted or archived from another
@@ -5774,11 +6657,21 @@ function initGlobalListeners(): void {
   // 纯来源漂移驱动,正常 patched 推送(current===loaded)不误重载。teardown 时随其它监听一并清。
   {
     const unsub = remoteProjectsStore.subscribe(() => {
+      // Snapshot/reseed can be the first clear signal (the projection or patch
+      // may have been dropped). Reconcile boundaries before any subscriber or
+      // outbox pump can observe the new shard.
+      observeRemoteInputClearBoundariesFromSnapshot();
       releaseArchivedRemoteTerminalTombstones();
       reconcileOpenSessionOrigins();
       // A remote shard can be reseeded before the relay presence event reaches
       // this renderer. Treat that as a reconnect edge for the in-memory outbox.
-      for (const sessionId of remoteOptimisticSends.keys()) {
+      const remoteOutboxSessionIds = new Set([
+        ...remoteOptimisticSends.keys(),
+        ...remoteClearFences.keys(),
+      ]);
+      for (const sessionId of remoteOutboxSessionIds) {
+        clearRemoteInputProjectionProbeFailure(sessionId);
+        void retryRemoteClearFence(sessionId);
         void pumpRemoteOptimisticSends(sessionId);
       }
     });
@@ -5789,25 +6682,58 @@ function initGlobalListeners(): void {
   // are optional in older test bridges / older preload snapshots, so a missing
   // callback must not prevent the rest of the maker listeners from installing.
   bindIpc(
-    (cb) => window.electronAPI.deviceLink?.onStatusChanged?.(cb as never),
-    (raw) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.deviceLink?.onStatusChanged?.(cb as never),
+    (raw, ownerStamp) => {
+      if (
+        !isCurrentLiveIngress({
+          ownerStamp,
+          ownerStampPresent: ownerStamp !== undefined,
+        })
+      ) {
+        return;
+      }
       const status = (raw as { status?: string } | null)?.status;
       if (status !== 'online') return;
-      for (const sessionId of remoteOptimisticSends.keys()) {
+      const remoteOutboxSessionIds = new Set([
+        ...remoteOptimisticSends.keys(),
+        ...remoteClearFences.keys(),
+      ]);
+      for (const sessionId of remoteOutboxSessionIds) {
+        clearRemoteInputProjectionProbeFailure(sessionId);
+        void retryRemoteClearFence(sessionId);
         pumpRemoteOptimisticSendsAfterCurrent(sessionId);
       }
     },
     'device-link-status-changed-for-outbox',
   );
   bindIpc(
-    (cb) => window.electronAPI.deviceLink?.onPresenceChanged?.(cb as never),
-    (raw) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.deviceLink?.onPresenceChanged?.(cb as never),
+    (raw, ownerStamp) => {
+      if (
+        !isCurrentLiveIngress({
+          ownerStamp,
+          ownerStampPresent: ownerStamp !== undefined,
+        })
+      ) {
+        return;
+      }
       const presence = raw as { deviceId?: string; online?: boolean } | null;
       if (!presence?.deviceId || presence.online !== true) return;
+      // A fresh online edge may follow a controlled-process restart, which can
+      // legitimately reset its local owner generation. Re-seed that device's
+      // monotonic fence before accepting its next stamped frame.
+      remoteOwnerStamps.delete(presence.deviceId);
+      remoteStampedDevices.delete(presence.deviceId);
       for (const [sessionId, records] of remoteOptimisticSends) {
         if ([...records.values()].some((record) => record.deviceId === presence.deviceId)) {
+          clearRemoteInputProjectionProbeFailure(sessionId, presence.deviceId);
           pumpRemoteOptimisticSendsAfterCurrent(sessionId);
         }
+      }
+      for (const [sessionId, fence] of remoteClearFences) {
+        if (fence.deviceId === presence.deviceId) void retryRemoteClearFence(sessionId);
       }
     },
     'device-link-presence-changed-for-outbox',
@@ -5821,12 +6747,21 @@ function initGlobalListeners(): void {
   //   这里直接补进 messages 数组让 UI 立刻看到。
   bindIpc(
     window.electronAPI.localDb.messages.onCreated,
-    handleMessageCreatedRaw,
+    (raw, ownerStamp) =>
+      handleMessageCreatedRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'local-db-messages-created',
   );
   bindIpc(
-    (cb) => window.electronAPI.localDb.messages.onDeleted?.(cb),
-    handleMessageDeletedRaw,
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.localDb.messages.onDeleted?.(cb),
+    (raw, ownerStamp) =>
+      handleMessageDeletedRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'local-db-messages-deleted',
   );
 
@@ -5838,8 +6773,17 @@ function initGlobalListeners(): void {
   //   2. store.error 存在(live ErrorBanner) → 清掉,让重拉后 ErrorMessageCard 独自出现。
   // 正在被查看的会话跳过:它们有 live ErrorBanner(含 Retry/Cancel),不应被脏信号干扰。
   bindIpc(
-    (cb) => window.electronAPI.localDb.messages.onErrorPersisted?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.localDb.messages.onErrorPersisted?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (
+        !isCurrentLiveIngress({
+          ownerStamp,
+          ownerStampPresent: ownerStamp !== undefined,
+        })
+      ) {
+        return;
+      }
       const p = raw as { sessionId?: string } | null;
       if (!p?.sessionId) return;
       const state = sessions.get(p.sessionId);
@@ -5871,13 +6815,23 @@ function initGlobalListeners(): void {
   // 可选调用兜底:renderer HMR 先于 main 重启时老 preload 没有这个 fanOut,
   // 直接取值会让 initGlobalListeners 整体崩掉(费用推送丢了无妨,历史加载兜底)。
   bindIpc(
-    (cb) => window.electronAPI.onUsageMessageTurnCost?.(cb),
-    handleUsageMessageTurnCostRaw,
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.onUsageMessageTurnCost?.(cb),
+    (raw, ownerStamp) =>
+      handleUsageMessageTurnCostRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'usage-message-turn-cost',
   );
   bindIpc(
-    (cb) => window.electronAPI.onUsageMessageModelMismatch?.(cb),
-    handleUsageMessageModelMismatchRaw,
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.onUsageMessageModelMismatch?.(cb),
+    (raw, ownerStamp) =>
+      handleUsageMessageModelMismatchRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
     'usage-message-model-mismatch',
   );
 
@@ -5887,8 +6841,10 @@ function initGlobalListeners(): void {
   // 两条路都保证用户看得见"这条被谁拦了",绝不无声蒸发。被拦消息本就没
   // 入库,离开会话即消失(UI 瞬态,预期语义)。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onUserMessageBlocked?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onUserMessageBlocked?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as {
         sessionId?: string;
         clientId?: string;
@@ -5934,8 +6890,10 @@ function initGlobalListeners(): void {
   // 必在;会话忙时排队消息无乐观气泡,找不到就忽略——落库后 messages:created
   // 会用改写版 content 显示。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onUserMessageRewritten?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onUserMessageRewritten?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as { sessionId?: string; clientId?: string; text?: string } | null;
       if (!p?.sessionId || !p.clientId || typeof p.text !== 'string') return;
       setState(p.sessionId, (s) => ({
@@ -5953,8 +6911,10 @@ function initGlobalListeners(): void {
   // content 静默换成改写版(与落库一致)。找不到该 clientId(极少:消息还没
   // hydrate)则忽略——messages:created/更新会带最终内容。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onAssistantMessageRewritten?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onAssistantMessageRewritten?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as { sessionId?: string; clientId?: string; text?: string } | null;
       if (!p?.sessionId || !p.clientId || typeof p.text !== 'string') return;
       setState(p.sessionId, (s) => ({
@@ -5972,8 +6932,10 @@ function initGlobalListeners(): void {
   // 或超时清掉。render(自绘卡)的呈现切换由 ghostCardStore 驱动(byCallId 命中
   // 本条 clientId),此处只管指示位。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onAssistantMessagePending?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onAssistantMessagePending?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as { sessionId?: string; clientId?: string; pending?: boolean } | null;
       if (!p?.sessionId || !p.clientId || typeof p.pending !== 'boolean') return;
       setState(p.sessionId, (s) => ({
@@ -5988,8 +6950,10 @@ function initGlobalListeners(): void {
 
   // ── 意识钩子熔断(订阅槽①):连续失败降级只旁听,提示用户 ──
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onHookFused?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onHookFused?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as { name?: string } | null;
       if (!p) return;
       toast.error(i18n.t('chat.ghostHook.fused', { name: p.name ?? '' }));
@@ -6003,8 +6967,10 @@ function initGlobalListeners(): void {
   // 主机权威事件)——文案跟用户语言走,按 GHOST_HOST_NOTICE_KEYS 白名单翻译,
   // 白名单外静默丢(防版本错配把生肉 key 摆上界面)。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onNotify?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onNotify?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       const p = raw as {
         name?: string;
         iconDataUrl?: string;
@@ -6043,8 +7009,10 @@ function initGlobalListeners(): void {
   // routeSidebarCommand 会按"贴附/抽离"把命令送到正确归宿;抽离的侧栏子窗口
   // 若也处理,同一条广播会开出两个标签。
   bindIpc(
-    (cb) => window.electronAPI.ghosts?.onPreviewOpen?.(cb),
-    (raw: unknown) => {
+    (cb: (data: unknown, ownerStamp?: unknown) => void) =>
+      window.electronAPI.ghosts?.onPreviewOpen?.(cb),
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       if (isSidebarWindow()) return;
       const p = raw as {
         name?: string;
@@ -6081,6 +7049,8 @@ function __teardownGlobalListeners(): void {
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
+  remoteOwnerStamps.clear();
+  remoteStampedDevices.clear();
   const remoteOptimisticSessionIds = new Set([
     ...remoteOptimisticSends.keys(),
     ...remoteOptimisticRetryTimers.keys(),
@@ -6089,11 +7059,22 @@ function __teardownGlobalListeners(): void {
   for (const sessionId of remoteOptimisticSessionIds) {
     clearRemoteOptimisticSendsForSession(sessionId);
   }
+  for (const sessionId of remoteClearFences.keys()) {
+    clearRemoteClearFence(sessionId, { pump: false });
+  }
   remoteOptimisticMaterializationRecoveries.clear();
   syncRemoteOptimisticAttachmentUrls();
   remoteOptimisticPumps.clear();
   remoteOptimisticLocallyRemoved.clear();
   remoteClearInFlight.clear();
+  remoteInputProjectionRequests.clear();
+  remoteInputProjectionProbeStateBySession.clear();
+  // A test/HMR teardown starts a fresh renderer epoch. Session LRU/view
+  // eviction intentionally does not clear these maps: a reconnect can rebuild
+  // the mirror with an empty shard and still needs the last known clear token.
+  remoteInputClearBoundaryBySession.clear();
+  rendererClearBoundaryBySession.clear();
+  rendererClearGenerationBySession.clear();
   // Stage 2 C1: 老的 cc-agent:* fan-out 已退役, __resetCCAgentFanOuts 也跟着删了。
   // 新链路 maker:* fan-out 当前不会泄漏 (initGlobalListeners 顶部 if guard +
   // dispose 时调对应 unsub()), 不需要 reset 兜底; 真发现 HMR fan-out 重复时
@@ -6551,6 +7532,7 @@ function reconcilePendingInteractions(
   // purged session cannot be resurrected because its epoch/tombstone changes.
   const interactionEpochAtStart = _messagesEpoch.get(sessionId) ?? 0;
   const interactionAuthorityEpochAtStart = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
+  const interactionDataOwnerAtStart = getDataOwnerGeneration();
   // Only the newest interaction snapshot may mutate the pending-card slice.
   // This also covers a dismiss/answer/request event arriving while the host
   // query is in flight, and prevents an older concurrent reconcile from
@@ -6562,6 +7544,7 @@ function reconcilePendingInteractions(
     ? makerApiForDevice(stickyDeviceAtStart)
     : makerApiFor(sessionId);
   const isCurrentInteractionReconcile = () =>
+    isDataOwnerGenerationCurrent(interactionDataOwnerAtStart) &&
     (_messagesEpoch.get(sessionId) ?? 0) === interactionEpochAtStart &&
     (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === interactionAuthorityEpochAtStart &&
     (_interactionReconcileEpoch.get(sessionId) ?? 0) === interactionReconcileEpochAtStart &&
@@ -6731,9 +7714,28 @@ function supersedeInputProjectionRequests(
 function invalidateInputProjectionRequests(sessionId: string): void {
   _inputProjectionOrigin.delete(sessionId);
   _inputProjectionEpoch.delete(sessionId);
+  remoteInputProjectionRequests.delete(sessionId);
+  remoteInputProjectionProbeStateBySession.delete(sessionId);
   // authority 代际不能 delete：pre-purge 操作可能捕获 0，delete 后回落 0 会误放行，
   // 并通过 setState 复活已 purge 的 session。保留单调墓碑，与 messagesEpoch 同理。
   _inputProjectionAuthorityEpoch.set(sessionId, nextInputProjectionEpoch());
+}
+
+/**
+ * An account/local-mode boundary invalidates standalone projection operations
+ * too. They do not necessarily have a remote optimistic outbox record, so
+ * clearing only the outbox would still let an old owner's late projection
+ * mutate the new owner's session slice.
+ */
+function invalidateInputProjectionRequestsForDataOwnerBoundary(): void {
+  const sessionIds = new Set<string>([
+    ...sessions.keys(),
+    ..._inputProjectionOrigin.keys(),
+    ..._inputProjectionEpoch.keys(),
+    ..._inputProjectionAuthorityEpoch.keys(),
+    ...remoteInputProjectionRequests.keys(),
+  ]);
+  for (const sessionId of sessionIds) invalidateInputProjectionRequests(sessionId);
 }
 
 function beginInputProjectionRequest(sessionId: string, origin: string | undefined): number {
@@ -6766,8 +7768,10 @@ function isCurrentInputProjectionRequest(
   sessionId: string,
   origin: string | undefined,
   epoch: number,
+  dataOwner: DataOwnerGeneration,
 ): boolean {
   return (
+    isDataOwnerGenerationCurrent(dataOwner) &&
     isCurrentInputProjectionOrigin(sessionId, origin) &&
     (_inputProjectionEpoch.get(sessionId) ?? 0) === epoch
   );
@@ -6777,6 +7781,7 @@ interface InputProjectionOperation {
   api: RoutableMaker;
   origin: string | undefined;
   pinnedDeviceId?: string;
+  dataOwner: DataOwnerGeneration;
   epoch: number;
 }
 
@@ -6789,11 +7794,17 @@ function beginInputProjectionOperation(
   sessionId: string,
   pinnedDeviceId?: string,
 ): InputProjectionOperation {
-  const origin = pinnedDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);
+  // Queue controls are still writes to the session owner. The live mirror can
+  // be empty for a short window while relay subscriptions are rebuilding, but
+  // stickySessionOrigin retains the last authoritative device and prevents a
+  // weak-link click from falling back to the controller's local maker.
+  const routedDeviceId = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
+  const origin = routedDeviceId;
   return {
-    api: pinnedDeviceId ? makerApiForDevice(pinnedDeviceId) : makerApiFor(sessionId),
+    api: routedDeviceId ? makerApiForDevice(routedDeviceId) : makerApiFor(sessionId),
     origin,
     ...(pinnedDeviceId ? { pinnedDeviceId } : {}),
+    dataOwner: getDataOwnerGeneration(),
     epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
   };
 }
@@ -6804,6 +7815,7 @@ function applyInputProjectionOperationResponse(
   projection: AgentInputProjection,
 ): boolean {
   if (
+    !isDataOwnerGenerationCurrent(operation.dataOwner) ||
     (operation.pinnedDeviceId
       ? getStickySessionDeviceId(sessionId) !== operation.pinnedDeviceId
       : !isCurrentInputProjectionOrigin(sessionId, operation.origin)) ||
@@ -6876,27 +7888,130 @@ async function prepareRemoteOptimisticSend(
   record: RemoteOptimisticSendRecord,
 ): Promise<RemoteOptimisticPreparationResult> {
   if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
+  if (hasPendingRemoteClearFence(sessionId)) {
+    record.phase = 'waiting-for-connection';
+    scheduleRemoteClearRetry(sessionId);
+    return { kind: 'deferred' };
+  }
   if (record.materializationPending) {
     record.phase = 'preflight';
     return { kind: 'deferred' };
   }
-  if (record.preflightCompleted || !record.beforeEnqueue) {
+  if (!record.preflightCompleted && record.beforeEnqueue) {
+    record.phase = 'preflight';
+    try {
+      const proceed = await record.beforeEnqueue();
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
+      if (!proceed) return { kind: 'failed' };
+      record.preflightCompleted = true;
+    } catch (error) {
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
+      if (!isDeferredRemoteSendError(error)) return { kind: 'failed', error };
+      markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+      return { kind: 'deferred' };
+    }
+  } else {
     record.preflightCompleted = true;
-    return { kind: 'ready' };
   }
-  record.phase = 'preflight';
-  try {
-    const proceed = await record.beforeEnqueue();
-    if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
-    if (!proceed) return { kind: 'failed' };
-    record.preflightCompleted = true;
-    return { kind: 'ready' };
-  } catch (error) {
-    if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
-    if (!isDeferredRemoteSendError(error)) return { kind: 'failed', error };
-    markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
-    return { kind: 'deferred' };
+
+  // Any send without a known token probes the pinned host before dispatch. This
+  // includes steer: a clear boundary is a content-ownership fence, not merely
+  // an enqueue concern. Older hosts may reject the projection invoke; the
+  // compatibility fallback below still permits the original steer attempt.
+  const forceProbe = record.forceClearBoundaryProbe;
+  if (
+    !forceProbe &&
+    record.expectedClearBoundaryMs === undefined &&
+    !record.clearBoundaryProbeCompleted
+  ) {
+    const knownBoundary = getKnownRemoteInputClearBoundary(sessionId);
+    if (knownBoundary !== undefined) {
+      record.expectedClearBoundaryMs = knownBoundary;
+      record.clearBoundaryProbeCompleted = true;
+    }
   }
+  if (
+    !forceProbe &&
+    record.expectedClearBoundaryMs === undefined &&
+    !record.clearBoundaryProbeCompleted
+  ) {
+    const probeState = remoteInputProjectionProbeStateBySession.get(sessionId);
+    if (
+      probeState &&
+      isRemoteInputProjectionProbeStateCurrent(sessionId, probeState, record.deviceId)
+    ) {
+      if (
+        probeState.status === 'blocked' &&
+        (isDeferredRemoteSendError(probeState.error) ||
+          isRemoteInputClearBoundaryError(probeState.error))
+      ) {
+        markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+        return { kind: 'deferred' };
+      }
+      record.expectedClearBoundaryMs = probeState.boundary;
+      record.clearBoundaryProbeCompleted = true;
+    }
+  }
+  if (
+    record.expectedClearBoundaryMs === undefined &&
+    (!record.clearBoundaryProbeCompleted || forceProbe)
+  ) {
+    record.clearBoundaryProbeInFlight = true;
+    try {
+      const projectionResult = await requestInputProjection(sessionId, record.deviceId);
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) {
+        return { kind: 'cancelled' };
+      }
+      if (projectionResult && !projectionResult.current) {
+        markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+        return { kind: 'deferred' };
+      }
+      const projection = projectionResult?.projection;
+      if (projection) {
+        const hasBoundary = Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs');
+        if (hasBoundary) {
+          const observedBoundary = normalizeAgentInputClearBoundaryMs(projection.clearBoundaryMs);
+          if (observedBoundary === undefined) {
+            return {
+              kind: 'failed',
+              error: new Error('Remote input projection carried an invalid clear boundary'),
+            };
+          }
+          // A push/snapshot may have already advanced the local mirror while the
+          // probe was in flight. Never regress to that probe's stale token.
+          const currentBoundary = remoteInputClearBoundaryBySession.get(sessionId);
+          record.expectedClearBoundaryMs =
+            typeof currentBoundary === 'number' &&
+            (observedBoundary === null || observedBoundary < currentBoundary)
+              ? currentBoundary
+              : observedBoundary;
+        }
+      }
+      // `requestInputProjection` has already applied the response. Marking the
+      // record complete here avoids a second apply/pump cycle and lets all later
+      // FIFO items reuse the same modern/legacy capability result.
+      record.clearBoundaryProbeCompleted = true;
+      record.forceClearBoundaryProbe = false;
+      record.clearGeneration = rendererClearGenerationBySession.get(sessionId) ?? 0;
+    } catch (error) {
+      if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
+      // A clear may be sealing while the relay is otherwise healthy. Keep the
+      // local bubble and retry after the boundary settles instead of restoring
+      // the composer as a permanent failure. Other projection failures retain
+      // the pre-probe compatibility path: enqueue can still be attempted, and
+      // main will enforce its own clear/state checks.
+      if (isDeferredRemoteSendError(error) || isRemoteInputClearBoundaryError(error)) {
+        markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+        return { kind: 'deferred' };
+      }
+      record.forceClearBoundaryProbe = false;
+      record.clearBoundaryProbeCompleted = true;
+    } finally {
+      record.clearBoundaryProbeInFlight = false;
+    }
+  }
+
+  return { kind: 'ready' };
 }
 
 async function reconcileUncertainRemoteSteer(
@@ -6991,6 +8106,9 @@ async function dispatchRemoteOptimisticSend(
       }
       const accepted = await operation.api.input.steer(sessionId, record.queued, {
         touchUserSend: true,
+        ...(record.expectedClearBoundaryMs !== undefined
+          ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
+          : {}),
       });
       if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
       if (!accepted) throw new Error('Remote steer was not accepted');
@@ -7000,6 +8118,9 @@ async function dispatchRemoteOptimisticSend(
     }
     const projection = await operation.api.input.enqueue(sessionId, record.queued, {
       sendAtMs: Date.now(),
+      ...(record.expectedClearBoundaryMs !== undefined
+        ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
+        : {}),
     });
     if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
     markRemoteOptimisticSendAccepted(sessionId, record.queued.clientId);
@@ -7020,7 +8141,31 @@ async function dispatchRemoteOptimisticSend(
     return { kind: 'accepted' };
   } catch (error) {
     if (!isRemoteOptimisticSendRegistered(sessionId, record)) return { kind: 'cancelled' };
-    if (isRemoteInputSupersededError(error)) return { kind: 'failed', error: undefined };
+    if (isRemoteInputPreparationSupersededError(error)) {
+      // The host invalidated the input while it was being prepared (for
+      // example, a remote clear advanced the coordinator generation). This
+      // message is no longer safe to re-probe or enqueue; restore the draft
+      // immediately without surfacing a user-facing error.
+      return { kind: 'failed', error: undefined };
+    }
+    if (isRemoteInputClearBoundaryError(error)) {
+      // The clear token can advance between the click-time probe and dispatch.
+      // Re-open the probe exactly once so a stale renderer token can recover;
+      // if the host still rejects the refreshed token, settle normally instead
+      // of spinning the outbox forever.
+      if (record.clearBoundaryRecoveryAttempted) {
+        return { kind: 'failed', error: undefined };
+      }
+      record.clearBoundaryRecoveryAttempted = true;
+      record.expectedClearBoundaryMs = undefined;
+      record.clearBoundaryProbeCompleted = false;
+      record.clearBoundaryProbeInFlight = false;
+      record.forceClearBoundaryProbe = true;
+      remoteInputProjectionProbeStateBySession.delete(sessionId);
+      remoteInputProjectionRequests.delete(sessionId);
+      markRemoteOptimisticSendWaiting(sessionId, record.queued.clientId);
+      return { kind: 'deferred' };
+    }
     if (isTerminalRemoteInputError(error)) {
       return { kind: 'failed', error };
     }
@@ -7356,8 +8501,11 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
  *  2. 清盘 —— 进程内标记跨重启就没了,盘上那份必须一起消失。
  * 本机会话没有缓存,直接 no-op。
  */
-function invalidateRemoteMessageCache(sessionId: string): void {
-  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+function invalidateRemoteMessageCache(sessionId: string, pinnedDeviceId?: string): void {
+  const deviceId =
+    pinnedDeviceId ??
+    getStickySessionDeviceId(sessionId) ??
+    remoteProjectsStore.getSessionDeviceId(sessionId);
   if (!deviceId) return;
   _cacheHydrateStarted.add(sessionId);
   _cacheHydrateSuppressed.add(sessionId);
@@ -9076,36 +10224,49 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
  */
 function setQueueExpanded(sessionId: string, expanded: boolean): void {
   if (!sessionId) return;
-  runInputProjectionOperation(sessionId, (input) => input.setExpanded(sessionId, expanded)).catch(
-    (err) => log.warn('setQueueExpanded failed:', err),
-  );
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts
+      ? input.setExpanded(sessionId, expanded, boundaryOpts)
+      : input.setExpanded(sessionId, expanded),
+  ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  runAgentDispatchProjectionOperation(sessionId, (input) => input.resume(sessionId)).catch((err) =>
-    log.warn('resumeQueue failed:', err),
-  );
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runAgentDispatchProjectionOperation(sessionId, (input) =>
+    boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
+  ).catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
   if (!sessionId || !lockId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runInputProjectionOperation(sessionId, (input) =>
-    input.setInteractionLock(sessionId, lockId, locked),
+    boundaryOpts
+      ? input.setInteractionLock(sessionId, lockId, locked, boundaryOpts)
+      : input.setInteractionLock(sessionId, lockId, locked),
   ).catch((err) => log.warn('setQueueInteractionLock failed:', err));
 }
 
 function setQueueEditLock(sessionId: string, clientId: string, locked: boolean): void {
   if (!sessionId || !clientId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runInputProjectionOperation(sessionId, (input) =>
-    input.setEditLock(sessionId, clientId, locked),
+    boundaryOpts
+      ? input.setEditLock(sessionId, clientId, locked, boundaryOpts)
+      : input.setEditLock(sessionId, clientId, locked),
   ).catch((err) => log.warn('setQueueEditLock failed:', err));
 }
 
 function moveQueueItem(sessionId: string, clientId: string, targetIndex: number): void {
   if (!sessionId || !clientId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runInputProjectionOperation(sessionId, (input) =>
-    input.move(sessionId, clientId, targetIndex),
+    boundaryOpts
+      ? input.move(sessionId, clientId, targetIndex, boundaryOpts)
+      : input.move(sessionId, clientId, targetIndex),
   ).catch((err) => log.warn('moveQueueItem failed:', err));
 }
 
@@ -9119,7 +10280,12 @@ function moveQueueItem(sessionId: string, clientId: string, targetIndex: number)
 function removeFromQueue(sessionId: string, clientId: string): void {
   if (!sessionId || !clientId) return;
   markRemoteOptimisticLocallyRemoved(sessionId, clientId);
-  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId))
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts
+      ? input.remove(sessionId, clientId, boundaryOpts)
+      : input.remove(sessionId, clientId),
+  )
     .then(() => clearRemoteOptimisticSend(sessionId, clientId))
     .catch((err) => {
       unmarkRemoteOptimisticLocallyRemoved(sessionId, clientId);
@@ -9139,13 +10305,23 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
   const trimmed = newText.trim();
   if (!trimmed) return;
   const queued = getOrCreateState(sessionId).pendingQueue.find((q) => q.clientId === clientId);
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runInputProjectionOperation(sessionId, (input) =>
-    input.updateText(
-      sessionId,
-      clientId,
-      newText,
-      extractSessionRefs(newText, queued?.sessionRefs),
-    ),
+    boundaryOpts
+      ? input.updateText(
+          sessionId,
+          clientId,
+          newText,
+          extractSessionRefs(newText, queued?.sessionRefs),
+          undefined,
+          boundaryOpts,
+        )
+      : input.updateText(
+          sessionId,
+          clientId,
+          newText,
+          extractSessionRefs(newText, queued?.sessionRefs),
+        ),
   ).catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
@@ -9381,12 +10557,15 @@ function sendMessage(
   // Allow send if there is text OR files
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
-  if (remoteClearInFlight.has(sessionId)) return Promise.resolve(false);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
   const remoteScopeAtStart = captureRemoteOptimisticSendScope(
     sessionId,
     opts?.onRemoteOptimisticFailure,
   );
+  // A remote clear is allowed to seal in the background. Register the local
+  // optimistic item and let its pump wait on the clear fence; local sessions
+  // retain the historical synchronous guard.
+  if (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) return Promise.resolve(false);
   if (remoteScopeAtStart && !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)) {
     return Promise.resolve(false);
   }
@@ -9520,7 +10699,7 @@ async function sendMessageCore(
   materializationPending = false,
 ): Promise<boolean> {
   if (
-    remoteClearInFlight.has(sessionId) ||
+    (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) ||
     (remoteScopeAtStart
       ? !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)
       : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart)
@@ -9552,6 +10731,7 @@ async function sendMessageCore(
         'queue',
         remoteScopeAtStart.dataOwner,
         remoteScopeAtStart.recoverySequence,
+        remoteScopeAtStart.expectedClearBoundaryMs,
         opts,
         recoveryFiles ?? files,
         materializationPending,
@@ -9711,9 +10891,13 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return (
     runAgentDispatchProjectionOperation(sessionId, (input) =>
-      input.compact(sessionId, createOpts, { userName: currentUserName }),
+      input.compact(sessionId, createOpts, {
+        userName: currentUserName,
+        ...(boundaryOpts ?? {}),
+      }),
     )
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
       .then(({ projection }) => projection.error === null)
@@ -9753,12 +10937,12 @@ function steerMessage(
   if (!sessionId || (!text.trim() && (!files || files.length === 0)) || !workingDir) {
     return Promise.resolve(false);
   }
-  if (remoteClearInFlight.has(sessionId)) return Promise.resolve(false);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
   const remoteScopeAtStart = captureRemoteOptimisticSendScope(
     sessionId,
     opts?.onRemoteOptimisticFailure,
   );
+  if (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) return Promise.resolve(false);
   if (remoteScopeAtStart && !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)) {
     return Promise.resolve(false);
   }
@@ -9902,7 +11086,7 @@ async function steerMessageCore(
   materializationPending = false,
 ): Promise<boolean> {
   if (
-    remoteClearInFlight.has(sessionId) ||
+    (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) ||
     (remoteScopeAtStart
       ? !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)
       : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart)
@@ -9931,6 +11115,7 @@ async function steerMessageCore(
         'steer',
         remoteScopeAtStart.dataOwner,
         remoteScopeAtStart.recoverySequence,
+        remoteScopeAtStart.expectedClearBoundaryMs,
         opts,
         recoveryFiles ?? files,
         materializationPending,
@@ -10158,7 +11343,10 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
     () => Promise.resolve(false),
     () =>
       steerApi.input
-        .steer(sessionId, queued, { removeFromQueue: true })
+        .steer(sessionId, queued, {
+          removeFromQueue: true,
+          ...getRemoteInputClearBoundaryOpts(sessionId),
+        })
         .then((ok) => {
           requestInputProjection(sessionId);
           return ok;
@@ -10194,7 +11382,11 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
  */
 function stopSession(
   sessionId: string,
-  opts?: { keepQueue?: boolean; pauseQueue?: boolean },
+  opts?: {
+    keepQueue?: boolean;
+    pauseQueue?: boolean;
+    expectedClearBoundaryMs?: number | null;
+  },
 ): void {
   if (!sessionId) return;
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
@@ -10204,8 +11396,16 @@ function stopSession(
   bumpInteractionReconcileEpoch(sessionId);
   supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
+  const clearBoundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const stopOpts =
+    opts || clearBoundaryOpts
+      ? {
+          ...(opts ?? {}),
+          ...(clearBoundaryOpts ?? {}),
+        }
+      : undefined;
   operation.api.input
-    .stop(sessionId, opts)
+    .stop(sessionId, stopOpts)
     .then((projection) => {
       applyInputProjectionOperationResponse(sessionId, operation, projection);
     })
@@ -10314,9 +11514,10 @@ function popQueueTail(sessionId: string): boolean {
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
-  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId)).catch((err) =>
-    log.warn('clearError failed:', err),
-  );
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts ? input.clearError(sessionId, boundaryOpts) : input.clearError(sessionId),
+  ).catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
     if (
       s.error == null &&
@@ -10344,8 +11545,9 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    input.retryLastError(sessionId),
+    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
   ).then(() => undefined);
 }
 
@@ -10452,6 +11654,12 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   bumpMessagesEpoch(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
   supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  if (remoteDeviceId) {
+    // Arm before the first remote await. New sends made while the invoke is
+    // pending are accepted into the local optimistic ledger but cannot cross
+    // the host's clear boundary.
+    armRemoteClearFence(sessionId, remoteDeviceId, clearedAt);
+  }
   clearRemoteOptimisticMaterializationRecoveriesForSession(sessionId, {
     preserveComposerTransitions: true,
     markComposerTransitionsPurged: true,
@@ -10460,7 +11668,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
   // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
   // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
-  invalidateRemoteMessageCache(sessionId);
+  invalidateRemoteMessageCache(sessionId, remoteDeviceId);
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:
@@ -10487,12 +11695,28 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
     if (guardTimeoutId) clearTimeout(guardTimeoutId);
   }
   if (guardResult.kind === 'projection') {
+    let remoteClearResolved = true;
+    if (remoteDeviceId) {
+      remoteClearResolved = resolveRemoteClearFenceFromProjection(
+        sessionId,
+        remoteDeviceId,
+        clearedAt,
+        guardResult.projection,
+        { pump: false },
+      );
+    }
     applyInputProjectionOperationResponse(sessionId, clearOperation, guardResult.projection);
+    if (remoteDeviceId) {
+      if (remoteClearResolved) pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+      else scheduleRemoteClearRetry(sessionId);
+    }
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
+    if (remoteDeviceId) scheduleRemoteClearRetry(sessionId);
   } else {
     log.warn('maker.input.clearSession timed out; continuing local clear', { sessionId });
+    if (remoteDeviceId) scheduleRemoteClearRetry(sessionId);
   }
 
   _lastViewedAt.delete(sessionId);
@@ -10504,13 +11728,30 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
     .closeSession(sessionId, { preserveWorkspace: true })
     .catch((err) => log.warn('maker.closeSession failed:', err));
 
+  // The remote guard may have been waiting while the user composed another
+  // message. Those records belong to the post-clear generation: clear the old
+  // transcript, but keep their local optimistic rows until the host accepts
+  // them. Pre-clear records were already removed before the guard invoke.
+  const postClearOptimisticClientIds = new Set(
+    [...(remoteOptimisticSendRecords(sessionId)?.values() ?? [])]
+      .filter(
+        (record) =>
+          isDataOwnerGenerationCurrent(record.dataOwner) &&
+          record.clearGeneration === (rendererClearGenerationBySession.get(sessionId) ?? 0),
+      )
+      .map((record) => record.queued.clientId),
+  );
+
   // Clear in-memory state; preserve isFirstMessage so the view stays in ChatView
   // with an empty message list (matches /clear semantics). The epoch was bumped
   // before the guard await above, so old history responses are already invalid.
   setState(sessionId, (s) => {
     return {
       ...s,
-      messages: [],
+      messages: s.messages.filter(
+        (message) =>
+          message.isPendingPersist && postClearOptimisticClientIds.has(message.clientId),
+      ),
       taskUpdates: new Map(),
       pendingTaskWake: false,
       streamingClientId: null,
@@ -10545,7 +11786,9 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       askUserDraft: null,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
-      pendingQueue: [],
+      pendingQueue: s.pendingQueue.filter((item) =>
+        postClearOptimisticClientIds.has(item.clientId),
+      ),
       steeringQueueClientIds: [],
       queuePaused: false,
       queueAbortPending: false,
