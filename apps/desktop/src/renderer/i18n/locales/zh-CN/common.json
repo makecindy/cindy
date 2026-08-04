@@ -3849,7 +3849,6 @@
     "limitRejected": "已触发套餐限额，请求可能被拒绝",
     "limitWarning": "接近套餐限额",
     "extraUsageEnabled": "额外用量已启用",
-    "turnCost": "本轮消耗",
     "turnCostUnavailable": "本轮费用暂无法估算",
     "tokenLabel": "Token",
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",

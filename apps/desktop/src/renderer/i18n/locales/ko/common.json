@@ -3849,14 +3849,13 @@
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
     "limitWarning": "플랜 한도에 근접했습니다",
     "extraUsageEnabled": "추가 사용량 활성화됨",
-    "turnCost": "이번 턴 비용",
-    "turnCostUnavailable": "이번 턴의 비용을 현재 추정할 수 없습니다",
+    "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
-    "waiting": "Claude 구독 사용량은 다음 턴이 완료된 후 업데이트됩니다."
+    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
     "costLine": "이번 턴 비용: {{cost}}",

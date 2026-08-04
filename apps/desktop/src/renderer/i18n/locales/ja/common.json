@@ -3849,14 +3849,13 @@
     "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
     "limitWarning": "プランの上限に近づいています",
     "extraUsageEnabled": "追加使用量が有効です",
-    "turnCost": "このターンの消費",
-    "turnCostUnavailable": "このターンの料金は現在見積もれません",
+    "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
-    "waiting": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。"
+    "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
     "costLine": "このターンの消費: {{cost}}",

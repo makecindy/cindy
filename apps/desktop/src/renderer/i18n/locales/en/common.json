@@ -3851,14 +3851,13 @@
     "limitRejected": "Plan limit reached; requests may be rejected",
     "limitWarning": "Approaching plan limit",
     "extraUsageEnabled": "Extra usage enabled",
-    "turnCost": "Cost this turn",
-    "turnCostUnavailable": "Cost unavailable for this turn",
+    "turnCostUnavailable": "Cost unavailable for this message",
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
-    "waiting": "Claude subscription usage will update after the next turn completes."
+    "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
     "costLine": "Cost this turn: {{cost}}",

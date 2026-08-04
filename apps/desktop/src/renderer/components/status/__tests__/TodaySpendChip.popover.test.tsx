@@ -41,7 +41,6 @@ vi.mock('react-i18next', () => ({
         'quotaCard.modelWeeklyLabel': '{{model}} 周限',
         'quotaCard.usedPercent': '已用 {{percent}}%',
         'quotaCard.resetAt': '{{at}} 重置',
-        'quotaCard.turnCost': '本轮消耗',
         'quotaCard.turnCostUnavailable': '本轮费用暂无法估算',
         'quotaCard.tokenLabel': 'Token',
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
