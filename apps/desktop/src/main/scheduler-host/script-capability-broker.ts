@@ -64,10 +64,13 @@ function rejectHostOwnedParams(params: Record<string, unknown>, keys: string[]):
  * 在途调用)时统一 finalize——否则 runner 的 30s drain 截止后,调用要等
  * pipeDispatcher 超时(上限 GHOST_PIPE_CALL_MAX_TOTAL_MS = 30min)才交卷,
  * 这段 gap 里旧 callId 仍有写权而下一轮 fire 可能已开始(review P1)。
+ *
+ * schedule 收窄为 Pick<Schedule,'workingDir'>:本包装只读工作目录,防未来
+ * 改动误把 providerId/targetSessionId 等 host-owned 字段当授权来源(review)。
  */
 async function callGhostForScript(
   request: { ghostId: string; tool: string; args: Record<string, unknown> },
-  schedule: Schedule,
+  schedule: Pick<Schedule, 'workingDir'>,
   active: Set<string>,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
@@ -117,7 +120,7 @@ function optionalOutFile(params: Record<string, unknown>): string | undefined {
 async function callFeishu(
   name: string,
   args: Record<string, unknown>,
-  schedule: Schedule,
+  schedule: Pick<Schedule, 'workingDir'>,
   active: Set<string>,
 ): Promise<unknown> {
   const result = await callGhostForScript(
@@ -132,7 +135,7 @@ async function callFeishu(
 
 async function callJira(
   args: Record<string, unknown>,
-  schedule: Schedule,
+  schedule: Pick<Schedule, 'workingDir'>,
   active: Set<string>,
 ): Promise<unknown> {
   const result = await callGhostForScript(
@@ -249,12 +252,14 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       case 'jira.add_comment': {
         requireCapability(granted, 'jira.comment');
         const issueKey = requireString(params, 'issue_key');
-        // body_text / body_adf 恰好二选一。ADF 只做"非 null 的 plain object"浅校验,
-        // 文档结构由 Jira 侧把关(下游 xd-atlassian add_comment 本就支持 body_adf)。
+        // body_text / body_adf 恰好二选一。body_adf 校验「非 null、非数组的
+        // object」:经 JSONL 协议到达的 object 必为 plain object(JSON.parse
+        // 产物,Date/Map/class 实例穿不过协议边界),无需更严;文档结构由
+        // Jira 侧把关(下游 xd-atlassian add_comment 本就支持 body_adf)。
         const hasBodyText = params.body_text !== undefined;
         const hasBodyAdf = params.body_adf !== undefined;
         if (hasBodyText === hasBodyAdf) {
-          fail('INVALID_ARGS', 'exactly one of body_text or body_adf is required');
+          fail('INVALID_ARGS', 'provide exactly one of body_text or body_adf (both or neither given)');
         }
         if (hasBodyAdf) {
           const bodyAdf = params.body_adf;

@@ -127,14 +127,33 @@ describe('SchedulerScriptCapabilityBroker', () => {
       tool: 'jira_issues',
       args: { action: 'add_comment', issue_key: 'DING-1', body_text: 'done' },
     });
+    // 生命周期同样锁住:add_comment 也走 callGhostForScript——登记形状、同一
+    // callId 下行、交卷 finalize,与 jira.get 同一本账(review:只断回显形状
+    // 会让「漏走登记包装」的回归照样绿)。
+    expect(registerCallMock).toHaveBeenCalledTimes(1);
+    const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(info).toMatchObject({ ghostId: 'xd-atlassian', sessionId: null, channel: 'script' });
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ callId }));
+    expect(finalizeCallMock).toHaveBeenCalledWith(callId);
   });
 
   it('forwards ADF comment bodies untouched for real @mentions', async () => {
     // 2026-08-04 DING-179498:决策评论带 mention 的 ADF 曾被白名单拒收导致丢单。
+    // fixture 用真实 mention 形态(text/accessLevel 等 attrs 全带),防「只透传
+    // 了简化形态、真 payload 被剥字段」的回归(review)。
     const adf = {
       type: 'doc',
       version: 1,
-      content: [{ type: 'paragraph', content: [{ type: 'mention', attrs: { id: 'acc-1' } }] }],
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '请 ' },
+            { type: 'mention', attrs: { id: 'acc-1', text: '@张三', accessLevel: '' } },
+            { type: 'text', text: ' 确认方案' },
+          ],
+        },
+      ],
     };
     await new SchedulerScriptCapabilityBroker().call(
       { method: 'jira.add_comment', params: { issue_key: 'DING-2', body_adf: adf } },
@@ -147,6 +166,21 @@ describe('SchedulerScriptCapabilityBroker', () => {
       args: { action: 'add_comment', issue_key: 'DING-2', body_adf: adf },
       callId: expect.any(String),
     });
+    // 互斥的负向断言:body_adf 分支不得夹带 body_text(review)。
+    const dispatched = callGhostToolMock.mock.calls[0][0] as { args: Record<string, unknown> };
+    expect(dispatched.args).not.toHaveProperty('body_text');
+  });
+
+  it('passes through an empty ADF object (shallow validation defers structure to Jira)', async () => {
+    // body_adf {} 是浅校验放行的合法形态:结构深校验留给 Jira 侧,broker 不自作主张拒。
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.add_comment', params: { issue_key: 'DING-4', body_adf: {} } },
+      new Set(['jira.comment']),
+      { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({
+      args: { action: 'add_comment', issue_key: 'DING-4', body_adf: {} },
+    }));
   });
 
   it('requires exactly one of body_text and body_adf, and body_adf must be an object', async () => {
@@ -157,15 +191,26 @@ describe('SchedulerScriptCapabilityBroker', () => {
         new Set(['jira.comment']),
         { schedule: schedule() },
       );
-    await expect(call({ body_text: 'x', body_adf: { type: 'doc' } })).rejects.toMatchObject({
-      code: 'INVALID_ARGS',
-    });
-    await expect(call({})).rejects.toMatchObject({ code: 'INVALID_ARGS' });
-    // 非 plain object 的 body_adf 全部拒收(结构深校验留给 Jira 侧)
-    await expect(call({ body_adf: '{"type":"doc"}' })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
-    await expect(call({ body_adf: [{ type: 'doc' }] })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
-    await expect(call({ body_adf: null })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    // 逐个坏输入断言(不合并批处理,哪个回归一眼可见;review):
+    const badInputs: Array<[string, Record<string, unknown>]> = [
+      ['两传', { body_text: 'x', body_adf: { type: 'doc' } }],
+      ['都不传', {}],
+      ['body_adf 为字符串', { body_adf: '{"type":"doc"}' }],
+      ['body_adf 为数组', { body_adf: [{ type: 'doc' }] }],
+      ['body_adf 为 null', { body_adf: null }],
+      // 非 plain object 的 body_adf 全部拒收(结构深校验留给 Jira 侧);
+      // body_text 空串/空白串走 requireString 同样拒。
+      ['body_text 为空串', { body_text: '' }],
+      ['body_text 为空白串', { body_text: '   ' }],
+    ];
+    for (const [label, params] of badInputs) {
+      await expect(call(params), label).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    }
+    // 账本无污染:全部坏输入必须在 registerCall 之前被拒——触达 ghost 或在
+    // 账本留孤儿条目(未 finalize 永驻)都算事故(review)。
     expect(callGhostToolMock).not.toHaveBeenCalled();
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(finalizeCallMock).not.toHaveBeenCalled();
   });
 
   it('lists recently-active feishu chats and forwards incremental start_time', async () => {
