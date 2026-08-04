@@ -317,10 +317,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
         omittedEncryptedContent = true;
         continue;
       }
-      if (
-        (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
-        && typeof part.text === 'string'
-      ) {
+      if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
+        if (typeof part.text !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
+        }
         parts.push(part.text);
         continue;
       }

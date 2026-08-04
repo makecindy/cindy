@@ -389,6 +389,15 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it.each(['input_text', 'output_text', 'text'])(
+    'reports a malformed agent message %s part by path',
+    (type) => {
+      expect(() => translateResponsesRequest(base({
+        input: [{ type: 'agent_message', content: [{ type }] }],
+      }))).toThrow(`input[0].content.${type}`);
+    },
+  );
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [
