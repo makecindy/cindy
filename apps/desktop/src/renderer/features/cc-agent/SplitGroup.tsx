@@ -221,10 +221,10 @@ function SplitBranchView({ branch, ...childProps }: Omit<SplitNodeViewProps, 'no
     [],
   );
 
-  const handleGutterPointerDown = useCallback(
     (event: ReactPointerEvent) => {
       if (event.button !== 0) return;
       event.preventDefault();
+      const container = containerRef.current;
       if (!container) return;
       const rect = container.getBoundingClientRect();
       const totalAxisSize = (isRow ? rect.width : rect.height) - GUTTER_PX;
