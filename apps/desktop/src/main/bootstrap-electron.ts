@@ -293,6 +293,7 @@ import {
   markAppContentWindow,
 } from './windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
@@ -911,6 +912,7 @@ const dbClientLog = createLogger('DbClient');
 const authBoundaryLog = createLogger('auth-boundary');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
+const safeStorageReadLog = createLogger('safe-storage:read');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 let rendererBootGuard: RendererBootGuard | null = null;
@@ -3587,7 +3589,16 @@ const registerIpcHandlers = () => {
         const buffer = Buffer.from(content, 'base64');
         return safeStorage.decryptString(buffer);
       } catch (err) {
-        console.error('[safe-storage-read]', err);
+        // 非可信 auxiliary/WebView renderer 触发的拒绝是预期安全结果,降为 debug；
+        // guard、allowlist、路径和明文返回边界保持不变。其它异常仍可见,但只记录
+        // 安全的类型/code,绝不落原始 message、路径、sender 或密文。
+        if (isIpcError(err) && err.code === 'PERMISSION_DENIED') {
+          safeStorageReadLog.debug('read denied for untrusted renderer');
+        } else {
+          safeStorageReadLog.error('read failed', {
+            error: isIpcError(err) ? err.code : err instanceof Error ? err.name : 'unknown',
+          });
+        }
         return null;
       }
     },

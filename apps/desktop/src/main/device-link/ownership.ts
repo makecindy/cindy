@@ -80,6 +80,8 @@ export interface OwnershipArbiterOptions {
   onAcquire: () => void;
   /** 失去持有权(续期 CAS 失败,行被他人接管)→ 宿主停止 relay 连接 */
   onDemote: () => void;
+  /** 本机另一个实例持有连接时通知宿主；仅在状态变化时调用。 */
+  onStandbyChanged?: (standby: boolean) => void;
   /** 持有者续期间隔,默认 5s */
   heartbeatMs?: number;
   /** 心跳超过该时长未续视为持有者失效,默认 15s(须 > 2×heartbeatMs 留余量) */
@@ -149,6 +151,8 @@ export class DeviceLinkOwnershipArbiter {
   private lastRenewOkAt = 0;
   /** 已记录过日志的外部持有者,变化才再记(避免被动态每 5s 刷一行) */
   private loggedForeignOwnerId: string | null = null;
+  /** 是否确知本机另一个实例正持有 device-link。 */
+  private standby = false;
 
   constructor(options: OwnershipArbiterOptions) {
     const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
@@ -173,6 +177,10 @@ export class DeviceLinkOwnershipArbiter {
 
   isOwner(): boolean {
     return this.owner;
+  }
+
+  isStandby(): boolean {
+    return this.standby;
   }
 
   start(): void {
@@ -202,6 +210,7 @@ export class DeviceLinkOwnershipArbiter {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.setStandby(false);
     this.clearStoreRetry();
     let released: Promise<void> = Promise.resolve();
     {
@@ -243,6 +252,7 @@ export class DeviceLinkOwnershipArbiter {
         // 回到 4409 互踢。超过自我降级期限(< staleMs)先停 client 保安全。
         this.maybeSelfDemoteForRenewFailure((this.opts.now ?? Date.now)());
       } else {
+        this.setStandby(false);
         // DB 未就绪:排一次快速重试,把冷启动首连延迟从一整拍收敛到亚秒级
         this.scheduleStoreRetry();
       }
@@ -291,9 +301,11 @@ export class DeviceLinkOwnershipArbiter {
       if (canceled()) return;
       if (row === OP_TIMEOUT) {
         log.warn('ownership read timed out locally, aborting round');
+        this.setStandby(false);
         return;
       }
       if (!row) {
+        this.setStandby(false);
         const insertPromise = store.tryInsert(id, now);
         const inserted = await this.raceOpTimeout(insertPromise);
         if (inserted === OP_TIMEOUT) {
@@ -359,9 +371,11 @@ export class DeviceLinkOwnershipArbiter {
         if (taken) this.promote(`takeover-stale(prev pid=${row.ownerPid})`);
         return;
       }
-      // 持有者心跳新鲜 → 保持被动,不抢
+      // 持有者心跳新鲜 → 保持被动,不抢。过期行会直接尝试接管，不先闪一次待命提示。
+      this.setStandby(true);
     } catch (err) {
       log.warn('ownership tick failed (will retry next tick)', err);
+      this.setStandby(false);
       // 持有者续期持续抛错(如 DbClient worker 崩溃):与 store 不可用同栏,
       // 超过自我降级期限先停 client,避免同伴按 staleMs 接管后回到互踢。
       // 用新鲜时钟 —— 本轮的 now 是 await 之前捕获的,RPC 拖延后已经过时。
@@ -458,6 +472,7 @@ export class DeviceLinkOwnershipArbiter {
   private promote(reason: string): void {
     this.owner = true;
     this.lastRenewOkAt = (this.opts.now ?? Date.now)();
+    this.setStandby(false);
     log.info(`became device-link owner (${reason})`);
     try {
       this.opts.onAcquire();
@@ -468,11 +483,22 @@ export class DeviceLinkOwnershipArbiter {
 
   private demote(reason: string): void {
     this.owner = false;
+    this.setStandby(reason === 'superseded');
     log.info(`no longer device-link owner (${reason})`);
     try {
       this.opts.onDemote();
     } catch (err) {
       log.error('onDemote callback failed', err);
+    }
+  }
+
+  private setStandby(next: boolean): void {
+    if (this.standby === next) return;
+    this.standby = next;
+    try {
+      this.opts.onStandbyChanged?.(next);
+    } catch (err) {
+      log.error('onStandbyChanged callback failed', err);
     }
   }
 }

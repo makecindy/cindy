@@ -2940,7 +2940,8 @@
         "auth-failed": "Sign-in expired — please sign in again",
         "replaced": "Connection replaced by another instance of this device",
         "too-many-connections": "Connection limit reached for this account",
-        "version-mismatch": "Protocol version mismatch — please update the app"
+        "version-mismatch": "Protocol version mismatch — please update the app",
+        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -2981,7 +2982,8 @@
         "disconnectFailed": "Failed to disconnect remote connection",
         "remoteSessionEnded": "The remote device ended this session"
       },
-      "control": "Control"
+      "control": "Control",
+      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
     },
     "imBot": {
       "beta": "Beta",
@@ -6189,7 +6191,8 @@
         "auth-failed": "Sign-in has expired — sign in again to restore the remote connection",
         "replaced": "This connection was replaced by another instance of the same device — reconnecting…",
         "too-many-connections": "Too many devices online for this account — the server refused the connection",
-        "version-mismatch": "Protocol version doesn't match the server — update the app and retry"
+        "version-mismatch": "Protocol version doesn't match the server — update the app and retry",
+        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry"
       }
     },
     "common": {

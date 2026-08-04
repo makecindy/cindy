@@ -16,5 +16,7 @@
   "sectionRemoteDisabled": "在电脑上操作",
   "sectionAccessRevoked": "需要重新允许",
   "retryAccess": "重试访问",
-  "recheck": "重新检查"
+  "recheck": "重新检查",
+  "unstableTitle": "连接反复断开",
+  "unstableHint": "本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。"
 }

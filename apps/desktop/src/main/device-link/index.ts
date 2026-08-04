@@ -717,6 +717,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       appliedSettingsSnapshot = null;
       teardownActiveLink();
     },
+    // 待命状态推给 renderer:待命实例不连 relay,远程设备会全部显示离线、远程调用一律
+    // DEVICE_LINK_STANDBY。不广播的话这段时间界面上没有任何解释(用户只能以为功能坏了)。
+    onStandbyChanged: (standby) => {
+      broadcast(DEVICE_LINK_PUSH.OWNERSHIP_CHANGED, { standby });
+    },
   });
 
   // 登录态驱动仲裁:已登录即参与认领(控制端列表/被控端可达都依赖这条 WS)
@@ -1055,6 +1060,14 @@ export function handleDeviceLinkSystemResume(): void {
 
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
   return client?.getConnectionIssue() ?? null;
+}
+
+/**
+ * 本机另一个实例正持有 device-link(本实例待命)。仲裁器缺失时按 false ——
+ * 未登录 / 服务未初始化不是“被占用”,不能让 UI 显示一条无从处理的占用提示。
+ */
+export function isDeviceLinkStandby(): boolean {
+  return arbiter?.isStandby() ?? false;
 }
 
 /** 切换「允许被控」开关:落盘 + 在线时即时 presence-set 广播;关闭时踢掉所有控制端 */

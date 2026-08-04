@@ -47,6 +47,8 @@ const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
 const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
+/** 连续三次握手成功后仍没撑过稳定期，才把普通抖动升级为可见问题。 */
+const SHORT_LIVED_STREAK_LIMIT = 3;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
 const MAX_LEGACY_INBOUND_BYTES = 16 * 1024 * 1024;
 const MAX_PENDING_INBOUND_LINK_OFFERS = 64;
@@ -209,7 +211,9 @@ export type DeviceLinkConnectionIssueKind =
   /** 4429:同账号连接数超限 */
   | 'too-many-connections'
   /** 协议版本不一致(server 4400 拒绝 / 客户端 hello-ack 校验) */
-  | 'version-mismatch';
+  | 'version-mismatch'
+  /** 连续多次握手成功后又在稳定期内断开。 */
+  | 'unstable';
 
 export interface DeviceLinkConnectionIssue {
   kind: DeviceLinkConnectionIssueKind;
@@ -368,6 +372,10 @@ export class DeviceLinkClient {
   private lastSocketErrorMessage: string | null = null;
   /** 最近一次分类出的连接问题;online 清除,普通断线保留(重连中 banner 不闪) */
   private connectionIssue: DeviceLinkConnectionIssue | null = null;
+  /** 当前连接第一次进入 online 的时刻；用于断开诊断和短命连接判定。 */
+  private onlineSinceAt: number | null = null;
+  /** 连续「握手成功但没撑过稳定期」次数；稳定在线后清零。 */
+  private shortLivedStreak = 0;
   /** 最近一次 hello-ack 声明的 server 能力集(老 server 无该字段 = 空集) */
   private serverCapabilities: readonly string[] = [];
   /** 最近一次 hello-ack 回的本设备 deviceId(深链等场景需要自我标识) */
@@ -532,6 +540,13 @@ export class DeviceLinkClient {
         ws.terminate?.();
       }
     }
+    this.log.info(
+      `device-link stopped by host (onlineForMs=${
+        this.onlineSinceAt === null ? 'never-online' : Math.max(0, Date.now() - this.onlineSinceAt)
+      })`,
+    );
+    this.onlineSinceAt = null;
+    this.shortLivedStreak = 0;
     // 主动停止(登出 / 退后台)清掉遗留 issue,避免下次启动前 UI 挂着过期原因
     this.setConnectionIssue(null);
     this.setStatus('stopped');
@@ -1029,8 +1044,11 @@ export class DeviceLinkClient {
       // 立刻 fail(带 inFlight 标记),让上层快速重试。这条 INFO 同时是排障锚点:
       // 此路径此前没有任何日志痕迹,连接翻覆时无法与「真实断连重连」区分。
       this.log.info(
-        `discarding live socket for reconnect (reason=${reason}, pending=${this.pending.size})`,
+        `discarding live socket for reconnect (reason=${reason}, pending=${this.pending.size}, onlineForMs=${
+          this.onlineSinceAt === null ? 'never-online' : Math.max(0, Date.now() - this.onlineSinceAt)
+        })`,
       );
+      this.onlineSinceAt = null;
       try {
         prev.close(1000, 'reconnecting');
       } catch {
@@ -1113,7 +1131,6 @@ export class DeviceLinkClient {
     ws.on('close', (code, reason) => {
       if (epoch !== this.connEpoch) return;
       const reasonText = closeReasonToString(reason);
-      this.log.info(`relay connection closed (code=${code}${reasonText ? ` reason=${reasonText}` : ''})`);
       this.handleDisconnect(code, reasonText);
     });
 
@@ -1149,6 +1166,15 @@ export class DeviceLinkClient {
   }
 
   private handleDisconnect(code?: number, reason?: string): void {
+    const onlineForMs =
+      this.onlineSinceAt === null ? null : Math.max(0, Date.now() - this.onlineSinceAt);
+    this.log.info(
+      `device-link disconnected (code=${code ?? 'n/a'}, reason=${reason || 'n/a'}, onlineForMs=${
+        onlineForMs ?? 'never-online'
+      })`,
+    );
+    this.trackShortLivedConnection(onlineForMs, code, reason);
+    this.onlineSinceAt = null;
     this.clearTimers();
     this.ws = null;
     this.resetLinkStateForReconnect();
@@ -1447,7 +1473,9 @@ export class DeviceLinkClient {
           this.ws?.close(4400, 'protocol version mismatch');
           return true; // close 事件经 epoch 校验后走 handleDisconnect → 退避重连
         }
-        this.setConnectionIssue(null);
+        // unstable 描述的是跨连接的抖动模式，不能在每次短暂握手成功时清掉；
+        // 只有稳定在线满一个稳定期才算恢复。
+        if (this.connectionIssue?.kind !== 'unstable') this.setConnectionIssue(null);
         this.serverCapabilities = Array.isArray(ack?.capabilities)
           ? ack.capabilities.filter((c): c is string => typeof c === 'string')
           : [];
@@ -1461,6 +1489,7 @@ export class DeviceLinkClient {
         this.handshakeTimeoutStreak = 0;
         const wasOnline = this.status === 'online';
         this.setStatus('online');
+        if (!wasOnline) this.onlineSinceAt = Date.now();
         this.armReconnectStableReset();
         this.startHeartbeat();
         // 重复 hello-ack(已在线还收到 ack)单独判别:这不是新连接,而是 relay 在同一条
@@ -2715,11 +2744,45 @@ export class DeviceLinkClient {
     }
   }
 
+  /**
+   * 普通网络切换不应打扰用户；连续多次「连上就掉」才暴露 unstable。
+   * 主动 stop 不经过这里，具体的鉴权/顶号/版本问题会在调用方随后覆盖本分类。
+   */
+  private trackShortLivedConnection(
+    onlineForMs: number | null,
+    code?: number,
+    reason?: string,
+  ): void {
+    if (this.stopped || onlineForMs === null) return;
+    if (onlineForMs >= this.timing.reconnectStableResetMs) {
+      this.shortLivedStreak = 0;
+      return;
+    }
+    this.shortLivedStreak++;
+    if (this.shortLivedStreak < SHORT_LIVED_STREAK_LIMIT) return;
+    this.log.warn(
+      `device-link keeps dropping after handshake (${this.shortLivedStreak} in a row, lastOnlineForMs=${onlineForMs}, code=${
+        code ?? 'n/a'
+      })`,
+    );
+    this.setConnectionIssue({
+      kind: 'unstable',
+      closeCode: code,
+      detail: `${this.shortLivedStreak} short-lived connections; last ${onlineForMs}ms${
+        reason ? ` (${reason})` : ''
+      }`,
+      at: Date.now(),
+    });
+  }
+
   private armReconnectStableReset(): void {
     if (this.reconnectStableTimer) clearTimeout(this.reconnectStableTimer);
     this.reconnectStableTimer = setTimeout(() => {
       this.reconnectStableTimer = null;
-      if (!this.stopped && this.status === 'online') this.reconnectAttempt = 0;
+      if (this.stopped || this.status !== 'online') return;
+      this.reconnectAttempt = 0;
+      this.shortLivedStreak = 0;
+      if (this.connectionIssue?.kind === 'unstable') this.setConnectionIssue(null);
     }, this.timing.reconnectStableResetMs);
   }
 }

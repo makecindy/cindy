@@ -25,6 +25,7 @@ import {
 import {
   getDeviceLinkStatus,
   getDeviceLinkConnectionIssue,
+  isDeviceLinkStandby,
   getUnresponsiveDeviceIds,
   clearDeviceResponsiveness,
   setRemoteControlEnabled,
@@ -122,6 +123,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
         connectionIssue: getDeviceLinkConnectionIssue(),
+        standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
@@ -229,6 +231,8 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     keepAwake: state.keepAwake,
     linkStatus: 'stopped',
     connectionIssue: null,
+    // 无 device-link 能力(未登录 / 本地会话)不是“被本机另一实例占用”,按 false 上报。
+    standby: false,
     controlledBy: [],
     revokedControllers: [],
     disabledControlDeviceIds: [],

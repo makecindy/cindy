@@ -16,5 +16,7 @@
   "sectionRemoteDisabled": "On Your Computer",
   "sectionAccessRevoked": "Approve Access Again",
   "retryAccess": "Retry Access",
-  "recheck": "Check Again"
+  "recheck": "Check Again",
+  "unstableTitle": "Connection keeps dropping",
+  "unstableHint": "Connection keeps dropping and reconnecting — check the network, or restart the app if it persists."
 }

@@ -2939,7 +2939,8 @@
         "auth-failed": "登录已失效，请重新登录",
         "replaced": "连接被另一处相同设备顶替",
         "too-many-connections": "同账号连接数已达上限",
-        "version-mismatch": "协议版本不一致，请升级应用"
+        "version-mismatch": "协议版本不一致，请升级应用",
+        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy"
       },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
@@ -2980,7 +2981,8 @@
         "disconnectFailed": "断开远程连接失败",
         "remoteSessionEnded": "被控设备已结束该远程任务"
       },
-      "control": "控制"
+      "control": "控制",
+      "standbyHint": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。"
     },
     "imBot": {
       "beta": "Beta",
@@ -6178,7 +6180,8 @@
         "auth-failed": "登录已失效，重新登录后才能恢复远程连接",
         "replaced": "本机连接被另一处相同设备顶替，正在重新连接…",
         "too-many-connections": "同账号在线设备过多，连接被服务端拒绝",
-        "version-mismatch": "与服务端协议版本不一致，请升级应用后重试"
+        "version-mismatch": "与服务端协议版本不一致，请升级应用后重试",
+        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试"
       }
     },
     "common": {

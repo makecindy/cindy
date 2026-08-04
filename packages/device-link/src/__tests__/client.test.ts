@@ -3465,6 +3465,67 @@ describe('DeviceLinkClient', () => {
       expect(issues).toHaveLength(2);
       expect(issues[1]).toBeNull();
     });
+
+    describe('unstable(反复连上又掉)', () => {
+      const flappy = () =>
+        makeHarness({ timing: { reconnectStableResetMs: 60, pingIntervalMs: 10_000 } });
+
+      async function flap(h: Harness, first = false): Promise<void> {
+        if (first) h.client.start();
+        await tick(first ? 0 : 45);
+        h.current().ack();
+        h.current().emit('close', 1006);
+      }
+
+      it('前两次短命不打扰用户,第三次连续才判 unstable', async () => {
+        const h = flappy();
+        await flap(h, true);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        h.client.stop();
+      });
+
+      it('hello-ack 不会立即清除 unstable,稳定在线满一个周期后才清除', async () => {
+        const h = flappy();
+        await flap(h, true);
+        await flap(h);
+        await flap(h);
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        await tick(45);
+        h.current().ack();
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'unstable' });
+        await tick(80);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        h.current().emit('close', 1006);
+        expect(h.client.getConnectionIssue()).toBeNull();
+        h.client.stop();
+      });
+
+      it('具体的 4409 replaced 优先于 unstable,主动 stop 不计入', async () => {
+        const h = flappy();
+        h.client.start();
+        await tick();
+        for (let i = 0; i < 3; i++) {
+          if (i > 0) await tick(45);
+          h.current().ack();
+          h.current().emit('close', 4409, 'replaced by new connection');
+        }
+        expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'replaced', closeCode: 4409 });
+        h.client.stop();
+
+        const stopped = flappy();
+        for (let i = 0; i < 3; i++) {
+          stopped.client.start();
+          await tick();
+          stopped.current().ack();
+          stopped.client.stop();
+        }
+        expect(stopped.client.getConnectionIssue()).toBeNull();
+      });
+    });
   });
 
   describe('客户端主动重建(connect 重入丢弃在用 socket)', () => {
@@ -3485,7 +3546,7 @@ describe('DeviceLinkClient', () => {
       // 静默重建此前没有任何日志痕迹(旧 socket close 被 epoch 守卫屏蔽),这条 INFO
       // 是排障时区分「客户端主动重建」与「真实断连重连」的唯一锚点。
       expect(info).toHaveBeenCalledWith(
-        expect.stringContaining('discarding live socket for reconnect (reason=appstate-active, pending=0)'),
+        expect.stringContaining('discarding live socket for reconnect (reason=appstate-active, pending=0'),
       );
       h.current().ack();
       expect(h.client.getStatus()).toBe('online');

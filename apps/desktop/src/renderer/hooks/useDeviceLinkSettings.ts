@@ -34,8 +34,10 @@ export interface DeviceLinkSettings {
   enabled: boolean;
   /** 本机 relay 连接状态。 */
   linkStatus: DeviceLinkLinkStatus;
-  /** 本机 relay 连接问题(鉴权失效/被顶号/超限/版本不符;null = 无异常)。 */
+  /** 本机 relay 连接问题(鉴权失效/被顶号/超限/版本不符/反复掉线;null = 无异常)。 */
   connectionIssue: DeviceLinkConnectionIssuePayload | null;
+  /** 本机另一个 Cindy 实例正持有 device-link 连接,本实例处于待命。 */
+  standby: boolean;
   /** 同账号设备列表(含本机 isSelf);null = 尚未加载。 */
   devices: DeviceLinkDeviceView[] | null;
   /** 当前正在控制本机的控制端。 */
@@ -68,6 +70,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [enabled, setEnabledState] = useState(false);
   const [linkStatus, setLinkStatus] = useState<DeviceLinkLinkStatus>('stopped');
   const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssuePayload | null>(null);
+  const [standby, setStandby] = useState(false);
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
@@ -129,6 +132,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
+        setStandby(s.standby === true);
         setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
@@ -146,6 +150,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     const offIssue = window.electronAPI.deviceLink.onConnectionIssue((p) => {
       setConnectionIssue(p.issue);
     });
+    const offOwnership = window.electronAPI.deviceLink.onOwnershipChanged((p) => {
+      setStandby(p.standby === true);
+    });
     const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
       setControlledBy(p.controllers ?? []);
     });
@@ -158,6 +165,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       offPresence();
       offStatus();
       offIssue();
+      offOwnership();
       offControlled();
       offControlTarget();
       clearInterval(timer);
@@ -300,6 +308,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     enabled,
     linkStatus,
     connectionIssue,
+    standby,
     devices,
     controlledBy,
     revokedControllers,

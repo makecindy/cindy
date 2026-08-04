@@ -3232,7 +3232,7 @@ export function CCAgentSessionView({
         {/* device-link 远程会话状态 banner:断链重连 / 被控离线 / 通路不稳定(degraded,弱网熔断)
           时提示 + 重新同步(以被控端为准重拉对账)。suspect-stall(链路在线但本轮久未更新且核实
           不到被控端)优先 —— 它可能在 connected 时触发,额外给「结束本轮」手动收尾。
-          connected / local 且无 stall 时不渲染。 */}
+          unstable 描述跨连接抖动,即使此刻 online 也要展示。connected / local 且无 stall 时不渲染。 */}
         {remoteSync.suspectStall ? (
           <RemoteSessionBanner
             status="suspect-stall"
@@ -3241,9 +3241,18 @@ export function CCAgentSessionView({
           />
         ) : remoteConn === 'reconnecting' ||
           remoteConn === 'host-offline' ||
-          remoteConn === 'degraded' ? (
+          remoteConn === 'degraded' ||
+          remoteLinkIssue?.kind === 'unstable' ? (
           <RemoteSessionBanner
-            status={remoteConn}
+            status={
+              remoteLinkIssue?.kind === 'unstable'
+                ? 'reconnecting'
+                : remoteConn === 'host-offline'
+                  ? 'host-offline'
+                  : remoteConn === 'degraded'
+                    ? 'degraded'
+                    : 'reconnecting'
+            }
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />

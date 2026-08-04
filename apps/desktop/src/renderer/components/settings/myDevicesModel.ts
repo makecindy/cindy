@@ -46,3 +46,13 @@ export function inboundToggleState(
 ): { checked: boolean; disabled: boolean } {
   return { checked: !isRevokedController, disabled: !masterEnabled };
 }
+
+/** 连接问题原因行的显示规则。unstable 描述跨连接抖动,即使当前短暂 online 也保留。 */
+export function resolveActiveConnectionIssue<T extends { kind: string }>(
+  linkStatus: 'stopped' | 'connecting' | 'online',
+  issue: T | null,
+): T | null {
+  if (!issue) return null;
+  if (issue.kind === 'unstable') return issue;
+  return linkStatus === 'online' ? null : issue;
+}

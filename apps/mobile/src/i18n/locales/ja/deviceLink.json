@@ -16,5 +16,7 @@
   "sectionRemoteDisabled": "パソコンで操作",
   "sectionAccessRevoked": "再度の許可が必要",
   "retryAccess": "アクセスを再試行",
-  "recheck": "再確認"
+  "recheck": "再確認",
+  "unstableTitle": "接続が繰り返し切断されています",
+  "unstableHint": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合はアプリを再起動してください。"
 }
