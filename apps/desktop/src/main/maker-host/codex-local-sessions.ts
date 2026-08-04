@@ -51,13 +51,12 @@ const EMPTY_ROLLOUT_RECOVERY_GRACE_MS = 15 * 60_000;
 const MAX_RECOVERY_PATH_ATTEMPTS = 8;
 const codexMessageImportFileCache = new Map<string, ExternalImportFileCacheEntry>();
 
-function isNonEmptyRolloutFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    return stat.isFile() && stat.size > 0;
-  } catch {
-    return false;
+function isNonEmptyRolloutFile(filePath: string, threadId: string): boolean {
+  const state = readRegularRolloutPathState(filePath);
+  if (state === 'unsafe') {
+    throw resumePreparationBlocked(threadId, 'the rollout path is not a stable regular file');
   }
+  return state === 'non-empty-file';
 }
 
 interface EmptyRolloutSnapshot {
@@ -576,7 +575,7 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
     // A non-empty external pointer is never a valid hot path: Codex resumes by
     // appending directly to state.rollout_path. Publish a stable private copy,
     // then move the existing row with CAS while preserving all current metadata.
-    if (!targetIsPrivate && isNonEmptyRolloutFile(targetRollout)) {
+    if (!targetIsPrivate && isNonEmptyRolloutFile(targetRollout, threadId)) {
       try {
         const row = readRawThreadRow(targetDbPath, threadId);
         const preferred = privateRolloutPathForStateRow(targetHome, targetRollout, row);
@@ -646,7 +645,7 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
 
     const expectedMissingPrivateRollout = targetRollout;
     const external = findExternalThreadById(threadId);
-    if (external && isNonEmptyRolloutFile(external.rolloutPath)) {
+    if (external && isNonEmptyRolloutFile(external.rolloutPath, threadId)) {
       try {
         const adopted = await copyExternalRolloutAtomically(
           external.rolloutPath,
@@ -786,7 +785,7 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
   const currentHomeThread = findExternalThreadByIdFromRollouts(targetHome, threadId);
   if (
     currentHomeThread?.rolloutPath
-    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath)
+    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath, threadId)
     && !currentHomeCanonicalEmpty
     && isCanonicalCodexRolloutPath(currentHomeThread.rolloutPath, threadId)
   ) {
@@ -883,7 +882,7 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
       stateBackedCanonicalNamespaceGuard,
     );
   }
-  if (found && isNonEmptyRolloutFile(found.rolloutPath)) {
+  if (found && isNonEmptyRolloutFile(found.rolloutPath, threadId)) {
     try {
       const preferred = targetRolloutPathForExternalThread(found, targetHome);
       const stateHandoffGuard = found.sourceDbPath
@@ -1100,7 +1099,7 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
 
   if (
     currentHomeThread?.rolloutPath
-    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath)
+    && isNonEmptyRolloutFile(currentHomeThread.rolloutPath, threadId)
     && !isCanonicalCodexRolloutPath(currentHomeThread.rolloutPath, threadId)
   ) {
     throw resumePreparationBlocked(threadId, 'private rollout is not discoverable without state');
@@ -1214,6 +1213,26 @@ function isPathInside(parentDir: string, candidate: string): boolean {
 }
 
 type PrivateRolloutPathState = 'missing' | 'empty-file' | 'non-empty-file' | 'unsafe';
+
+/** Classify one rollout path without following its final symbolic link. */
+function readRegularRolloutPathState(candidate: string): PrivateRolloutPathState {
+  let before: fs.Stats;
+  try {
+    before = fs.lstatSync(candidate);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe';
+  }
+  if (!before.isFile()) return 'unsafe';
+  try {
+    const after = fs.lstatSync(candidate);
+    if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) {
+      return 'unsafe';
+    }
+    return after.size > 0 ? 'non-empty-file' : 'empty-file';
+  } catch {
+    return 'unsafe';
+  }
+}
 
 function rolloutPathIsMissing(candidate: string): boolean {
   try {

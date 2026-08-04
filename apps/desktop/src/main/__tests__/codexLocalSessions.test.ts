@@ -5892,6 +5892,61 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(targetRow).toEqual({ rolloutPath: prepared, title: 'Keep target metadata' });
   });
 
+  it('rejects a symlink-shaped external state pointer before copying it', async () => {
+    const externalRollout = path.join(
+      externalHome,
+      'sessions',
+      `rollout-2026-08-03-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(externalRollout), { recursive: true });
+    fs.writeFileSync(externalRollout, 'EXTERNAL_CURRENT');
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, externalRollout, {
+      updatedAt: 3_000,
+      title: 'Keep target metadata',
+    });
+
+    // Model a final symlink without requiring Windows symlink privileges. The
+    // real file keeps statSync-compatible contents, while lstatSync exposes the
+    // no-follow shape that resume preparation must reject.
+    const realLstat = fs.lstatSync.bind(fs);
+    const copySpy = vi.spyOn(fs.promises, 'copyFile');
+    let copyCalls = 0;
+    const lstatSpy = vi.spyOn(fs, 'lstatSync').mockImplementation(((candidate: fs.PathLike) => {
+      const observed = realLstat(candidate);
+      if (path.resolve(candidate.toString()) !== path.resolve(externalRollout)) return observed;
+      return new Proxy(observed, {
+        get(target, property, receiver) {
+          if (property === 'isFile') return () => false;
+          if (property === 'isSymbolicLink') return () => true;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    }) as typeof fs.lstatSync);
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /rollout path is not a stable regular file/,
+      );
+    } finally {
+      copyCalls = copySpy.mock.calls.length;
+      lstatSpy.mockRestore();
+      copySpy.mockRestore();
+    }
+
+    expect(copyCalls).toBe(0);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath, title FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string; title: string };
+    targetDb.close();
+    expect(targetRow).toEqual({
+      rolloutPath: externalRollout,
+      title: 'Keep target metadata',
+    });
+    const privateSessions = path.join(desktopHome(), 'sessions');
+    expect(fs.existsSync(privateSessions) ? fs.readdirSync(privateSessions) : []).toEqual([]);
+  });
+
   it('fails closed when private adoption hits a filesystem error', async () => {
     const externalRollout = path.join(
       externalHome,
