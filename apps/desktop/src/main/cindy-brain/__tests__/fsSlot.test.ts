@@ -428,10 +428,25 @@ describe('GhostFsSlot', () => {
     });
     expect(rMissing).toMatchObject({ ok: false });
     expect((rMissing as { message: string }).message).toContain('脚本工作目录不存在');
+    // 失败必须无副作用:根目录没有被顺手建出来。
+    expect(fs.existsSync(path.join(tmpRoot, 'no-such-dir'))).toBe(false);
     // 非绝对根:登记侧只应放绝对路径,这里防御性拒。
     const relative = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: 'relative/dir' });
     expect(await relative.slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
     })).toMatchObject({ ok: false });
+  });
+
+  it('workdir(脚本通道):登记后工作目录被删 → realpath fail-closed,不自动重建根目录', async () => {
+    const doomed = path.join(tmpRoot, 'doomed-workdir');
+    await fs.promises.mkdir(doomed, { recursive: true });
+    const { slot } = makeHarness(dataRoot, { callSessionId: null, callScriptWorkdir: doomed });
+    await fs.promises.rm(doomed, { recursive: true, force: true });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('脚本工作目录不存在');
+    expect(fs.existsSync(doomed)).toBe(false);
   });
 });

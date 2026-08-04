@@ -333,6 +333,9 @@ describe('withCardToken(令牌注入纯函数)', () => {
     expect(r.accepted).toBe(false);
     expect(r.reason).toBe('script-call-no-card');
     expect(broadcast).not.toHaveBeenCalled();
+    // 拒卡后账本无卡:report-height / card-action 等邻近入口无卡可锚,
+    // 脚本条目不会经旁路入口被开出卡片面(review)。
+    expect(svc.hasCard('c1')).toBe(false);
     // 条目最终随「宽限窗过期 + 下一次写操作触发懒清扫」回收(账本卫生)。
     advance(31_000); // > SWEEP_MIN_INTERVAL_MS(30s) 且 > GRACE_MS(10s)
     svc.registerCall('c2', { ghostId: 'g1', toolUseId: null, sessionId: null, scriptWorkdir: 'D:\\proj', channel: 'script' });

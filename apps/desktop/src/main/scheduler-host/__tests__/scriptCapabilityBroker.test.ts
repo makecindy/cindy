@@ -7,7 +7,8 @@ import * as path from 'node:path';
 import type { Schedule } from '@cindy/maker-scheduler';
 import { GhostCardService } from '../../cindy-brain/cardService.js';
 import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
+import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
@@ -406,30 +407,23 @@ describe('SchedulerScriptCapabilityBroker', () => {
       { schedule: schedule({ workingDir: 'relative/dir' }) },
     );
     expect(registerCallMock.mock.calls[0][1]).toMatchObject({ scriptWorkdir: null, channel: 'script' });
+
+    // 首尾空白的绝对路径按原值登记(trim 只判空不改写)——与 script-runner
+    // 的 spawn cwd 严格同源,POSIX 上带尾空格的目录名不会让授权根分叉(review)。
+    registerCallMock.mockClear();
+    const padded = `${absWorkdir}${path.sep}padded `;
+    await broker.call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']),
+      { schedule: schedule({ workingDir: padded }) },
+    );
+    expect(registerCallMock.mock.calls[0][1]).toMatchObject({ scriptWorkdir: padded, channel: 'script' });
   });
 
   it('端到端:脚本通道 out_file 经真实 cardService + fs 槽落进 schedule 工作目录', async () => {
     const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-e2e-'));
     try {
-      const cardService = new GhostCardService({
-        hasCardSlot: () => false,
-        sanitize: (html: string) => ({ ok: true, html }),
-        persist: async () => {},
-        broadcast: () => {},
-      });
-      const fsSlot = new GhostFsSlot({
-        getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
-        dataRootDir: () => path.join(tmp, 'ghost-fs'),
-        callInfo: (callId) => cardService.callInfoOf(callId),
-        inFlightCallInfo: (callId) => cardService.inFlightCallInfoOf(callId),
-        getSessionSnapshot: async () => null,
-        requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' as const }),
-        writeSaveDeposit: async () => null,
-      });
-      registerCallMock.mockImplementation((callId: string, info: never) =>
-        cardService.registerCall(callId, info),
-      );
-      finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
+      const { fsSlot } = wireRealChannel(tmp);
       // 模拟意识行为(xd-atlassian 的 deliver 路径):收到 tool-call 后按 out_file
       // 经 fs 槽 root:'workdir' 泄洪写盘,回 saved_to 相对路径。
       callGhostToolMock.mockImplementation(async (request: unknown) => {
@@ -463,13 +457,118 @@ describe('SchedulerScriptCapabilityBroker', () => {
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it('端到端(穿真实 pipeDispatcher):callId 下行配对、错误折叠、交卷后写拒', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-e2e-pipe-'));
+    try {
+      const { fsSlot } = wireRealChannel(tmp);
+      // 真实 dispatcher:资格审 + callId 配对 + 错误折叠全真,只有「意识进程」
+      // 本身由 sendToGhost 内联模拟(先经 fs 槽写盘,再 handleToolResult 交卷)。
+      let dispatcher!: GhostPipeDispatcher;
+      dispatcher = new GhostPipeDispatcher({
+        getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
+        runtimeStateOf: () => 'running',
+        spawn: async () => ({ ok: true }),
+        sendToGhost: (ghostId: string, payload: GhostPipeToolCall) => {
+          void (async () => {
+            const outFile = (payload.args as Record<string, unknown>).out_file as string;
+            const w = await fsSlot.handleFsRequest(ghostId, {
+              op: 'write', root: 'workdir', callId: payload.callId, path: outFile, content: '{"via":"pipe"}',
+            });
+            dispatcher.handleToolResult(ghostId, w.ok
+              ? { callId: payload.callId, ok: true, result: { saved_to: outFile } }
+              : { callId: payload.callId, ok: false, errorCode: 'INTERNAL', message: w.message });
+          })();
+          return true;
+        },
+        timeoutMs: 5_000,
+      });
+      callGhostToolMock.mockImplementation((request: unknown) =>
+        dispatcher.callGhostTool(request as { ghostId: string; tool: string; args: Record<string, unknown> }),
+      );
+
+      const broker = new SchedulerScriptCapabilityBroker();
+      const ok = await broker.call(
+        { method: 'jira.search_jql', params: { jql: 'x', out_file: 'r/pipe.json' } },
+        new Set(['jira.read']),
+        { schedule: schedule({ workingDir: tmp }) },
+      );
+      expect(ok).toMatchObject({ saved_to: 'r/pipe.json' });
+      expect(await fs.promises.readFile(path.join(tmp, 'r', 'pipe.json'), 'utf8')).toBe('{"via":"pipe"}');
+      // 已交卷:真实 dispatcher 配对的 callId 同样立即失去写盘授权。
+      const usedCallId = registerCallMock.mock.calls[0][0] as string;
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: usedCallId, path: 'r/late.json', content: 'x',
+      })).toMatchObject({ ok: false });
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('传输层异常(callGhostTool reject)同样 finalize,旧 callId 立即失在途资格', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-reject-'));
+    try {
+      const { cardService } = wireRealChannel(tmp);
+      // 生产契约上 callGhostTool 永不 reject(pipeDispatcher 折叠),但 finally
+      // 必须对传输层炸裂同样成立——锁死防御语义。
+      callGhostToolMock.mockRejectedValueOnce(new Error('transport blew up'));
+      await expect(
+        new SchedulerScriptCapabilityBroker().call(
+          { method: 'jira.get', params: { issue_key: 'DING-1' } },
+          new Set(['jira.read']),
+          { schedule: schedule({ workingDir: tmp }) },
+        ),
+      ).rejects.toThrow('transport blew up');
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      expect(finalizeCallMock).toHaveBeenCalledWith(callId);
+      expect(cardService.inFlightCallInfoOf(callId)).toBeNull();
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('并发调用:两个 callId 各自独立,一个 finalize 不误伤另一个的在途写权', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-conc-'));
+    try {
+      const { fsSlot } = wireRealChannel(tmp);
+      // 第一个调用挂闸门(保持在途),第二个立即完成并 finalize。
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      callGhostToolMock
+        .mockImplementationOnce(async () => { await firstGate; return { ok: true, result: {} }; })
+        .mockImplementationOnce(async () => ({ ok: true, result: {} }));
+      const broker = new SchedulerScriptCapabilityBroker();
+      const granted = new Set(['jira.read'] as const);
+      const p1 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-1' } }, granted, { schedule: schedule({ workingDir: tmp }) });
+      const p2 = broker.call({ method: 'jira.get', params: { issue_key: 'DING-2' } }, granted, { schedule: schedule({ workingDir: tmp }) });
+      await p2;
+      const firstCallId = registerCallMock.mock.calls[0][0] as string;
+      const secondCallId = registerCallMock.mock.calls[1][0] as string;
+      // 第二个已交卷:写拒;第一个仍在途:写通——两本授权互不串。
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: secondCallId, path: 'second.json', content: 'x',
+      })).toMatchObject({ ok: false });
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: firstCallId, path: 'first.json', content: 'x',
+      })).toMatchObject({ ok: true });
+      releaseFirst();
+      await p1;
+      // 第一个交卷后同样失效。
+      expect(await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId: firstCallId, path: 'first-late.json', content: 'x',
+      })).toMatchObject({ ok: false });
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 // Compile-time fixture: legacy schedules may omit executionMode.
 const _legacySchedule: Partial<Schedule> = { prompt: 'legacy' };
 void _legacySchedule;
 
-/** 端到端用例的已装意识(fixture):声明 fs 槽,好让 fs 槽资格审通过。 */
+/** 端到端用例的已装意识(fixture):声明 fs 槽(fs 槽资格审)+ jira_issues 工具
+ *  (pipeDispatcher 资格审)。 */
 function makeInstalledGhost(id: string): InstalledGhost {
   return {
     manifest: {
@@ -480,8 +579,37 @@ function makeInstalledGhost(id: string): InstalledGhost {
       kind: 'chip',
       entry: 'main.js',
       slots: ['fs'],
+      tools: [{ name: 'jira_issues', description: 'jira' }],
     } as InstalledGhost['manifest'],
     dir: '/tmp/fake-install-dir',
     enabled: true,
   };
+}
+
+/**
+ * 端到端 harness:真实 GhostCardService + 真实 GhostFsSlot,把 broker 的
+ * mock 边界(register/finalize)接到真实账本——用例只需替换意识行为
+ * (callGhostToolMock 的实现),其余链路全真。
+ */
+function wireRealChannel(tmp: string): { cardService: GhostCardService; fsSlot: GhostFsSlot } {
+  const cardService = new GhostCardService({
+    hasCardSlot: () => false,
+    sanitize: (html: string) => ({ ok: true, html }),
+    persist: async () => {},
+    broadcast: () => {},
+  });
+  const fsSlot = new GhostFsSlot({
+    getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
+    dataRootDir: () => path.join(tmp, 'ghost-fs'),
+    callInfo: (callId) => cardService.callInfoOf(callId),
+    inFlightCallInfo: (callId) => cardService.inFlightCallInfoOf(callId),
+    getSessionSnapshot: async () => null,
+    requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' as const }),
+    writeSaveDeposit: async () => null,
+  });
+  registerCallMock.mockImplementation((callId: string, info: never) =>
+    cardService.registerCall(callId, info),
+  );
+  finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
+  return { cardService, fsSlot };
 }

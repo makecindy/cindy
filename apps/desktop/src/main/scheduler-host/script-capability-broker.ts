@@ -65,11 +65,12 @@ async function callGhostForScript(
   schedule: Schedule,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
-  // 登记前规范化:trim + 必须绝对路径——畸形 workingDir 按 null 登记(fs 槽
-  // 会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响;script-runner
-  // 已强制非空,这里防的是相对/带首尾空白的配置,review m2/m3/n2)。
-  const trimmedWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir.trim() : '';
-  const scriptWorkdir = trimmedWorkdir && isAbsolute(trimmedWorkdir) ? trimmedWorkdir : null;
+  // 登记值与 script-runner 的 spawn cwd 严格同源(同一字符串,不 trim 改写):
+  // POSIX 允许首尾空白的目录名,trim 后登记会让授权根与脚本实际 cwd 分叉
+  // (review)。trim 只用于「全空白 = 未配置」判空;相对/畸形按 null 登记
+  // (fs 槽会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响)。
+  const rawWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir : '';
+  const scriptWorkdir = rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
   const cardService = getGhostCardService();
   cardService.registerCall(callId, {
     ghostId: request.ghostId,
