@@ -129,12 +129,42 @@ describe('SchedulerScriptCapabilityBroker', () => {
     });
     // 生命周期同样锁住:add_comment 也走 callGhostForScript——登记形状、同一
     // callId 下行、交卷 finalize,与 jira.get 同一本账(review:只断回显形状
-    // 会让「漏走登记包装」的回归照样绿)。
+    // 会让「漏走登记包装」的回归照样绿)。纯写方法不挂写盘授权(review P1
+    // 第三轮):scriptWorkdir 恒 null。
     expect(registerCallMock).toHaveBeenCalledTimes(1);
     const [callId, info] = registerCallMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(info).toMatchObject({ ghostId: 'xd-atlassian', sessionId: null, channel: 'script' });
+    expect(info).toMatchObject({ ghostId: 'xd-atlassian', sessionId: null, channel: 'script', scriptWorkdir: null });
     expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ callId }));
     expect(finalizeCallMock).toHaveBeenCalledWith(callId);
+  });
+
+  it('write-method grantless: add_comment 在途也不持 workdir 写窗(review P1 第三轮)', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-grantless-'));
+    const { fsSlot } = wireRealChannel(tmp);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    callGhostToolMock.mockImplementationOnce(async () => { await gate; return { ok: true, result: {} }; });
+    const p = new SchedulerScriptCapabilityBroker()
+      .call(
+        { method: 'jira.add_comment', params: { issue_key: 'DING-1', body_text: 'done' } },
+        new Set(['jira.comment']),
+        { schedule: schedule({ workingDir: tmp }), runId: 'run-w' },
+      )
+      .catch((err: unknown) => err);
+    try {
+      // 调用在途:插件此时调 fs 槽 root:'workdir' 必须被拒——add_comment 是
+      // 纯写方法,结果体小不可能泄洪,给写窗只是白白扩大在途暴露面。
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      const w = await fsSlot.handleFsRequest('xd-atlassian', {
+        op: 'write', root: 'workdir', callId, path: 'poison.json', content: 'x',
+      });
+      expect(w).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'poison.json'))).toBe(false);
+    } finally {
+      release();
+      await p;
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it('forwards ADF comment bodies untouched for real @mentions', async () => {

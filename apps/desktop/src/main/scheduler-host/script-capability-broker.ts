@@ -71,14 +71,17 @@ async function callGhostForScript(
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
   active: Map<string, Set<string>>,
+  grantWorkdir: boolean,
 ): Promise<GhostToolCallResult> {
   const callId = randomUUID();
   // 登记值与 script-runner 的 spawn cwd 严格同源(同一字符串,不 trim 改写):
   // POSIX 允许首尾空白的目录名,trim 后登记会让授权根与脚本实际 cwd 分叉
   // (review)。trim 只用于「全空白 = 未配置」判空;相对/畸形按 null 登记
   // (fs 槽会以「脚本通道未配置有效的工作目录」拒写,查询本身不受影响)。
+  // grantWorkdir=false(纯写方法,如 add_comment):不挂写盘授权——结果体小
+  // 不可能泄洪,给了写窗只是白白扩大在途暴露面(review P1 第三轮)。
   const rawWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir : '';
-  const scriptWorkdir = rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
+  const scriptWorkdir = grantWorkdir && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
   const cardService = getGhostCardService();
   cardService.registerCall(callId, {
     ghostId: request.ghostId,
@@ -134,6 +137,8 @@ async function callFeishu(
     schedule,
     runId,
     active,
+    // 读方法可能超限自动泄洪(不带 out_file 也落盘),写窗保留。
+    true,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   const payload = result.result as { data?: unknown } | null | undefined;
@@ -145,12 +150,14 @@ async function callJira(
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
   active: Map<string, Set<string>>,
+  grantWorkdir: boolean,
 ): Promise<unknown> {
   const result = await callGhostForScript(
     { ghostId: 'xd-atlassian', tool: 'jira_issues', args },
     schedule,
     runId,
     active,
+    grantWorkdir,
   );
   if (!result.ok) fail(result.errorCode, result.message);
   return result.result;
@@ -236,7 +243,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           issue_key: requireString(params, 'issue_key'),
           ...(fields ? { fields } : {}),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds);
+        }, context.schedule, runId, this.activeScriptCallIds, true);
       }
       case 'jira.search_jql': {
         requireCapability(granted, 'jira.read');
@@ -262,7 +269,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           // 或传 out_file 让意识把整包落盘到 schedule 工作目录,脚本自己读回。
           ...(nextPageToken === undefined ? {} : { next_page_token: nextPageToken }),
           ...(outFile ? { out_file: outFile } : {}),
-        }, context.schedule, runId, this.activeScriptCallIds);
+        }, context.schedule, runId, this.activeScriptCallIds, true);
       }
       case 'jira.add_comment': {
         requireCapability(granted, 'jira.comment');
@@ -281,13 +288,13 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           if (typeof bodyAdf !== 'object' || bodyAdf === null || Array.isArray(bodyAdf)) {
             fail('INVALID_ARGS', 'body_adf must be an ADF document object');
           }
-          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds);
+          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds, false);
         }
         return callJira({
           action: 'add_comment',
           issue_key: issueKey,
           body_text: requireString(params, 'body_text'),
-        }, context.schedule, runId, this.activeScriptCallIds);
+        }, context.schedule, runId, this.activeScriptCallIds, false);
       }
       case 'feishu.recent_chats': {
         // 按活跃时间倒序列最近会话(群/单聊)。配合 feishu.recent_messages 的
