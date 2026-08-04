@@ -84,10 +84,20 @@ const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
 /**
- * 出站 429 退避的上限。取值只为兜住异常大的 `retry_after`(坏网关/坏值),
- * 正常 flood 窗口一律按 Telegram 给的全值等 —— 见 callSend 的注释。
+ * 429 没给 `retry_after`(或给了非法值)时的兜底退避。**只用于兜底** —— 合法值
+ * 一律按服务端给的全长等, 不设上限: 任何上限都等于在 flood 窗口结束前提前重试,
+ * 那次重试必然再 429, 终稿于是又丢一次(bot-wide flood 的 retry_after 可以远超
+ * 一分钟)。不设上限是安全的, 因为这个等待绑定了连接生命周期取消源(见
+ * outboundAbortSignal), dispose / 下线 / 重连会立刻把它收口。
  */
-const RETRY_AFTER_MAX_WAIT_MS = 60_000;
+const RETRY_AFTER_FALLBACK_MS = 3_000;
+
+/** 429 退避时长: 合法 `retry_after` 原样采用, 缺失或非法(NaN / ≤0 / 非有限)走兜底。 */
+function retryAfterWaitMs(retryAfterSec: number | undefined): number {
+  if (typeof retryAfterSec !== 'number') return RETRY_AFTER_FALLBACK_MS;
+  if (!Number.isFinite(retryAfterSec) || retryAfterSec <= 0) return RETRY_AFTER_FALLBACK_MS;
+  return retryAfterSec * 1000;
+}
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
 /** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
@@ -821,11 +831,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
     return startTelegramStreaming(
       {
-        // 本轮的**每一条**新消息出站都先核验回合身份。逐条核验不可省成"补送时查
-        // 一次": 换 owner 完全可能发生在补送成功之后, 那时 finalize 还要继续发
-        // 剩余分段、上传图片 —— 这些出站若不各自核验, 旧回合的剩余内容照样会落到
-        // 已失权的旧 userId 手里。核验只在真的换代/换主人/取消时才失败, 正常轮次
-        // 恒为空操作。
+        // 本轮**每一个**触达 Telegram 的出站入口都先核验回合身份 —— 一个不漏。
+        // 逐个核验不可省成"补送时查一次": 换 owner 可能发生在任意一次 await 之后,
+        // 而 owner-only 变更**不换 api 客户端**, 剩下的出站照样能成功。
+        // 覆盖面: send / repost(新消息)、edit / editFinal(原位编辑——终稿的主投递
+        // 路径, 换主人后编辑成功就等于把答案写进已失权主人的聊天)、deleteMessage
+        // (失权后连清理都不该再碰对方的聊天)、uploadImages(内部逐次再核验)。
+        // 正常轮次里这些核验恒为空操作。
         send: async (markdown) => {
           this.assertRoundStillLive(round);
           const { messageId } = await this.sendRenderedChunk(userId, markdown);
@@ -844,19 +856,28 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           return messageId;
         },
         edit: async (messageId, markdown) => {
+          this.assertRoundStillLive(round);
           const { chatId, messageId: nativeId } = decodeMessageId(messageId);
           const { html } = markdownToTelegramHtml(markdown);
           await this.editHtml(chatId, nativeId, html, undefined);
         },
         uploadImages: async (messageId, imageUrls) => {
-          // 图片同样是新消息出站(sendPhoto / sendMediaGroup), 与分段同一条纪律。
+          // 图片是多次真实出站(分组 sendMediaGroup、整组失败回落逐张 sendPhoto),
+          // 每次之间都有 await —— 所以核验要下沉到每次调用前, 只在批次开头查一次
+          // 挡不住"第一组传完才换主人"这个窗口。
           this.assertRoundStillLive(round);
-          await this.uploadImages(messageId, imageUrls);
+          await this.uploadImages(messageId, imageUrls, () =>
+            this.assertRoundStillLive(round),
+          );
         },
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
-        editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),
+        editFinal: (messageId, markdown) => {
+          this.assertRoundStillLive(round);
+          return this.richEditFinal(messageId, markdown);
+        },
         deleteMessage: async (messageId) => {
+          this.assertRoundStillLive(round);
           const { chatId, messageId: nativeId } = decodeMessageId(messageId);
           await this.requireApi().call('deleteMessage', {
             chat_id: chatId,
@@ -1593,10 +1614,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   /**
    * 429 退避一次重试; 'message is not modified' 静默。
    *
-   * 退避时长必须尊重 Telegram 给的 `retry_after` 全值 —— 早先这里封在 10s,
-   * 于是 `retry_after` 更大的 flood 窗口里重试必然二次失败(实测 2026-08-04:
-   * 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试, 再次 429
-   * 后整条答案丢失)。上限只用来兜住异常大的 `retry_after`, 不参与正常判断。
+   * 退避时长必须尊重 Telegram 给的 `retry_after` **全值, 不设任何上限** —— 早先
+   * 这里封在 10s, 于是 `retry_after` 更大的 flood 窗口里重试必然二次失败(实测
+   * 2026-08-04: 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试,
+   * 再次 429 后整条答案丢失)。任何固定上限都只是把同一个 bug 往后挪: bot-wide
+   * flood 的 retry_after 可以是几分钟, 60s 上限照样会提前重试。只有缺失/非法值
+   * 才走 RETRY_AFTER_FALLBACK_MS。
    *
    * 退避必须绑定连接生命周期: 等待期可能长达一分钟, 期间实例完全可能被
    * dispose / 下线 / 换配置重连。等待本身用当前世代的 AbortSignal 取消(否则
@@ -1617,10 +1640,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 429) {
         // sleep 在 abort 时提前 resolve(不 reject), 所以醒来后必须显式核验。
-        await sleep(
-          Math.min((err.retryAfterSec ?? 3) * 1000, RETRY_AFTER_MAX_WAIT_MS),
-          abortSignal,
-        );
+        await sleep(retryAfterWaitMs(err.retryAfterSec), abortSignal);
         // 已停止 → 放弃重试并抛回原始 429, 不再发出任何请求。
         if (!this.isLiveConnection(api, generation, abortSignal)) throw err;
         return api.call<T>(method, params);
@@ -1822,8 +1842,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 2 张起自动合成原生相册(sendMediaGroup, 每组 ≤10 — Telegram 上限),
    * 客户端渲染为整齐的图集而不是刷屏的一串独立消息; 单张走 sendPhoto;
    * 相册整组失败回落逐张(部分文件缺失/超限时不拖累其余)。
+   *
+   * `assertLive` 是**每次真实出站前**的回合核验(流式回合传入; 独立出站不传)。
+   * 这里的循环会跨多个 await 打出多次 callForm —— >10 张的分组、以及整组失败后
+   * 的逐张回落都是。只在进入本方法时查一次挡不住"第一组传完才换主人"的窗口,
+   * 剩下的图片会照发到已失权的旧聊天。
    */
-  private async uploadImages(messageId: string, imageRefs: string[]): Promise<void> {
+  private async uploadImages(
+    messageId: string,
+    imageRefs: string[],
+    assertLive?: () => void,
+  ): Promise<void> {
     const api = this.api;
     if (!api || imageRefs.length === 0) return;
     // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
@@ -1853,14 +1882,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       absPaths.push(absPath);
     }
     if (absPaths.length === 1) {
+      assertLive?.();
       await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
       return;
     }
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
+      assertLive?.();
       const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
       if (!albumSent) {
-        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath, anchorReply);
+        for (const absPath of group) {
+          assertLive?.();
+          await this.sendSinglePhoto(chatId, absPath, anchorReply);
+        }
       }
     }
   }

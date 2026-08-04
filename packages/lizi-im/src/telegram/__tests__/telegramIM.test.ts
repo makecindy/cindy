@@ -1747,6 +1747,117 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(sendAttempts).toBe(1));
   });
 
+  it('换 owner 后原位编辑与清理都不再触碰旧回合(edit / editFinal / deleteMessage)', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 5m');
+    const callsBefore = api.calls.length;
+
+    // 只换主人: 不 stopPolling, api 对象不变 —— 唯一能识别授权易主的是世代/主人。
+    await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777888' });
+
+    // editFinal 是 finalize 的第一步, 核验失败即抛 —— 整个收口放弃。
+    await expect(handle.finalize('旧回合的终稿')).rejects.toThrow(/round abandoned/);
+
+    const after = api.calls.slice(callsBefore);
+    expect(after.filter((c) => c.method === 'editMessageText')).toEqual([]);
+    expect(after.filter((c) => c.method === 'deleteMessage')).toEqual([]);
+    expect(after.filter((c) => c.method === 'sendMessage')).toEqual([]);
+  });
+
+  it('换 owner 后的 NO_REPLY 沉默不再删旧回合的占位消息', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 30s');
+    const callsBefore = api.calls.length;
+    await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777889' });
+
+    // NO_REPLY 的删除被 finalize 内部 catch 吞掉, 所以不抛 —— 但一定不能真删。
+    await handle.finalize('NO_REPLY');
+    expect(api.calls.slice(callsBefore).filter((c) => c.method === 'deleteMessage')).toEqual([]);
+  });
+
+  it('多组图片中途换 owner: 第一组之后不再向旧 chat 出站', async () => {
+    await connect();
+    // 11 张 → 分两组(每组 ≤10), 第一组落地后换主人。
+    const paths = Array.from({ length: 11 }, (_, i) => {
+      const p = path.join(tmpDir, `g${i}.png`);
+      fs.writeFileSync(p, 'fake-png');
+      return p;
+    });
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 6m');
+    for (const p of paths) handle.addExtraImageAbsPath?.(p);
+
+    const originalForm = api.callForm.bind(api);
+    let groups = 0;
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      const result = await originalForm(method, form, signal);
+      if (method === 'sendMediaGroup') {
+        groups += 1;
+        if (groups === 1) {
+          await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777890' });
+        }
+      }
+      return result;
+    }) as FakeApi['callForm'];
+
+    // uploadImages 的核验在第二组之前失败 → finalize 抛出。
+    await expect(handle.finalize('十一张图的回答')).rejects.toThrow(/round abandoned/);
+    // 只发出了第一组, 第二组被挡住。
+    expect(groups).toBe(1);
+    expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(1);
+  });
+
+  it('合法 retry_after 超过 60s 时不提前重试(不再有固定上限)', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let attempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 180', 180);
+        }
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, 'bot-wide flood');
+      // 旧实现封在 60s: 此刻已经重试, 而 flood 窗口还剩两分钟 → 必然再失败。
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await sending;
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retry_after 缺失或非法时走兜底退避(3s)', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let attempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        attempts += 1;
+        // 缺失 retry_after
+        if (attempts === 1) throw new TelegramApiError('sendMessage', 429, 'Too Many Requests');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '无 retry_after');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await sending;
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('补送成功后才换 owner: 剩余分段与图片同样不再发给旧 userId', async () => {
     await connect();
     const originalCall = api.call.bind(api);
