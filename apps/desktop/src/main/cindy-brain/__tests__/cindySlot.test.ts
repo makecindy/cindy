@@ -21,7 +21,13 @@ function fakeGhost(
   overrides: {
     enabled?: boolean;
     slots?: string[];
-    model?: { image?: string[]; video?: string[]; media?: string[]; text?: string[] } | null;
+    model?: {
+      image?: string[];
+      video?: string[];
+      media?: string[];
+      text?: string[];
+      embed?: string[];
+    } | null;
   } = {},
 ): InstalledGhost {
   return {
@@ -1709,5 +1715,290 @@ describe('anyInflightWork（更新重启阻断探针）', () => {
     // 受理即返回，job 仍在途 —— 此时没有任何 turn 级信号还亮着。
     expect(slot.anyInflightWork()).toBe(true);
     release();
+  });
+});
+
+describe('文本转向量(embed_text)', () => {
+  const EMBED = { type: 'cindy-request', kind: 'embed_text', texts: ['一段内容'] };
+  /** 4 维假向量:维度只需要"可辨认",不必真跑模型。 */
+  const fakeVec = (seed: number): number[] => [seed, seed + 0.1, seed + 0.2, seed + 0.3];
+  const withEmbed = (deps: Partial<CindySlotDeps> = {}) =>
+    makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(() => ({
+        models: [
+          { id: 'voyage/voyage-4', label: 'Voyage 4' },
+          { id: 'voyage/voyage-4-large', label: 'Voyage 4 Large' },
+          { id: 'text-embedding-3-small', label: 'OpenAI Embedding 3 Small' },
+        ],
+        defaults: {
+          standard: 'voyage/voyage-4',
+          draft: 'text-embedding-3-small',
+          best: 'voyage/voyage-4-large',
+        },
+      })),
+      embedText: vi.fn(async ({ texts }: { texts: string[] }) => ({
+        embeddings: texts.map((_t, i) => fakeVec(i)),
+        modelUsed: 'voyage/voyage-4',
+      })),
+      ...deps,
+    } as unknown as Partial<CindySlotDeps>);
+
+  it('未声明 embed.text → PERMISSION_DENIED,不触发通道', async () => {
+    const embedText = vi.fn();
+    const { slot } = makeSlot({ embedText } as unknown as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', EMBED);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  it('happy path:向量等长递回,并带 model / dim / modelLabel', async () => {
+    const { slot } = withEmbed();
+    const r = await slot.handleModelRequest('art', {
+      ...EMBED,
+      texts: ['第一段', '第二段'],
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      model: 'voyage/voyage-4',
+      modelLabel: 'Voyage 4',
+      dim: 4,
+    });
+    // dim 与 model 是调方判断"存量向量还能不能用"的唯一依据,必须逐次交付。
+    expect((r as { embeddings: number[][] }).embeddings).toHaveLength(2);
+  });
+
+  it('载荷校验:空数组 / 非字符串 / 超条数 / 单条超长 / 总量超限 → INVALID_PARAMS', async () => {
+    const { slot } = withEmbed();
+    for (const texts of [[], [''], [123], Array.from({ length: 33 }, () => 'x')]) {
+      expect(await slot.handleModelRequest('art', { ...EMBED, texts })).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_PARAMS',
+      });
+    }
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, texts: ['x'.repeat(8193)] }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    // 32 条 × 4096 = 131072 字符:每条都合法,合计超出单批预算。
+    expect(
+      await slot.handleModelRequest('art', {
+        ...EMBED,
+        texts: Array.from({ length: 32 }, () => 'x'.repeat(4096)),
+      }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+
+  it('inputType / dimensions 值域校验,合法值原样下传', async () => {
+    const embedText = vi.fn(async () => ({ embeddings: [fakeVec(1)], modelUsed: 'voyage/voyage-4' }));
+    const { slot } = withEmbed({ embedText } as unknown as Partial<CindySlotDeps>);
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, inputType: 'passage' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, dimensions: 0 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, dimensions: 99999 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(embedText).not.toHaveBeenCalled();
+
+    await slot.handleModelRequest('art', { ...EMBED, inputType: 'query', dimensions: 512 });
+    expect(embedText).toHaveBeenCalledWith(
+      expect.objectContaining({ inputType: 'query', dimensions: 512 }),
+    );
+  });
+
+  it('选型:tier 档位 / 显式 model / 意识专属覆盖,白名单外明拒', async () => {
+    const embedText = vi.fn(async () => ({ embeddings: [fakeVec(1)], modelUsed: 'x' }));
+    const { slot } = withEmbed({ embedText } as unknown as Partial<CindySlotDeps>);
+    await slot.handleModelRequest('art', { ...EMBED, tier: 'draft' });
+    expect(embedText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: 'text-embedding-3-small' }),
+    );
+    await slot.handleModelRequest('art', { ...EMBED, model: 'voyage/voyage-4-large' });
+    expect(embedText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: 'voyage/voyage-4-large' }),
+    );
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, model: 'not-in-catalog' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+
+    // 覆盖表(用户在插件详情页钉的后端)优先于目录默认,但仍受白名单约束。
+    const pinned = vi.fn(async () => ({ embeddings: [fakeVec(1)], modelUsed: 'x' }));
+    const { slot: slot2 } = withEmbed({
+      embedText: pinned,
+      getOverride: vi.fn((_g: string, cap: string) =>
+        cap === 'embed.text' ? 'voyage/voyage-4-large' : null,
+      ),
+    } as unknown as Partial<CindySlotDeps>);
+    await slot2.handleModelRequest('art', EMBED);
+    expect(pinned).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: 'voyage/voyage-4-large' }),
+    );
+  });
+
+  it('目录无可用向量型号 → NO_CANDIDATE,不出网', async () => {
+    const embedText = vi.fn();
+    const { slot } = withEmbed({
+      getEmbedConfig: vi.fn(() => ({ models: [], defaults: null })),
+      embedText,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'NO_CANDIDATE',
+    });
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  it('能力未接线(deps 缺 embedText / getEmbedConfig)→ 结构化拒绝,fail closed', async () => {
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      embedText: undefined,
+      getEmbedConfig: undefined,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('通道返回条数与请求不符 → 丢弃结果而不是错位交付', async () => {
+    // 错位比缺失危险得多:调方按 index 对齐,配错的向量不报错,只让检索结果莫名其妙。
+    const { slot } = withEmbed({
+      embedText: vi.fn(async () => ({ embeddings: [fakeVec(1)], modelUsed: 'voyage/voyage-4' })),
+    } as unknown as Partial<CindySlotDeps>);
+    expect(
+      await slot.handleModelRequest('art', { ...EMBED, texts: ['a', 'b', 'c'] }),
+    ).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+  });
+
+  it('通道抛错被兜住(永不 reject),且在途计数归零', async () => {
+    const { slot } = withEmbed({
+      embedText: vi.fn(async () => {
+        throw new Error('gateway 500');
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', EMBED);
+    expect(r).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+});
+
+describe('文本转向量 · 上下文化(documents)', () => {
+  const fakeVec = (seed: number): number[] => [seed, seed + 0.1, seed + 0.2, seed + 0.3];
+  const CTX_MODEL = 'voyage/voyage-context-4';
+  const DOCS = [['一篇的 chunk1', '一篇的 chunk2', '一篇的 chunk3'], ['二篇只有一块']];
+  const REQ = {
+    type: 'cindy-request',
+    kind: 'embed_text',
+    model: CTX_MODEL,
+    documents: DOCS,
+    inputType: 'document',
+  };
+  /** 按请求分组同形地造假结果(默认 happy path)。 */
+  const echoShape = vi.fn(async ({ documents }: { documents: string[][] }) => ({
+    embeddings: documents.map((doc, d) => doc.map((_c, i) => fakeVec(d * 10 + i))),
+    modelUsed: CTX_MODEL,
+  }));
+  const withCtx = (deps: Partial<CindySlotDeps> = {}) =>
+    makeSlot({
+      getGhost: () => fakeGhost({ model: { embed: ['text'] } }),
+      getEmbedConfig: vi.fn(() => ({
+        models: [
+          { id: 'voyage/voyage-4', label: 'Voyage 4' },
+          { id: CTX_MODEL, label: 'Voyage Context 4' },
+        ],
+        defaults: { standard: 'voyage/voyage-4', draft: 'voyage/voyage-4', best: CTX_MODEL },
+      })),
+      embedText: vi.fn(async ({ texts }: { texts: string[] }) => ({
+        embeddings: texts.map((_t, i) => fakeVec(i)),
+        modelUsed: 'voyage/voyage-4',
+      })),
+      embedDocuments: echoShape,
+      ...deps,
+    } as unknown as Partial<CindySlotDeps>);
+
+  it('happy path:回 documentEmbeddings(三层),不回 embeddings', async () => {
+    const { slot } = withCtx();
+    const r = (await slot.handleModelRequest('art', REQ)) as {
+      ok: boolean;
+      documentEmbeddings?: number[][][];
+      embeddings?: number[][];
+      dim?: number;
+      modelLabel?: string;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.documentEmbeddings?.map((d) => d.length)).toEqual([3, 1]);
+    expect(r.embeddings).toBeUndefined();
+    expect(r.dim).toBe(4);
+    expect(r.modelLabel).toBe('Voyage Context 4');
+  });
+
+  it('texts 与 documents 同时传 → INVALID_PARAMS,不出网(意图不明不猜)', async () => {
+    const embedDocuments = vi.fn();
+    const embedText = vi.fn();
+    const { slot } = withCtx({ embedDocuments, embedText } as unknown as Partial<CindySlotDeps>);
+    expect(
+      await slot.handleModelRequest('art', { ...REQ, texts: ['x'] }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(embedDocuments).not.toHaveBeenCalled();
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  it('不支持上下文化的型号收到 documents → 出网前明拒', async () => {
+    // 关键:不能让它降级成逐块独立嵌 —— 那样调方以为拿到了 chunk 上下文,
+    // 实际没有,质量损失完全不可见。
+    const embedDocuments = vi.fn();
+    const { slot } = withCtx({ embedDocuments } as unknown as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', { ...REQ, model: 'voyage/voyage-4' });
+    expect(r).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect((r as { message: string }).message).toContain('上下文化');
+    expect(embedDocuments).not.toHaveBeenCalled();
+  });
+
+  it('documents 载荷校验:空数组 / 空文档 / 非字符串 chunk → INVALID_PARAMS', async () => {
+    const { slot } = withCtx();
+    for (const documents of [[], [[]], [['ok'], []], [[123]], ['not-an-array']]) {
+      expect(
+        await slot.handleModelRequest('art', { ...REQ, documents }),
+      ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    }
+  });
+
+  it('预算按 chunk 总数计:33 个 chunk 分两篇也超限', async () => {
+    const { slot } = withCtx();
+    const documents = [
+      Array.from({ length: 20 }, () => 'x'),
+      Array.from({ length: 13 }, () => 'y'),
+    ];
+    const r = await slot.handleModelRequest('art', { ...REQ, documents });
+    expect(r).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect((r as { message: string }).message).toContain('chunk');
+  });
+
+  it('返回分组与请求不同形 → 丢弃结果(chunk 归错文档不报错,只让检索莫名其妙)', async () => {
+    const { slot } = withCtx({
+      embedDocuments: vi.fn(async () => ({
+        embeddings: [[fakeVec(1), fakeVec(2)], [fakeVec(3)]], // 首篇少一个 chunk
+        modelUsed: CTX_MODEL,
+      })),
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('上下文化未接线(deps 缺 embedDocuments)→ 结构化拒绝,而非退回逐条路径', async () => {
+    const embedText = vi.fn();
+    const { slot } = withCtx({
+      embedDocuments: undefined,
+      embedText,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+    expect(embedText).not.toHaveBeenCalled();
   });
 });

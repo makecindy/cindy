@@ -12,6 +12,13 @@
  *   - 拆批 (调方自负 model.maxTokens)
  *   - 持久化缓存 (Phase 1.1 范围外)
  *   - 自动 model fallback (consumer 业务决策)
+ *
+ * 两条嵌入路径:
+ *   - `embed()`      : 一批独立文本 → 一批向量。走 LRU 缓存。
+ *   - `embedDocuments()`: 上下文化(voyage-context-*)索引侧 —— 按文档分组,同文档
+ *     chunk 互为上下文。**不走缓存**:一个 chunk 的向量取决于它所在文档,单 chunk
+ *     级 key 表达不了这个依赖,缓存了就会在"同一段文字出现在另一个文档里"时给错。
+ *   两条路径共用同一个 endpoint 与同一套响应解析(见 ContextualizedResponse)。
  */
 
 import { createHash } from 'node:crypto';
@@ -20,12 +27,34 @@ import { getEmbeddingModel, isKnownEmbeddingModel, listEmbeddingModels } from '.
 import { LruCache } from './lruCache.js';
 import {
   EmbeddingError,
+  type EmbedDocumentsRequest,
+  type EmbedDocumentsResponse,
   type EmbedRequest,
   type EmbedResponse,
   type EmbeddingClientOptions,
+  type EmbeddingInputType,
   type EmbeddingLogger,
   type EmbeddingModelMeta,
 } from './types.js';
+
+/**
+ * 中立 inputType → 各家 wire 值。null = 该家不支持,不发这个字段。
+ *
+ * 值域是**互斥**的(2026-08-04 经 XD 网关实测,见 apps/desktop 的
+ * ipc/dev/embedding.ts 透传探测):
+ *   - voyage 传大写 → 500 VoyageException;
+ *   - google(经 Vertex)传小写 → 400 Invalid value at 'task_type';
+ *   - openai 两种都回 200 但无任何效果(参数不存在,被静默忽略)。
+ * 所以这里必须按 provider 翻译,不能原样透传 —— 透传等于让一半模型确定性报错。
+ */
+const INPUT_TYPE_WIRE: Record<
+  EmbeddingModelMeta['provider'],
+  Record<EmbeddingInputType, string> | null
+> = {
+  voyage: { query: 'query', document: 'document' },
+  google: { query: 'RETRIEVAL_QUERY', document: 'RETRIEVAL_DOCUMENT' },
+  openai: null,
+};
 
 const DEFAULT_CACHE_SIZE = 1000;
 // 重试间隔 (ms): 1s / 5s / 15s. 共最多 4 次尝试 (initial + 3 retries)。
@@ -36,6 +65,95 @@ interface OpenAiEmbeddingsResponse {
   data: Array<{ object: 'embedding'; embedding: number[]; index: number }>;
   model: string;
   usage?: { prompt_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * 网关 /v1/embeddings 的两种响应形态(2026-08-04 自 live gateway LiteLLM 实抓)。
+ *
+ *   A. 一层 flat —— 普通型号:`data: [{ object:'embedding', index, embedding }]`
+ *   B. 两层嵌套 —— voyage-context-*:
+ *      `data: [{ object:'list', index, data: [{ object:'embedding', index, embedding }] }]`
+ *      外层一项 = 一个文档,内层 = 该文档的 per-chunk 向量。
+ *
+ * **形态由型号决定,不由请求决定**:voyage-context-* 的查询侧请求虽然发的是一维
+ * `input`,回来的**仍然是**两层(每个 input 成为一个单 chunk 文档)。所以扁平路径
+ * (`embed()`)也必须能吃嵌套响应 —— 只按 `data[].embedding` 解析会对这些型号
+ * 直接失败。两条路径因此共用 `parseGroupedEmbeddings`。
+ */
+interface ContextualizedResponse {
+  data: Array<
+    | { object?: 'embedding'; embedding: number[]; index?: number }
+    | { object?: 'list'; data: Array<{ embedding: number[]; index?: number }>; index?: number }
+  >;
+  model: string;
+  usage?: { prompt_tokens?: number; total_tokens?: number };
+}
+
+/**
+ * 把响应解析成按文档分组的向量。两种形态都吃(见 ContextualizedResponse 注释),
+ * 形状不认识时抛 SERVER_ERROR 而不是给出半个结果。
+ *
+ * `groupSizes` 是**期望**的分组:扁平路径传全 1(每个 input 一个单 chunk 文档),
+ * 上下文化索引侧传各文档真实 chunk 数。它同时充当条数校验 —— 上游少给 / 多给都
+ * 在这里失败,不会让调方拿到错位的向量。
+ */
+function parseGroupedEmbeddings(
+  body: ContextualizedResponse,
+  groupSizes: readonly number[],
+): number[][][] {
+  const items = body.data ?? [];
+  const nested = items.length > 0 && Array.isArray((items[0] as { data?: unknown }).data);
+  if (nested) {
+    // 嵌套形态:一项一个文档。按 index 定位(缺 index 时退回数组序)。
+    const byIndex = new Map<number, number[][]>();
+    items.forEach((item, i) => {
+      const inner = (item as { data: Array<{ embedding: number[]; index?: number }> }).data;
+      const docIndex = (item as { index?: number }).index ?? i;
+      const vectors = inner
+        .map((entry, j) => ({ entry, order: entry.index ?? j }))
+        .sort((a, b) => a.order - b.order)
+        .map((x) => x.entry.embedding);
+      byIndex.set(docIndex, vectors);
+    });
+    return groupSizes.map((size, docIndex) => {
+      const vectors = byIndex.get(docIndex);
+      if (!vectors || vectors.length !== size) {
+        throw new EmbeddingError(
+          `contextualized response: document ${docIndex} returned ${vectors?.length ?? 0} embeddings, expected ${size}`,
+          'SERVER_ERROR',
+        );
+      }
+      return vectors;
+    });
+  }
+  // 扁平形态:所有 chunk 按全局顺序摊平,按 groupSizes 重新切回文档。
+  const flat = items
+    .map((item, i) => ({
+      embedding: (item as { embedding?: number[] }).embedding,
+      order: (item as { index?: number }).index ?? i,
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map((x) => x.embedding);
+  if (flat.some((v) => !Array.isArray(v))) {
+    throw new EmbeddingError(
+      'contextualized response: unrecognized data shape (neither flat embeddings nor per-document groups)',
+      'SERVER_ERROR',
+    );
+  }
+  const total = groupSizes.reduce((sum, n) => sum + n, 0);
+  if (flat.length !== total) {
+    throw new EmbeddingError(
+      `contextualized response: got ${flat.length} embeddings, expected ${total}`,
+      'SERVER_ERROR',
+    );
+  }
+  const out: number[][][] = [];
+  let cursor = 0;
+  for (const size of groupSizes) {
+    out.push(flat.slice(cursor, cursor + size) as number[][]);
+    cursor += size;
+  }
+  return out;
 }
 
 interface OpenAiErrorResponse {
@@ -94,8 +212,12 @@ export class EmbeddingClient {
     const missIdx: number[] = [];
     const missTexts: string[] = [];
     let cacheHits = 0;
+    // inputType / dimensions 必须计入 key:同一段文本在 query 档与 document 档下是
+    // 两个不同的向量(上游加了不同前缀), 维度不同更是长度都不一样。漏计 = 后到的
+    // 请求静默拿到前一档的向量, 而且因为形状看起来正常, 排查时毫无线索。
+    const variant = cacheVariant(req.inputType, req.dimensions);
     for (let i = 0; i < req.texts.length; i++) {
-      const key = cacheKey(req.model, req.texts[i]);
+      const key = cacheKey(req.model, req.texts[i], variant);
       const cached = this.cache.get(key);
       if (cached) {
         result[i] = cached;
@@ -120,19 +242,20 @@ export class EmbeddingClient {
       );
     }
 
-    const apiResponse = await this.callWithRetry(apiKey, req.model, missTexts);
+    const apiResponse = await this.callWithRetry(apiKey, req.model, missTexts, req);
 
     // 3. 写回结果 + 缓存
-    if (apiResponse.data.length !== missTexts.length) {
-      throw new EmbeddingError(
-        `XD Gateway returned ${apiResponse.data.length} embeddings, expected ${missTexts.length}`,
-        'SERVER_ERROR',
-      );
-    }
-    // OpenAI spec: data 顺序应与 input 一致, 但用 .index 显式定位更稳。
-    const byIndex = new Map(apiResponse.data.map((d) => [d.index, d.embedding]));
+    //
+    // 一维 input 也可能拿到两层嵌套响应 —— voyage-context-* 的形态由**型号**决定,
+    // 与请求是几维无关(每个 input 成为一个单 chunk 文档)。所以统一走
+    // parseGroupedEmbeddings:期望分组为"N 个文档各 1 chunk",再摊平回一维。
+    // 条数校验也在那里做(少给/多给都失败,不会错位交付)。
+    const grouped = parseGroupedEmbeddings(
+      apiResponse as unknown as ContextualizedResponse,
+      missTexts.map(() => 1),
+    );
     for (let j = 0; j < missTexts.length; j++) {
-      const vec = byIndex.get(j) ?? apiResponse.data[j]?.embedding;
+      const vec = grouped[j]?.[0];
       if (!vec) {
         throw new EmbeddingError(
           `XD Gateway response missing embedding for input index ${j}`,
@@ -141,7 +264,20 @@ export class EmbeddingClient {
       }
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
-      this.cache.set(cacheKey(req.model, missTexts[j]), vec);
+      this.cache.set(cacheKey(req.model, missTexts[j], variant), vec);
+    }
+
+    // 维度自检:显式请求了维度就必须兑现。上游对"不支持的维度"行为不统一(可能
+    // 400, 也可能静默回默认长度), 静默那条最危险 —— 调方按请求值建索引 / 预分配,
+    // 拿到的却是另一个长度, 而报错点会漂到很远的地方。
+    if (req.dimensions !== undefined) {
+      const got = result[missIdx[0]]?.length;
+      if (got !== undefined && got !== req.dimensions) {
+        throw new EmbeddingError(
+          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
+          'INVALID_MODEL',
+        );
+      }
     }
 
     return {
@@ -153,6 +289,53 @@ export class EmbeddingClient {
   }
 
   /**
+   * 上下文化嵌入 (voyage-context-* 索引侧):按文档分组嵌入,同文档 chunk 互为上下文。
+   *
+   * wire 形态与 `embed()` 同一个端点,差别只在 `input` 是二维数组。
+   *
+   * **不走缓存**:一个 chunk 的向量取决于它所在文档,单 chunk 级 key 无法表达这个
+   * 依赖 —— 缓存了就会在"同一段文字出现在另一个文档里"时给出错误的向量。
+   */
+  async embedDocuments(req: EmbedDocumentsRequest): Promise<EmbedDocumentsResponse> {
+    if (!isKnownEmbeddingModel(req.model)) {
+      throw new EmbeddingError(`unknown embedding model '${req.model}'`, 'INVALID_MODEL');
+    }
+    if (req.documents.length === 0) {
+      return { embeddings: [], modelUsed: req.model, tokensUsed: 0 };
+    }
+    if (req.documents.some((doc) => doc.length === 0)) {
+      throw new EmbeddingError('documents 不能包含空的 chunk 序列', 'INVALID_MODEL');
+    }
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      throw new EmbeddingError(
+        'no API key available (user not logged in or safeStorage failure)',
+        'AUTH_FAILED',
+      );
+    }
+    const groupSizes = req.documents.map((doc) => doc.length);
+    const body = await this.callWithRetry(apiKey, req.model, req.documents, req);
+    const embeddings = parseGroupedEmbeddings(
+      body as unknown as ContextualizedResponse,
+      groupSizes,
+    );
+    if (req.dimensions !== undefined) {
+      const got = embeddings[0]?.[0]?.length;
+      if (got !== undefined && got !== req.dimensions) {
+        throw new EmbeddingError(
+          `requested dimensions=${req.dimensions} but model '${req.model}' returned ${got}`,
+          'INVALID_MODEL',
+        );
+      }
+    }
+    return {
+      embeddings,
+      modelUsed: body.model || req.model,
+      tokensUsed: body.usage?.prompt_tokens ?? body.usage?.total_tokens ?? 0,
+    };
+  }
+
+  /**
    * 带重试的 POST /v1/embeddings。重试条件:
    *   - 5xx / 429 / NETWORK_ERROR → 退避后重试 (最多 RETRY_DELAYS_MS.length 次)
    *   - 401/403 (AUTH_FAILED) / 400 (INVALID_MODEL) → 立即抛
@@ -160,7 +343,9 @@ export class EmbeddingClient {
   private async callWithRetry(
     apiKey: string,
     model: string,
-    inputs: string[],
+    // string[][] = 上下文化的按文档分组输入(见 embedDocuments);wire 上原样发。
+    inputs: string[] | string[][],
+    opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
   ): Promise<OpenAiEmbeddingsResponse> {
     let attempt = 0;
     // initial + retries
@@ -169,7 +354,7 @@ export class EmbeddingClient {
 
     while (attempt < maxAttempts) {
       try {
-        return await this.callOnce(apiKey, model, inputs);
+        return await this.callOnce(apiKey, model, inputs, opts);
       } catch (err) {
         if (!(err instanceof EmbeddingError)) {
           // 防御性: 任何非 EmbeddingError 都视作 SERVER_ERROR 走重试
@@ -206,9 +391,16 @@ export class EmbeddingClient {
   private async callOnce(
     apiKey: string,
     model: string,
-    inputs: string[],
+    inputs: string[] | string[][],
+    opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
   ): Promise<OpenAiEmbeddingsResponse> {
     const url = `${this.resolveBaseUrl()}/v1/embeddings`;
+    // inputType 按 provider 翻成该家的 wire 值(不支持的家不发这个字段);
+    // dimensions 统一用 OpenAI 的名字 —— 三家经网关都认它, Voyage 自己的
+    // output_dimension 只对 voyage 生效。
+    const provider = getEmbeddingModel(model)?.provider;
+    const wireInputType =
+      opts.inputType && provider ? INPUT_TYPE_WIRE[provider]?.[opts.inputType] : undefined;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
@@ -217,7 +409,12 @@ export class EmbeddingClient {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ model, input: inputs }),
+        body: JSON.stringify({
+          model,
+          input: inputs,
+          ...(wireInputType ? { input_type: wireInputType } : {}),
+          ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+        }),
       });
     } catch (err) {
       // DNS / socket reset / fetch abort 都走这里
@@ -258,10 +455,22 @@ function mapStatusToCode(status: number): EmbeddingError['code'] {
   return 'INVALID_MODEL';
 }
 
-function cacheKey(model: string, text: string): string {
-  // sha256(model + '\0' + text); 用 NUL 分隔避免 'a' + 'bc' / 'ab' + 'c' 碰撞
+/**
+ * 请求变体标识 —— 同一 (model, text) 在不同 inputType / dimensions 下是不同的向量,
+ * 必须进 cache key。空串 = 两者都缺省(与加入本参数之前的 key 语义一致)。
+ */
+function cacheVariant(inputType: string | undefined, dimensions: number | undefined): string {
+  if (inputType === undefined && dimensions === undefined) return '';
+  return `${inputType ?? ''}:${dimensions ?? ''}`;
+}
+
+function cacheKey(model: string, text: string, variant: string): string {
+  // sha256(model + '\0' + variant + '\0' + text); 用 NUL 分隔避免
+  // 'a' + 'bc' / 'ab' + 'c' 碰撞
   const h = createHash('sha256');
   h.update(model);
+  h.update('\x00');
+  h.update(variant);
   h.update('\x00');
   h.update(text);
   return h.digest('hex');

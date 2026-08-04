@@ -23,6 +23,16 @@ const XD: CindyMediaProviderSlice = {
     { id: 'seedance-pro', name: 'Seedance Pro' },
   ],
   videoDefaults: { standard: 'seedance-fast', best: 'seedance-pro' },
+  embeddingModels: [
+    { id: 'voyage/voyage-4', name: 'Voyage 4' },
+    { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large' },
+    { id: 'text-embedding-3-small', name: 'OpenAI Embedding 3 Small' },
+  ],
+  embeddingDefaults: {
+    standard: 'voyage/voyage-4',
+    draft: 'text-embedding-3-small',
+    best: 'voyage/voyage-4-large',
+  },
 };
 
 describe('deriveCindyMediaConfig — 正常目录', () => {
@@ -225,5 +235,50 @@ describe('deriveCindyMediaConfig — supportsEdit(仅生成来源,2026-07)', () 
     expect(cfg.models.map((m) => m.id)).toContain('xai/aurora');
     expect(cfg.models.find((m) => m.id === 'xai/aurora')?.supportsEdit).toBe(false);
     expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.supportsEdit).toBe(true);
+  });
+});
+
+describe('deriveCindyMediaConfig — 向量类目(embed)', () => {
+  it('读 embeddingModels / embeddingDefaults,与 image / video 同一套派生规则', () => {
+    const cfg = deriveCindyMediaConfig([XD], 'embed');
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults).toEqual({
+      standard: 'voyage/voyage-4',
+      draft: 'text-embedding-3-small',
+      best: 'voyage/voyage-4-large',
+    });
+  });
+
+  it('目录没声明向量段 → 空清单 + defaults null(能力暂不可用,不落回别的类目)', () => {
+    const imageOnly: CindyMediaProviderSlice = {
+      id: 'xd',
+      imageModels: [{ id: 'gpt-image-2', name: 'GPT Image 2' }],
+      imageDefaults: { standard: 'gpt-image-2' },
+    };
+    expect(deriveCindyMediaConfig([imageOnly], 'embed')).toEqual({ models: [], defaults: null });
+  });
+
+  it('停用过滤:被停用的型号不进清单,目录默认指向它时回落清单首项', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD],
+      'embed',
+      (_providerId, modelId) => modelId === 'voyage/voyage-4',
+    );
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4-large');
+  });
+
+  it('供应商未就绪(本地模式无网关)→ 整段跳过,能力暂不可用', () => {
+    expect(deriveCindyMediaConfig([XD], 'embed', undefined, () => false)).toEqual({
+      models: [],
+      defaults: null,
+    });
   });
 });

@@ -1237,7 +1237,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
 文生视频 / \`edit\`=图生视频,参考图怎么用由 \`refMode\` 决定:首尾帧 1–2 张,
-或多张参考图,详见 §4 的 cindy-request 视频段)。
+或多张参考图,详见 §4 的 cindy-request 视频段)、\`media\`(\`deposit\`=把手里的
+媒体字节存进媒体库,§4.0.1)、\`text\`(\`oneshot\`=快问快答,§4.0.2)、
+\`embed\`(\`text\`=文本转向量,§4.0.3)。
 详单里没申请的动作,运行时点单直接被拒;声明了 cindy 槽却漏写详单 = 零能力,
 别漏。(旧名 model 槽/字段仍兼容,但新意识一律用 cindy。)
 
@@ -1628,6 +1630,92 @@ const r = await cindy.send({
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
 - prompt ≤32768 字符;同步返回,没有异步单;每插件在途上限与媒体代办共用
   (用户可配);装入确认框会单列一行「可向 Cindy 的快速通道提问」。
+
+### 4.0.3 文本转向量:把文字算成向量做语义检索(embed_text)
+
+要做"按意思找"而不是"按关键词找"(在你自己的笔记、素材、条目里做语义搜索,或给
+Agent 做检索增强)时,用这个能力把文字算成向量:
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "embed": ["text"] }
+
+// 1) 入库:把你的内容算成向量,自己存起来
+const doc = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  texts: ['第一段内容…', '第二段内容…'],
+  inputType: 'document',   // 可选:这批是"被检索的内容"
+  // dimensions: 1024,     // 可选:降维省存储与传输(默认随型号)
+  // tier: 'best',         // 可选:档位意图(draft/standard/best)
+  callId: msg.callId,
+});
+// 成功:{ ok:true, embeddings:[[…],[…]], model:'…', dim:1024, modelLabel:'…' }
+// 把 embeddings 连同 model + dim 一起存进你自己的 kv / 文件
+
+// 2) 检索:把用户的问题算成向量,和存量向量算余弦相似度,取最近的几条
+const q = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  texts: [userQuestion],
+  inputType: 'query',      // 可选:这条是"用来检索的提问"
+  model: storedModel,      // 必须与入库时同一型号!
+  callId: msg.callId,
+});
+\`\`\`
+
+**长文档要用上下文化**(voyage-context 系列):把一篇文档切好的 chunk 一起递进来,
+同一文档内的 chunk **互为上下文**,每个 chunk 拿到的向量都带着整篇的语境 ——
+比逐块独立嵌明显更准,尤其是"这个"、"该方法"这类指代要靠上文才懂的句子:
+
+\`\`\`js
+// 入库侧:documents 是二维的 —— 每个内层数组 = 一篇文档的 chunk 序列
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'embed_text',
+  model: 'voyage/voyage-context-4',   // 只有 voyage-context 系列支持,别的型号会被明拒
+  documents: [
+    ['第一篇的 chunk1…', '第一篇的 chunk2…', '第一篇的 chunk3…'],
+    ['第二篇的 chunk1…', '第二篇的 chunk2…'],
+  ],
+  inputType: 'document',
+  callId: msg.callId,
+});
+// 成功:{ ok:true, documentEmbeddings:[[v,v,v],[v,v]], model:'…', dim:1024, modelLabel:'…' }
+//   注意字段是 documentEmbeddings(三层:文档 → chunk → 维度),不是 embeddings
+// 检索侧照旧用 texts 传一条问题(查询是单条、无上下文),型号保持一致即可
+\`\`\`
+
+- \`texts\` 与 \`documents\` **二选一**,同时传会被拒(意图不明,主机不猜);
+- 一篇文档必须**整篇一起嵌**,不能拆开分几次调 —— 拆了就没有上下文了,那还不如
+  直接用普通型号;
+- 预算是共用的:两种形态都算 chunk 总数 ≤32、单条 ≤8192 字符、合计 ≤65536 字符。
+  文档多就按文档分批(别把一篇拆开)。
+
+规矩与边界(都会被主机强制):
+
+- **只生成,不存储**。主机把向量原样交给你就结束了 —— 存哪儿、怎么建索引、
+  什么时候重算,全是你自己的事(面板 kv、你自己的文件)。主机自己的向量库不对
+  插件开放;
+- **换模型 = 换向量空间**。不同型号(乃至同型号不同 \`dimensions\`)算出的向量
+  互不可比,混进同一个索引会让相似度失去意义。所以**务必把回执里的 \`model\` 与
+  \`dim\` 跟向量一起存下**,检索前比对;不一致就得把存量重算一遍,而不是接着用。
+  这是它跟出图最不一样的地方:出图换型号无非风格变了,向量换型号会让你的整个
+  索引静默失效;
+- **一次 ≤32 条**,单条 ≤8192 字符,单批合计 ≤65536 字符。上限是被"向量要穿过
+  管子回到你手里"的体积钉住的(3072 维一条约 60KB JSON),不是上游 API 的限额。
+  更多请自己分批。超长文本请**按语义自己切块**——指望上游截断的话,你拿到的向量
+  代表的是被截掉后半段的文本,而且不报错;
+- \`inputType\` 是意图声明:\`'document'\` 给入库内容,\`'query'\` 给检索提问。
+  各家模型的实际参数互不兼容,主机负责翻译;有的型号(OpenAI 系)根本没有这个
+  概念,此时主机静默不发 —— 所以别把它当"一定生效"的开关。**要用就两侧一致**:
+  存的时候 \`'document'\`、查的时候 \`'query'\`,或者两边都不传;一边传一边不传
+  不会报错,只是召回悄悄变差;
+- \`dimensions\` 该型号不支持时按 \`errorCode:'INVALID_PARAMS'\` 明拒,不会静默
+  给你另一个长度;
+- \`errorCode:'NO_CANDIDATE'\` = 当前没有可用的向量型号(用户在设置里停用了,
+  或该版本/该区域不提供)。**这是正常失败面**,如实提示,别重试轰炸;
+- 同步返回,没有异步单;每插件在途上限与媒体代办共用;装入确认框会单列一行
+  「可把文字送去算成向量」并写明单次条数上限。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 

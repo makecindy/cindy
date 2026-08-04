@@ -16,6 +16,17 @@ import {
 } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
+/**
+ * cindy 详单里**可钉后端**的类目 —— 详情页给每个申请到的动作渲染一行模型选择。
+ *
+ * 新增 cindy 能力类目时必须回到这里登记,否则那个类目在详情页**完全没有选型
+ * 入口**(不是少个下拉:`cindyCapabilities` 为空时整张卡片都不渲染),插件只能
+ * 吃全局默认档。2026-08-04 加 `embed` 时就漏过一次。
+ *
+ * `media` 有意不在其中:寄存(deposit)不经模型,没有"用哪个型号"可选。
+ */
+const PINNABLE_CINDY_CATEGORIES = ['image', 'video', 'text', 'embed'] as const;
+
 export interface GhostPluginListItem {
   id: string;
   name: string;
@@ -213,13 +224,9 @@ export function toGhostPluginDetail(
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],
     hasSettingsUi: Boolean(manifest.settingsHtml),
-    cindyCapabilities: [
-      ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
-      ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
-      // 文本类(快问快答)同样可钉后端:漏掉它,声明了 cindy.text 的插件在
-      // 详情页就没有任何选型入口,只能吃全局轻量链的默认档。
-      ...(manifest.cindy?.text ?? []).map((action) => `text.${action}`),
-    ],
+    cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
+      (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
+    ),
     hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,

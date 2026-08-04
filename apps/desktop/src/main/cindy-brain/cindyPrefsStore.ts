@@ -30,6 +30,9 @@ export const CINDY_CAPABILITY_KEYS = [
   'video.generate',
   'video.edit',
   'text.oneshot',
+  // 向量类的取值是 embedding catalog 的 model id(与媒体同为"一组供应商×模型",
+  // 不同于 text.oneshot 那种轻量链档位键)。
+  'embed.text',
 ] as const;
 export type CindyCapabilityKey = (typeof CINDY_CAPABILITY_KEYS)[number];
 

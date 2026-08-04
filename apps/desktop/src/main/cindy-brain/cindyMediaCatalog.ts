@@ -1,10 +1,13 @@
 /**
- * cindyMediaCatalog.ts — cindy 槽媒体能力配置的纯派生(白名单 + 默认/档位选型)。
+ * cindyMediaCatalog.ts — cindy 槽能力配置的纯派生(白名单 + 默认/档位选型)。
  * [PROTOCOL]: 变更时更新此头部,然后检查 CLAUDE.md
  *
  * 输入是 providers.json 运行时目录的供应商数组(与会话模型列表**同一获取来源**,
- * 见 maker-host/active-catalog 的 getActiveCatalog),输出图像 / 视频各自的可选清单
- * 与默认选型。本文件**零模型字面量**:清单与默认全部来自目录。
+ * 见 maker-host/active-catalog 的 getActiveCatalog),输出图像 / 视频 / 向量各自的
+ * 可选清单与默认选型。本文件**零模型字面量**:清单与默认全部来自目录。
+ *
+ * 文件名留着 "Media" 是历史(2026-08-04 加入向量类目时未改名,避免一次纯改名
+ * 的大 diff 冲掉 blame);三个类目共用同一套派生规则,差异只在读目录的哪个字段。
  *
  * 空清单语义(2026-07 定案):目录里没有该类目的任何模型 = 该能力**暂不可用**,
  * 返回 `{ models: [], defaults: null }`,不拿打包常量(GATEWAY_IMAGE_MODELS /
@@ -15,6 +18,12 @@
  * 纯逻辑、无 IO、无 electron 依赖(规则 14):单测直测,见 __tests__/cindyMediaCatalog.test.ts。
  */
 
+/**
+ * 本模块派生的能力类目。`embed` 与 image / video 共用同一套派生规则(白名单、
+ * first-wins 去重、停用过滤、默认档位、空清单降级)—— 差异只在读目录的哪个字段。
+ */
+export type CindyCapabilityKind = 'image' | 'video' | 'embed';
+
 /** 目录里与媒体能力相关的供应商字段(只取本模块用得到的那几个)。 */
 export interface CindyMediaProviderSlice {
   /** 供应商 id —— 停用过滤(isModelDisabled)按 (供应商, 模型) 定位 override。 */
@@ -23,6 +32,8 @@ export interface CindyMediaProviderSlice {
   imageDefaults?: { standard: string; draft?: string; best?: string };
   videoModels?: { id: string; name: string }[];
   videoDefaults?: { standard: string; draft?: string; best?: string };
+  embeddingModels?: { id: string; name: string }[];
+  embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
 export interface CindyMediaCatalogConfig {
@@ -46,7 +57,7 @@ export interface CindyMediaCatalogConfig {
 }
 
 /**
- * 从目录供应商数组派生某一类目(image / video)的 cindy 媒体能力配置。
+ * 从目录供应商数组派生某一类目(image / video / embed)的 cindy 能力配置。
  *
  * - 清单:按供应商出现序拼接、按 id 去重(first-wins),`label` 取目录 `name`。
  * - 停用过滤:`isModelDisabled(providerId, modelId)` 为 true 的条目不进清单
@@ -63,7 +74,7 @@ export interface CindyMediaCatalogConfig {
  */
 export function deriveCindyMediaConfig(
   providers: readonly CindyMediaProviderSlice[],
-  kind: 'image' | 'video',
+  kind: CindyCapabilityKind,
   isModelDisabled?: (providerId: string, modelId: string) => boolean,
   isProviderReady?: (providerId: string) => boolean,
   isProviderEditReady?: (providerId: string) => boolean,
@@ -73,7 +84,8 @@ export function deriveCindyMediaConfig(
   let rawDefaults: { standard: string; draft?: string; best?: string } | undefined;
   for (const p of providers) {
     if (isProviderReady && !isProviderReady(p.id)) continue;
-    const list = kind === 'image' ? p.imageModels : p.videoModels;
+    const list =
+      kind === 'image' ? p.imageModels : kind === 'video' ? p.videoModels : p.embeddingModels;
     for (const m of list ?? []) {
       if (seen.has(m.id)) continue;
       if (isModelDisabled?.(p.id, m.id)) continue;
@@ -86,7 +98,12 @@ export function deriveCindyMediaConfig(
       });
     }
     // 多供应商时首个声明默认的生效(契约测试锁定只有 xd 声明)。
-    const d = kind === 'image' ? p.imageDefaults : p.videoDefaults;
+    const d =
+      kind === 'image'
+        ? p.imageDefaults
+        : kind === 'video'
+          ? p.videoDefaults
+          : p.embeddingDefaults;
     if (!rawDefaults && d) rawDefaults = d;
   }
   if (models.length === 0) return { models, defaults: null };

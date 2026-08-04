@@ -16,7 +16,13 @@
  *   - Worker 长生命周期细节 (tick / 重试) 全在 EmbeddingWorker, 本类不操心
  */
 
-import type { EmbedResponse, EmbeddingClient, EmbeddingModelId } from '@cindy/embedding-client';
+import type {
+  EmbedDocumentsResponse,
+  EmbedResponse,
+  EmbeddingClient,
+  EmbeddingInputType,
+  EmbeddingModelId,
+} from '@cindy/embedding-client';
 
 import type { createLogger } from '../logger';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -154,14 +160,51 @@ export class EmbeddingService {
    * 同步 embed — 不入队, 不写 vec 表; 调方拿 embeddings 自处置。
    * 典型用途: query embedding (用户搜索时即时嵌一段 query, 再去 searchVectors)。
    */
-  async embedSync(texts: string[], opts: { modelId: EmbeddingModelId }): Promise<EmbedResponse> {
+  async embedSync(
+    texts: string[],
+    opts: {
+      modelId: EmbeddingModelId;
+      /** 检索用途档(client 按 model 的 provider 翻成上游 wire 值)。 */
+      inputType?: EmbeddingInputType;
+      /** 期望维度(缺省 = 上游默认;client 会按返回长度自检)。 */
+      dimensions?: number;
+    },
+  ): Promise<EmbedResponse> {
     // 停用轴(PR #744 review 第十七轮):查询向量与后台批同为经 XD 网关的新付费
     // 调用,供应商停用时同样不发 —— 抛错交给消费方既有降级路径(语义搜索回落
     // 关键词检索)。
     if (isProviderModelRouteDisabled('xd', opts.modelId)) {
       throw new Error('embedding provider or model disabled in settings');
     }
-    return this.deps.getClient().embed({ texts, model: opts.modelId });
+    return this.deps.getClient().embed({
+      texts,
+      model: opts.modelId,
+      ...(opts.inputType !== undefined ? { inputType: opts.inputType } : {}),
+      ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+    });
+  }
+
+  /**
+   * 上下文化嵌入(索引侧):按文档分组,同文档 chunk 互为上下文。
+   * 同 embedSync 不入队、不写 vec 表;停用轴同判。
+   */
+  async embedDocumentsSync(
+    documents: string[][],
+    opts: {
+      modelId: EmbeddingModelId;
+      inputType?: EmbeddingInputType;
+      dimensions?: number;
+    },
+  ): Promise<EmbedDocumentsResponse> {
+    if (isProviderModelRouteDisabled('xd', opts.modelId)) {
+      throw new Error('embedding provider or model disabled in settings');
+    }
+    return this.deps.getClient().embedDocuments({
+      documents,
+      model: opts.modelId,
+      ...(opts.inputType !== undefined ? { inputType: opts.inputType } : {}),
+      ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
+    });
   }
 
   // ── KNN 查询 (consumer 调) ────────────────────────────────────────────

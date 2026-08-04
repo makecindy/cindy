@@ -41,6 +41,13 @@ function projectVideoDefaults(
  * API keys and custom providers therefore keep their image catalog in every
  * build. Video dispatch is not provider-aware yet, so non-XD video capabilities
  * stay hidden outside Global until the runtime can route them by provider.
+ *
+ * Embedding follows the image rule verbatim: Cindy-managed embedding models are
+ * cleared for Mainland China builds, because every model behind that endpoint is
+ * an overseas one. Non-XD providers keep whatever they declare — that is the
+ * user's own key, not a Cindy-operated service. Clearing the list (rather than
+ * leaving it and failing at dispatch) is what makes the plugin capability report
+ * "unavailable" instead of offering models that are guaranteed to fail.
  */
 export function projectProviderCatalogForBuildRegion(
   catalog: Catalog,
@@ -86,7 +93,8 @@ export function projectProviderCatalogForBuildRegion(
         agent,
         (list ?? []).filter((model) => {
           const group = classifyModel(model);
-          return group !== 'image' && (group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id));
+          if (group === 'image' || group === 'embedding') return false;
+          return group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id);
         }),
       ]),
     ) as Provider['models'];
@@ -95,9 +103,11 @@ export function projectProviderCatalogForBuildRegion(
       models,
       imageModels: [],
       videoModels,
+      embeddingModels: [],
     };
     delete projected.imageDefaults;
     delete projected.videoDefaults;
+    delete projected.embeddingDefaults;
     if (videoDefaults) projected.videoDefaults = videoDefaults;
     return projected;
   });

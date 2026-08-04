@@ -978,6 +978,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      /** 向量类(文本转向量):同 image/video 走目录派生。 */
+      embed: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
     } => ipcRenderer.sendSync('ghosts:cindy-prefs', id),
     setCindyPref: (
       id: string,

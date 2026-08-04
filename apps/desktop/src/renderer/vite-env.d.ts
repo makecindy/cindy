@@ -1177,6 +1177,11 @@ interface ElectronAPI {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      /** 向量类(文本转向量):同 image/video 走目录派生。 */
+      embed: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
     };
     /** 写/清一项覆盖(model=null 即恢复跟随默认);返回该意识最新覆盖表。 */
     setCindyPref: (
