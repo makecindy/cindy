@@ -2756,6 +2756,7 @@ export class CodexAgent extends BaseAgent {
 
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
+    let sessionHostForceRetired = false;
     let subscription: ThreadSubscription | null = null;
     let interactionResolver: InteractionResolver | null = null;
     // Kept across the internal plan implementation/revision turns. A later
@@ -2988,6 +2989,7 @@ export class CodexAgent extends BaseAgent {
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
     const connectionId = host.getConnectionId();
     const isCurrentHost = (): boolean => {
+      if (sessionHostForceRetired) return false;
       const currentHost = this.hosts.get(currentHostKey);
       if ((this.hostGenerations.get(currentHostKey) ?? 0) !== hostGeneration) return false;
       return capturedHostWasRegistered ? currentHost === host : currentHost === undefined;
@@ -7331,6 +7333,68 @@ export class CodexAgent extends BaseAgent {
 
     // ── subscribeThread: notification 路由 + approval handlers ─────────────
     const handlers: ThreadEventHandlers = {
+      // 强制退役(账号切换/auth 失效)时由 host 发结构化信号，按本会话自身真实状态收口。
+      // 空闲/已完成 → 静默失效；真实在飞(turn in-flight / turn/start pending /
+      // overload retry) → 清理在途状态并推终态 error + Done。
+      // 不能在 host 层用空 turnId 的 transport error 广播：error handler 的
+      // targetsPendingTurn 要求非空 turnId、wasTurnRunning 不含 overload retry，
+      // pending/retry 会话会收不了口（busy 永久卡死）。所以由这里统一收口。
+      hostForcedRetire: ({ reason }) => {
+        sessionHostForceRetired = true;
+        subscriptionInvalidatedByTransport = false;
+
+        const hadPendingWork =
+          isTurnInFlight
+          || isTurnStartPending
+          || overloadRetryPending();
+        if (!hadPendingWork) {
+          log.info('idle Codex session invalidated by forced host retirement', { threadId });
+          eventQueue.end();
+          return;
+        }
+
+        // turn/start 可能尚未返回 id。先把所有在途请求标为已收口并隔离，随后 RPC
+        // reject/迟到 resolve 时复用既有 finally/墓碑路径，不再发第二组终态。
+        markInFlightStartsTerminallySettled();
+        quarantineAllInFlightStarts();
+        discardOverloadRetry('app-server force-retired');
+        // 强制退役后 host 不再投递后代 turn/completed 通知, 与 close /
+        // transport-error 同款: 先把仍在跑的子代理卡收成终态, 否则渲染端在
+        // parent 已推 Done 之后仍会看到子代理卡永久转圈。
+        for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+        subagentLiveCards.clear();
+        dismissAllPending('app_server_force_retired', 'deny');
+        dismissAllPendingUserInput('transport_error');
+        activeToolContexts.clear();
+        stopActiveRolloutPlanFallback();
+        resetUpstreamIdleForTurnEnd();
+        if (currentTurnId) terminalErroredTurnIds.add(currentTurnId);
+        currentTurnId = null;
+        isTurnInFlight = false;
+        isTurnStartPending = false;
+        currentTurnPlanModeActive = false;
+        pendingTurnStartPlanMode = null;
+
+        eventQueue.push({
+          type: 'error',
+          data: {
+            message: `app-server force-retired: ${reason}`,
+            isTerminal: true,
+            willRetry: false,
+            reason: 'app-server-force-retired',
+          },
+          source: 'codex',
+        });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        // 该 host 已被永久替换，handle 不可能原地恢复。结束内部事件流，让已启动的
+        // Session 走既有 auto-close → Maker lazy create；尚未启动 event loop 的
+        // Session 会在下一次 send 明确失败后 drain 到这里并重建。
+        eventQueue.end();
+      },
       threadStarted: (params) => {
         const sid = params.thread?.id;
         if (sid && sid !== sdkSessionId) sdkSessionId = sid;
@@ -8331,7 +8395,12 @@ export class CodexAgent extends BaseAgent {
             // 墓碑: 该 turn 的终态已抢在本响应之前到达 (典型: 收紧补中断后
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
-            if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+            // 强退守卫 (Greptile P1 on #1720): hostForcedRetire 已把本会话终态收口
+            // (eventQueue.end), 迟到的 turn/start 成功响应不得重新激活。正常流程里
+            // client.close() 会 reject 挂起 RPC 且 quarantine 已在 adoptUnidentifiedDeadTurn
+            // 落墓碑, 这里再显式挡一道, 不依赖那些间接语义 —— 否则 currentTurnId /
+            // isTurnInFlight 复活后事件队列已 end, 上层 busy 永久卡死。
+            if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id) && !sessionHostForceRetired) {
               // The app-server has now acknowledged which turn owns this
               // input. Bind explicit source selection before buffered tool
               // requests are released, and never on a pre-accept failure.
