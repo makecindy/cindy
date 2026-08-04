@@ -2752,13 +2752,19 @@ export function getGhostCindySlot(): GhostCindySlot {
       // app.getAppPath is not a function)。@cindy/embedding-client 是零运行依赖的
       // 纯包,已改为顶层静态 import,不必陪着动态化。
       embedText: async ({ texts, model, inputType, dimensions, timeoutMs }) => {
-        const { getEmbeddingService } = await import('../embedding-host/index.js');
+        // ensureEmbeddingServiceForPluginVector 而不是 getEmbeddingService:host 的启停
+        // 不归「聊天嵌入」开关独占 —— 那个开关关着时 host 不启动,直接取 service 必抛
+        // not-started,已授权的 embed_text 全变 INTERNAL(PR #1707 review)。这里打标
+        // 成"插件向量 consumer 在用"并按需懒启动。
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
         // 白名单已在 slot 层校验过,这里是纵深防御:目录里出现了 embedding catalog
         // 不认识的 id(两边不同步)时早失败,而不是把不认识的 id 发去网关。
         if (!isKnownEmbeddingModel(model)) {
           throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
         }
-        const res = await getEmbeddingService().embedSync(texts, {
+        const res = await ensureEmbeddingServiceForPluginVector().embedSync(texts, {
           modelId: model,
           ...(inputType !== undefined ? { inputType } : {}),
           ...(dimensions !== undefined ? { dimensions } : {}),
@@ -2770,11 +2776,13 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       // 上下文化嵌入(voyage-context-* 索引侧):同上,只是 input 按文档分组。
       embedDocuments: async ({ documents, model, inputType, dimensions, timeoutMs }) => {
-        const { getEmbeddingService } = await import('../embedding-host/index.js');
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
         if (!isKnownEmbeddingModel(model)) {
           throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
         }
-        const res = await getEmbeddingService().embedDocumentsSync(documents, {
+        const res = await ensureEmbeddingServiceForPluginVector().embedDocumentsSync(documents, {
           modelId: model,
           ...(inputType !== undefined ? { inputType } : {}),
           ...(dimensions !== undefined ? { dimensions } : {}),
