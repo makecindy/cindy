@@ -376,6 +376,19 @@ function embeddingErrorCode(err: unknown): string {
   }
 }
 
+/**
+ * 上游实际型号与白名单别名不同时,单独带一个 `upstreamModel` 字段(相同或缺省时不带)。
+ *
+ * 为什么不直接把它填进 `model`(PR #1707 review 第十一轮):手册要求调方把回执里的
+ * `model` 存下、检索时原样传回,而 `model` 参数要过 `cfg.models` 白名单 —— 回一个
+ * 带版本号的上游 id 会让"入库成功 → 按回执检索"确定性地撞 INVALID_PARAMS。别名负责
+ * 可回放,这个字段负责"后端换了实现、存量可能要重算"的可观测性。
+ */
+function upstreamModelMeta(alias: string, modelUsed: string | undefined): { upstreamModel?: string } {
+  if (!modelUsed || modelUsed === alias) return {};
+  return { upstreamModel: modelUsed };
+}
+
 /** 视频预期耗时缺省(秒;与 video/run.ts 的缺省同口径)。 */
 const DEFAULT_VIDEO_EXPECTED_SECONDS = 120;
 
@@ -1540,7 +1553,10 @@ export class GhostCindySlot {
         return {
           ok: true,
           documentEmbeddings: outcome.embeddings,
-          model: outcome.modelUsed || model,
+          // 回**白名单里的别名**而不是上游解析出的型号:手册要求把这个值存下、检索时
+          // 原样回传,而 model 参数要过白名单(PR #1707 review 第十一轮)。
+          model,
+          ...upstreamModelMeta(model, outcome.modelUsed),
           dim,
           modelLabel: label,
         };
@@ -1572,7 +1588,8 @@ export class GhostCindySlot {
       return {
         ok: true,
         embeddings: outcome.embeddings,
-        model: outcome.modelUsed || model,
+        model,
+        ...upstreamModelMeta(model, outcome.modelUsed),
         dim,
         modelLabel: label,
       };

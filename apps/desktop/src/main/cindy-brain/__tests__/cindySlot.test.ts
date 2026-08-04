@@ -1769,6 +1769,40 @@ describe('文本转向量(embed_text)', () => {
     expect((r as { embeddings: number[][] }).embeddings).toHaveLength(2);
   });
 
+  /**
+   * 手册要求把回执里的 model 存下、检索时原样回传,而 model 参数要过主机白名单。
+   * 上游解析出带版本号的实际型号(不在目录里)时,若把它当 model 回给插件,
+   * "入库成功 → 按回执检索"这条主路径就确定性地撞 INVALID_PARAMS
+   * (PR #1707 review 第十一轮)。别名负责可回放,upstreamModel 负责可观测。
+   */
+  it('上游回带版本号的型号 → model 仍是白名单别名,实际型号进 upstreamModel', async () => {
+    const embedText = vi.fn(async () => ({
+      embeddings: [fakeVec(1)],
+      modelUsed: 'voyage/voyage-4-20250101',
+    }));
+    const { slot } = withEmbed({ embedText } as unknown as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', EMBED);
+
+    expect(r).toMatchObject({
+      ok: true,
+      model: 'voyage/voyage-4',
+      upstreamModel: 'voyage/voyage-4-20250101',
+    });
+    // 回执里的 model 必须能原样再走一遍白名单(不然手册那条检索示例是死的)
+    const replay = await slot.handleModelRequest('art', {
+      ...EMBED,
+      model: (r as { model: string }).model,
+    });
+    expect(replay).toMatchObject({ ok: true });
+  });
+
+  it('上游型号与别名相同 → 不带 upstreamModel(不给调方多余的比对项)', async () => {
+    const { slot } = withEmbed();
+    const r = await slot.handleModelRequest('art', EMBED);
+    expect(r).toMatchObject({ ok: true, model: 'voyage/voyage-4' });
+    expect(r).not.toHaveProperty('upstreamModel');
+  });
+
   it('载荷校验:空数组 / 非字符串 / 超条数 / 单条超长 / 总量超限 → INVALID_PARAMS', async () => {
     const { slot } = withEmbed();
     for (const texts of [[], [''], [123], Array.from({ length: 33 }, () => 'x')]) {
@@ -1933,6 +1967,20 @@ describe('文本转向量 · 上下文化(documents)', () => {
     expect(r.embeddings).toBeUndefined();
     expect(r.dim).toBe(4);
     expect(r.modelLabel).toBe('Voyage Context 4');
+  });
+
+  it('上下文化路径同样回可回放的别名(带版本号的进 upstreamModel)', async () => {
+    const embedDocuments = vi.fn(async ({ documents }: { documents: string[][] }) => ({
+      embeddings: documents.map((doc, d) => doc.map((_c, i) => fakeVec(d * 10 + i))),
+      modelUsed: `${CTX_MODEL}-20250101`,
+    }));
+    const { slot } = withCtx({ embedDocuments } as unknown as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', REQ);
+    expect(r).toMatchObject({
+      ok: true,
+      model: CTX_MODEL,
+      upstreamModel: `${CTX_MODEL}-20250101`,
+    });
   });
 
   it('texts 与 documents 同时传 → INVALID_PARAMS,不出网(意图不明不猜)', async () => {

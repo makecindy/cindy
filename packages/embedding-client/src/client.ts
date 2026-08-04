@@ -134,8 +134,42 @@ function orderedByIndex<T>(
 }
 
 /**
+ * 一条向量必须是"元素全为有限数字的数组"。
+ *
+ * 为什么不能只看长度(PR #1707 review 第十一轮):200 响应里的 `embedding` 完全可能是
+ * `["0.1", null, {}]` 甚至一个字符串 —— 后者连 `.length` 都有,下游的维度校验读到的是
+ * 字符数,`dim` 看着还很合理。整批就这么被当成合法向量交付、入缓存,插件把它写进索引,
+ * 之后每次检索都是噪声,而哪一步都没报错。
+ *
+ * `NaN` / `±Infinity` 同样拒:它们会让余弦相似度整列变成 NaN,坏得更彻底也更难查。
+ */
+function assertNumericVector(value: unknown, what: string): number[] {
+  if (!Array.isArray(value)) {
+    throw new EmbeddingError(
+      `contextualized response: ${what} is not an array (got ${typeof value})`,
+      'SERVER_ERROR',
+    );
+  }
+  for (let i = 0; i < value.length; i++) {
+    const coord: unknown = value[i];
+    if (typeof coord !== 'number' || !Number.isFinite(coord)) {
+      // 坏值本身进不去消息(可能是个巨大对象),只报类型 / 数值形态。
+      const shown = typeof coord === 'number' ? String(coord) : typeof coord;
+      throw new EmbeddingError(
+        `contextualized response: ${what} coordinate ${i} is not a finite number (got ${shown})`,
+        'SERVER_ERROR',
+      );
+    }
+  }
+  return value as number[];
+}
+
+/**
  * 把响应解析成按文档分组的向量。两种形态都吃(见 ContextualizedResponse 注释),
  * 形状不认识时抛 SERVER_ERROR 而不是给出半个结果。
+ *
+ * 逐坐标的数字校验也在这里(见 assertNumericVector):这是两条路径(扁平 / 上下文化)
+ * 唯一共同的入口,放在这里 = 没有一条非数字向量能溜到缓存或交付面。
  *
  * `groupSizes` 是**期望**的分组:扁平路径传全 1(每个 input 一个单 chunk 文档),
  * 上下文化索引侧传各文档真实 chunk 数。它同时充当条数校验 —— 上游少给 / 多给、
@@ -162,7 +196,9 @@ function parseGroupedEmbeddings(
         groupSizes[docIndex],
         `document ${docIndex} chunk`,
       );
-      return chunks.map((entry) => entry.embedding);
+      return chunks.map((entry, chunkIndex) =>
+        assertNumericVector(entry.embedding, `document ${docIndex} chunk ${chunkIndex} embedding`),
+      );
     });
   }
   // 扁平形态:所有 chunk 按全局顺序摊平,按 groupSizes 重新切回文档。
@@ -181,7 +217,7 @@ function parseGroupedEmbeddings(
     (item, arrayOrder) => item.index ?? arrayOrder,
     total,
     'embedding',
-  ).map((item) => item.embedding as number[]);
+  ).map((item, i) => assertNumericVector(item.embedding, `embedding ${i}`));
   const out: number[][][] = [];
   let cursor = 0;
   for (const size of groupSizes) {

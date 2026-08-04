@@ -957,3 +957,74 @@ describe('EmbeddingClient · 缓存项记住上游实际型号', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('EmbeddingClient · 坐标必须是有限数字', () => {
+  /**
+   * 只看数组长度是不够的(PR #1707 review 第十一轮):200 响应里的 embedding 完全可能是
+   * ["0.1", null, {}],甚至是个字符串 —— 后者连 .length 都有,维度校验读到的是字符数,
+   * dim 看着还很合理。整批就这么被当成合法向量交付、入缓存,插件写进索引后每次检索都是
+   * 噪声,而哪一步都没报错。
+   */
+  it('扁平路径:元素是字符串 → SERVER_ERROR,不入缓存', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [{ object: 'embedding', index: 0, embedding: ['0.1', '0.2'] }],
+    });
+    const client = clientWith(fetchImpl);
+    const req = { texts: ['a'], model: 'voyage/voyage-4' as const };
+
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    await expect(client.embed(req)).rejects.toThrow(/coordinate 0 is not a finite number/);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('扁平路径:null / 对象混在中间也拒(不是只看首个元素)', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [{ object: 'embedding', index: 0, embedding: [0.1, null, 0.3] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toThrow(/coordinate 1 is not a finite number \(got object\)/);
+  });
+
+  it('NaN / Infinity 也拒(会让余弦相似度整列变成 NaN)', async () => {
+    // JSON 里没有 NaN 字面量,上游一般以 null 表达;这里直接构造非法数值字符串
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('{"model":"voyage/voyage-4","data":[{"index":0,"embedding":[1e999,2]}]}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toThrow(/coordinate 0 is not a finite number \(got Infinity\)/);
+  });
+
+  it('上下文化路径:嵌套形态同样逐坐标校验', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ data: [{ embedding: [1, 2] }, { embedding: [3, '4'] }] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a', 'b']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/document 0 chunk 1 embedding coordinate 1 is not a finite number/);
+  });
+
+  it('嵌套形态里 embedding 是字符串 → 明确报"不是数组",不被 .length 蒙过去', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ data: [{ embedding: 'abcd' }] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/document 0 chunk 0 embedding is not an array \(got string\)/);
+  });
+});

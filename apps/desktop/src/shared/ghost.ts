@@ -5762,8 +5762,23 @@ export interface GhostVideoResultParams {
  * 风格变了,向量换型号会让整个索引静默失效)。
  */
 interface GhostCindyEmbedResultMeta {
-  /** 实际执行的模型 id。 */
+  /**
+   * 实际执行的模型 id,**主机白名单里的那个别名** —— 也就是可以原样回传给
+   * `embed_text` 的那个值。
+   *
+   * 不回上游解析出的带版本号型号(PR #1707 review):手册要求调方把这个值存下、
+   * 检索时原样传回,而 `model` 参数要过主机白名单;回一个不在白名单里的上游 id
+   * 会让"入库成功 → 按回执检索"这条主路径确定性地撞 INVALID_PARAMS。
+   */
   model: string;
+  /**
+   * 上游实际使用的型号 id(带版本号 / 服务端解析后的实现),**仅当它与 `model`
+   * 不同时出现**。审计与"要不要重算存量"用,不要回传给 `embed_text`。
+   *
+   * 有什么用:同一别名的后端实现被换掉时(维度可能都没变),向量空间未必仍然可比,
+   * 而只看别名是察觉不到的。
+   */
+  upstreamModel?: string;
   /** 实际返回的向量维度。 */
   dim: number;
   /** 模型展示名(目录 label;给用户看的场合用这个,不用裸 id)。 */
