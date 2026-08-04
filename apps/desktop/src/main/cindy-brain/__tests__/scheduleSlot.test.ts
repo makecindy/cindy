@@ -363,6 +363,15 @@ describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
     ['插件面板独立窗(仅 hash)', 'file:///app/index.html#/ghost-panel-window'],
     ['右侧栏独立窗(query)', 'file:///app/index.html?sidebarWindow=1#/sidebar-window'],
     ['右侧栏独立窗(仅 hash)', 'file:///app/index.html#/sidebar-window'],
+    // utility 窗:统一带 ?view=<名字>,一律接不住草稿(review 第三轮)。
+    ['语音浮窗', 'file:///app/index.html?view=voice-input-overlay'],
+    ['词典 toast', 'file:///app/index.html?view=voice-input-dictionary-toast'],
+    ['权限引导窗', 'file:///app/index.html?view=computer-permission-guide'],
+    ['权限引导 backdrop', 'file:///app/index.html?view=computer-permission-backdrop'],
+    // 按 key 排除而非枚举取值:将来任何新 utility 窗只要沿用 ?view= 约定就自动落在排除侧。
+    ['将来某个未知的 utility 窗', 'file:///app/index.html?view=some-future-window'],
+    // 插件沙箱窗用自定义 scheme 加载插件内容,被协议判据挡掉 —— 主机 UI 事件不该推给插件。
+    ['插件沙箱窗(自定义协议)', 'cindy-ghost://codex-reset-planner/__boot__'],
     // 会话副窗:挂完整壳、技术上接得住,但不是用户建任务时看的窗口(review 第二轮)。
     ['会话副窗(secondaryWindow=1)', 'file:///app/index.html?secondaryWindow=1#/cc-agent'],
     ['会话副窗带 bootSession', 'file:///app/index.html?secondaryWindow=1&bootSession=abc#/cc-agent/x'],

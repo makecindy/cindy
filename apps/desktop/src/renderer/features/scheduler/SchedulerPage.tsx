@@ -262,7 +262,10 @@ export function SchedulerPage() {
       const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
       navigate(path, { replace: true, state: null });
     };
-    // 表单已经开着 → **不覆盖**,提示后把这次请求丢掉(#1715 review Codex P2)。
+    // 表单已经开着 → **不覆盖**,提示后把这次请求丢掉(review #1715 的 Codex P2)。
+    // ⚠️ PR 号写成 `review` 紧跟编号的语序不是随手排版:scheduler-ci-guard 的
+    // 色值白名单规则会把「井号 + 4 位数字」当成 RGBA 简写色值,它只豁免紧跟
+    // `PR ` / `review ` 的写法(见 scripts/scheduler-ci-guard.mjs)。
     //
     // 为什么不能直接往下走:ScheduleFormDialog 的 reset effect 依赖 initialValues 且
     // 守卫只有 `if (!open) return`(components/ScheduleFormDialog.tsx 的那个 effect),

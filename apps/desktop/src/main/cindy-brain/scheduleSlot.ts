@@ -70,22 +70,30 @@ function fail(
 /**
  * 该窗口是否是**能承载自动化页的主窗口**。投给别的窗口要么静默丢失,要么落错地方。
  *
- * 排除三类,理由各不相同:
+ * ⚠️ 本判据被 review 连着推了三轮(面板窗 → 会话副窗 → utility 窗),所以这一版**按
+ * 窗口约定收口,不再逐个枚举**:main 侧全部 `new BrowserWindow` 的位置只有 7 处
+ * (secondary-windows / bootstrap / 插件沙箱 / ghost-panel-window /
+ * right-sidebar-window / computer-permission-guide / voice-input),下面四条把它们
+ * 全覆盖了,**只有 bootstrap 建的主窗口不带任何标识** —— 新增窗口类型只要沿用现有
+ * 约定(utility 窗带 `?view=`),就自动落在排除侧,不需要再改这里。
  *
- * 1. **插件面板独立窗**(`?ghostPanelWindow=<id>` / hash `/ghost-panel-window`)与
- *    **右侧栏独立窗**(`?sidebarWindow=1` / hash `/sidebar-window`):它们与 MainLayout
- *    **平级**(见 router.tsx 两条根路由),只挂各自的轻壳,**没有草稿订阅、也去不了
- *    自动化页** → 投过去就是静默丢失。而插件面板恰恰可以被用户拉成独立窗口,而
- *    「在插件面板上点一下」正是本能力的主使用路径(编写手册 §4.11.2 第 1 步)——
- *    那一刻 focused 就是面板窗,若照 confirm 槽那样只写 `focused ?? all[0]` 就丢了。
- * 2. **「在新窗口打开」的会话副窗**(`?secondaryWindow=1`,见 main/secondary-windows.ts):
- *    它**挂的是完整 MainLayout**(所以有订阅、技术上接得住),但它是用户为某个会话
- *    单独开的窗口。回落时把创建面板弹进它 = 落错地方:用户以为在主窗口建任务,
- *    结果主窗口什么也没发生,而某个会话副窗被劫持去开自动化页(#1715 review
- *    Greptile P1 第二轮)。**能接住 ≠ 该接住**,故一并排除。
- *
- * 判据只认 query 与 hash 两路的显式启动参数(main 侧创建三类窗口时都显式设了 query;
- * hash 是 renderer 单入口的路由段),并只接受 app 真实页面的协议。
+ * 1. **协议**只认 app 真实页面(file / http(s))。顺带挡住两类:`about:blank`(窗口刚建
+ *    还没 load,它本身是合法 URL 且不带任何标识,不显式挡会被误判);以及**插件沙箱
+ *    窗** —— 它用自定义 scheme 加载插件内容(runtime/electronSandboxAdapter.ts),
+ *    往那边推主机 UI 事件本就不该发生。
+ * 2. **utility 窗**统一带 `?view=<名字>`:语音浮窗 `voice-input-overlay`、词典 toast
+ *    `voice-input-dictionary-toast`、权限引导 `computer-permission-guide` 与它的
+ *    backdrop。这里按 **`view` 这个 key** 排除而不是枚举取值 —— 它是 app 的 utility
+ *    窗约定,枚举取值就等着下一个新窗口再漏一次(review 第三轮)。
+ * 3. **插件面板独立窗**(`?ghostPanelWindow=<id>`)与**右侧栏独立窗**(`?sidebarWindow=1`):
+ *    与 MainLayout **平级**(router.tsx 两条根路由),只挂轻壳,**没有草稿订阅、也去不了
+ *    自动化页** → 投过去静默丢失。而插件面板恰恰可以被用户拉成独立窗口,「在插件面板
+ *    上点一下」正是本能力的主使用路径(编写手册 §4.11.2 第 1 步)——那一刻 focused 就是
+ *    面板窗,若照 confirm 槽那样只写 `focused ?? all[0]` 就丢了。hash 两路也查,兜底。
+ * 4. **「在新窗口打开」的会话副窗**(`?secondaryWindow=1`,main/secondary-windows.ts):
+ *    它**挂的是完整 MainLayout**(有订阅、技术上接得住),但它是用户为某个会话单独开的
+ *    窗口。回落时把创建面板弹进它 = 落错地方:用户以为在主窗口建任务,主窗口却什么也
+ *    没发生,而某个会话副窗被劫持去开自动化页。**能接住 ≠ 该接住**。
  *
  * 纯函数(只收 URL 字符串,不碰 Electron),便于直测。
  */
@@ -104,9 +112,12 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
     return false;
   }
   if (
+    // utility 窗的统一约定:按 key 排除,不枚举取值(见上方第 2 条)。
+    parsed.searchParams.has('view') ||
     parsed.searchParams.has('ghostPanelWindow') ||
     parsed.searchParams.has('sidebarWindow') ||
     // 会话副窗:挂完整壳、技术上接得住,但它不是用户建任务时看的那个窗口。
+    // 取 === '1' 而不是 has():带 secondaryWindow=0 的主窗不该被误排除。
     parsed.searchParams.get('secondaryWindow') === '1'
   ) {
     return false;
