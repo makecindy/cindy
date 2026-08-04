@@ -5758,6 +5758,31 @@ function releaseHistoryFetchIfCurrent(sessionId: string, token: number): void {
 }
 
 /**
+ * 释放一条被代际作废的首拉,并在没有新请求接管时补发当前代的首拉。
+ *
+ * 消息删除 / clear / trim 等路径会 bump `_messagesEpoch` 令在途响应失效,但它们
+ * 不一定会主动重载。若这里仅释放 in-flight 占用,会留下 historyLoaded=false 的
+ * 会话,而挂载中的视图不会再次触发 ensureInitialMessages。只有这次请求仍持有
+ * token、代际确实变化、会话仍存在且没有其它请求接管时才重试,避免与 reload / purge
+ * 或新一轮首拉重复发起。
+ */
+function retryInvalidatedInitialHistoryFetchIfNeeded(
+  sessionId: string,
+  token: number,
+  origin: string | undefined,
+  epoch: number,
+): void {
+  const ownsFetch = _historyFetchToken.get(sessionId) === token;
+  const epochChanged = (_messagesEpoch.get(sessionId) ?? 0) !== epoch;
+  const originUnchanged = remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+  releaseHistoryFetchIfCurrent(sessionId, token);
+  if (!ownsFetch || !epochChanged || !originUnchanged || !sessions.has(sessionId)) return;
+  const state = sessions.get(sessionId);
+  if (!state || state.historyLoaded || _historyFetchInFlight.has(sessionId)) return;
+  ensureInitialMessages(sessionId);
+}
+
+/**
  * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
  * row 派生 agentKind 的地方必须走这里,不要在调用点手写三元(历史上多处各写
@@ -5908,7 +5933,9 @@ function ensureInitialMessages(sessionId: string): void {
   getSessionFor(sessionId)
     .then((session) => {
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        // The history list owns the shared in-flight guard and will settle the
+        // invalidated generation. Do not release it while that request is still
+        // pending, otherwise a caller could start a second initial fetch beside it.
         return;
       }
       setState(sessionId, (s) => {
@@ -5962,7 +5989,8 @@ function ensureInitialMessages(sessionId: string): void {
     })
     .catch((err) => {
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        // See the resolve branch above: let listMessagesFor settle the shared
+        // initial-fetch guard and decide whether the current generation retries.
         return;
       }
       const ipcError = extractIpcError(err);
@@ -5976,12 +6004,22 @@ function ensureInitialMessages(sessionId: string): void {
   listMessagesFor(sessionId)
     .then(async (existing) => {
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
         return;
       }
       if (existing.length === 0) {
         if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-          releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+          retryInvalidatedInitialHistoryFetchIfNeeded(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          );
           return;
         }
         // 权威侧确认这个会话没有可见消息(被控端 /clear、rewind 到头、消息被删干净)。
@@ -6023,7 +6061,12 @@ function ensureInitialMessages(sessionId: string): void {
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
         if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-          releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+          retryInvalidatedInitialHistoryFetchIfNeeded(
+            sessionId,
+            historyFetchToken,
+            historyOriginAtStart,
+            historyEpochAtStart,
+          );
           return;
         }
         setState(sessionId, (s) => ({
@@ -6062,7 +6105,12 @@ function ensureInitialMessages(sessionId: string): void {
             before: oldestRow.id,
           });
           if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-            releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+            retryInvalidatedInitialHistoryFetchIfNeeded(
+              sessionId,
+              historyFetchToken,
+              historyOriginAtStart,
+              historyEpochAtStart,
+            );
             return;
           }
           if (older.length === 0) {
@@ -6082,7 +6130,12 @@ function ensureInitialMessages(sessionId: string): void {
       // 构建里 Vite 把常量折成 false 后 dead-code 消除,零开销。
       const ingestStartMs = import.meta.env.DEV ? performance.now() : 0;
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
         return;
       }
       const mapped = mapServerMessages(merged);
@@ -6142,7 +6195,12 @@ function ensureInitialMessages(sessionId: string): void {
     })
     .catch(() => {
       if (!isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart)) {
-        releaseHistoryFetchIfCurrent(sessionId, historyFetchToken);
+        retryInvalidatedInitialHistoryFetchIfNeeded(
+          sessionId,
+          historyFetchToken,
+          historyOriginAtStart,
+          historyEpochAtStart,
+        );
         return;
       }
       // Allow retry on next mount
