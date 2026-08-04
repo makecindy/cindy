@@ -382,6 +382,40 @@ describe('ghost_call 兜底拒绝', () => {
     const deps = makeDeps();
     const r = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
     expect(r).toMatchObject({ ok: true, result: 'done' });
+    expect(r).not.toHaveProperty('setup');
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ready + scope stale 时成功 envelope 附非阻塞 reauthSuggest', async () => {
+    const assessment = {
+      state: 'ready' as const,
+      revision: 3,
+      groups: [],
+      reauthSuggest: {
+        ghostId: 'art',
+        secretKey: 'account',
+        missingScopes: ['scope.new'],
+        missingScopeCount: 1,
+        requirement: {
+          ref: 'secret:account',
+          kind: 'oauth' as const,
+          label: 'Account',
+          action: {
+            id: 'oauth_connect:secret:account',
+            kind: 'oauth_connect' as const,
+          },
+        },
+      },
+    };
+    setupAssessmentMock.mockReturnValue(assessment);
+
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: 'done',
+      setup: { state: 'ready', reauthSuggest: { secretKey: 'account' } },
+    });
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 

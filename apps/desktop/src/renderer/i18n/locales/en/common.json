@@ -3536,6 +3536,7 @@
         "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
+        "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",

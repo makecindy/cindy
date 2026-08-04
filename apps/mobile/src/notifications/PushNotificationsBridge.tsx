@@ -1,7 +1,7 @@
-import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { useAuth } from '@/auth/AuthContext';
+import Notifications from './nativeNotifications';
 import { parseNotificationDeepLink } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,

@@ -353,6 +353,12 @@ function installFakeHost(
         cwd: '/repo',
       };
     }
+    if (method === Method.SkillsList) {
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
+      };
+    }
     if (method === Method.ThreadFork) {
       return {
         thread: { id: 'fork-thread-id' },
@@ -559,6 +565,18 @@ describe('CodexAgent capability routing', () => {
         source: {
           kind: 'harness-plugin',
           harness: 'codex',
+          surface: 'skill',
+          id: 'computer-use:computer-use',
+          artifactId: 'computer-use',
+          containerId: 'computer-use@openai-bundled',
+        },
+        invocation: 'disabled',
+      },
+      {
+        capabilityId: 'computer-use',
+        source: {
+          kind: 'harness-plugin',
+          harness: 'codex',
           surface: 'plugin',
           id: 'computer-use@openai-bundled',
         },
@@ -572,8 +590,34 @@ describe('CodexAgent capability routing', () => {
   } as const;
 
   it('applies host-owned plugin policy to new and resumed Codex 0.145 threads', async () => {
+    const listComputerUseSkill = (method: string, params: unknown) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [
+            {
+              name: 'computer-use:computer-use',
+              description: 'Control local Mac apps',
+              path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+              scope: 'user',
+              enabled: true,
+            },
+            {
+              name: 'disabled-user-skill',
+              description: 'Already disabled by the user',
+              path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+              scope: 'user',
+              enabled: false,
+            },
+          ],
+          errors: [],
+        })),
+      };
+    };
     const startAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const startHost = installFakeHost(startAgent, undefined, {
+    const startHost = installFakeHost(startAgent, listComputerUseSkill, {
       userAgent: 'mock-codex/0.145.0',
     });
     const startHandle = await startAgent.startSession({
@@ -589,10 +633,25 @@ describe('CodexAgent capability routing', () => {
       'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
       'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
         'prompt',
+      'skills.config': [
+        {
+          path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+          enabled: false,
+        },
+        {
+          path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+          enabled: false,
+        },
+      ],
     });
+    expect(startHost.request).toHaveBeenCalledWith(Method.SkillsList, {
+      cwds: ['/repo'],
+      forceReload: false,
+      perCwdExtraUserRoots: null,
+    }, { timeoutMs: 60_000 });
 
     const resumeAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const resumeHost = installFakeHost(resumeAgent, undefined, {
+    const resumeHost = installFakeHost(resumeAgent, listComputerUseSkill, {
       userAgent: 'mock-codex/0.145.0',
     });
     const resumeHandle = await resumeAgent.startSession({
@@ -609,10 +668,107 @@ describe('CodexAgent capability routing', () => {
       'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
       'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
         'prompt',
+      'skills.config': [
+        {
+          path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+          enabled: false,
+        },
+        {
+          path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+          enabled: false,
+        },
+      ],
     });
 
     await startHandle.close();
     await resumeHandle.close();
+  });
+
+  it('keeps the plugin enabled when Cindy Computer Use is unavailable but hides its incompatible Skill', async () => {
+    const compatibilityOnlyRouting = {
+      overrides: [capabilityRouting.overrides[1]],
+    } as const;
+    const agent = new CodexAgent(createDeps({}, {
+      capabilityRouting: compatibilityOnlyRouting,
+    }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [{
+            name: 'computer-use:computer-use',
+            description: 'Control local Mac apps',
+            path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+            scope: 'user',
+            enabled: true,
+          }],
+          errors: [],
+        })),
+      };
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-capability-routing-compatibility-only',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(params.config).toMatchObject({
+      'skills.config': [{
+        path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+        enabled: false,
+      }],
+    });
+    expect(params.config).not.toHaveProperty(
+      'plugins."computer-use@openai-bundled".enabled',
+    );
+
+    await handle.close();
+  });
+
+  it('disables a restricted Skill path even when catalog parsing reports it as an error', async () => {
+    const compatibilityOnlyRouting = {
+      overrides: [capabilityRouting.overrides[1]],
+    } as const;
+    const agent = new CodexAgent(createDeps({}, {
+      capabilityRouting: compatibilityOnlyRouting,
+    }));
+    const brokenSkillPath =
+      '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md';
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [],
+          errors: [{ path: brokenSkillPath, message: 'invalid metadata' }],
+        })),
+      };
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-capability-routing-broken-skill',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(params.config).toMatchObject({
+      'skills.config': [{ path: brokenSkillPath, enabled: false }],
+    });
+    await handle.close();
   });
 
   it('fails closed for older Codex daemons that cannot apply plugin overrides', async () => {
@@ -630,9 +786,25 @@ describe('CodexAgent capability routing', () => {
     ).rejects.toThrow('requires Codex app-server 0.145.0 or newer');
   });
 
-  it('disables an explicit-only plugin on remote Codex where the local overlay is unavailable', async () => {
+  it('keeps remote Computer Use available without a local host replacement', async () => {
     const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const host = installFakeHost(agent, undefined, {
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [{
+            name: 'computer-use:computer-use',
+            description: 'Control remote desktop apps',
+            path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
+            scope: 'user',
+            enabled: true,
+          }],
+          errors: [],
+        })),
+      };
+    }, {
       userAgent: 'mock-codex/0.145.0',
     });
     const handle = await agent.startSession({
@@ -647,13 +819,39 @@ describe('CodexAgent capability routing', () => {
 
     expect(params.config).toMatchObject({
       'plugins."feishu-delegate@personal".enabled': false,
-      'plugins."computer-use@openai-bundled".enabled': false,
+      'skills.config': [{
+        path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
+        enabled: false,
+      }],
     });
     expect(params.config).not.toHaveProperty(
       'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
     );
+    expect(params.config).not.toHaveProperty(
+      'plugins."computer-use@openai-bundled".enabled',
+    );
 
     await handle.close();
+  });
+
+  it('fails closed when restricted Skill discovery is unavailable', async () => {
+    const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.SkillsList) {
+        throw new Error('skills/list unavailable');
+      }
+      return undefined;
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-capability-routing-skill-discovery-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    })).rejects.toThrow(
+      'Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: skills/list unavailable',
+    );
   });
 
   it('declines an explicit-only downstream MCP unless the user chose that source', async () => {

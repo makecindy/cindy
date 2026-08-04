@@ -11,6 +11,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
+  AlertTriangle,
   ArrowUp,
   Bot,
   ChevronDown,
@@ -416,11 +417,14 @@ export function GhostPluginDetailView({
             <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-3')}>
               {detail.hasSettingsUi ? (
                 ghost ? (
-                  <GhostSettingsWebview
-                    ghost={ghost}
-                    title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
-                    appearance="plugin"
-                  />
+                  <>
+                    {ghost.oauthScopeStale ? <OauthScopeStaleBadge /> : null}
+                    <GhostSettingsWebview
+                      ghost={ghost}
+                      title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
+                      appearance="plugin"
+                    />
+                  </>
                 ) : (
                   <div
                     className={cn(
@@ -465,6 +469,24 @@ export function GhostPluginDetailView({
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>
     </main>
+  );
+}
+
+/** 宿主侧非阻塞角标；重新连接动作继续复用插件设置区已有入口。 */
+export function OauthScopeStaleBadge() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-[var(--warning-bg-soft)] px-3 py-1.5 text-12 leading-5 text-[var(--text-secondary)]"
+    >
+      <AlertTriangle
+        size={13}
+        className="shrink-0 text-[var(--warning-fg)]"
+        aria-hidden="true"
+      />
+      <span>{t('settings.ghosts.detail.oauthScopeStale')}</span>
+    </div>
   );
 }
 
