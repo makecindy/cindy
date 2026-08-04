@@ -1305,6 +1305,15 @@ export function registerSessionIpc(
     }
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    const updated = sessionToCamel(row);
+    const broadcastPatch =
+      p.pinnedAt === undefined
+        ? p
+        : {
+            ...p,
+            pinnedAt: updated.pinnedAt,
+            ...(updated.pinnedAt === null ? {} : { status: updated.status }),
+          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1316,18 +1325,19 @@ export function registerSessionIpc(
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
-    if (projectTargetChanged || settingsChanged || titleChanged) {
-      if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sid, p, ownerScope);
+    if (projectTargetChanged || settingsChanged || titleChanged || p.pinnedAt !== undefined) {
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+      }
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
     // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
     // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
-    if (p.pinnedAt != null) {
+    if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
       void import('../../sessionTaskSummary.js').then((m) =>
         m.maybeGenerateSessionTaskSummary(sid),
       );
     }
-    const updated = sessionToCamel(row);
     notifyAgentIslandSessionPatch(updated.id, {
       status: updated.status,
       title: updated.title,
@@ -1576,12 +1586,13 @@ export async function setSessionsStatusInDb(
       }
       throw err;
     });
-  if (!isOwnerScopeCurrent(ownerScope)) return applied.map((item) => ({
-    sessionId: item.sessionId,
-    title: item.title,
-    workingDir: item.workingDir,
-    status: item.status,
-  }));
+  if (!isOwnerScopeCurrent(ownerScope))
+    return applied.map((item) => ({
+      sessionId: item.sessionId,
+      title: item.title,
+      workingDir: item.workingDir,
+      status: item.status,
+    }));
   for (const item of applied) {
     notifyAgentIslandSessionPatch(item.sessionId, {
       status: item.status,
