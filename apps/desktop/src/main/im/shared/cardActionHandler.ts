@@ -1269,6 +1269,17 @@ export function createCardActionHandler(
     }
   }
 
+  async function patchExpiredInteractionCard(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+    const notice = adapter.interactionExpiredNotice;
+    if (!notice) return;
+    try {
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(notice));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`expired interaction card cleanup failed (non-fatal): ${msg}`);
+    }
+  }
+
   return function attachCardActionHandler(im: ChannelIM): () => void {
     return im.onCardAction(async (event: IMCardActionEvent) => {
       const accountGeneration = captureImAccountGeneration();
@@ -1358,12 +1369,14 @@ export function createCardActionHandler(
           const decision = decisionFromPress(event);
           if (!decision) {
             log.warn(`unknown buttonId=${event.buttonId} — ignoring`);
+            await patchExpiredInteractionCard(im, event);
             return;
           }
 
           const requestId = String(event.payload.requestId ?? '');
           if (!requestId) {
             log.warn('no requestId in payload — ignoring');
+            await patchExpiredInteractionCard(im, event);
             return;
           }
 
@@ -1372,6 +1385,7 @@ export function createCardActionHandler(
             log.warn(
               `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
             );
+            await patchExpiredInteractionCard(im, event);
             return;
           }
 

@@ -1307,17 +1307,28 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async handleCallbackQuery(q: import('./api.js').TgCallbackQuery): Promise<void> {
     const api = this.api;
     if (!api) return;
-    // 无论结果如何都先应答, 消掉客户端 loading 态。
-    void api.call('answerCallbackQuery', { callback_query_id: q.id }).catch(() => undefined);
-    if (String(q.from.id) !== this.ownerUserId) return;
+    const answer = (params: Record<string, unknown>) =>
+      api.call('answerCallbackQuery', params).catch(() => undefined);
+    if (String(q.from.id) !== this.ownerUserId) {
+      void answer({ callback_query_id: q.id });
+      return;
+    }
     const event = parseCallbackQuery(q);
     if (!event) {
       const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
-      void api
-        .call('answerCallbackQuery', { callback_query_id: q.id, text: notice, show_alert: true })
-        .catch(() => undefined);
+      void answer({ callback_query_id: q.id, text: notice, show_alert: true });
+      if (q.message !== undefined) {
+        void api
+          .call('editMessageReplyMarkup', {
+            chat_id: q.message.chat.id,
+            message_id: q.message.message_id,
+            reply_markup: { inline_keyboard: [] },
+          })
+          .catch(() => undefined);
+      }
       return;
     }
+    void answer({ callback_query_id: q.id });
     for (const h of this.cardActionHandlers) {
       try {
         h(event);

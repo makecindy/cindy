@@ -13,12 +13,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMHost, IMMessageEvent } from '../../types.js';
 import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
+import { encodeCallbackData } from '../codec.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
 
 interface FakeApi extends TelegramApiClient {
   calls: Array<{ method: string; params: Record<string, unknown> }>;
+  hangMethods: Set<string>;
   pushUpdates(updates: TgUpdate[]): void;
   failNextGetUpdates(err: Error): void;
 }
@@ -31,6 +33,7 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
 
   const api: FakeApi = {
     calls: [],
+    hangMethods: new Set(),
     pushUpdates(updates) {
       if (waiter) {
         const w = waiter;
@@ -57,6 +60,7 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
     },
     async call(method, params = {}, signal) {
       api.calls.push({ method, params });
+      if (api.hangMethods.has(method)) return new Promise(() => undefined) as never;
       if (method === 'getMe') {
         if (opts.getMeError) throw opts.getMeError;
         return BOT as never;
@@ -204,6 +208,95 @@ describe('TelegramIM', () => {
     });
     const linked = api.calls.find((c) => c.method === 'sendMessage');
     expect(linked?.params.chat_id).toBe(OWNER_ID);
+  });
+
+  it('有效 callback 只应答一次；失效 callback 显示提示并清掉旧键盘', async () => {
+    await connect();
+    api.calls.length = 0;
+    im.onCardAction(() => undefined);
+    const valid = encodeCallbackData('ask:pick', { requestId: 'pending-1' });
+    api.pushUpdates([
+      {
+        update_id: 901,
+        callback_query: {
+          id: 'valid-callback',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: valid,
+          message: {
+            message_id: 901,
+            chat: { id: Number(OWNER_ID), type: 'private' },
+            date: 1,
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(1);
+    });
+    expect(api.calls.find((call) => call.method === 'answerCallbackQuery')?.params).toEqual({
+      callback_query_id: 'valid-callback',
+    });
+
+    api.calls.length = 0;
+    api.pushUpdates([
+      {
+        update_id: 902,
+        callback_query: {
+          id: 'expired-callback',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: 'r:missing-after-restart',
+          message: {
+            message_id: 902,
+            chat: { id: Number(OWNER_ID), type: 'private' },
+            date: 1,
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'editMessageReplyMarkup')).toHaveLength(1);
+    });
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toEqual([
+      {
+        method: 'answerCallbackQuery',
+        params: {
+          callback_query_id: 'expired-callback',
+          text: '卡片已过期',
+          show_alert: true,
+        },
+      },
+    ]);
+    expect(api.calls.find((call) => call.method === 'editMessageReplyMarkup')?.params).toEqual({
+      chat_id: Number(OWNER_ID),
+      message_id: 902,
+      reply_markup: { inline_keyboard: [] },
+    });
+  });
+
+  it('callback ACK 长时间未返回时仍立即派发卡片动作', async () => {
+    await connect();
+    api.calls.length = 0;
+    api.hangMethods.add('answerCallbackQuery');
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    api.pushUpdates([
+      {
+        update_id: 903,
+        callback_query: {
+          id: 'slow-ack',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: encodeCallbackData('permission:allow:once', { requestId: 'pending-2' }),
+          message: {
+            message_id: 903,
+            chat: { id: Number(OWNER_ID), type: 'private' },
+            date: 1,
+          },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(1);
   });
 
   it('set-config 失败(401): 状态 error 且凭证回滚', async () => {

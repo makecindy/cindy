@@ -115,6 +115,8 @@ export interface ImChannelAdapter {
    * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
+  /** Shown on a Telegram card whose callback survived transport but lost its pending interaction. */
+  interactionExpiredNotice?: string;
   /**
    * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
    * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)

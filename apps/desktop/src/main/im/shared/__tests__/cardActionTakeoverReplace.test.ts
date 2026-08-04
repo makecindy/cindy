@@ -481,6 +481,42 @@ describe('control:start 按钮(免打字重新发起远程控制)', () => {
   });
 });
 
+describe('Telegram 失效交互卡', () => {
+  it('pending interaction 丢失时收口旧卡并显示过期提示', async () => {
+    const im = makeIm();
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    await registeredHandler(handler)({
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'permission:allow:once',
+      payload: { requestId: 'already-resolved' },
+    });
+
+    expect(resolvePending).toHaveBeenCalledWith('already-resolved', {
+      kind: 'permission',
+      behavior: 'allow',
+    });
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      '111|42',
+      expect.objectContaining({ body: '卡片已过期', buttons: [] }),
+    );
+  });
+});
+
 describe('/permission Full access 确认', () => {
   async function pressPermission(
     im: ChannelIM,
