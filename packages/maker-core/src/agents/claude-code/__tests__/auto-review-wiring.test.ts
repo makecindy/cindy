@@ -16,7 +16,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
@@ -408,14 +408,20 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
    * 断言就会莫名少一条。所以整个用例只订阅一次。
    */
   function startNoticeCollector(
-    handle: { events(): AsyncIterable<{ type: string; data?: { message?: unknown } }> },
+    handle: Pick<AgentSessionHandle, 'events'>,
   ) {
     const notices: string[] = [];
     // 刻意不返回这个 promise:fakeQuery 的消息流永远挂起,forward loop 不退出,close()
     // 之后事件流也不会 end —— await 它就是等到测试超时。收集器随测试进程一起结束。
     void (async () => {
       for await (const event of handle.events()) {
-        if (event.type === 'error' && typeof event.data?.message === 'string') {
+        if (
+          event.type === 'error'
+          && typeof event.data === 'object'
+          && event.data !== null
+          && 'message' in event.data
+          && typeof event.data.message === 'string'
+        ) {
           notices.push(event.data.message);
         }
       }
