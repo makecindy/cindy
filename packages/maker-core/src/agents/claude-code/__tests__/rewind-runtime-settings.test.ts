@@ -305,6 +305,48 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('drops a queued permission-mode write when the query was replaced while it waited', async () => {
+    // 档位写入是串行队列,排队期间 `q` 可能被换掉(invalid-resume 自救 / rewind 重建)。新
+    // Query 的起档已由 buildQuery 用 effectiveSdkPermissionMode() 按**最新状态**初始化,旧
+    // Query 排的那条写入若落到新 Query 上,就用一个为旧上下文算出的档位盖掉它 —— SDK 档位
+    // 与逻辑状态重新分叉(copilot / codex P1 of #1612)。这里钉住:换过 Query 就丢弃。
+    const { handle, firstQuery } = await startRewindableSession();
+
+    // ① 用一次挂住的写入占住队列,后面的意图只能排队(而不是立刻执行)。
+    let releaseFirstWrite!: () => void;
+    const firstWriteGate = new Promise<void>((resolve) => { releaseFirstWrite = resolve; });
+    firstQuery.setPermissionMode.mockImplementationOnce(async () => { await firstWriteGate; });
+    const occupying = handle.setPermissionMode?.('auto');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(firstQuery.setPermissionMode).toHaveBeenCalledTimes(1);
+
+    // ② 队列被占住期间进 plan:入队一条 literal 'plan'(为旧 Query 算出的目标档)。
+    const planOn = handle.setPlanMode?.(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    // ③ 再退出 plan:逻辑状态已回到非 plan,队列里那条 'plan' 就成了**过期 literal**。
+    const planOff = handle.setPlanMode?.(false);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // ④ 换 Query:旧 q 被 close,新 q 的起档由 buildQuery 按当前(非 plan)状态算出。
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+
+    const sendPromise = handle.send({ type: 'user', content: 'after rewind' });
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseFirstWrite();
+    await sendPromise;
+    await occupying;
+    await planOn;
+    await planOff;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 关键断言:那条为旧 Query 排的 'plan' 不得落到新 Query 上 —— 否则这一轮普通 turn 会以
+    // plan 档跑,工具权限面与 mutablePlanMode / sdkInPlanMode 分叉。
+    expect(secondQuery.setPermissionMode).not.toHaveBeenCalledWith('plan');
+    await handle.close();
+  });
+
   it('replays max without downgrading it when effort changes during query rebuild', async () => {
     const { handle } = await startRewindableSession();
     await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');

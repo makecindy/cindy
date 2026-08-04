@@ -3684,11 +3684,24 @@ export class ClaudeCodeAgent extends BaseAgent {
       target: SdkPermissionMode | (() => SdkPermissionMode | null),
     ): Promise<SdkPermissionMode | null> => {
       sdkPermissionModeQueueDepth += 1;
+      // **入队时钉住 Query 身份。** 排队期间 `q` 可能被换掉(invalid-resume 自救、rewind /
+      // bridge 重建),而新 Query 的起档已经由 `buildQuery` 用 `effectiveSdkPermissionMode()`
+      // 按**最新状态**初始化好了。旧 Query 的那次写入若落到新 Query 上,就会用一个为旧
+      // 上下文算出的档位盖掉这个已经正确的起档 —— 又造出「SDK 档位与逻辑状态分叉」,正是
+      // 本 PR 要消除的东西(copilot / codex P1)。所以换过 Query 就丢弃,不改成"现算后再写":
+      // 新 Query 本来就已经是现算的结果,再写一次只是多发一个控制请求。
+      const enqueuedQuery = q;
       const run = (async (): Promise<SdkPermissionMode | null> => {
         // 等前一个写入落地。成功或失败都算落地 —— 一次失败不该毒化整条队列。
         await sdkPermissionModeQueue;
+        // 先求值再判身份:取值函数自己带记账(收敛推送要在这里清"已排队"标记、必要时留欠账),
+        // 提前 return 会把那份记账永久卡住。身份不符时只丢弃**写入**。
         const resolved = typeof target === 'function' ? target() : target;
         if (resolved === null) return null;
+        if (q !== enqueuedQuery) {
+          log.debug('sdk permission mode write dropped: query was replaced while queued', { resolved });
+          return null;
+        }
         await q.setPermissionMode(resolved);
         return resolved;
       })();
