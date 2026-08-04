@@ -138,12 +138,6 @@ import {
 } from './gitlabAccountsMigration.js';
 import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
-import {
-  GhostAtResourceQueryScheduler,
-  listGhostAtResourceProviders,
-  resolveGhostAtResourceWorkingDir,
-  type GhostAtResourceProviderDeps,
-} from './atResourceProvider.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
 import { GhostCardActionDispatcher } from './cardActionDispatch.js';
 import { GhostSessionActivityTracker } from './ghostSessionActivity.js';
@@ -4255,56 +4249,6 @@ export function registerGhostIpc(): void {
 
   ipcMain.on('ghosts:list', (event) => {
     event.returnValue = { ghosts: availableGhosts() };
-  });
-
-  const atResourceProviderDeps: GhostAtResourceProviderDeps = {
-    listGhosts: () => manager.list(),
-    isAvailable: isGhostAvailableForActiveSession,
-    isDisabledForWorkdir: (ghostId, workingDir) =>
-      isGhostDisabledForWorkdir(ghostId, workingDir),
-    getSetupAssessment: getGhostSetupAssessment,
-    callTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
-  };
-  const atResourceQueryScheduler = new GhostAtResourceQueryScheduler(atResourceProviderDeps);
-  ipcMain.handle('ghosts:at-resource-providers:list', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const request = raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? raw as Record<string, unknown>
-      : {};
-    const scope = await resolveGhostAtResourceWorkingDir(request, getSessionFsSnapshot);
-    return {
-      items: scope.allowed
-        ? listGhostAtResourceProviders(atResourceProviderDeps, scope.workingDir)
-        : [],
-    };
-  });
-  ipcMain.handle('ghosts:at-resources:query', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throwIpcError('INVALID_PARAMS', 'Plugin resource query must be an object');
-    }
-    const request = raw as Record<string, unknown>;
-    if (typeof request.ghostId !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'ghostId is required');
-    }
-    const scope = await resolveGhostAtResourceWorkingDir(request, getSessionFsSnapshot);
-    if (!scope.allowed) {
-      return {
-        success: false,
-        error: 'Plugin resource provider unavailable',
-        items: [],
-        truncated: false,
-      };
-    }
-    const requestScope = typeof request.sessionId === 'string' && request.sessionId.length > 0
-      ? `session:${request.sessionId.slice(0, 256)}`
-      : `draft:${scope.workingDir ?? ''}`;
-    return atResourceQueryScheduler.query(`${event.sender.id}:${requestScope}`, {
-      ghostId: request.ghostId,
-      ...(scope.workingDir ? { workingDir: scope.workingDir } : {}),
-      ...(typeof request.query === 'string' ? { query: request.query } : {}),
-      ...(typeof request.limit === 'number' ? { limit: request.limit } : {}),
-    });
   });
 
   // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入

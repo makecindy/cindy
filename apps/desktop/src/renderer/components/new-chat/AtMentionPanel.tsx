@@ -6,15 +6,15 @@
  * in `atResourceService.ts`; this component handles:
  *   - focus-row tracking (↑↓ / hover)
  *   - empty / loading / error states
+ *   - root-query sections for addable resources and installed plugins
  *   - click-outside close
  *
- * Per F2 spec: 480px width, 44px row height, no tabs, no group headers,
- * agents and files share the same list.
+ * Per F2 spec: 480px width and 44px row height. The root query uses compact
+ * section labels to separate addable resources from installed plugins.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ArrowLeft,
   File as FileIcon,
   Folder as FolderIcon,
   Globe2,
@@ -27,20 +27,25 @@ import {
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import {
   AT_FILE_PICKER_RESOURCE,
-  AT_MENTION_SEARCH_RESULT_LIMIT,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
 
 const TOOLTIP_FALLBACK_H = 120;
 const VIEWPORT_PAD = 8;
+const SECTION_HEADER_H = 24;
 
 type TooltipMeasure = {
   key: string | null;
   height: number;
 };
+
+function isPluginItem(item: AtResourceItem): boolean {
+  return item.type === 'plugin-command' || item.type === 'plugin-resource';
+}
 
 export type AtPanelState =
   | { kind: 'loading' }
@@ -57,11 +62,8 @@ interface AtMentionPanelProps {
   onSelect: (item: AtResourceItem) => void;
   onClose: () => void;
   onRetry: () => void;
-  /** Selected Plugin provider; its query is scoped and never broadcast. */
-  scopedProviderName?: string;
   /** Whether the local task can launch the native file picker. */
   filePickerEnabled?: boolean;
-  onBack?: () => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
@@ -74,9 +76,7 @@ export function AtMentionPanel({
   onSelect,
   onClose,
   onRetry,
-  scopedProviderName,
   filePickerEnabled = false,
-  onBack,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
@@ -93,14 +93,24 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    if (scopedProviderName) return state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
     const items = filePickerEnabled
       ? [AT_FILE_PICKER_RESOURCE, ...state.items]
       : state.items;
     return filterAtResources(items, query);
-  }, [state, query, scopedProviderName, filePickerEnabled]);
-  const hasScope = !!scopedProviderName;
-  const isEmptyRootQuery = !hasScope && !query.trim();
+  }, [state, query, filePickerEnabled]);
+  const isEmptyRootQuery = !query.trim();
+  const indexedFiltered = useMemo(
+    () => filtered.map((item, index) => ({ item, index })),
+    [filtered],
+  );
+  const addItems = isEmptyRootQuery
+    ? indexedFiltered.filter(({ item }) => !isPluginItem(item))
+    : [];
+  const pluginItems = isEmptyRootQuery
+    ? indexedFiltered.filter(({ item }) => isPluginItem(item))
+    : [];
+  const addSectionVisible = isEmptyRootQuery && addItems.length > 0;
+  const pluginSectionVisible = isEmptyRootQuery && pluginItems.length > 0;
 
   useEffect(() => {
     if (filtered.length === 0) return;
@@ -146,7 +156,11 @@ export function AtMentionPanel({
     const bottomBoundary = Math.min(panelRect.bottom, window.innerHeight - VIEWPORT_PAD);
     const maxTooltipHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - VIEWPORT_PAD));
     const measuredHeight = Math.min(tooltipHeight, maxTooltipHeight);
-    const rawTop = (hasScope ? 46 : 6) + focusedIndex * 44 - panelScroll;
+    const focusedIsPlugin = isEmptyRootQuery && !!focusedItem && isPluginItem(focusedItem);
+    const sectionOffset = isEmptyRootQuery
+      ? SECTION_HEADER_H + (focusedIsPlugin && addSectionVisible ? SECTION_HEADER_H : 0)
+      : 0;
+    const rawTop = 6 + sectionOffset + focusedIndex * 44 - panelScroll;
     const minTop = VIEWPORT_PAD - rootRect.top;
     const bottomBoundaryInRoot = bottomBoundary - rootRect.top;
     const top = Math.max(minTop, Math.min(rawTop, bottomBoundaryInRoot - measuredHeight));
@@ -154,7 +168,16 @@ export function AtMentionPanel({
       top: Math.round(top),
       maxHeight: Math.round(maxTooltipHeight),
     });
-  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight, hasScope]);
+  }, [
+    showTooltip,
+    focusedIndex,
+    focusedItem,
+    panelScroll,
+    maxHeight,
+    tooltipHeight,
+    isEmptyRootQuery,
+    addSectionVisible,
+  ]);
 
   const tooltipVisible = showTooltip && !!tooltipPos;
   useLayoutEffect(() => {
@@ -188,8 +211,10 @@ export function AtMentionPanel({
       meta = item.description || t('newChat.atMention.desktopWindow');
     } else if (item.type === 'session') {
       meta = t('newChat.atMention.task');
-    } else if (item.type === 'plugin-provider') {
-      meta = t('newChat.atMention.pluginResources');
+    } else if (item.type === 'plugin-command') {
+      // Plugin rows follow the compact icon + name presentation used by the
+      // installed-plugin menu; the command remains an internal selection key.
+      meta = '';
     } else if (item.type === 'plugin-resource') {
       meta = item.sourceLabel || t('newChat.atMention.pluginResource');
     } else {
@@ -213,7 +238,7 @@ export function AtMentionPanel({
             ? Monitor
             : item.type === 'session'
               ? History
-              : item.type === 'plugin-provider' || item.type === 'plugin-resource'
+              : item.type === 'plugin-command' || item.type === 'plugin-resource'
                 ? Plug
               : FileIcon;
 
@@ -234,7 +259,16 @@ export function AtMentionPanel({
           focused && 'bg-[var(--cmd-palette-item-hover)]',
         )}
       >
-        <Icon size={16} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
+        {isPluginItem(item) ? (
+          <GhostPluginIcon
+            iconDataUrl={item.iconDataUrl}
+            iconId={item.pluginId ?? item.relPath}
+            iconName={item.type === 'plugin-resource' ? (item.sourceLabel ?? item.name) : item.name}
+            size="menu"
+          />
+        ) : (
+          <Icon size={16} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
+        )}
         <span
           className={cn(
             'min-w-0 truncate text-[14px] font-medium',
@@ -276,32 +310,6 @@ export function AtMentionPanel({
         )}
         style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
       >
-        {hasScope && (
-          <div className="sticky top-0 z-10 flex h-[40px] items-center gap-2 bg-[var(--cmd-palette-bg)] px-[4px]">
-            <button
-              type="button"
-              aria-label={t('newChat.atMention.backToAll')}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                onBack?.();
-              }}
-              className={cn(
-                'flex size-[32px] shrink-0 items-center justify-center rounded-[6px]',
-                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)]',
-              )}
-            >
-              <ArrowLeft size={16} />
-            </button>
-            <span className="min-w-0 truncate text-[13px] font-medium text-[var(--cmd-palette-item-text)]">
-              {scopedProviderName}
-            </span>
-            {scopedProviderName && (
-              <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">
-                {t('newChat.atMention.pluginResources')}
-              </span>
-            )}
-          </div>
-        )}
         {state.kind === 'loading' && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (
@@ -352,7 +360,34 @@ export function AtMentionPanel({
         )}
         {state.kind === 'ready' && filtered.length > 0 && (
           <>
-            {filtered.map((item, idx) => renderItemRow(item, idx))}
+            {isEmptyRootQuery ? (
+              <>
+                {addSectionVisible && (
+                  <div
+                    className={cn(
+                      'flex h-[24px] items-center px-[10px]',
+                      'text-[12px] font-medium text-[var(--cmd-palette-item-meta)]',
+                    )}
+                  >
+                    {t('newChat.atMention.add')}
+                  </div>
+                )}
+                {addItems.map(({ item, index }) => renderItemRow(item, index))}
+                {pluginSectionVisible && (
+                  <div
+                    className={cn(
+                      'flex h-[24px] items-center px-[10px]',
+                      'text-[12px] font-medium text-[var(--cmd-palette-item-meta)]',
+                    )}
+                  >
+                    {t('newChat.atMention.plugins')}
+                  </div>
+                )}
+                {pluginItems.map(({ item, index }) => renderItemRow(item, index))}
+              </>
+            ) : (
+              filtered.map((item, idx) => renderItemRow(item, idx))
+            )}
             {isEmptyRootQuery && (
               <div
                 className={cn(

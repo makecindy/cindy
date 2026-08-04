@@ -181,6 +181,26 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(electronMocks.views[0]?.visible).toBe(true);
   });
 
+  it('publishes null when a favicon update has no usable URL', async () => {
+    const host = makeContents(1);
+    const popup = makeContents(42);
+    electronMocks.windows.set(host, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(host as never, popup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    popup.emit('page-favicon-updated', {}, ['', '   ']);
+
+    expect(host.sent.at(-1)).toEqual({
+      channel: 'rsb-native-popup:event',
+      payload: {
+        surfaceId,
+        type: 'state',
+        snapshot: expect.objectContaining({ favicon: null }),
+      },
+    });
+  });
+
   it('pins opener and popup, rejects a foreign owner, and closes idempotently', async () => {
     const host = makeContents(1);
     const foreign = makeContents(3);

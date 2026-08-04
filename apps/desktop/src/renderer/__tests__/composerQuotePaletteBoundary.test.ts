@@ -18,17 +18,15 @@ describe('composer quote palette boundary wiring', () => {
     expect(triggerSource).toContain("textSoFar = ''; // chips reset the @ / slash run");
   });
 
-  it('keeps Plugin scope out of persisted composer text', () => {
+  it('routes @ plugin selection through the shared command placement', () => {
     const source = readFileSync(
       resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
       'utf8',
     );
 
-    expect(source).toContain('const activeAtScopeFrom = atPluginScope?.triggerFrom;');
-    expect(source).toContain('detectTrigger(editor, activeAtScopeFrom)');
-    expect(source).toContain("tr.replaceWith(from, to, editor.schema.text('@'));");
-    expect(source).not.toContain('editor.schema.text(`@${item.pluginId}:`)');
-    expect(source).toMatch(/if \(atPluginScope\) \{\r?\n\s+atScanSeqRef\.current \+= 1;/);
+    expect(source).toContain("type: 'plugin-command'");
+    expect(source).toContain('placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current)');
+    expect(source).not.toContain('scanPluginAtResources');
   });
 
   it('records a scheduled mention query before reserving its scan sequence', () => {

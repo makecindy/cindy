@@ -29,4 +29,13 @@ describe('ChatInput Ghost snapshot contract', () => {
       'const eligibleGhosts = filterGhostsForWorkdir(\n        installedGhostsRef.current,\n        workingDirRef.current,\n      );',
     );
   });
+
+  it('does not expose controller-local plugin rows in device-link sessions', () => {
+    expect(source).toContain(
+      'if (deviceLinkDeviceId) return [];',
+    );
+    expect(source).toContain(
+      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds]',
+    );
+  });
 });

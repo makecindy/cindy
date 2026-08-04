@@ -3396,8 +3396,6 @@
         "nodeResident": "Node 프로그램을 백그라운드에서 계속 실행할 수 있음",
         "nodeResidentDetail": "플러그인이 활성화된 동안 실행되며 비활성화, 업데이트, 제거 또는 Cindy 종료 시 중지됩니다.",
         "tool": "도구 \"{{name}}\"",
-        "atResourceProvider": "@에서 \"{{name}}\"으로 플러그인 리소스를 검색할 수 있음",
-        "atResourceProviderDetail": "@에서 이 플러그인을 명시적으로 선택한 뒤에만 도구가 실행됩니다. 플러그인 작성자는 검색에 부작용이 없도록 해야 합니다.",
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
         "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
@@ -5297,6 +5295,8 @@
       }
     },
     "atMention": {
+      "add": "추가",
+      "plugins": "플러그인",
       "filesAndFolders": "파일 및 폴더",
       "browserTab": "브라우저 탭",
       "desktopWindow": "앱 창",

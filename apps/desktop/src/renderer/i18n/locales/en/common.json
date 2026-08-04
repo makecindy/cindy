@@ -3397,8 +3397,6 @@
         "nodeResident": "The Node program can stay running in the background",
         "nodeResidentDetail": "Runs while the plugin is enabled and stops when disabled, updated, uninstalled, or when Cindy exits.",
         "tool": "Tool \"{{name}}\"",
-        "atResourceProvider": "Can search Plugin resources in @ using \"{{name}}\"",
-        "atResourceProviderDetail": "The tool runs only after you explicitly select this Plugin in @. Plugin authors must keep this search free of side effects.",
         "command": "Chat command ${{command}}",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
         "panelTab": "Panel \"{{title}}\" · opens inside the Plugins page",
@@ -5299,6 +5297,8 @@
       }
     },
     "atMention": {
+      "add": "Add",
+      "plugins": "Plugins",
       "filesAndFolders": "Files and folders",
       "browserTab": "Browser tab",
       "desktopWindow": "App window",

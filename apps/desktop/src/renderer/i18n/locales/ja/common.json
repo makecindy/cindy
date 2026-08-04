@@ -3396,8 +3396,6 @@
         "nodeResident": "Node プログラムをバックグラウンドで常駐実行できます",
         "nodeResidentDetail": "プラグインが有効な間は実行を続け、無効化、更新、アンインストール、または Cindy 終了時に停止します。",
         "tool": "ツール「{{name}}」",
-        "atResourceProvider": "@ で「{{name}}」を使ってプラグインリソースを検索できます",
-        "atResourceProviderDetail": "@ でこのプラグインを明示的に選択した後にのみツールが実行されます。プラグイン作者は検索に副作用がないことを保証する必要があります。",
         "command": "チャット指令 ${{command}}",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
         "panelTab": "パネル「{{title}}」· プラグインページ内で開く",
@@ -5297,6 +5295,8 @@
       }
     },
     "atMention": {
+      "add": "追加",
+      "plugins": "プラグイン",
       "filesAndFolders": "ファイルとフォルダ",
       "browserTab": "ブラウザタブ",
       "desktopWindow": "アプリウィンドウ",

@@ -3396,8 +3396,6 @@
         "nodeResident": "Node 程序可常驻后台",
         "nodeResidentDetail": "插件启用期间会一直运行；停用、更新、卸载或退出 Cindy 时关闭。",
         "tool": "工具「{{name}}」",
-        "atResourceProvider": "可在 @ 中用「{{name}}」搜索插件资源",
-        "atResourceProviderDetail": "只有你在 @ 中明确选中这个插件后才会调用该工具；插件作者必须保证搜索没有副作用。",
         "command": "对话指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 停靠主对话区左侧",
         "panelTab": "面板「{{title}}」· 插件页内打开",
@@ -5297,6 +5295,8 @@
       }
     },
     "atMention": {
+      "add": "添加",
+      "plugins": "插件",
       "filesAndFolders": "文件和文件夹",
       "browserTab": "浏览器标签",
       "desktopWindow": "应用窗口",

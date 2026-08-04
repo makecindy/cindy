@@ -166,7 +166,7 @@ function installSurfaceObservers(record: SurfaceRecord): void {
   wc.on('did-navigate-in-page', publish);
   wc.on('page-title-updated', publish);
   wc.on('page-favicon-updated', (_event, favicons) => {
-    record.favicon = favicons.find((candidate) => candidate.trim().length > 0) ?? '';
+    record.favicon = favicons.find((candidate) => candidate.trim().length > 0) ?? null;
     publish();
   });
   wc.on('audio-state-changed', publish);
