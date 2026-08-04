@@ -70,9 +70,16 @@ export function createMessageHandler(
     //
     // 放在 /ctr 拦截**之前**: 否则主人正走 /ctr 时, 群成员发命令会收到一句
     // "控制流程中" —— 等于把主人的状态回给了没有权限的人。
+    //
+    // 只有**纯文本**才算控制命令: 附件与 unsupported(音视频/超限/未知类型等)都要
+    // 让消息走 unsupportedNotice / unsupportedOnly / agent 的原有路径, 不能被当成
+    // 一句裸命令吞掉 —— 那会连"你那个音频我处理不了"的反馈一起吃掉。
+    // 这个判据必须与下面两条命令分支**逐字一致**: 门比分支窄一点, 非主人的
+    // `!stop` + unsupported 就会穿过门再被分支执行, 洞等于没堵。
+    const pureTextCommandInput =
+      event.text.length > 0 && event.attachments.length === 0 && event.unsupported.length === 0;
     const commandLike =
-      event.text.length > 0 &&
-      event.attachments.length === 0 &&
+      pureTextCommandInput &&
       (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
     if (commandLike && !isCommandAuthorized(event)) {
       log.info(
@@ -110,10 +117,10 @@ export function createMessageHandler(
     }
 
     // ── !stop 控制指令: 中止当前 turn, 绝不作为普通消息入队 ─────────────────
-    // 放在 slash 之前; 与 slash 同口径只认无附件的纯文本。turn 运行期间
-    // userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
+    // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
+    // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (event.text && event.attachments.length === 0 && isStopCommand(event.text)) {
+    if (pureTextCommandInput && isStopCommand(event.text)) {
       let reply: string;
       try {
         const result = await turnRunner.stopActiveTurn({
@@ -139,8 +146,8 @@ export function createMessageHandler(
       return;
     }
 
-    // ── slash command (only on plain text, no attachments) ──────────────────
-    if (event.text && event.attachments.length === 0 && looksLikeSlashCommand(event.text)) {
+    // ── slash command (only on plain text: no attachments, no unsupported) ──
+    if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
