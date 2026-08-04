@@ -37,6 +37,7 @@ export function hasStaleOrcaLeadIndex(db: Database.Database): boolean {
       db.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name=?`).get(STALE_INDEX_NAME),
     );
   } catch {
+    // Read-only startup cannot repair this invariant, so an unreadable catalog is unsafe.
     return true;
   }
 }

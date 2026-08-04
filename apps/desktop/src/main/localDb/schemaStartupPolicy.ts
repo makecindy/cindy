@@ -1,8 +1,9 @@
 /**
  * localDb schema 启动阶段的确定性编排。
  *
- * shared passive 只允许先做兼容性核对，绝不执行 migration、drift repair 或其它
- * schema DDL；primary / packaged 则按既有顺序完成维护并发布 runtime manifest。
+ * shared passive 与 packaged readOnly 只允许先做兼容性/只读不变量核对，绝不执行
+ * migration、drift repair 或其它 schema DDL；primary / packaged writer 则按既有顺序
+ * 完成维护并发布 runtime manifest。
  */
 
 export interface SchemaCompatibilityResult {

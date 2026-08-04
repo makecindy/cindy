@@ -1,5 +1,5 @@
 /**
- * 共享 userData 的 passive dev 遇到 migration 兼容性失败时的恢复说明。
+ * shared userData 的 passive dev 与 packaged read-only 启动遇到 migration 兼容性失败时的恢复说明。
  *
  * 只有 checkout 存在待迁移 schema 时才能建议切换为 primary 执行 migration；
  * 历史记录或运行时身份不一致必须改用兼容 checkout 或隔离数据库。
