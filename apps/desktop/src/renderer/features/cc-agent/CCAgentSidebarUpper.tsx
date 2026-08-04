@@ -2941,17 +2941,12 @@ function ExpandedView({
                   partial
                 />
               )}
-              {remoteDeviceDirectoryStatus === 'loading' && (
-                <RemoteSidebarLoadNotice kind="devices" status="loading" partial />
-              )}
-              {remoteSessionBootstrapLoadingDevices.length > 0 && (
-                <RemoteSidebarLoadNotice
-                  kind="tasks"
-                  status="loading"
-                  deviceLabel={loadingRemoteDeviceLabel}
-                  partial
-                />
-              )}
+              {/*
+               * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
+               * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
+               * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
+               * 在列表前，便于用户知道已有内容不是本轮权威结果。
+               */}
               <PinnedSection
                 entries={visiblePinnedEntries}
                 allKnownProjects={visibleProjectUniverse}

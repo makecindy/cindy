@@ -196,6 +196,20 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
+  it('在机器栏固定显示远程任务读取 loading,不改变文字与下拉箭头间距', () => {
+    // 文字与箭头保持原有相邻布局；后台 bootstrap 只占最右侧固定状态槽，
+    // 避免列表上下跳动，也避免空槽把下拉箭头推远。
+    expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
+    expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
+    expect(menuSource).toMatch(
+      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?<span\s*aria-hidden="true"\s*className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center"\s*>/,
+    );
+    expect(menuSource).toContain(
+      '<span className="inline-flex animate-spinner motion-reduce:animate-none">',
+    );
+    expect(menuSource).toContain('<Loader2 size={14} strokeWidth={1.8} />');
+  });
+
   it('MachineSwitcherMenu 保留门控 / 设备选择 / 远程设置入口', () => {
     expect(menuSource).toContain('if (!hasRemote) return null');
     expect(menuSource).toContain('MACHINE_ALL');
