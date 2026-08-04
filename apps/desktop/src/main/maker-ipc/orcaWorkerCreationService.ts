@@ -353,14 +353,37 @@ function resolveWorkerModelId(params: {
   agent: AgentKind;
   model: string;
   providerId: string | null;
+  /** cached defaults 可在自身路由不可用时搜索当前已连接来源；显式/Lead 配对来源保持严格。 */
+  allowProviderFallback?: boolean;
   availableModels: OrcaWorkerModelCapabilities[];
   providers: OrcaWorkerProviderSnapshot[];
 }): ResolveWorkerModelIdResult {
-  const { agent, model, providerId, availableModels, providers } = params;
+  const {
+    agent,
+    model,
+    providerId,
+    allowProviderFallback = false,
+    availableModels,
+    providers,
+  } = params;
   const listedModelIds = new Set(availableModels.map((candidate) => candidate.id));
-  const routeProviders = providerId === null
+  const scopedRouteProviders = providerId === null
     ? providers
     : providers.filter((provider) => provider.id === providerId);
+  const providerCanResolveInput = (provider: OrcaWorkerProviderSnapshot): boolean => {
+    if (listedModelIds.has(model) && provider.models.includes(model)) return true;
+    if (model.includes('/') || provider.id !== ORCA_MANAGED_GATEWAY_PROVIDER_ID) return false;
+    return provider.models.some(
+      (candidate) => candidate.endsWith(`/${model}`) && listedModelIds.has(candidate),
+    );
+  };
+  // 成对缓存的 defaults model/provider 只有在该来源无法解析当前模型时，才允许回退到
+  // 当前已连接来源；显式来源与 Lead 配对来源不会进入此分支。
+  const routeProviders = providerId !== null
+    && allowProviderFallback
+    && !scopedRouteProviders.some(providerCanResolveInput)
+    ? providers
+    : scopedRouteProviders;
 
   if (
     listedModelIds.has(model)
@@ -368,14 +391,15 @@ function resolveWorkerModelId(params: {
   ) {
     return { ok: true, model };
   }
-  if (model.includes('/')) return { ok: true, model };
 
   const canonicalCandidates = new Set<string>();
-  for (const provider of routeProviders) {
-    if (provider.id !== ORCA_MANAGED_GATEWAY_PROVIDER_ID) continue;
-    for (const candidate of provider.models) {
-      if (candidate.endsWith(`/${model}`) && listedModelIds.has(candidate)) {
-        canonicalCandidates.add(candidate);
+  if (!model.includes('/')) {
+    for (const provider of routeProviders) {
+      if (provider.id !== ORCA_MANAGED_GATEWAY_PROVIDER_ID) continue;
+      for (const candidate of provider.models) {
+        if (candidate.endsWith(`/${model}`) && listedModelIds.has(candidate)) {
+          canonicalCandidates.add(candidate);
+        }
       }
     }
   }
@@ -644,19 +668,29 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
 
     const defaults = deps.getWorkerDefaults(params.agent);
+    const inheritedModelComesFromDefaults =
+      params.model === undefined
+      && defaults.model !== undefined
+      && defaults.model !== null;
     const selectedModel = explicitModelResolution?.model ?? selectWorkerModel({
       input: params,
       lead,
       defaults,
     });
     const inheritedProviderId = explicitSourceId
-      ?? (defaults.providerId !== undefined
+      ?? (inheritedModelComesFromDefaults && defaults.providerId !== undefined
         ? defaults.providerId
         : (params.agent === lead.agentKind ? lead.providerId : null));
+    const cachedProviderMayFallback =
+      explicitSourceId === null
+      && inheritedModelComesFromDefaults
+      && defaults.providerId !== undefined
+      && defaults.providerId !== null;
     const modelResolution = explicitModelResolution ?? resolveWorkerModelId({
       agent: params.agent,
       model: selectedModel,
       providerId: inheritedProviderId,
+      allowProviderFallback: cachedProviderMayFallback,
       availableModels,
       providers: agentProviders,
     });
@@ -853,6 +887,21 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           ),
         };
       }
+    }
+    if (
+      resolved.providerId === null
+      && !agentProviders.some((provider) => provider.models.includes(resolved.model))
+    ) {
+      return {
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: buildProviderRouteUnavailableMessage(
+          params.agent,
+          null,
+          resolved.model,
+          undefined,
+        ),
+      };
     }
     const workerId = deps.createId();
     let reservation:

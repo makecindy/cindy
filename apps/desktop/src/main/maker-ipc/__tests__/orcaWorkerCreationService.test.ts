@@ -455,6 +455,18 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
       ...overrides,
     });
+    const leadWithLegacyModel = (providerId: string | null) => ({
+      id: 'lead-1',
+      agentKind: 'codex' as const,
+      workspaceKind: 'project' as const,
+      workingDir: 'C:\\repo',
+      model: shortId,
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+      providerId,
+      remoteHostId: null,
+    });
     const aliasHarness = (options: {
       agent?: AgentKind;
       providers?: OrcaWorkerProviderSnapshot[];
@@ -607,18 +619,7 @@ describe('OrcaWorkerCreationService', () => {
     });
 
     it('resolves a legacy persisted Lead model in memory without rewriting the Lead row', async () => {
-      const legacyLead = {
-        id: 'lead-1',
-        agentKind: 'codex' as const,
-        workspaceKind: 'project' as const,
-        workingDir: 'C:\\repo',
-        model: shortId,
-        effort: 'high',
-        permissionMode: 'default',
-        fastMode: false,
-        providerId: 'xd',
-        remoteHostId: null,
-      };
+      const legacyLead = leadWithLegacyModel('xd');
       const { deps, service } = aliasHarness({
         overrides: { getLeadSessionRow: vi.fn(async () => legacyLead) },
       });
@@ -651,6 +652,88 @@ describe('OrcaWorkerCreationService', () => {
         model: canonicalId,
         providerId: 'xd',
       }));
+    });
+
+    it('falls back from a stale default route while canonicalizing its legacy short ID', async () => {
+      const legacyDefaults = { model: shortId, providerId: 'deleted-custom' };
+      const { deps, service } = aliasHarness({
+        overrides: { getWorkerDefaults: vi.fn(() => legacyDefaults) },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: canonicalId, providerId: null },
+      });
+
+      expect(legacyDefaults).toEqual({ model: shortId, providerId: 'deleted-custom' });
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: canonicalId,
+        providerId: null,
+      }));
+    });
+
+    it('ignores a stale provider-only default when resolving a legacy Lead short ID', async () => {
+      const legacyLead = leadWithLegacyModel('xd');
+      const providerOnlyDefaults = { providerId: 'deleted-custom' };
+      const { deps, service } = aliasHarness({
+        overrides: {
+          getLeadSessionRow: vi.fn(async () => legacyLead),
+          getWorkerDefaults: vi.fn(() => providerOnlyDefaults),
+        },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: canonicalId, providerId: null },
+      });
+
+      expect(legacyLead.model).toBe(shortId);
+      expect(providerOnlyDefaults).toEqual({ providerId: 'deleted-custom' });
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: canonicalId,
+        providerId: null,
+      }));
+    });
+
+    it('does not let a provider-only default override the paired Lead route', async () => {
+      const customLead = leadWithLegacyModel('deepseek');
+      const { deps, service } = aliasHarness({
+        providers: [managedProvider(), customProvider()],
+        overrides: {
+          getLeadSessionRow: vi.fn(async () => customLead),
+          getWorkerDefaults: vi.fn(() => ({ providerId: 'xd' })),
+        },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: true,
+        resolved: { model: shortId, providerId: 'deepseek' },
+      });
+
+      expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+        model: shortId,
+        providerId: 'deepseek',
+      }));
+    });
+
+    it('rejects a listed short ID when no connected provider can route it', async () => {
+      const legacyLead = leadWithLegacyModel(null);
+      const { deps, service } = aliasHarness({
+        providers: [{ id: 'other', name: 'Other', models: ['other-model'] }],
+        availableModels: [
+          modelCapabilities[0],
+          { id: 'other-model', efforts: ['high'], defaultEffort: 'high' },
+        ],
+        overrides: { getLeadSessionRow: vi.fn(async () => legacyLead) },
+      });
+
+      await expect(service.createWorker(workerParams())).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: expect.stringContaining(`"${shortId}"`),
+      });
+
+      expectNoCreationState(deps);
     });
   });
 

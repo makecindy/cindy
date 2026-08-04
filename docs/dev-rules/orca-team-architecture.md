@@ -299,6 +299,10 @@ Worker 创建与默认模型继承边界对历史短 ID 做 provider-aware 兼�
 `namespace/short-id` 规范候选恰好一个并同时存在于 `list_available_models` 的 capabilities
 清单时，才在内存中解析为规范 ID。Custom Provider 的精确短 ID 必须保持不变；候选为零或
 多个时 fail-closed，不猜测、不改写已有 Lead、Session 或默认配置的持久化值。
+Worker defaults 中单独缓存的 `providerId` 不约束从 Lead / 硬编码默认值继承模型的规范化；
+它只有在仍提供最终精确模型 ID 时才参与最终路由。缓存来源已失效或不提供该模型时，创建
+边界可回退搜索当前已连接来源，但最终仍必须得到精确路由或唯一 managed 规范候选，否则
+在 reservation / bootstrap 前拒绝。
 
 #### 7. Prompt / tool / MCP 注册路径必须评估 maker-core 四指标（状态：不变量）
 
