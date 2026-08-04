@@ -17,6 +17,8 @@ export interface ConfirmOptions {
   confirmVariant?: 'default' | 'destructive';
   /** 主按钮文字前的小图标(见 ConfirmDialogProps.confirmIcon)。 */
   confirmIcon?: ReactNode;
+  /** 让屏幕阅读器开场朗读覆盖 content 清单(见 ConfirmDialogProps.describeContent)。 */
+  describeContent?: boolean;
   showCancel?: boolean;
   /**
    * 设了就在弹窗底部加一个"下次不再提示"复选框,并把勾选状态以 '1' 写入
@@ -250,6 +252,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           // 一直被静默丢掉(spread 绕过了多余属性检查),这里补上。
           confirmVariant={currentItem.options.confirmVariant}
           confirmIcon={currentItem.options.confirmIcon}
+          describeContent={currentItem.options.describeContent}
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}

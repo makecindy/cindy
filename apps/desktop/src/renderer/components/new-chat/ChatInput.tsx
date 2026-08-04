@@ -5129,6 +5129,8 @@ export function ChatInput({
           description: t('newChat.chatInput.fullAccessConfirmation.description'),
           // 逐类权限清单(文件 / 终端命令 / 网络)+ 高风险操作仍确认的脚注。
           content: <FullAccessConfirmContent />,
+          // 高风险授权:开场朗读必须覆盖清单全文,SR 用户听全权限再确认。
+          describeContent: true,
           // 带清单的确认框放宽到 440(§4:普通确认 400,富内容可适度放宽)。
           maxWidth: 440,
           confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
