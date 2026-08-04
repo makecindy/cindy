@@ -1024,7 +1024,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
       atResourceProvider: { tool: 'search_issues' },
     });
     expect(valid.ok).toBe(true);
-    expect(valid.ok && valid.manifest.atResourceProvider).toEqual({ tool: 'search_issues' });
 
     const missing = validateGhostManifest({
       ...base,
@@ -1036,8 +1035,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     });
     expect(missing.ok).toBe(true);
     expect(extraField.ok).toBe(true);
-    expect(missing.ok ? missing.manifest.atResourceProvider : null).toBeUndefined();
-    expect(extraField.ok ? extraField.manifest.atResourceProvider : null).toBeUndefined();
   });
 
   it('忽略旧 manifest 中无效的同名未知字段', () => {
@@ -1059,7 +1056,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         atResourceProvider: legacyValue,
       });
       expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
-      expect(result.ok && result.manifest.atResourceProvider).toBeUndefined();
     }
   });
 
@@ -1086,16 +1082,10 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     });
     expect(before.ok && after.ok).toBe(true);
     if (!before.ok || !after.ok) return;
-    expect(ghostPermissionBaselineKey(after.manifest)).not.toBe(
+    expect(ghostPermissionBaselineKey(after.manifest)).toBe(
       ghostPermissionBaselineKey(before.manifest),
     );
-    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([
-      expect.objectContaining({
-        key: 'at-resource:search_issues',
-        kind: 'at-resource',
-        labelKey: 'atResourceProvider',
-      }),
-    ]);
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {

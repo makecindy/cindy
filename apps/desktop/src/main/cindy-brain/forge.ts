@@ -1064,7 +1064,6 @@ my-ghost/
   // (仅检查插件启用状态与 tools 声明)。除非你的插件完全靠 panel 或 subscribe 驱动,
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
-  "atResourceProvider": { "tool": "search_resources" }, // 可选:把一个已声明、无副作用的搜索工具接入 @,见 §3.1
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
   // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
   // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1)。按需申请,
@@ -1333,7 +1332,6 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 插件可把一个**已经声明并经过权限确认**的工具接到 Composer 的 \`@\` 面板：
 
 \`\`\`json
-"atResourceProvider": { "tool": "search_resources" }
 \`\`\`
 
 本入口复用已有的 \`"tool"\` 槽，不新增 slot；\`tool\` 必须逐字引用 \`tools[].name\`。这不会增加

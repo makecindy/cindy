@@ -1122,23 +1122,7 @@ interface ElectronAPI {
      */
     setupStatus: (id: string) => Promise<import('../shared/ghost').GhostSetupStatus>;
     /** 只列入口元数据，不运行插件工具；远程/device-link 不暴露。 */
-    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }) => Promise<{
-      items: Array<{ ghostId: string; name: string; description?: string }>;
-    }>;
     /** 用户选定一个入口后，按固定只读摘要契约搜索该插件。 */
-    queryAtResources: (params: {
-      ghostId: string;
-      sessionId?: string;
-      workingDir?: string;
-      query?: string;
-      limit?: number;
-    }) => Promise<{
-      success: boolean;
-      error?: string;
-      pluginName?: string;
-      items: Array<{ id: string; label: string; description?: string; href: string }>;
-      truncated: boolean;
-    }>;
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */
     onRecentUsageChanged: (
       callback: (payload: { ids: string[] }) => void,

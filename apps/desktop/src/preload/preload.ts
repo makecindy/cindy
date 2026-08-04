@@ -915,22 +915,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> =>
       ipcRenderer.invoke('ghosts:setup-status', id),
-    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }): Promise<{
-      items: Array<{ ghostId: string; name: string; description?: string }>;
-    }> => ipcRenderer.invoke('ghosts:at-resource-providers:list', params),
-    queryAtResources: (params: {
-      ghostId: string;
-      sessionId?: string;
-      workingDir?: string;
-      query?: string;
-      limit?: number;
-    }): Promise<{
-      success: boolean;
-      error?: string;
-      pluginName?: string;
-      items: Array<{ id: string; label: string; description?: string; href: string }>;
-      truncated: boolean;
-    }> => ipcRenderer.invoke('ghosts:at-resources:query', params),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },

@@ -27,7 +27,7 @@ export type AtResourceType =
   | 'browser-tab'
   | 'desktop-window'
   | 'session'
-  | 'plugin-provider'
+  | 'plugin-command'
   | 'plugin-resource';
 
 export interface AtResourceItem {
@@ -45,10 +45,12 @@ export interface AtResourceItem {
   relPath: string;
   /** Agent description from YAML frontmatter (agents only). */
   description?: string;
-  /** Plugin display name for provider/resource rows and Agent projection. */
+  /** Plugin display name for plugin rows and Agent projection. */
   sourceLabel?: string;
-  /** Stable Plugin id. Present on provider/resource rows only. */
+  /** Stable Plugin id. Present on plugin rows only. */
   pluginId?: string;
+  /** Installed plugin icon as a validated data URL. Present on plugin rows when declared. */
+  iconDataUrl?: string;
   /** @internal Pre-computed lowercase for filter performance. */
   _nameLower?: string;
   /** @internal Pre-computed lowercase for filter performance. */
@@ -77,7 +79,7 @@ const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
   new Set(['file-picker']),
   new Set(['browser-tab']),
   new Set(['agent']),
-  new Set(['plugin-provider']),
+  new Set(['plugin-command']),
 ];
 
 export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
@@ -142,7 +144,6 @@ function normalizedBrowserPageTitle(value: string): string {
 
 type RawWorkspaceScan = Awaited<ReturnType<typeof window.electronAPI.maker.scanAtResources>>;
 type RawContextScan = Awaited<ReturnType<typeof window.electronAPI.maker.listAtContext>>;
-type RawPluginProviders = Awaited<ReturnType<typeof window.electronAPI.ghosts.listAtResourceProviders>>;
 
 function normalizeWorkspaceResources(res: RawWorkspaceScan | null): AtResourceItem[] {
   const agents: AtResourceItem[] = [];
@@ -320,29 +321,6 @@ async function searchRemoteHistoricalTasks(
   }
 }
 
-function normalizePluginProviderResources(
-  result: RawPluginProviders | null,
-): AtResourceItem[] {
-  const pluginProviders: AtResourceItem[] = [];
-  for (const provider of result?.items ?? []) {
-    const ghostId = oneLineText(provider.ghostId, 32);
-    const name = oneLineText(provider.name, 128);
-    if (!ghostId || !name) continue;
-    const description = oneLineText(provider.description, 256);
-    pluginProviders.push({
-      type: 'plugin-provider',
-      name,
-      relPath: ghostId,
-      pluginId: ghostId,
-      sourceLabel: name,
-      ...(description ? { description } : {}),
-      _nameLower: name.toLowerCase(),
-      _relPathLower: `${ghostId} ${name} ${description}`.toLowerCase(),
-    });
-  }
-  return pluginProviders;
-}
-
 /**
  * Load candidate @-resources from independent workspace/context providers.
  * Partial provider failures keep the remaining candidates usable; the caller
@@ -428,17 +406,9 @@ export async function scanAtResources(
             ),
           )
     : Promise.resolve(null);
-  const pluginProvidersPromise = !deviceId
-    ? window.electronAPI.ghosts.listAtResourceProviders({
-        ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
-        ...(workingDir ? { workingDir } : {}),
-      })
-    : Promise.resolve(null);
-
   const partial = {
     contextual: [] as AtResourceItem[],
     historicalTasks: [] as AtResourceItem[],
-    pluginProviders: [] as AtResourceItem[],
     workspace: [] as AtResourceItem[],
     truncated: false,
   };
@@ -450,7 +420,6 @@ export async function scanAtResources(
         items: [
           ...partial.contextual,
           ...partial.historicalTasks,
-          ...partial.pluginProviders,
           ...partial.workspace,
         ],
         truncated: partial.truncated,
@@ -475,17 +444,10 @@ export async function scanAtResources(
     partial.historicalTasks = value;
     emitPartial();
   }, () => undefined);
-  void pluginProvidersPromise.then((value) => {
-    if (!value) return;
-    partial.pluginProviders = normalizePluginProviderResources(value);
-    emitPartial();
-  }, () => undefined);
-
-  const [workspaceSettled, contextSettled, taskHistorySettled, pluginProvidersSettled] = await Promise.allSettled([
+  const [workspaceSettled, contextSettled, taskHistorySettled] = await Promise.allSettled([
     workspacePromise,
     contextPromise,
     taskHistoryPromise,
-    pluginProvidersPromise,
   ]);
   const res = workspaceSettled.status === 'fulfilled' ? workspaceSettled.value : null;
   const contextResult = contextSettled.status === 'fulfilled' ? contextSettled.value : null;
@@ -494,7 +456,6 @@ export async function scanAtResources(
   );
   const contextFailed = includeLocalContext && contextSettled.status === 'rejected';
   const taskHistoryFailed = includeTaskHistory && taskHistorySettled.status === 'rejected';
-  const pluginProvidersFailed = !deviceId && pluginProvidersSettled.status === 'rejected';
   if (workspaceFailed) {
     log.warn(
       'Workspace @ resource scan failed; keeping other providers available.',
@@ -513,17 +474,10 @@ export async function scanAtResources(
       taskHistorySettled.status === 'rejected' ? taskHistorySettled.reason : undefined,
     );
   }
-  if (pluginProvidersFailed) {
-    log.warn(
-      'Plugin @ provider listing failed; keeping other providers available.',
-      pluginProvidersSettled.status === 'rejected' ? pluginProvidersSettled.reason : undefined,
-    );
-  }
   if (
     (!workingDir || workspaceFailed)
     && (!includeLocalContext || contextFailed)
     && (!includeTaskHistory || taskHistoryFailed)
-    && (deviceId !== undefined || pluginProvidersFailed)
   ) {
     return {
       success: false,
@@ -543,63 +497,11 @@ export async function scanAtResources(
     && Array.isArray(taskHistorySettled.value)
     ? taskHistorySettled.value
     : [];
-  const pluginProviders = normalizePluginProviderResources(
-    pluginProvidersSettled.status === 'fulfilled' ? pluginProvidersSettled.value : null,
-  );
-
   return {
     success: true,
-    items: [...contextual, ...historicalTasks, ...pluginProviders, ...workspace],
+    items: [...contextual, ...historicalTasks, ...workspace],
     truncated: !!res?.truncated,
   };
-}
-
-/** Search exactly one provider after the user explicitly selected it. */
-export async function scanPluginAtResources(
-  provider: AtResourceItem,
-  query: string,
-  workingDir?: string,
-  sessionId?: string,
-): Promise<ScanResult> {
-  if (provider.type !== 'plugin-provider' || !provider.pluginId) {
-    return { success: false, error: 'Plugin resource provider unavailable', items: [], truncated: false };
-  }
-  const result = await window.electronAPI.ghosts.queryAtResources({
-    ghostId: provider.pluginId,
-    ...(sessionId ? { sessionId } : {}),
-    ...(workingDir ? { workingDir } : {}),
-    query: query.trim(),
-    limit: 20,
-  });
-  if (!result.success) {
-    return {
-      success: false,
-      error: result.error ?? 'Plugin resource search failed',
-      items: [],
-      truncated: false,
-    };
-  }
-  const sourceLabel = oneLineText(result.pluginName || provider.sourceLabel || provider.name, 128);
-  const items: AtResourceItem[] = [];
-  for (const row of result.items) {
-    const name = oneLineText(row.label, 128);
-    const relPath = typeof row.href === 'string' && row.href.length <= 1_500
-      ? oneLineText(row.href, 1_500)
-      : '';
-    if (!name || !relPath) continue;
-    const description = oneLineText(row.description, 256);
-    items.push({
-      type: 'plugin-resource',
-      name,
-      relPath,
-      pluginId: provider.pluginId,
-      sourceLabel,
-      ...(description ? { description } : {}),
-      _nameLower: name.toLowerCase(),
-      _relPathLower: `${name} ${description}`.toLowerCase(),
-    });
-  }
-  return { success: true, items, truncated: result.truncated };
 }
 
 /**

@@ -240,25 +240,18 @@ describe('GhostManager · install', () => {
   it('@ 资源入口必须命中主机安装 receipt，旧安装元数据不会在升级后自动扩权', async () => {
     const cindy = await makeCindy('at-resource.cindy', atResourceManifest());
     const installed = await manager.install(cindy);
-    expect(installed).toMatchObject({
-      ghost: { manifest: { atResourceProvider: { tool: 'do_thing' } } },
-    });
-    expect(manager.list()[0].manifest.atResourceProvider).toEqual({ tool: 'do_thing' });
 
     const metadataPath = path.join(rootDir, 'hello', '.cindy-trust.json');
     const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
-    expect(metadata.approvedAtResourceProvider).toEqual({ tool: 'do_thing' });
 
     delete metadata.approvedAtResourceProvider;
     await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
-    expect(manager.list()[0].manifest.atResourceProvider).toBeUndefined();
     expect(manager.list()[0].manifest.tools).toEqual([
       { name: 'do_thing', description: '做点事' },
     ]);
 
     metadata.approvedAtResourceProvider = { tool: 'other_tool' };
     await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
-    expect(manager.list()[0].manifest.atResourceProvider).toBeUndefined();
   });
 
   it('initiallyEnabled=false:装入即沉睡(.disabled 与目录同帧就位,首个广播就是沉睡态)', async () => {
