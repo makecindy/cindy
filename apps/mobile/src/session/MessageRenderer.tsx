@@ -2079,8 +2079,9 @@ function MessageBubble({
                 <MessageMoreButton
                   buttonSize={actionBar.buttonSize}
                   // Fork has its own visible busy state. Keep More available
-                  // while that direct action is running.
-                  disabled={disabled && !actionBusy}
+                  // only while that direct action is running; rewind/delete
+                  // still block the menu while their requests are in flight.
+                  disabled={disabled && !forkBusy}
                   iconSize={actionBar.iconSize}
                   key="more"
                   onPress={() => setActionSheetOpen(true)}
