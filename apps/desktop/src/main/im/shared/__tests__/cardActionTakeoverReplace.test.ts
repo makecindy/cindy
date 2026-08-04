@@ -291,6 +291,48 @@ describe('plan_review IM 卡片决策', () => {
     expect(result).toBe(false);
   });
 
+  it('resolved 卡首次收口失败后重试仍显示已完成结果', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    let resolveCalls = 0;
+    (resolvePending as ReturnType<typeof vi.fn>).mockImplementation(
+      () => resolveCalls++ === 0,
+    );
+    attach(im)();
+
+    const event = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'permission:allow:once',
+      payload: { requestId: 'resolved-card-retry' },
+    } as IMCardActionEvent;
+
+    expect(await registeredHandler(handler)(event)).toBe(false);
+    expect(await registeredHandler(handler)(event)).toBe(true);
+    expect(resolvePending).toHaveBeenCalledTimes(1);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ body: slackUi.cards.permission.resolvedAllowOnce, buttons: [] }),
+    );
+    expect(im.updateInteractiveCard).not.toHaveBeenCalledWith(
+      '111|42',
+      expect.objectContaining({ body: '卡片已过期' }),
+    );
+  });
+
   it('keeps the complete async card callback inside the closing account scope', async () => {
     const updateGate = deferred();
     const im = makeIm();
@@ -712,6 +754,28 @@ describe('/permission Full access 确认', () => {
       'permission-card',
       expect.objectContaining({ body: slackUi.cards.permissionMode.fullAccessCancelled }),
     );
+  });
+
+  it('returns a retryable result when cancel card patch fails', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const attach = createCardActionHandler(adapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const result = await registeredHandler(handler)({
+      messageId: 'permission-card',
+      senderId: 'U_NEW',
+      buttonId: 'permmode:cancel-full-access',
+      payload: { sessionId: 'sess-target' },
+    } as unknown as IMCardActionEvent);
+
+    expect(result).toBe(false);
+    expect(mocks.updatePermissionMode).not.toHaveBeenCalled();
   });
 });
 

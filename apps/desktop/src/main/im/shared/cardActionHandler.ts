@@ -91,6 +91,15 @@ const DESKTOP_CC_DEFAULTS: DesktopCcPrefs = {
   fastMode: false,
 };
 
+const RESOLVED_CARD_RETRY_TTL_MS = 5 * 60_000;
+const MAX_RESOLVED_CARD_RETRIES = 512;
+
+type ResolvedCardRetry = {
+  label: string;
+  accountGeneration: number;
+  at: number;
+};
+
 export function createCardActionHandler(
   adapter: ImChannelAdapter,
   cards: ImCardBuilders,
@@ -99,6 +108,23 @@ export function createCardActionHandler(
   const { ui, channel, threadScoped } = adapter;
   const log = createLogger(`im:${channel}:card`);
   const threadUi = ui.thread;
+  /**
+   * A pending interaction is consumed before its Telegram card can be edited.
+   * Keep the resolved label briefly when that edit fails so a retry can finish
+   * the same visible outcome instead of reporting an already-completed action
+   * as expired.
+   */
+  const resolvedCardRetries = new Map<string, ResolvedCardRetry>();
+
+  function pruneResolvedCardRetries(now: number): void {
+    for (const [key, entry] of resolvedCardRetries) {
+      if (now - entry.at > RESOLVED_CARD_RETRY_TTL_MS) resolvedCardRetries.delete(key);
+    }
+  }
+
+  function resolvedCardRetryKey(event: IMCardActionEvent, requestId: string): string {
+    return `${event.messageId}|${requestId}`;
+  }
 
   function requireThreadUi() {
     if (!threadUi)
@@ -467,15 +493,17 @@ export function createCardActionHandler(
   async function handlePermissionModeCancel(
     im: ChannelIM,
     event: IMCardActionEvent,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await im.updateInteractiveCard(
         event.messageId,
         cards.buildResolvedCard(ui.cards.permissionMode.fullAccessCancelled),
       );
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`permmode:cancel card patch failed (non-fatal): ${msg}`);
+      return false;
     }
   }
 
@@ -1321,8 +1349,7 @@ export function createCardActionHandler(
             return;
           }
           if (event.buttonId === 'permmode:cancel-full-access') {
-            await handlePermissionModeCancel(im, event);
-            return;
+            return handlePermissionModeCancel(im, event);
           }
 
           // /ctr picker —
@@ -1387,6 +1414,26 @@ export function createCardActionHandler(
             return patchExpiredInteractionCard(im, event);
           }
 
+          const retryKey = resolvedCardRetryKey(event, requestId);
+          const now = Date.now();
+          pruneResolvedCardRetries(now);
+          const retry = resolvedCardRetries.get(retryKey);
+          if (retry && retry.accountGeneration === accountGeneration) {
+            try {
+              await im.updateInteractiveCard(
+                event.messageId,
+                cards.buildResolvedCard(retry.label),
+              );
+              resolvedCardRetries.delete(retryKey);
+              return true;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`resolved interaction card retry failed (non-fatal): ${msg}`);
+              return false;
+            }
+          }
+          if (retry) resolvedCardRetries.delete(retryKey);
+
           const resolved = resolvePending(requestId, decision);
           if (!resolved) {
             log.warn(
@@ -1399,13 +1446,24 @@ export function createCardActionHandler(
           const resolvedLabel = describeDecision(decision);
           try {
             await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(resolvedLabel));
+            resolvedCardRetries.delete(retryKey);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
             // The pending decision has already been consumed, but the rendered card
-            // still exposes its callback. Let Telegram release its dedup key so a
-            // retry can at least run the stale-card cleanup instead of being ACKed
-            // and silently discarded for five minutes.
+            // still exposes its callback. Let Telegram release its dedup key and
+            // remember the completed outcome so a retry can finish the same card
+            // update instead of reporting the already-applied decision as expired.
+            resolvedCardRetries.set(retryKey, {
+              label: resolvedLabel,
+              accountGeneration,
+              at: Date.now(),
+            });
+            while (resolvedCardRetries.size > MAX_RESOLVED_CARD_RETRIES) {
+              const oldest = resolvedCardRetries.keys().next().value;
+              if (oldest === undefined) break;
+              resolvedCardRetries.delete(oldest);
+            }
             return false;
           }
         });
