@@ -255,7 +255,10 @@ describe('TodaySpendChip dashboard routing', () => {
     // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
     // main/usage/__tests__/claudeSubscriptionUsage.test.ts), 组件只消费, 不再本地重写。
     expect(source).toContain('isClaudeSubscriptionAlerting,');
-    expect(quotaHoverCardSource).toContain('const normalizedStatus = snapshot?.rateLimitStatus?.trim().toLowerCase();');
+    // rateLimitStatus 可能来自脏快照;卡片先做字符串类型守卫再归一化。
+    expect(quotaHoverCardSource).toContain(
+      "typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined",
+    );
     expect(source).not.toContain('function isClaudeSubscriptionAlerting(');
     expect(source).not.toContain('function hasAlertingClaudeSessionWindow(');
     // chip 变红只看当前会话真受限 (rejected / 影响本会话的窗口告警); headers 的
