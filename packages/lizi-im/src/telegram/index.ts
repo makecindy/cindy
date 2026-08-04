@@ -122,7 +122,14 @@ const DEFAULT_OWNER_NOTICES = {
 
 type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
 type MessageHandler = (e: IMMessageEvent) => void;
-type CardActionHandler = (e: IMCardActionEvent) => void;
+/**
+ * Card handlers may return false when the action's visible card could not be
+ * updated and Telegram should allow the rendered callback to be retried.
+ * `undefined` keeps the legacy fire-and-forget success contract.
+ */
+type CardActionHandler = (
+  e: IMCardActionEvent,
+) => void | boolean | PromiseLike<void | boolean>;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 
@@ -1400,7 +1407,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             Promise.resolve().then(() => handler(event)),
           ),
         );
-        const succeeded = results.every((result) => result.status === 'fulfilled');
+        const succeeded = results.every(
+          (result) => result.status === 'fulfilled' && result.value !== false,
+        );
         if (succeeded) {
           if (this.inFlightInteractionCallbacks.get(callbackKey)?.epoch !== dedupEpoch) return;
           this.inFlightInteractionCallbacks.delete(callbackKey);
@@ -1411,8 +1420,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             this.handledInteractionCallbacks.delete(oldest);
           }
         } else {
-          // A transient handler failure must not make the rendered button
-          // permanently unresponsive; a later Telegram retry may try again.
+          // A transient handler failure, including an explicit retryable false
+          // result after a card-edit failure, must not make the rendered
+          // button permanently unresponsive; a later Telegram retry may try
+          // again.
           if (this.inFlightInteractionCallbacks.get(callbackKey)?.epoch === dedupEpoch) {
             this.inFlightInteractionCallbacks.delete(callbackKey);
           }

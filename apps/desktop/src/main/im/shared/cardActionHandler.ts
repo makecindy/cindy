@@ -479,13 +479,13 @@ export function createCardActionHandler(
     }
   }
 
-  async function handleControlPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleControlPick(im: ChannelIM, event: IMCardActionEvent): Promise<boolean> {
     const botContextId = String(event.payload.botAppId ?? '');
     const workingDir = String(event.payload.workingDir ?? '');
     const displayName = String(event.payload.displayName ?? workingDir);
     if (!workingDir || !botContextId) {
       log.warn('control:pick missing workingDir/botAppId — ignoring');
-      return;
+      return true;
     }
     log.info(`control:pick workingDir=${workingDir} displayName=${displayName}`);
 
@@ -512,14 +512,16 @@ export function createCardActionHandler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`control:pick card update failed (non-fatal): ${msg}`);
+      return false;
     }
+    return true;
   }
 
-  async function handleControlBack(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+  async function handleControlBack(im: ChannelIM, event: IMCardActionEvent): Promise<boolean> {
     const botContextId = String(event.payload.botAppId ?? '');
     if (!botContextId) {
       log.warn('control:back missing botAppId — ignoring');
-      return;
+      return true;
     }
     log.info(`control:back (sender=...${event.senderId.slice(-8)})`);
     let projects: ControlProject[];
@@ -556,7 +558,9 @@ export function createCardActionHandler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`control:back card update failed (non-fatal): ${msg}`);
+      return false;
     }
+    return true;
   }
 
   async function handleControlSessionPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
@@ -1288,7 +1292,7 @@ export function createCardActionHandler(
         return;
       }
       try {
-        await runInImAccountGeneration(accountGeneration, async () => {
+        return await runInImAccountGeneration(accountGeneration, async () => {
           log.info(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
@@ -1321,12 +1325,10 @@ export function createCardActionHandler(
           //   new             → 新建 session + attach
           //   exit            → patch 为 resolved 卡片, 不动 session
           if (event.buttonId === 'control:pick') {
-            await handleControlPick(im, event);
-            return;
+            return handleControlPick(im, event);
           }
           if (event.buttonId === 'control:back') {
-            await handleControlBack(im, event);
-            return;
+            return handleControlBack(im, event);
           }
           if (event.buttonId === 'control:session-pick') {
             await handleControlSessionPick(im, event);

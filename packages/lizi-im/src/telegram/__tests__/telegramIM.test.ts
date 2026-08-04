@@ -395,6 +395,35 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
   });
 
+  it('卡片 handler 显式报告收口失败后允许同一 callback 重试', async () => {
+    await connect();
+    const handler = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(undefined);
+    im.onCardAction(handler);
+    const callback = encodeCallbackData('control:back', {
+      requestId: 'retryable-card-edit',
+    });
+    const pushCallback = (updateId: number, callbackId: string) => {
+      api.pushUpdates([
+        {
+          update_id: updateId,
+          callback_query: {
+            id: callbackId,
+            from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+            data: callback,
+            message: { message_id: 907, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+          },
+        },
+      ]);
+    };
+
+    pushCallback(907, 'retryable-card-edit-first');
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    pushCallback(908, 'retryable-card-edit-second');
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
   it('同一终态 interaction 的不同决策按钮只派发一次', async () => {
     await connect();
     const handler = vi.fn();
