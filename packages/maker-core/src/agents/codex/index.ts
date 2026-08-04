@@ -101,6 +101,7 @@ import { buildCodexEnv } from './env-builder.js';
 import {
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
+  buildCodexSessionCapabilityRoutingPolicy,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
@@ -2960,7 +2961,15 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
-    const capabilityRoutingPolicy = this.deps.capabilityRouting;
+    const capabilityRoutingPolicy = buildCodexSessionCapabilityRoutingPolicy(
+      this.deps.capabilityRouting,
+      {
+        // Remote Codex does not receive the local Cindy MCP bridge. Keep
+        // compatibility restrictions, but do not disable a remote capability
+        // in favor of a replacement that only exists on the local host.
+        cindyHostReplacementsAvailable: !opts.remoteHostId,
+      },
+    );
     let capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
       capabilityRoutingPolicy,
       {

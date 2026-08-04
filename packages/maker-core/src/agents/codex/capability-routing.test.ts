@@ -4,8 +4,67 @@ import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js'
 import {
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
+  buildCodexSessionCapabilityRoutingPolicy,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
+
+describe('buildCodexSessionCapabilityRoutingPolicy', () => {
+  const compatibilityRoute = {
+    capabilityId: 'computer-use',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'skill',
+      id: 'computer-use:computer-use',
+      artifactId: 'computer-use',
+      containerId: 'computer-use@openai-bundled',
+    },
+    invocation: 'disabled',
+  } as const;
+  const localReplacementRoute = {
+    capabilityId: 'computer-use',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'plugin',
+      id: 'computer-use@openai-bundled',
+    },
+    invocation: 'disabled',
+    replacement: { kind: 'cindy-host', id: 'cindy_computer' },
+  } as const;
+  const pluginReplacementRoute = {
+    capabilityId: 'example',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'plugin',
+      id: 'example@personal',
+    },
+    invocation: 'disabled',
+    replacement: { kind: 'cindy-plugin', id: 'example' },
+  } as const;
+  const policy = {
+    overrides: [
+      compatibilityRoute,
+      localReplacementRoute,
+      pluginReplacementRoute,
+    ],
+  } as const satisfies CapabilityRoutingPolicy;
+
+  it('preserves local-host replacement arbitration for local Codex', () => {
+    expect(buildCodexSessionCapabilityRoutingPolicy(policy, {
+      cindyHostReplacementsAvailable: true,
+    })).toBe(policy);
+  });
+
+  it('removes only unavailable Cindy-host replacements for remote Codex', () => {
+    expect(buildCodexSessionCapabilityRoutingPolicy(policy, {
+      cindyHostReplacementsAvailable: false,
+    })).toEqual({
+      overrides: [compatibilityRoute, pluginReplacementRoute],
+    });
+  });
+});
 
 describe('buildCodexCapabilityConfigOverrides', () => {
   it('disables the selected Codex plugin with a per-thread config override', () => {
@@ -263,6 +322,26 @@ describe('buildCodexCapabilitySkillConfigOverrides', () => {
     });
   });
 
+  it('matches bundled marketplace snapshots without disabling namesakes', () => {
+    const macSnapshotPath =
+      '/Users/dash/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/computer-use/skills/computer-use/SKILL.md';
+    const windowsSnapshotPath =
+      'C:\\Users\\dash\\.codex\\.tmp\\bundled-marketplaces\\openai-bundled.staging-123\\plugins\\computer-use\\skills\\computer-use\\SKILL.md';
+    expect(buildCodexCapabilitySkillConfigOverrides(disabledSkillPolicy, [
+      { path: macSnapshotPath, enabled: true },
+      { path: windowsSnapshotPath, enabled: true },
+      {
+        path: '/Users/dash/.codex/skills/computer-use/SKILL.md',
+        enabled: true,
+      },
+    ])).toEqual({
+      'skills.config': [
+        { path: macSnapshotPath, enabled: false },
+        { path: windowsSnapshotPath, enabled: false },
+      ],
+    });
+  });
+
   it('disables only the selected incompatible Skill without disabling its plugin', () => {
     expect(requiresCodexCapabilitySkillDiscovery(disabledSkillPolicy)).toBe(true);
     expect(buildCodexCapabilityConfigOverrides(disabledSkillPolicy)).toEqual({});
@@ -310,6 +389,24 @@ describe('buildCodexCapabilitySkillConfigOverrides', () => {
 
     expect(() => buildCodexCapabilitySkillConfigOverrides(invalidPolicy, []))
       .toThrowError(/expected plugin id in <name>@<marketplace> form/);
+  });
+
+  it('identifies a missing plugin source id in the error', () => {
+    const invalidPolicy = {
+      overrides: [{
+        capabilityId: 'example',
+        source: {
+          kind: 'harness-plugin',
+          harness: 'codex',
+          surface: 'plugin',
+          id: '',
+        },
+        invocation: 'disabled',
+      }],
+    } as const satisfies CapabilityRoutingPolicy;
+
+    expect(() => buildCodexCapabilitySkillConfigOverrides(invalidPolicy, []))
+      .toThrowError(/source\.id is required/);
   });
 
   it('fails closed when a disabled Skill lacks precise plugin provenance', () => {

@@ -786,7 +786,7 @@ describe('CodexAgent capability routing', () => {
     ).rejects.toThrow('requires Codex app-server 0.145.0 or newer');
   });
 
-  it('disables an explicit-only plugin on remote Codex where the local overlay is unavailable', async () => {
+  it('keeps remote Computer Use available without a local host replacement', async () => {
     const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
     const host = installFakeHost(agent, (method, params) => {
       if (method !== Method.SkillsList) return undefined;
@@ -819,7 +819,6 @@ describe('CodexAgent capability routing', () => {
 
     expect(params.config).toMatchObject({
       'plugins."feishu-delegate@personal".enabled': false,
-      'plugins."computer-use@openai-bundled".enabled': false,
       'skills.config': [{
         path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
         enabled: false,
@@ -827,6 +826,9 @@ describe('CodexAgent capability routing', () => {
     });
     expect(params.config).not.toHaveProperty(
       'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
+    );
+    expect(params.config).not.toHaveProperty(
+      'plugins."computer-use@openai-bundled".enabled',
     );
 
     await handle.close();

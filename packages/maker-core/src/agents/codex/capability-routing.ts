@@ -34,6 +34,11 @@ export interface CodexCapabilityRoutingOptions {
   isolatedPluginOverlays?: boolean;
 }
 
+export interface CodexSessionCapabilityRoutingOptions {
+  /** Whether this Codex host can invoke replacements served by Cindy itself. */
+  cindyHostReplacementsAvailable: boolean;
+}
+
 /**
  * Codex thread config accepts flattened TOML paths. Plugin config names contain
  * `@`, so they must be rendered as quoted dotted-key segments.
@@ -73,13 +78,14 @@ function parseCodexPluginCacheIdentity(
   };
 }
 
-function isSkillFromPluginCache(
+function isSkillFromPluginDistribution(
   skillPath: string,
   target: CodexSkillDisableTarget,
 ): boolean {
   const segments = skillPath.replace(/\\/g, '/').split('/');
-  for (let index = 0; index + 6 < segments.length; index += 1) {
+  for (let index = 0; index < segments.length; index += 1) {
     if (
+      index + 6 < segments.length &&
       segments[index] === 'plugins' &&
       segments[index + 1] === 'cache' &&
       segments[index + 2] === target.plugin.marketplace &&
@@ -91,8 +97,40 @@ function isSkillFromPluginCache(
     ) {
       return true;
     }
+    const bundledMarketplace = segments[index + 1];
+    if (
+      index + 5 < segments.length &&
+      segments[index] === 'bundled-marketplaces' &&
+      (bundledMarketplace === target.plugin.marketplace ||
+        bundledMarketplace?.startsWith(
+          `${target.plugin.marketplace}.staging-`,
+        )) &&
+      segments[index + 2] === 'plugins' &&
+      segments[index + 3] === target.plugin.pluginName &&
+      segments[index + 4] === 'skills' &&
+      (target.skillArtifactId === undefined ||
+        segments[index + 5] === target.skillArtifactId)
+    ) {
+      return true;
+    }
   }
   return false;
+}
+
+/**
+ * Remove replacement-arbitration routes that the selected Codex host cannot
+ * satisfy. Compatibility-only restrictions without a replacement remain in
+ * force, so remote sessions still hide Skills that depend on unavailable APIs.
+ */
+export function buildCodexSessionCapabilityRoutingPolicy(
+  policy: CapabilityRoutingPolicy | undefined,
+  opts: CodexSessionCapabilityRoutingOptions,
+): CapabilityRoutingPolicy | undefined {
+  if (opts.cindyHostReplacementsAvailable || !policy) return policy;
+  const overrides = policy.overrides.filter(
+    (directive) => directive.replacement?.kind !== 'cindy-host',
+  );
+  return overrides.length === policy.overrides.length ? policy : { overrides };
 }
 
 /** Whether a session must inspect Codex's effective Skill catalog before start. */
@@ -124,8 +162,11 @@ export function buildCodexCapabilitySkillConfigOverrides(
       ? directive.source.id
       : directive.source.containerId;
     if (!pluginId) {
+      const requiredField = directive.source.surface === 'plugin'
+        ? 'source.id'
+        : 'source.containerId';
       throw new Error(
-        `Cannot disable Codex Skill ${directive.source.id}: source.containerId is required`,
+        `Cannot disable Codex Skill ${directive.source.id}: ${requiredField} is required`,
       );
     }
     const plugin = parseCodexPluginCacheIdentity(pluginId);
@@ -152,7 +193,7 @@ export function buildCodexCapabilitySkillConfigOverrides(
   const routedSkillPaths = skills
     .filter((skill) =>
       targets.some((target) =>
-        isSkillFromPluginCache(skill.path, target),
+        isSkillFromPluginDistribution(skill.path, target),
       ),
     )
     .map((skill) => skill.path);
