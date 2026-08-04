@@ -178,20 +178,18 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_1_dup2');
   });
 
-  it('并发 subagent 同重铸 parent id: parent key 解析到终 id 后配对,不 swap(P2: Use normalized parent IDs)', () => {
-    // 两个 subagent 的 parent_tool_use_id 都是重铸的 Task_1(父 Agent/Task 调用重铸两次)。
-    // 若 parent key 用原始 Task_1, sameParent 全匹配、batchMatch 选最近 → A 的 result swap
-    // 到 B。parent key 必须解析到归一化终 id(Task_x1 / Task_1_dup2)才能正确配对。
+  it('并发 subagent 同重铸 parent id: 同批并行 child 调用,result 按 parent 配对不 swap(P2: Key subagent tool results by parent)', () => {
+    // 两个 subagent 的 parent_tool_use_id 都是重铸的 Task_1(父 Agent/Task 调用重铸两次),
+    // 它们的 child 调用在同一 assistant 行(同批并行)。若 result 只按全局 batch 配对会
+    // 错配; 用 parent 身份隔离, 同批内按出现序 FIFO。
     const text = [
       assistantEntry('aParent1', [toolUse('Task_1')], 'parent-task'), // 父调用 1 → Task_x1
       assistantEntry('aParent2', [toolUse('Task_1')], 'parent-task'), // 父调用 2 → Task_1_dup2
-      // subagent A 的 child 调用(父 = 重铸 Task_1,归一化后 Task_x1)
-      assistantEntry('aA', [toolUse('Bash_1')], 'Task_1'),
-      // subagent B 的 child 调用(父 = 重铸 Task_1,归一化后 Task_1_dup2)
-      assistantEntry('aB', [toolUse('Bash_1')], 'Task_1'),
-      // A 的 result 先到 —— 父解析到 Task_x1,应配 A 的调用
+      // A、B 的 child 调用同批并行(同一 assistant 行, 各自 parent 原始 Task_1)
+      assistantEntry('aChild', [toolUse('Bash_1'), toolUse('Bash_1')], 'Task_1'),
+      // A 的 result 先到 → 配 A 的调用(第一个 Bash_1)
       userEntry('uA', [toolResult('Bash_1', 'A 的结果')], 'Task_1'),
-      // B 的 result —— 父解析到 Task_1_dup2,应配 B 的调用
+      // B 的 result → 配 B 的调用(第二个 Bash_1)
       userEntry('uB', [toolResult('Bash_1', 'B 的结果')], 'Task_1'),
     ].join('\n') + '\n';
     const result = normalizeClaudeJsonlToolIdsText(text);
@@ -200,11 +198,27 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[0])[0].id).toBe('Task_x1');
     expect(contentOf(entries[1])[0].id).toBe('Task_1_dup2');
     // 子调用定终
-    expect(contentOf(entries[2])[0].id).toBe('Bash_x1');
-    expect(contentOf(entries[3])[0].id).toBe('Bash_1_dup2');
+    expect(contentOf(entries[2]).map((b) => b.id)).toEqual(['Bash_x1', 'Bash_1_dup2']);
     // A 的 result 配 A 的调用(Bash_x1), B 的配 B 的(Bash_1_dup2) —— 不 swap
-    expect(contentOf(entries[4])[0].tool_use_id).toBe('Bash_x1');
-    expect(contentOf(entries[5])[0].tool_use_id).toBe('Bash_1_dup2');
+    expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_x1');
+    expect(contentOf(entries[4])[0].tool_use_id).toBe('Bash_1_dup2');
+  });
+
+  it('同 parent 孤儿 call + 重铸 call: result 配最新 retry,非 stale 孤儿(P1: Keep same-parent orphan retries on the newest call)', () => {
+    // 同一 parent 下, 孤儿 Bash_5(中断无 result) + 重铸 Bash_5(真实执行)。
+    // 跨批时 result 属于最新 retry(重铸 call) —— 恒取 sameParent[0](孤儿)会改写为
+    // stale 孤儿 id, 真实重铸 call 失配。
+    const text = [
+      assistantEntry('aOrphan', [toolUse('Bash_5')], 'parent-X'), // 孤儿(中断)
+      assistantEntry('aRetry', [toolUse('Bash_5')], 'parent-X'), // 重铸(真实执行)
+      userEntry('u1', [toolResult('Bash_5', '真实结果')], 'parent-X'),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x5'); // 孤儿
+    expect(contentOf(entries[1])[0].id).toBe('Bash_5_dup2'); // 重铸
+    // result 配最新 retry(重铸 Bash_5_dup2), 不配孤儿 Bash_x5
+    expect(contentOf(entries[2])[0].tool_use_id).toBe('Bash_5_dup2');
   });
 
   it('位置配对: 孤儿 call + 重铸 call 并存时 result 配给真实执行的那次', () => {

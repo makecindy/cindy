@@ -278,15 +278,20 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           // Task_x1 / Task_1_dup2, 无法用原始 Task_1 关联回)。
           // (codex-connector P2: Key subagent tool results by parent / Use normalized
           // parent IDs)。
+          // **同批 FIFO, 跨批取最新**: 并发 subagent 的同批 parallel calls 按出现序
+          // FIFO(各配各次); 孤儿 + 重铸(跨批)时 result 属于**最新 retry**(重铸 call),
+          // 而非最早的孤儿 —— 恒取 sameParent[0] 会把 result 改写为 stale 孤儿 id,
+          // 真实重铸 call 反而失配(codex-connector P1: Keep same-parent orphan
+          // retries on the newest call)。同批判断用「最近 assistant 批」(即该 result
+          // 紧跟的 child 批)。
           const resultParent = parentKeyOf(entry);
           const sameParent = resultParent !== undefined
             ? stack.filter((c) => c.parentKey === resultParent)
             : stack;
           const candidates = sameParent.length > 0 ? sameParent : stack;
-          // 同 rawParent 组内 FIFO: 配出现序最前的未配对 call。
-          // 无 parent 时回退既有语义: 同批 FIFO → 最近(batch 优先, 最后 fallback)。
           if (resultParent !== undefined && sameParent.length > 0) {
-            matched = sameParent[0];
+            const sameBatch = sameParent.filter((c) => c.batch === lastAssistantBatch);
+            matched = sameBatch.length > 0 ? sameBatch[0] : sameParent[sameParent.length - 1];
           } else {
             const batchMatch = candidates.find((c) => c.batch === lastAssistantBatch);
             matched = batchMatch ?? candidates[candidates.length - 1];
@@ -427,13 +432,21 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     const resolveLastFuture = (val: string, index: number): string | undefined => {
       const occs = occurrenceByOriginal.get(val);
       if (!occs || occs.length === 0) return undefined;
-      let last: { line: number; finalId: string } | undefined;
+      // 带 parent 的 content_block_start 描述子/新调用: 匹配**最后一个** line >= index
+      // 的 future occurrence(父 Agent/Task 与子 tool 同 id 时, 子调用是更晚的 future,
+      // 取最后一个而非最近的那个 —— 「Resolve nested」场景 line 0 的 start 应匹配
+      // 子 Task_1_dup2 而非父 Task_x1)。扫全量 future(不是遇到 line < index 就 break,
+      // 否则等价于总取 occs 末尾, 把较早的 start 错挂到更晚的重铸调用,
+      // copilot P1-A / codex-connector P1: Map child stream starts to the nearest
+      // occurrence)。
+      let lastFuture: { line: number; finalId: string } | undefined;
       for (let i = 0; i < occs.length; i += 1) {
-        if (occs[i].line >= index) last = occs[i];
-        else break;
+        if (occs[i].line >= index) lastFuture = occs[i];
       }
-      if (last) return last.finalId;
-      return occs[occs.length - 1].finalId; // 无 future → 最近之前
+      if (lastFuture) return lastFuture.finalId;
+      // 无 future(assistant 后的 child start): 取最近的过去 —— 最后一个 line < index
+      // 的 occurrence(子 occurrence 仍在父之后, 命中子而非父)。
+      return occs[occs.length - 1].finalId;
     };
     // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
     // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
