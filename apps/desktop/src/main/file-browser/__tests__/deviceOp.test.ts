@@ -15,6 +15,11 @@ import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  WorkdirWatchManager,
+  type RemoteFileTreeEvent,
+} from '@cindy/remote-file-service';
+import { FILE_BROWSER_EVENT_CHANNEL } from '@cindy/device-link';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
 const pushSpy = vi.fn();
@@ -501,6 +506,91 @@ describe('file-browser device-op', () => {
 
     await vi.waitFor(() => {
       expect(watchStartCount).toBe(2);
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: owner change during local start discards stale owner and rebuilds', async () => {
+    let resolveFirstStart!: () => void;
+    const firstStart = new Promise<void>((resolve) => {
+      resolveFirstStart = resolve;
+    });
+    const managers: WorkdirWatchManager[] = [];
+    const startSpy = vi
+      .spyOn(WorkdirWatchManager.prototype, 'start')
+      .mockImplementation(function (this: WorkdirWatchManager) {
+        managers.push(this);
+        return managers.length === 1 ? firstStart : Promise.resolve();
+      });
+    const stopSpy = vi
+      .spyOn(WorkdirWatchManager.prototype, 'stop')
+      .mockImplementation(() => undefined);
+
+    try {
+      const starting = onFsWatchSubscribed(workdir);
+      await vi.waitFor(() => {
+        expect(startSpy).toHaveBeenCalledTimes(1);
+      });
+
+      ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
+      resolveFirstStart();
+      await starting;
+
+      await vi.waitFor(() => {
+        expect(startSpy).toHaveBeenCalledTimes(2);
+      });
+      expect(managers[1]).not.toBe(managers[0]);
+      expect(stopSpy.mock.instances).toContain(managers[0]);
+
+      const event: RemoteFileTreeEvent = {
+        workdir,
+        type: 'change',
+        relPath: 'src/owner-b.ts',
+      };
+      (managers[1] as unknown as { emit: (value: RemoteFileTreeEvent) => void }).emit(event);
+      expect(pushSpy).toHaveBeenCalledWith(
+        FILE_BROWSER_EVENT_CHANNEL,
+        event,
+        { dataOwnerId: 'owner-b', ownerGeneration: 8 },
+      );
+    } finally {
+      onFsWatchReleased(workdir);
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+    }
+  });
+
+  it('watch: owner change during SSH start discards stale owner and rebuilds', async () => {
+    const sshWorkdir = '/remote/home/user/owner-race-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let resolveFirstStart!: () => void;
+    const firstStart = new Promise<void>((resolve) => {
+      resolveFirstStart = resolve;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart' && watchStartCount++ === 0) return firstStart;
+      return Promise.resolve({ ok: true });
+    });
+
+    const starting = onFsWatchSubscribed(sshWorkdir);
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(1);
+    });
+
+    // The first owner commits a new boundary while its watchStart is still in
+    // flight. The old start must be stopped and the current subscription
+    // rebuilt with the new owner stamp instead of reusing the stale callback.
+    ownerStampState.current = { dataOwnerId: 'owner-b', ownerGeneration: 8 };
+    resolveFirstStart();
+    await starting;
+
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir: sshWorkdir,
     });
     onFsWatchReleased(sshWorkdir);
   });

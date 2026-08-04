@@ -3287,7 +3287,12 @@ interface ElectronAPI {
     onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
     /** 控制端:被控端转发回来的 renderer 广播事件 */
     onRemotePush: (
-      cb: (payload: { deviceId: string; channel: string; payload: unknown }) => void,
+      cb: (payload: {
+        deviceId: string;
+        channel: string;
+        payload: unknown;
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+      }) => void,
     ) => () => void;
     /** 被控端可见性:本机正在被哪些控制端控制 */
     onControlledState: (

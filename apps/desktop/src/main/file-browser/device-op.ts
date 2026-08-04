@@ -666,6 +666,20 @@ const fsWatchDesired = new Set<string>();
 /** 启动窗口占位:dedup 判定与首个 await 之间的 TOCTOU 防护(见下)。 */
 const fsWatchStarting = new Map<string, symbol>();
 
+function isSameOwnerStamp(
+  left: PushOwnerStamp | undefined,
+  right: PushOwnerStamp | undefined,
+): boolean {
+  return (
+    left?.dataOwnerId === right?.dataOwnerId &&
+    left?.ownerGeneration === right?.ownerGeneration
+  );
+}
+
+function isOwnerStampCurrent(ownerStamp: PushOwnerStamp | undefined): boolean {
+  return isSameOwnerStamp(ownerStamp, getSafeDataOwnerPushStamp());
+}
+
 async function onFsWatchSubscribed(workdir: string): Promise<void> {
   fsWatchDesired.add(workdir);
   await startFsWatchIfDesired(workdir);
@@ -742,12 +756,14 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
       await activeLocalWatch.manager.start(workdir, { hideMetaFiles: true });
       if (
         !isFsWatchStartCurrent(workdir, token) ||
-        localWatchHandles.get(workdir) !== activeLocalWatch
+        localWatchHandles.get(workdir) !== activeLocalWatch ||
+        !isOwnerStampCurrent(activeLocalWatch.ownerStamp)
       ) {
         activeLocalWatch.manager.stop(workdir);
         if (localWatchHandles.get(workdir) === activeLocalWatch) {
           localWatchHandles.delete(workdir);
         }
+        if (fsWatchDesired.has(workdir)) scheduleFsWatchReconcile(workdir);
         return;
       }
       localWatchWorkdirs.add(workdir);
@@ -789,7 +805,7 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   try {
     await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
     const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
-    if (!isFsWatchStartCurrent(workdir, token) || !isRegistered) {
+    if (!isFsWatchStartCurrent(workdir, token) || !isRegistered || !isOwnerStampCurrent(ownerStamp)) {
       if (isRegistered) sshWatchOffs.delete(workdir);
       // release 可能已在 watchStart 完成前发过 stop；完成后再发一次，保证
       // daemon 不会留下刚启动成功的 watcher。

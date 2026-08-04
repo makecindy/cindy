@@ -28,10 +28,7 @@ import {
   isDataOwnerPushStampCurrent,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
-import {
-  isDataOwnerPushStamp,
-  type DataOwnerPushStamp,
-} from '../../shared/dataOwnerPush';
+import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
@@ -119,6 +116,10 @@ import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
+import {
+  isRemoteDataOwnerPushCurrent,
+  resetRemoteDataOwnerPushFence,
+} from '@/lib/remoteDataOwnerPushFence';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
   parseIssueEnvRegion,
@@ -1849,8 +1850,7 @@ export function invalidateLiveIngressForDataOwnerBoundary(): void {
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
-  remoteOwnerStamps.clear();
-  remoteStampedDevices.clear();
+  resetRemoteDataOwnerPushFence();
 }
 
 function cancelRemoteOptimisticSendsForSessionPurge(sessionId: string): void {
@@ -5200,11 +5200,6 @@ type LiveIngressContext = {
   ownerStampPresent?: boolean;
 };
 
-/** Last stamped source boundary observed from each controlled device. */
-const remoteOwnerStamps = new Map<string, DataOwnerPushStamp>();
-/** Devices that have emitted at least one stamped frame in this connection. */
-const remoteStampedDevices = new Set<string>();
-
 function isCurrentLiveIngress(context?: LiveIngressContext): boolean {
   if (!context) return true;
   const hasStamp = context.ownerStampPresent ?? context.ownerStamp !== undefined;
@@ -5214,27 +5209,11 @@ function isCurrentLiveIngress(context?: LiveIngressContext): boolean {
     return !hasStamp || isDataOwnerPushStampCurrent(context.ownerStamp);
   }
 
-  const current = getDataOwnerGeneration();
-  // A signed-out renderer has no remote session shard to mutate.
-  if (current.dataOwnerId === null) return false;
-  // Older controlled desktops omit ownerStamp. Accept that legacy stream only
-  // until this device has emitted a stamped frame; after that, an unframed
-  // late packet cannot cross an owner boundary.
-  if (!hasStamp) return !remoteStampedDevices.has(context.remoteDeviceId);
-  if (!isDataOwnerPushStamp(context.ownerStamp)) return false;
-  const stamp = context.ownerStamp;
-  remoteStampedDevices.add(context.remoteDeviceId);
-  if (stamp.dataOwnerId !== current.dataOwnerId) return false;
-  const previous = remoteOwnerStamps.get(context.remoteDeviceId);
-  if (
-    previous &&
-    previous.dataOwnerId === stamp.dataOwnerId &&
-    stamp.ownerGeneration < previous.ownerGeneration
-  ) {
-    return false;
-  }
-  remoteOwnerStamps.set(context.remoteDeviceId, stamp);
-  return true;
+  return isRemoteDataOwnerPushCurrent(
+    context.remoteDeviceId,
+    context.ownerStamp,
+    hasStamp,
+  );
 }
 
 function isCurrentLocalLiveIngress(ownerStamp: unknown): boolean {
@@ -6733,8 +6712,7 @@ function initGlobalListeners(): void {
       // A fresh online edge may follow a controlled-process restart, which can
       // legitimately reset its local owner generation. Re-seed that device's
       // monotonic fence before accepting its next stamped frame.
-      remoteOwnerStamps.delete(presence.deviceId);
-      remoteStampedDevices.delete(presence.deviceId);
+      resetRemoteDataOwnerPushFence(presence.deviceId);
       for (const [sessionId, records] of remoteOptimisticSends) {
         if ([...records.values()].some((record) => record.deviceId === presence.deviceId)) {
           clearRemoteInputProjectionProbeFailure(sessionId, presence.deviceId);
@@ -7058,8 +7036,7 @@ function __teardownGlobalListeners(): void {
   pendingDeferredStateNotifications.clear();
   pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
-  remoteOwnerStamps.clear();
-  remoteStampedDevices.clear();
+  resetRemoteDataOwnerPushFence();
   const remoteOptimisticSessionIds = new Set([
     ...remoteOptimisticSends.keys(),
     ...remoteOptimisticRetryTimers.keys(),
