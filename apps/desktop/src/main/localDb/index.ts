@@ -169,10 +169,16 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     const readerHint = startupLease.activeReaderCount
       ? `（当前有 ${startupLease.activeReaderCount} 个 passive 实例）`
       : '';
-    const message =
-      `当前不能执行数据库 schema 启动维护${readerHint}。` +
-      '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
-    showFatalDialog('数据库 schema 正被其它实例使用', message, 'MIGRATE_FAILED');
+    const waitingForWriter = startupLease.reason === 'writer-active';
+    const message = waitingForWriter
+      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试。'
+      : `当前不能执行数据库 schema 启动维护${readerHint}。` +
+        '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+    showFatalDialog(
+      waitingForWriter ? '数据库 schema 正在维护' : '数据库 schema 正被其它实例使用',
+      message,
+      'MIGRATE_FAILED',
+    );
     return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
   }
   const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
