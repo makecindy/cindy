@@ -45,6 +45,7 @@ import {
 } from './logger';
 import { noteQuitDisposersCompleted, noteShutdownBegin } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
+import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -471,6 +472,8 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // renderer 侧 useBrowserWebview 已有 crash banner + reload 恢复链路。此前
   // 这里不区分 guest,网页死递归吃满内存被 OOM kill 时会把整个 App 一起带走
   // (VS Code / Cursor 的边界都是 guest 崩溃不退 Workbench)。
+  // 例外 3:RSB popup 虽然是 `window` 类型,但它是局部网页 surface；崩溃时由
+  // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
   app.on('render-process-gone', (_event, webContents, details) => {
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
@@ -481,6 +484,12 @@ export function installQuitHandler(timeoutMs = 2000): void {
     if (webContents.getType() === 'webview') {
       log.warn(
         `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    if (isRsbNativePopupWebContentsId(webContents.id)) {
+      log.warn(
+        `native popup render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

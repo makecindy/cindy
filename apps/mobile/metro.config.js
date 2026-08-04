@@ -15,6 +15,15 @@ const workspaceTsSourcePackages = [
   'model-providers',
 ];
 
+// cindy-protocol submodule 里的源码直发协议包中,源码内部用**显式 .js 扩展名**的那些
+// (为满足服务端 moduleResolution: node16 的类型检查)。esbuild / Vite 会自动把
+// ./x.js 回落到 ./x.ts,Metro 不会——所以这些包也必须走下方 .js→.ts 分流。
+// 边界:只列内部用 .js 扩展名的包。device-link-protocol 用无扩展名相对导入,
+// 走 Metro 默认解析即可,不在此列。
+const protocolTsSourcePackages = [
+  'model-access-protocol',
+];
+
 config.resolver.disableHierarchicalLookup = true;
 // 关掉层级查找后,Metro 只查显式列出的 node_modules。pnpm hoisted 布局(根 .npmrc
 // node-linker=hoisted)下,workspace:* 依赖**不会**提升到根 node_modules,只链接在消费方包
@@ -52,8 +61,15 @@ const defaultResolveRequest = config.resolver.resolveRequest;
 const rnDevToolsSettingsManager = '../../src/private/devsupport/rndevtools/ReactDevToolsSettingsManager';
 
 function isWorkspaceTsSourcePackage(originModulePath) {
-  return workspaceTsSourcePackages.some((packageName) => (
+  if (workspaceTsSourcePackages.some((packageName) => (
     originModulePath.includes(`${path.sep}packages${path.sep}${packageName}${path.sep}`)
+  ))) {
+    return true;
+  }
+  return protocolTsSourcePackages.some((packageName) => (
+    originModulePath.includes(
+      `${path.sep}cindy-protocol${path.sep}packages${path.sep}${packageName}${path.sep}`,
+    )
   ));
 }
 

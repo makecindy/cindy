@@ -16,6 +16,7 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -122,6 +123,38 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
+  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
+    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
+      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
+      delete raw.panel;
+      const result = validateGhostManifest(raw);
+      if (!result.ok) throw new Error(result.reason);
+      return result.manifest;
+    };
+    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
+    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
+    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
+    const expandedPackage = makeToolManifest([
+      { name: 'gen_image', description: 'Generate images' },
+      { name: 'edit_image', description: 'Edit images' },
+    ]);
+    const changedPackage = makeToolManifest([
+      { name: 'gen_image', description: 'A third, unreviewed description' },
+    ]);
+
+    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
+    expect(
+      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
+    ).toEqual([
+      'tool:edit_image',
+    ]);
+    expect(
+      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
+    ).toEqual([
+      'tool:gen_image',
+    ]);
+  });
+
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);
@@ -1024,7 +1057,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
       atResourceProvider: { tool: 'search_issues' },
     });
     expect(valid.ok).toBe(true);
-    expect(valid.ok && valid.manifest.atResourceProvider).toEqual({ tool: 'search_issues' });
 
     const missing = validateGhostManifest({
       ...base,
@@ -1036,8 +1068,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     });
     expect(missing.ok).toBe(true);
     expect(extraField.ok).toBe(true);
-    expect(missing.ok ? missing.manifest.atResourceProvider : null).toBeUndefined();
-    expect(extraField.ok ? extraField.manifest.atResourceProvider : null).toBeUndefined();
   });
 
   it('忽略旧 manifest 中无效的同名未知字段', () => {
@@ -1059,7 +1089,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         atResourceProvider: legacyValue,
       });
       expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
-      expect(result.ok && result.manifest.atResourceProvider).toBeUndefined();
     }
   });
 
@@ -1086,16 +1115,10 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     });
     expect(before.ok && after.ok).toBe(true);
     if (!before.ok || !after.ok) return;
-    expect(ghostPermissionBaselineKey(after.manifest)).not.toBe(
+    expect(ghostPermissionBaselineKey(after.manifest)).toBe(
       ghostPermissionBaselineKey(before.manifest),
     );
-    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([
-      expect.objectContaining({
-        key: 'at-resource:search_issues',
-        kind: 'at-resource',
-        labelKey: 'atResourceProvider',
-      }),
-    ]);
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {

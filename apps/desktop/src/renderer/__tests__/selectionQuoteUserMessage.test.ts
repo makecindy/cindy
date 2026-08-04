@@ -34,8 +34,9 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
       "longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10')",
     );
     expect(userMessageSource).toMatch(
-      /longMessageCollapsed\n\s+\? projectSentInlinePlainText\(\n\s+segment\.text,/,
+      /\{renderContent\(\n\s+segment\.text,/,
     );
+    expect(userMessageSource).toContain('!longMessageCollapsed,');
   });
 
   it('keeps right-click Add to chat enabled while suppressing the floating button', () => {

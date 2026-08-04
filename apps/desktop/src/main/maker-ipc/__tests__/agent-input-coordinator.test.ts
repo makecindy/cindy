@@ -1376,6 +1376,36 @@ describe('AgentInputCoordinator send transaction', () => {
     }
   });
 
+  it('keeps queued user input runnable while stopping an external goal turn for clear', async () => {
+    const h = createHarness();
+    const sid = 'clear-external-goal-turn';
+    const queued = makeItem('q-1', 'adjust the goal direction');
+
+    // Goal turns bypass the coordinator, so the host is busy while activeTurn stays null.
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, queued);
+    await flush();
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: false });
+
+    expect(h.abortSession).toHaveBeenCalledWith(sid);
+    expect(latestProjection(h.projections)).toMatchObject({
+      queuePaused: false,
+      pendingQueue: [expect.objectContaining({ clientId: 'q-1' })],
+    });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content: 'adjust the goal direction',
+    });
+  });
+
   it('replaces a stale retry timer before it fires after a generation change', async () => {
     vi.useFakeTimers();
     try {

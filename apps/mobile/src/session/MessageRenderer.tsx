@@ -16,7 +16,6 @@ import {
   Ellipsis,
   ExternalLink,
   File as FileIcon,
-  FileText,
   Layers,
   ListTodo,
   LoaderCircle,
@@ -72,8 +71,7 @@ import { motionDuration, motionEasing } from '@/theme/tokens';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
-import { InlineQuoteChip } from '@/session/InlineQuoteChip';
-import { InlineReferenceChip } from '@/session/InlineReferenceChip';
+import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   composerDocumentFromSerializedMessage,
   type ComposerDocument,
@@ -106,7 +104,6 @@ import {
   buildFilePayload,
   buildMediaPayload,
   buildMermaidPayload,
-  buildTextPayload,
   buildToolResultPayload,
   formatDiffPayloadView,
   payloadMediaKindLabel,
@@ -430,6 +427,8 @@ export interface MobileMessageDraft {
   orderedBody?: string;
 }
 
+export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
+
 interface MessageActions {
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
   onCopyMessageLink?: (clientId: string) => void;
@@ -455,6 +454,7 @@ interface MessageActions {
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   busyClientId?: string | null;
+  busyAction?: MobileMessageActionBusyKind | null;
   canLoadEarlier?: boolean;
   loadingEarlier?: boolean;
   screenWidth?: number;
@@ -483,6 +483,7 @@ export function MessageRenderer({
   onShareImage,
   imageAnnotation,
   busyClientId,
+  busyAction,
   canLoadEarlier,
   emptyTestID,
   bottomOverlayHeight,
@@ -780,11 +781,13 @@ export function MessageRenderer({
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
     busyClientId,
+    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
     busyClientId,
+    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     onCopyMessageLink,
@@ -1735,6 +1738,9 @@ function MessageBubble({
   // hook 来源消息在 RenderItemView 中会降级为左对齐 system kind，避免暴露
   // 本地 user 消息的 fork / rewind / delete 操作；它仍可能携带至多 20k 文本，
   // 因此必须继续复用长消息的有界测量与折叠保护。
+  // 引用 / 粘贴文本 / Slash 等结构化 atom 的 displayBubbleBody 已是紧凑投影，
+  // 因此可继续参与同一套长消息判定；真正收起时改用静态结构化 renderer + 整体
+  // 高度裁切，既不把完整 payload 摊开，也不会因含 chip 而永久失去长消息保护。
   const collapseMeasureEnabled = (isUser || hookSource !== undefined)
     && (item.message.kind === 'user' || hookSource !== undefined)
     && !item.message.systemCardType
@@ -1769,20 +1775,21 @@ function MessageBubble({
     canAddToChat,
     canCopyLink,
     canDelete,
-    canFork,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind, i18nInstance.language]);
+  }), [canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
+    canFork,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
     // 金额与 token 回退占同一格,任一有值就保留该位置。
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
+  }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
+  const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
 
   useEffect(() => {
@@ -1840,7 +1847,6 @@ function MessageBubble({
   ]);
   const selectMenuAction = useCallback((id: MobileMessageMenuActionId) => {
     if (!clientId) return;
-    if (id === 'fork') return selectControlAction('fork');
     if (id === 'rewind') return selectControlAction('rewind');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
@@ -1934,26 +1940,46 @@ function MessageBubble({
         />
       ) : displayBubbleBody ? (
         longMessageCollapsed ? (
-          // 收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该保留交互),
-          // 展开后恢复 MarkdownBody 的完整渲染。文本选择不因收起而丢失:
-          // 走与正文/secondaryBody 同款的 MarkdownSelectableText(iOS 用
-          // UITextView,原生支持 numberOfLines 截断,长按有系统选择手柄)。
-          <MarkdownSelectableText
-            numberOfLines={collapsedLineCount}
-            selectable={canSelectVisibleText}
-            style={styles.messageText}
-            testID="message.collapsedBody"
-          >
-            {displayBubbleBody}
-          </MarkdownSelectableText>
+          rendersSentInlineBody ? (
+            <SentInlineAtomBody
+              interactiveAtoms={false}
+              maxVisibleLines={collapsedLineCount}
+              numberOfLines={collapsedLineCount}
+              selectable={canSelectVisibleText}
+              testID="message.collapsedSentInlineAtoms"
+              textStyle={styles.messageText}
+              tokens={sentInlineTokens}
+            />
+          ) : (
+            // 普通长消息收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该
+            // 保留交互),展开后恢复 MarkdownBody。文本选择走与正文同款的
+            // MarkdownSelectableText(iOS UITextView 原生支持 numberOfLines)。
+            <MarkdownSelectableText
+              numberOfLines={collapsedLineCount}
+              selectable={canSelectVisibleText}
+              style={styles.messageText}
+              testID="message.collapsedBody"
+            >
+              {displayBubbleBody}
+            </MarkdownSelectableText>
+          )
         ) : rendersSentInlineBody ? (
           <SentInlineAtomBody
-            layout={contentLayout}
-            markdownImageCacheKey={item.message.key}
             onOpenPayload={actions.onOpenPayload}
-            onOpenSessionLink={actions.onOpenSessionLink}
-            selectable={canSelectVisibleText}
-            sessionReferences={item.message.sessionReferences}
+            renderText={(text, index) => (
+              <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
+                <MarkdownBody
+                  layout={contentLayout}
+                  markdownImageCacheKey={item.message.key}
+                  onOpenPayload={actions.onOpenPayload}
+                  onOpenSessionLink={actions.onOpenSessionLink}
+                  selectable={canSelectVisibleText}
+                  sessionReferences={item.message.sessionReferences}
+                  streaming={false}
+                  text={text}
+                />
+              </View>
+            )}
             tokens={sentInlineTokens}
           />
         ) : (
@@ -2072,7 +2098,10 @@ function MessageBubble({
               return (
                 <MessageMoreButton
                   buttonSize={actionBar.buttonSize}
-                  disabled={disabled || actionBusy}
+                  // Fork has its own visible busy state. Keep More available
+                  // only while that direct action is running; rewind/delete
+                  // still block the menu while their requests are in flight.
+                  disabled={disabled && !forkBusy}
                   iconSize={actionBar.iconSize}
                   key="more"
                   onPress={() => setActionSheetOpen(true)}
@@ -2083,6 +2112,7 @@ function MessageBubble({
               return (
                 <MessageControlButton
                   buttonSize={actionBar.buttonSize}
+                  busy={id === 'fork' && forkBusy}
                   copyState={copyState}
                   disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
                   id={id}
@@ -2097,6 +2127,7 @@ function MessageBubble({
         </View>
       ) : null}
       <MessageActionSheet
+        disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
         items={messageMenu}
         onAction={selectMenuAction}
         onClose={() => setActionSheetOpen(false)}
@@ -3248,80 +3279,6 @@ function OrcaCollabCard({ card, screenWidth }: { card: OrcaCollabCardModel; scre
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
 // 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
-/** Sent user atoms stay compact while their full wire text remains copyable/sendable. */
-function SentInlineAtomBody({
-  layout,
-  markdownImageCacheKey,
-  onOpenPayload,
-  onOpenSessionLink,
-  selectable,
-  sessionReferences,
-  tokens,
-}: {
-  layout: MessageContentLayout;
-  markdownImageCacheKey?: string;
-  onOpenPayload?: (payload: MessagePayload) => void;
-  onOpenSessionLink?: (url: string) => void;
-  selectable: boolean;
-  sessionReferences?: readonly MobilePersistedSessionReferenceMetadata[];
-  tokens: readonly SentInlineToken[];
-}) {
-  const { colors } = useTheme();
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <View style={styles.sentInlineAtomBody} testID="message.sentInlineAtoms">
-      {tokens.map((token, index) => {
-        if (token.kind === 'quote') {
-          return (
-            <InlineQuoteChip
-              key={`quote:${token.quote.sourcePath ?? 'chat'}:${index}:${token.quote.text}`}
-              quote={token.quote}
-            />
-          );
-        }
-        if (token.kind === 'pasted') {
-          return (
-            <InlineReferenceChip
-              accessibilityLabel={token.display}
-              icon={<FileText color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
-              key={`pasted:${index}`}
-              label={token.display}
-              onPress={onOpenPayload
-                ? () => onOpenPayload(buildTextPayload('Pasted text', token.text))
-                : undefined}
-              testID="message.pastedTextChip"
-            />
-          );
-        }
-        if (token.kind === 'slash') {
-          return (
-            <InlineReferenceChip
-              accessibilityLabel={token.text}
-              key={`slash:${index}`}
-              label={token.text}
-              testID="message.slashCommandChip"
-            />
-          );
-        }
-        return token.text ? (
-          <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
-            <MarkdownBody
-              layout={layout}
-              markdownImageCacheKey={markdownImageCacheKey}
-              onOpenPayload={onOpenPayload}
-              onOpenSessionLink={onOpenSessionLink}
-              selectable={selectable}
-              sessionReferences={sessionReferences}
-              streaming={false}
-              text={token.text}
-            />
-          </View>
-        ) : null;
-      })}
-    </View>
-  );
-}
-
 function MarkdownBody({
   allowIosUITextView = true,
   markdownImageCacheKey,
@@ -5669,6 +5626,7 @@ function formatMediaPayloadBody(
 
 function MessageControlButton({
   buttonSize,
+  busy,
   copyState,
   disabled,
   id,
@@ -5676,6 +5634,7 @@ function MessageControlButton({
   onPress,
 }: {
   buttonSize: number;
+  busy?: boolean;
   copyState: CopyMessageStatus | 'idle' | 'copying';
   disabled?: boolean;
   id: MobileMessageControlActionId;
@@ -5700,7 +5659,7 @@ function MessageControlButton({
       ]}
       testID={messageControlActionTestID(id)}
     >
-      {messageControlActionIcon(id, copyState, iconSize, colors)}
+      {messageControlActionIcon(id, copyState, iconSize, colors, busy)}
     </Pressable>
   );
 }
@@ -5739,8 +5698,8 @@ function MessageMoreButton({
   );
 }
 
-function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' {
-  return id === 'copy';
+function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'fork' {
+  return id === 'copy' || id === 'fork';
 }
 
 function messageControlActionLabel(
@@ -5765,7 +5724,11 @@ function messageControlActionIcon(
   copyState: CopyMessageStatus | 'idle' | 'copying',
   iconSize: number,
   colors: ThemeColors,
+  busy = false,
 ): ReactNode {
+  if (id === 'fork' && busy) {
+    return <ActivityIndicator color={colors.textSecondary} size="small" />;
+  }
   if (id === 'copy') {
     return copyState === 'copying'
       ? <ActivityIndicator color={colors.textSecondary} size="small" />
@@ -5935,13 +5898,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageItem: {
     gap: 2,
     width: '100%',
-  },
-  sentInlineAtomBody: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    maxWidth: '100%',
   },
   sentInlineTextChunk: {
     flexBasis: '100%',

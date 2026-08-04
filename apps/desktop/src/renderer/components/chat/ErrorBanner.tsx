@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   AlertCircle,
   Check,
@@ -289,7 +290,9 @@ export function ErrorBanner({
   // 加 else if, 标志自动保持 true, 折扣版提示不会误叠加 (无需记得同步维护条件表)。
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isPiImageInputUnsupportedError(error)) {
+  if (isCodexResumeNotReadyProjectionError(error)) {
+    displayError = t('chat.errorBanner.codexResumeNotReady');
+  } else if (isPiImageInputUnsupportedError(error)) {
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');

@@ -1,9 +1,13 @@
-import type {
-  AgentKind,
-  SessionSendOptions,
-  SessionSendResult,
-  UserMessage,
+import {
+  CodexResumePreparationBlockedError,
+  type AgentKind,
+  type SessionSendOptions,
+  type SessionSendResult,
+  type UserMessage,
 } from '@cindy/maker-core';
+import {
+  CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
+} from '@cindy/maker-shared/agent-input-projection';
 
 import {
   createHostSendFailure,
@@ -399,6 +403,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         };
       }
+      if (err instanceof CodexResumePreparationBlockedError) {
+        deps.log.warn('send: Codex resume preparation blocked during rehydrate', {
+          sessionId,
+          error: err.message,
+        });
+        return {
+          kind: 'failure',
+          result: toCompatibleMakerSendResult(
+            createHostSendFailure('REHYDRATE_FAILED', CODEX_RESUME_NOT_READY_WIRE_MESSAGE),
+          ),
+        };
+      }
       return {
         kind: 'failure',
         result: toCompatibleMakerSendResult(
@@ -449,6 +465,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             createHostSendFailure('CREDENTIAL_SWITCH_BUSY', err.message, {
               busySessionIds: err.sessionIds,
             }),
+          ),
+        };
+      }
+      if (err instanceof CodexResumePreparationBlockedError) {
+        deps.log.warn('send: Codex resume preparation blocked during lazy create', {
+          sessionId,
+          error: err.message,
+        });
+        return {
+          kind: 'failure',
+          result: toCompatibleMakerSendResult(
+            createHostSendFailure('LAZY_CREATE_FAILED', CODEX_RESUME_NOT_READY_WIRE_MESSAGE),
           ),
         };
       }

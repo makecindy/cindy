@@ -189,19 +189,17 @@ import {
 import { QuickStartPillMark } from './QuickStartPillMark';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
+import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
   AT_FILE_PICKER_RESOURCE,
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
-  AT_MENTION_SEARCH_RESULT_LIMIT,
   createAtResourceFromNativePath,
   getAtDirectoryCompletionQuery,
   mergeAtResourceItems,
   scanAtResources,
-  scanPluginAtResources,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
@@ -763,7 +761,7 @@ type TriggerState = TriggerSlash | TriggerAt | { kind: 'none' };
  */
 const GHOST_SIGIL_CHARS = ['$', '＄', '¥', '￥'] as const;
 
-function detectTrigger(editor: Editor, activeAtScopeFrom?: number): TriggerState {
+function detectTrigger(editor: Editor): TriggerState {
   const { state } = editor;
   const { selection } = state;
   if (!selection.empty) return { kind: 'none' };
@@ -850,13 +848,6 @@ function detectTrigger(editor: Editor, activeAtScopeFrom?: number): TriggerState
     const allowed = atIdx === 0 || /\s/.test(before);
     const after = textSoFar.slice(atIdx + 1);
     const from = pos - (textSoFar.length - atIdx);
-    if (allowed && activeAtScopeFrom === from && !/[\r\n]/.test(after)) {
-      return {
-        kind: 'at',
-        query: after,
-        from,
-      };
-    }
     if (allowed && !/\s/.test(after)) {
       return {
         kind: 'at',
@@ -2381,6 +2372,26 @@ export function ChatInput({
       ),
     [ghostsForCommand],
   );
+  const atPluginItems = useMemo<AtResourceItem[]>(
+    () => {
+      // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
+      // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
+      if (deviceLinkDeviceId) return [];
+      return pluginsForMenu
+        .filter((ghost) => pluginAvailableIds.has(ghost.manifest.id) && ghost.manifest.command)
+        .map((ghost) => ({
+          type: 'plugin-command',
+          name: ghost.manifest.name,
+          relPath: ghost.manifest.command!,
+          pluginId: ghost.manifest.id,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+          sourceLabel: ghost.manifest.command!,
+          _nameLower: `${ghost.manifest.name} ${ghost.manifest.command}`.toLowerCase(),
+          _relPathLower: `${ghost.manifest.command} ${ghost.manifest.id}`.toLowerCase(),
+        }));
+    },
+    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds],
+  );
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
   }, [editor, ghostsForCommand]);
@@ -3202,13 +3213,8 @@ export function ChatInput({
   );
 
   // ── Slash / At panel state ─────────────────────────────────────────
-  const [atPluginScope, setAtPluginScope] = useState<{
-    provider: AtResourceItem;
-    triggerFrom: number;
-  } | null>(null);
-  const activeAtScopeFrom = atPluginScope?.triggerFrom;
   const trigger: TriggerState = editor
-    ? detectTrigger(editor, activeAtScopeFrom)
+    ? detectTrigger(editor)
     : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
@@ -3317,6 +3323,9 @@ export function ChatInput({
         if (prev.kind === 'ready' && normalizedQuery) {
           return { ...prev, searching: true };
         }
+        if (atPluginItems.length > 0) {
+          return { kind: 'ready', items: atPluginItems, truncated: false, searching: true };
+        }
         return { kind: 'loading' };
       });
       scanAtResources(
@@ -3335,8 +3344,8 @@ export function ChatInput({
             setAtState((prev) => ({
               kind: 'ready',
               items: preservePreviousItems && prev.kind === 'ready'
-                ? mergeAtResourceItems(prev.items, partial.items)
-                : partial.items,
+                ? mergeAtResourceItems(prev.items, [...atPluginItems, ...partial.items])
+                : [...atPluginItems, ...partial.items],
               truncated: partial.truncated || (prev.kind === 'ready' && prev.truncated),
               searching: true,
             }));
@@ -3346,10 +3355,18 @@ export function ChatInput({
         .then((res) => {
           if (atScanSeqRef.current !== seq) return;
           if (!res.success) {
-            setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
+            if (atPluginItems.length > 0) {
+              setAtState({ kind: 'ready', items: atPluginItems, truncated: false });
+            } else {
+              setAtState({ kind: 'error', message: res.error ?? 'scan failed' });
+            }
             return;
           }
-          setAtState({ kind: 'ready', items: res.items, truncated: res.truncated });
+          setAtState({
+            kind: 'ready',
+            items: [...atPluginItems, ...res.items],
+            truncated: res.truncated,
+          });
         })
         .catch((err: unknown) => {
           if (atScanSeqRef.current !== seq) return;
@@ -3357,56 +3374,10 @@ export function ChatInput({
           setAtState({ kind: 'error', message: m });
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t],
-  );
-
-  useEffect(() => {
-    if (!editor || !atPluginScope) return;
-    const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
-      // A caret-only move makes the end of a multi-word query ambiguous.
-      // Leave Plugin scope before the user can select a row against a prefix
-      // and accidentally leave the query suffix behind.
-      if (!transaction.docChanged && transaction.selectionSet) {
-        atScanSeqRef.current += 1;
-        setAtPluginScope(null);
-        runAtScan();
-      }
-    };
-    editor.on('transaction', handleTransaction);
-    return () => {
-      editor.off('transaction', handleTransaction);
-    };
-  }, [editor, atPluginScope, runAtScan]);
-
-  const runAtPluginScan = useCallback(
-    (provider: AtResourceItem, query: string, reservedSeq?: number) => {
-      const seq = reservedSeq ?? ++atScanSeqRef.current;
-      if (atScanSeqRef.current !== seq) return;
-      setAtState((prev) => prev.kind === 'ready'
-        ? { ...prev, searching: true }
-        : { kind: 'loading' });
-      scanPluginAtResources(provider, query, workingDir ?? undefined, sessionId)
-        .then((res) => {
-          if (atScanSeqRef.current !== seq) return;
-          if (!res.success) {
-            setAtState({ kind: 'error', message: res.error ?? 'Plugin resource search failed' });
-            return;
-          }
-          setAtState({ kind: 'ready', items: res.items, truncated: res.truncated });
-        })
-        .catch((error: unknown) => {
-          if (atScanSeqRef.current !== seq) return;
-          setAtState({
-            kind: 'error',
-            message: error instanceof Error ? error.message : String(error),
-          });
-        });
-    },
-    [workingDir, sessionId],
+    [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId, t, atPluginItems],
   );
 
   const atQuery = trigger.kind === 'at' ? trigger.query : '';
-  const atTriggerFrom = trigger.kind === 'at' ? trigger.from : null;
 
   // When `@` panel opens, rescan so newly created files/agents show immediately.
   useEffect(() => {
@@ -3414,41 +3385,16 @@ export function ChatInput({
     runAtScan();
   }, [trigger.kind, workingDir, runAtScan]);
 
-  useEffect(() => {
-    if (
-      !atPluginScope
-      || trigger.kind !== 'at'
-      || atTriggerFrom !== atPluginScope.triggerFrom
-    ) {
-      if (atPluginScope) {
-        atScanSeqRef.current += 1;
-        setAtPluginScope(null);
-        if (trigger.kind === 'at') runAtScan(atQuery);
-      }
-      return;
-    }
-    // Never leave stale results selectable while a new scoped query is waiting
-    // for its debounce or network response.
-    const seq = ++atScanSeqRef.current;
-    setAtState({ kind: 'ready', items: [], truncated: false, searching: true });
-    const timer = window.setTimeout(
-      () => runAtPluginScan(atPluginScope.provider, atQuery, seq),
-      atQuery ? 200 : 0,
-    );
-    return () => window.clearTimeout(timer);
-  }, [atPluginScope, trigger.kind, atTriggerFrom, atQuery, runAtPluginScan, runAtScan]);
-
   // Derive query string for stable memo deps — avoids re-filtering on
   // every editor tick when only the caret moved but the query didn't change.
   const filteredAt = useMemo(() => {
     if (!atQuery && trigger.kind !== 'at') return [];
     if (atState.kind !== 'ready') return [];
-    if (atPluginScope) return atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
     const items = workingDir && localAttachmentPickerEnabled
       ? [AT_FILE_PICKER_RESOURCE, ...atState.items]
       : atState.items;
     return filterAtResources(items, atQuery);
-  }, [atState, atQuery, trigger.kind, atPluginScope, workingDir, localAttachmentPickerEnabled]);
+  }, [atState, atQuery, trigger.kind, workingDir, localAttachmentPickerEnabled]);
 
   // Focused row index for each palette
   const [slashFocus, setSlashFocus] = useState(0);
@@ -3462,16 +3408,11 @@ export function ChatInput({
     if (atFocus >= filteredAt.length) setAtFocus(0);
   }, [filteredAt.length, atFocus]);
   useEffect(() => {
-    if (atPluginScope) setAtFocus(0);
-  }, [atPluginScope?.provider.pluginId, atQuery]);
-
-  useEffect(() => {
     if (atQueryScanTimerRef.current !== null) {
       window.clearTimeout(atQueryScanTimerRef.current);
       atQueryScanTimerRef.current = null;
     }
     if (trigger.kind !== 'at') return;
-    if (atPluginScope) return;
     const normalizedQuery = atQuery.trim();
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atLastScanQueryRef.current = normalizedQuery;
@@ -3489,7 +3430,7 @@ export function ChatInput({
         atQueryScanTimerRef.current = null;
       }
     };
-  }, [trigger.kind, workingDir, atQuery, runAtScan, atPluginScope]);
+  }, [trigger.kind, workingDir, atQuery, runAtScan]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3565,9 +3506,6 @@ export function ChatInput({
               insertAtResource(filteredAt[atFocus]);
               return true;
             }
-            // A scoped Plugin search owns Enter/Tab even while loading or
-            // empty; keep accidental sends from bypassing resource selection.
-            if (atOpen && atPluginScope) return true;
             return false;
           case 'Escape':
             if (slashOpen && trigger.kind === 'slash') {
@@ -3575,20 +3513,12 @@ export function ChatInput({
               return true;
             }
             if (atOpen && trigger.kind === 'at') {
-              if (atPluginScope) {
-                exitAtPluginScope(true);
-                return true;
-              }
               setSuppressedAtAt(trigger.from);
               return true;
             }
             return false;
           case 'ArrowLeft':
           case 'Backspace':
-            if (atOpen && atPluginScope && !atQuery) {
-              exitAtPluginScope(false);
-              return true;
-            }
             return false;
           default:
             return false;
@@ -3657,31 +3587,26 @@ export function ChatInput({
       const $from = editor.state.doc.resolve(from);
       const parent = $from.parent;
       const parentStart = $from.start();
-      // Scoped Plugin queries may contain spaces. Their explicit end is the
-      // current caret, so ordinary composer text after the caret is preserved.
-      const isAtScoped = activeAtScopeFrom === from;
-      let runEnd = isAtScoped ? editor.state.selection.from : from + 1;
+      let runEnd = from + 1;
       const offset = from - parentStart + 1;
-      if (!isAtScoped) {
-        let stopped = false;
-        parent.forEach((child, childOffset) => {
-          if (stopped || childOffset + child.nodeSize <= offset) return;
-          if (child.type.name === 'mentionChip' || !child.isText) {
+      let stopped = false;
+      parent.forEach((child, childOffset) => {
+        if (stopped || childOffset + child.nodeSize <= offset) return;
+        if (child.type.name === 'mentionChip' || !child.isText) {
+          stopped = true;
+          return;
+        }
+        const localStart = Math.max(0, offset - childOffset);
+        const text = child.text ?? '';
+        for (let i = localStart; i < text.length; i++) {
+          if (/\s/.test(text[i])) {
+            runEnd = parentStart + childOffset + i;
             stopped = true;
             return;
           }
-          const localStart = Math.max(0, offset - childOffset);
-          const text = child.text ?? '';
-          for (let i = localStart; i < text.length; i++) {
-            if (/\s/.test(text[i])) {
-              runEnd = parentStart + childOffset + i;
-              stopped = true;
-              return;
-            }
-          }
-          runEnd = parentStart + childOffset + text.length;
-        });
-      }
+        }
+        runEnd = parentStart + childOffset + text.length;
+      });
       const to = runEnd;
       let selectedItem = item;
       let selectedByNativePicker = false;
@@ -3719,21 +3644,22 @@ export function ChatInput({
       // The synthetic action must always resolve to a concrete file/directory
       // before it can reach mention serialization.
       if (selectedItem.type === 'file-picker') return;
-      if (selectedItem.type === 'plugin-provider') {
+      if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
+        const ghost = installedGhostsRef.current.find(
+          (candidate) => candidate.manifest.id === selectedItem.pluginId,
+        );
+        if (!ghost?.enabled || !ghost.manifest.command) return;
         editor
           .chain()
           .focus()
           .command(({ tr }) => {
-            // The provider lives only in React state. Keeping ordinary `@`
-            // text means drafts and sends can never leak an internal sentinel.
-            tr.replaceWith(from, to, editor.schema.text('@'));
+            tr.delete(from, to);
             return true;
           })
           .run();
-        atScanSeqRef.current += 1;
-        setAtPluginScope({ provider: selectedItem, triggerFrom: from });
-        setAtState({ kind: 'loading' });
+        placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
+        setSuppressedAtAt(from);
         return;
       }
       const directoryQuery = selectedByNativePicker
@@ -3749,7 +3675,6 @@ export function ChatInput({
           })
           .run();
         setAtFocus(0);
-        setAtPluginScope(null);
         return;
       }
       const attrs: MentionChipAttrs = {
@@ -3785,34 +3710,9 @@ export function ChatInput({
           return true;
         })
         .run();
-      setAtPluginScope(null);
     },
-    [editor, trigger, activeAtScopeFrom, workingDir, storageKey],
+    [editor, trigger, workingDir, storageKey],
   );
-
-  const exitAtPluginScope = useCallback((closePanel: boolean) => {
-    if (!editor || trigger.kind !== 'at') return;
-    const { from } = trigger;
-    if (!closePanel) {
-      const runEnd = editor.state.selection.from;
-      editor
-        .chain()
-        .focus()
-        .command(({ tr }) => {
-          tr.replaceWith(from, runEnd, editor.schema.text('@'));
-          return true;
-        })
-        .run();
-    }
-    setAtPluginScope(null);
-    atScanSeqRef.current += 1;
-    if (closePanel) {
-      setAtState({ kind: 'loading' });
-      setSuppressedAtAt(from);
-    } else {
-      runAtScan();
-    }
-  }, [editor, trigger, runAtScan]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
@@ -3827,10 +3727,6 @@ export function ChatInput({
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
       if (dispatchSendInFlightRef.current) return;
-      if (atPluginScope) {
-        atScanSeqRef.current += 1;
-        setAtPluginScope(null);
-      }
       const sourceSessionId = sessionId;
       const finishAgentSendDispatch = sourceSessionId
         ? tryBeginAgentSendDispatch(sourceSessionId)
@@ -4080,7 +3976,6 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
-      atPluginScope,
     ],
   );
   useEffect(() => {
@@ -6223,20 +6118,10 @@ export function ChatInput({
               onSelect={(item) => insertAtResource(item)}
               onClose={() => {
                 if (trigger.kind !== 'at') return;
-                if (atPluginScope) {
-                  exitAtPluginScope(true);
-                } else {
-                  setSuppressedAtAt(trigger.from);
-                }
+                setSuppressedAtAt(trigger.from);
               }}
-              onRetry={() => atPluginScope
-                ? runAtPluginScan(atPluginScope.provider, atQuery)
-                : runAtScan(atQuery)}
-              scopedProviderName={atPluginScope?.provider.name}
+              onRetry={() => runAtScan(atQuery)}
               filePickerEnabled={!!workingDir && localAttachmentPickerEnabled}
-              onBack={atPluginScope
-                ? () => exitAtPluginScope(false)
-                : undefined}
               maxHeight={paletteMaxHeight}
             />
           )}

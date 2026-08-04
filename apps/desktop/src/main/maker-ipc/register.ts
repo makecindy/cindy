@@ -2124,6 +2124,21 @@ export async function withSendToSessionLock<T>(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+
+/**
+ * GoalController 已确认当前 turn 归自己所有后调用：复用输入协调器的 Stop 边界中断
+ * vendor，同时保留用户已经排队的新指令并在终态收口后继续派发。
+ *
+ * 这里不判断 goal ownership，避免 register 反向依赖 goal-host；调用方必须先完成判定。
+ */
+export function stopActiveGoalTurnForClear(sessionId: string): void {
+  const coordinator = agentInputCoordinatorHolder;
+  if (!coordinator) {
+    throw new Error('Agent input coordinator is not initialized');
+  }
+  coordinator.stop(sessionId, { keepQueue: true, pauseQueue: false });
+}
+
 const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;

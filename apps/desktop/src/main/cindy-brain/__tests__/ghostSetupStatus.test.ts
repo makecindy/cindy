@@ -62,6 +62,32 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
     expect(evaluateGhostSetup(m, probes()).ready).toBe(true);
   });
 
+  it('仅 oidc-token 凭证的插件不被误判为需要填写 Secret', () => {
+    const m = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'whoami', description: '查看企业身份' }],
+      network: {
+        hosts: ['service-a.x.test'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy 企业身份',
+            source: 'oidc-token',
+            inject: {
+              ...INJECT,
+              hosts: ['service-a.x.test'],
+            },
+          },
+        ],
+      },
+    });
+    expect(evaluateGhostSetup(m, probes())).toEqual({
+      ready: true,
+      missingGroups: [],
+      reauth: [],
+    });
+  });
+
   it('双 key 任一已保存即就绪(Web Search 形态)', () => {
     const m = manifest({
       slots: ['tool', 'network'],
