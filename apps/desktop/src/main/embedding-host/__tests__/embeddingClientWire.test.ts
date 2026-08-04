@@ -763,3 +763,50 @@ describe('EmbeddingClient · 错误归属与重取的预算', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('EmbeddingClient · 全命中批次同样复查自洽', () => {
+  /**
+   * 到达路径不需要巧合(PR #1707 review 第九轮):A 在旧默认维度下入缓存 → 上游改默认 →
+   * 某次只含 B 的请求把 B 以新维度入缓存(那次零命中、新批内部自洽,混合复查进不来)→
+   * 此后任何同时要 A 和 B 的请求都是**全命中**,直接从早退分支返回混合长度的向量。
+   */
+  it('缓存里混着两种维度时,全命中请求也清缓存重取,交付等长', async () => {
+    let width = 2;
+    const calls: string[][] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: string[] };
+      calls.push(body.input);
+      return new Response(
+        JSON.stringify({
+          model: 'voyage/voyage-4',
+          data: body.input.map((_t, index) => ({
+            object: 'embedding',
+            index,
+            embedding: Array.from({ length: width }, (_v, i) => i),
+          })),
+          usage: { prompt_tokens: 1 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const client = clientWith(fetchImpl as unknown as ReturnType<typeof vi.fn>);
+
+    await client.embed({ texts: ['a'], model: 'voyage/voyage-4' }); // A → 2 维
+    width = 4;
+    await client.embed({ texts: ['b'], model: 'voyage/voyage-4' }); // B → 4 维(零命中)
+    // 此刻缓存里 A=2 维、B=4 维,下面这次两条都命中。
+    const both = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+
+    expect(both.embeddings.map((v) => v.length)).toEqual([4, 4]);
+    expect(calls[calls.length - 1]).toEqual(['a', 'b']);
+    expect(both.cacheHits).toBe(0);
+  });
+
+  it('全命中且维度一致时不打网络(复查不能把正常的全命中变成一次请求)', async () => {
+    const { client, fetchImpl } = harness();
+    await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+    const again = await client.embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' });
+    expect(again.cacheHits).toBe(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});

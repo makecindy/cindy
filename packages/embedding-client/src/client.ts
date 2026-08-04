@@ -341,8 +341,15 @@ export class EmbeddingClient {
       }
     }
 
-    // 全命中 — 不打网络
+    // 全命中 — 不打网络。但仍要复查批内自洽:缓存里完全可能同时存着两种维度的向量
+    // (PR #1707 review 第九轮)。到达路径不需要什么巧合:文本 A 在旧默认维度下入缓存,
+    // 上游改默认,随后某次只含文本 B 的请求把 B 以新维度入缓存 —— 那一次零命中、新批
+    // 内部自洽,前面那道复查进不来。此后任何同时要 A 和 B 的请求都是全命中,直接从这里
+    // 返回一批混合长度的向量。
     if (missTexts.length === 0) {
+      if (mixedLengthAt(result) !== null) {
+        return this.refetchAfterCacheReset(req, startedAt, 'all-cache-hit batch');
+      }
       return { embeddings: result, modelUsed: req.model, tokensUsed: 0, cacheHits };
     }
 
@@ -404,28 +411,7 @@ export class EmbeddingClient {
     // 默认维度一变,该型号所有缓存向量都已过期,而缓存只是内存里的性能优化,重取的代价
     // 远小于交付错数据。递归至多一次:清空后 cacheHits 必为 0,这个分支进不来。
     if (cacheHits > 0 && mixedLengthAt(result) !== null) {
-      this.log.warn?.(
-        `[embedding-client] mixed vector lengths across cache hits and fresh results for '${req.model}'; upstream default dimension likely changed — clearing cache and refetching`,
-      );
-      this.cache.clear();
-      // 重取要吃**同一份**预算的剩余量(PR #1707 review 第八轮):`timeoutMs` 是时长而
-      // 不是绝对截止点,原样递下去等于重新计时 —— 第一次取新向量已经花掉 55 秒时,整批
-      // 重取还能再等 60 秒,插件那一次 await 最长接近 120 秒,在途额度也一直占着,与手册
-      // 承诺的"单次请求 60 秒"直接矛盾。
-      let remaining: number | undefined;
-      if (req.timeoutMs !== undefined) {
-        remaining = req.timeoutMs - (Date.now() - startedAt);
-        if (remaining <= 0) {
-          throw new EmbeddingError(
-            `embed: timed out after ${req.timeoutMs}ms (budget exhausted before cache-reset refetch)`,
-            'TIMEOUT',
-          );
-        }
-      }
-      return this.embed({
-        ...req,
-        ...(remaining !== undefined ? { timeoutMs: remaining } : {}),
-      });
+      return this.refetchAfterCacheReset(req, startedAt, 'cache hits mixed with fresh results');
     }
 
     return {
@@ -434,6 +420,44 @@ export class EmbeddingClient {
       tokensUsed: apiResponse.usage?.prompt_tokens ?? apiResponse.usage?.total_tokens ?? 0,
       cacheHits,
     };
+  }
+
+  /**
+   * 发现缓存里存着不同维度的向量时:清空缓存,整批重取一次。
+   *
+   * 清得比必要范围大(其它型号的条目也没了)是有意的 —— 默认维度一变,该型号所有缓存
+   * 向量都已过期,而缓存只是内存里的性能优化,重取的代价远小于交付错数据。
+   *
+   * 重取吃**同一份**预算的剩余量:`timeoutMs` 是时长而不是绝对截止点,原样递下去等于
+   * 重新计时 —— 第一次已经花掉 55 秒时重取还能再等 60 秒,插件那一次 await 最长接近
+   * 120 秒,在途额度也一直占着,与手册承诺的"单次请求 60 秒"直接矛盾。
+   *
+   * 递归至多一次:清空后本批全是 miss,两处调用点(全命中分支 / 命中与新取回混合)都
+   * 进不来。
+   */
+  private async refetchAfterCacheReset(
+    req: EmbedRequest,
+    startedAt: number,
+    why: string,
+  ): Promise<EmbedResponse> {
+    this.log.warn?.(
+      `[embedding-client] mixed vector lengths (${why}) for '${req.model}'; upstream default dimension likely changed — clearing cache and refetching`,
+    );
+    this.cache.clear();
+    let remaining: number | undefined;
+    if (req.timeoutMs !== undefined) {
+      remaining = req.timeoutMs - (Date.now() - startedAt);
+      if (remaining <= 0) {
+        throw new EmbeddingError(
+          `embed: timed out after ${req.timeoutMs}ms (budget exhausted before cache-reset refetch)`,
+          'TIMEOUT',
+        );
+      }
+    }
+    return this.embed({
+      ...req,
+      ...(remaining !== undefined ? { timeoutMs: remaining } : {}),
+    });
   }
 
   /**
