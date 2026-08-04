@@ -430,9 +430,21 @@ describe('OrcaWorkerCreationService', () => {
   describe('provider-aware managed model aliases', () => {
     const shortId = 'deepseek-v4-flash';
     const canonicalId = 'deepseek/deepseek-v4-flash';
+    const shortModelCapabilities: OrcaWorkerModelCapabilities = {
+      id: shortId,
+      efforts: ['high', 'max'],
+      defaultEffort: 'high',
+      supportsFastMode: false,
+    };
+    const canonicalModelCapabilities: OrcaWorkerModelCapabilities = {
+      id: canonicalId,
+      efforts: ['high', 'max'],
+      defaultEffort: 'high',
+      supportsFastMode: false,
+    };
     const modelCapabilities: OrcaWorkerModelCapabilities[] = [
-      { id: shortId, efforts: ['high', 'max'], defaultEffort: 'high', supportsFastMode: false },
-      { id: canonicalId, efforts: ['high', 'max'], defaultEffort: 'high', supportsFastMode: false },
+      shortModelCapabilities,
+      canonicalModelCapabilities,
     ];
 
     const managedProvider = (models: string[] = [canonicalId]): OrcaWorkerProviderSnapshot => ({
@@ -506,7 +518,11 @@ describe('OrcaWorkerCreationService', () => {
     it.each(['codex', 'claude-code'] as const)(
       'maps a unique short ID to the managed canonical ID for %s workers',
       async (agent) => {
-        const { deps, service } = aliasHarness({ agent });
+        const { deps, service } = aliasHarness({
+          agent,
+          // Gateway capabilities only advertise the managed canonical ID in the real regression.
+          availableModels: [canonicalModelCapabilities],
+        });
 
         await expect(service.createWorker(workerParams({
           agent,
