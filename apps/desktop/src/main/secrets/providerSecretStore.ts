@@ -278,8 +278,10 @@ export function createProviderSecretStore(
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
     // 对外模型代理的对外访问 token:同机换账号后,旧账号生成的 token 必须失效,
-    // 防止新账号沿用旧 token 访问代理(背后是新账号的付费凭证)。
+    // 防止新账号沿用旧 token 访问代理(背后是新账号的付费凭证)。A 族(Anthropic)与
+    // B 族(Codex/OpenAI)两个独立 token 都要清,漏清任一族都会让旧客户端串到新账号凭证。
     io.remove(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY);
+    io.remove(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
