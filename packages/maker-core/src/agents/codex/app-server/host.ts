@@ -121,6 +121,8 @@ function extractThreadId(method: string, params: unknown): string | null {
 }
 
 export interface ThreadEventHandlers {
+  /** Host 被永久替换；订阅者按自身是否仍有真实工作决定是否需要用户可见终态。 */
+  hostForcedRetire?: (signal: { reason: string }) => void;
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
   descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
   /**
@@ -639,22 +641,29 @@ export class AppServerHost {
   }
 
   /**
-   * 强制收割前把终态 transport error 广播给仍在订阅的 session。
+   * 强制收割前向仍在订阅的 session 发结构化生命周期信号。
    *
-   * retire()/shutdown() 会静默清空 subscribers —— 常规路径(凭证切换/app 退出)由
-   * 上层先 Session.close 收尾,这是对的;但 auth 失效等强制路径会带着 in-flight turn
-   * 直接收割 host,不先叫醒订阅者的话,session 的 isTurnRunning 永远不翻 false,上层
-   * 的输入队列 / Stop 的 queueAbortPending 锁 / 凭证切换 busy 判定全部永久卡死
-   * (2026-07-19 实排:auth app_session_terminated 触发 retire 后会话假 busy 数小时)。
-   * 只广播、不清订阅 —— 紧随其后的 retire() 负责清理。
+   * retire()/shutdown() 会静默清空 subscribers；带着真实工作的订阅者必须先收口，
+   * 否则 isTurnRunning 会永久残留。空闲订阅者只需失效旧 handle，不应把一次内部
+   * host 替换渲染成历史会话的终止错误。
+   * 这里只通知、不清订阅 —— 紧随其后的 retire() 负责清理。
    */
   notifySubscribersOfForcedRetire(reason: string): void {
     if (this.subscribers.size === 0) return;
-    this.logger.warn('forced retire with live subscribers — broadcasting terminal transport error', {
+    this.logger.warn('forced retire with live subscribers — notifying session lifecycles', {
       subscribers: this.subscribers.size,
       reason,
     });
-    this.broadcastTransportErrorToSubscribers(`app-server force-retired: ${reason}`);
+    for (const [threadId, handlers] of this.subscribers) {
+      try {
+        handlers.hostForcedRetire?.({ reason });
+      } catch (e) {
+        this.logger.warn('forced retire handler threw', {
+          threadId,
+          message: (e as Error).message,
+        });
+      }
+    }
   }
 
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────

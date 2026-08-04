@@ -28,6 +28,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
     static dropModelList = false;
     static dropInitialize = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
+    static beforeTurnStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
     readonly lines: string[] = [];
@@ -98,6 +99,14 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
             modelProvider: 'openai',
             cwd: '/repo',
           },
+        });
+        return;
+      }
+      if (req.method === 'turn/start' && MockCodexTransport.beforeTurnStartResponse) {
+        await MockCodexTransport.beforeTurnStartResponse(this);
+        this.emitLine({
+          id: req.id,
+          result: { turn: { id: `turn-${MockCodexTransport.threadSeq++}` } },
         });
         return;
       }
@@ -240,6 +249,7 @@ beforeEach(() => {
   MockCodexTransport.dropModelList = false;
   MockCodexTransport.dropInitialize = false;
   MockCodexTransport.beforeThreadStartResponse = null;
+  MockCodexTransport.beforeTurnStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
 
@@ -3860,6 +3870,70 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('silently invalidates idle and completed sessions when their shared host is force-retired', async () => {
+    const agent = new CodexAgent(createDeps());
+    const idleHandle = await agent.startSession({
+      sessionId: 'session-forced-retire-idle',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const completedHandle = await agent.startSession({
+      sessionId: 'session-forced-retire-completed',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const idleEvents: AgentEvent[] = [];
+    const completedEvents: AgentEvent[] = [];
+    const collectIdle = (async () => {
+      for await (const event of idleHandle.events()) idleEvents.push(event);
+    })();
+    const collectCompleted = (async () => {
+      for await (const event of completedHandle.events()) completedEvents.push(event);
+    })();
+    const transport = createdTransports[0];
+
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-2', turn: { id: 'turn-before-forced-retire' } },
+    });
+    transport.emitMockLine({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-2',
+        turn: { id: 'turn-before-forced-retire', status: 'completed' },
+      },
+    });
+    await waitForExpectation(() => {
+      expect(completedHandle.isTurnRunning?.()).toBe(false);
+      expect(completedEvents.some((event) => event.type === 'done')).toBe(true);
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test idle forced retire');
+
+    expect(transport.closed).toBe(true);
+    expect(idleEvents.filter((event) => event.type === 'error')).toEqual([]);
+    expect(completedEvents.filter((event) => event.type === 'error')).toEqual([]);
+    await Promise.all([collectIdle, collectCompleted]);
+    await expect(idleHandle.send({ type: 'user', content: 'use the replacement host' })).rejects.toThrow(
+      /app-server was replaced/,
+    );
+
+    MockCodexTransport.beforeTurnStartResponse = () => undefined;
+    const rebuiltHandle = await agent.startSession({
+      sessionId: 'session-after-forced-retire',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    await rebuiltHandle.send({ type: 'user', content: 'continue after rebuild' });
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[1].lines.some((line) => line.includes('turn/start'))).toBe(true);
+
+    await idleHandle.close();
+    await completedHandle.close();
+    await rebuiltHandle.close();
+    await agent.dispose();
+  });
+
   it('collapses in-flight turn state with a terminal transport error when the local host is force-retired', async () => {
     // 回归 2026-07-19:auth 失效触发 retiring host with active sessions 时,原实现
     // 静默清 subscribers 再杀进程,session 收不到任何终态事件 → isTurnRunning 永久
@@ -3898,6 +3972,63 @@ describe('CodexAgent MCP thread context hooks', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     });
+    await expect(iterator.next()).resolves.toMatchObject({ done: true });
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('terminally settles a pending turn/start exactly once when its host is force-retired', async () => {
+    const turnStartGate = deferred<void>();
+    MockCodexTransport.beforeTurnStartResponse = () => turnStartGate.promise;
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-forced-retire-pending-turn-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const transport = createdTransports[0];
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test pending turn/start forced retire');
+    turnStartGate.resolve();
+    await sendPromise;
+
+    await waitForExpectation(() => {
+      expect(
+        events.filter(
+          (event) => event.type === 'error'
+            && (event.data as { isTerminal?: unknown }).isTerminal === true,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) => event.type === 'status'
+            && (event.data as { status?: unknown; isRunning?: unknown }).status === 'Done'
+            && (event.data as { status?: unknown; isRunning?: unknown }).isRunning === false,
+        ),
+      ).toHaveLength(1);
+    });
+    expect(events.find((event) => event.type === 'error')).toMatchObject({
+      type: 'error',
+      data: {
+        isTerminal: true,
+        reason: 'app-server-force-retired',
+      },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(transport.closed).toBe(true);
+    await collectEvents;
+    await expect(handle.send({ type: 'user', content: 'must rebuild first' })).rejects.toThrow(
+      /app-server was replaced/,
+    );
 
     await handle.close();
     await agent.dispose();

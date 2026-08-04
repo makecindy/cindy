@@ -2200,6 +2200,11 @@ export class CodexAgent extends BaseAgent {
       let resolved = false;
 
       subscription = host.subscribeThread(threadId, {
+        hostForcedRetire: ({ reason }) => {
+          if (resolved) return;
+          resolved = true;
+          resolve({ kind: 'error', message: `app-server force-retired: ${reason}` });
+        },
         turnStarted: (params) => {
           currentTurnId = params.turn.id;
         },
@@ -2656,6 +2661,7 @@ export class CodexAgent extends BaseAgent {
     }
 
     let closed = false;
+    let sessionHostForceRetired = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
     let interactionResolver: InteractionResolver | null = null;
@@ -2889,6 +2895,7 @@ export class CodexAgent extends BaseAgent {
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
     const connectionId = host.getConnectionId();
     const isCurrentHost = (): boolean => {
+      if (sessionHostForceRetired) return false;
       const currentHost = this.hosts.get(currentHostKey);
       if ((this.hostGenerations.get(currentHostKey) ?? 0) !== hostGeneration) return false;
       return capturedHostWasRegistered ? currentHost === host : currentHost === undefined;
@@ -7174,6 +7181,60 @@ export class CodexAgent extends BaseAgent {
 
     // ── subscribeThread: notification 路由 + approval handlers ─────────────
     const handlers: ThreadEventHandlers = {
+      hostForcedRetire: ({ reason }) => {
+        // 先在 handle 内部失效旧 host；retireHostKey 紧接着才会删除共享 map，
+        // 这道本地闸也覆盖同一同步栈里抢跑的下一次 send。
+        sessionHostForceRetired = true;
+        subscriptionInvalidatedByTransport = false;
+
+        const hadPendingWork =
+          isTurnInFlight
+          || isTurnStartPending
+          || overloadRetryPending();
+        if (!hadPendingWork) {
+          log.info('idle Codex session invalidated by forced host retirement', { threadId });
+          eventQueue.end();
+          return;
+        }
+
+        // turn/start 可能尚未返回 id。先把所有在途请求标为已收口并隔离，随后 RPC
+        // reject/迟到 resolve 时复用既有 finally/墓碑路径，不再发第二组终态，也不会
+        // 把一个已向用户报终止的 turn 重新激活。
+        markInFlightStartsTerminallySettled();
+        quarantineAllInFlightStarts();
+        discardOverloadRetry('app-server force-retired');
+        dismissAllPending('app_server_force_retired', 'deny');
+        dismissAllPendingUserInput('transport_error');
+        activeToolContexts.clear();
+        stopActiveRolloutPlanFallback();
+        resetUpstreamIdleForTurnEnd();
+        if (currentTurnId) terminalErroredTurnIds.add(currentTurnId);
+        currentTurnId = null;
+        isTurnInFlight = false;
+        isTurnStartPending = false;
+        currentTurnPlanModeActive = false;
+        pendingTurnStartPlanMode = null;
+
+        eventQueue.push({
+          type: 'error',
+          data: {
+            message: `app-server force-retired: ${reason}`,
+            isTerminal: true,
+            willRetry: false,
+            reason: 'app-server-force-retired',
+          },
+          source: 'codex',
+        });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        // 该 host 已被永久替换，handle 不可能原地恢复。结束内部事件流，让已启动的
+        // Session 走既有 auto-close → Maker lazy create；尚未启动 event loop 的
+        // Session 会在下一次 send 明确失败后 drain 到这里并重建。
+        eventQueue.end();
+      },
       threadStarted: (params) => {
         const sid = params.thread?.id;
         if (sid && sid !== sdkSessionId) sdkSessionId = sid;
