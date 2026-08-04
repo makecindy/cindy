@@ -1254,6 +1254,35 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(latestIdentityTime + 20 * 60_000);
   }
 
+  function materializeAfterInitialPrivateCanonicalScan(
+    targetSessionsDir: string,
+    materialize: () => void,
+  ): { restore: () => void; didMaterialize: () => boolean } {
+    const realReaddirSync = fs.readdirSync;
+    let targetSessionsScanCount = 0;
+    let materialized = false;
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((function (
+      directory: fs.PathLike,
+      options?: unknown,
+    ) {
+      if (path.resolve(directory.toString()) === path.resolve(targetSessionsDir)) {
+        targetSessionsScanCount += 1;
+        // The first root scan enforces the grace period. The second belongs to
+        // interrupted-preservation discovery immediately before the state-backed
+        // rescan, which models a writer appearing in that exact preflight gap.
+        if (targetSessionsScanCount === 2) {
+          materialize();
+          materialized = true;
+        }
+      }
+      return Reflect.apply(realReaddirSync, fs, [directory, options]);
+    }) as typeof fs.readdirSync);
+    return {
+      restore: () => readdirSpy.mockRestore(),
+      didMaterialize: () => materialized,
+    };
+  }
+
   it('adopts a legacy branded Codex HOME and remains resumable after the old directory is removed', async () => {
     const legacyUserData = path.join(path.dirname(targetUserData), 'xdt-maker');
     const legacyHome = path.join(legacyUserData, 'codex-home');
@@ -1289,7 +1318,9 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     targetRow.close();
     expect(adopted.title).toBe('Legacy branded session');
     expect(adopted.rolloutPath.startsWith(path.join(desktopHome(), 'sessions'))).toBe(true);
-    expect(path.basename(adopted.rolloutPath)).toBe(path.basename(sourceRollout));
+    expect(path.basename(adopted.rolloutPath)).toBe(
+      `rollout-cindy-adopted-${path.basename(sourceRollout)}`,
+    );
     expect(fs.readFileSync(adopted.rolloutPath, 'utf-8')).toBe(sourceContents);
 
     // 接管后不再依赖老目录;重复 prepare 走当前 HOME 热路径且不改写 rollout。
@@ -1421,6 +1452,75 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(targetRow.rolloutPath).toBe(canonical);
     expect(fs.readFileSync(canonical, 'utf-8')).toBe(nativeContents);
     expect(fs.readFileSync(canonical, 'utf-8')).not.toBe(sourceContents);
+  });
+
+  it('rejects a different concurrent state winner beside the planned native canonical', async () => {
+    const externalRollout = path.join(
+      externalHome,
+      'sessions',
+      `rollout-2026-07-14T10-00-00-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(externalRollout), { recursive: true });
+    fs.writeFileSync(externalRollout, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/concurrent-state-source' },
+    })}\n`);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, externalRollout, { updatedAt: 3_000 });
+
+    const directory = path.join(desktopHome(), 'sessions', '2026', '07', '14');
+    const nativeCanonical = path.join(
+      directory,
+      `rollout-2026-07-14T11-00-00-${threadId}.jsonl`,
+    );
+    const concurrentWinner = path.join(
+      directory,
+      `rollout-cindy-adopted-${path.basename(nativeCanonical)}`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/planned-canonical' },
+    })}\n`;
+    const concurrentContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/recovery/concurrent-state-winner' },
+    })}\n`;
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(nativeCanonical, nativeContents);
+    fs.writeFileSync(concurrentWinner, concurrentContents);
+
+    const realLstat = fs.lstatSync.bind(fs);
+    let stateChanged = false;
+    const lstatSpy = vi.spyOn(fs, 'lstatSync').mockImplementation(((candidate: fs.PathLike) => {
+      if (
+        !stateChanged
+        && path.resolve(candidate.toString()) === path.resolve(nativeCanonical)
+      ) {
+        const db = new Database(targetDbPath);
+        db.prepare('UPDATE threads SET rollout_path = ? WHERE id = ?')
+          .run(concurrentWinner, threadId);
+        db.close();
+        stateChanged = true;
+      }
+      return realLstat(candidate);
+    }) as typeof fs.lstatSync);
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /concurrent state selected a different private winner/,
+      );
+    } finally {
+      lstatSpy.mockRestore();
+    }
+
+    expect(stateChanged).toBe(true);
+    expect(fs.readFileSync(nativeCanonical, 'utf-8')).toBe(nativeContents);
+    expect(fs.readFileSync(concurrentWinner, 'utf-8')).toBe(concurrentContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(concurrentWinner);
   });
 
   it('fails closed when a second preserved native writer wakes before reconciliation commits', async () => {
@@ -1616,7 +1716,7 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
       if (
         !materialized
         && source.toString().includes('.migration-tmp')
-        && path.resolve(target.toString()) === path.resolve(missingPrivate)
+        && path.basename(target.toString()).startsWith('rollout-cindy-adopted')
       ) {
         fs.mkdirSync(path.dirname(missingPrivate), { recursive: true });
         fs.writeFileSync(missingPrivate, nativeContents);
@@ -1699,15 +1799,20 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
 
     await prepareExternalCodexSessionForResume(threadId);
 
-    const adoptedRollout = path.join(desktopHome(), 'sessions', path.basename(sourceRollout));
+    const preferredRollout = path.join(desktopHome(), 'sessions', path.basename(sourceRollout));
     const targetDb = new Database(targetDbPath, { readonly: true });
     const targetRow = targetDb
       .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
       .get(threadId) as { rolloutPath: string };
     targetDb.close();
-    // 方案 A:desktop state 指向私有副本,而非源 rollout;副本落盘、内容与源一致。
-    expect(targetRow.rolloutPath).toBe(adoptedRollout);
-    expect(fs.readFileSync(adoptedRollout, 'utf-8')).toBe('EXTERNAL_ROLLOUT');
+    // State-backed copies stay hidden from the canonical scanner until the
+    // transaction selects them, then desktop state points at that private copy.
+    expect(targetRow.rolloutPath).not.toBe(preferredRollout);
+    expect(path.basename(targetRow.rolloutPath)).toBe(
+      `rollout-cindy-adopted-${path.basename(sourceRollout)}`,
+    );
+    expect(fs.existsSync(preferredRollout)).toBe(false);
+    expect(fs.readFileSync(targetRow.rolloutPath, 'utf-8')).toBe('EXTERNAL_ROLLOUT');
     // 源 rollout 原样不动——不再有任何回写通道。
     expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe('EXTERNAL_ROLLOUT');
   });
@@ -3961,6 +4066,964 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(stateCount.count).toBe(0);
   });
 
+  it('blocks a recent private canonical created between state-backed recovery scans', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const sourceContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/state-backed-race' },
+    })}\n`;
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, sourceContents);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, sourceRollout, { updatedAt: 3_000 });
+
+    const targetSessionsDir = path.join(desktopHome(), 'sessions');
+    const privateCanonical = path.join(
+      targetSessionsDir,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(targetSessionsDir, { recursive: true });
+    const injection = materializeAfterInitialPrivateCanonicalScan(
+      targetSessionsDir,
+      () => fs.writeFileSync(privateCanonical, ''),
+    );
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /private rollout may still be materializing/,
+      );
+    } finally {
+      injection.restore();
+    }
+
+    expect(injection.didMaterialize()).toBe(true);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe('');
+    expect(fs.readdirSync(targetSessionsDir)).toEqual([path.basename(privateCanonical)]);
+    expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe(sourceContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(sourceRollout);
+  });
+
+  it('blocks a recent private canonical before recovering a missing external pointer', async () => {
+    const missingSourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, missingSourceRollout, { updatedAt: 3_000 });
+    const sessionId = `local-missing-external-second-scan-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'missing-external-second-scan-c1',
+      'user',
+      JSON.stringify({ text: 'synthetic recovery must wait' }),
+      1_000,
+    );
+
+    const targetSessionsDir = path.join(desktopHome(), 'sessions');
+    const privateCanonical = path.join(
+      targetSessionsDir,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(targetSessionsDir, { recursive: true });
+    const injection = materializeAfterInitialPrivateCanonicalScan(
+      targetSessionsDir,
+      () => fs.writeFileSync(privateCanonical, ''),
+    );
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /private rollout may still be materializing/,
+      );
+    } finally {
+      injection.restore();
+    }
+
+    expect(injection.didMaterialize()).toBe(true);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe('');
+    expect(fs.readdirSync(targetSessionsDir)).toEqual([path.basename(privateCanonical)]);
+    expect(fs.existsSync(missingSourceRollout)).toBe(false);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(missingSourceRollout);
+  });
+
+  it('retries a full private canonical created between state-backed recovery scans', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/state-backed-race' },
+    })}\n`);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, sourceRollout, { updatedAt: 3_000 });
+
+    const targetSessionsDir = path.join(desktopHome(), 'sessions');
+    const privateCanonical = path.join(
+      targetSessionsDir,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/second-scan-winner' },
+    })}\n`;
+    fs.mkdirSync(targetSessionsDir, { recursive: true });
+    const injection = materializeAfterInitialPrivateCanonicalScan(
+      targetSessionsDir,
+      () => fs.writeFileSync(privateCanonical, nativeContents),
+    );
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /private canonical rollout materialized during recovery planning/,
+      );
+    } finally {
+      injection.restore();
+    }
+
+    expect(injection.didMaterialize()).toBe(true);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+    let targetDb = new Database(targetDbPath, { readonly: true });
+    let targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(sourceRollout);
+
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(privateCanonical);
+    targetDb = new Database(targetDbPath, { readonly: true });
+    targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(privateCanonical);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+  });
+
+  it('blocks a recent different canonical created during hidden external adoption', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const sourceContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/hidden-adoption' },
+    })}\n`;
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, sourceContents);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, sourceRollout, { updatedAt: 3_000 });
+
+    const privateCanonical = path.join(
+      desktopHome(),
+      'sessions',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const preferredAdoption = path.join(desktopHome(), path.relative(externalHome, sourceRollout));
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('rollout-cindy-adopted')
+      ) {
+        fs.mkdirSync(path.dirname(privateCanonical), { recursive: true });
+        fs.writeFileSync(privateCanonical, '');
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /external rollout pointer changed during private adoption/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe('');
+    expect(fs.existsSync(preferredAdoption)).toBe(false);
+    expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe(sourceContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(sourceRollout);
+  });
+
+  it('rolls back when a different canonical appears after the state update', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/post-update-race' },
+    })}\n`);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, sourceRollout, { updatedAt: 3_000 });
+
+    const targetSessionsDir = path.join(desktopHome(), 'sessions');
+    const privateCanonical = path.join(
+      targetSessionsDir,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/post-update-winner' },
+    })}\n`;
+    const realLink = fs.promises.link.bind(fs.promises);
+    const realReaddirSync = fs.readdirSync;
+    let publicationReady = false;
+    let namespaceScanCount = 0;
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (path.basename(target.toString()).startsWith('rollout-cindy-adopted')) {
+        publicationReady = true;
+      }
+    });
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((function (
+      directory: fs.PathLike,
+      options?: unknown,
+    ) {
+      if (
+        publicationReady
+        && path.resolve(directory.toString()) === path.resolve(targetSessionsDir)
+      ) {
+        namespaceScanCount += 1;
+        // The first scan is the pre-UPDATE guard; inject into the second so
+        // throwing from the post-UPDATE guard must roll the transaction back.
+        if (namespaceScanCount === 2) {
+          fs.writeFileSync(privateCanonical, nativeContents);
+          materialized = true;
+        }
+      }
+      return Reflect.apply(realReaddirSync, fs, [directory, options]);
+    }) as typeof fs.readdirSync);
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /external rollout pointer changed during private adoption/,
+      );
+    } finally {
+      readdirSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(namespaceScanCount).toBeGreaterThanOrEqual(2);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+    let targetDb = new Database(targetDbPath, { readonly: true });
+    let targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(sourceRollout);
+
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(privateCanonical);
+    targetDb = new Database(targetDbPath, { readonly: true });
+    targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(privateCanonical);
+  });
+
+  it('keeps a missing private pointer when another canonical appears during fallback copy', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/private-missing-race' },
+    })}\n`);
+    const sourceDbPath = createStateDb(externalHome);
+    insertThread(sourceDbPath, threadId, sourceRollout, { updatedAt: 2_000 });
+
+    const targetDbPath = createStateDb(desktopHome());
+    const missingPrivate = path.join(
+      desktopHome(),
+      'sessions',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const privateCanonical = path.join(
+      desktopHome(),
+      'sessions',
+      `rollout-2026-08-03T13-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/private-missing-winner' },
+    })}\n`;
+    insertThread(targetDbPath, threadId, missingPrivate, { updatedAt: 3_000 });
+
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('rollout-cindy-adopted')
+      ) {
+        fs.writeFileSync(privateCanonical, nativeContents);
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /private orphan pointer changed during adoption/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.existsSync(missingPrivate)).toBe(false);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+    let targetDb = new Database(targetDbPath, { readonly: true });
+    let targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(missingPrivate);
+
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(privateCanonical);
+    targetDb = new Database(targetDbPath, { readonly: true });
+    targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(privateCanonical);
+  });
+
+  it('rejects a second canonical before returning a state-pointed native winner', async () => {
+    const targetDbPath = createStateDb(desktopHome());
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const primaryCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const secondCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const primaryContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/state-primary' },
+    })}\n`;
+    const secondContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/state-second' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(primaryCanonical, '');
+    markEmptyRolloutStable(primaryCanonical);
+    insertThread(targetDbPath, threadId, primaryCanonical, { updatedAt: 3_000 });
+    const sessionId = `local-state-native-return-race-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'state-native-return-race-c1',
+      'user',
+      JSON.stringify({ text: 'do not return into a split canonical namespace' }),
+      1_000,
+    );
+
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('rollout-cindy-empty-recovery')
+      ) {
+        fs.writeFileSync(primaryCanonical, primaryContents);
+        fs.writeFileSync(secondCanonical, secondContents);
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /canonical rollout namespace changed during recovery handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.readFileSync(primaryCanonical, 'utf-8')).toBe(primaryContents);
+    expect(fs.readFileSync(secondCanonical, 'utf-8')).toBe(secondContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(primaryCanonical);
+  });
+
+  it('rejects a late canonical before returning a committed state-backed copy', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const sourceContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/state-return-race' },
+    })}\n`;
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, sourceContents);
+    const targetDbPath = createStateDb(desktopHome());
+    insertThread(targetDbPath, threadId, sourceRollout, { updatedAt: 3_000 });
+
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const lateCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const lateContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/state-return-winner' },
+    })}\n`;
+    const realLink = fs.promises.link.bind(fs.promises);
+    const realLstat = fs.lstatSync.bind(fs);
+    let adoptedPath: string | null = null;
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (path.basename(target.toString()).startsWith('rollout-cindy-adopted')) {
+        adoptedPath = path.resolve(target.toString());
+      }
+    });
+    const lstatSpy = vi.spyOn(fs, 'lstatSync').mockImplementation(((candidate: fs.PathLike) => {
+      if (
+        adoptedPath
+        && !materialized
+        && path.resolve(candidate.toString()) === adoptedPath
+      ) {
+        let probe: Database.Database | null = null;
+        try {
+          probe = new Database(targetDbPath, { readonly: true });
+          const state = probe
+            .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+            .get(threadId) as { rolloutPath: string };
+          if (path.resolve(state.rolloutPath) === adoptedPath) {
+            fs.mkdirSync(targetDirectory, { recursive: true });
+            fs.writeFileSync(lateCanonical, lateContents);
+            materialized = true;
+          }
+        } catch {
+          // The state handoff transaction may not have committed yet.
+        } finally {
+          probe?.close();
+        }
+      }
+      return realLstat(candidate);
+    }) as typeof fs.lstatSync);
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /canonical rollout namespace changed during recovery handoff/,
+      );
+    } finally {
+      lstatSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(adoptedPath).toBeTruthy();
+    expect(fs.readFileSync(adoptedPath!, 'utf-8')).toBe(sourceContents);
+    expect(fs.readFileSync(lateCanonical, 'utf-8')).toBe(lateContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(path.resolve(targetRow.rolloutPath)).toBe(adoptedPath);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(adoptedPath);
+  });
+
+  it('keeps a state-less external adoption from publishing beside a new native canonical', async () => {
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/rollout-only-race' },
+    })}\n`);
+    const targetDbPath = createStateDb(desktopHome());
+    const preferred = path.join(desktopHome(), path.relative(externalHome, sourceRollout));
+    const privateCanonical = path.join(
+      desktopHome(),
+      'sessions',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/rollout-only-winner' },
+    })}\n`;
+
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('rollout-cindy-adopted')
+      ) {
+        fs.mkdirSync(path.dirname(privateCanonical), { recursive: true });
+        fs.writeFileSync(privateCanonical, nativeContents);
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /canonical rollout namespace changed during recovery handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.existsSync(preferred)).toBe(false);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const stateCount = targetDb
+      .prepare('SELECT count(*) AS count FROM threads WHERE id = ?')
+      .get(threadId) as { count: number };
+    targetDb.close();
+    expect(stateCount.count).toBe(0);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(privateCanonical);
+  });
+
+  it('never publishes a rollout-only snapshot directly when the stable canonical disappears', async () => {
+    createStateDb(desktopHome());
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const originalCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const preservedOriginal = path.join(
+      targetDirectory,
+      `rollout-cindy-preserved-empty-${path.basename(originalCanonical)}`,
+    );
+    const nativeCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T13-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/staging-gap-winner' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(originalCanonical, '');
+    markEmptyRolloutStable(originalCanonical);
+
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const sourceContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/staging-gap' },
+    })}\n`;
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, sourceContents);
+
+    const realExistsSync = fs.existsSync.bind(fs);
+    let materialized = false;
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((candidate) => {
+      const candidatePath = candidate.toString();
+      const isPublicationProbe = path.resolve(candidatePath) === path.resolve(originalCanonical)
+        || path.basename(candidatePath).startsWith('rollout-cindy-adopted');
+      if (!materialized && isPublicationProbe) {
+        fs.renameSync(originalCanonical, preservedOriginal);
+        fs.writeFileSync(nativeCanonical, nativeContents);
+        materialized = true;
+      }
+      return realExistsSync(candidate);
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /stable empty canonical changed before preservation/,
+      );
+    } finally {
+      existsSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.existsSync(originalCanonical)).toBe(false);
+    expect(fs.readFileSync(preservedOriginal, 'utf-8')).toBe('');
+    expect(fs.readFileSync(nativeCanonical, 'utf-8')).toBe(nativeContents);
+    expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe(sourceContents);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(nativeCanonical);
+  });
+
+  it('keeps a state-less synthetic handoff from publishing beside a new native canonical', async () => {
+    const targetDbPath = createStateDb(desktopHome());
+    const sessionId = `local-state-less-namespace-race-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'state-less-namespace-race-c1',
+      'user',
+      JSON.stringify({ text: 'synthetic must not fork the native history' }),
+      1_000,
+    );
+    const preferred = path.join(
+      desktopHome(),
+      'sessions',
+      '1970',
+      '01',
+      '01',
+      `rollout-1970-01-01T00-00-01-${threadId}.jsonl`,
+    );
+    const privateCanonical = path.join(
+      desktopHome(),
+      'sessions',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/state-less-synthetic-winner' },
+    })}\n`;
+
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('.cindy-state-less-recovery')
+      ) {
+        fs.mkdirSync(path.dirname(privateCanonical), { recursive: true });
+        fs.writeFileSync(privateCanonical, nativeContents);
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /canonical rollout namespace changed during recovery handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.existsSync(preferred)).toBe(false);
+    expect(fs.readFileSync(privateCanonical, 'utf-8')).toBe(nativeContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const stateCount = targetDb
+      .prepare('SELECT count(*) AS count FROM threads WHERE id = ?')
+      .get(threadId) as { count: number };
+    targetDb.close();
+    expect(stateCount.count).toBe(0);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(privateCanonical);
+  });
+
+  it('rejects a second canonical when the primary writer wakes before preservation', async () => {
+    createStateDb(desktopHome());
+    const sessionId = `local-native-winner-namespace-race-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'native-winner-namespace-race-c1',
+      'user',
+      JSON.stringify({ text: 'do not accept two native histories' }),
+      1_000,
+    );
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const primaryCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const secondCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const primaryContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/primary-writer' },
+    })}\n`;
+    const secondContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/second-writer' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(primaryCanonical, '');
+    markEmptyRolloutStable(primaryCanonical);
+
+    const realLink = fs.promises.link.bind(fs.promises);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs.promises, 'link').mockImplementation(async (source, target) => {
+      await realLink(source, target);
+      if (
+        !materialized
+        && path.basename(target.toString()).startsWith('.cindy-state-less-recovery')
+      ) {
+        fs.writeFileSync(primaryCanonical, primaryContents);
+        fs.writeFileSync(secondCanonical, secondContents);
+        materialized = true;
+      }
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /namespace changed before completing the handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.readFileSync(primaryCanonical, 'utf-8')).toBe(primaryContents);
+    expect(fs.readFileSync(secondCanonical, 'utf-8')).toBe(secondContents);
+    await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+      /multiple private canonical rollouts conflict/,
+    );
+  });
+
+  it('keeps the primary preserved when another canonical appears before the handoff guard', async () => {
+    createStateDb(desktopHome());
+    const sessionId = `local-preserved-rollback-namespace-race-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'preserved-rollback-namespace-race-c1',
+      'user',
+      JSON.stringify({ text: 'do not restore beside another canonical' }),
+      1_000,
+    );
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const primaryCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const preservedPrimary = path.join(
+      targetDirectory,
+      `rollout-cindy-preserved-empty-${path.basename(primaryCanonical)}`,
+    );
+    const nativeCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/post-preservation-winner' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(primaryCanonical, '');
+    markEmptyRolloutStable(primaryCanonical);
+
+    const realUnlinkSync = fs.unlinkSync.bind(fs);
+    let materialized = false;
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation((candidate) => {
+      const result = realUnlinkSync(candidate);
+      if (
+        !materialized
+        && path.resolve(candidate.toString()) === path.resolve(primaryCanonical)
+        && fs.existsSync(preservedPrimary)
+      ) {
+        fs.writeFileSync(nativeCanonical, nativeContents);
+        materialized = true;
+      }
+      return result;
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /canonical rollout namespace changed during recovery handoff/,
+      );
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.existsSync(primaryCanonical)).toBe(false);
+    expect(fs.readFileSync(preservedPrimary, 'utf-8')).toBe('');
+    expect(fs.readFileSync(nativeCanonical, 'utf-8')).toBe(nativeContents);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(nativeCanonical);
+  });
+
+  it('fails closed when another canonical appears after the external canonical link commits', async () => {
+    createStateDb(desktopHome());
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const primaryCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const preservedPrimary = path.join(
+      targetDirectory,
+      `rollout-cindy-preserved-empty-${path.basename(primaryCanonical)}`,
+    );
+    const nativeCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T13-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/post-external-link' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(primaryCanonical, '');
+    markEmptyRolloutStable(primaryCanonical);
+
+    const sourceRollout = path.join(
+      externalHome,
+      'sessions',
+      '2026',
+      '08',
+      '03',
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const sourceContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/post-link' },
+    })}\n`;
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, sourceContents);
+
+    const realLinkSync = fs.linkSync.bind(fs);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      const result = realLinkSync(source, target);
+      if (
+        !materialized
+        && path.resolve(target.toString()) === path.resolve(primaryCanonical)
+        && path.basename(source.toString()).startsWith('rollout-cindy-adopted')
+      ) {
+        fs.writeFileSync(nativeCanonical, nativeContents);
+        materialized = true;
+      }
+      return result;
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /namespace changed before completing the handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.readFileSync(primaryCanonical, 'utf-8')).toBe(sourceContents);
+    expect(fs.readFileSync(nativeCanonical, 'utf-8')).toBe(nativeContents);
+    expect(fs.readFileSync(preservedPrimary, 'utf-8')).toBe('');
+    expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe(sourceContents);
+    await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+      /multiple private canonical rollouts conflict/,
+    );
+  });
+
+  it('fails closed when another canonical appears after the synthetic canonical link commits', async () => {
+    createStateDb(desktopHome());
+    const sessionId = `local-post-synthetic-link-race-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'post-synthetic-link-race-c1',
+      'user',
+      JSON.stringify({ text: 'retain both histories and stop' }),
+      1_000,
+    );
+    const targetDirectory = path.join(desktopHome(), 'sessions', '2026', '08', '03');
+    const primaryCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T11-56-18-${threadId}.jsonl`,
+    );
+    const preservedPrimary = path.join(
+      targetDirectory,
+      `rollout-cindy-preserved-empty-${path.basename(primaryCanonical)}`,
+    );
+    const nativeCanonical = path.join(
+      targetDirectory,
+      `rollout-2026-08-03T12-00-00-${threadId}.jsonl`,
+    );
+    const nativeContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/native/post-synthetic-link' },
+    })}\n`;
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(primaryCanonical, '');
+    markEmptyRolloutStable(primaryCanonical);
+
+    const realLinkSync = fs.linkSync.bind(fs);
+    let materialized = false;
+    const linkSpy = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      const result = realLinkSync(source, target);
+      if (
+        !materialized
+        && path.resolve(target.toString()) === path.resolve(primaryCanonical)
+        && path.basename(source.toString()).startsWith('.cindy-state-less-recovery')
+      ) {
+        fs.writeFileSync(nativeCanonical, nativeContents);
+        materialized = true;
+      }
+      return result;
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /namespace changed before completing the handoff/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(materialized).toBe(true);
+    expect(fs.readFileSync(primaryCanonical, 'utf-8')).toContain(
+      'retain both histories and stop',
+    );
+    expect(fs.readFileSync(nativeCanonical, 'utf-8')).toBe(nativeContents);
+    expect(fs.readFileSync(preservedPrimary, 'utf-8')).toBe('');
+    await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+      /multiple private canonical rollouts conflict/,
+    );
+  });
+
   it('retries external adoption without publishing a snapshot from an active copy', async () => {
     const sourceRollout = path.join(
       externalHome,
@@ -3997,14 +5060,19 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     }
 
     expect(fs.existsSync(preferred)).toBe(false);
-    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(preferred);
-    expect(fs.readFileSync(preferred, 'utf-8')).toBe(firstLine + lateLine);
+    const recovered = await prepareExternalCodexSessionForResume(threadId);
+    expect(recovered).toBeTruthy();
+    expect(recovered).not.toBe(preferred);
+    expect(path.basename(recovered!)).toBe(
+      `rollout-cindy-adopted-${path.basename(sourceRollout)}`,
+    );
+    expect(fs.readFileSync(recovered!, 'utf-8')).toBe(firstLine + lateLine);
     const targetDb = new Database(targetDbPath, { readonly: true });
     const targetRow = targetDb
       .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
       .get(threadId) as { rolloutPath: string };
     targetDb.close();
-    expect(targetRow.rolloutPath).toBe(preferred);
+    expect(targetRow.rolloutPath).toBe(recovered);
   });
 
   it('leaves an empty rollout pointer unchanged when no readable history can recover it', async () => {
@@ -4910,6 +5978,61 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     await prepareExternalCodexSessionForResume(threadId);
 
     expect(fs.readFileSync(rolloutPath, 'utf-8')).toBe('ORIGINAL_CONTENT');
+  });
+
+  it('does not return a late external state row after a failed state-less synthesis', async () => {
+    const targetDbPath = createStateDb(desktopHome());
+    const sessionId = `local-late-external-state-${threadId}`;
+    insertLocalCodexSession(sessionId, threadId);
+    insertLocalMessage(
+      sessionId,
+      'late-external-state-c1',
+      'user',
+      JSON.stringify({ text: 'attempt state-less recovery first' }),
+      1_000,
+    );
+    const lateExternal = path.join(
+      externalHome,
+      'sessions',
+      `rollout-late-${threadId}.jsonl`,
+    );
+    const lateContents = `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: threadId, cwd: '/external/late-state' },
+    })}\n`;
+
+    const realLinkSync = fs.linkSync.bind(fs);
+    let stateInserted = false;
+    const linkSpy = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      if (
+        !stateInserted
+        && path.basename(source.toString()).startsWith('.cindy-state-less-recovery')
+        && path.basename(target.toString()).startsWith('rollout-')
+      ) {
+        fs.mkdirSync(path.dirname(lateExternal), { recursive: true });
+        fs.writeFileSync(lateExternal, lateContents);
+        insertThread(targetDbPath, threadId, lateExternal, { updatedAt: 3_000 });
+        stateInserted = true;
+        throw Object.assign(new Error('synthetic publication interrupted'), { code: 'EIO' });
+      }
+      return realLinkSync(source, target);
+    });
+    try {
+      await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+        /late Codex state appeared outside a readable private recovery boundary/,
+      );
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(stateInserted).toBe(true);
+    expect(fs.readFileSync(lateExternal, 'utf-8')).toBe(lateContents);
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    const targetRow = targetDb
+      .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+      .get(threadId) as { rolloutPath: string };
+    targetDb.close();
+    expect(targetRow.rolloutPath).toBe(lateExternal);
   });
 
   it('does not synthesize when there is no readable localDb history', async () => {
