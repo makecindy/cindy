@@ -321,3 +321,53 @@ describe('deriveCindyMediaConfig — 向量只认 XD(派单还不是 provider-aw
     ]);
   });
 });
+
+describe('deriveCindyMediaConfig — 客户端不认识的向量型号不进清单', () => {
+  /**
+   * 目录是热更的,可能给出比 EmbeddingModelId 这个静态联合更新的型号 id。不滤掉的话
+   * 它会照常展示、可被钉选、甚至成为目录默认,而执行侧的纵深防御会把每一次请求变成
+   * INTERNAL —— UI 先宣称可用、下单才失败(PR #1707 review)。
+   *
+   * 过滤复用的是 isModelDisabled 那个"别进清单"钩子,所以既有的降级语义照旧:
+   * 被滤条目不占 first-wins,目录默认指向它时回落清单首项。
+   */
+  const KNOWN = new Set(['voyage/voyage-4', 'voyage/voyage-4-large', 'text-embedding-3-small']);
+  const notKnown = (_p: string, modelId: string): boolean => !KNOWN.has(modelId);
+
+  it('未知型号被滤掉,已知的照常在册', () => {
+    const withFuture: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingModels: [
+        { id: 'voyage/voyage-99-future', name: '客户端还不认识的型号' },
+        ...XD.embeddingModels!,
+      ],
+    };
+    const cfg = deriveCindyMediaConfig([withFuture], 'embed', notKnown);
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'voyage/voyage-4',
+      'voyage/voyage-4-large',
+      'text-embedding-3-small',
+    ]);
+  });
+
+  it('目录默认指向未知型号 → 回落清单首项,而不是钉一个必失败的默认', () => {
+    const badDefault: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingDefaults: { standard: 'voyage/voyage-99-future' },
+    };
+    const cfg = deriveCindyMediaConfig([badDefault], 'embed', notKnown);
+    expect(cfg.defaults?.standard).toBe('voyage/voyage-4');
+  });
+
+  it('整份清单都不认识 → 空清单(能力不可用,而非逐单 INTERNAL)', () => {
+    const allFuture: CindyMediaProviderSlice = {
+      ...XD,
+      embeddingModels: [{ id: 'voyage/voyage-99-future', name: '未来型号' }],
+      embeddingDefaults: { standard: 'voyage/voyage-99-future' },
+    };
+    expect(deriveCindyMediaConfig([allFuture], 'embed', notKnown)).toEqual({
+      models: [],
+      defaults: null,
+    });
+  });
+});

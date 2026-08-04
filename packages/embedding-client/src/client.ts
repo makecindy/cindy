@@ -196,14 +196,22 @@ interface OpenAiErrorResponse {
 }
 
 /**
- * 显式请求了维度时, 校验**批内每一条**向量都兑现了该长度。
+ * 校验**批内每一条**向量的长度都一致, 且(显式请求了维度时)等于请求值。
  *
- * 只看首条不够(PR #1707 review):首条对、后面某条错时检查会通过, 整批被缓存并交付,
- * 上层(cindySlot)又按首条填 `dim` —— 调方拿到一批"声称同维度"其实不等长的向量,
- * 写进索引后相似度失去意义, 而且哪一步都没有报错。上游对不支持的维度行为不统一
- * (可能 400, 也可能静默回默认长度), 这里是最后一道能看见长度的地方。
+ * 两件事分开说:
  *
- * `dimensions` 缺省 = 跟随上游默认, 不做校验(没有期望值可比)。
+ * 1. 只看首条不够(PR #1707 review 第四轮):首条对、后面某条错时检查会通过, 整批被
+ *    缓存并交付, 上层(cindySlot)又按首条填 `dim` —— 调方拿到一批"声称同维度"其实
+ *    不等长的向量, 写进索引后相似度失去意义, 而且哪一步都没有报错。
+ *
+ * 2. **没显式传 dimensions 时也必须校验**(同 review 第五轮):那是文档示例和绝大多数
+ *    调用走的路径, 之前直接 return 等于整条默认路径零校验。这里的判据是"全批与首条
+ *    一致"而不是"等于 catalog 的 `dim`":catalog 的 `dim` 记的是**上游当前的默认值**,
+ *    上游改默认时拿它硬判会把本来正常的响应全判失败;而"批内不等长"无论默认值是多少
+ *    都一定是坏数据。
+ *
+ * 上游对不支持的维度行为不统一(可能 400, 也可能静默回默认长度), 这里是最后一道
+ * 能看见长度的地方。
  *
  * `mode` 只影响报错里的位置描述:扁平路径每组恒为 1 条(组下标 = 文本下标),报
  * "group 3 index 0" 只会让调方困惑。
@@ -214,18 +222,25 @@ function assertBatchDimensions(
   dimensions: number | undefined,
   mode: 'flat' | 'grouped',
 ): void {
-  if (dimensions === undefined) return;
+  // 缺省时以首条为基准 —— 校验的是"整批自洽",不是"符合某个记在客户端里的常量"。
+  let expected = dimensions;
   for (let d = 0; d < grouped.length; d++) {
     const group = grouped[d];
     for (let c = 0; c < group.length; c++) {
       const got = group[c]?.length;
-      if (got !== undefined && got !== dimensions) {
+      if (got === undefined) continue;
+      if (expected === undefined) {
+        expected = got;
+        continue;
+      }
+      if (got !== expected) {
         // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
         const at = mode === 'flat' ? `index ${d}` : `group ${d} index ${c}`;
-        throw new EmbeddingError(
-          `requested dimensions=${dimensions} but model '${model}' returned ${got} at ${at}`,
-          'INVALID_MODEL',
-        );
+        const why =
+          dimensions === undefined
+            ? `model '${model}' returned mixed vector lengths (${expected} then ${got})`
+            : `requested dimensions=${dimensions} but model '${model}' returned ${got}`;
+        throw new EmbeddingError(`${why} at ${at}`, 'INVALID_MODEL');
       }
     }
   }

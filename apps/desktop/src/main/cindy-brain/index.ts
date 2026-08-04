@@ -242,6 +242,7 @@ import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
+import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import {
   CINDY_CAPABILITY_KEYS,
   cindyCapabilityValueDomain,
@@ -2382,7 +2383,15 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
-        isModelDisabled(access, providerId, modelId),
+        isModelDisabled(access, providerId, modelId) ||
+        // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
+        // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
+        // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
+        // 变成 INTERNAL。UI 先宣称可用、下单才失败是最难排查的一种坏体验
+        // (PR #1707 review)。滤掉后按既有语义降级:被滤条目不占 first-wins,
+        // 目录默认指向它时回落清单首项;整份清单都不认识才是空清单 → NO_CANDIDATE。
+        // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
+        (kind === 'embed' && !isKnownEmbeddingModel(modelId)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
       // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
       // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
@@ -2735,13 +2744,15 @@ export function getGhostCindySlot(): GhostCindySlot {
       getEmbedConfig: getCatalogEmbedConfig,
       // 文本转向量(embed.text):走主机统一 embedding 通道(与聊天历史语义检索
       // 同一条付费链路)。只生成不存储 —— embedSync 明确不入队、不写 vec 表,
-      // 向量原样返回给意识自己保管。动态 import 同 oneshotText:embedding-host
-      // 的传递依赖会拽起 localDb,静态引入会污染所有 import 本模块的单测。
+      // 向量原样返回给意识自己保管。
+      //
+      // 动态 import 同 oneshotText,且**只对 embedding-host 一家**:它的传递依赖会
+      // 拽起 localDb → runtime-configs,静态引入会让所有 import 本模块的单测炸在
+      // electron mock 上(PR #1707 review 实测:collabSendOutcome.test.ts 报
+      // app.getAppPath is not a function)。@cindy/embedding-client 是零运行依赖的
+      // 纯包,已改为顶层静态 import,不必陪着动态化。
       embedText: async ({ texts, model, inputType, dimensions, timeoutMs }) => {
-        const [{ getEmbeddingService }, { isKnownEmbeddingModel }] = await Promise.all([
-          import('../embedding-host/index.js'),
-          import('@cindy/embedding-client'),
-        ]);
+        const { getEmbeddingService } = await import('../embedding-host/index.js');
         // 白名单已在 slot 层校验过,这里是纵深防御:目录里出现了 embedding catalog
         // 不认识的 id(两边不同步)时早失败,而不是把不认识的 id 发去网关。
         if (!isKnownEmbeddingModel(model)) {
@@ -2759,10 +2770,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       // 上下文化嵌入(voyage-context-* 索引侧):同上,只是 input 按文档分组。
       embedDocuments: async ({ documents, model, inputType, dimensions, timeoutMs }) => {
-        const [{ getEmbeddingService }, { isKnownEmbeddingModel }] = await Promise.all([
-          import('../embedding-host/index.js'),
-          import('@cindy/embedding-client'),
-        ]);
+        const { getEmbeddingService } = await import('../embedding-host/index.js');
         if (!isKnownEmbeddingModel(model)) {
           throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
         }

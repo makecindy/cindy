@@ -595,3 +595,57 @@ describe('EmbeddingClient · 响应位次必须是双射', () => {
     expect(r.embeddings).toEqual([[[1, 1], [2, 2]]]);
   });
 });
+
+describe('EmbeddingClient · 默认维度路径也校验批内一致', () => {
+  /**
+   * 不传 dimensions 是文档示例和绝大多数调用走的路径,之前那里直接 return,等于整条
+   * 默认路径零长度校验(PR #1707 review 第五轮)。判据是"全批与首条一致"而不是"等于
+   * catalog 的 dim":catalog 的 dim 记的是上游**当前**的默认值,上游改默认时拿它硬判
+   * 会把本来正常的响应全判失败;而批内不等长无论默认值是多少都一定是坏数据。
+   */
+  it('不传 dimensions 时,批内长度不一致仍然抛错、不入缓存', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [
+        { object: 'embedding', index: 0, embedding: [1, 2, 3, 4] },
+        { object: 'embedding', index: 1, embedding: [1, 2] },
+      ],
+      usage: { prompt_tokens: 2 },
+    });
+    const client = clientWith(fetchImpl);
+    const req = { texts: ['a', 'b'], model: 'voyage/voyage-4' as const };
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    await expect(client.embed(req)).rejects.toThrow(/mixed vector lengths \(4 then 2\)/);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // 首次一条都没入缓存
+  });
+
+  it('不传 dimensions 且全批等长 → 照常返回(不拿 catalog 的 dim 硬判)', async () => {
+    // 故意给一个与 catalog dim(1024)不同的长度:上游改默认值不该让请求失败。
+    const fetchImpl = respond({
+      model: 'voyage/voyage-4',
+      data: [
+        { object: 'embedding', index: 0, embedding: [1, 2, 3] },
+        { object: 'embedding', index: 1, embedding: [4, 5, 6] },
+      ],
+      usage: { prompt_tokens: 2 },
+    });
+    const r = await clientWith(fetchImpl).embed({
+      texts: ['a', 'b'],
+      model: 'voyage/voyage-4',
+    });
+    expect(r.embeddings.map((v) => v.length)).toEqual([3, 3]);
+  });
+
+  it('上下文化的默认维度路径同样受约束', async () => {
+    const fetchImpl = respond({
+      model: 'voyage/voyage-context-4',
+      data: [{ data: [{ embedding: [1, 2] }, { embedding: [3, 4, 5] }] }],
+    });
+    await expect(
+      clientWith(fetchImpl).embedDocuments({
+        documents: [['a', 'b']],
+        model: 'voyage/voyage-context-4',
+      }),
+    ).rejects.toThrow(/mixed vector lengths/);
+  });
+});
