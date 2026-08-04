@@ -4287,11 +4287,17 @@ export function ChatInput({
               )
             : () => {};
         const onDeferredAccepted = () => {
-          // 缺 workingDir 的第一次尝试会返回 false，并把远程 composer 恢复回来。
-          // 补选目录后若真正受理，需要开启一轮新的失败恢复资格，再清掉原草稿；
-          // 否则后续 outbox 永久失败会因为 optimisticComposerRestored=true 而无法恢复。
-          optimisticComposerRestored = false;
-          clearSentComposer({ preserveNewerContent: true });
+          if (optimisticallyClearRemoteComposer) {
+            // 缺 workingDir 的第一次尝试会返回 false，并把远程 composer 恢复回来。
+            // 补选目录后若真正受理，需要开启一轮新的失败恢复资格，再只清掉原草稿；
+            // 否则后续 outbox 永久失败会因为 optimisticComposerRestored=true 而无法恢复。
+            optimisticComposerRestored = false;
+            clearSentComposer({ preserveNewerContent: true });
+          } else {
+            // Local/SSH never entered the optimistic-clear path. Reuse the normal
+            // snapshot guard so an unchanged accepted draft clears while newer edits survive.
+            clearSentComposer();
+          }
           markRecentPluginUsage();
         };
         const restoreRemoteComposerAndRelease = () => {
