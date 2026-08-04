@@ -3139,7 +3139,10 @@ describe('DeviceLinkClient', () => {
     client.start();
     await tick(5);
     expect(sockets.length).toBe(0); // 第一轮卡在 getToken,没建 socket
-    await tick(30); // 10ms 超时 + ≤5ms 退避后第二轮拿到 token
+    // 负载下(Windows CI 分片并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(30) 不足以
+    // 保证 10ms getToken 超时 + ≤5ms 退避 + 第二轮 getToken 都已落地。有界等待到 socket
+    // 出现,断言语义不变(挂死的第一轮必须被超时掀掉、第二轮必须真的建出连接)。
+    for (let i = 0; i < 40 && sockets.length < 1; i++) await tick(10);
     expect(sockets.length).toBe(1);
     sockets[0].ack();
     expect(client.getStatus()).toBe('online');
