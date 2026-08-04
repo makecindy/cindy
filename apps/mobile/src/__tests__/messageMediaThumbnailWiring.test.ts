@@ -102,9 +102,15 @@ describe('mobile message media thumbnail wiring', () => {
 
   it('wires stale-key self-heal: lightbox onError force refresh and orphan release DELETE', () => {
     const lightboxSource = readTextLf(resolve(process.cwd(), 'src/session/ImageLightbox.tsx'), 'utf8');
-    // 悬空 key 404 → 一次性 forceRefresh 自愈;重试按钮也走 forceRefresh(穿透负缓存)
-    expect(lightboxSource).toContain('onError={onImageError && retryable');
+    // 悬空 key 404 → 一次性 forceRefresh 自愈;重试按钮也走 forceRefresh(穿透负缓存)。
+    // 自愈仍按 retryable 门控(只有桌面取件图能重取),但 onError 本身对**所有**图接线:
+    // 直连图没有重取入口,要靠它记下"确证没有像素"才能收敛到失败终态、不永久转圈。
+    expect(lightboxSource).toContain('onImageError && retryable');
+    expect(lightboxSource).toContain('setFailedFullUri(uri)');
+    expect(lightboxSource).toContain('fullFailedTerminally');
     expect(lightboxSource).toContain('handleImageLoadError');
+    // 垫底层同样要接失败路径:缩略图文件被 LRU/系统清掉后不能停在纯黑(少了转圈反馈)
+    expect(lightboxSource).toContain('setFailedPreviewUri(previewUri)');
     // 重试 / onError 都是带 image 参数的稳定回调,不被内联闭包击穿 LightboxPage memo
     expect(lightboxSource).toContain('handleRetryPage');
     expect(lightboxSource).toContain('resolveImage(image, true, true)');

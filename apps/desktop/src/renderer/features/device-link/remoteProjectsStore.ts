@@ -21,13 +21,22 @@
  *  - **复用本地渲染管线**:每条 session 注入 `deviceLinkDeviceId/Name/ConnectionStatus`
  *    后喂给 `groupSessions`。
  *  - **origin 注册表**:`sessionId → deviceId`(`getSessionDeviceId`),供传输层 / SessionView 用。
+ *  - **冷启动首屏借冷缓存**(`hydrateFromCache`):列表快照落在 main 的 userData
+ *    (`main/device-link/mirrorCacheStore.ts`),冷启动时先画上次看到的行,免得侧边栏
+ *    等一次 bootstrap 往返才出现远程项目。这不动摇「零权威状态」:种入的分片一律标
+ *    **disconnected**(缓存不是 live 设备)、只在该设备还没有分片时种入,bootstrap 的
+ *    `setDeviceSessions` 一到就整片替换;设备已不合格时由既有
+ *    `resolveIneligibleRemoteProjectAction`(它的 `hasCachedShard` 判据)收敛为
+ *    disconnect / remove。缓存永不参与写路径。
  *
  * 模块级 vanilla store + useSyncExternalStore;`getMergedRemoteSessions()` 返回缓存引用,
  * 仅在分片真正变化时才换新数组(满足 getSnapshot 引用稳定性,否则无限重渲染)。
  */
 
 import { useSyncExternalStore } from 'react';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import { clearCachedMessages } from './mirrorCacheClient';
 
 /** 单台被控设备的内存分片。 */
 interface DeviceShard {
@@ -78,6 +87,23 @@ let reseedImpl: ((deviceId: string) => void) | null = null;
 let mergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
+/**
+ * 「归属已确定、但快照还没到」的 origin 钉子:sessionId → deviceId。
+ *
+ * 远程新建会话时,被控端 `maker:create-session` 一返回 id,那条会话就**确实存在**了;但把它带
+ * 进镜像的 `sessions:list` 回流可能失败(链路刚断 / 对端 DB 未就绪 / 被更新的一次 refresh 取代)。
+ * 那个窗口里 sessionDeviceIndex 没有这条,`getSessionDeviceId` 返回 undefined —— 传输层据此把
+ * 一个**远程**会话的操作发给本机 maker:首条消息、setGoal、流订阅全落错边(#807 review P1)。
+ *
+ * 所以创建成功后立刻把这个已确定的事实钉进来,recompute 时先铺钉子、再让分片派生值覆盖
+ * (分片更完整,且与钉子不可能冲突)。钉子只影响 origin 判定,不伪造会话行 —— 会话进列表仍等
+ * 权威快照。
+ *
+ * 不主动清理(含 clear / removeDevice):与 stickySessionOrigin 同一论证 —— 归属是单向的
+ * (会话不会从远程变回本机,本机会话永远不会进这张表),单次 app 运行内新建会话数量有限。
+ * 设备真被解除配对后,钉子只会让操作走隧道并明确报错,而不是静默落到本机执行 —— 后者严重得多。
+ */
+const pinnedOrigins = new Map<string, string>();
 
 const EMPTY: Session[] = [];
 
@@ -110,8 +136,13 @@ function sameDeviceList(a: RemoteDeviceSummary[], b: RemoteDeviceSummary[]): boo
   return true;
 }
 
-/** 被控端建会话时的默认标题;权威标题仍等于它 = 还没起过名。 */
-const DEFAULT_REMOTE_SESSION_TITLE = 'New Maker';
+/**
+ * 被控端建会话时的默认标题;权威标题仍等于它 = 还没起过名。
+ *
+ * 复用跨端共享常量:这串要与**被控端**(可能是另一个版本的客户端)写进 DB 的默认值
+ * 逐字一致,不能本地化、也不能与 main 侧各写一份。
+ */
+const DEFAULT_REMOTE_SESSION_TITLE = DEFAULT_DRAFT_SESSION_TITLE;
 /**
  * fork 会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …",非 i18n 串)。
  * 与被控端 `localDb/ipc/sessions.ts` 的 FORK_PLACEHOLDER_TITLE_PREFIX 同源;两边
@@ -215,6 +246,9 @@ function withPendingTitle(session: Session): Session {
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
   sessionDeviceIndex.clear();
+  // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
+  // 分片派生值随后覆盖同 id 的条目。
+  for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
   if (shards.size === 0) {
     mergedSnapshot = EMPTY;
   } else {
@@ -310,6 +344,35 @@ const actions = {
     recompute();
   },
 
+  /**
+   * 冷启动:用本地冷缓存的列表快照种入分片,让侧边栏在 bootstrap 往返之前就有内容。
+   *
+   * 三条硬约束(见文件头「冷启动首屏借冷缓存」):
+   *  - 只种**尚无分片**的设备:任何权威数据(snapshot / patch)都优先,缓存绝不覆盖它。
+   *  - 一律标 **disconnected**:缓存不是 live 设备,标 connected 会画出假在线,
+   *    也会让「新建对话」这类以连接态为准的判定误放行。
+   *  - 不清 bootstrapFailed、不动 epoch:种入不是一次拉取,不参与乱序保护。
+   */
+  hydrateFromCache(
+    devices: ReadonlyArray<{ deviceId: string; deviceName: string; sessions: readonly Session[] }>,
+  ): void {
+    let changed = false;
+    for (const device of devices) {
+      const deviceId = device.deviceId?.trim();
+      if (!deviceId || shards.has(deviceId)) continue;
+      if (device.sessions.length === 0) continue;
+      const deviceName = device.deviceName?.trim() || deviceId;
+      shards.set(deviceId, {
+        deviceId,
+        deviceName,
+        connectionStatus: 'disconnected',
+        sessions: device.sessions.map((s) => stamp(s, deviceId, deviceName, 'disconnected')),
+      });
+      changed = true;
+    }
+    if (changed) recompute();
+  },
+
   /** bootstrap 永久失败 / 重试耗尽且没有 sessions shard：记录终态，避免侧边栏无限 loading。 */
   markBootstrapFailed(deviceId: string): void {
     if (!setBootstrapFailed(deviceId, true)) return;
@@ -348,6 +411,12 @@ const actions = {
    *    (后续 snapshot 自带最终态;对不在 active 视图的会话的改动控制端不关心)。
    */
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
+    const terminal = patch.status === 'deleted' || patch.status === 'archived';
+    // 终态清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
+    // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
+    // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
+    // (review: codex P1)。缓存是纯优化,多清一次无害。
+    if (terminal) clearCachedMessages(deviceId, sessionId);
     const shard = shards.get(deviceId);
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
@@ -361,6 +430,7 @@ const actions = {
       // 会话),之后 unarchive / reseed 会把边界前的旧预览顶回一个仍是系统占位的
       // 会话上(PR #510 review)。
       dropTitleOverlay(sessionId);
+      // 消息冷缓存已在函数开头清掉(那里能覆盖"会话不在分片里"的情形)。
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       recompute();
       return;
@@ -522,6 +592,12 @@ const actions = {
     synthesizedPreviewSessions.clear();
   },
 
+  /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */
+  __resetPinnedOriginsForTest(): void {
+    pinnedOrigins.clear();
+    recompute();
+  },
+
   /** refresh anti-entropy 用:取某设备当前缓存分片，调用方只读。 */
   getDeviceSessions(deviceId: string): readonly Session[] {
     return shards.get(deviceId)?.sessions ?? EMPTY;
@@ -533,6 +609,16 @@ const actions = {
    */
   getSessionDeviceId(sessionId: string): string | undefined {
     return sessionDeviceIndex.get(sessionId);
+  },
+
+  /**
+   * 远程新建会话后**立刻**登记归属(见 pinnedOrigins)。只让 origin 判定即刻可用,不制造会话行;
+   * 权威快照回流后由分片派生值接管。幂等。
+   */
+  pinSessionOrigin(deviceId: string, sessionId: string): void {
+    if (pinnedOrigins.get(sessionId) === deviceId) return;
+    pinnedOrigins.set(sessionId, deviceId);
+    recompute();
   },
 
   /** 取设备友好名(tooltip / 日志用)。 */
@@ -550,6 +636,19 @@ const actions = {
     return [...shards.values()]
       .filter((shard) => shard.connectionStatus === 'connected')
       .map((shard) => shard.deviceId);
+  },
+
+  /**
+   * **保留着分片的全部**设备 id(connected + disconnected)。
+   *
+   * 与 `getDeviceIds()` 的区别是刻意的,两者不可混用:那个是「在线可控」语义(anti-entropy
+   * 轮询、Stop 按钮的 host-online 判定都只该看在线设备);这个是「本端还留着谁的镜像」语义,
+   * 给需要遍历全部留存分片的场景用 —— 冷缓存回写(断连设备也要写进快照,否则下次冷启动
+   * 就恢复不出它)、以及按权威列表收掉缺席分片(缓存种入的分片一律是 disconnected,
+   * 用 connected-only 的访问器根本遍历不到它们)。见 review(codex P1)。
+   */
+  getAllDeviceIds(): string[] {
+    return [...shards.keys()];
   },
 
   /** 机器切换栏用:当前已同步或保留断线缓存的被控设备摘要列表(引用稳定 + 稳定排序)。 */

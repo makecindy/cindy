@@ -107,8 +107,12 @@ export class CustomMcpProvider implements McpProvider {
     return Object.keys(headers).length > 0 ? headers : undefined;
   }
 
-  toClaudeSdkConfig(_context: McpProviderContext): unknown {
+  toClaudeSdkConfig(context: McpProviderContext): unknown {
     if (this.config.transport === 'stdio') {
+      // stdio MCPs execute on the local Desktop host. A remote Claude session runs
+      // on the SSH host, so never serialize local commands, cwd, or safeStorage
+      // secrets into the remote cc-manager start params.
+      if (context.remoteHostId) return null;
       const env = this.stdioEnv;
       return {
         type: 'stdio',

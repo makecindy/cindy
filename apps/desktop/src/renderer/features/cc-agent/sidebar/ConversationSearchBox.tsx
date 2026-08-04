@@ -1,6 +1,13 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDownUp,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import {
   Check,
   ChevronDown,
   Globe,
@@ -29,6 +36,11 @@ import {
 import { cn } from '@/lib/utils';
 import { searchConversations } from '@/lib/conversationSearchService';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
+import {
+  getSearchSortBy,
+  setSearchSortBy,
+  subscribeSearchSortBy,
+} from './conversationSearchPrefs';
 import type {
   ConversationSearchAgentFilter,
   ConversationSearchLastActivityFilter,
@@ -37,6 +49,7 @@ import type {
   ConversationSearchSortBy,
   ConversationSearchStatusFilter,
 } from '../../../../shared/conversationSearch';
+import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
@@ -57,6 +70,11 @@ type Option<T extends string> = {
   labelKey: string;
 };
 
+/**
+ * 排序三选项。与其它筛选选项同款:纯文字 + 选中勾,不配图标——它们只出现在筛选菜单的
+ * 「排序」子菜单里(见 SearchFilterMenu),当前值已常显在父行右侧,图标不再承担区分职责。
+ * (曾试过靶心/时钟系与箭头排序族图标,前者读不出排序,后者在收进子菜单后成了冗余。)
+ */
 const SORT_OPTIONS: ReadonlyArray<Option<ConversationSearchSortBy>> = [
   { value: 'relevance', labelKey: 'ccAgent.search.sort.relevance' },
   { value: 'activityDesc', labelKey: 'ccAgent.search.sort.activityDesc' },
@@ -125,6 +143,7 @@ export interface UseConversationSearchParams {
  * useConversationSearch —— 会话搜索状态机(query / 排序 / 筛选 / 项目锁定 / 两段防抖搜索)。
  * 从 ConversationSearchBox 抽出,供 popover 形态(rail 图标)与内联形态(展开侧栏首行)复用,
  * 保证两处搜索行为、防抖节奏、结果口径完全一致(不复制逻辑、不引入行为漂移)。
+ * 排序选择跨会话记住(localStorage,见 conversationSearchPrefs);其余筛选每次回到默认。
  */
 export function useConversationSearch({
   enabled,
@@ -134,8 +153,15 @@ export function useConversationSearch({
   onProgrammaticOpen,
   onResultChosen,
 }: UseConversationSearchParams) {
+  const { t } = useTranslation();
+  // 「尚未起名」会话的显示文案。main 拿它算标题匹配与命中下标、结果行拿它渲染
+  // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
+  // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
+  const unnamedLabel = t('ccAgent.common.unnamedSession');
   const [query, setQuery] = useState('');
-  const [sortBy, setSortBy] = useState<ConversationSearchSortBy>('relevance');
+  // 排序订阅共享偏好 store(持久化 + 跨实例同步),其余筛选每次回到默认
+  // ——取舍与「为什么不是各自 useState」见 conversationSearchPrefs 的文件头。
+  const sortBy = useSyncExternalStore(subscribeSearchSortBy, getSearchSortBy);
   const [statusFilter, setStatusFilter] = useState<ConversationSearchStatusFilter>('all');
   const [agentFilter, setAgentFilter] = useState<ConversationSearchAgentFilter>('all');
   const [lastActivityFilter, setLastActivityFilter] =
@@ -209,6 +235,7 @@ export function useConversationSearch({
       query: trimmed,
       limit: SEARCH_LIMIT,
       sortBy,
+      unnamedLabel,
       filters: {
         status: statusFilter,
         agentKind: agentFilter,
@@ -262,7 +289,16 @@ export function useConversationSearch({
     sortBy,
     statusFilter,
     trimmed,
+    unnamedLabel,
   ]);
+
+  /**
+   * 切换排序:写共享 store —— 立刻同步到所有挂载中的搜索实例(rail / 内联),
+   * 并落 localStorage,下次打开搜索 / 重启客户端沿用同一排序。
+   */
+  const setSortBy = useCallback((next: ConversationSearchSortBy) => {
+    setSearchSortBy(next);
+  }, []);
 
   /** 清空 query / 结果 / 状态(popover 关闭时调用)。项目锁定保留。 */
   const reset = useCallback(() => {
@@ -527,12 +563,12 @@ export function ConversationSearchBox({
             )}
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <SearchSortMenu sortBy={search.sortBy} onChange={search.setSortBy} />
             <SearchFilterMenu
               status={search.statusFilter}
               agentKind={search.agentFilter}
               lastActivity={search.lastActivityFilter}
               projects={search.projectSelection}
+              sortBy={search.sortBy}
               allKnownProjects={allKnownProjects}
               activeCount={search.activeFilterCount}
               lockedProjectKey={search.lockedProjectKey}
@@ -541,6 +577,7 @@ export function ConversationSearchBox({
               onAgentKindChange={search.setAgentFilter}
               onLastActivityChange={search.setLastActivityFilter}
               onProjectsChange={search.setProjectSelection}
+              onSortChange={search.setSortBy}
               onReset={search.resetFilters}
             />
           </div>
@@ -557,58 +594,19 @@ export function ConversationSearchBox({
   );
 }
 
-export function SearchSortMenu({
-  sortBy,
-  onChange,
-  compact,
-  onOpenChange,
-}: {
-  sortBy: ConversationSearchSortBy;
-  onChange: (value: ConversationSearchSortBy) => void;
-  /** 内嵌在搜索框内的紧凑形态:纯图标钮,无边框 / 标签(见 SidebarInlineSearch)。 */
-  compact?: boolean;
-  /** 下拉开合上报(内联搜索框据此在菜单打开时保持展开态,不因鼠标移到菜单而收起)。 */
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const label = optionLabel(SORT_OPTIONS, sortBy, t);
-
-  return (
-    <DropdownMenu onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={t('ccAgent.search.sortAria', { sort: label })}
-          className={compact ? SEARCH_TOOL_ICON_CLASS : SEARCH_TOOL_BUTTON_CLASS}
-        >
-          <ArrowDownUp size={compact ? 14 : 13} className="shrink-0" />
-          {!compact && (
-            <>
-              <span className="truncate">{label}</span>
-              <ChevronDown size={13} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
-            </>
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="bottom" align="start" sideOffset={6} className={MENU_CONTENT_CLASS}>
-        {SORT_OPTIONS.map((option) => (
-          <SelectMenuItem
-            key={option.value}
-            label={t(option.labelKey)}
-            selected={sortBy === option.value}
-            onSelect={() => onChange(option.value)}
-          />
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
+/**
+ * SearchFilterMenu —— 搜索框旁**唯一**的选项钮:排序 + 各项筛选都收在这一个菜单里。
+ * 排序曾是搜索框内并排的第二颗钮,已收进本菜单首行子菜单(2026-07 用户拍板):
+ * 搜索框里只留一颗钮更干净,排序也不必在收起态用图标自证身份。
+ * 排序**不计入** activeCount(它不收窄结果集,不该点亮「有筛选」红点);当前排序值
+ * 常显在首行右侧,不用展开子菜单就能看到——这也是排序选项不需要图标的原因。
+ */
 export function SearchFilterMenu({
   status,
   agentKind,
   lastActivity,
   projects,
+  sortBy,
   allKnownProjects,
   activeCount,
   lockedProjectKey,
@@ -617,6 +615,7 @@ export function SearchFilterMenu({
   onAgentKindChange,
   onLastActivityChange,
   onProjectsChange,
+  onSortChange,
   onReset,
   compact,
   onOpenChange,
@@ -625,6 +624,7 @@ export function SearchFilterMenu({
   agentKind: ConversationSearchAgentFilter;
   lastActivity: ConversationSearchLastActivityFilter;
   projects: ProjectSelection;
+  sortBy: ConversationSearchSortBy;
   allKnownProjects: ProjectNodeData[];
   activeCount: number;
   lockedProjectKey: string | null;
@@ -633,6 +633,7 @@ export function SearchFilterMenu({
   onAgentKindChange: (value: ConversationSearchAgentFilter) => void;
   onLastActivityChange: (value: ConversationSearchLastActivityFilter) => void;
   onProjectsChange: (value: ProjectSelection) => void;
+  onSortChange: (value: ConversationSearchSortBy) => void;
   onReset: () => void;
   /** 内嵌在搜索框内的紧凑形态:纯图标钮,无边框 / 标签,激活时右上角红点。 */
   compact?: boolean;
@@ -643,6 +644,7 @@ export function SearchFilterMenu({
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
   const agentValue = optionLabel(AGENT_OPTIONS, agentKind, t);
   const lastActivityValue = optionLabel(LAST_ACTIVITY_OPTIONS, lastActivity, t);
+  const sortValue = optionLabel(SORT_OPTIONS, sortBy, t);
   const lockedProject = lockedProjectKey
     ? allKnownProjects.find((project) => project.projectKey === lockedProjectKey) ?? null
     : null;
@@ -663,7 +665,10 @@ export function SearchFilterMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          // 排序也收在本菜单里,故 filterAria 文案本身多了 {{sort}} 段:整句由各语言自己
+          // 决定语序与标点,不在代码里拼接多段译文(PR #963 review)。
           aria-label={t('ccAgent.search.filterAria', {
+            sort: sortValue,
             status: statusValue,
             agent: agentValue,
             lastActivity: lastActivityValue,
@@ -719,6 +724,18 @@ export function SearchFilterMenu({
             </button>
           )}
         </div>
+
+        {/* 排序放首行:先定「怎么排」,再谈「留哪些」;它总有值,也不参与 activeCount。 */}
+        <MenuSubRow label={t('ccAgent.sidebar.filterSortByHeading')} value={sortValue}>
+          {SORT_OPTIONS.map((option) => (
+            <SelectMenuItem
+              key={option.value}
+              label={t(option.labelKey)}
+              selected={sortBy === option.value}
+              onSelect={() => onSortChange(option.value)}
+            />
+          ))}
+        </MenuSubRow>
 
         <MenuSubRow label={t('ccAgent.sidebar.filterStatusHeading')} value={statusValue}>
           {STATUS_OPTIONS.map((option) => (
@@ -885,6 +902,9 @@ function SearchResultRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  // 与 main 的匹配串同源:未起名会话在结果行里也不能露出英文哨兵,且 titleMatchIndices
+  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。
+  const displayTitle = conversationSearchTitle(item.session.title, t('ccAgent.common.unnamedSession'));
   const primaryHit = item.contentHit;
   const allHits = item.contentHits ?? (primaryHit ? [primaryHit] : []);
   const visibleHits = expanded ? allHits : allHits.slice(0, MAX_VISIBLE_HITS_PER_RESULT);
@@ -902,7 +922,7 @@ function SearchResultRow({
   ].filter(Boolean).join(' · ');
   const tooltip = (
     <div className="space-y-2">
-      <div className="font-medium leading-snug">{item.session.title}</div>
+      <div className="font-medium leading-snug">{displayTitle}</div>
       {primaryHit?.preview && (
         <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-[12px] leading-snug text-[var(--tooltip-text)]">
           {renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)}
@@ -929,7 +949,7 @@ function SearchResultRow({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)]">
-                {highlightSegments(item.session.title, item.titleMatchIndices)}
+                {highlightSegments(displayTitle, item.titleMatchIndices)}
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--text-tertiary)]">

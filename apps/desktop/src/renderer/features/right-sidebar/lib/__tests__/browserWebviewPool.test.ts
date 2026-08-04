@@ -73,6 +73,33 @@ describe('browserWebviewPool', () => {
     expect(entry.guestFailure).toBeNull();
   });
 
+  it('broadcasts guest window.close() to onGuestClose subscribers', () => {
+    // 监听必须由 pool 在创建 webview 时安装(而不是 useBrowserWebview):隐藏
+    // tab 根本不物化 hook 的监听,OAuth callback 页的自关会发生在后台。
+    const onGuestClose = vi.fn();
+    const unsub = browserWebviewPool.onGuestClose(onGuestClose);
+
+    const entry = browserWebviewPool.acquire('tab-a');
+    entry.webview.dispatchEvent(new Event('close'));
+
+    expect(onGuestClose).toHaveBeenCalledWith('tab-a');
+    // pool 只广播,不自己关 tab —— 裁决(popup-spawned 判定)在订阅方。
+    expect(browserWebviewPool.peek('tab-a')).not.toBeNull();
+
+    unsub();
+    entry.webview.dispatchEvent(new Event('close'));
+    expect(onGuestClose).toHaveBeenCalledOnce();
+  });
+
+  it('guest close listener throw does not break the pool', () => {
+    const unsub = browserWebviewPool.onGuestClose(() => {
+      throw new Error('guest-close listener exploded');
+    });
+    const entry = browserWebviewPool.acquire('tab-a');
+    expect(() => entry.webview.dispatchEvent(new Event('close'))).not.toThrow();
+    unsub();
+  });
+
   it('creates webviews with allowpopups so main can route popups into tabs', () => {
     const entry = browserWebviewPool.acquire('tab-a');
     expect(entry.webview.getAttribute('allowpopups')).toBe('true');

@@ -93,7 +93,16 @@ describe('reconnect host-authoritative healing', () => {
     expect(remoteSessionStore.getMessages(SESSION_ID).map((item) => item.id)).toEqual(['m1', 'm2']);
 
     await rehydrateDeviceLinkTopics(registry.snapshot(), {
-      openLink: vi.fn(async () => undefined),
+      capturePresenceEpoch: vi.fn(() => 0),
+      captureResponseEvidenceEpoch: vi.fn(() => 0),
+      isPresenceEpochCurrent: vi.fn(() => true),
+      isResponseEvidenceEpochCurrent: vi.fn(() => true),
+      createDeviceSendCohort: vi.fn(() => 1),
+      openLink: vi.fn(() => ({
+        capturedPresenceEpoch: 0,
+        capturedResponseEvidenceEpoch: 0,
+        request: Promise.resolve(),
+      })),
       subscribe: vi.fn(async () => undefined),
       requestSessionsReseed,
       rebuildSessionSnapshot: vi.fn(async (_deviceId, sessionId) => {

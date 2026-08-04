@@ -344,7 +344,7 @@ export function registerBuiltinDesktopCommands(
   registry.register({
     name: 'clear',
     description:
-      'Equivalent of "+ New Maker" in the sidebar — opens a fresh empty draft and switches to it. Discards the current conversation context.',
+      'Equivalent of the sidebar\'s "New Chat" button — opens a fresh empty draft and switches to it. Discards the current conversation context.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
   });
 

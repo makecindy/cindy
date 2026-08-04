@@ -15,6 +15,7 @@ vi.mock('qrcode', () => ({
 }));
 
 import { PlanChangeStatusDialog } from '../PlanChangeDialog';
+import * as QRCode from 'qrcode';
 import type { PlanChangeState } from '../usePlanChange';
 
 function quoteReadyState(overrides: Partial<PlanChangeState> = {}): PlanChangeState {
@@ -40,6 +41,36 @@ function quoteReadyState(overrides: Partial<PlanChangeState> = {}): PlanChangeSt
 }
 
 describe('PlanChangeStatusDialog stale snapshot handling', () => {
+  it('renders a logo QR code with high error correction while awaiting Alipay payment', async () => {
+    const paymentAction = {
+      type: 'QR_CODE' as const,
+      value: 'https://u.alipay.cn/fixture',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    const quoted = quoteReadyState().planChange!;
+    render(
+      <PlanChangeStatusDialog
+        state={quoteReadyState({
+          phase: 'AWAITING_PAYMENT',
+          planChange: { ...quoted, status: 'AWAITING_PAYMENT', paymentAction },
+        })}
+        targetName={null}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onRefresh={vi.fn()}
+        onReselect={vi.fn()}
+        onAbandon={vi.fn()}
+      />,
+    );
+
+    const qrCode = await screen.findByAltText('billing.checkout.qrAlt');
+    expect(qrCode.parentElement?.querySelectorAll('img')).toHaveLength(2);
+    expect(vi.mocked(QRCode.toDataURL)).toHaveBeenCalledWith(
+      paymentAction.value,
+      expect.objectContaining({ errorCorrectionLevel: 'H', margin: 4, width: 320 }),
+    );
+  });
+
   it('lets a fresh quote be confirmed or abandoned', () => {
     render(
       <PlanChangeStatusDialog

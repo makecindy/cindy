@@ -10,6 +10,7 @@
 export type {
   AgentKind,
   ProviderWireProtocol,
+  CodexCompatibilityWireProtocol,
   Effort,
   ProviderSource,
   AuthMethod,
@@ -29,6 +30,8 @@ export type {
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
 } from './types.js';
+
+export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from './catalog.js';
 
@@ -67,6 +70,7 @@ export {
   providerOffersModel,
   getModel,
   sourcesForModel,
+  chatEligibleSourcesForModel,
   resolveRoute,
   modelSupportsFastMode,
   sessionModelSupportsFastMode,
@@ -119,7 +123,10 @@ export {
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   isSubscriptionDirectModel,
   CATEGORY_ORDER,
+  CHAT_VENDOR_CATEGORY_ORDER,
   categorize,
+  classifyModel,
+  isChatEligible,
   groupOf,
   isAgentSelectableModel,
   groupModelsForDisplay,

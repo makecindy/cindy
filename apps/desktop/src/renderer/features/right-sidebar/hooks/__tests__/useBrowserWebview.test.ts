@@ -158,6 +158,7 @@ describe('useBrowserWebview', () => {
 
     expect(acquire).not.toHaveBeenCalled();
     expect(result!.wrapper).toBeNull();
+    expect(result!.webview).toBeNull();
   });
 
   it('does not materialize a hidden tab until it becomes visible', async () => {
@@ -177,6 +178,7 @@ describe('useBrowserWebview', () => {
 
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(result!.wrapper).not.toBeNull();
+    expect(result!.webview).toBe(mockWebview);
   });
 
   it('touches an existing entry through acquire when it becomes visible', async () => {
@@ -196,6 +198,7 @@ describe('useBrowserWebview', () => {
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
     expect(result!.wrapper).toBe(existing.wrapper);
+    expect(result!.webview).toBe(mockWebview);
   });
 
   it('observes an entry explicitly created while hidden without navigating it', async () => {
@@ -212,6 +215,7 @@ describe('useBrowserWebview', () => {
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
     expect(result!.wrapper).toBeNull();
+    expect(result!.webview).toBe(mockWebview);
     expect(mockWebview.addEventListener).toHaveBeenCalledWith(
       'render-process-gone',
       expect.any(Function),
@@ -435,6 +439,7 @@ describe('useBrowserWebview', () => {
     );
     expect(acquire).toHaveBeenCalledTimes(1);
     const firstWrapper = result!.wrapper;
+    const firstWebview = result!.webview;
 
     act(() => {
       for (let i = 0; i <= BROWSER_NAVIGATION_FUSE_LIMIT; i += 1) {
@@ -450,6 +455,7 @@ describe('useBrowserWebview', () => {
     // 后台淘汰(资源看门狗 / LRU):entry 被 release,不可见期间不得重建。
     act(() => poolMocks.fireRelease('tab-a'));
     expect(acquire).toHaveBeenCalledTimes(1);
+    expect(result!.webview).toBeNull();
 
     // 重新可见 → 重新 acquire,拿到新一代 entry,观测 state 复位。
     mockWebview = makeMockWebview('');
@@ -458,6 +464,8 @@ describe('useBrowserWebview', () => {
     );
     expect(acquire).toHaveBeenCalledTimes(2);
     expect(result!.wrapper).not.toBe(firstWrapper);
+    expect(result!.webview).not.toBe(firstWebview);
+    expect(result!.webview).toBe(mockWebview);
     expect(result!.url).toBe('');
     expect(result!.crash).toBeNull();
 

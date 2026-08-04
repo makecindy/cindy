@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 
 import {
   addRegionalMoney,
-  DEFAULT_USAGE_CURRENCY,
   legacyUsdMoney,
   normalizeRegionalMoney,
   zeroUsageMoney,
@@ -12,6 +11,7 @@ import { dailyModelUsage } from './schema.js';
 import { localDayKey } from './dailySpend.js';
 import { getDbClient } from './client/current.js';
 import { createLogger } from '../logger.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
 const log = createLogger('localDb/dailyModelUsage');
 
@@ -44,14 +44,16 @@ export async function incrementDailyModelUsage(
   delta: DailyModelUsageDelta,
   ts: number = Date.now(),
 ): Promise<void> {
+  // 单币种行:只接受本账号的结算币种,基准取 currentLedgerCurrency() 而不是构建区域 ——
+  // 结算币种由服务端按账号所属租户下发,不保证等于发行区域;按区域判会让以 USD 结算的
+  // 账号每一行都只剩 token、金额永远是 0。
+  // 异币种金额被忽略但 token 仍累计。
   const normalizedMoney = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
-  const money =
-    normalizedMoney?.currency === DEFAULT_USAGE_CURRENCY
-      ? normalizedMoney
-      : undefined;
+  const ledgerCurrency = currentLedgerCurrency();
+  const money = normalizedMoney?.currency === ledgerCurrency ? normalizedMoney : undefined;
   if (normalizedMoney && !money) {
     log.warn(
-      `daily model usage rejected currency mismatch: ${normalizedMoney.currency} != ${DEFAULT_USAGE_CURRENCY}`,
+      `daily model usage rejected currency mismatch: ${normalizedMoney.currency} != ${ledgerCurrency}`,
     );
   }
   const inputTokens = sanitizeTokens(delta.inputTokensDelta);

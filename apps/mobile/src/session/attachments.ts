@@ -55,6 +55,33 @@ const KNOWN_TEXT_FILENAMES = new Set([
   'cmakelists',
 ]);
 
+/**
+ * 附件按 id 去重合并,前者优先,受托盘上限截断。
+ *
+ * **溢出必须由调用方处理**:回收中转对象 + 告知用户。上限是「每条消息」的产品约束,而
+ * 创建失败的恢复路径要把 N 条待发消息的附件并进**一条**草稿——只要有两条带附件的消息
+ * 就可能超,静默截断等于把用户已上传的附件连同它在 OSS 的中转对象一起吞掉(review P1)。
+ * 返回 dropped 而不是内部丢弃,是为了让「丢了什么」在类型上无法被忽略。
+ *
+ * preferred 自身超限时原样保留:那是调用方自己的内容,该由它决定,这里不越权截断。
+ */
+export function mergeAttachmentsWithinLimit(
+  preferred: readonly RemoteSerializedAttachment[],
+  extra: readonly RemoteSerializedAttachment[],
+): { merged: RemoteSerializedAttachment[]; dropped: RemoteSerializedAttachment[] } {
+  const merged = [...preferred];
+  const dropped: RemoteSerializedAttachment[] = [];
+  for (const attachment of extra) {
+    if (merged.some((item) => item.id === attachment.id)) continue;
+    if (merged.length >= MOBILE_MAX_ATTACHMENTS) {
+      dropped.push(attachment);
+      continue;
+    }
+    merged.push(attachment);
+  }
+  return { merged, dropped };
+}
+
 /** 本机文件附件的体积校验(乐观上传后台任务里执行,超限 throw 由失败回调呈现)。 */
 export function assertMobileDocumentSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {

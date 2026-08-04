@@ -273,9 +273,9 @@ function AgentProxyTunnelCard({ hostId }: { hostId: string }) {
   const tunnel = snap?.agentProxyTunnel ?? null;
   // pref 已关但 disable 失败 (daemon 没死透, 错误已落 lastError) 时仍渲染
   // 错误卡片 (codex R17 P2) — 否则 Settings 看起来像成功关闭, 存活 daemon
-  // 还握着指向已拆端口的 proxy env, 用户毫无察觉。
+  // 还握着旧 proxy env, 用户毫无察觉。
   if (!pref && !tunnel?.lastError) return null;
-  const localTarget = pref ? `${pref.localHost}:${pref.localPort}` : '';
+  const localTarget = pref?.mode === 'tunnel' ? `${pref.localHost}:${pref.localPort}` : '';
 
   let icon;
   let text: string;
@@ -285,21 +285,38 @@ function AgentProxyTunnelCard({ hostId }: { hostId: string }) {
     icon = <AlertCircle size={14} />;
     text = t('settings.remote.detail.agentProxyError', { message: tunnel?.lastError ?? '' });
     isError = true;
-  } else if (snap?.status !== 'ready') {
-    // 主机断连/重连中: 隧道已 disarm 或正在拆除 — 即使隧道状态快照还没翻到
-    // 非活跃 (断连帧先于 mark-inactive 帧到达), 也优先显示「等待连接」,
-    // 不渲染过期的「已建立」(review: PR #715 收官审查 P2)。断连时
-    // markAgentProxyTunnelInactive 会清掉 lastError, 错误分支只在 ready
-    // 状态 (连接正常但建隧道失败) 下有语义。
-    icon = <AlertCircle size={14} />;
-    text = t('settings.remote.detail.agentProxyWaiting', { target: localTarget });
-  } else if (tunnel?.active && tunnel.remotePort != null) {
+  } else if (pref.mode === 'env') {
+    // env 模式无隧道 — 只有 apply 成功 (phase='active' 由 main 侧落下) 才
+    // 显示「已注入」; 未连接 / 尚未应用 / live-turn 推迟中都显示等待态,
+    // 不凭 pref 存在就谎报已生效。
+    if (tunnel?.phase === 'error' && tunnel.lastError) {
+      icon = <AlertCircle size={14} />;
+      text = t('settings.remote.detail.agentProxyError', { message: tunnel.lastError });
+      isError = true;
+    } else if (snap?.status === 'ready' && tunnel?.phase === 'active') {
+      icon = <CheckCircle2 size={14} />;
+      text = t('settings.remote.detail.agentProxyEnvInfo', { url: pref.proxyUrl });
+    } else {
+      icon = <Spinner size={12} />;
+      text = t('settings.remote.detail.agentProxyEnvPending', { url: pref.proxyUrl });
+    }
+  } else if (tunnel?.phase === 'active' && tunnel.remotePort != null) {
+    // 隧道走独立 SSH 连接 — 主连接断开期间它可能仍在服务, active 优先展示。
     icon = <CheckCircle2 size={14} />;
     text = t('settings.remote.detail.agentProxyActive', {
       port: tunnel.remotePort,
       target: localTarget,
     });
-  } else if (tunnel?.lastError) {
+  } else if (snap?.status !== 'ready' || tunnel?.phase === 'paused') {
+    // 主机断连/重连中: 隧道保活挂起, 主连接恢复后自动重建。
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyWaiting', { target: localTarget });
+  } else if (tunnel?.phase === 'port-busy') {
+    icon = <Spinner size={12} />;
+    text = t('settings.remote.detail.agentProxyPortBusy', {
+      port: tunnel.remotePort ?? pref.remotePort,
+    });
+  } else if (tunnel?.lastError && tunnel.phase === 'error') {
     icon = <AlertCircle size={14} />;
     text = t('settings.remote.detail.agentProxyError', { message: tunnel.lastError });
     isError = true;

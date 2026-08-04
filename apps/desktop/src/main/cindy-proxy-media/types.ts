@@ -83,7 +83,13 @@ export const GATEWAY_VIDEO_MODELS = [
 export type GatewayVideoModel = (typeof GATEWAY_VIDEO_MODELS)[number]['id'];
 
 export interface GatewayImageGenerateParams {
-  model: GatewayImageModel;
+  /**
+   * 模型 id。放宽为 string(2026-07 图像多来源):同一客户端实现被 xd 网关之外的
+   * 图像来源(OpenAI 平台等 OpenAI-images 兼容面)复用,白名单校验在 cindySlot /
+   * cindyMediaCatalog 层完成,客户端不再重复收窄。xd 自己的清单契约仍由
+   * GATEWAY_IMAGE_MODELS + imageModelCatalogSync 测试锁定。
+   */
+  model: string;
   prompt: string;
   size?: string;
   quality?: 'low' | 'medium' | 'high';
@@ -91,7 +97,8 @@ export interface GatewayImageGenerateParams {
 }
 
 export interface GatewayImageEditParams {
-  model: GatewayImageModel;
+  /** 同 GatewayImageGenerateParams.model。 */
+  model: string;
   prompt: string;
   imagePaths: string[];
   size?: string;

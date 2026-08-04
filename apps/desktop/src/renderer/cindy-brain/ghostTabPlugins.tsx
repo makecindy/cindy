@@ -3,8 +3,11 @@ import { Puzzle } from 'lucide-react';
 
 import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
 import { registerTabKind, unregisterTabKind } from '../features/right-sidebar/registry';
+import { pruneGhostTabPins } from '../features/right-sidebar/lib/pinnedGhostTabs';
 import type { TabKindId, TabKindPlugin } from '../features/right-sidebar/types';
-import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
+import { GhostPanelError } from './ghostPanelBody';
+import { ghostPanelFingerprint, ghostPanelWebviewPool } from './ghostPanelWebviewPool';
+import { PooledGhostPanelBody } from './pooledGhostPanelBody';
 import { useGhostRuntimeState } from './runtimeStates';
 
 /**
@@ -23,8 +26,16 @@ import { useGhostRuntimeState } from './runtimeStates';
  * kind 复用 ghostPanelKind 的 `ghost:<id>`(DB kind 列无枚举约束,可直存)。
  */
 
-/** 页签体:Shell 已提供容器与 TabBar,不再套 PanelChrome 标准头。 */
-function GhostTabBody({ manifest }: { manifest: GhostManifest }): ReactNode {
+/** 页签体:Shell 已提供容器与 TabBar,不再套 PanelChrome 标准头。
+ *  webview 托管在 ghostPanelWebviewPool(钉住 → 跨会话保活;未钉住 → 卸载即释,
+ *  语义同旧版每次挂载新建);沙箱崩 / 熔断仍走停靠形态同款错误接管。 */
+function GhostTabBody({
+  manifest,
+  visible,
+}: {
+  manifest: GhostManifest;
+  visible: boolean;
+}): ReactNode {
   // 沙箱崩了/熔断 → 与停靠形态同款错误接管(GhostPanel broken 分支的等价物)。
   const runtimeState = useGhostRuntimeState(manifest.id);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
@@ -33,7 +44,7 @@ function GhostTabBody({ manifest }: { manifest: GhostManifest }): ReactNode {
       {broken ? (
         <GhostPanelError manifest={manifest} state={runtimeState} />
       ) : (
-        <GhostChipPanelBody manifest={manifest} />
+        <PooledGhostPanelBody manifest={manifest} visible={visible} />
       )}
     </div>
   );
@@ -45,7 +56,10 @@ export function buildGhostTabPlugin(manifest: GhostManifest): TabKindPlugin {
   const label = manifest.panel?.title ?? manifest.name;
   const TabPillTitle: TabKindPlugin['TabPillTitle'] = () => <>{label}</>;
   const TabPillIcon: NonNullable<TabKindPlugin['TabPillIcon']> = () => <Puzzle size={13} />;
-  const TabBody: TabKindPlugin['TabBody'] = () => <GhostTabBody manifest={manifest} />;
+  // active / shellVisible → 懒物化判据:页签首次真正可见才创建面板 webview。
+  const TabBody: TabKindPlugin['TabBody'] = ({ active, shellVisible }) => (
+    <GhostTabBody manifest={manifest} visible={active !== false && shellVisible !== false} />
+  );
   return {
     kind,
     menu: {
@@ -94,6 +108,16 @@ export function syncGhostTabRegistrations(ghosts: InstalledGhost[]): void {
     registeredTabFingerprints.delete(kind);
     unregisterTabKind(kind as TabKindId);
   }
+  // 常驻池对齐同一份清单:停用 / 卸载 / 换形态 / 换版的面板 webview 就地释放
+  // —— 沙箱生命周期纪律(沉睡、抽离必须终止)不因"钉住保活"打折。
+  ghostPanelWebviewPool.sync(
+    ghosts
+      .filter((g) => g.enabled !== false && g.manifest.panel?.position === 'tab')
+      .map((g) => ({ ghostId: g.manifest.id, fingerprint: ghostPanelFingerprint(g.manifest) })),
+  );
+  // 钉住偏好的孤儿清理:被卸载的插件不再占条目(停用不清 —— 重新启用时
+  // 钉住状态原位复活,与页签"停用落 Placeholder、重启用复活"同语义)。
+  pruneGhostTabPins(new Set(ghosts.map((g) => g.manifest.id)));
 }
 
 /** 仅测试用:清空本模块注册,保证用例间隔离。 */

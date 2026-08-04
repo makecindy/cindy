@@ -46,6 +46,7 @@
 | `model-providers` | 模型供应商目录 + 路由抽象（Anthropic／OpenAI／XD），纯逻辑 | desktop + mobile |
 | `anthropic-compat-proxy` | 本地回环 HTTP 代理：剥离 Anthropic 专有字段，让 Claude Code SDK 可经网关访问非 Anthropic 后端 | desktop |
 | `anthropic-responses-bridge` | 本地回环 HTTP 桥：Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
+| `responses-anthropic-bridge` | 本地 Responses → Anthropic Messages 桥：请求、图片／工具／thinking 转换与 Responses SSE 回译 | desktop |
 | `lizi-mcps` | 可复用 MCP server 集合（Google 套件、GitHub／GitLab、浏览器、scheduler 等） | desktop |
 | `cindy-tools` | 意识（Ghost）系统内部工具集（MCP），含 ghost 总机（`ghost_list` / `ghost_call`） | desktop |
 | `browser-control-runtime` | 浏览器自动化运行时适配层（playwright-core + MCP） | desktop、lizi-mcps |

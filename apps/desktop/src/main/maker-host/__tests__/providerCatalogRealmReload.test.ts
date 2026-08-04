@@ -83,6 +83,7 @@ vi.mock('../provider-route.js', () => ({
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
   setProviderOAuthTokenReader: () => undefined,
+  setProviderViewsReader: () => undefined,
 }));
 vi.mock('../provider-diagnostics.js', () => ({
   setDiagnosticsKeyReader: () => undefined,

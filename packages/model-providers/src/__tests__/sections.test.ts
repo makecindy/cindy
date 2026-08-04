@@ -119,6 +119,33 @@ describe('buildProviderSections', () => {
     expect(sections.map((s) => s.provider.id)).toEqual(['xd']);
   });
 
+  it('非聊天模型(mode 权威判定)不进分段列表(issue #882 第 3 点,2026-07 review:三个调用方——桌面选择器/IM /model 卡片/mobile——都靠这一个函数挡住)', () => {
+    const withNonChat = provider('xd', 'XD', [
+      model('gpt-5.5', 'GPT-5.5'),
+      { ...model('gpt-image-2', 'GPT Image 2'), mode: 'image_generation' },
+    ]);
+    const sections = buildProviderSections({
+      providers: [withNonChat],
+      agent: 'claude-code',
+      isVisible: () => true,
+    });
+    expect(sections[0].models.map((m) => m.id)).toEqual(['gpt-5.5']);
+  });
+
+  it('非聊天模型即便是"当前选中"也不会被 keepSelected 豁免带回(防御性:选中态不应覆盖能力判定)', () => {
+    const withNonChat = provider('xd', 'XD', [
+      { ...model('gpt-image-2', 'GPT Image 2'), mode: 'image_generation' },
+    ]);
+    const sections = buildProviderSections({
+      providers: [withNonChat],
+      agent: 'claude-code',
+      selectedModelId: 'gpt-image-2',
+      selectedProviderId: 'xd',
+      isVisible: () => false,
+    });
+    expect(sections).toHaveLength(0);
+  });
+
   it('目录条目的 icon(AI Gateway 设定)透传进 SectionModel;缺省不带字段', () => {
     const withIcon = provider('xd', 'XD', [
       { ...model('claude-fable-5', 'Fable 5'), icon: 'claude' },
@@ -132,6 +159,30 @@ describe('buildProviderSections', () => {
     const models = sections[0].models;
     expect(models.find((m) => m.id === 'claude-fable-5')?.icon).toBe('claude');
     expect('icon' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(false);
+  });
+
+  it('模型级 Codex bridge 协议透传进 SectionModel;缺省不带字段', () => {
+    const bridged = provider('xd', 'XD', [
+      {
+        ...model('claude-opus-4-8', 'Opus 4.8'),
+        codexCompatibilityWireProtocol: 'anthropic-messages',
+      },
+      model('gpt-5.5', 'GPT-5.5'),
+    ]);
+    bridged.agents = ['codex'];
+    bridged.models = { codex: bridged.models['claude-code'] };
+    const sections = buildProviderSections({
+      providers: [bridged],
+      agent: 'codex',
+      isVisible: () => true,
+    });
+    const models = sections[0].models;
+    expect(models.find((m) => m.id === 'claude-opus-4-8')?.codexCompatibilityWireProtocol).toBe(
+      'anthropic-messages',
+    );
+    expect('codexCompatibilityWireProtocol' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(
+      false,
+    );
   });
 });
 
@@ -187,5 +238,15 @@ describe('visibleModelUnion', () => {
     const codexOnly: ProviderView = { ...xd, agents: ['codex'] };
     const out = visibleModelUnion([codexOnly], 'claude-code', () => true);
     expect(out).toEqual([]);
+  });
+
+  it('非聊天模型不进并集(issue #882 第 3 点,2026-07 review):Orca sub-agent 可用性判定 /' +
+    ' Slack /model 卡片 / hook session-runner 共用这一个函数,漏过滤会让非聊天模型被当成可执行模型选中', () => {
+    const withNonChat = provider('xd', 'XD', [
+      model('gpt-5.5', 'GPT-5.5'),
+      { ...model('gpt-image-2', 'GPT Image 2'), mode: 'image_generation' },
+    ]);
+    const out = visibleModelUnion([withNonChat], 'claude-code', () => true);
+    expect(out.map((m) => m.id)).toEqual(['gpt-5.5']);
   });
 });

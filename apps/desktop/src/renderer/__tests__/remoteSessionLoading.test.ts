@@ -26,4 +26,14 @@ describe('shouldShowRemoteLoading', () => {
   it('远程 + 未加载 + 延迟到期 → 显示', () => {
     expect(shouldShowRemoteLoading(true, false, true)).toBe(true);
   });
+
+  it('屏上已有消息(冷缓存已画出最近一页)→ 不显示:覆盖层不该盖住可读内容', () => {
+    expect(shouldShowRemoteLoading(true, false, true, true)).toBe(false);
+  });
+
+  it('hasMessages 缺省 false → 既有调用点行为不变(零回归)', () => {
+    expect(shouldShowRemoteLoading(true, false, true)).toBe(
+      shouldShowRemoteLoading(true, false, true, false),
+    );
+  });
 });

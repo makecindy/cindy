@@ -303,19 +303,19 @@ async function scanClaudeSkillDirs(
   return results;
 }
 
-export async function scanClaudeSlashCommands(workingDir: string): Promise<AgentSlashCommand[]> {
-  if (!workingDir || !path.isAbsolute(workingDir) || !(await isDirectory(workingDir))) {
-    return [];
-  }
-
+export async function scanClaudeSlashCommands(workingDir?: string): Promise<AgentSlashCommand[]> {
   const home = os.homedir();
   const merged = new Map<string, AgentSlashCommand>();
   const discovered = [
     ...(await scanClaudeCommandFiles(path.join(home, '.claude', 'commands'), 'global')),
     ...(await scanClaudeSkillDirs(path.join(home, '.claude', 'skills'), 'global')),
-    ...(await scanClaudeCommandFiles(path.join(workingDir, '.claude', 'commands'), 'project')),
-    ...(await scanClaudeSkillDirs(path.join(workingDir, '.claude', 'skills'), 'project')),
   ];
+  if (workingDir && path.isAbsolute(workingDir) && await isDirectory(workingDir)) {
+    discovered.push(
+      ...(await scanClaudeCommandFiles(path.join(workingDir, '.claude', 'commands'), 'project')),
+      ...(await scanClaudeSkillDirs(path.join(workingDir, '.claude', 'skills'), 'project')),
+    );
+  }
 
   for (const cmd of discovered) {
     merged.set(cmd.name, cmd);

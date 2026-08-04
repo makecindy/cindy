@@ -14,7 +14,7 @@
  * 剔除(旧 server 不发时降级为不剔重, 仅多一条重复)。
  */
 
-import { and, desc, eq, gt, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, notLike } from 'drizzle-orm';
 
 import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
 
@@ -115,7 +115,17 @@ async function sweepExpiredRows(): Promise<void> {
   lastGlobalSweepAt = now;
   try {
     const db = getDbClient().drizzle;
-    await db.delete(hookGroupMessages).where(lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS));
+    // 只清官方 hook 通道自己的行: 个人 Telegram bot 的窗口(provider
+    // 'telegram-personal[:botId]', 见 im/telegram/groupWindow.ts)是永久保留
+    // 的长期记忆, 不参与本 TTL(2026-07-30 产品拍板, review P1 堵共享表漏扫)。
+    await db
+      .delete(hookGroupMessages)
+      .where(
+        and(
+          lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS),
+          notLike(hookGroupMessages.provider, 'telegram-personal%'),
+        ),
+      );
   } catch (err) {
     lastGlobalSweepAt = 0;
     throw err;

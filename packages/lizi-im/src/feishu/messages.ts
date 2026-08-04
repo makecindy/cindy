@@ -44,6 +44,10 @@ export const messages = {
     },
     /** Finalize: card text empty AND no files (rare — agent emitted nothing useful). */
     emptyReply: '_(空回复)_',
+    replyTruncated:
+      '\n\n---\n⚠️ 回复过长，飞书仅展示前半部分；完整内容仍可在 Cindy 桌面端查看。',
+    deliveryFailed:
+      '⚠️ 这条回复过长或包含飞书暂不支持的内容，请在 Cindy 桌面端查看完整回复。',
   },
 } as const;
 

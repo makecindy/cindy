@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { DeviceLinkError, type DeviceView, type PresenceSnapshot } from '@cindy/device-link';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   Archive,
   Check,
@@ -798,8 +799,10 @@ export default function HomeScreen() {
       selectedDeviceId,
       sessions: homeSessions,
       statusFilter,
+      // 未起名会话的显示文案:共享层不兜中文串,由这里给已解析的 i18n 值。
+      unnamedLabel: t('session.menu.unnamedTitle'),
     }),
-    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, selectedDeviceId, homeSessions, statusFilter],
+    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, selectedDeviceId, homeSessions, statusFilter, t],
   );
   const sections = useMemo(
     () => buildHomeSections(home, groupByProject, pinnedCollapsed),
@@ -1042,7 +1045,10 @@ export default function HomeScreen() {
     if (!session) return;
     if (action === 'delete') {
       // 菜单不再展示会话标题(2026-07-07 产品反馈),删除确认在这里带上标题作上下文。
-      const title = session.title?.trim() || t('devices.list.untitled');
+      // 哨兵先过投影,与列表行显示同一个串:否则确认框里写着 "New Maker",用户在列表上
+      // 看到的却是「未命名对话」,对不上自己要删的是哪条。
+      const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()
+        || t('devices.list.untitled');
       Alert.alert(t('devices.list.alert.deleteTitle'), t('devices.list.alert.deleteMessage', { title }), [
         { style: 'cancel', text: t('devices.common.cancel') },
         { onPress: () => runSwipeAction(session, 'delete'), style: 'destructive', text: t('devices.common.delete') },
@@ -1051,7 +1057,9 @@ export default function HomeScreen() {
     }
     if (action === 'rename') {
       pendingSheetActionRef.current = () => {
-        setRenameSessionDraft(session.title ?? '');
+        // 预填也走投影:输入框里不能出现内部哨兵。用户不改直接确定时,
+        // confirmRenameSession 的「没改就不落库」判据会把它挡掉(见那里的注释)。
+        setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
         setRenameSessionTarget(session);
       };
       return;
@@ -1075,7 +1083,10 @@ export default function HomeScreen() {
     const title = renameSessionDraft.trim();
     if (!target || !title) return;
     setRenameSessionTarget(null);
+    // 「没改就不落库」要同时比原始标题**和**预填的投影值:未起名会话预填的是本地化兜底
+    // 文案,只比原始标题会把这个文案写进 DB,哨兵被毁 → 自动起名永久跳过该会话。
     if (title === (target.title ?? '')) return;
+    if (title === projectDraftSessionTitle(target.title, t('session.menu.unnamedTitle'))) return;
     void patchHomeSession(target, { title }).catch((err: unknown) => {
       Alert.alert(t('devices.list.alert.renameFailed'), humanizeRemoteError(err));
     });

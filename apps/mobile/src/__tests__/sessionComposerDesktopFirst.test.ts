@@ -137,7 +137,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('被控电脑上的文件路径');
     expect(source).toContain('testID="session.composerActivityStatus"');
     expect(source).toContain("t('session.screen.thinking')");
-    expect(source).toContain("t('session.screen.networkReconnecting')");
+    // 活动状态行的三种说法都要在这里出现。过载退避与传输层重连共用同一个 attempt
+    // 字段, 但文案分开: 说「正在重新连接」会把用户引向排查自己的网络
+    // (review #844 codex P1)。字符串按 i18n key 断言, 不断言三元表达式的写法。
+    expect(source).toContain("'session.screen.networkReconnecting'");
+    expect(source).toContain("'session.screen.modelBusyRetrying'");
     expect(source).toContain('{reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}');
     expect(source).toContain('ArrowDown');
     expect(source).toContain('useSessionRunStatus');
@@ -410,6 +414,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('top: voiceDraftCaretFrame.top');
     expect(source).not.toContain('voiceMicCaretInline');
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
+    // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
+    // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
+    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
+    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(source).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(source).toContain('finishVoiceRecordingRef.current?.();');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(voiceSource).toContain('|| voiceStopInFlightRef.current');

@@ -9,7 +9,12 @@
  * 只 mock electron(app)+ logger;subscriptions 用真实模块(注册控制端订阅)。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DeviceLinkError, MAX_FRAME_BYTES, PROTOCOL_VERSION, type InvokeResultPayload } from '@cindy/device-link';
+import {
+  DeviceLinkError,
+  MAX_FRAME_BYTES,
+  PROTOCOL_VERSION,
+  type InvokeResultPayload,
+} from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: {
@@ -31,7 +36,12 @@ import { __testing } from '../dispatch';
 import * as subscriptions from '../subscriptions';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
-function mkClient(over: Partial<{ sendInvokeResult: ReturnType<typeof vi.fn>; sendPush: ReturnType<typeof vi.fn> }> = {}) {
+function mkClient(
+  over: Partial<{
+    sendInvokeResult: ReturnType<typeof vi.fn>;
+    sendPush: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
   return {
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
     sendPush: over.sendPush ?? vi.fn(),
@@ -41,7 +51,9 @@ function mkClient(over: Partial<{ sendInvokeResult: ReturnType<typeof vi.fn>; se
 const tooLarge = () => new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds 2097152 bytes');
 const encodedByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 const invokeResultFrameBytes = (dst: string, requestId: string, payload: InvokeResultPayload) =>
-  encodedByteLength(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload }));
+  encodedByteLength(
+    JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload }),
+  );
 
 beforeEach(() => {
   __testing.reset();
@@ -56,20 +68,28 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const bigContent = 'x'.repeat(32 * 1024);
     const big: InvokeResultPayload = {
       ok: true,
-      result: [{
-        agentMeta: null,
-        clientId: 'c1',
-        content: bigContent,
-        createdAt: '2026-06-23T00:00:00.000Z',
-        id: 'm1',
-        role: 'tool_result',
-        sessionId: 's1',
-        toolUseId: 'tu1',
-      }],
+      result: [
+        {
+          agentMeta: null,
+          clientId: 'c1',
+          content: bigContent,
+          createdAt: '2026-06-23T00:00:00.000Z',
+          id: 'm1',
+          role: 'tool_result',
+          sessionId: 's1',
+          toolUseId: 'tu1',
+        },
+      ],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        big,
+        'local-db:messages:list',
+      ),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -97,24 +117,35 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const client = mkClient({ sendInvokeResult });
     const big: InvokeResultPayload = {
       ok: true,
-      result: [{
-        agentMeta: null,
-        clientId: 'c1',
-        content: { blocks: ['x'.repeat(32 * 1024)] },
-        createdAt: '2026-06-23T00:00:00.000Z',
-        id: 'm1',
-        role: 'tool_result',
-        sessionId: 's1',
-        toolUseId: 'tu1',
-      }],
+      result: [
+        {
+          agentMeta: null,
+          clientId: 'c1',
+          content: { blocks: ['x'.repeat(32 * 1024)] },
+          createdAt: '2026-06-23T00:00:00.000Z',
+          id: 'm1',
+          role: 'tool_result',
+          sessionId: 's1',
+          toolUseId: 'tu1',
+        },
+      ],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        big,
+        'local-db:messages:list',
+      ),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
-    const compact = sendInvokeResult.mock.calls[1][2] as { ok: true; result: Array<{ content: unknown }> };
+    const compact = sendInvokeResult.mock.calls[1][2] as {
+      ok: true;
+      result: Array<{ content: unknown }>;
+    };
     expect(compact.result[0].content).toBe('[remote content truncated: payload too large]');
   });
 
@@ -126,31 +157,42 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const bigCommand = 'x'.repeat(160 * 1024);
     const big: InvokeResultPayload = {
       ok: true,
-      result: [{
-        agentMeta: null,
-        clientId: 'c1',
-        content: {
-          toolUseId: 'toolu-1',
-          toolName: 'Bash',
-          input: {
-            command: bigCommand,
-            timeout: 1,
+      result: [
+        {
+          agentMeta: null,
+          clientId: 'c1',
+          content: {
+            toolUseId: 'toolu-1',
+            toolName: 'Bash',
+            input: {
+              command: bigCommand,
+              timeout: 1,
+            },
           },
+          createdAt: '2026-06-23T00:00:00.000Z',
+          id: 'm1',
+          role: 'tool_use',
+          sessionId: 's1',
+          toolUseId: 'toolu-1',
         },
-        createdAt: '2026-06-23T00:00:00.000Z',
-        id: 'm1',
-        role: 'tool_use',
-        sessionId: 's1',
-        toolUseId: 'toolu-1',
-      }],
+      ],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        big,
+        'local-db:messages:list',
+      ),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
-    const compact = sendInvokeResult.mock.calls[1][2] as { ok: true; result: Array<{ content: unknown }> };
+    const compact = sendInvokeResult.mock.calls[1][2] as {
+      ok: true;
+      result: Array<{ content: unknown }>;
+    };
     expect(compact.ok).toBe(true);
     const content = compact.result[0].content as {
       toolUseId?: string;
@@ -181,7 +223,13 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const big: InvokeResultPayload = { ok: true, result: messages };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        big,
+        'local-db:messages:list',
+      ),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -203,9 +251,10 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       agentMeta: { debugBlob: 'm'.repeat(480 * 1024) },
       clientId: `newest-first-${index}`,
-      content: index === 0
-        ? { toolUseId: 'toolu-0', toolName: 'Bash', input: { command: 'echo ok', timeout: 1 } }
-        : 'x',
+      content:
+        index === 0
+          ? { toolUseId: 'toolu-0', toolName: 'Bash', input: { command: 'echo ok', timeout: 1 } }
+          : 'x',
       createdAt: new Date(Date.UTC(2026, 5, 23, 0, 0, 6 - index)).toISOString(),
       id: `m${index}`,
       role: index === 0 ? 'tool_use' : 'assistant',
@@ -214,7 +263,13 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const big: InvokeResultPayload = { ok: true, result: messages };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        big,
+        'local-db:messages:list',
+      ),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -313,7 +368,9 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     expect(invokeResultFrameBytes('ctrl-1', 'req-1', compact)).toBeLessThan(MAX_FRAME_BYTES);
     expect(compact.ok).toBe(true);
     if (compact.ok) {
-      const clientIds = (compact.result as Array<{ clientId: string }>).map((message) => message.clientId);
+      const clientIds = (compact.result as Array<{ clientId: string }>).map(
+        (message) => message.clientId,
+      );
       expect(clientIds).toContain('anchor-client');
     }
   });
@@ -333,7 +390,10 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const second = sendInvokeResult.mock.calls[1];
     expect(second[0]).toBe('ctrl-1');
     expect(second[1]).toBe('req-1');
-    expect(second[2]).toEqual({ ok: false, error: { code: 'PAYLOAD_TOO_LARGE', message: expect.any(String) } });
+    expect(second[2]).toEqual({
+      ok: false,
+      error: { code: 'PAYLOAD_TOO_LARGE', message: expect.any(String) },
+    });
   });
 
   it('紧凑错误结果也发不出去 → 仍不抛(只 log,彻底放弃)', () => {
@@ -342,7 +402,13 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     });
     const client = mkClient({ sendInvokeResult });
     expect(() =>
-      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', { ok: true, result: {} }, 'x'),
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-1',
+        'req-1',
+        { ok: true, result: {} },
+        'x',
+      ),
     ).not.toThrow();
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
   });

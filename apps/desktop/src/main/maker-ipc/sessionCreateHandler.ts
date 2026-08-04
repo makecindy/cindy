@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   type MakerSessionCreateOpts,
   readCreateSessionOpts,
@@ -9,6 +10,18 @@ import {
 } from './sessionRequest.js';
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+/**
+ * remote-claude-route 抛出的 [REMOTE_*] 前缀错误 → 共享 IPC 错误码。
+ * 纯字符串匹配,不引入 maker-core 类型(避免 main 侧耦合)。
+ */
+function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('[REMOTE_PROVIDER_UPDATING]')) return 'REMOTE_PROVIDER_UPDATING';
+  if (msg.includes('[REMOTE_PROVIDER_UNSUPPORTED]')) return 'REMOTE_PROVIDER_UNSUPPORTED';
+  if (msg.includes('[REMOTE_NATIVE_OAUTH_UNAVAILABLE]')) return 'REMOTE_NATIVE_OAUTH_UNAVAILABLE';
+  return null;
+}
 
 export interface MakerSessionCreateResultSession {
   id: string;
@@ -65,6 +78,14 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
         // 独立 code:新建会话撞上凭证切换忙(别的会话在跑),不是"本会话在跑"。
         // renderer 据此走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
         throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+      }
+      // 远端 Claude 路由 materialization 错误([REMOTE_*] 前缀)映射到独立 code,
+      // renderer 按 code 给可操作文案(连接订阅 / 换来源 / 稍后重试),不吞成通用
+      // 「创建会话失败」。
+      const remoteRouteCode = remoteRouteErrorCode(err);
+      if (remoteRouteCode) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throwIpcError(remoteRouteCode, msg);
       }
       throw err;
     }

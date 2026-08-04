@@ -14,6 +14,8 @@
  * 兼容已发出的旧卡片, 见 cardBuilders 头注释)。
  */
 
+import fs from 'node:fs';
+
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
 import {
   createSessionPermissionUpdate,
@@ -67,6 +69,7 @@ import type { IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
   readPermissionMode,
+  switchSessionWorkingDir,
   touchUserSent,
   updateModelEffort,
   updatePermissionMode,
@@ -1092,6 +1095,92 @@ export function createCardActionHandler(
     });
   }
 
+  // ── /project 项目切换(projectSwitching 渠道专用)────────────────────────────
+
+  async function patchProjectCard(im: ChannelIM, messageId: string, label: string): Promise<void> {
+    try {
+      await im.updateInteractiveCard(messageId, cards.buildResolvedCard(label));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`project card patch failed (non-fatal): ${msg}`);
+    }
+  }
+
+  /**
+   * project:pick / project:dialogue — 把当前 (bot, user/lane) 的 IM 会话行切到
+   * 目标目录并重开上下文。设置(模型/权限/供应商)保留;正在跑的 live session
+   * dispose 掉, 下一条消息在新目录起新对话。
+   */
+  async function handleProjectSwitch(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+    kind: 'project' | 'dialogue',
+  ): Promise<void> {
+    const projectUi = adapter.ui.cards.project;
+    if (!projectUi) return;
+    const botContextId = String(event.payload.botAppId ?? '');
+    if (!botContextId) {
+      log.warn('project switch missing botAppId — ignoring');
+      return;
+    }
+    // 接管期间语义冲突(slash 层已拦, 这里兜旧卡片迟到按压)。
+    const attached = bindingStore.get({
+      channel,
+      botContextId,
+      userId: event.senderId,
+    });
+    if (attached) {
+      await patchProjectCard(im, event.messageId, projectUi.attachedUnsupported);
+      return;
+    }
+
+    let workingDir: string;
+    let displayName: string;
+    let workspaceKind: 'project' | 'dialogue';
+    if (kind === 'project') {
+      workingDir = String(event.payload.workingDir ?? '');
+      displayName = String(event.payload.displayName ?? workingDir);
+      workspaceKind = 'project';
+      if (!workingDir) {
+        log.warn('project:pick missing workingDir — ignoring');
+        return;
+      }
+      // 项目清单来自历史会话行, 目录可能已被移动/删除/被同名文件顶替 —
+      // 必须确认是目录才切(fail-closed), 否则会话会切进非法 cwd 难以排障。
+      let isDirectory = false;
+      try {
+        isDirectory = fs.statSync(workingDir).isDirectory();
+      } catch {
+        isDirectory = false;
+      }
+      if (!isDirectory) {
+        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+        return;
+      }
+    } else {
+      workingDir = adapter.sessions.ensureWorkingDir(botContextId);
+      displayName = projectUi.dialogueName;
+      workspaceKind = 'dialogue';
+    }
+
+    const target = await turnRunner.resolveRouteTarget(botContextId, event.senderId);
+    if (!target) {
+      await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+      return;
+    }
+    log.info(
+      `project switch session=...${target.row.id.slice(-8)} kind=${workspaceKind} sender=...${event.senderId.slice(-8)}`,
+    );
+    await switchSessionWorkingDir(target.row.id, workingDir, workspaceKind);
+    // 旧目录的 live session(含进行中 turn)必须丢弃 — 下一条消息在新目录重建。
+    await turnRunner.disposeOneSession(target.row.id);
+    await patchProjectCard(
+      im,
+      event.messageId,
+      kind === 'project' ? projectUi.resolvedPick(displayName) : projectUi.resolvedDialogue,
+    );
+  }
+
   async function handleControlExit(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
     // Terminal: 解锁 controlState。同 session-pick: card patch 失败也解锁。
     const botContextId = String(event.payload.botAppId ?? '');
@@ -1264,6 +1353,23 @@ export function createCardActionHandler(
           }
           if (event.buttonId === 'control:start') {
             await handleControlStart(im, event);
+            return;
+          }
+
+          // /project picker — pick(项目) / dialogue(回托管对话目录) / cancel
+          if (event.buttonId === 'project:pick') {
+            await handleProjectSwitch(im, event, 'project');
+            return;
+          }
+          if (event.buttonId === 'project:dialogue') {
+            await handleProjectSwitch(im, event, 'dialogue');
+            return;
+          }
+          if (event.buttonId === 'project:cancel') {
+            const projectUi = adapter.ui.cards.project;
+            if (projectUi) {
+              await patchProjectCard(im, event.messageId, projectUi.resolvedCancel);
+            }
             return;
           }
 

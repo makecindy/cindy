@@ -16,7 +16,11 @@ import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
-import { deriveAvailableModels, refreshCatalogDerivedModels } from '../catalog-to-descriptors.js';
+import {
+  deriveAvailableModels,
+  refreshCatalogDerivedModels,
+  resolveVerifiedContextWindow,
+} from '../catalog-to-descriptors.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -81,6 +85,19 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  // availableModels 是跨 provider 去重后的扁平表 —— provenance 刻意**不**进这份 descriptor:
+  // 归属已丢,按 id 回查可能命中另一条路由。收敛改走 resolveVerifiedContextWindow。
+  it('toDescriptor 不透传 contextWindowVerified(provenance 只留在 host 侧)', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id !== 'openai') continue;
+      p.models.codex = [model('verified/known', { contextWindow: 372_000, contextWindowVerified: true })];
+    }
+    const d = deriveAvailableModels(catalog, 'codex').find((m) => m.id === 'verified/known');
+    expect(d?.contextWindow).toBe(372_000);
+    expect(d && 'contextWindowVerified' in d).toBe(false);
+  });
+
   it('注入后:按 provider 序 union + id 首见去重(anthropic 先于 xd,fast 分叉取首见)', () => {
     const cc = deriveAvailableModels(injectedCatalog(), 'claude-code');
     const ids = cc.map((m) => m.id);
@@ -128,6 +145,29 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('非聊天模型(issue #882 第 3 点)不进任一 agent 的 availableModels,但仍留在完整 catalog 里', () => {
+    const cat = injectedCatalog();
+    const xd = cat.providers.find((provider) => provider.id === 'xd')!;
+    xd.models['claude-code'] = [
+      ...(xd.models['claude-code'] ?? []),
+      model('gpt-image-2', { name: 'GPT Image 2', mode: 'image_generation', group: undefined }),
+      model('text-embedding-3-large', { name: 'Embedding 3 Large' }), // 无 mode,靠 id 正则兜底判定为 embedding
+    ];
+    xd.models.codex = [
+      ...(xd.models.codex ?? []),
+      model('gpt-image-2', { name: 'GPT Image 2', mode: 'image_generation' }),
+    ];
+
+    const cc = deriveAvailableModels(cat, 'claude-code');
+    const codex = deriveAvailableModels(cat, 'codex');
+    expect(cc.some((m) => m.id === 'gpt-image-2')).toBe(false);
+    expect(cc.some((m) => m.id === 'text-embedding-3-large')).toBe(false);
+    expect(codex.some((m) => m.id === 'gpt-image-2')).toBe(false);
+    // 完整 catalog(设置页消费的那份)不受 availableModels 派生过滤影响,模型仍在。
+    expect(xd.models['claude-code']!.some((m) => m.id === 'gpt-image-2')).toBe(true);
+    expect(xd.models['claude-code']!.some((m) => m.id === 'text-embedding-3-large')).toBe(true);
+  });
+
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
@@ -145,5 +185,70 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(codexModels).toBe(codexRef);
     expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
     expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
+  });
+});
+
+describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () => {
+  /** 常见双 provider 目录:订阅直连发现的无前缀 id(live-list 兜底 272K,未核实) + 网关下发的同 id(已核实 372K)。 */
+  function dualProviderCatalog(): Catalog {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') {
+        p.models.codex = [model('gpt-5.6-sol', { contextWindow: 272_000 })];
+      }
+      if (p.id === 'xd') {
+        p.models.codex = [
+          model('gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true }),
+          model('codex/gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true }),
+        ];
+      }
+    }
+    return catalog;
+  }
+
+  // 这是本 PR 的核心场景:会话明确路由到 xd 时,必须拿到网关声明的 372K —— 不能因为
+  // openai 也暴露同一个无前缀 id 就放弃收敛(那会让 app-server 的 1M 原样留下)。
+  it('给了 providerId 时只认该路由的条目', () => {
+    const catalog = dualProviderCatalog();
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBe(372_000);
+    // openai 那条是 live-list 兜底、未核实 → 不可作上限。
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'openai', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没给 providerId 且该 id 跨 provider 有歧义时不收敛', () => {
+    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', null, 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没给 providerId 但该 id 无歧义时照常返回(折扣路由只由网关提供)', () => {
+    expect(
+      resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', undefined, 'codex/gpt-5.6-sol'),
+    ).toBe(372_000);
+  });
+
+  it('候选存在但未标记已核实 → null(派生兜底值只够展示)', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') p.models.codex = [model('fallback/only', { contextWindow: 272_000 })];
+    }
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'openai', 'fallback/only')).toBeNull();
+  });
+
+  it('providerId 指向的路由没有该模型 → null,不回落到别的 provider', () => {
+    const catalog = dualProviderCatalog();
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'anthropic', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('目录未覆盖的模型 → null', () => {
+    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', 'xd', 'nope/unknown')).toBeNull();
+  });
+
+  it('该 agent 上被 disabled 的 provider 不参与解析', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id !== 'xd') continue;
+      p.models.codex = [model('xd/only', { contextWindow: 500_000, contextWindowVerified: true })];
+      p.routing.codex = { ...(p.routing.codex ?? {}), disabled: true } as typeof p.routing.codex;
+    }
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'xd/only')).toBeNull();
   });
 });

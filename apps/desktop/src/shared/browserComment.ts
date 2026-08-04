@@ -26,9 +26,11 @@ export const BROWSER_COMMENT_EXIT_MODE_CHANNEL = 'browser-comment:exit-mode';
 export const BROWSER_COMMENT_CANCEL_PENDING_CHANNEL = 'browser-comment:cancel-pending';
 /**
  * 截图前置:guest 隐藏交互层与 hover 高亮,只保留蓝色 marker(含已提交的常驻
- * marker)与当前 pending 的区域框 / 文本高亮,待页面完成两帧渲染后回
- * `screenshot-prepared`。host 收到后再调 main capturePage,保证截图里只有
- * 标注、没有交互 UI。无 payload。
+ * marker)与当前 pending 的区域框 / 文本高亮,并继续保留透明 blocker 隔离
+ * 页面输入。页面完成两帧渲染后,guest 通过统一的
+ * {@link BROWSER_COMMENT_COMMAND_RESULT_CHANNEL} 回执当前 requestId；host
+ * 收到 matching ACK 后再调 main capturePage,保证截图里只有标注、没有可见
+ * 交互 UI。
  */
 export const BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL = 'browser-comment:prepare-screenshot';
 /**
@@ -50,14 +52,38 @@ export const BROWSER_COMMENT_DESIGN_RESET_CHANNEL = 'browser-comment:design-rese
 
 // ── guest → host ───────────────────────────────────────────────────────────
 
+/**
+ * 关键 host → guest 命令的统一完成回执。host 只在收到当前 WebView 代际发回的
+ * matching requestId 后推进评论状态机，避免 `webview.send()` 丢失时两端状态分叉。
+ */
+export const BROWSER_COMMENT_COMMAND_RESULT_CHANNEL = 'browser-comment:command-result';
 /** 用户在页面里点选了一个元素。payload: {@link BrowserCommentTargetInfo} */
 export const BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL = 'browser-comment:element-selected';
-/** prepare-screenshot 完成(交互层已隐藏、marker 已渲染稳定)。无 payload。 */
-export const BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL = 'browser-comment:screenshot-prepared';
 /** guest 侧主动退出评论模式(用户在页面里按 Esc)。无 payload。 */
 export const BROWSER_COMMENT_MODE_EXITED_CHANNEL = 'browser-comment:mode-exited';
 
 // ── payload 类型 ────────────────────────────────────────────────────────────
+
+/** 需要确认完成的 host → guest 命令集合。高频样式预览仍走无回执通知。 */
+export type BrowserCommentCommandChannel =
+  | typeof BROWSER_COMMENT_ENTER_MODE_CHANNEL
+  | typeof BROWSER_COMMENT_EXIT_MODE_CHANNEL
+  | typeof BROWSER_COMMENT_CANCEL_PENDING_CHANNEL
+  | typeof BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL
+  | typeof BROWSER_COMMENT_COMMIT_PENDING_CHANNEL;
+
+/** host 包裹关键命令的传输信封；requestId 在单个评论控制器生命周期内唯一。 */
+export interface BrowserCommentCommandEnvelope<T = unknown> {
+  requestId: string;
+  payload?: T;
+}
+
+/** guest 执行关键命令后的统一结果；不把第三方页面异常细节跨边界返回 host。 */
+export interface BrowserCommentCommandResult {
+  requestId: string;
+  command: BrowserCommentCommandChannel;
+  ok: boolean;
+}
 
 /** host → guest enter-mode 的参数。 */
 export interface BrowserCommentEnterModePayload {

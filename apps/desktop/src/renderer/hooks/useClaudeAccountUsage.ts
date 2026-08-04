@@ -21,17 +21,21 @@
  *
  * enabled 语义 (而非 vendorKey): 这份 quota 是"XD gateway key 在 LiteLLM 上的 spend",
  * 与发起请求的 agent 无关。cc 固然要看; codex 的 'api' 鉴权模式复用同一把 XD key 走
- * 同一个 AI Gateway, 所以也该看同一份 quota。调用方据此决定 enabled (cc || codex-api),
- * 本 hook 不感知 vendor。
+ * 同一个 AI Gateway, 所以也该看同一份 quota。调用方只在当前会话实际走 Gateway 时
+ * 启用；自定义供应商即使复用相同 host 也不会读这份账号配额。
  */
 
 import { useEffect, useState } from 'react';
+
+import type { MoneyCurrency } from '../../shared/regionalMoney';
 
 export interface ClaudeAccountUsageSnapshot {
   /** 月度周期跨客户端累计，保持 Gateway 部署区域的原生金额。 */
   spend: number;
   /** 月度周期上限，保持 Gateway 部署区域的原生金额。 */
   maxBudget: number;
+  /** Gateway 账号金额的原生币种。 */
+  currency: MoneyCurrency;
   /** 下次月度 reset 时间 ISO8601。 */
   budgetResetAt?: string | null;
   /**
@@ -53,6 +57,7 @@ function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
     typeof r.spend === 'number' &&
     typeof r.maxBudget === 'number' &&
     r.maxBudget > 0 &&
+    (r.currency === 'CNY' || r.currency === 'USD') &&
     (typeof r.todaySpend === 'number' || r.todaySpend === null)
   );
 }

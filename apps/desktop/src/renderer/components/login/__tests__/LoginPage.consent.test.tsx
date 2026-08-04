@@ -142,6 +142,27 @@ describe('协议同意行', () => {
     expect(radio.getAttribute('aria-checked')).toBe('false');
   });
 
+  // 2026-07-29:热区从 24px 圈体扩到 680×40 整行(点小圆点太难瞄)
+  it('点整行(声明文字所在容器)同样切换勾选态,且只切一次', async () => {
+    mount(await identifierState('providers:cn-social'));
+    const row = screen.getByTestId('login-consent-row');
+    const radio = screen.getByTestId('login-consent-radio');
+    expect(radio.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(row);
+    expect(radio.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(row);
+    expect(radio.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('点 radio 不会因冒泡到行容器而二次 toggle(净效果必须是切换)', async () => {
+    mount(await identifierState('providers:cn-social'));
+    const radio = screen.getByTestId('login-consent-radio');
+    // radio 是行容器的子节点:少了 stopPropagation 就会 toggle 两次、看起来点不动
+    expect(screen.getByTestId('login-consent-row').contains(radio)).toBe(true);
+    fireEvent.click(radio);
+    expect(radio.getAttribute('aria-checked')).toBe('true');
+  });
+
   it('行内「服务条款」「隐私协议」链接 → openExternal 打开国内区 URL,且不切换 radio', async () => {
     mount(await identifierState('providers:cn-social'));
     fireEvent.click(screen.getByTestId('login-consent-terms-link'));
@@ -216,24 +237,165 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
   });
 
-  // 2026-07-27 拍板(推翻同年 07-24「游客也先过协议门」):跳过登录不创建账号、不上报
-  // 数据,radio 未勾选也直接进本地模式,不弹协议弹窗。旧游客圆钮入口已删除。
-  it('「跳过登录」未勾选也豁免协议门 → 无弹窗,直接进入本地模式(authEnterLocal)', async () => {
+  // 2026-07-29 拍板(推翻同年 07-27「跳过登录免协议门」):不登录账号也是在用 Cindy
+  // 客户端,跳过登录与个人账号登录同口径先过协议门。旧游客圆钮入口已删除。
+  it('「跳过登录」未勾选 → 弹窗且不进本地模式;同意 → 续接 authEnterLocal', async () => {
     mount(await identifierState('providers:cn-social'));
     expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
+    expect(authEnterLocal).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-consent-agree'));
+    });
     expect(authEnterLocal).toHaveBeenCalledTimes(1);
   });
 
-  it('「跳过登录」不写入「已同意隐私政策」记录(未明示同意 → 采集闸保持关闭)', async () => {
+  it('「跳过登录」不同意 → 停在登录页,不进本地模式', async () => {
     mount(await identifierState('providers:cn-social'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
+    fireEvent.click(screen.getByTestId('login-consent-disagree'));
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('已勾选后点「跳过登录」→ 直接进本地模式并写入「已同意隐私政策」记录', async () => {
+    mount(await identifierState('providers:cn-social'));
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-skip-entry'));
+    });
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(acceptPrivacyConsent).toHaveBeenCalled();
+  });
+
+  /* 顺序回归(codex 审查 P1,#907):同意记录必须落在 auth:enter-local **之后**。
+     acceptPrivacyConsent 的 handler 会同步广播 allowed,而 allowed 的算式是
+     isAnalyticsAllowed() && !isLocalMode() —— 提前落同意时 isLocalMode() 还是
+     false,广播 allowed:true 会让 tapdbClient 当场 initSdk() 并发出 device_login,
+     与「未登录态不上报」直接冲突。两个入口、勾选与弹窗两条路径都要锁。 */
+  const expectConsentPersistedAfterEnterLocal = () => {
+    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
+    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+      acceptPrivacyConsent.mock.invocationCallOrder[0],
+    );
+  };
+
+  it('已勾选 + 面板内入口:同意记录落在 enter-local 之后(不给 TapDB 开窗口)', async () => {
+    mount(await identifierState('providers:cn-social'));
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-skip-entry'));
+    });
+    expectConsentPersistedAfterEnterLocal();
+  });
+
+  it('弹窗同意 + 面板内入口:同意记录同样落在 enter-local 之后', async () => {
+    mount(await identifierState('providers:cn-social'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-skip-entry'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-consent-agree'));
+    });
+    expectConsentPersistedAfterEnterLocal();
+  });
+
+  /* 并发窗口回归(codex 审查 P1 第二条,#907):auth:enter-local 的 handler 要 await
+     waitForSessionInvalidation() + teardownAuthAccountBoundary(),这段窗口里 isLoading
+     仍是 false、弹窗已关、consentAccepted 已为 true,于是邮箱 / 社交等入口仍可点。
+     它们走 deferConsentPersist=false 分支,会在 main 还没转成 local 时立刻 persist,
+     把 allowed:true 广播给 TapDB —— 必须一个都不放过。 */
+  it('会话切换窗口内点社交圆钮 → 不派发、不落同意;切换完成后只落 skip 自己那一次', async () => {
+    let releaseEnterLocal: () => void = () => undefined;
+    authEnterLocal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseEnterLocal = () => resolve({ mode: 'local' });
+        }),
+    );
+    mount(await identifierState('providers:cn-social'));
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
+    // 不 await:enter-local 故意悬挂在窗口里
+    fireEvent.click(screen.getByTestId('login-skip-entry'));
+    expect(authEnterLocal).toHaveBeenCalledTimes(1);
     expect(acceptPrivacyConsent).not.toHaveBeenCalled();
+
+    // 窗口内点其它过门入口:一律作废
+    fireEvent.click(screen.getByTestId('login-social-apple'));
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    expect(acceptPrivacyConsent).not.toHaveBeenCalled();
+    // 豁免协议门的企业 SSO 圆钮同样不该在切换中把视图拨走
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    expect(screen.queryByTestId('login-panel-sso-org')).toBeNull();
+
+    await act(async () => {
+      releaseEnterLocal();
+    });
+    // 只有 skip 自己那一次同意记录,且它落在 enter-local 之后
+    expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
+    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+      acceptPrivacyConsent.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('其它个人链路不受影响:社交圆钮仍在派发前先落同意记录', async () => {
+    mount(await identifierState('providers:cn-social'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-social-apple'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-consent-agree'));
+    });
+    // 账号登录链路登录后 isLocalMode() 为 false、allowed 本就该为真,顺序无需延后
+    expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
+    expect(authEnterLocal).not.toHaveBeenCalled();
+  });
+
+  /* error 步 footer 的逃生入口(login-local-mode)与面板内入口共用 openLocalMode,
+     但它是「登录服务不可用时的唯一出路」,协议门接错会把这条路堵死。error 步不渲染
+     协议行(radio 只在 identifier 主视图),所以这里只能靠弹窗断言。 */
+  const errorState = {
+    step: 'error',
+    code: 'NETWORK_ERROR',
+    recoverTo: 'identifier',
+  } as unknown as AuthFlowState;
+
+  it('error 步逃生入口未勾选 → 弹协议弹窗;同意 → 进本地模式并写同意记录', async () => {
+    mount(errorState, { errorCode: 'NETWORK_ERROR' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-local-mode'));
+    });
+    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
+    expect(authEnterLocal).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-consent-agree'));
+    });
+    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(acceptPrivacyConsent).toHaveBeenCalledTimes(1);
+    // 顺序同面板内入口:先切会话再落同意(见下方顺序回归组的注释)
+    expect(authEnterLocal.mock.invocationCallOrder[0]).toBeLessThan(
+      acceptPrivacyConsent.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('error 步逃生入口不同意 → 关弹窗、留在 error 屏,不进本地模式', async () => {
+    mount(errorState, { errorCode: 'NETWORK_ERROR' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-local-mode'));
+    });
+    fireEvent.click(screen.getByTestId('login-consent-disagree'));
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(authEnterLocal).not.toHaveBeenCalled();
+    // 逃生入口本身必须还在(不同意不等于把这条唯一出路关掉)
+    expect(screen.getByTestId('login-local-mode')).toBeTruthy();
   });
 
   it('旧游客圆钮入口已删除(圆钮行不再渲染 login-social-guest)', async () => {

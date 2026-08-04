@@ -7,6 +7,8 @@
  * 目的：让上层 sessionService/messageService 函数签名与原 HTTP 响应字段完全一致，hooks 零改动。
  */
 
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+
 import type {
   sessions,
   messages,
@@ -268,7 +270,7 @@ export function sessionCreateToRow(
 ): SessionInsert {
   return {
     id,
-    title: 'New Maker',
+    title: DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',

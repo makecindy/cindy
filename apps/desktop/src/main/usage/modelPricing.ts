@@ -3,7 +3,8 @@
  *
  * XD 模型与价格只来自 model-access-server 的同一次 GET /models 响应。这里不再
  * 直接请求 LiteLLM；模型同步成功时整体替换 XD quote，失败时保留上一份成功快照。
- * Gateway per-token 数值在这里转换为 per-Mtok，币种只由构建区域决定。
+ * Gateway per-token 数值在这里转换为 per-Mtok；新版服务端下发的原生币种优先，
+ * 旧版服务端缺失时才回退构建区域。
  */
 
 import { promises as fs, statSync } from 'node:fs';
@@ -12,14 +13,21 @@ import { app, BrowserWindow } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
+  gatewayLedgerCurrency,
   gatewayPricingCatalog,
   getModelPriceQuote,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
 import { providerSecretStorageKey } from '../../shared/providerSecrets.js';
-import { type ModelPriceQuote, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
+import {
+  gatewayCurrencyForRegion,
+  type ModelPriceQuote,
+  type ModelPricingCatalog,
+  type MoneyCurrency,
+} from '../../shared/regionalMoney.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
+import { setActiveLedgerCurrency } from './ledgerCurrency.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
@@ -31,9 +39,11 @@ export type {
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('modelPricing');
+// v8:账号币种与报价同快照持久化；无报价模型也可能明确声明结算币种。
+// v7:币种改为优先使用 Model Access 明确声明，不能复用按 region 猜测的旧 quote。
 // v6:所有 Gateway 模型统一按服务端 costDiscount 计费。v5 的 codex/ quote 已
 // 硬编码乘过 0.15 且丢弃 costDiscount，不能继续复用。
-const DISK_CACHE_VERSION = 6;
+const DISK_CACHE_VERSION = 8;
 const DISK_CACHE_FILE = 'model-pricing.json';
 
 export const MODEL_PRICING_CHANGED_CHANNEL = 'usage:model-pricing-changed';
@@ -43,14 +53,33 @@ interface DiskCachePayload {
   scope: string;
   fetchedAt: number;
   pricing: ModelPricingCatalog;
+  accountCurrency: MoneyCurrency | null;
 }
 
 let cache: ModelPricingCatalog | null = null;
 let cacheScope: string | null = null;
 let cacheAt = 0;
 let modelSyncInflight: Promise<unknown> | null = null;
+let gatewayAccountCurrency: MoneyCurrency | null = null;
+let gatewayAccountCurrencyScope: string | null = null;
 const hydratedScopes = new Set<string>();
 const hydrateInflightByScope = new Map<string, Promise<ModelPricingCatalog | null>>();
+
+function resolveGatewayAccountCurrency(
+  models: readonly ModelAccessGatewayModel[],
+): MoneyCurrency | null {
+  if (models.length === 0) return null;
+  const currencies = new Set(
+    models
+      .map((model) => model.currency)
+      .filter((currency): currency is MoneyCurrency => currency === 'CNY' || currency === 'USD'),
+  );
+  if (currencies.size > 1) {
+    log.warn('xd gateway models returned mixed currencies; account quota currency unavailable');
+    return null;
+  }
+  return currencies.values().next().value ?? gatewayCurrencyForRegion(CURRENT_CINDY_REGION);
+}
 
 function currentKeyCacheIdentity(): string {
   try {
@@ -147,6 +176,7 @@ function validateCatalog(value: unknown): ModelPricingCatalog | null {
 async function writeDiskCache(
   scope: string,
   pricing: ModelPricingCatalog,
+  accountCurrency: MoneyCurrency | null,
   fetchedAt: number,
 ): Promise<void> {
   try {
@@ -157,6 +187,7 @@ async function writeDiskCache(
       scope,
       fetchedAt,
       pricing,
+      accountCurrency,
     };
     await fs.writeFile(file, JSON.stringify(payload), 'utf8');
     hydratedScopes.add(scope);
@@ -181,7 +212,10 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
         raw.version !== DISK_CACHE_VERSION ||
         raw.scope !== scope ||
         !Number.isFinite(raw.fetchedAt) ||
-        Number(raw.fetchedAt) <= 0
+        Number(raw.fetchedAt) <= 0 ||
+        (raw.accountCurrency !== null &&
+          raw.accountCurrency !== 'CNY' &&
+          raw.accountCurrency !== 'USD')
       ) {
         return null;
       }
@@ -191,6 +225,14 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
       cache = pricing;
       cacheScope = scope;
       cacheAt = Number(raw.fetchedAt);
+      // 账本币种必须在这里恢复,而不是只在 getGatewayAccountCurrency 里:那个函数只服务
+      // 可选的账号配额查询,而计费热路径(register.ts 的 turn 记账、prewarm)走的是
+      // getModelPricing / getModelPricingForModel。冷启动只命中磁盘缓存(/models 尚未
+      // 完成或失败)时若不在此同步,currentLedgerCurrency() 会回落构建默认币种,把该账号
+      // 用缓存报价算出的金额当异币种丢弃 —— 等于这一段时间完全不计费。
+      gatewayAccountCurrency = raw.accountCurrency;
+      gatewayAccountCurrencyScope = scope;
+      setActiveLedgerCurrency(raw.accountCurrency);
       log.debug(`hydrated model pricing cache: ${Object.keys(pricing.xd ?? {}).length} XD quotes`);
       return pricing;
     } catch (err) {
@@ -239,8 +281,13 @@ export function replaceGatewayModelPricing(
   cache = pricing;
   cacheScope = scope;
   cacheAt = Date.now();
+  gatewayAccountCurrency = resolveGatewayAccountCurrency(models);
+  gatewayAccountCurrencyScope = scope;
+  // 账本写入层据此判断"这一笔是不是本账号的结算币种"。目录为空(登出 / clear)或混合
+  // 币种时 resolveGatewayAccountCurrency 返回 null，账本随之回落构建默认值。
+  setActiveLedgerCurrency(gatewayAccountCurrency);
   hydratedScopes.add(scope);
-  void writeDiskCache(scope, pricing, cacheAt);
+  void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt);
   broadcastPricing(pricing);
   return pricing;
 }
@@ -279,6 +326,39 @@ export async function getModelPricing(): Promise<ModelPricingCatalog | null> {
  */
 const PRICING_SYNC_WAIT_MS = 3_000;
 
+async function waitForModelPricingSync(): Promise<void> {
+  if (!modelSyncInflight) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      modelSyncInflight.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PRICING_SYNC_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Model Access 账号用量与模型目录属于同一个 Gateway 租户，因而共用目录声明的
+ * 原生币种。混合币种或尚无当前账号目录时返回 null，调用方不再根据组织名称猜测。
+ */
+export async function getGatewayAccountCurrency(
+  authenticatedUserId?: string,
+): Promise<MoneyCurrency | null> {
+  await waitForModelPricingSync();
+  const scope = currentScope(authenticatedUserId);
+  if (gatewayAccountCurrencyScope === scope) return gatewayAccountCurrency;
+  // 本轮 /models 没跑成时，磁盘缓存里的报价同样能定出币种。hydrateFromDisk 内部会在
+  // 落盘缓存生效的同时把币种写回缓存与账本事实源（那里才是所有取价路径的共同入口），
+  // 所以这里只需触发一次 hydrate 再读结果。
+  await getModelPricing();
+  if (gatewayAccountCurrencyScope === scope) return gatewayAccountCurrency;
+  return cacheScope === scope ? gatewayLedgerCurrency(cache) : null;
+}
+
 /**
  * 计费热路径等待模型同步已经落下的本地投影，不再自己联网。providerId 是必需的，
  * 同模型从 XD/OpenAI/订阅来源进入时不会串价。
@@ -287,19 +367,7 @@ export async function getModelPricingForModel(
   providerId: string | null | undefined,
   modelId: string,
 ): Promise<ModelPricingCatalog | null> {
-  if (modelSyncInflight) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        modelSyncInflight.catch(() => undefined),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, PRICING_SYNC_WAIT_MS);
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
+  await waitForModelPricingSync();
   const pricing = await getModelPricing();
   void getModelPriceQuote(pricing, providerId, modelId);
   return pricing;
@@ -330,6 +398,8 @@ export function __resetModelPricingCacheForTesting(): void {
   cacheScope = null;
   cacheAt = 0;
   modelSyncInflight = null;
+  gatewayAccountCurrency = null;
+  gatewayAccountCurrencyScope = null;
   hydratedScopes.clear();
   hydrateInflightByScope.clear();
 }

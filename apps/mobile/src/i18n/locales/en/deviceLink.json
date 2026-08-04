@@ -12,7 +12,7 @@
   "cloudTeaserTitle": "{{appName}} in the Cloud, Coming Soon",
   "cloudTeaserCopy": "Once it launches, the mobile app works on its own, no computer needed.",
   "sectionFirstRun": "Get Started",
-  "sectionOffline": "Connected Computers",
+  "sectionOffline": "Connected Devices",
   "sectionRemoteDisabled": "On Your Computer",
   "sectionAccessRevoked": "Approve Access Again",
   "retryAccess": "Retry Access",

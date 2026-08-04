@@ -75,9 +75,45 @@ export function isSafeGhostThemeValue(value: string): boolean {
 }
 
 /**
- * 读取 :root 现值,产出 `:root { --token: value; … }` 变量块。面板与聊天卡片
- * (卡槽③,iframe srcDoc 注入)共用同一套白名单 token —— 意识用同名
- * var(--xxx) 就能跟主机主题(不只 light/dark,扩展主题同样成立)。
+ * 沙箱页的明暗档(`color-scheme`)——必须与白名单色值一起显式下发。
+ *
+ * `color-scheme` **不跨文档继承**:theme-service.applyTheme 写在宿主 root 上的
+ * `color-scheme: <theme.type>` 到不了意识沙箱页(卡片 iframe / 面板 webview 都是
+ * 独立文档),而不声明的文档按 light 处理。后果分两档:
+ * - **卡片 iframe(srcDoc)**:iframe canvas 透明与否,取决于 guest 的 used
+ *   color-scheme 与 embedder(宿主 renderer 文档)**是否一致** —— 一致才透明、
+ *   露出聊天背景;不一致就用 guest 那一档的 UA 底色填成不透明(light=白)。
+ *   于是宿主暗色 + guest 未声明(按 light)= **一张不透明白 canvas**,而卡片的
+ *   作者契约是"不铺底色 = 透明画布"(见 GhostToolCard.buildCardSrcDoc),不铺
+ *   底色的全出血卡整张变白、切主题也不变(白来自 UA,不是任何 token)——
+ *   xd-mivo 实撞。浅色主题下两者恰好一致,所以这个坑长期没被看见。实测:光写
+ *   `background: transparent` 不管用,只有档位一致才让 canvas 真透明;
+ * - **面板 / 设置区 webview**:body 底色由下面的基线 CSS 铺住,不会露白 canvas,
+ *   但原生控件(滚动条、input / select / checkbox、日期选择器)会停在浅色档。
+ *
+ * 只下发 'light' | 'dark' 两个字面量,不扩大暴露面(白名单里的颜色值早已把明暗
+ * 告诉了 guest,这里不含新信息),也无需过 isSafeGhostThemeValue —— 取值由本函数
+ * 收敛成两个字面量,不透传 computed 原文。
+ */
+function readHostColorScheme(): 'light' | 'dark' {
+  // computed 值可能是 'normal'(尚未 applyTheme)或未来的多值形态(如
+  // 'light dark'),两者都不能直接下发;jsdom 下该属性可能整个缺失。一律
+  // 回落到 root 的 dark class —— applyTheme 与它同步 toggle,是同源信号。
+  const scheme = getComputedStyle(document.documentElement).colorScheme?.trim();
+  if (scheme === 'light' || scheme === 'dark') return scheme;
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+/**
+ * 读取 :root 现值,产出 `:root { color-scheme: …; --token: value; … }` 变量块。
+ * 面板与聊天卡片(卡槽③,iframe srcDoc 注入)共用同一套白名单 token —— 意识用
+ * 同名 var(--xxx) 就能跟主机主题(不只 light/dark,扩展主题同样成立);明暗档由
+ * color-scheme 一并下发(见 readHostColorScheme:UA 层的默认底色/原生控件只认
+ * 它,不认 token)。
+ *
+ * color-scheme 声明在最前:一是恒有值 → 变量块永不为空(卡片 srcDoc 按非空
+ * 决定是否注 `<style>`,见 buildCardSrcDoc),二是意识自己的 color-scheme 声明
+ * 后置或更高 specificity 时仍能覆盖(与下面几组基线外观同一口径)。
  */
 export function buildGhostThemeVarsBlock(): string {
   const style = getComputedStyle(document.documentElement);
@@ -87,7 +123,7 @@ export function buildGhostThemeVarsBlock(): string {
   })
     .filter(Boolean)
     .join(' ');
-  return `:root { ${vars} }`;
+  return `:root { color-scheme: ${readHostColorScheme()}; ${vars} }`;
 }
 
 /** 读取 :root 现值,产出注入面板 webview 的 CSS 文本(变量块 + 面板基线外观)。 */

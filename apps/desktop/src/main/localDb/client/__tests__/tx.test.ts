@@ -195,6 +195,152 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('codex.importMessages dedupes pre-upgrade local rows that still carry raw citation markers', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      // 升级前经流式路径落库的本地 assistant 行:正文仍是原始 citation 标记。
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          'local-1',
+          'local-1',
+          's1',
+          'assistant',
+          JSON.stringify('已保存::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。'),
+          1000,
+        ],
+      );
+
+      // 升级后再导入同一条回复:导入侧文本已归一化。两侧指纹统一规范化后应判定为
+      // 同一条,不插入第二份(review 反馈)。
+      const result = await client.tx('codex.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'codex-import:',
+        sdkSessionId: 'thread-1',
+        model: 'gpt-5',
+        rows: [
+          {
+            lineNo: 1,
+            role: 'assistant',
+            text: '已保存:`/tmp/报告.docx`,请查收。',
+            content: '已保存:`/tmp/报告.docx`,请查收。',
+            createdAt: 1001,
+          },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 0 });
+      await expect(
+        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
+      ).resolves.toEqual([{ client_id: 'local-1' }]);
+    });
+  });
+
+  it('codex.importMessages keeps distinct replies that differ only by Markdown formatting', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      // 仅 Markdown 格式不同的两条**不同**回复:canon 有损比较只在「至少一侧含
+      // 原始标记字面量」时启用,这里两侧都不含 → 原文精确比较,不得误判成重复
+      // (review 反馈:无条件去反引号会把 `Use \`foo\`` 与 `Use foo` 判成同一条)。
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ['local-1', 'local-1', 's1', 'assistant', JSON.stringify('Use `foo`'), 1000],
+      );
+
+      const result = await client.tx('codex.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'codex-import:',
+        sdkSessionId: 'thread-1',
+        model: 'gpt-5',
+        rows: [
+          { lineNo: 1, role: 'assistant', text: 'Use foo', content: 'Use foo', createdAt: 1001 },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 1 });
+      await expect(
+        client.query('SELECT client_id FROM messages WHERE session_id = ? ORDER BY client_id', [
+          's1',
+        ]),
+      ).resolves.toEqual([{ client_id: 'codex-import:1' }, { client_id: 'local-1' }]);
+    });
+  });
+
+  it('codex.importMessages dedupes unfinished-marker rows against finalized plain text', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      // 升级前落库的残尾行:生成被打断,正文停在未闭合标记。导入侧同一条回复
+      // finalize 后是**不含标记/反引号的纯文本**——纯文本也要有规范形候选指纹,
+      // 否则永远配不上残尾行的规范形(review 反馈)。
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          'local-1',
+          'local-1',
+          's1',
+          'assistant',
+          JSON.stringify('Result :codex-file-citation{path="/tmp/x'),
+          1000,
+        ],
+      );
+
+      const result = await client.tx('codex.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'codex-import:',
+        sdkSessionId: 'thread-1',
+        model: 'gpt-5',
+        rows: [
+          { lineNo: 1, role: 'assistant', text: 'Result', content: 'Result', createdAt: 1001 },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 0 });
+      await expect(
+        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
+      ).resolves.toEqual([{ client_id: 'local-1' }]);
+    });
+  });
+
+  it('codex.importMessages dedupes marker-literal filenames (指纹不动点规范形)', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      // 极端文件名:路径解码后本身是完整标记字面量。展示形二次处理不幂等,指纹
+      // 用不动点规范形让原始行与展示形行收敛到同一形。
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          'local-1',
+          'local-1',
+          's1',
+          'assistant',
+          JSON.stringify('保存 :codex-file-citation{path="/tmp/a:codex-file-citation{path=\\"/b\\"}.md"} 完成'),
+          1000,
+        ],
+      );
+
+      const result = await client.tx('codex.importMessages', {
+        sessionId: 's1',
+        importClientIdPrefix: 'codex-import:',
+        sdkSessionId: 'thread-1',
+        model: 'gpt-5',
+        rows: [
+          {
+            lineNo: 1,
+            role: 'assistant',
+            text: '保存 `/tmp/a:codex-file-citation{path="/b"}.md` 完成',
+            content: '保存 `/tmp/a:codex-file-citation{path="/b"}.md` 完成',
+            createdAt: 1001,
+          },
+        ],
+      });
+
+      expect(result).toEqual({ changed: 0 });
+      await expect(
+        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
+      ).resolves.toEqual([{ client_id: 'local-1' }]);
+    });
+  });
+
   it('codex.importMessages does not rewrite tombstoned imported messages', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

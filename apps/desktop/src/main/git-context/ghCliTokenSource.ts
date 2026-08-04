@@ -111,3 +111,14 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     },
   };
 }
+
+let sharedSource: GhCliTokenSource | null = null;
+
+/**
+ * 进程内共享实例。多个消费方(PR 状态徽标、「我的 Issue」列表)各自 new 一份的话,
+ * 缓存互不可见 —— 同一段时间会重复 spawn `gh`,负缓存也各算一套。
+ */
+export function getSharedGhCliTokenSource(): GhCliTokenSource {
+  if (!sharedSource) sharedSource = createGhCliTokenSource();
+  return sharedSource;
+}

@@ -22,7 +22,7 @@ import {
 } from '../../shared/ghost.js';
 
 export const GHOST_SIGNATURE_FILE = 'cindy-signatures.json';
-const MAX_SIGNATURE_FILE_BYTES = 64 * 1024;
+export const MAX_SIGNATURE_FILE_BYTES = 64 * 1024;
 const MAX_SIGNED_CONTENT_BYTES = 256 * 1024 * 1024;
 
 export interface GhostTrustedKey {

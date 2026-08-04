@@ -37,15 +37,17 @@ export function replaceCustomProviderModelId(
 
 /**
  * 运行期 CatalogModel 已把缺省 contextWindow 物化为通用默认值；转回用户配置时不能把该
- * 默认快照写成 override，否则未来默认升级后老配置无法跟随。厂商明确的非默认值则保留。
+ * 默认快照写成 override，否则未来默认升级后老配置无法跟随。判据以 contextWindowExplicit
+ * 标记为准——用户显式填的值哪怕恰好等于当前默认（如 200K）也必须原样保留，不能靠等值
+ * 推断（PR review P1）；无标记的旧视图快照回退等值判断,行为不变。
  */
 export function customProviderModelConfigFromCatalogModel(
-  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'defaultEnabled'>,
+  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'contextWindowExplicit' | 'defaultEnabled'>,
 ): ProviderRuntimeModelConfig {
   return {
     id: model.id,
     name: model.name,
-    ...(model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
+    ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
@@ -81,17 +83,26 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。 */
+/** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。端点声明的 contextWindow 随发现带入(#386)。 */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
-  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name'>[],
+  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name' | 'contextWindow'>[],
 ): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
   const known = new Set(existing.map((m) => m.id));
   const models = [...existing];
   const addedIds: string[] = [];
   for (const model of discovered) {
     if (!model.id || !model.name || known.has(model.id)) continue;
-    models.push({ id: model.id, name: model.name, defaultEnabled: false });
+    models.push({
+      id: model.id,
+      name: model.name,
+      ...(typeof model.contextWindow === 'number' &&
+      Number.isFinite(model.contextWindow) &&
+      model.contextWindow > 0
+        ? { contextWindow: Math.floor(model.contextWindow) }
+        : {}),
+      defaultEnabled: false,
+    });
     known.add(model.id);
     addedIds.push(model.id);
   }

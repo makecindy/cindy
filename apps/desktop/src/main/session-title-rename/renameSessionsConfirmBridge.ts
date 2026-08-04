@@ -30,6 +30,8 @@ export interface RenameSessionsConfirmBridgeDeps {
   broadcast: (channel: string, payload: unknown) => void;
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
+  /** 同 IssueConfirmBridgeDeps.onDesktopOnlyConfirmPending(#926):IM 侧「去桌面确认」提示。 */
+  onDesktopOnlyConfirmPending?: (sessionId: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -60,6 +62,16 @@ export class RenameSessionsConfirmBridge {
         sessionId,
         request: { kind: 'rename_sessions_confirm', requestId, changes },
       });
+      try {
+        this.deps.onDesktopOnlyConfirmPending?.(sessionId);
+      } catch (err) {
+        // 旁路提示绝不反噬确认流程:回调同步抛错会在 Promise executor 里把
+        // request() 直接 reject(review 反馈)——吞错只 warn。
+        this.deps.logger?.warn('onDesktopOnlyConfirmPending threw (ignored)', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     });
   }
 

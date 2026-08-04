@@ -135,12 +135,40 @@ export function subscribeVoiceInputSettings(
 }
 
 export type VoiceInputShortcutUpdateResult =
-  | { ok: true; settings: VoiceInputSettings }
-  | { ok: false; error: string; errorCode?: string };
+  | {
+    ok: true;
+    settings: VoiceInputSettings;
+    /**
+     * 快捷键已存盘，但 macOS 监听权限还没拿到，所以按键暂时不会有反应。设置页据此
+     * 请求授权并标注「待授权」，而不是当成注册失败报错。
+     */
+    pendingInputMonitoring?: boolean;
+  }
+  // 用 IPC 契约的固定联合而不是裸 string，避免误传/误判不存在的 code。
+  | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 
-export async function syncVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null): Promise<{ ok: boolean; error?: string }> {
+/**
+ * 录制期挂起全局快捷键。
+ *
+ * 与「同步」分开是必要的：main 侧会丢掉与存盘不一致的同步请求（那是过时的广播回声），而挂起
+ * 传的 null 恰恰**故意**与存盘不同。不把意图讲明，就只能在 main 侧放行所有 null —— 于是
+ * 「清空快捷键」那次提交广播出的 null 回声也能迟到落地，把更晚一次提交刚注册好的快捷键关掉。
+ */
+export async function suspendVoiceInputGlobalShortcut(): Promise<{ ok: boolean; error?: string }> {
+  return syncVoiceInputGlobalShortcut(null, { suspend: true });
+}
+
+/**
+ * 返回类型带上 `errorCode`：调用方要靠它区分「还是缺权限」「helper 真起不来」「被更晚一轮
+ * 顶掉」，只有 ok/error 的话就只能去匹配 main 侧那句英文（而那句已经被统一消毒成固定文案，
+ * 压根区分不出原因）。
+ */
+export async function syncVoiceInputGlobalShortcut(
+  shortcut: VoiceInputShortcut | null,
+  options?: { suspend?: true },
+): Promise<{ ok: boolean; error?: string; errorCode?: VoiceInputGlobalErrorCode }> {
   try {
-    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut);
+    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut, options);
     if (!result.ok) {
       log.warn('global voice input shortcut sync failed:', result.error);
     }

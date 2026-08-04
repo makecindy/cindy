@@ -48,6 +48,36 @@ describe('loadAllCommands deviceId', () => {
     expect(cmds.map((x) => x.name).sort()).toEqual(['compact', 'goal', 'help', 'localskill']);
   });
 
+  it('本地 Claude 新对话 workingDir=null 时仍加载全局 skills', async () => {
+    const s = stubElectron();
+    const cmds = await loadAllCommands('claude-code', null);
+
+    expect(s.invoke).not.toHaveBeenCalled();
+    expect(s.listAgentSkills).toHaveBeenCalledWith('claude-code', {});
+    expect(cmds.some((x) => x.name === 'localskill')).toBe(true);
+  });
+
+  it('SSH remote 用 skipAgentSkills 显式关闭控制端本机 skill 扫描', async () => {
+    const s = stubElectron();
+    const cmds = await loadAllCommands('claude-code', null, { skipAgentSkills: true });
+
+    expect(s.listAgentSkills).not.toHaveBeenCalled();
+    expect(s.invoke).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'maker:list-agent-skills',
+      expect.anything(),
+    );
+    expect(cmds.some((x) => x.kind === 'agent-skill')).toBe(false);
+  });
+
+  it('本地 Codex 新对话 workingDir=null 时仍加载全局 skills', async () => {
+    const s = stubElectron();
+    const cmds = await loadAllCommands('codex', null);
+
+    expect(s.listAgentSkills).toHaveBeenCalledWith('codex', {});
+    expect(cmds.some((x) => x.name === 'localskill')).toBe(true);
+  });
+
   it('远程会话:agent-builtin / agent-skill 走隧道,desktop 仍本地', async () => {
     const s = stubElectron();
     const cmds = await loadAllCommands('claude-code', '/host/path', undefined, 'dev-1');
@@ -59,11 +89,23 @@ describe('loadAllCommands deviceId', () => {
     expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-commands', ['claude-code']);
     expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-skills', [
       'claude-code',
-      { workingDir: '/host/path', forceReload: undefined },
+      { workingDir: '/host/path' },
     ]);
     // 结果 = 本地 desktop(help + goal,远程会话不再剔除)+ 被控端 builtin(host-cmd)+ 被控端 skill(host-skill)
     expect(cmds.map((x) => x.name).sort()).toEqual(['goal', 'help', 'host-cmd', 'host-skill']);
     // device-link 下 /goal 保留:业务体经隧道到被控端 goal-host,palette 正常展示。
     expect(cmds.some((x) => x.name === 'goal')).toBe(true);
+  });
+
+  it('device-link Claude 新对话 workingDir=null 时从被控端加载全局 skills', async () => {
+    const s = stubElectron();
+    const cmds = await loadAllCommands('claude-code', null, undefined, 'dev-1');
+
+    expect(s.listAgentSkills).not.toHaveBeenCalled();
+    expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-skills', [
+      'claude-code',
+      {},
+    ]);
+    expect(cmds.some((x) => x.name === 'host-skill')).toBe(true);
   });
 });

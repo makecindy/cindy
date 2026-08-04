@@ -11,12 +11,26 @@ export type ScheduleFireSource = 'automatic' | 'run-now';
 /**
  * Scheduler 内部执行阶段。阶段只用于运行期诊断，不持久化到 schedule_runs。
  * 它覆盖从抢占排期到终态落库的整个槽位生命周期。
+ *
+ * 'queued' 是**纯等待**阶段：runner 已把本轮 prompt 排进目标会话的队列，正在等
+ * 会话空闲后被派发 —— 此时没有 agent 子进程、没有 MCP 注册、不烧 token。它刻意
+ * 不计入并发闸门（见 Scheduler.tick 的槽位计算）：并发上限防的是"同时跑太多
+ * agent"，纯等待占着配额会让整个调度器被卡住的会话拖死（2026-07-29 实事故：
+ * 4 个排队心跳占满全部槽位，其余任务停摆 3.5 小时）。
  */
 export type ScheduleRunPhase =
   | 'loading'
   | 'claiming'
   | 'persisting'
   | 'running'
+  | 'queued'
+  /**
+   * 排队者已决定**本轮不再执行**（endQueueWait(false)：撤项 / 失败 / abort），正在走
+   * 自己的收口。既不算纯等待（卡死守卫要看得住它），也不该占并发槽（它明确不会执行）——
+   * 复位成 'running' 会让 slotsInUse 临时超过 maxConcurrentRuns，UI 上冒出 9/8
+   * （review #944 第十五轮）。
+   */
+  | 'cancelling'
   | 'finalizing';
 
 /** 当前 Scheduler 实例中的一条结构化 in-flight 记录。 */
@@ -30,6 +44,12 @@ export interface SchedulerInflightRun {
   /** 自动任务从到期到真正获得槽位的等待时间；runNow 没有此字段。 */
   slotWaitMs?: number;
   phase: ScheduleRunPhase;
+  /**
+   * 最近一次收到执行进展信号的时刻（runner 经 FireContext.onProgress 打点，
+   * 每个会话事件一次）。卡死判定用"多久没有新反馈"而不是总执行时长 —— 后者会
+   * 误砍真在干活的长任务。没收到过任何事件时等于 startedAt。
+   */
+  lastProgressAt: number;
 }
 
 /** 因自动并发闸门而尚未获得槽位的到期任务。 */
@@ -46,7 +66,14 @@ export interface SchedulerWaitingSchedule {
 export interface SchedulerRuntimeSnapshot {
   schedulerInstanceId: string;
   processId?: number;
+  /** in-flight 记录总数（含 'queued' 纯等待与 'cancelling' 收口中的项）。 */
   inFlight: number;
+  /**
+   * 真正占用并发槽的 run 数（判据以 Scheduler.countSlotsInUse 为准：排除 'queued'
+   * 纯等待与 'cancelling' 已决定本轮不执行的收口项）。UI 显示"N/max"要用本字段：
+   * inFlight 含这两类不占槽的记录，直接拿它显示会出现"满负荷"却没有任务在跑的错觉。
+   */
+  slotsInUse: number;
   maxConcurrentRuns: number;
   inFlightRuns: SchedulerInflightRun[];
   waitingSchedules: SchedulerWaitingSchedule[];

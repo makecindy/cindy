@@ -382,6 +382,43 @@ describe('readUsageHistoryWith', () => {
     });
   });
 
+  it('keeps a USD-settled account history intact regardless of build region', async () => {
+    // 结算币种由服务端按账号所属租户下发,不是构建区域。账本币种若按区域取,
+    // 以 USD 结算的账号在 CN 构建上每一行都会被判成异币种归零 —— 等于这些用户不计费。
+    // 判据取自当前 Gateway 报价目录的币种。
+    const usdRow = (amount: number): RegionalMoney => ({
+      amount,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getAllSpendDays: async () => [
+          { day: '2026-06-10', money: usdRow(3) },
+          { day: TODAY, money: usdRow(5) },
+        ],
+        getModelUsageSince: async () => [],
+        getModelPricing: async () => ({
+          xd: {
+            'gpt-5.5': {
+              providerId: 'xd',
+              modelId: 'gpt-5.5',
+              currency: 'USD',
+              source: 'gateway',
+              approximate: false,
+              inputPerMtok: 3,
+              outputPerMtok: 15,
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.totals.today).toMatchObject({ amount: 5, currency: 'USD' });
+    expect(result.totals.last30Days).toMatchObject({ amount: 8, currency: 'USD' });
+  });
+
   it('uses provider-scoped Anthropic reference pricing for Claude subscription rows', async () => {
     const expected = regionalUsdAmount(5);
     const result = await readUsageHistoryWith(makeDeps({

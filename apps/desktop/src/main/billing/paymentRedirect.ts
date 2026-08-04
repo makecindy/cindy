@@ -6,8 +6,9 @@ const ALLOWED_BILLING_REDIRECT_HOSTS = new Set([
   'checkout.stripe.com',
   'invoice.stripe.com',
 ]);
+const ALLOWED_STRIPE_PORTAL_HOSTS = new Set(['billing.stripe.com']);
 
-export function isAllowedBillingRedirectUrl(value: unknown): value is string {
+function isAllowedStripeUrl(value: unknown, allowedHosts: ReadonlySet<string>): value is string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
@@ -22,9 +23,17 @@ export function isAllowedBillingRedirectUrl(value: unknown): value is string {
       parsed.username === '' &&
       parsed.password === '' &&
       parsed.port === '' &&
-      ALLOWED_BILLING_REDIRECT_HOSTS.has(parsed.hostname)
+      allowedHosts.has(parsed.hostname)
     );
   } catch {
     return false;
   }
+}
+
+export function isAllowedBillingRedirectUrl(value: unknown): value is string {
+  return isAllowedStripeUrl(value, ALLOWED_BILLING_REDIRECT_HOSTS);
+}
+
+export function isAllowedStripeBillingPortalUrl(value: unknown): value is string {
+  return isAllowedStripeUrl(value, ALLOWED_STRIPE_PORTAL_HOSTS);
 }

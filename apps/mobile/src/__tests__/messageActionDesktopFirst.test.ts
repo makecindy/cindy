@@ -47,6 +47,23 @@ describe('mobile message actions desktop-first surface', () => {
     );
   });
 
+  it('never hangs the action bar on a system boundary card', () => {
+    // 系统卡(agent-switch / auto-resume / goal / slash 命令卡)不是发言:桌面
+    // MessageStream 对 systemCardType 提前 return SystemCard,卡片下方没有任何操作
+    // 行。手机版曾漏掉这条,跨 Agent 切换的分隔线药丸下多出一行「··· 刚刚」。
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+
+    expect(source).toContain('const showCompletedActionBar = mobileMessageShowsActionBar({');
+    expect(source).toContain('hasSystemCard: !!item.message.systemCardType,');
+    expect(source).toContain('isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,');
+    // 时间、花费与 More 都必须由该判据统一 gate,不得绕过它单独计算。
+    expect(source).toContain(
+      "const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';",
+    );
+    expect(source).toContain('const turnCost = showCompletedActionBar && ');
+    expect(source).not.toContain('const suppressAssistantActions');
+  });
+
   it('only exposes the More menu on a completed turn boundary', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
 

@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { LEGACY_AGENT_PROXY_REMOTE_PORT, normalizeAgentProxyUrl } from '../../../shared/agentProxyConfig';
 
 import { RemoteHostDetail } from './RemoteHostDetail';
 import { SshKeySetupDialog } from './SshKeySetupDialog';
@@ -270,10 +271,19 @@ interface AddFormState {
   port: string;
   authMethod: 'agent' | 'key';
   identityFile: string;
-  /** 「Agent 流量走本地 Proxy」隧道开关 + 本地 Proxy 地址 (host:port)。 */
+  /** 「Agent 流量走 Proxy」开关。 */
   agentProxyEnabled: boolean;
+  /** tunnel = Cindy 代建隧道; env = 自备代理 (仅注入环境变量)。 */
+  agentProxyMode: 'tunnel' | 'env';
+  /** tunnel 模式: 本地 Proxy 地址 (host:port)。 */
   agentProxyAddr: string;
+  /** tunnel 模式: 远端固定监听端口 (文本输入, 提交时转数字)。 */
+  agentProxyRemotePort: string;
+  /** env 模式: 远端可达的代理 URL。 */
+  agentProxyUrl: string;
 }
+
+const DEFAULT_AGENT_PROXY_REMOTE_PORT = String(LEGACY_AGENT_PROXY_REMOTE_PORT);
 
 const EMPTY_FORM: AddFormState = {
   id: '',
@@ -283,7 +293,10 @@ const EMPTY_FORM: AddFormState = {
   authMethod: 'agent',
   identityFile: '',
   agentProxyEnabled: false,
+  agentProxyMode: 'tunnel',
   agentProxyAddr: '127.0.0.1:7890',
+  agentProxyRemotePort: DEFAULT_AGENT_PROXY_REMOTE_PORT,
+  agentProxyUrl: 'http://127.0.0.1:7890',
 };
 
 /**
@@ -320,6 +333,44 @@ export function parseProxyAddrInput(input: string): { localHost: string; localPo
   return { localHost, localPort };
 }
 
+/** 远端固定端口输入 — 严格整数, 且拒特权/知名服务端口 (与 main 侧
+ * isAllowedAgentProxyRemotePort 同口径, 防清理路径误杀系统 sshd)。 */
+export function parseRemotePortInput(input: string): number | null {
+  const s = input.trim();
+  if (!/^\d+$/.test(s)) return null;
+  const port = Number(s);
+  return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : null;
+}
+
+type AgentProxyPayload =
+  | { enabled: boolean; mode: 'tunnel'; localHost: string; localPort: number; remotePort: number }
+  | { enabled: boolean; mode: 'env'; proxyUrl: string };
+
+/** 表单 → IPC agentProxy 载荷; 校验失败返回错误文案 key (toast 用)。 */
+function buildAgentProxyPayload(
+  form: AddFormState,
+): { ok: true; agentProxy: AgentProxyPayload | null } | { ok: false; errorKey: string } {
+  if (!form.agentProxyEnabled) return { ok: true, agentProxy: null };
+  if (form.agentProxyMode === 'tunnel') {
+    const addr = parseProxyAddrInput(form.agentProxyAddr);
+    if (!addr) return { ok: false, errorKey: 'settings.remote.add.agentProxyAddrInvalid' };
+    const remotePort = parseRemotePortInput(form.agentProxyRemotePort);
+    if (!remotePort) return { ok: false, errorKey: 'settings.remote.add.agentProxyRemotePortInvalid' };
+    return { ok: true, agentProxy: { enabled: true, mode: 'tunnel', ...addr, remotePort } };
+  }
+  const proxyUrl = parseProxyUrlInput(form.agentProxyUrl);
+  if (!proxyUrl) return { ok: false, errorKey: 'settings.remote.add.agentProxyUrlInvalid' };
+  return { ok: true, agentProxy: { enabled: true, mode: 'env', proxyUrl } };
+}
+
+/**
+ * env 模式代理 URL 校验 — 直接复用 shared 的 normalizeAgentProxyUrl,
+ * 与 main 侧 prefs/IPC 恒同口径 (两套标准会让用户填了合法表象被 IPC 打回)。
+ */
+export function parseProxyUrlInput(input: string): string | null {
+  return normalizeAgentProxyUrl(input);
+}
+
 interface HostFormProps {
   /**
    * 'add' → blank form, alias editable, submit creates a new host.
@@ -354,7 +405,14 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
     if (!form.hostname.trim()) return false;
     if (!form.user.trim()) return false;
     if (form.authMethod === 'key' && !form.identityFile.trim()) return false;
-    if (form.agentProxyEnabled && !parseProxyAddrInput(form.agentProxyAddr)) return false;
+    if (form.agentProxyEnabled) {
+      if (form.agentProxyMode === 'tunnel') {
+        if (!parseProxyAddrInput(form.agentProxyAddr)) return false;
+        if (!parseRemotePortInput(form.agentProxyRemotePort)) return false;
+      } else if (!parseProxyUrlInput(form.agentProxyUrl)) {
+        return false;
+      }
+    }
     return true;
   }, [form]);
 
@@ -547,9 +605,10 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
         )}
       </div>
 
-      {/* ── Agent Proxy 隧道 ──
-          开关 + 本地 Proxy 地址。pref 落 desktop 本地 ssh-host-prefs.json
-          (不写 ~/.ssh/config); 生效路径: 远端 127.0.0.1:<port> → 本机 Proxy,
+      {/* ── Agent Proxy ──
+          开关 + 双模式。pref 落 desktop 本地 ssh-host-prefs.json (不写
+          ~/.ssh/config)。tunnel 模式: 远端 127.0.0.1:<固定端口> → 独立 SSH
+          隧道 → 本机 Proxy; env 模式: 只注入用户给的远端可达 URL。
           codex daemon 经 env marker (重启生效), claude 按 session env (即时)。 */}
       <div className="flex flex-col gap-2">
         <label
@@ -570,23 +629,89 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
           </span>
         </label>
         {form.agentProxyEnabled && (
-          <div className="flex flex-col gap-1">
-            <LabeledInput
-              label={t('settings.remote.add.agentProxyAddr')}
-              placeholder="127.0.0.1:7890"
-              value={form.agentProxyAddr}
-              onChange={(v) => setForm({ ...form, agentProxyAddr: v })}
-            />
-            <span
-              className="text-11"
-              style={{ color: 'var(--settings-integration-subtitle)' }}
-            >
-              {t('settings.remote.add.agentProxyHint')}
-            </span>
-            {form.agentProxyAddr.trim() && !parseProxyAddrInput(form.agentProxyAddr) && (
-              <span className="text-11" style={{ color: 'var(--error-fg)' }}>
-                {t('settings.remote.add.agentProxyAddrInvalid')}
-              </span>
+          <div className="flex flex-col gap-2 pl-6">
+            <div className="flex flex-col gap-1">
+              {(['tunnel', 'env'] as const).map((mode) => (
+                <label key={mode} className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="radio"
+                    name="agent-proxy-mode"
+                    checked={form.agentProxyMode === mode}
+                    onChange={() => setForm({ ...form, agentProxyMode: mode })}
+                    className="mt-[3px] cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                  />
+                  <span className="flex flex-col">
+                    <span
+                      className="text-12 font-medium"
+                      style={{ color: 'var(--settings-section-sublabel)' }}
+                    >
+                      {t(mode === 'tunnel'
+                        ? 'settings.remote.add.agentProxyModeTunnel'
+                        : 'settings.remote.add.agentProxyModeEnv')}
+                    </span>
+                    <span
+                      className="text-11"
+                      style={{ color: 'var(--settings-integration-subtitle)' }}
+                    >
+                      {t(mode === 'tunnel'
+                        ? 'settings.remote.add.agentProxyModeTunnelDesc'
+                        : 'settings.remote.add.agentProxyModeEnvDesc')}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            {form.agentProxyMode === 'tunnel' ? (
+              <div className="flex flex-col gap-1">
+                <LabeledInput
+                  label={t('settings.remote.add.agentProxyAddr')}
+                  placeholder="127.0.0.1:7890"
+                  value={form.agentProxyAddr}
+                  onChange={(v) => setForm({ ...form, agentProxyAddr: v })}
+                />
+                {form.agentProxyAddr.trim() && !parseProxyAddrInput(form.agentProxyAddr) && (
+                  <span className="text-11" style={{ color: 'var(--error-fg)' }}>
+                    {t('settings.remote.add.agentProxyAddrInvalid')}
+                  </span>
+                )}
+                <LabeledInput
+                  label={t('settings.remote.add.agentProxyRemotePort')}
+                  placeholder={DEFAULT_AGENT_PROXY_REMOTE_PORT}
+                  value={form.agentProxyRemotePort}
+                  onChange={(v) => setForm({ ...form, agentProxyRemotePort: v })}
+                />
+                {form.agentProxyRemotePort.trim() && !parseRemotePortInput(form.agentProxyRemotePort) && (
+                  <span className="text-11" style={{ color: 'var(--error-fg)' }}>
+                    {t('settings.remote.add.agentProxyRemotePortInvalid')}
+                  </span>
+                )}
+                <span
+                  className="text-11"
+                  style={{ color: 'var(--settings-integration-subtitle)' }}
+                >
+                  {t('settings.remote.add.agentProxyHint')}
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <LabeledInput
+                  label={t('settings.remote.add.agentProxyUrl')}
+                  placeholder="http://127.0.0.1:7890"
+                  value={form.agentProxyUrl}
+                  onChange={(v) => setForm({ ...form, agentProxyUrl: v })}
+                />
+                {form.agentProxyUrl.trim() && !parseProxyUrlInput(form.agentProxyUrl) && (
+                  <span className="text-11" style={{ color: 'var(--error-fg)' }}>
+                    {t('settings.remote.add.agentProxyUrlInvalid')}
+                  </span>
+                )}
+                <span
+                  className="text-11"
+                  style={{ color: 'var(--settings-integration-subtitle)' }}
+                >
+                  {t('settings.remote.add.agentProxyUrlHint')}
+                </span>
+              </div>
             )}
           </div>
         )}
@@ -882,9 +1007,9 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       //   agent → optional pin (FilteredAgent only offers this one key)
       // Empty string from the input = unset, send undefined.
       const trimmedIdentityFile = form.identityFile.trim();
-      const proxyAddr = form.agentProxyEnabled ? parseProxyAddrInput(form.agentProxyAddr) : null;
-      if (form.agentProxyEnabled && !proxyAddr) {
-        toast.error(t('settings.remote.add.agentProxyAddrInvalid'));
+      const proxyPayload = buildAgentProxyPayload(form);
+      if (!proxyPayload.ok) {
+        toast.error(t(proxyPayload.errorKey));
         return;
       }
       await window.electronAPI.remoteSsh.update({
@@ -894,7 +1019,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         port: Number.isFinite(port) && port > 0 ? port : 22,
         authMethod: form.authMethod,
         identityFile: trimmedIdentityFile || undefined,
-        agentProxy: proxyAddr ? { enabled: true, ...proxyAddr } : null,
+        agentProxy: proxyPayload.agentProxy,
       });
       // refresh() pulls the latest snapshot; updateConfig already fired a
       // status event, but a full refresh is the safest way to also reflect
@@ -915,9 +1040,9 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       const port = parseInt(form.port, 10);
       // identityFile is meaningful in BOTH auth modes (see handleEdit).
       const trimmedIdentityFile = form.identityFile.trim();
-      const proxyAddr = form.agentProxyEnabled ? parseProxyAddrInput(form.agentProxyAddr) : null;
-      if (form.agentProxyEnabled && !proxyAddr) {
-        toast.error(t('settings.remote.add.agentProxyAddrInvalid'));
+      const proxyPayload = buildAgentProxyPayload(form);
+      if (!proxyPayload.ok) {
+        toast.error(t(proxyPayload.errorKey));
         return;
       }
       await window.electronAPI.remoteSsh.add({
@@ -927,7 +1052,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         port: Number.isFinite(port) && port > 0 ? port : 22,
         authMethod: form.authMethod,
         identityFile: trimmedIdentityFile || undefined,
-        agentProxy: proxyAddr ? { enabled: true, ...proxyAddr } : null,
+        agentProxy: proxyPayload.agentProxy,
       });
       await refresh();
       setAdding(false);
@@ -1053,9 +1178,16 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                     authMethod: snap.config.authMethod === 'key' ? 'key' : 'agent',
                     identityFile: snap.config.identityFile ?? '',
                     agentProxyEnabled: snap.agentProxy?.enabled === true,
-                    agentProxyAddr: snap.agentProxy
+                    agentProxyMode: snap.agentProxy?.mode === 'env' ? 'env' : 'tunnel',
+                    agentProxyAddr: snap.agentProxy?.mode === 'tunnel'
                       ? `${snap.agentProxy.localHost}:${snap.agentProxy.localPort}`
                       : '127.0.0.1:7890',
+                    agentProxyRemotePort: snap.agentProxy?.mode === 'tunnel'
+                      ? String(snap.agentProxy.remotePort)
+                      : DEFAULT_AGENT_PROXY_REMOTE_PORT,
+                    agentProxyUrl: snap.agentProxy?.mode === 'env'
+                      ? snap.agentProxy.proxyUrl
+                      : 'http://127.0.0.1:7890',
                   }}
                   onSubmit={handleEdit}
                   onCancel={() => setEditingId(null)}

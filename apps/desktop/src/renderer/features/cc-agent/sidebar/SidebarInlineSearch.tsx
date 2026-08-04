@@ -21,7 +21,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
   SearchFilterMenu,
-  SearchSortMenu,
   type useConversationSearch,
 } from './ConversationSearchBox';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
@@ -188,19 +187,15 @@ export function SidebarInlineSearch({
               </button>
             </Tip>
           )}
-          {/* 选项钮:排序 + 筛选,紧凑纯图标形态,与搜索框合为一体(无分隔线、无文字提示)。
+          {/* 选项钮:只一颗——排序与各项筛选都收在这个菜单里(排序是它的首行子菜单)。
+               紧凑纯图标形态,与搜索框合为一体(无分隔线、无文字提示)。
                菜单开合上报 → 打开期间保持展开,不因鼠标移到菜单而收起。 */}
-          <SearchSortMenu
-            sortBy={search.sortBy}
-            onChange={search.setSortBy}
-            onOpenChange={setMenuOpen}
-            compact
-          />
           <SearchFilterMenu
             status={search.statusFilter}
             agentKind={search.agentFilter}
             lastActivity={search.lastActivityFilter}
             projects={search.projectSelection}
+            sortBy={search.sortBy}
             allKnownProjects={allKnownProjects}
             activeCount={search.activeFilterCount}
             lockedProjectKey={search.lockedProjectKey}
@@ -209,6 +204,7 @@ export function SidebarInlineSearch({
             onAgentKindChange={search.setAgentFilter}
             onLastActivityChange={search.setLastActivityFilter}
             onProjectsChange={search.setProjectSelection}
+            onSortChange={search.setSortBy}
             onReset={search.resetFilters}
             onOpenChange={setMenuOpen}
             compact

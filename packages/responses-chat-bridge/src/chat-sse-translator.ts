@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import type { ChatBridgeToolContext } from './tool-context.js';
+
 interface ToolState {
   outputIndex: number;
   itemId: string;
@@ -11,12 +13,38 @@ interface ToolState {
   done: boolean;
 }
 
+interface ReasoningState {
+  outputIndex: number;
+  itemId: string;
+  text: string;
+  added: boolean;
+  done: boolean;
+}
+
 interface UsageShape {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
+  input_tokens_details?: { cached_tokens?: number };
   completion_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number };
+}
+
+interface ResponseAnnotation {
+  type: 'url_citation';
+  url: string;
+  title?: string;
+  start_index: number;
+  end_index: number;
+}
+
+export interface ChatSseTranslatorOptions {
+  toolContext?: ChatBridgeToolContext;
+  zeroUsageOnMissing?: boolean;
+  inlineReasoning?: boolean;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -36,11 +64,75 @@ function deterministicId(prefix: string, responseId: string, index: number): str
   return `${prefix}_${digest}`;
 }
 
+function reasoningText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(reasoningText).filter(Boolean).join('');
+  if (!isPlainObject(value)) return '';
+  for (const key of ['reasoning_content', 'content', 'text', 'summary']) {
+    const text = reasoningText(value[key]);
+    if (text) return text;
+  }
+  return '';
+}
+
+function extractReasoning(delta: Record<string, unknown>): string {
+  for (const key of ['reasoning_content', 'reasoning', 'reasoning_details']) {
+    const text = reasoningText(delta[key]);
+    if (text) return text;
+  }
+  return '';
+}
+
+function annotationsFrom(value: unknown): ResponseAnnotation[] {
+  if (!Array.isArray(value)) return [];
+  const result: ResponseAnnotation[] = [];
+  for (const entry of value) {
+    if (!isPlainObject(entry)) continue;
+    const source = isPlainObject(entry.url_citation) ? entry.url_citation : entry;
+    if (typeof source.url !== 'string' || !source.url) continue;
+    result.push({
+      type: 'url_citation',
+      url: source.url,
+      ...(typeof source.title === 'string' ? { title: source.title } : {}),
+      start_index: typeof source.start_index === 'number' ? source.start_index : 0,
+      end_index: typeof source.end_index === 'number' ? source.end_index : 0,
+    });
+  }
+  return result;
+}
+
+function inlineCitationAnnotations(value: unknown): ResponseAnnotation[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string' && /^https?:\/\//.test(entry)) {
+      return [{ type: 'url_citation' as const, url: entry, start_index: 0, end_index: 0 }];
+    }
+    return annotationsFrom([entry]);
+  });
+}
+
+function customInput(argumentsText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    if (isPlainObject(parsed) && typeof parsed.input === 'string') return parsed.input;
+  } catch {
+    // A provider may return a raw freeform argument buffer.
+  }
+  return argumentsText;
+}
+
+function toolSearchArguments(argumentsText: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(argumentsText);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Chat Completions SSE → OpenAI Responses SSE 状态机。
- *
- * tool call 以 Chat 的 `index` 为 identity；id/name/arguments 可以在不同 chunk 抵达，
- * translator 会为每个 index 独立累积，避免并行工具参数串线。
+ * Chat Completions SSE → OpenAI Responses SSE state machine. The state is deliberately
+ * request-scoped so flattened namespace/custom/tool-search names can be restored exactly.
  */
 export class ChatSseTranslator {
   private responseId = '';
@@ -53,21 +145,31 @@ export class ChatSseTranslator {
   private messageItemId = '';
   private messageStarted = false;
   private messageDone = false;
+  private textStarted = false;
+  private textContentIndex: number | null = null;
   private text = '';
+  private refusalStarted = false;
+  private refusalContentIndex: number | null = null;
+  private refusal = '';
+  private nextMessageContentIndex = 0;
   private pendingFinishReason: string | null = null;
   private sawTerminalMarker = false;
-  // reasoning(思考)通道:DeepSeek/GLM 等 reasoner 在 delta.reasoning_content 里流式吐思考,
-  // 映射成 Responses reasoning summary 事件(reasoner 必须排在 message 之前)。
-  private reasoningOutputIndex: number | null = null;
-  private reasoningItemId = '';
-  private reasoningStarted = false;
-  private reasoningDone = false;
-  private reasoningText = '';
+  private readonly reasoningItems: ReasoningState[] = [];
   private readonly tools = new Map<number, ToolState>();
+  private readonly annotations: ResponseAnnotation[] = [];
   private usage: UsageShape | undefined;
+  private serviceTier = '';
+  private inlineThinkMode: 'undecided' | 'reasoning' | 'text' = 'undecided';
+  private inlineThinkBuffer = '';
+  private readonly toolContext?: ChatBridgeToolContext;
+  private readonly zeroUsageOnMissing: boolean;
+  private readonly inlineReasoning: boolean;
 
-  constructor(model: string) {
+  constructor(model: string, options: ChatSseTranslatorOptions = {}) {
     this.model = model;
+    this.toolContext = options.toolContext;
+    this.zeroUsageOnMissing = options.zeroUsageOnMissing !== false;
+    this.inlineReasoning = options.inlineReasoning === true;
   }
 
   push(raw: unknown): unknown[] {
@@ -79,53 +181,51 @@ export class ChatSseTranslator {
     if (rawModel) this.model = rawModel;
     const rawCreated = numberField(raw.created);
     if (rawCreated) this.created = rawCreated;
+    const rawServiceTier = stringField(raw.service_tier);
+    if (rawServiceTier) this.serviceTier = rawServiceTier;
     this.ensureStarted(out);
 
-    // 部分 Chat 上游在 `200 text/event-stream` 里用顶层 `error` 帧报错(而非 HTTP 非 2xx)。
-    // 没有 choices,若不识别就只会被当成空帧,最终 finish() 发出"成功但空"的 completed,
-    // Codex 会把失败当成功轮。检测到顶层 error → 直接走 fail() 终态,把错误如实透出。
     if (isPlainObject(raw.error)) {
-      const message = stringField((raw.error as { message?: unknown }).message)
-        || 'provider returned an error event';
+      const message = stringField(raw.error.message) || 'provider returned an error event';
       for (const event of this.fail(message)) out.push(event);
       return out;
     }
-
     if (isPlainObject(raw.usage)) this.usage = raw.usage as UsageShape;
     const choices = Array.isArray(raw.choices) ? raw.choices : [];
     for (const choiceValue of choices) {
       if (!isPlainObject(choiceValue)) continue;
-      const delta = isPlainObject(choiceValue.delta) ? choiceValue.delta : {};
-      // 思考内容先于正文:reasoner 在 delta.reasoning_content 流式吐思考。
-      const reasoning = stringField(delta.reasoning_content);
+      const delta = isPlainObject(choiceValue.delta)
+        ? choiceValue.delta
+        : isPlainObject(choiceValue.message)
+          ? choiceValue.message
+          : {};
+      const reasoning = extractReasoning(delta);
       if (reasoning) {
+        this.flushInlineThinkAtBoundary(out);
         this.ensureReasoning(out);
-        this.reasoningText += reasoning;
-        out.push({
-          type: 'response.reasoning_summary_text.delta',
-          item_id: this.reasoningItemId,
-          output_index: this.reasoningOutputIndex,
-          summary_index: 0,
-          delta: reasoning,
-        });
+        this.appendReasoning(reasoning, out);
       }
-      const content = stringField(delta.content);
-      if (content) {
-        this.ensureMessage(out);
-        this.text += content;
-        out.push({
-          type: 'response.output_text.delta',
-          // item_id 必填:codex 靠它把 delta 绑定到已 added 的 message output_item 做**增量渲染**;
-          // 缺了 codex 无法增量,只能等 output_item.done 的完整 text 一次性渲染(表现为"非流式")。
-          item_id: this.messageItemId,
-          response_id: this.responseId,
-          output_index: this.messageOutputIndex,
-          content_index: 0,
-          delta: content,
-        });
-      }
+      const content = typeof delta.content === 'string'
+        ? delta.content
+        : Array.isArray(delta.content)
+          ? delta.content.map((part) => isPlainObject(part) ? stringField(part.text) : '').join('')
+          : '';
+      if (content) this.consumeContent(content, out);
+      const refusal = stringField(delta.refusal);
+      if (refusal) this.pushRefusal(refusal, out);
+      this.annotations.push(
+        ...annotationsFrom(delta.annotations),
+        ...inlineCitationAnnotations(delta.citations),
+        ...annotationsFrom(choiceValue.annotations),
+      );
       if (Array.isArray(delta.tool_calls)) {
-        for (const toolCall of delta.tool_calls) this.consumeToolDelta(toolCall, out);
+        this.flushInlineThinkAtBoundary(out);
+        for (const [toolIndex, toolCall] of delta.tool_calls.entries()) {
+          const normalizedToolCall = isPlainObject(toolCall) && typeof toolCall.index !== 'number'
+            ? { ...toolCall, index: toolIndex }
+            : toolCall;
+          this.consumeToolDelta(normalizedToolCall, out);
+        }
       }
       const finishReason = typeof choiceValue.finish_reason === 'string' ? choiceValue.finish_reason : null;
       if (finishReason) {
@@ -136,7 +236,6 @@ export class ChatSseTranslator {
     return out;
   }
 
-  /** Mark the upstream SSE stream as having delivered its explicit terminal marker. */
   markTerminal(): void {
     this.sawTerminalMarker = true;
   }
@@ -148,6 +247,7 @@ export class ChatSseTranslator {
     }
     const out: unknown[] = [];
     this.ensureStarted(out);
+    this.flushInlineThinkAtBoundary(out);
     this.complete(this.pendingFinishReason ?? 'stop', out);
     return out;
   }
@@ -156,13 +256,12 @@ export class ChatSseTranslator {
     if (this.terminal) return [];
     const out: unknown[] = [];
     this.ensureStarted(out);
+    this.flushInlineThinkAtBoundary(out);
     this.closeOpenItems(out);
     this.terminal = true;
     out.push({
       type: 'response.failed',
-      response: this.responseObject('failed', {
-        error: { code: 'upstream_stream_error', message },
-      }),
+      response: this.responseObject('failed', { error: { code: 'upstream_stream_error', message } }),
     });
     return out;
   }
@@ -175,68 +274,197 @@ export class ChatSseTranslator {
     out.push({ type: 'response.in_progress', response: this.responseObject('in_progress') });
   }
 
-  private ensureReasoning(out: unknown[]): void {
-    if (this.reasoningStarted) return;
-    this.reasoningStarted = true;
-    this.reasoningOutputIndex = this.nextOutputIndex++;
-    this.reasoningItemId = deterministicId('rs', this.responseId, this.reasoningOutputIndex);
+  private ensureReasoning(out: unknown[]): ReasoningState {
+    const current = this.reasoningItems.find((item) => !item.done);
+    if (current) return current;
+    const outputIndex = this.nextOutputIndex++;
+    const state: ReasoningState = {
+      outputIndex,
+      itemId: deterministicId('rs', this.responseId, outputIndex),
+      text: '',
+      added: true,
+      done: false,
+    };
+    this.reasoningItems.push(state);
     out.push({
       type: 'response.output_item.added',
       response_id: this.responseId,
-      output_index: this.reasoningOutputIndex,
-      item: { id: this.reasoningItemId, type: 'reasoning', status: 'in_progress', summary: [] },
+      output_index: outputIndex,
+      item: { id: state.itemId, type: 'reasoning', status: 'in_progress', summary: [] },
     });
     out.push({
       type: 'response.reasoning_summary_part.added',
-      item_id: this.reasoningItemId,
-      output_index: this.reasoningOutputIndex,
+      item_id: state.itemId,
+      output_index: outputIndex,
       summary_index: 0,
       part: { type: 'summary_text', text: '' },
     });
+    return state;
   }
 
-  private closeReasoning(out: unknown[]): void {
-    if (!this.reasoningStarted || this.reasoningDone || this.reasoningOutputIndex === null) return;
-    this.reasoningDone = true;
+  private appendReasoning(reasoning: string, out: unknown[]): void {
+    const state = this.ensureReasoning(out);
+    state.text += reasoning;
+    out.push({
+      type: 'response.reasoning_summary_text.delta',
+      item_id: state.itemId,
+      output_index: state.outputIndex,
+      summary_index: 0,
+      delta: reasoning,
+    });
+  }
+
+  private closeReasoning(state: ReasoningState, out: unknown[]): void {
+    if (state.done) return;
+    state.done = true;
     out.push({
       type: 'response.reasoning_summary_text.done',
-      item_id: this.reasoningItemId,
-      output_index: this.reasoningOutputIndex,
+      item_id: state.itemId,
+      output_index: state.outputIndex,
       summary_index: 0,
-      text: this.reasoningText,
+      text: state.text,
     });
     out.push({
       type: 'response.reasoning_summary_part.done',
-      item_id: this.reasoningItemId,
-      output_index: this.reasoningOutputIndex,
+      item_id: state.itemId,
+      output_index: state.outputIndex,
       summary_index: 0,
-      part: { type: 'summary_text', text: this.reasoningText },
+      part: { type: 'summary_text', text: state.text },
     });
-    // reasoning summary item 完成态刻意不带 status(对齐参考实现)。
     out.push({
       type: 'response.output_item.done',
       response_id: this.responseId,
-      output_index: this.reasoningOutputIndex,
-      item: { id: this.reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: this.reasoningText }] },
+      output_index: state.outputIndex,
+      item: { id: state.itemId, type: 'reasoning', summary: [{ type: 'summary_text', text: state.text }] },
+    });
+  }
+
+  private closeActiveReasoning(out: unknown[]): void {
+    const current = this.reasoningItems.find((item) => !item.done);
+    if (current) this.closeReasoning(current, out);
+  }
+
+  private consumeContent(content: string, out: unknown[]): void {
+    if (!this.inlineReasoning) {
+      this.pushText(content, out);
+      return;
+    }
+    if (this.inlineThinkMode === 'text') {
+      this.pushText(content, out);
+      return;
+    }
+    this.inlineThinkBuffer += content;
+    const trimmed = this.inlineThinkBuffer.trimStart();
+    if (this.inlineThinkMode === 'undecided') {
+      if ('<think>'.startsWith(trimmed.toLowerCase())) return;
+      if (trimmed.toLowerCase().startsWith('<think>')) {
+        this.inlineThinkMode = 'reasoning';
+        this.inlineThinkBuffer = trimmed.slice('<think>'.length);
+      } else {
+        this.inlineThinkMode = 'text';
+        const text = this.inlineThinkBuffer;
+        this.inlineThinkBuffer = '';
+        this.pushText(text, out);
+        return;
+      }
+    }
+    const closeTag = '</think>';
+    const lower = this.inlineThinkBuffer.toLowerCase();
+    const closeIndex = lower.indexOf(closeTag);
+    if (closeIndex >= 0) {
+      const thinking = this.inlineThinkBuffer.slice(0, closeIndex);
+      if (thinking) this.appendReasoning(thinking, out);
+      this.closeActiveReasoning(out);
+      this.inlineThinkMode = 'text';
+      const answer = this.inlineThinkBuffer.slice(closeIndex + closeTag.length);
+      this.inlineThinkBuffer = '';
+      if (answer) this.pushText(answer, out);
+      return;
+    }
+    const keep = closeTag.length - 1;
+    const emitLength = Math.max(0, this.inlineThinkBuffer.length - keep);
+    if (emitLength > 0) {
+      this.appendReasoning(this.inlineThinkBuffer.slice(0, emitLength), out);
+      this.inlineThinkBuffer = this.inlineThinkBuffer.slice(emitLength);
+    }
+  }
+
+  private flushInlineThinkAtBoundary(out: unknown[]): void {
+    if (!this.inlineReasoning) return;
+    if (this.inlineThinkMode === 'undecided') {
+      if (this.inlineThinkBuffer) this.pushText(this.inlineThinkBuffer, out);
+    } else if (this.inlineThinkMode === 'reasoning') {
+      if (this.inlineThinkBuffer) this.appendReasoning(this.inlineThinkBuffer, out);
+    }
+    this.inlineThinkMode = this.inlineThinkMode === 'reasoning' ? 'text' : this.inlineThinkMode;
+    this.inlineThinkBuffer = '';
+  }
+
+  private pushText(content: string, out: unknown[]): void {
+    this.closeActiveReasoning(out);
+    this.ensureText(out);
+    this.text += content;
+    out.push({
+      type: 'response.output_text.delta',
+      item_id: this.messageItemId,
+      response_id: this.responseId,
+      output_index: this.messageOutputIndex,
+      content_index: this.textContentIndex,
+      delta: content,
     });
   }
 
   private ensureMessage(out: unknown[]): void {
     if (this.messageStarted) return;
-    // reasoning 必须在 message 之前完整关闭(参考:reasoning precedes message)。
-    this.closeReasoning(out);
     this.messageStarted = true;
     this.messageOutputIndex = this.nextOutputIndex++;
     this.messageItemId = deterministicId('msg', this.responseId, this.messageOutputIndex);
-    const item = { id: this.messageItemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] };
-    out.push({ type: 'response.output_item.added', response_id: this.responseId, output_index: this.messageOutputIndex, item });
+    out.push({
+      type: 'response.output_item.added',
+      response_id: this.responseId,
+      output_index: this.messageOutputIndex,
+      item: { id: this.messageItemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+    });
+  }
+
+  private ensureText(out: unknown[]): void {
+    this.ensureMessage(out);
+    if (this.textStarted) return;
+    this.textStarted = true;
+    this.textContentIndex = this.nextMessageContentIndex++;
     out.push({
       type: 'response.content_part.added',
       response_id: this.responseId,
       item_id: this.messageItemId,
       output_index: this.messageOutputIndex,
-      content_index: 0,
+      content_index: this.textContentIndex,
       part: { type: 'output_text', text: '', annotations: [] },
+    });
+  }
+
+  private pushRefusal(refusal: string, out: unknown[]): void {
+    this.closeActiveReasoning(out);
+    this.ensureMessage(out);
+    if (!this.refusalStarted) {
+      this.refusalStarted = true;
+      this.refusalContentIndex = this.nextMessageContentIndex++;
+      out.push({
+        type: 'response.content_part.added',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        part: { type: 'refusal', refusal: '' },
+      });
+    }
+    this.refusal += refusal;
+    out.push({
+      type: 'response.refusal.delta',
+      response_id: this.responseId,
+      item_id: this.messageItemId,
+      output_index: this.messageOutputIndex,
+      content_index: this.refusalContentIndex,
+      delta: refusal,
     });
   }
 
@@ -246,11 +474,10 @@ export class ChatSseTranslator {
     let state = this.tools.get(index);
     if (!state) {
       const outputIndex = this.nextOutputIndex++;
-      const callId = stringField(raw.id) || deterministicId('call', this.responseId, index);
       state = {
         outputIndex,
         itemId: deterministicId('fc', this.responseId, index),
-        callId,
+        callId: stringField(raw.id) || deterministicId('call', this.responseId, index),
         name: '',
         arguments: '',
         emittedArgumentsLength: 0,
@@ -261,44 +488,16 @@ export class ChatSseTranslator {
     }
     const callId = stringField(raw.id);
     if (callId && !state.added) state.callId = callId;
-    const fn = isPlainObject(raw.function) ? raw.function : {};
-    const name = stringField(fn.name);
-    if (name && !state.added) state.name += name;
-    if (!state.added && state.name) {
-      state.added = true;
-      out.push({
-        type: 'response.output_item.added',
-        response_id: this.responseId,
-        output_index: state.outputIndex,
-        item: {
-          id: state.itemId,
-          type: 'function_call',
-          status: 'in_progress',
-          name: state.name,
-          call_id: state.callId,
-          arguments: '',
-        },
-      });
-      const bufferedArgs = state.arguments.slice(state.emittedArgumentsLength);
-      if (bufferedArgs) {
-        state.emittedArgumentsLength = state.arguments.length;
-        out.push({
-          type: 'response.function_call_arguments.delta',
-          response_id: this.responseId,
-          item_id: state.itemId,
-          output_index: state.outputIndex,
-          delta: bufferedArgs,
-        });
-      }
-    }
-    const args = stringField(fn.arguments);
-    if (args) {
-      state.arguments += args;
-      // Some providers stream argument bytes before the function name. Keep the
-      // bytes buffered so the first output_item.added event has a usable name.
-      if (state.added) {
-        const delta = state.arguments.slice(state.emittedArgumentsLength);
-        state.emittedArgumentsLength = state.arguments.length;
+    const functionPart = isPlainObject(raw.function) ? raw.function : {};
+    const name = stringField(functionPart.name);
+    if (name) state.name += name;
+    const args = stringField(functionPart.arguments);
+    if (args) state.arguments += args;
+    this.addToolWhenReady(state, out);
+    if (state.added) {
+      const delta = state.arguments.slice(state.emittedArgumentsLength);
+      state.emittedArgumentsLength = state.arguments.length;
+      if (delta && !this.isCustomOrToolSearch(state.name)) {
         out.push({
           type: 'response.function_call_arguments.delta',
           response_id: this.responseId,
@@ -310,26 +509,110 @@ export class ChatSseTranslator {
     }
   }
 
+  private isCustomOrToolSearch(name: string): boolean {
+    const kind = this.toolContext?.lookupChatName(name)?.kind;
+    return kind === 'custom' || kind === 'tool_search';
+  }
+
+  private toolItem(state: ToolState, status: 'in_progress' | 'completed'): Record<string, unknown> {
+    const spec = this.toolContext?.lookupChatName(state.name);
+    if (spec?.kind === 'custom') {
+      return {
+        id: state.itemId,
+        type: 'custom_tool_call',
+        status,
+        call_id: state.callId,
+        name: spec.name,
+        ...(spec.namespace ? { namespace: spec.namespace } : {}),
+        input: status === 'in_progress' ? '' : customInput(state.arguments),
+      };
+    }
+    if (spec?.kind === 'tool_search') {
+      return {
+        id: state.itemId,
+        type: 'tool_search_call',
+        status,
+        call_id: state.callId,
+        execution: 'client',
+        arguments: status === 'in_progress' ? {} : toolSearchArguments(state.arguments),
+      };
+    }
+    return {
+      id: state.itemId,
+      type: 'function_call',
+      status,
+      call_id: state.callId,
+      name: spec?.name ?? state.name,
+      ...(spec?.namespace ? { namespace: spec.namespace } : {}),
+      arguments: status === 'in_progress' ? '' : state.arguments,
+    };
+  }
+
+  private addToolWhenReady(state: ToolState, out: unknown[], force = false): void {
+    if (
+      state.added
+      || !state.name
+      || (!force && !state.arguments && !this.pendingFinishReason)
+    ) return;
+    const spec = this.toolContext?.lookupChatName(state.name);
+    if (!force && this.toolContext?.hasChatNamePrefix(state.name)) return;
+    const kind = spec?.kind;
+    state.itemId = deterministicId(
+      kind === 'custom' ? 'ctc' : kind === 'tool_search' ? 'tsc' : 'fc',
+      this.responseId,
+      state.outputIndex,
+    );
+    state.added = true;
+    out.push({
+      type: 'response.output_item.added',
+      response_id: this.responseId,
+      output_index: state.outputIndex,
+      item: this.toolItem(state, 'in_progress'),
+    });
+  }
+
   private closeMessage(out: unknown[]): void {
     if (!this.messageStarted || this.messageDone || this.messageOutputIndex === null) return;
     this.messageDone = true;
-    out.push({
-      type: 'response.output_text.done',
-      response_id: this.responseId,
-      item_id: this.messageItemId,
-      output_index: this.messageOutputIndex,
-      content_index: 0,
-      text: this.text,
-    });
-    const content = [{ type: 'output_text', text: this.text, annotations: [] }];
-    out.push({
-      type: 'response.content_part.done',
-      response_id: this.responseId,
-      item_id: this.messageItemId,
-      output_index: this.messageOutputIndex,
-      content_index: 0,
-      part: content[0],
-    });
+    const content = this.messageContent();
+    if (this.textStarted && this.textContentIndex !== null) {
+      const part = content[this.textContentIndex];
+      out.push({
+        type: 'response.output_text.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.textContentIndex,
+        text: this.text,
+      });
+      out.push({
+        type: 'response.content_part.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.textContentIndex,
+        part,
+      });
+    }
+    if (this.refusalStarted && this.refusalContentIndex !== null) {
+      const part = content[this.refusalContentIndex];
+      out.push({
+        type: 'response.refusal.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        refusal: this.refusal,
+      });
+      out.push({
+        type: 'response.content_part.done',
+        response_id: this.responseId,
+        item_id: this.messageItemId,
+        output_index: this.messageOutputIndex,
+        content_index: this.refusalContentIndex,
+        part,
+      });
+    }
     out.push({
       type: 'response.output_item.done',
       response_id: this.responseId,
@@ -338,52 +621,66 @@ export class ChatSseTranslator {
     });
   }
 
+  private messageContent(): Array<Record<string, unknown>> {
+    const content: Array<{ contentIndex: number; part: Record<string, unknown> }> = [];
+    if (this.textStarted && this.textContentIndex !== null) {
+      content.push({
+        contentIndex: this.textContentIndex,
+        part: { type: 'output_text', text: this.text, annotations: this.uniqueAnnotations() },
+      });
+    }
+    if (this.refusalStarted && this.refusalContentIndex !== null) {
+      content.push({
+        contentIndex: this.refusalContentIndex,
+        part: { type: 'refusal', refusal: this.refusal },
+      });
+    }
+    return content.sort((a, b) => a.contentIndex - b.contentIndex).map((entry) => entry.part);
+  }
+
   private closeTools(out: unknown[]): void {
     for (const state of [...this.tools.values()].sort((a, b) => a.outputIndex - b.outputIndex)) {
       if (state.done) continue;
+      this.addToolWhenReady(state, out, true);
       state.done = true;
-      if (!state.added) {
-        state.added = true;
-        out.push({
-          type: 'response.output_item.added',
+      const item = this.toolItem(state, 'completed');
+      const kind = this.toolContext?.lookupChatName(state.name)?.kind;
+      if (kind === 'custom') {
+        const input = customInput(state.arguments);
+        if (input) out.push({
+          type: 'response.custom_tool_call_input.delta',
           response_id: this.responseId,
+          item_id: state.itemId,
           output_index: state.outputIndex,
-          item: {
-            id: state.itemId,
-            type: 'function_call',
-            status: 'in_progress',
-            name: state.name,
-            call_id: state.callId,
-            arguments: '',
-          },
+          delta: input,
+        });
+        out.push({
+          type: 'response.custom_tool_call_input.done',
+          response_id: this.responseId,
+          item_id: state.itemId,
+          output_index: state.outputIndex,
+          input,
+        });
+      } else if (kind !== 'tool_search') {
+        out.push({
+          type: 'response.function_call_arguments.done',
+          response_id: this.responseId,
+          item_id: state.itemId,
+          output_index: state.outputIndex,
+          arguments: state.arguments,
         });
       }
-      out.push({
-        type: 'response.function_call_arguments.done',
-        response_id: this.responseId,
-        item_id: state.itemId,
-        output_index: state.outputIndex,
-        arguments: state.arguments,
-      });
       out.push({
         type: 'response.output_item.done',
         response_id: this.responseId,
         output_index: state.outputIndex,
-        item: {
-          id: state.itemId,
-          type: 'function_call',
-          status: 'completed',
-          name: state.name,
-          call_id: state.callId,
-          arguments: state.arguments,
-        },
+        item,
       });
     }
   }
 
   private closeOpenItems(out: unknown[]): void {
-    // reasoning 先于 message 关闭(顺序不变量);message 若已在 ensureMessage 里关过 reasoning 则 no-op。
-    this.closeReasoning(out);
+    for (const reasoning of this.reasoningItems) this.closeReasoning(reasoning, out);
     this.closeMessage(out);
     this.closeTools(out);
   }
@@ -395,23 +692,34 @@ export class ChatSseTranslator {
     const incomplete = reason === 'length' || reason === 'content_filter';
     out.push({
       type: incomplete ? 'response.incomplete' : 'response.completed',
-      response: this.responseObject(incomplete ? 'incomplete' : 'completed', incomplete
-        ? { incomplete_details: { reason: reason === 'length' ? 'max_output_tokens' : 'content_filter' } }
-        : {}),
+      response: this.responseObject(
+        incomplete ? 'incomplete' : 'completed',
+        incomplete
+          ? { incomplete_details: { reason: reason === 'length' ? 'max_output_tokens' : 'content_filter' } }
+          : {},
+      ),
+    });
+  }
+
+  private uniqueAnnotations(): ResponseAnnotation[] {
+    const seen = new Set<string>();
+    return this.annotations.filter((annotation) => {
+      const key = `${annotation.url}\0${annotation.start_index}\0${annotation.end_index}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   }
 
   private responseObject(status: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-    // Responses 协议里 output 数组位置 = output index（item 不带显式 index 字段）。
-    // message 与 function_call 必须**统一按 outputIndex 排序**，不能无条件把 message 排在前面——
-    // 否则模型先发工具调用、后补正文时（agentic 第三方模型常见），回放为下一轮 input 的顺序会颠倒。
     const items: Array<{ outputIndex: number; item: Record<string, unknown> }> = [];
-    if (this.reasoningDone && this.reasoningOutputIndex !== null) {
-      items.push({
-        outputIndex: this.reasoningOutputIndex,
-        // reasoning summary item 完成态不带 status(对齐参考实现)。
-        item: { id: this.reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: this.reasoningText }] },
-      });
+    for (const reasoning of this.reasoningItems) {
+      if (reasoning.done) {
+        items.push({
+          outputIndex: reasoning.outputIndex,
+          item: { id: reasoning.itemId, type: 'reasoning', summary: [{ type: 'summary_text', text: reasoning.text }] },
+        });
+      }
     }
     if (this.messageDone && this.messageOutputIndex !== null) {
       items.push({
@@ -421,38 +729,35 @@ export class ChatSseTranslator {
           type: 'message',
           status: 'completed',
           role: 'assistant',
-          content: [{ type: 'output_text', text: this.text, annotations: [] }],
+          content: this.messageContent(),
         },
       });
     }
     for (const state of this.tools.values()) {
-      if (!state.done) continue;
-      items.push({
-        outputIndex: state.outputIndex,
-        item: {
-          id: state.itemId,
-          type: 'function_call',
-          status: 'completed',
-          name: state.name,
-          call_id: state.callId,
-          arguments: state.arguments,
-        },
-      });
+      if (state.done) items.push({ outputIndex: state.outputIndex, item: this.toolItem(state, 'completed') });
     }
     const output = items.sort((a, b) => a.outputIndex - b.outputIndex).map((entry) => entry.item);
-    const inputTokens = numberField(this.usage?.prompt_tokens);
-    const outputTokens = numberField(this.usage?.completion_tokens);
-    const usage = this.usage ? {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      total_tokens: numberField(this.usage.total_tokens) || inputTokens + outputTokens,
-      input_tokens_details: {
-        cached_tokens: numberField(this.usage.prompt_tokens_details?.cached_tokens),
-      },
-      output_tokens_details: {
-        reasoning_tokens: numberField(this.usage.completion_tokens_details?.reasoning_tokens),
-      },
-    } : undefined;
+    const inputTokens = numberField(this.usage?.prompt_tokens ?? this.usage?.input_tokens);
+    const outputTokens = numberField(this.usage?.completion_tokens ?? this.usage?.output_tokens);
+    const usage = this.usage || this.zeroUsageOnMissing
+      ? {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: numberField(this.usage?.total_tokens) || inputTokens + outputTokens,
+          input_tokens_details: {
+            cached_tokens: numberField(
+              this.usage?.prompt_tokens_details?.cached_tokens
+                ?? this.usage?.input_tokens_details?.cached_tokens,
+            ),
+          },
+          output_tokens_details: {
+            reasoning_tokens: numberField(
+              this.usage?.completion_tokens_details?.reasoning_tokens
+                ?? this.usage?.output_tokens_details?.reasoning_tokens,
+            ),
+          },
+        }
+      : undefined;
     return {
       id: this.responseId,
       object: 'response',
@@ -460,6 +765,7 @@ export class ChatSseTranslator {
       status,
       model: this.model,
       output,
+      ...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
       ...(usage ? { usage } : {}),
       ...extra,
     };

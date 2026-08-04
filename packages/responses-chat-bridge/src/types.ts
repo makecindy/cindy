@@ -14,11 +14,38 @@ export interface ResponsesInputTextPart {
 
 export interface ResponsesInputImagePart {
   type: 'input_image';
-  image_url?: string;
+  image_url?: string | {
+    url: string;
+    detail?: string;
+  };
   file_id?: string;
+  detail?: string;
 }
 
-export type ResponsesContentPart = ResponsesInputTextPart | ResponsesInputImagePart | {
+export interface ResponsesInputFilePart {
+  type: 'input_file';
+  file_id?: string;
+  file_data?: string;
+  file_url?: string;
+  filename?: string;
+}
+
+export interface ResponsesInputAudioPart {
+  type: 'input_audio';
+  input_audio?: {
+    data: string;
+    format: string;
+  };
+  data?: string;
+  format?: string;
+}
+
+export type ResponsesContentPart =
+  | ResponsesInputTextPart
+  | ResponsesInputImagePart
+  | ResponsesInputFilePart
+  | ResponsesInputAudioPart
+  | {
   type: string;
   [key: string]: unknown;
 };
@@ -66,15 +93,51 @@ export interface ResponsesFunctionTool {
   strict?: boolean;
 }
 
+export interface ResponsesCustomTool {
+  type: 'custom';
+  name: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+export interface ResponsesNamespaceTool {
+  type: 'namespace';
+  name: string;
+  tools?: Array<ResponsesFunctionTool | ResponsesCustomTool | { type: string; [key: string]: unknown }>;
+  children?: Array<ResponsesFunctionTool | ResponsesCustomTool | { type: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
 export interface ResponsesRequest {
   model: string;
-  instructions?: string;
+  instructions?: string | ResponsesContentPart[];
   input: string | ResponsesInputItem[];
-  tools?: Array<ResponsesFunctionTool | { type: string; [key: string]: unknown }>;
+  tools?: Array<
+    | string
+    | ResponsesFunctionTool
+    | ResponsesCustomTool
+    | ResponsesNamespaceTool
+    | { type: string; [key: string]: unknown }
+  >;
   tool_choice?: unknown;
   parallel_tool_calls?: boolean;
   max_output_tokens?: number;
   reasoning?: { effort?: string; [key: string]: unknown };
+  temperature?: number;
+  top_p?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  stop?: string | string[];
+  seed?: number;
+  user?: string;
+  metadata?: Record<string, unknown>;
+  service_tier?: string;
+  response_format?: unknown;
+  text?: { format?: unknown; [key: string]: unknown };
+  logit_bias?: Record<string, number>;
+  logprobs?: boolean;
+  top_logprobs?: number;
+  n?: number;
   stream?: boolean;
   store?: boolean;
   [key: string]: unknown;
@@ -89,10 +152,33 @@ export interface ChatImageUrlContentPart {
   type: 'image_url';
   image_url: {
     url: string;
+    detail?: string;
   };
 }
 
-export type ChatUserContentPart = ChatTextContentPart | ChatImageUrlContentPart;
+export interface ChatFileContentPart {
+  type: 'file';
+  file: {
+    file_id?: string;
+    file_data?: string;
+    file_url?: string;
+    filename?: string;
+  };
+}
+
+export interface ChatInputAudioContentPart {
+  type: 'input_audio';
+  input_audio: {
+    data: string;
+    format: string;
+  };
+}
+
+export type ChatUserContentPart =
+  | ChatTextContentPart
+  | ChatImageUrlContentPart
+  | ChatFileContentPart
+  | ChatInputAudioContentPart;
 
 export interface ChatTextMessage {
   role: 'system' | 'developer';
@@ -143,14 +229,54 @@ export interface ChatCompletionsRequest {
   max_tokens?: number;
   max_completion_tokens?: number;
   reasoning_effort?: string;
-  stream: true;
+  reasoning?: { effort: string };
+  thinking?: { type: string };
+  enable_thinking?: boolean;
+  reasoning_split?: boolean;
+  temperature?: number;
+  top_p?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  stop?: string | string[];
+  seed?: number;
+  user?: string;
+  metadata?: Record<string, unknown>;
+  service_tier?: string;
+  response_format?: unknown;
+  logit_bias?: Record<string, number>;
+  logprobs?: boolean;
+  top_logprobs?: number;
+  stream: boolean;
   stream_options?: { include_usage: true };
 }
 
 export type ChatDeveloperRole = 'developer' | 'system';
 export type ChatMaxTokensField = 'max_tokens' | 'max_completion_tokens' | 'omit';
-export type ChatReasoningField = 'reasoning_effort' | 'none';
 export type ChatImageInput = 'image_url';
+export type ChatFileInput = 'file';
+export type ChatAudioInput = 'input_audio';
+export type ChatReasoningField =
+  | 'reasoning_effort'
+  | 'reasoning.effort'
+  | 'thinking.type'
+  | 'enable_thinking'
+  | 'reasoning_split'
+  | 'none';
+export type ChatReasoningHistoryField = 'reasoning_content';
+export type ChatPassthroughField =
+  | 'temperature'
+  | 'top_p'
+  | 'frequency_penalty'
+  | 'presence_penalty'
+  | 'stop'
+  | 'seed'
+  | 'user'
+  | 'metadata'
+  | 'service_tier'
+  | 'response_format'
+  | 'logit_bias'
+  | 'logprobs'
+  | 'top_logprobs';
 
 /** 同协议族内的上游差异，全部由数据表达（对齐 cc-switch / opencodex 的 per-provider 处理）。 */
 export interface ChatBridgeCapabilities {
@@ -158,12 +284,27 @@ export interface ChatBridgeCapabilities {
   parallelToolCalls?: boolean;
   maxTokensField?: ChatMaxTokensField;
   reasoningField?: ChatReasoningField;
-  streamUsage?: boolean;
   /**
-   * Responses `input_image` 的上游等价形态。默认未声明 = fail closed；只有已确认支持
-   * Chat Completions 视觉输入的运行时才开启，避免把图片静默丢掉或误发给纯文本上游。
+   * Responses reasoning history 的 Chat 消息字段。默认未声明 = 省略历史 reasoning；
+   * 只有明确接受厂商扩展 `reasoning_content` 的上游才应开启。
+   */
+  reasoningHistoryField?: ChatReasoningHistoryField;
+  /**
+   * Responses `input_image` 的上游等价形态。默认未声明 = fail closed；只由
+   * 已确认支持视觉输入的运行时（当前为 upstream 白名单）开启。
    */
   imageInput?: ChatImageInput;
+  /** Responses `input_file` 的上游等价形态；默认未声明 = fail closed。 */
+  fileInput?: ChatFileInput;
+  /** Responses `input_audio` 的上游等价形态；默认未声明 = fail closed。 */
+  audioInput?: ChatAudioInput;
+  /** 仅对明确采用 `<think>...</think>` 内联推理方言的上游启用标签解析。 */
+  inlineReasoning?: boolean;
+  /** 将 Responses reasoning.effort 映射成供应商接受的枚举值。未声明时原样使用。 */
+  reasoningEffortMap?: Readonly<Record<string, string | boolean>>;
+  /** 只有显式列入的 Chat 可选字段才会转发，避免严格兼容端点因未知字段返回 400。 */
+  passthroughFields?: readonly ChatPassthroughField[];
+  streamUsage?: boolean;
   /**
    * thinking 模型(DeepSeek/Kimi/Moonshot)要求每个带 tool_calls 的 assistant 消息携带非空
    * reasoning_content,否则上游报 `reasoning_content is missing in assistant tool call message`。
@@ -181,6 +322,8 @@ export interface ChatBridgeCapabilities {
    * `skip_thought_signature_validator`，避免桥接历史在首个工具调用后稳定 400。
    */
   googleThoughtSignaturePlaceholder?: boolean;
+  /** 缺少上游 usage 时仍生成 Responses 要求的完整零值 usage 结构。默认开启。 */
+  zeroUsageOnMissing?: boolean;
 }
 
 export interface ChatBridgeLogger {

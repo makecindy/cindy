@@ -54,7 +54,7 @@ const D_LIST_TOOLS =
 const D_CALL_TOOL =
   '调用智能通讯录(cindy_contacts)中的某个具体工具。先用 list_tools 拿工具名 + 简介, 再用本工具执行。' +
   '错误码: ' +
-  '`CONTACTS_NOT_READY` = 通讯录未在设置中开启, 提示用户去设置开启; ' +
+  '`CONTACTS_NOT_READY` = 通讯录未开启, 提示用户可在 设置→个性化→智能通讯录 开启; ' +
   '`NOT_FOUND` = 指定 contact/identity/event/group 不存在; ' +
   '`ALREADY_EXISTS` = 身份已在本人名下 / 组名撞名; ' +
   '`IDENTITY_CONFLICT` = 该身份已属于另一个人(data 带 conflictContactId, 应改为更新那份档案或询问用户是否 merge); ' +

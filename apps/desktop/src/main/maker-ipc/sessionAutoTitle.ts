@@ -23,11 +23,11 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import {
   getOverwritableAutoTitle,
   isUntitledSessionAwaitingAutoTitle,
-  normalizeAutoTitle,
   persistSessionTitleIfStillDraft,
   setOnUserSessionTitleWritten,
   type OverwritableAutoTitleTarget,

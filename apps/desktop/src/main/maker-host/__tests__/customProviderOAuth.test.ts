@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { buildUserProvider, type CustomProviderConfig } from '@cindy/model-providers';
 
 import { mergeDiscoveredModelsIntoConfig, validateCustomProviderConfig } from '../custom-provider-store.js';
+import { parseModelsListResponse } from '../generic-oauth.js';
 import { createProviderService } from '../provider-service.js';
 
 const OAUTH = {
@@ -173,6 +174,56 @@ describe('mergeDiscoveredModelsIntoConfig（发现结果持久化的 additions-o
 
     expect(mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [{ id: 'm1', name: 'M1' }])).toBeNull();
     expect(mergeDiscoveredModelsIntoConfig(BASE, 'codex', [{ id: 'x', name: 'X' }])).toBeNull();
+  });
+
+  it('端点声明的 contextWindow 随发现落盘,非法值丢弃回落默认(#386)', () => {
+    const merged = mergeDiscoveredModelsIntoConfig(BASE, 'claude-code', [
+      { id: 'big', name: 'Big', contextWindow: 1_000_000 },
+      { id: 'bogus', name: 'Bogus', contextWindow: 0 },
+    ]);
+    expect(merged?.runtimes['claude-code']?.models).toEqual([
+      { id: 'm1', name: 'M1' },
+      { id: 'big', name: 'Big', contextWindow: 1_000_000 },
+      { id: 'bogus', name: 'Bogus' },
+    ]);
+  });
+});
+
+describe('parseModelsListResponse contextWindow 提取(#386)', () => {
+  it('从 context_length / context_window / max_context_length / max_input_tokens 尽力提取,非法值缺省', () => {
+    expect(
+      parseModelsListResponse({
+        data: [
+          { id: 'a', context_length: 1_048_576 },
+          { id: 'b', name: 'B', context_window: 262144.9 },
+          { id: 'c', max_context_length: 131072 },
+          // Anthropic 兼容端点的字段口径(与 model-discovery/anthropic.ts 对齐,review P1)。
+          { id: 'f', max_input_tokens: 200_000 },
+          { id: 'd', context_length: -5 },
+          { id: 'e' },
+          // 0 < v < 1 会通过 v > 0 但 Math.floor 取整成 0——按取整后的值校验
+          // 才不会漏这个区间(review P2)。
+          { id: 'g', context_length: 0.5 },
+          // 超出安全整数范围的异常值同样要拒绝,否则落盘后 Main 的正数校验会
+          // 因超界拒绝整份供应商配置,内置 OAuth 发现分支则会把这个失真值当
+          // 真实窗口注入目录(review P2)。
+          { id: 'h', context_length: 1e20 },
+        ],
+      }),
+    ).toEqual([
+      { id: 'a', name: 'a', contextWindow: 1_048_576 },
+      { id: 'b', name: 'B', contextWindow: 262144 },
+      { id: 'c', name: 'c', contextWindow: 131072 },
+      { id: 'f', name: 'f', contextWindow: 200_000 },
+      { id: 'd', name: 'd' },
+      { id: 'e', name: 'e' },
+      { id: 'g', name: 'g' },
+      { id: 'h', name: 'h' },
+    ]);
+  });
+
+  it('字符串数组形状不携带 contextWindow', () => {
+    expect(parseModelsListResponse({ models: ['m1'] })).toEqual([{ id: 'm1', name: 'm1' }]);
   });
 });
 

@@ -73,6 +73,30 @@ describe('messageMarkdown', () => {
     ]);
   });
 
+  // 无语言标注的围栏:桌面端曾因「按 className 判定行内 code」把这种块整段套上
+  // 行内底色(rehype-highlight 只给带语言的围栏下发 className)。移动端解析器在
+  // 块级就分出 code 块、与行内 code 是两个类型,天然不会误判——这条测试把该性质
+  // 钉住,防止将来有人把「无语言就当普通文本/行内」塞进解析器。
+  // 桌面端同一形态的回归见 apps/desktop 的 markdownFencedCodeInline.test.ts。
+  it('无语言标注的围栏仍是 code 块(language 缺席),不降级成 inline code', () => {
+    const blocks = parseMobileMarkdown([
+      '```',
+      '任务(Session)',
+      '└─ 对话(Chat)',
+      '```',
+    ].join('\n'));
+    expect(blocks).toEqual([
+      {
+        type: 'code',
+        key: 'code:0:0',
+        language: undefined,
+        text: '任务(Session)\n└─ 对话(Chat)',
+      },
+    ]);
+    // 关键:整块内容没有任何一段变成行内 code inline。
+    expect(JSON.stringify(blocks)).not.toContain('"inlines"');
+  });
+
   it('keeps unclosed fenced code as a code block', () => {
     expect(parseMobileMarkdown('```bash\npnpm test')).toEqual([
       {

@@ -15,11 +15,14 @@ pnpm restart:desktop:remote --region=cn
 ```
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
-「本地模式」（无需账号即可使用本机 agent）不是同一个概念。Agent 不得自行改用
+「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
+`local` mode）不是同一个概念。Agent 不得自行改用
 `pnpm dev:desktop` 或 `pnpm dev:desktop:remote` 绕过包装脚本。
 
-启动包装可能停止已有 Desktop dev 进程。必须尊重宿主提供的并行或保活工作流；如果
-脚本因为当前 Agent 运行在 Cindy 内部而拒绝重启，不要换命令绕过，应把提示交给用户。
+启动包装会先停止**当前 checkout** 已有的 Desktop dev 进程；其他 worktree／命名沙箱的
+实例不受影响。必须尊重宿主提供的并行或保活工作流；如果脚本因为当前 Agent 运行在
+Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而中止，不要换命令绕过，
+应把提示交给用户。
 
 ## 可选启动参数
 
@@ -63,14 +66,23 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 
 ### 并行多开 dev
 
-restart 命令默认会停掉本 checkout 能识别到的全部 Cindy dev 进程，所以**用同一 checkout 的
-restart 无法同时多开**。真要并行多个 dev 实例，走下面三条之一：
+restart 的 kill 作用域是**当前 checkout（worktree）**：只停自己这份 checkout 的 dev
+进程，其他 worktree／命名沙箱的实例一律保留（2026-07-30 约束：并行沙箱不得被另一个
+checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个实例一个独立 worktree +
+`--isolated=<名字>` 命名沙箱**，互不干扰地各自 restart。
 
-- 由能证明实例归属的上层编排调用 `--preserve-running`（不停已有实例，共享 userData／
-  登录态，可从多个 worktree 重复启动）；
-- 让用户在自己终端直跑 human-only 的 `pnpm dev:desktop:remote --isolated=<名字>`（不杀旧
-  进程，每个名字一条完全独立的沙箱）；
-- 使用多个 checkout。
+配套护栏与工具：
+
+- **userData 冲突门**：目标 userData（按 `--isolated` 名字推导）已被其他 checkout 的
+  dev 实例占用时，restart 会在杀任何进程之前中止并列出占用进程——不代杀、不共库。
+  换一个沙箱名字，或由用户自己停掉那个实例后重试。检测靠 helper 进程命令行上的
+  `--user-data-dir`，对方实例刚启动还没起 helper 时可能漏检，属尽力而为。
+- **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
+  实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
+- 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
+  名字），一个 worktree 同时只跑一份 dev。
+- 共享 userData 的并行（`--preserve-running` 被动预览）语义不变：不停任何实例、强制
+  passive、禁止与 `--isolated` 组合，仅供能证明实例归属的上层编排使用。
 
 Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*`。共享同一 userData
 多开时，非 primary 实例用 `--passive` 让出定时任务调度（见上）。

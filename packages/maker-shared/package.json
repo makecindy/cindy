@@ -51,6 +51,7 @@
     "./session-list-collapse": "./src/sessionListCollapse.ts",
     "./session-operation": "./src/sessionOperation.ts",
     "./session-selection": "./src/sessionSelection.ts",
+    "./session-title": "./src/sessionTitle.ts",
     "./synthetic-trigger": "./src/syntheticTrigger.ts",
     "./system-card": "./src/systemCard.ts",
     "./thinking-text": "./src/thinkingText.ts",

@@ -114,6 +114,50 @@ export function commandContainsPath(command, candidatePath) {
   return false;
 }
 
+/**
+ * 判断进程命令行是否带 `--user-data-dir=<userDataDir>`(Electron helper 进程携带)。
+ * 结束边界必须是行尾 / 空白 / 引号 / 斜杠 —— `Cindy-dev` 不得命中
+ * `Cindy-dev-pi-latest` 这类前缀同名沙箱。路径本身可含空格(macOS 的
+ * "Application Support"),所以整段 needle 精确匹配、只对尾部做边界判定。
+ */
+export function commandUsesUserDataDir(command, userDataDir) {
+  const normalizedCommand = normalize(command);
+  const normalizedDir = stripTrailingSlashes(normalize(userDataDir));
+  if (!normalizedDir) return false;
+  // 值可能带引号(Windows 常见: --user-data-dir="C:\..."), 裸值与引号包裹
+  // 两种形态都要命中, 否则冲突检测漏判会放行进共享 SQLite/登录态。
+  const needles = [
+    `--user-data-dir=${normalizedDir}`,
+    `--user-data-dir="${normalizedDir}`,
+    `--user-data-dir='${normalizedDir}`,
+  ];
+  for (const needle of needles) {
+    let index = normalizedCommand.indexOf(needle);
+    while (index !== -1) {
+      const after = normalizedCommand[index + needle.length];
+      if (after === undefined || after === '/' || after === '"' || after === "'" || /\s/.test(after)) {
+        return true;
+      }
+      index = normalizedCommand.indexOf(needle, index + 1);
+    }
+  }
+  return false;
+}
+
+/**
+ * 重启的 kill 作用域:只收当前 checkout(ownRootDir)自己的 dev 进程。其他
+ * worktree / 命名沙箱一律保留 ——「重启」的语义是重启这份 checkout 的实例,
+ * 不是清场(2026-07-30 约束:PI 沙箱启动器曾全灭掉并行的 tgbot-review 沙箱)。
+ */
+export function partitionDesktopDevProcesses(processes, ownRootDir) {
+  const targets = [];
+  const preserved = [];
+  for (const proc of processes) {
+    (commandContainsPath(proc.command, ownRootDir) ? targets : preserved).push(proc);
+  }
+  return { targets, preserved };
+}
+
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
     encoding: 'utf8',
@@ -391,8 +435,7 @@ function closeDarwinTerminalTtys(ttys) {
  * `-<名字>` 后缀,每个名字一条完全独立的沙箱。只在 dev 生效——主进程入口只在
  * 非 packaged 时应用该覆写。
  */
-function defaultIsolatedUserDataDir(isolationName) {
-  const dirName = `${BRAND_USER_DATA_DIR_NAME}-dev${isolationName ? `-${isolationName}` : ''}`;
+function userDataDirNamed(dirName) {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     return path.join(appData, dirName);
@@ -402,6 +445,20 @@ function defaultIsolatedUserDataDir(isolationName) {
   }
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config');
   return path.join(xdgConfig, dirName);
+}
+
+function defaultIsolatedUserDataDir(isolationName) {
+  return userDataDirNamed(`${BRAND_USER_DATA_DIR_NAME}-dev${isolationName ? `-${isolationName}` : ''}`);
+}
+
+/** 非隔离 dev 与正式版共用的 userData 目录。 */
+function productionUserDataDir() {
+  return userDataDirNamed(BRAND_USER_DATA_DIR_NAME);
+}
+
+function parseIsolationName(isolatedArg) {
+  if (!isolatedArg || !isolatedArg.includes('=')) return '';
+  return isolatedArg.slice('--isolated='.length);
 }
 
 function devScriptForMode(mode) {
@@ -457,6 +514,8 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
+    // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
+    ['XDT_CDP_PORT', env.XDT_CDP_PORT],
     ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],
     // 端点清单来源覆写:--endpoints-cdn(dev 走线上 CDN)/ local 模式的
     // endpoint.local.json 文件路径,均由主进程 clientEndpointsService 消费。
@@ -737,15 +796,49 @@ async function main() {
     );
   }
 
+  // userData 冲突门:目标 userData 已被其他 checkout 的 dev 实例占用时中止。
+  // 杀掉别人(旧全灭行为)会顶掉用户并行调试中的沙箱;共用同一份 userData 并行
+  // 又会撞 SQLite / 登录态。两难之下唯一安全解是停下来让用户决定:换一个
+  // --isolated 名字,或用户自己停掉那个实例。preserve-running 不进此门 ——
+  // 它的语义就是共享 userData 的被动预览。检测是尽力而为:靠 helper 进程命令行
+  // 上的 --user-data-dir,对方实例刚启动还没起 helper 时可能漏检。
+  if (!preserveRunning) {
+    const targetUserDataDir = process.env.XDT_USER_DATA_DIR
+      || (isolatedArg
+        ? defaultIsolatedUserDataDir(parseIsolationName(isolatedArg))
+        : productionUserDataDir());
+    const conflicts = listDesktopDevProcesses().filter(
+      (proc) => !commandContainsPath(proc.command, rootDir)
+        && commandUsesUserDataDir(proc.command, targetUserDataDir),
+    );
+    if (conflicts.length > 0) {
+      console.error(`==> Target userData is already in use by another checkout's dev instance: ${targetUserDataDir}`);
+      for (const proc of conflicts) {
+        console.error(`    pid ${proc.pid}: ${proc.command.slice(0, 180)}`);
+      }
+      console.error('==> Refusing to stop processes outside this checkout. Pick a different sandbox');
+      console.error('    name (--isolated=<name>), or stop that instance yourself and re-run.');
+      process.exit(1);
+    }
+  }
+
   const allTargets = listDesktopDevProcesses();
+  // kill 作用域 = 当前 checkout。其他 worktree / 命名沙箱的实例一律保留。
+  const ownScope = partitionDesktopDevProcesses(allTargets, rootDir);
   const targets = replaceRunningRoot
     ? allTargets.filter((proc) => commandContainsPath(proc.command, replaceRunningRoot))
-    : allTargets;
+    : ownScope.targets;
   const darwinTerminalTtys = darwinTerminalTtysForProcesses(targets);
+
+  if (!preserveRunning && !replaceRunningRoot && ownScope.preserved.length > 0) {
+    console.log(
+      `==> Preserving ${ownScope.preserved.length} Cindy desktop dev process(es) from other checkouts; this restart only touches ${rootDir}.`,
+    );
+  }
 
   if (preserveRunning && !replaceRunningRoot) {
     console.log(
-      `==> Preserving ${targets.length} existing Cindy desktop dev process(es); the preview will start alongside them in passive mode.`,
+      `==> Preserving ${allTargets.length} existing Cindy desktop dev process(es); the preview will start alongside them in passive mode.`,
     );
   } else if (replaceRunningRoot) {
     console.log(
@@ -788,15 +881,18 @@ async function main() {
       closeDarwinTerminalTtys(darwinTerminalTtys);
     }
   } else if (targets.length === 0) {
-    console.log('==> No existing Cindy desktop dev processes found.');
+    console.log('==> No existing Cindy desktop dev processes found for this checkout.');
   } else {
-    console.log(`==> Stopping ${targets.length} existing Cindy desktop dev process(es)...`);
+    console.log(`==> Stopping ${targets.length} existing Cindy desktop dev process(es) from this checkout...`);
     for (const target of targets) {
       console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
       killProcess(target.pid);
     }
 
-    const remainingAfterTerm = await waitForDesktopDevProcessesToExit(gracefulTimeoutMs);
+    // 等待/强杀同样限定在本 checkout —— 不带过滤器会把其他 checkout 仍在跑的
+    // 实例当成"顽固进程"逐个 SIGKILL 掉。
+    const matchesOwnRoot = (proc) => commandContainsPath(proc.command, rootDir);
+    const remainingAfterTerm = await waitForDesktopDevProcessesToExit(gracefulTimeoutMs, matchesOwnRoot);
     if (remainingAfterTerm.length > 0) {
       console.log(`==> Force stopping ${remainingAfterTerm.length} stubborn Cindy desktop dev process(es)...`);
       for (const target of remainingAfterTerm) {
@@ -805,7 +901,7 @@ async function main() {
       }
     }
 
-    const remainingAfterForce = await waitForDesktopDevProcessesToExit(forceTimeoutMs);
+    const remainingAfterForce = await waitForDesktopDevProcessesToExit(forceTimeoutMs, matchesOwnRoot);
     if (remainingAfterForce.length > 0) {
       console.error(`==> Failed to stop ${remainingAfterForce.length} Cindy desktop dev process(es); aborting restart.`);
       for (const target of remainingAfterForce) {

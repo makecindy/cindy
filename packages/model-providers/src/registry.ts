@@ -13,6 +13,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
+import { isAgentSelectableModel } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
 import {
   isModelDisabled,
@@ -255,6 +256,31 @@ export function sourcesForModel(
 }
 
 /**
+ * 同 sourcesForModel,但只保留该来源上**这个模型条目本身确实是聊天模型**的来源
+ * (issue #882 第 3 点,2026-07 review)。所有"这个来源能不能真的把这个模型发出去"
+ * 的判断——路由解析、发送前置校验(空来源拦截)、"选中来源已断连"提示——必须走
+ * 同一份口径,否则会出现 UI 说"能发"、resolveRoute 却解析不出可用来源的分裂状态。
+ * 只在裸 `sourcesForModel`(仅看 id 是否存在,不看 mode)不够用的场景才需要这个;
+ * 纯展示/设置页场景仍应直接用 sourcesForModel,不要在那里过度收紧。
+ */
+export function chatEligibleSourcesForModel(
+  views: ProviderView[],
+  modelId: string,
+  agent: AgentKind,
+  opts: { onlyConnected?: boolean; includeDisabled?: boolean } = {},
+): ProviderView[] {
+  return sourcesForModel(views, modelId, agent, opts).filter((provider) => {
+    const model = getModel(provider, modelId, agent);
+    // provider-aware 谓词而非裸 isChatEligible:用户自定义供应商显式配置的模型带未知
+    // group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第 25 轮)。
+    return (
+      model !== undefined &&
+      isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+    );
+  });
+}
+
+/**
  * 某 agent 在已连接来源列表(rail)里的「原生默认来源 id」。
  * 与模型选择器 activeSourceId 的 nativeDefault 口径一致:
  *   codex  → 优先 openai,其次 xd,再兜底 rail 首项。
@@ -282,7 +308,7 @@ export function effectiveSourceIdForModel(
   modelId: string,
   agent: AgentKind,
 ): string | null {
-  const sources = sourcesForModel(views, modelId, agent);
+  const sources = chatEligibleSourcesForModel(views, modelId, agent);
   if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
   return nativeDefaultSourceId(sources, agent);
 }

@@ -464,3 +464,76 @@ describe('RemoteHost remote forwarding', () => {
     expect(client.forwardInCalls).toHaveLength(1);
   });
 });
+
+describe('RemoteHost remote forwarding — exactRemotePort (固定端口)', () => {
+  it('binds only the fixed port and succeeds when it is free', async () => {
+    const client = new FakeClient();
+    const host = makeReadyHost(client);
+    const fwd = await host.ensureRemoteForward({
+      localHost: '127.0.0.1',
+      localPort: 7890,
+      preferredRemotePort: 45000,
+      exactRemotePort: true,
+    });
+    expect(fwd.remotePort).toBe(45000);
+    expect(client.forwardInCalls).toEqual([{ addr: '127.0.0.1', port: 45000 }]);
+  });
+
+  it('fails without falling back to other candidates when the fixed port is busy', async () => {
+    // 固定端口语义: 远端 env 写死该端口, 顺延 = env 失效 + 必须重启 daemon,
+    // 宁可失败让调用方 (agent-proxy 保活器) 重试/清理残留监听。
+    const client = new FakeClient((port) => port !== 45000);
+    const host = makeReadyHost(client);
+    await expect(
+      host.ensureRemoteForward({
+        localHost: '127.0.0.1',
+        localPort: 7890,
+        preferredRemotePort: 45000,
+        exactRemotePort: true,
+      }),
+    ).rejects.toThrow(/remote port forwarding failed/);
+    expect(client.forwardInCalls).toEqual([{ addr: '127.0.0.1', port: 45000 }]);
+  });
+
+  it('rejects exactRemotePort without preferredRemotePort at the entrance', async () => {
+    const client = new FakeClient();
+    const host = makeReadyHost(client);
+    await expect(
+      host.ensureRemoteForward({ localHost: '127.0.0.1', localPort: 7890, exactRemotePort: true }),
+    ).rejects.toThrow(/exactRemotePort requires preferredRemotePort/);
+    expect(client.forwardInCalls).toHaveLength(0);
+  });
+
+  it('exact mode seeds the fixed port even when the record previously drifted (PR #992 copilot)', async () => {
+    // 同 key 的 record 先在非 exact 阶段顺延漂到别的端口; 之后同 key 改
+    // exactRemotePort=true 重绑时, 候选必须回到 preferred 固定端口, 不得以
+    // 漂移值为种子把「固定端口」语义吃回去。
+    const client = new FakeClient((port) => port !== 45000 && port !== 45001);
+    const host = makeReadyHost(client);
+    // 非 exact: 45000、45001 都被占 → 顺延到 45002 (record 漂到 45002)。
+    const fwd = await host.ensureRemoteForward({
+      localHost: '127.0.0.1',
+      localPort: 7890,
+      preferredRemotePort: 45000,
+    });
+    expect(fwd.remotePort).toBe(45002);
+    expect(client.forwardInCalls).toEqual([
+      { addr: '127.0.0.1', port: 45000 },
+      { addr: '127.0.0.1', port: 45001 },
+      { addr: '127.0.0.1', port: 45002 },
+    ]);
+    // 模拟同 record 在 exact 语义下重绑 (断开愿望, 以 exact 重新登记)。
+    await host.closeRemoteForward('127.0.0.1', 7890);
+    const client2 = new FakeClient((port) => port === 45000); // 45000 现在可用
+    (host as unknown as { client: unknown }).client = client2;
+    const exact = await host.ensureRemoteForward({
+      localHost: '127.0.0.1',
+      localPort: 7890,
+      preferredRemotePort: 45000,
+      exactRemotePort: true,
+    });
+    expect(exact.remotePort).toBe(45000);
+    // 只试了固定端口 45000 — 没有从漂移的 45002 开始。
+    expect(client2.forwardInCalls).toEqual([{ addr: '127.0.0.1', port: 45000 }]);
+  });
+});

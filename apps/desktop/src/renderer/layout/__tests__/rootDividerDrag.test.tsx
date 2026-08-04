@@ -82,6 +82,17 @@ function renderLayoutRoot() {
   );
 }
 
+/**
+ * 覆盖 jsdom 恒为 0 的矩形:给某 panelKind 的元素钉死一个实测宽,让起拖时
+ * measuredPanePx 拿到真机口径的宽度(而非回落账面)。
+ */
+function mockPaneWidth(kind: string, width: number): void {
+  const el = document.querySelector(`[data-panel-drag-root="${kind}"]`) as HTMLElement | null;
+  expect(el).not.toBeNull();
+  el!.getBoundingClientRect = () =>
+    ({ width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+}
+
 /** 把缝一路拖向左(右侧面板变宽)到抓不动为止,松手。 */
 function dragDividerLeft(container: HTMLElement, byPx: number): void {
   const grab = container.querySelector('[data-testid="layout-divider"] > div');
@@ -162,5 +173,27 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
 
     expect(setCalls).toHaveLength(1);
     expect(committedShares()['right-tabs'].px).toBeCloseTo(120, 0);
+  });
+
+  // 2026-07-31 Lizi 实测:右侧栏折叠成 0 宽时拖 chat 变小(反向即拖别的面板变大),
+  // chat 到一半就卡。根因:折叠邻居让出的地方被弹性 chat 吸收,chat 实测宽远大于账面
+  // (share × avail),旧实现取 min(账面, 实测) 用了低估的账面,把 chat 真实可让空间压没了。
+  it('实测宽 > 账面宽(折叠邻居把份额让给了弹性 chat):按实测算可让空间,不被账面卡住', () => {
+    currentLayout = createDefaultLayout(); // chat / right 各半
+    const split = currentLayout.content as SplitNode;
+    split.children[0].fraction = 0.6; // chat:账面 0.6 → 账面宽 996px
+    split.children[1].fraction = 0.4; // right-tabs
+    const { container } = renderLayoutRoot();
+    // 真机:右栏折叠成 ~0,那 0.4 的地方被 chat 吸收 → chat 实测 1200px(账面才 996)。
+    const realChatPx = 1200;
+    mockPaneWidth('chat-main', realChatPx);
+    mockPaneWidth('right-tabs', 0);
+    dragDividerLeft(container, 1000); // 一路压缩 chat 到抓不动
+
+    expect(setCalls).toHaveLength(1); // 写树成功,没回弹
+    // 修复后按实测算:chat 能让 realPx − 400 = 800px(份额 800/1660),chat 落到约 0.118。
+    // 旧实现被账面 996 卡住:只让 min(996,1200)−400 = 596px(份额 0.359),chat 停在 0.241。
+    const givenShare = (realChatPx - CHAT_MIN) / AVAIL;
+    expect(committedShares()['chat-main'].fraction).toBeCloseTo(0.6 - givenShare, 3);
   });
 });

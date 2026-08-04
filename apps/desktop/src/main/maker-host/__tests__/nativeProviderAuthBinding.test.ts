@@ -23,6 +23,7 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  isNativeProviderAuthSelfAuthorized,
   migrateLegacyNativeProviderAuthBindings,
   unbindNativeProviderAuth,
 } from '../nativeProviderAuthBinding.js';
@@ -281,5 +282,49 @@ describe('claimDetectedNativeProviderAuth', () => {
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: '' }));
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ legacyClaimOwner: '' });
+  });
+});
+
+describe('凭证来路(selfAuthorized)—— 显式授权 vs 自动继承', () => {
+  // 存在的理由:两者结果相同(绑到当前 owner、凭证可用),但用户可见文案的依据不同 ——
+  // 「已沿用这台电脑上登录的账号」只对继承成立(PR #1076 review 第三轮)。
+
+  it('显式授权记下来路,自动认领不记', () => {
+    bindNativeProviderAuth('anthropic');
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+  });
+
+  it('来路按 provider 分别记账,不互相串味', () => {
+    bindNativeProviderAuth('anthropic');
+    expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(true);
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+    expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+  });
+
+  it('登出清掉来路 —— 之后残留凭证对 Cindy 重新是「外部已有的」', () => {
+    bindNativeProviderAuth('anthropic');
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
+
+    unbindNativeProviderAuth('anthropic');
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(false);
+  });
+
+  it('显式登出(带 revoked 标记)同样清掉来路', () => {
+    bindNativeProviderAuth('openai');
+    unbindNativeProviderAuth('openai', { revoked: true });
+    expect(isNativeProviderAuthSelfAuthorized('openai')).toBe(false);
+  });
+
+  it('从没绑定过的 provider 不算自己授权过', () => {
+    expect(isNativeProviderAuthSelfAuthorized('xai')).toBe(false);
+  });
+
+  it('绑定文件读不出来时保守按「自己授权过」——说不清来路就不要声称是继承', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, '{ this is not json');
+    expect(isNativeProviderAuthSelfAuthorized('anthropic')).toBe(true);
   });
 });

@@ -58,6 +58,8 @@ export interface IMHost {
     feishuMediaDir: string;
     /** Root for downloaded discord media. Optional — only hosts that wire the discord channel provide it. */
     discordMediaDir?: string;
+    /** Root for downloaded telegram media. Optional — only hosts that wire the telegram channel provide it. */
+    telegramMediaDir?: string;
   };
 
   /**
@@ -83,15 +85,15 @@ export interface IMHost {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord';
-    /** 平台侧稳定 token(feishu image_key / discord attachment id),host 据此免重下。 */
+    integration: 'feishu' | 'discord' | 'telegram';
+    /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
     mimeType: string;
   }): Promise<{ absPath: string; url: string }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord',
+    integration: 'feishu' | 'discord' | 'telegram',
     token: string,
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
@@ -129,6 +131,16 @@ export interface IMMessageEvent {
   messageId: string;
   /** Plain-text payload. */
   text: string;
+  /**
+   * 群多人对话的发言人元数据(telegram 群 turn 提供; 其它渠道/DM 缺省)。
+   * name 为平台显示名 — 不可信输入, 消费方注入 prompt 前必须消毒。
+   */
+  speaker?: { id: string; name: string; username?: string; isOwner: boolean };
+  /**
+   * 全响应模式下的旁听触发(非显式召唤): 业务层注入安静上下文指令,
+   * 模型可用 NO_REPLY 哨兵选择沉默; transport 抑制该消息的表情回应。
+   */
+  ambient?: boolean;
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**
@@ -152,6 +164,18 @@ export interface IMMessageEvent {
    * 「thread = 独立 session」;feishu 恒 undefined(整 DM 单会话)。
    */
   scopeKey?: string;
+  /**
+   * 本条消息所**回复/引用**的原消息(telegram reply_to_message 等)。
+   * 编排层可据此在送模型正文前拼引用上下文块;落库仍是渠道原文。
+   * 不支持引用语义的渠道恒 undefined。
+   */
+  replyContext?: {
+    author: string;
+    text: string;
+    isBot?: boolean;
+    /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
+    attachmentCount?: number;
+  };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
 }

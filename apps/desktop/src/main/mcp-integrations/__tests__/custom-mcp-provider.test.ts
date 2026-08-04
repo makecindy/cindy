@@ -68,6 +68,25 @@ describe('CustomMcpProvider', () => {
     });
   });
 
+  it('does not expose local stdio MCPs to remote Claude sessions', () => {
+    const config: CustomMcpConfig = {
+      id: 'stdio',
+      name: 'stdio',
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      cwd: 'C:\\work',
+    };
+    const provider = new CustomMcpProvider(config, () => null, () => ({ API_KEY: 'secret' }));
+
+    expect(
+      provider.toClaudeSdkConfig({
+        ...ctx,
+        remoteHostId: 'ssh-host',
+      }),
+    ).toBeNull();
+  });
+
   it('keeps stdio env paired with the config snapshot until providers refresh', () => {
     const config: CustomMcpConfig = {
       id: 'stdio',

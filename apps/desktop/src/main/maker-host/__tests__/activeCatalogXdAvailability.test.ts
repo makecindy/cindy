@@ -15,10 +15,12 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
+  isXdCodexAnthropicBridgeModel,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
+import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 function xdModels(agent: 'claude-code' | 'codex') {
   const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
@@ -45,11 +47,12 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('未登记模型的确定性默认:3 档 effort + fast=false + 仅 cc tab + 200k 窗口', () => {
+  it('未登记模型按 Claude-only 兜底并投影到 Codex bridge:3 档 effort + fast=false + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
 
     const cc = xdModels('claude-code');
+    const codex = xdModels('codex');
     expect(cc.map((m) => m.id)).toEqual(['brand-new-model']);
     expect(cc[0]).toMatchObject({
       name: 'brand-new-model',
@@ -58,7 +61,31 @@ describe('XD 网关权威模型清单重建', () => {
       defaultEffort: 'high',
       supportsFastMode: false,
     });
-    expect(xdModels('codex')).toEqual([]);
+    expect(codex).toEqual([
+      {
+        ...cc[0],
+        codexCompatibilityWireProtocol: 'anthropic-messages',
+      },
+    ]);
+    expect('codexCompatibilityWireProtocol' in cc[0]).toBe(false);
+    expect(isXdCodexAnthropicBridgeModel('brand-new-model')).toBe(true);
+    expect(
+      deriveAvailableModels(getActiveCatalog(), 'codex').map((model) => model.id),
+    ).toContain('brand-new-model');
+  });
+
+  it('Claude-only 模型投影到 Codex bridge 时清除未实现的 Fast 能力', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([{
+      id: 'fast-claude-only',
+      agents: ['claude-code'],
+      supportsFastMode: true,
+    }]);
+    expect(xdModels('claude-code')[0]?.supportsFastMode).toBe(true);
+    expect(xdModels('codex')[0]).toMatchObject({
+      supportsFastMode: false,
+      codexCompatibilityWireProtocol: 'anthropic-messages',
+    });
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
@@ -101,6 +128,23 @@ describe('XD 网关权威模型清单重建', () => {
         defaultEffort: 'high',
       });
     }
+    expect(isXdCodexAnthropicBridgeModel('gpt-5.6-sol')).toBe(false);
+    expect('codexCompatibilityWireProtocol' in xdModels('codex')[0]).toBe(false);
+  });
+
+  it('仅 codex 的原生模型不投影到 Claude tab,也不标记为 bridge', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'codex-native-only',
+        agents: ['codex'],
+        name: 'Codex Native Only',
+      },
+    ]);
+
+    expect(xdModels('claude-code')).toEqual([]);
+    expect(xdModels('codex').map((model) => model.id)).toEqual(['codex-native-only']);
+    expect(isXdCodexAnthropicBridgeModel('codex-native-only')).toBe(false);
   });
 
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {
@@ -234,9 +278,9 @@ describe('XD 网关权威模型清单重建', () => {
 });
 
 describe('Anthropic 权威模型清单注入', () => {
-  function anthropicModels() {
+  function anthropicModels(agent: 'claude-code' | 'codex' = 'claude-code') {
     const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
-    return p?.models['claude-code'] ?? [];
+    return p?.models[agent] ?? [];
   }
 
   const opus: CatalogModel = {
@@ -261,8 +305,13 @@ describe('Anthropic 权威模型清单注入', () => {
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });
+    expect(anthropicModels('codex')[0]).toMatchObject({
+      name: 'Opus 4.8',
+      supportsFastMode: false,
+    });
     setAnthropicDiscoveredModels([]);
     expect(anthropicModels()).toEqual([]);
+    expect(anthropicModels('codex')).toEqual([]);
   });
 
   it('注入 anthropic 不影响其它供应商(xai 静态清单逐字不变)', () => {

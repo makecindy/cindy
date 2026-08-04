@@ -27,7 +27,6 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
 
 const STORAGE_KEY = 'xdt:newMakerDraft:v1';
-const DEFAULT_CODEX_DRAFT_MODEL = 'gpt-5.4';
 let activeDataOwnerId: string | null = null;
 
 function storageKey(): string {
@@ -137,10 +136,15 @@ export interface NewMakerDraft {
   modelChosenByVendor: Partial<Record<MakerVendor, boolean>>;
 }
 
+/**
+ * 种子默认偏好。模型 id **一律经 getDefaultModelForVendor 从目录推荐位取**,不在这里写死:
+ * 这里曾写死 codex → 'gpt-5.4',与 modelDefinitions 里写死的 'gpt-5.5' 漂移成两个值,而两者
+ * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
+ */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
   if (vendor === 'codex') {
     return {
-      model: DEFAULT_CODEX_DRAFT_MODEL,
+      model: getDefaultModelForVendor('codex').id,
       effort: 'high',
       permissionMode: 'auto',
       planMode: false,
@@ -397,12 +401,16 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
     next.remoteHostId = null;
   }
-  // device-link 目标与 workingDir 同生命周期:切走 / 改 workingDir(未同时显式带
-  // deviceLink)即清除远程目标,避免把本地项目误当成远程设备项目。
-  if ('workingDir' in patch && next.workingDir == null) {
-    next.deviceLinkDeviceId = null;
-    next.deviceLinkDeviceName = null;
-  } else if ('workingDir' in patch && !('deviceLinkDeviceId' in patch)) {
+  // 改 workingDir 但**没有显式带** deviceLink 字段 → 清除远程目标,避免把本地项目误当成
+  // 远程设备项目。
+  //
+  // #807:原来这里还有一条「workingDir 变 null 就无条件清设备」的分支(即使同一个 patch
+  // 显式提供了 deviceLinkDeviceId 也清)。那是「远程草稿必带项目目录」时代的不变量;设备
+  // 提成一级维度后它直接把新流程打死 —— 选设备时传的正是
+  // `{ deviceLinkDeviceId, workingDir: null }`,设备刚设上就被清成 null,选设备完全不生效。
+  // 现在只保留「未显式带设备字段」这一条:显式指定设备的 patch 一律尊重,
+  // 而 resetDraftWorkspaceAfterSend 之类不带设备字段的清空路径行为不变。
+  if ('workingDir' in patch && !('deviceLinkDeviceId' in patch)) {
     next.deviceLinkDeviceId = null;
     next.deviceLinkDeviceName = null;
   }
@@ -415,6 +423,22 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   currentDraft = next;
   scheduleWrite(currentDraft);
   emit();
+}
+
+/**
+ * 把草稿的「这次要跑在哪」复位成干净的本机对话态。
+ *
+ * 只需这两个字段:workingDir=null 经上面的兜底级联同时清掉 remoteHostId /
+ * deviceLink* / collab.enabled。vendor / lastByVendor / fastModeByModel 等模型偏好
+ * 保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
+ *
+ * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
+ * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
+ * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
+ */
+export function resetDraftWorkspaceTargets(): void {
+  patchDraft({ workingDir: null, extraDirs: [] });
 }
 
 /** 单字段写入 collab(便捷 setter,语义比 patchDraft({ collab: ... }) 更直接)。 */

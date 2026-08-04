@@ -33,14 +33,21 @@ import path from 'node:path';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
-import { REMOTE_COLLAB_SERVER_NAMES } from '../mcp-integrations/codexHttpBridge.js';
+import {
+  REMOTE_ALLOWED_SERVER_NAMES,
+  REMOTE_COLLAB_SERVER_NAMES,
+  computeRemoteMcpFingerprint,
+  selectRemoteInjectableServerNames,
+} from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 
 const log = createLogger('codex-remote-mcp');
 
 const TOKEN_ENV = 'LIZI_MCP_TOKEN';
-// 远端注入白名单的唯一真源在 codexHttpBridge.ts (bridge 鉴权层也用它
-// scope persistent token) — 这里取别名保持本文件既有引用点不变。
+// 远端注入白名单的唯一真源在 codexHttpBridge.ts (bridge 鉴权层按
+// REMOTE_ALLOWED_SERVER_NAMES = 协同 + cindy_memory scope persistent token)。
+// 这里取协同别名保持本文件既有引用点不变;cindy_memory 独立走 Maker Memory
+// 全局开关 (daemon config 是 per-host 共享的, 没有 per-session 粒度)。
 const CODEX_REMOTE_MCP_SERVER_NAMES = REMOTE_COLLAB_SERVER_NAMES;
 const MANAGED_BEGIN = '# >>> cindy-remote-mcp (managed, do not edit) >>>';
 const MANAGED_END = '# <<< cindy-remote-mcp <<<';
@@ -645,12 +652,17 @@ export function hasPendingRemoteMcpDrift(
   hostId: string,
   opts: {
     collabEnabled: boolean;
+    /**
+     * Maker Memory 全局开关 (manager.isEnabled)。开着时 desired server 列表
+     * 含 cindy_memory — 与 ensure 内的注入集合同源, 开关翻转构成漂移。
+     */
+    makerMemoryEnabled: boolean;
     token: string | null;
     bridgeInstanceId: string | null;
   },
 ): boolean {
   const applied = readPortPrefs()[hostId]?.appliedFingerprint ?? null;
-  if (!opts.collabEnabled || !opts.token) {
+  if ((!opts.collabEnabled && !opts.makerMemoryEnabled) || !opts.token) {
     // 清理语义:applied 存在 = 待清理 (strip / 清理路径未跑过)。
     return applied !== null;
   }
@@ -658,13 +670,18 @@ export function hasPendingRemoteMcpDrift(
     return true;
   }
   const remotePort = readPortPrefs()[hostId]?.remotePort ?? DEFAULT_REMOTE_PORT_START;
-  const desired = createHash('sha256')
-    .update(
-      `${opts.token}|${opts.bridgeInstanceId}|${remotePort}|${[...CODEX_REMOTE_MCP_SERVER_NAMES].sort().join(',')}`,
-      'utf8',
-    )
-    .digest('hex')
-    .slice(0, 12);
+  // desired 集合与 ensure 的注入集合靠 selectRemoteInjectableServerNames 构造
+  // 同源;available 传白名单全集 = 「provider 恒注册」假设 (keepOrcaProviderStable,
+  // memory 侧由调用方按活跃 bridge 快照预钳制)。
+  const desired = computeRemoteMcpFingerprint({
+    token: opts.token,
+    bridgeInstanceId: opts.bridgeInstanceId,
+    remotePort,
+    serverNames: selectRemoteInjectableServerNames([...REMOTE_ALLOWED_SERVER_NAMES], {
+      collabEnabled: opts.collabEnabled,
+      memoryEnabled: opts.makerMemoryEnabled,
+    }),
+  });
   return desired !== applied;
 }
 
@@ -695,6 +712,14 @@ export function ensureRemoteCodexMcpBridge(
      * 闸门为准: 禁用时按清理路径剥受管段 (codex-connector R20 P2)。
      */
     isCollabEnabled?: () => boolean;
+    /**
+     * Maker Memory 全局开关 (manager.isEnabled)。开着时把 cindy_memory 一并
+     * 写进远端 daemon config (daemon 是 per-host 共享的, 无 per-session
+     * 粒度; per-session prompt 注入仍由 maker-core 按 session flag 决定,
+     * withStore 在 manager 禁用时返回 MAKER_MEMORY_NOT_READY 兜底)。缺省
+     * 视为关闭 — 未接线的调用方不改变既有行为。
+     */
+    isMakerMemoryEnabled?: () => boolean;
   },
 ): Promise<EnsureRemoteCodexMcpResult> {
   return withHostSerial(host.id, () => doEnsureRemoteCodexMcpBridge(host, deps));
@@ -712,6 +737,8 @@ async function doEnsureRemoteCodexMcpBridge(
      * 闸门为准: 禁用时按清理路径剥受管段 (codex-connector R20 P2)。
      */
     isCollabEnabled?: () => boolean;
+    /** 见 ensureRemoteCodexMcpBridge.deps.isMakerMemoryEnabled。 */
+    isMakerMemoryEnabled?: () => boolean;
   },
 ): Promise<EnsureRemoteCodexMcpResult> {
   try {
@@ -725,12 +752,14 @@ async function doEnsureRemoteCodexMcpBridge(
       // 对象的维持 bridge-unavailable 早退。
       const applied = readPortPrefs()[host.id]?.appliedFingerprint;
       const collabEnabled = deps.isCollabEnabled?.() ?? true;
+      const memoryEnabled = deps.isMakerMemoryEnabled?.() ?? false;
       const token = getRemoteMcpBridgeToken();
-      if (applied || !collabEnabled || !token) {
+      if (applied || (!collabEnabled && !memoryEnabled) || !token) {
         log.warn('bridge unavailable — running cleanup-only strip on remote host', {
           host: host.id,
           hadAppliedFingerprint: Boolean(applied),
           collabEnabled,
+          memoryEnabled,
           hasToken: Boolean(token),
         });
         // 已在 per-host 串行锁内 (ensure 持锁), 直调无锁核心 (R27 P2 自死锁修正)。
@@ -740,17 +769,25 @@ async function doEnsureRemoteCodexMcpBridge(
       log.warn('remote MCP injection skipped: http bridge unavailable', { host: host.id });
       return { ok: false, reason: 'bridge-unavailable' };
     }
-    // 只注入协同白名单 server:bridge 上还挂着其他 in-process provider
-    // (cindy_memory / cindy_ssh 等), 全量写进远端 daemon config 会让远端
-    // session 获得本机 MCP 能力, 越出协同边界 (与 cc 侧白名单同语义)。
-    const filteredNames = bridge.serverNames.filter((n) => CODEX_REMOTE_MCP_SERVER_NAMES.has(n));
+    // 只注入白名单 server (协同 + 开着 Maker Memory 时的 cindy_memory):
+    // bridge 上还挂着其他 in-process provider (cindy_ssh 等), 全量写进远端
+    // daemon config 会让远端 session 获得本机 MCP 能力, 越出边界。合成规则
+    // 唯一真源在 selectRemoteInjectableServerNames (codexHttpBridge.ts, 与
+    // cc 侧 / drift 判定共用)。
     const token = getRemoteMcpBridgeToken();
     const collabEnabled = deps.isCollabEnabled?.() ?? true;
-    let serverNames = collabEnabled ? filteredNames : [];
-    if (!collabEnabled && filteredNames.length > 0) {
-      // collab 全局禁用:bridge 名单不反映开关 (keepOrcaProviderStable) —
-      // 按清理路径剥受管段, 远端从「工具可见但调用必败」降级为不暴露
-      // (codex-connector R20 P2)。
+    let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
+      collabEnabled,
+      memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
+    });
+    if (
+      !collabEnabled &&
+      serverNames.length === 0 &&
+      bridge.serverNames.some((n) => CODEX_REMOTE_MCP_SERVER_NAMES.has(n))
+    ) {
+      // collab 全局禁用 (且 memory 也没开):bridge 名单不反映开关
+      // (keepOrcaProviderStable) — 按清理路径剥受管段, 远端从「工具可见但
+      // 调用必败」降级为不暴露 (codex-connector R20 P2)。
       log.info('collab globally disabled — cleaning remote managed block', { host: host.id });
     }
     if (serverNames.length > 0 && !token) {
@@ -829,13 +866,12 @@ async function doEnsureRemoteCodexMcpBridge(
     // 失败时缺了它们 driftUnapplied 会漏判, daemon 永远拿着旧 URL /
     // server 列表 (codex-connector R19 P1)。changed 仍是并列独立触发。
     const desiredFingerprint = serverNames.length > 0
-      ? createHash('sha256')
-          .update(
-            `${effectiveToken}|${bridge.bridgeInstanceId}|${remotePort}|${[...serverNames].sort().join(',')}`,
-            'utf8',
-          )
-          .digest('hex')
-          .slice(0, 12)
+      ? computeRemoteMcpFingerprint({
+          token: effectiveToken,
+          bridgeInstanceId: bridge.bridgeInstanceId,
+          remotePort,
+          serverNames,
+        })
       : null;
     const appliedFingerprint = readPortPrefs()[host.id]?.appliedFingerprint ?? null;
     const driftUnapplied = desiredFingerprint !== appliedFingerprint;

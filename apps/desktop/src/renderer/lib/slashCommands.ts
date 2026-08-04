@@ -85,12 +85,13 @@ export function filterSlashCommands(
  * 拉三路 IPC, 合并成 UnifiedCommand[]。
  *
  * - 任何一路失败按空列表处理(已在 main 端做 try/catch + 返回 success:false), 不阻塞 palette。
- * - workingDir 为空时不发起 agent-skill 扫描(没意义), 但 desktop / agent-builtin 仍然返回。
+ * - workingDir 为空时 Claude 仍扫描全局 skills。
+ * - SSH remote 由 opts.skipAgentSkills 显式禁用扫描,避免读取控制端本机 skills。
  */
 export async function loadAllCommands(
   agentKind: AgentKind,
   workingDir: string | null | undefined,
-  opts?: { forceReload?: boolean },
+  opts?: { forceReload?: boolean; skipAgentSkills?: boolean },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   const api = window.electronAPI.maker;
@@ -108,14 +109,19 @@ export async function loadAllCommands(
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [agentKind]) as Promise<CmdRes>)
       : api.listAgentCommands(agentKind)
   ).catch(() => ({ success: false }));
-  const skillP: Promise<SkillRes> = workingDir
+  const shouldLoadSkills = !opts?.skipAgentSkills;
+  const skillParams = {
+    ...(workingDir ? { workingDir } : {}),
+    ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
+  };
+  const skillP: Promise<SkillRes> = shouldLoadSkills
     ? (
         deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
               agentKind,
-              { workingDir, forceReload: opts?.forceReload },
+              skillParams,
             ]) as Promise<SkillRes>)
-          : api.listAgentSkills(agentKind, { workingDir, forceReload: opts?.forceReload })
+          : api.listAgentSkills(agentKind, skillParams)
       ).catch(() => ({ success: false }))
     : Promise.resolve({ success: true, skills: [] });
 

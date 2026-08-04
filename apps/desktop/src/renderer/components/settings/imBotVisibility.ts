@@ -39,3 +39,8 @@ export function showCindyGroup(identity: ImBotIdentity): boolean {
 export function showDiscordBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);
 }
+
+/** 个人分栏是否提供 Telegram 机器人配置 — 可见性规则与 Discord 同组。 */
+export function showTelegramBot(identity: ImBotIdentity): boolean {
+  return !isCnPersonalIdentity(identity);
+}

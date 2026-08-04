@@ -47,14 +47,24 @@ function memoryStore(): OwnershipStore & {
       row ? { ownerId: row.ownerId, ownerPid: row.ownerPid, heartbeatAt: row.heartbeatAt } : null,
     async tryInsert(id, now) {
       if (row) return false;
-      row = { ownerId: id.ownerId, ownerPid: id.ownerPid, ownerLabel: id.ownerLabel, heartbeatAt: now };
+      row = {
+        ownerId: id.ownerId,
+        ownerPid: id.ownerPid,
+        ownerLabel: id.ownerLabel,
+        heartbeatAt: now,
+      };
       return true;
     },
     async tryTakeover(expected, id, now) {
       if (!row || row.ownerId !== expected.ownerId || row.heartbeatAt !== expected.heartbeatAt) {
         return false;
       }
-      row = { ownerId: id.ownerId, ownerPid: id.ownerPid, ownerLabel: id.ownerLabel, heartbeatAt: now };
+      row = {
+        ownerId: id.ownerId,
+        ownerPid: id.ownerPid,
+        ownerLabel: id.ownerLabel,
+        heartbeatAt: now,
+      };
       return true;
     },
     async renew(ownerId, now) {

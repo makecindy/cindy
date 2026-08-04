@@ -12,7 +12,7 @@
   "cloudTeaserTitle": "클라우드 {{appName}} 준비 중",
   "cloudTeaserCopy": "출시되면 컴퓨터 없이 모바일 앱만으로 바로 사용할 수 있습니다.",
   "sectionFirstRun": "시작하기",
-  "sectionOffline": "연결한 컴퓨터",
+  "sectionOffline": "연결한 기기",
   "sectionRemoteDisabled": "컴퓨터에서 조작",
   "sectionAccessRevoked": "다시 허용 필요",
   "retryAccess": "액세스 재시도",

@@ -22,7 +22,10 @@ import {
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
 } from './active-catalog.js';
-import { maybeBackfillCodexModels } from './codex-model-backfill.js';
+import {
+  createCodexModelBackfillCoordinator,
+  type CodexModelBackfillCoordinator,
+} from './codex-model-backfill.js';
 import {
   createOrcaWorkerBridgeMcpProvider,
   type OrcaBridgeMcpDeps,
@@ -68,8 +71,18 @@ import {
 } from '../remote-ssh/agent-proxy.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
+import {
+  createBashConcurrencyHooks,
+  mergeClaudeHooks,
+} from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
-import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to-descriptors.js';
+import { readAgentResourceSettings } from './agent-resource-settings-store.js';
+import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
+import {
+  deriveAvailableModels,
+  refreshCatalogDerivedModels,
+  resolveVerifiedContextWindow,
+} from './catalog-to-descriptors.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -86,6 +99,7 @@ import {
   desktopCodexRuntimeConfig,
 } from './runtime-configs.js';
 import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker } from './anthropic-compat-proxy-host.js';
+import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permission-fallback.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -96,14 +110,27 @@ import {
   getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  getCodexThreadUpstreamOrigin,
   isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
+  registerReviewerRouteContext as registerCodexReviewerRouteContext,
+  registerChildThread as registerCodexProxyChildThread,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
+import { readContactsSettings } from './contacts-settings-store.js';
+
+/**
+ * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
+ * spawn 过)。codex 的 MCP flags 冻结在 cached spawn 配置且 app-server 跨会话
+ * 长活 —— 开关切换后若失效失败(busy), running 实例仍是旧工具面; codex 的
+ * getContactsPromptState 用这份快照识别该 stale 窗口, 避免 prompt 指挥模型调
+ * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
+ */
+let codexAppliedContactsEnabled: boolean | null = null;
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -134,6 +161,9 @@ import {
 } from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
   attachAgentsToMakerMemory,
@@ -157,6 +187,13 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+
+/**
+ * Codex 模型补拉 coordinator —— 随 maker 一起创建(需要 maker 实例做 live 拉取)、随
+ * resetMaker 一起作废(它闭包捕获了那个 maker,换账号后绝不能再对旧实例发拉取请求)。
+ * null = maker 尚未构造:那时既没有 agent 也没有会话,没有任何东西在等模型清单。
+ */
+let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
@@ -428,6 +465,8 @@ export async function ensureCodexMcpBridgeStartedForRemote(): Promise<{
           // 恢复路径同闸门 (codex-connector R21 P1):collab 全局禁用时
           // ensure 走清理而非重注入。
           isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+          // Maker Memory 同源闸门:开着时补刀不得把 cindy_memory 剥掉。
+          isMakerMemoryEnabled: () => _maker?.makerMemory?.isEnabled() ?? false,
           detachRemoteCodexSessionsOnHost: (hostId) =>
             detachActiveRemoteCodexSessions(hostId, 'bridge-recreate-rebootstrap'),
           log: desktopMakerLogger,
@@ -604,13 +643,16 @@ export function getMaker(): Maker {
       // MCP 注入) — 与 IPC create/send 路径同一 preflight。holder 在 IPC
       // 注册时填入 (晚于本 deps 构造, 早于任何 bridge 回调)。
       ensureRemoteSessionStart: async (params) => {
-        await getRemoteSessionStartEnsure()?.({
-          createOpts: {
-            id: params.sessionId,
-            agentKind: params.agentKind,
-            remoteHostId: params.remoteHostId,
-          },
-        });
+        // ensure 会在 createOpts 上就地归一化 makerMemoryEnabled (全局设置
+        // backfill + stale-bridge 钳制) — 这里是临时对象, 必须把结果读回
+        // 交给 bridge 的真实 createSession (review R6 P2)。
+        const createOpts: { id: string; agentKind: typeof params.agentKind; remoteHostId: string; makerMemoryEnabled?: boolean } = {
+          id: params.sessionId,
+          agentKind: params.agentKind,
+          remoteHostId: params.remoteHostId,
+        };
+        await getRemoteSessionStartEnsure()?.({ createOpts });
+        return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       dispatchInterAgentMessage,
@@ -638,6 +680,12 @@ export function getMaker(): Maker {
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
       orcaWorkerBridgeProvider,
     ];
+    // agent Bash 命令的全局并发闸门(跨所有本地 cc session / worker / subagent 共享)。
+    // 上限每次准入判断现读设置文件,热更即刻生效;默认 0 = 不限 = 不排队。
+    const commandConcurrencyGate = createCommandConcurrencyGate({
+      readMaxConcurrent: () => readAgentResourceSettings().maxConcurrentCommands,
+      log: desktopMakerLogger.child('command-gate'),
+    });
     const claudeAgent = new ClaudeCodeAgent({
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
@@ -648,6 +696,13 @@ export function getMaker(): Maker {
       resolveCcDebugFile: resolveSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
       makerMemory: makerMemoryManager,
+      // 智能通讯录 prompt 段的「本会话有效状态」: 与 mcp-providers.ts 的 provider
+      // 包装同一判定链(PluginRegistry 工作区/用户覆盖 → 全局开关), 保证工具面与
+      // prompt 不分叉; agent 侧对 enabled 还会与实际注册的 server 集合取交。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        return readContactsSettings().enabled ? 'enabled' : 'disabled';
+      },
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
@@ -670,19 +725,29 @@ export function getMaker(): Maker {
       //     WebP 副本, 把 Read 的 file_path 改写到副本路径再交给 SDK (原图不动).
       //     解决 agent 自主 Read 大图把 vision context 撑爆的问题 (用户附图那条路本来
       //     就走压缩, 但 agent 自己调 Read 绕过了).
+      //   - bash-concurrency-hooks: agent Bash 命令的全局并发闸门(跨 session)。
+      //     PreToolUse 满员挂起排队, Post/Failure/Denied/SessionEnd 释放;
+      //     maxConcurrentCommands 默认 0 = 不限 = 行为与无此 hook 时一致。
       //   (slack-empty-cursor-hook 已随 slack-official MCP 集成退役 2026-07-15:
       //    它只认老集成的 mcp__slack__* 工具名;空 cursor 清洗移入 cindy-slack
       //    意识的 slack_call_tool。)
-      claudeHooks: {
-        PreToolUse: [
-          {
-            matcher: 'Read',
-            hooks: [createReadImageHook(desktopMakerLogger)],
-          },
-        ],
-      },
+      claudeHooks: mergeClaudeHooks(
+        {
+          PreToolUse: [
+            {
+              matcher: 'Read',
+              hooks: [createReadImageHook(desktopMakerLogger)],
+            },
+          ],
+        },
+        createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+      ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+      // 远端 Claude 会话的路由 materialization:把该会话真实上游 + 鉴权 + 定制头解析成 cc
+      // env(native OAuth 订阅 / 自定义 Claude Code 供应商),覆盖「远端恒用网关」旧行为。
+      // 返回 null = 有效路由是 XD 网关,maker-core 维持既有网关远端路径。见 remote-claude-route.ts。
+      resolveRemoteClaudeRoute,
       // Phase 4.3: 远端 cc 路由 — 当 session 标了 remoteHostId, ClaudeCodeAgent
       // 调这个 factory 拿一个连远端 cc-mgr daemon 的 Query (替代本地 sdkQuery
       // 起 cc 子进程)。详见 packages/maker-core/src/agents/base-agent.ts 的
@@ -691,7 +756,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -722,6 +787,8 @@ export function getMaker(): Maker {
               sessionId,
               workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
               vendorOptions,
+              // per-session Maker Memory 开关 (maker-core 归一后透传)。
+              makerMemoryEnabled,
             },
             {
               ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
@@ -808,6 +875,7 @@ export function getMaker(): Maker {
               startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
               claudeBinaryPath,
               onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
+              onOAuthRefresh: onOAuthRefresh as Parameters<typeof openCcManagerSession>[0]['onOAuthRefresh'],
               forceFreshQuery,
             });
           } catch (err) {
@@ -873,6 +941,17 @@ export function getMaker(): Maker {
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
       makerMemory: makerMemoryManager,
+      // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
+      // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
+      // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
+      // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        const live = readContactsSettings().enabled;
+        if (!live) return 'disabled';
+        const applied = codexAppliedContactsEnabled ?? live;
+        return applied ? 'enabled' : 'unavailable';
+      },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
       // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按
@@ -880,8 +959,30 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
+      // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
+      // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
+      // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
+      },
+      // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
+      // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
+      //
+      // 两步定位,缺一不可:
+      //  1. codex-proxy-host 记的 threadId → 本次实际出口 origin。codex 的出口随会话
+      //     选定的 provider 变(订阅直连 ChatGPT、网关、xAI、自定义供应商),猜候选或
+      //     按时间戳挑最新都会把别的会话的判定报到本次故障上。
+      //  2. 该 origin 在 resolver 侧的判定。resolver 是共享的(anthropic-compat proxy、
+      //     通用 outbound-fetch 也在调),按 origin 取才不会串到别的消费方。
+      // 任一步查不到就返回 null,退回通用文案 —— 尤其 gateway-key fallback 下
+      // codexProxyActive=false、codex 直连不经本 proxy 时,这里必然查不到映射,
+      // 于是不会报出一条本次根本没走过的路径。
+      getOutboundPathFact: ({ threadId }) => {
+        if (!threadId) return null;
+        const origin = getCodexThreadUpstreamOrigin(threadId);
+        return origin ? getOutboundPathSnapshotFor([origin]) : null;
       },
       onAutoPermissionClassifierUnavailable: notifyAutoPermissionClassifierUnavailable,
       prepareCodexLocalCredentialModeSwitch: async (ctx) => {
@@ -908,10 +1009,17 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
+          // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
+          // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
+          // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
+          // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
+          codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
           });
+          // bridge 整体缺席 = cindy_contacts 必然不可达
+          codexAppliedContactsEnabled = false;
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
@@ -964,7 +1072,14 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         return {
-          extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
+          // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
+          // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
+          // model/list 无影响,不加 hostPurpose 分支。
+          extraArgs: [
+            ...mcpExtraArgs,
+            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
+          ],
           extraEnv: mcpExtraEnv,
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
@@ -974,7 +1089,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -983,6 +1098,8 @@ export function getMaker(): Maker {
           agentKind: 'codex',
           sessionId,
           workingDir,
+          // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
+          ...(remoteHostId ? { remoteHostId } : {}),
           vendorOptions: {
             ...vendorOptions,
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
@@ -993,6 +1110,11 @@ export function getMaker(): Maker {
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
       registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
         registerCodexProxyComposed(sessionId, threadId, text),
+      registerCodexReviewerRouteContext: ({ sessionId, threadId, model }) =>
+        registerCodexReviewerRouteContext(sessionId, threadId, model),
+      registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
+        registerCodexProxyChildThread(parentThreadId, childThreadId);
+      },
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider
@@ -1029,6 +1151,9 @@ export function getMaker(): Maker {
             // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
             // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
             // session start 显式报错, 而不是静默复用。
+            // deferredForLiveTurn (host 上有别的 turn 在跑) 则放行 attach:
+            // 这正是「不 mid-turn 杀 daemon」的代价 — 新 session 暂用旧
+            // env, turn-done 挂钩补刀后自愈。
             const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
             if (reconciled.markerChanged && !reconciled.daemonRestarted) {
               throw new Error(
@@ -1067,6 +1192,8 @@ export function getMaker(): Maker {
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      // auth 边界变了:「清单已在场」和「试过几次」都不再适用于下一个账号。
+      resetCodexModelBackfillState();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -1077,11 +1204,22 @@ export function getMaker(): Maker {
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      resetCodexModelBackfillState();
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
       await broadcastCodexRuntimeRoute();
+      // 这里刻意**不**补拉:登录路径的清单收口在 maker-ipc/auth.ts,它会在 live 拉取没
+      // applied 时回退读 models_cache（cache miss 即清空,防串号）。在这里并发补拉会与那次
+      // 清空交错,刚拉到的清单可能被空 cache 覆盖。补拉挂在那条收口之后,顺序确定。
+    });
+    // 「本机已有 ChatGPT 凭证被自动认领」这条路径不走 OAuth 登录动作,拿不到上面那个收口。
+    // 不在这里补拉,新机器首启就会停在「已连接 + 零模型」,直到用户打开设置页或模型选择器
+    // 才由 auto-refresh 兜住 —— 这正是首启 Codex tab 只剩少数模型的直接原因。
+    desktopCodexAuthAdapter.setOnOAuthBindingClaimed(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
+      await requestCodexModelBackfill();
     });
     // codex CLI 在 stderr 报 refresh_token 失效时, agent 会调 auth.invalidate() →
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
@@ -1089,9 +1227,20 @@ export function getMaker(): Maker {
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
+        // **必须先退役旧 host**，再清目录（PR #1076 review 第三轮）。
+        //
+        // 凭证失效与 logout / login 是同一类 auth 边界，却是三条路径里唯一没有退役 host 的
+        // ——于是旧 host 上在途的 `model/list` 会在目录被清空之后带着已失效账号的清单回来。
+        // 拦得住它的判据本来就有：CodexAgent 在把结果交给宿主前会校验
+        // `this.hosts.get(key) !== host`（见 agents/codex/index.ts 的 model/list 收尾），
+        // 只是这条路径从没让那个校验生效过。退役即补齐对称性，不需要在写入侧再加一层闸门。
+        await codexAgent.forceDisposeLocalHostForAuthChange(
+          `Codex credential invalidated: ${reason}`,
+        );
         clearChatgptBridgeCredentialCache();
         await refreshDiscoveredCodexModels(false);
       } catch (e) {
@@ -1200,8 +1349,12 @@ export function getMaker(): Maker {
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
+    //
+    // coordinator 而非一次性调用:首启这一刻 owner 绑定常常还没认领完,此时 hasCodexLogin()
+    // 为 false —— 一次性调用会被 skipped-unauthed 白白消费掉唯一机会。授权就绪后的重试
+    // 由 codex auth 事件驱动(见下方 requestCodexModelBackfill 的调用点)。
     const makerRef = _maker;
-    void maybeBackfillCodexModels({
+    _codexModelBackfill = createCodexModelBackfillCoordinator({
       hasCodexLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
       hasCodexModels: () =>
         (getActiveCatalog().providers.find((p) => p.id === 'openai')?.models.codex?.length ?? 0) > 0,
@@ -1209,8 +1362,35 @@ export function getMaker(): Maker {
       onApplied: () => refreshSelectableModelsAndBroadcast({}),
       log: desktopMakerLogger,
     });
+    void _codexModelBackfill.request();
   }
   return _maker;
+}
+
+/**
+ * 按 auth 事件请求一次 Codex 模型补拉(幂等 + 并发去重 + 失败封顶,见 coordinator 注释)。
+ * maker 未构造时是 no-op —— 它的补拉会在构造时自己跑第一轮。
+ */
+export async function requestCodexModelBackfill(): Promise<void> {
+  const coordinator = _codexModelBackfill;
+  if (!coordinator) return;
+  try {
+    const outcome = await coordinator.request();
+    desktopMakerLogger.debug('codex model backfill request settled', { outcome });
+  } catch (err) {
+    // coordinator 内部已吞异常并转成 outcome;这里只兜住理论上的意外,绝不让 auth 收口抛穿。
+    desktopMakerLogger.warn('codex model backfill request threw', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * 重置补拉的失败计数 —— 只在 codex auth 边界真的变了时调(登录 / 登出 / 凭证失效 / 换账号)。
+ * 新边界下「上个账号试过几次都不成」这个结论不再适用。
+ */
+export function resetCodexModelBackfillState(): void {
+  _codexModelBackfill?.reset();
 }
 
 /**
@@ -1229,6 +1409,9 @@ export function resetMaker(): void {
   cancelCodexAuthModeChange();
   _maker = null;
   _codexAgent = null;
+  // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
+  // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
+  _codexModelBackfill = null;
   _initialCustomMcpRefresh = undefined;
   resetPluginRegistry();
   resetCustomMcpRegistry();
@@ -1334,6 +1517,10 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   // 重读 codex models_cache 刷新规范化模型快照 —— active-catalog 会同时投影 Codex 与
   // Claude bridge;放在 auth 广播前,renderer refetch 即见最新。
   await refreshDiscoveredCodexModels();
+  // auth 模式变了,上一条边界下的失败计数不再适用;随后补一次 live 拉取兜住
+  // 「已登录 + models_cache 还没落盘」——必须排在上面的 cache 重读之后,否则被空快照覆盖。
+  resetCodexModelBackfillState();
+  await requestCodexModelBackfill();
   await broadcastCodexAuthStateChanged();
 }
 

@@ -25,7 +25,7 @@
 import * as path from 'node:path';
 import type Database from 'better-sqlite3';
 
-import { MakerMemoryStore, sanitizeWorkdir } from './store.js';
+import { MakerMemoryStore, memoryScopeDirName } from './store.js';
 import {
   type MemoryConfig,
   type WriteOptions,
@@ -198,6 +198,10 @@ export class MakerMemoryManager {
    *  - 调 store.init() (创建 FTS 表 + sanity check)
    *
    * 同 workdir 复用同一 store + db 实例。失败 (db open 失败 / mkdir 失败) 抛错。
+   *
+   * key 语义: 本地会话传 workdir 绝对路径; SSH remote 会话传
+   * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
+   * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
    */
   async getStore(absWorkdir: string): Promise<MakerMemoryStore> {
     if (!absWorkdir || absWorkdir.length === 0) {
@@ -206,7 +210,9 @@ export class MakerMemoryManager {
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
-    const sanitized = sanitizeWorkdir(absWorkdir);
+    // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
+    // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
+    const sanitized = memoryScopeDirName(absWorkdir);
     const storageDir = path.join(this.deps.basePath, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 

@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useGoalStatus } from '@/hooks/useGoalStatus';
 import { goalApiFor } from '@/lib/makerTransport';
+import { isGoalCapacityBackoff } from '@/utils/overloadError';
 import { GoalAdvancedLimits, type GoalLimitValues } from './GoalAdvancedLimits';
 import { ListComposerTextarea } from './ListComposerTextarea';
 
@@ -222,7 +223,16 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
   if (!goal || !sessionId) return null;
 
   const attention = isAttentionStatus(goal.status);
-  const statusLabel = t(`goal.status.${goal.status}`);
+  // 过载与账号限流共用 usageLimited(都是可恢复 + 到点自动续跑), 但说法必须分开:
+  // 账号从没被限流时说「用量受限 / X 点恢复」是假信息 —— 那个时刻只是"现在 + 60s 后
+  // 重试", 不是任何额度重置点(review #844 codex P1)。
+  const isCapacityBackoff = isGoalCapacityBackoff(goal.status, goal.lastReason);
+  const statusLabel = isCapacityBackoff
+    ? t('goal.status.capacityLimited')
+    : t(`goal.status.${goal.status}`);
+  // 只算一次: formatResetTime 内部会取 new Date()(判"是否今天"), 条件与插值各算一次不仅
+  // 多余, 跨午夜那一刻两次结果还可能不一致(copilot 低置信提示; 双取是既有写法)。
+  const resetTimeText = formatResetTime(goal.usageResetAt);
   const elapsedMs = active ? Math.max(0, nowMs - goal.startedAt) : 0;
 
   return (
@@ -248,10 +258,12 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
       >
         {statusLabel}
       </span>
-      {/* usageLimited:显示限额恢复时刻(知道才显示) */}
-      {goal.status === 'usageLimited' && formatResetTime(goal.usageResetAt) && (
+      {/* usageLimited:显示恢复 / 重试时刻(知道才显示)。过载那条是重试时刻, 不是额度重置。 */}
+      {goal.status === 'usageLimited' && resetTimeText && (
         <span className="shrink-0" style={{ color: 'var(--error-fg)' }}>
-          {t('goal.usageLimitedUntil', { time: formatResetTime(goal.usageResetAt) })}
+          {t(isCapacityBackoff ? 'goal.capacityRetryAt' : 'goal.usageLimitedUntil', {
+            time: resetTimeText,
+          })}
         </span>
       )}
       {/* 目标文本(截断) */}

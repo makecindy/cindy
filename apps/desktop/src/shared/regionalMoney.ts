@@ -125,13 +125,51 @@ export function regionalizeUsd(
   return regionalizeMoney(usdMoney(amountUsd, kind, reason), region);
 }
 
-/** 当前客户端 Gateway 数值，币种跟随本地 usage 账本。 */
-export function gatewayMoney(amount: number, kind: MoneyKind = 'actual-cost'): RegionalMoney {
+/**
+ * 把 USD 口径金额投影到目标账本币种。
+ *
+ * 与 regionalizeMoney 的区别：投影目标是**账号的结算币种**而不是构建区域。本地账本是
+ * 单币种的，写入侧只接受该币种（见 main/usage/ledgerCurrency），所以非 Gateway 渠道
+ * （订阅价值估算、第三方供应商 SDK 费用，原始口径都是 USD）必须按账本币种投影而不是按
+ * 区域 —— 否则以 USD 结算的账号在 CN 构建上会拿到 CNY 金额，被账本守卫当异币种全部丢弃，
+ * 这些渠道的花费就再也记不进日账本、按模型统计与「本对话」累计。
+ *
+ * 只支持 USD → CNY（固定汇率本就是为这个方向的展示投影设的）。已是目标币种的原样返回；
+ * CNY → USD 没有反向汇率契约，不猜、原样返回交给上层的异币种处理。
+ */
+export function toLedgerCurrency(
+  money: RegionalMoney,
+  ledgerCurrency: MoneyCurrency,
+): RegionalMoney {
+  assertAmount(money.amount);
+  if (money.currency === ledgerCurrency) return money;
+  if (ledgerCurrency === 'CNY' && money.currency === 'USD') {
+    return { ...money, amount: money.amount * USD_TO_CNY_FIXED_RATE, currency: 'CNY' };
+  }
+  return money;
+}
+
+/** usdMoney + 按账本币种投影（替代按区域投影的 regionalizeUsd）。 */
+export function usdToLedgerCurrency(
+  amountUsd: number,
+  ledgerCurrency: MoneyCurrency,
+  kind: MoneyKind = 'actual-cost',
+  reason?: MoneyEstimateReason,
+): RegionalMoney {
+  return toLedgerCurrency(usdMoney(amountUsd, kind, reason), ledgerCurrency);
+}
+
+/** Gateway 原生数值；缺省币种跟随本地 usage 账本，账号快照可显式传入币种。 */
+export function gatewayMoney(
+  amount: number,
+  currency: MoneyCurrency = DEFAULT_USAGE_CURRENCY,
+  kind: MoneyKind = 'actual-cost',
+): RegionalMoney {
   assertAmount(amount);
   const approximate = kind === 'value-estimate';
   return {
     amount,
-    currency: DEFAULT_USAGE_CURRENCY,
+    currency,
     approximate,
     kind,
     ...(approximate ? { estimateReasons: ['subscription-value'] } : {}),

@@ -148,6 +148,61 @@ describe('resolveSourceSwitch', () => {
     expect(r.reconciledEffort).toBeUndefined();
   });
 
+  it('reconcile 候选按 mode 准入过滤(issue #882 review):mode 非 chat 且 id 落 categorize 兜底组时不被选中', () => {
+    // 故意造一个 id 不含任何非聊天关键词、只能靠 categorize 兜底落 'china' 的场景:
+    // 旧实现用纯 id 正则的 categorize 判定候选分组,'china' 在 CHAT_VENDOR_CATEGORY_ORDER
+    // 里、会被当成有效候选;换成 mode 优先的 classifyModel 后,mode='embedding' 权威判定
+    // 为非聊天,不再落进任何厂商组,候选列表为空。该来源只 offer 这一个模型,
+    // 没有别的候选可选 —— 必须不选中它、保持模型不变,而不是"退而求其次"选一个非聊天模型。
+    const r = resolveSourceSwitch({
+      provider: provider('xd', ['some-vendor-neutral-id']),
+      agent: AGENT,
+      currentModelId: 'gpt-5.4', // 不被该来源 offer,触发 reconcile
+      visibleModels: [{ id: 'some-vendor-neutral-id', efforts: [], mode: 'embedding' }],
+      remembered: undefined,
+    });
+    expect(r.reconciledModelId).toBeUndefined();
+  });
+
+  it('候选校验目标 provider 自己的那份数据,不是 visibleModels 并集里的同 id 条目(issue #882,2026-07 review:fresh evidence——并集条目可能来自另一个 provider 的聊天分类,和目标 provider 自己的 mode 不一致)', () => {
+    // 目标 provider('xd')上 'shared-id' 是非聊天(image_generation);但 visibleModels
+    // 并集里同 id 的条目标了 mode='chat'(模拟它是从另一个 provider 的聊天分类合并过来的)。
+    const targetProviderWithNonChatCopy = {
+      id: 'xd',
+      name: 'xd',
+      models: { [AGENT]: [{ id: 'shared-id', mode: 'image_generation' }] },
+    } as unknown as ProviderView;
+
+    const r = resolveSourceSwitch({
+      provider: targetProviderWithNonChatCopy,
+      agent: AGENT,
+      currentModelId: 'gpt-5.4', // 不被 xd offer,触发 reconcile
+      visibleModels: [{ id: 'shared-id', efforts: ['low', 'high'], mode: 'chat' }],
+      remembered: undefined,
+    });
+    // 不能选中它——目标 provider 自己的这份条目不是聊天模型,即便并集里同 id 条目标了 chat。
+    expect(r.reconciledModelId).toBeUndefined();
+  });
+
+  it('记忆命中校验目标 provider 自己的那份数据(同上,remembered 分支)', () => {
+    const targetProviderWithNonChatCopy = {
+      id: 'xd',
+      name: 'xd',
+      models: { [AGENT]: [{ id: 'shared-id', mode: 'image_generation' }] },
+    } as unknown as ProviderView;
+
+    const r = resolveSourceSwitch({
+      provider: targetProviderWithNonChatCopy,
+      agent: AGENT,
+      currentModelId: 'gpt-5.4',
+      visibleModels: [{ id: 'shared-id', efforts: ['low', 'high'], mode: 'chat' }],
+      remembered: { model: 'shared-id', effort: 'high' },
+    });
+    // 记忆指向的模型在目标 provider 上不是聊天模型 → 记忆失效,不恢复它;也没有别的候选。
+    expect(r.reconciledModelId).toBeUndefined();
+    expect(r.reconciledEffort).toBeUndefined();
+  });
+
   it('无记忆 + 当前模型仍被 offer:全不动', () => {
     const r = resolveSourceSwitch({
       provider: provider('anthropic', ['claude-opus-4-8', 'claude-sonnet-4-6']),
@@ -574,5 +629,25 @@ describe('isSelectedSourceDisconnected — 会话显式来源断连判定', () =
         providersLoading: false,
       }),
     ).toBe(false);
+  });
+
+  it('选中来源仍连着,但这个模型在它上面已经不是聊天模型 → true(issue #882 第 3 点,2026-07 review)', () => {
+    const nonChatView = {
+      id: 'xd',
+      name: 'xd',
+      connected: true,
+      agents: [AGENT],
+      routing: { [AGENT]: {} },
+      models: { [AGENT]: [{ id: MODEL_ID, mode: 'image_generation' }] },
+    } as unknown as ProviderView;
+    expect(
+      isSelectedSourceDisconnected({
+        providers: [nonChatView],
+        agent: AGENT,
+        modelId: MODEL_ID,
+        selectedProviderId: 'xd',
+        providersLoading: false,
+      }),
+    ).toBe(true);
   });
 });

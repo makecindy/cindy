@@ -1025,6 +1025,96 @@ describe('importExternalCodexMessagesForSession', () => {
     expect(rows.map((r) => JSON.parse(r.content))).toEqual(['first', 'third']);
   });
 
+  it('normalizes codex file citations in imported assistant messages (#785)', async () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(
+      rolloutPath,
+      [
+        rolloutLine('m1', 'user', 'save it', '2026-05-13T00:00:01.000Z'),
+        rolloutLine(
+          'm2',
+          'assistant',
+          '已保存::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。',
+          '2026-05-13T00:00:02.000Z',
+        ),
+        '',
+      ].join('\n'),
+    );
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+
+    currentTestDb()
+      .prepare(
+        `
+      INSERT INTO sessions (
+        id, title, working_dir, model, effort, permission_mode, status,
+        sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
+        context_window, fast_mode, cleared_at, pinned_at, user_send_at,
+        agent_kind, parent_session_id, forked_at_message_id, worktree_path,
+        source, feishu_open_id, feishu_bot_app_id, used_project_context,
+        extra_dirs, created_at, updated_at
+      )
+      VALUES (
+        ?, 'Imported', '/tmp/project', 'gpt-5.5', 'high', 'ask', 'active',
+        ?, 0, 0, 0, 0, 0, NULL, NULL, 1,
+        'codex', NULL, NULL, NULL, 'desktop', NULL, NULL, 0, '[]', 1, 1
+      )
+    `,
+      )
+      .run(`codex-${threadId}`, threadId);
+
+    await importExternalCodexMessagesForSession(`codex-${threadId}`);
+
+    const rows = currentTestDb()
+      .prepare('SELECT role, content FROM messages ORDER BY id')
+      .all() as Array<{ role: string; content: string }>;
+    // 导入路径与流式路径同口径:入库的 assistant 正文不含内部 citation 语法。
+    expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
+    expect(JSON.parse(rows[1].content)).toBe('已保存:`/tmp/报告.docx`,请查收。');
+  });
+
+  it('strips unfinished citation tails from imported assistant messages (#785 review 反馈)', async () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    // 生成中断的会话:assistant 正文停在标记中间(rollout 里就是这样存的)。
+    fs.writeFileSync(
+      rolloutPath,
+      `${rolloutLine('m1', 'assistant', '结果在 :codex-file-citation{path="/tmp/x', '2026-05-13T00:00:01.000Z')}\n`,
+    );
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+
+    currentTestDb()
+      .prepare(
+        `
+      INSERT INTO sessions (
+        id, title, working_dir, model, effort, permission_mode, status,
+        sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
+        context_window, fast_mode, cleared_at, pinned_at, user_send_at,
+        agent_kind, parent_session_id, forked_at_message_id, worktree_path,
+        source, feishu_open_id, feishu_bot_app_id, used_project_context,
+        extra_dirs, created_at, updated_at
+      )
+      VALUES (
+        ?, 'Imported', '/tmp/project', 'gpt-5.5', 'high', 'ask', 'active',
+        ?, 0, 0, 0, 0, 0, NULL, NULL, 1,
+        'codex', NULL, NULL, NULL, 'desktop', NULL, NULL, 0, '[]', 1, 1
+      )
+    `,
+      )
+      .run(`codex-${threadId}`, threadId);
+
+    await importExternalCodexMessagesForSession(`codex-${threadId}`);
+
+    const rows = currentTestDb()
+      .prepare('SELECT role, content FROM messages ORDER BY id')
+      .all() as Array<{ role: string; content: string }>;
+    // 与流式 completed 同口径:确定的截断残尾从入库文本剥掉,不漏内部语法。
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].content)).toBe('结果在');
+  });
+
   it('keeps importing linked Codex rollout messages after local app messages without duplicating them', async () => {
     const dbPath = createStateDb(externalHome);
     const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);

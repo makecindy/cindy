@@ -722,18 +722,68 @@ function forward(
   // writableEnded 为 false —— 那不是客户端断开,不该打断开日志/置 clientAborted,
   // 否则排查上游故障时日志会把因果指向客户端。destroy 前置位此标记跳过。
   let proxyDestroyedClient = false;
+  // 一个请求可能同时收到 upstream response 的 `aborted` + `error`(或 `close`),
+  // 也可能在 response error 之后再收到 upstreamReq error。所有这些事件都只
+  // 能把 clientRes 收口一次;否则第二个事件会重复 destroy / 重复刷错误日志。
+  let upstreamFailureHandled = false;
+  // `end` 与 `close` 的事件顺序由 Node stream 决定,不能用 clientRes.writableEnded
+  // 判断上游是否正常结束:上游 `end` listener 执行时 pipe 尚未调用 clientRes.end()。
+  // 这个状态还用于屏蔽 error/aborted 在正常 end 后的迟到事件。
+  let upstreamResponseTerminal: 'end' | 'error' | 'aborted' | 'close' | 'client-aborted' | null = null;
+  // response 已经开始后,同一个 socket 故障在不同 Node/平台上可能先落到
+  // upstreamReq.error 或 upstreamRes.error。request 侧通过这个回调汇入当前
+  // response 的终态处理,保证 observer 与下游收口语义不受事件先后影响。
+  let failActiveResponse: ((err: unknown) => void) | null = null;
+
+  const finishClientAfterUpstreamFailure = (err: Error, message = `upstream stream error: ${String(err)}`): boolean => {
+    if (
+      clientAborted ||
+      proxyDestroyedClient ||
+      upstreamFailureHandled ||
+      clientRes.destroyed ||
+      clientRes.writableEnded
+    ) {
+      return false;
+    }
+    upstreamFailureHandled = true;
+    // `destroy()` / `end()` 都会触发 clientRes.close;先标记来源,避免 close listener
+    // 把代理自己收口的故障误报成“client disconnected”。
+    proxyDestroyedClient = true;
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'content-type': 'application/json' });
+      clientRes.end(JSON.stringify({
+        error: { type: 'proxy_error', message },
+      }));
+    } else {
+      // 已经把上游的部分响应发给客户端时,不能 end 一个看似完整的 SSE。
+      // destroy 让 Claude/SDK 明确收到截断连接并立即失败,而不是把半截流当成功。
+      clientRes.destroy(err);
+    }
+    return true;
+  };
+
   clientRes.on('close', () => {
-    if (proxyDestroyedClient || clientRes.writableEnded) return;
+    // 透明重试的上一笔 forward 也保留着 close listener;它的上游已经 end,
+    // 后一笔若因上游故障 destroy clientRes,不能被旧 listener 误报成客户端断开。
+    if (proxyDestroyedClient || upstreamResponseTerminal === 'end' || clientRes.writableEnded) return;
     clientAborted = true;
+    if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'client-aborted';
     logger.info?.('client disconnected mid-response — aborting upstream request', {
       reqId,
       method,
-      path: upstreamPath,
+      path: upstreamPathname,
     });
     upstreamReq.destroy(new Error('client aborted before response completed'));
   });
 
   upstreamReq.on('response', (upstreamRes) => {
+    // 请求已经因客户端断开或另一条 upstream error 路径收口时,不要再向同一个
+    // ServerResponse 写 header/pipe;恢复上游读取以释放 socket。
+    if (clientAborted || upstreamFailureHandled || clientRes.destroyed || upstreamResponseTerminal === 'client-aborted') {
+      upstreamRes.resume();
+      return;
+    }
+
     // status + headers 透传(过滤掉 transfer-encoding 让 Node 自己处理 chunked)
     const respHeaders: Record<string, string | string[]> = {};
     for (const [k, v] of Object.entries(upstreamRes.headers)) {
@@ -753,8 +803,39 @@ function forward(
       : [];
     if (activeRules.length > 0) {
       const chunks: Buffer[] = [];
-      upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+      const failBufferedResponse = (
+        reason: 'error' | 'aborted' | 'close',
+        rawError?: unknown,
+      ): void => {
+        if (upstreamResponseTerminal !== null) return;
+        upstreamResponseTerminal = reason;
+        if (clientAborted || clientRes.destroyed) return;
+        const err = rawError instanceof Error
+          ? rawError
+          : new Error(rawError === undefined
+            ? `upstream response ${reason} before completion`
+            : String(rawError));
+        logger.error?.('upstream response stream error (during 400 buffering)', {
+          reqId,
+          err: String(err),
+          reason,
+          status,
+          bytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+        });
+        // 400/422 buffering never creates a responseObserver sink; only the
+        // streaming path below owns observer start/data/end/error callbacks.
+        finishClientAfterUpstreamFailure(err);
+      };
+      failActiveResponse = (err) => failBufferedResponse('error', err);
+
+      upstreamRes.on('data', (chunk: Buffer) => {
+        if (upstreamResponseTerminal !== null) return;
+        chunks.push(chunk);
+      });
       upstreamRes.on('end', () => {
+        if (upstreamResponseTerminal !== null) return;
+        upstreamResponseTerminal = 'end';
+        if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
         const errBody = Buffer.concat(chunks);
         // 先按 content-encoding 解压一次 —— 规则 matches / errorType / body dump 都吃解压后的字节。
         // node:http 不自动解压; 上游若 gzip/br 压缩, 直接对压缩字节跑 regex 会漏判, 透明重试就不触发。
@@ -851,16 +932,13 @@ function forward(
         }
         clientRes.end(errBody);
       });
-      upstreamRes.on('error', (err) => {
-        if (clientAborted) return;
-        logger.error?.('upstream response stream error (during 400 buffering)', { reqId, err: String(err) });
-        if (!clientRes.headersSent) {
-          clientRes.writeHead(502, { 'content-type': 'application/json' });
-          clientRes.end(JSON.stringify({ error: { type: 'proxy_error', message: `upstream stream error: ${String(err)}` } }));
-        } else {
-          proxyDestroyedClient = true;
-          clientRes.destroy(err);
-        }
+      upstreamRes.on('error', (err) => failBufferedResponse('error', err));
+      // IncomingMessage 在连接被对端提前掐断时可能只发 `aborted`,不一定随后发
+      // `error`;两条事件都接入同一个幂等收口。
+      upstreamRes.on('aborted', () => failBufferedResponse('aborted'));
+      upstreamRes.on('close', () => {
+        if (upstreamResponseTerminal !== null || upstreamRes.complete) return;
+        failBufferedResponse('close');
       });
       return;
     }
@@ -914,6 +992,38 @@ function forward(
       }
     };
 
+    let lastChunkBytes = 0;
+    let lastChunkAt: number | null = null;
+    const failStreamingResponse = (
+      reason: 'error' | 'aborted' | 'close',
+      rawError?: unknown,
+    ): void => {
+      if (upstreamResponseTerminal !== null) return;
+      upstreamResponseTerminal = reason;
+      // 客户端主动停止是预期的取消路径,不应再通知 observer 为上游故障。
+      if (clientAborted || clientRes.destroyed) return;
+      const err = rawError instanceof Error
+        ? rawError
+        : new Error(rawError === undefined
+          ? `upstream response ${reason} before completion`
+          : String(rawError));
+      observerError(err);
+      logger.error?.('upstream response stream error', {
+        reqId,
+        method,
+        // query 可能携带供应商签名或 token;生命周期日志只保留 pathname。
+        path: upstreamPathname,
+        status,
+        err: String(err),
+        reason,
+        bytes: totalBytes,
+        lastChunkBytes,
+        lastChunkAt,
+      });
+      finishClientAfterUpstreamFailure(err);
+    };
+    failActiveResponse = (err) => failStreamingResponse('error', err);
+
     clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
 
     // 收 body: 总字节始终累加;status >= 400 时额外收集前 ERROR_RESPONSE_DUMP_MAX_BYTES
@@ -924,7 +1034,10 @@ function forward(
     const errBuf: Buffer[] = [];
     let errBufBytes = 0;
     upstreamRes.on('data', (chunk: Buffer) => {
+      if (upstreamResponseTerminal !== null) return;
       totalBytes += chunk.length;
+      lastChunkBytes = chunk.length;
+      lastChunkAt = Date.now();
       observerData(chunk);
       if (collectErrBody && errBufBytes < ERROR_RESPONSE_DUMP_MAX_BYTES) {
         const remain = ERROR_RESPONSE_DUMP_MAX_BYTES - errBufBytes;
@@ -933,6 +1046,9 @@ function forward(
       }
     });
     upstreamRes.on('end', () => {
+      if (upstreamResponseTerminal !== null) return;
+      upstreamResponseTerminal = 'end';
+      if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
       // 4xx/5xx 用 warn 级别冒泡, 默认只记低风险摘要 (status / content-type / bytes / errorType),
       // 完整 body 只在 debug 级别下才进日志 —— 避免 release 把上游错误体里可能回显的请求字段
       // 静默落盘到用户磁盘。debug 关时 isDebugEnabled 提前返 false, 不付 dump 字符串构造开销。
@@ -968,8 +1084,11 @@ function forward(
       }
       observerEnd();
     });
-    upstreamRes.on('error', (err) => {
-      observerError(err instanceof Error ? err : new Error(String(err)));
+    upstreamRes.on('error', (err) => failStreamingResponse('error', err));
+    upstreamRes.on('aborted', () => failStreamingResponse('aborted'));
+    upstreamRes.on('close', () => {
+      if (upstreamResponseTerminal !== null || upstreamRes.complete) return;
+      failStreamingResponse('close');
     });
 
     upstreamRes.pipe(clientRes);  // ← 字节级 pipe,SSE 零延迟的命脉('data' 只是计数+错误体收集, 不影响流)
@@ -978,21 +1097,27 @@ function forward(
   upstreamReq.on('error', (err) => {
     // 客户端主动断开触发的 destroy 是预期路径:客户端已不在,不写 502、不按
     // 上游故障记 error(上面 'close' 处已记过 info)。
-    if (clientAborted) return;
+    if (
+      clientAborted ||
+      upstreamFailureHandled ||
+      upstreamResponseTerminal === 'end' ||
+      clientRes.destroyed ||
+      clientRes.writableEnded
+    ) return;
+    if (failActiveResponse && upstreamResponseTerminal === null) {
+      failActiveResponse(err);
+      return;
+    }
     logger.error?.('upstream request failed', {
       reqId,
       err: String(err),
       method,
-      path: upstreamPath,
+      path: upstreamPathname,
       ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
     });
-    if (!clientRes.headersSent) {
-      clientRes.writeHead(502, { 'content-type': 'application/json' });
-      clientRes.end(JSON.stringify({ error: { type: 'proxy_error', message: `upstream unreachable: ${String(err)}` } }));
-    } else {
-      proxyDestroyedClient = true;
-      clientRes.destroy(err);
-    }
+    if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';
+    const upstreamError = err instanceof Error ? err : new Error(String(err));
+    finishClientAfterUpstreamFailure(upstreamError, `upstream unreachable: ${String(err)}`);
   });
 
   upstreamReq.on('timeout', () => {

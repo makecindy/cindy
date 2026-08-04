@@ -165,6 +165,14 @@ export interface MobileLocalAttachmentUploadController {
    */
   claim(localIds: readonly string[]): void;
   /**
+   * claim 的逆操作:任务交还 composer 域(重回托盘、重新计入限额)。
+   *
+   * 乐观消息被收回成草稿时用(创建失败把待发消息交还输入框):任务本身继续跑,
+   * 落定后宿主的 outbox 路由找不到归属条目,产物自然回落到托盘。取消再重传是错的
+   * ——用户已经等过一次上传,且粘贴来源的本地文件可能已被回收(review P1)。
+   */
+  unclaim(localIds: readonly string[]): void;
+  /**
    * 未 claim 且未丢弃任务的同步快照(顺序 = 入队序):发送时刻用它决定「这条消息
    * 要带走哪些在途上传」。failed = 已失败结算的卡(claim 后随消息进失败态);
    * kind / previewUri 供乐观消息气泡直接渲染本地缩略图(图片 = candidate.uri)。
@@ -498,6 +506,18 @@ export function createMobileLocalAttachmentUploadController(
         changed = true;
       }
       // claimed 任务离开托盘,同步刷一次 pending 列表。
+      if (changed) notifyPending();
+    },
+
+    unclaim(localIds) {
+      let changed = false;
+      for (const localId of localIds) {
+        const task = tasks.get(localId);
+        if (!task || task.discarded || !task.claimed) continue;
+        task.claimed = false;
+        changed = true;
+      }
+      // 任务回到托盘域,同步刷一次 pending 列表(失败卡也会重新出现,可 retry / X)。
       if (changed) notifyPending();
     },
 

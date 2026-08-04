@@ -3,7 +3,7 @@
  *
  * 关键不变量：
  *   - presets 是纯 UI 模板数据，坏条目**逐条丢弃**，绝不让整份目录 parse 失败回退 bundled；
- *   - mergeWithBundled：远端带 presets 用远端的，远端没带回落 bundled 的；
+ *   - mergeWithBundled：远端与 bundled 按 id 合并，同 id 远端优先、bundled 补缺；
  *   - BUNDLED_CATALOG 自带的首批预设本身合法（每条至少一个 runtime、字段完整）。
  */
 
@@ -147,15 +147,73 @@ describe('parseCatalog presets 容错', () => {
 });
 
 describe('mergeWithBundled presets 兜底', () => {
-  it('远端带 presets → 用远端的', () => {
+  it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {
     const merged = mergeWithBundled(minimalCatalog({ presets: [VALID_PRESET] }));
-    expect(merged.presets?.map((p) => p.id)).toEqual(['openrouter']);
+    expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual(VALID_PRESET);
+    expect(merged.presets?.map((preset) => preset.id)).toEqual(
+      BUNDLED_CATALOG.presets?.map((preset) => preset.id),
+    );
+    expect(merged.presets?.map((preset) => preset.id)).toEqual(
+      expect.arrayContaining(['zhipu-coding-plan-cn', 'zai-coding-plan-global']),
+    );
   });
 
   it('远端没带 presets → 回落 bundled 的', () => {
     const merged = mergeWithBundled(minimalCatalog());
     expect(merged.presets).toEqual(BUNDLED_CATALOG.presets);
     expect(merged.presets?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('远端独有 preset 按远端原序追加在 bundled 之后', () => {
+    const remoteOnly = { ...VALID_PRESET, id: 'remote-only' };
+    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteOnly] }));
+    expect(merged.presets?.at(-1)).toEqual(remoteOnly);
+  });
+
+  it('同 id 远端保留 runtime/model 时回填 bundled contextWindow，不复活被移除的 runtime/model', () => {
+    const remoteMiniMax = {
+      id: 'minimax-global',
+      name: 'Remote MiniMax',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://remote.example/anthropic',
+          models: [{ id: 'MiniMax-M3', name: 'Remote M3' }],
+        },
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
+    const preset = merged.presets?.find((candidate) => candidate.id === 'minimax-global');
+    expect(preset).toEqual({
+      ...remoteMiniMax,
+      runtimes: {
+        'claude-code': {
+          ...remoteMiniMax.runtimes['claude-code'],
+          models: [{ id: 'MiniMax-M3', name: 'Remote M3', contextWindow: 1_000_000 }],
+        },
+      },
+    });
+    expect(preset?.runtimes.codex).toBeUndefined();
+  });
+
+  it('远端显式 contextWindow 优先于 bundled', () => {
+    const remoteMiniMax = {
+      id: 'minimax-global',
+      name: 'Remote MiniMax',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://remote.example/anthropic',
+          models: [{ id: 'MiniMax-M3', name: 'Remote M3', contextWindow: 512_000 }],
+        },
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
+    expect(
+      merged.presets
+        ?.find((candidate) => candidate.id === 'minimax-global')
+        ?.runtimes['claude-code']
+        ?.models[0]
+        ?.contextWindow,
+    ).toBe(512_000);
   });
 });
 
@@ -375,6 +433,10 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
+    expect(preset?.runtimes['claude-code']?.models).toEqual([
+      { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
+    ]);
     expect(preset?.runtimes.codex).toEqual({
       baseUrl: codexBaseUrl,
       models: [
@@ -425,6 +487,19 @@ describe('官方渠道预设契约', () => {
       wireProtocol: 'openai-chat',
     }));
   });
+
+  it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
+    '%s 的 Claude Code GLM-5.2 1M 入口保留完整窗口元数据',
+    (id) => {
+      expect(
+        preset(id)?.runtimes['claude-code']?.models.find((model) => model.id === 'glm-5.2[1m]'),
+      ).toEqual({
+        id: 'glm-5.2[1m]',
+        name: 'GLM-5.2 (1M)',
+        contextWindow: 1_000_000,
+      });
+    },
+  );
 
   it('小米按量与 Token Plan 凭证不会混用端点', () => {
     expect(preset('xiaomi-mimo-api-cn')?.runtimes.codex?.baseUrl)

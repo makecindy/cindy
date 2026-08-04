@@ -23,7 +23,11 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: vi.fn(() => false) },
 }));
 
-import { CallbackListener, xaiCallbackCorsHeaders } from '../grok-oauth-login.js';
+import {
+  CallbackListener,
+  XAI_CALLBACK_PORT_OCCUPIED_MESSAGE,
+  xaiCallbackCorsHeaders,
+} from '../grok-oauth-login.js';
 
 const PORT = 56121;
 const XAI_ORIGIN = 'https://accounts.x.ai';
@@ -88,12 +92,45 @@ describe('xaiCallbackCorsHeaders', () => {
   });
 });
 
+/**
+ * 绑 56121 时它可能短暂被别人占着,有两个来源:
+ *   1. 文件内部:close() 同步返回但端口是异步释放的,上一个用例「调过 close」
+ *      不等于端口已交还,下一个用例立刻重绑就撞上;
+ *   2. 文件外部:56121 落在临时端口段内(macOS 49152–65535 / Linux 32768–60999),
+ *      任何用 listen(0) 拿端口的并发用例都可能被内核分到它。desktop unit tier
+ *      一轮 1330 个文件、threads 池下还共享同一个进程,这不是理论风险 —— CI 上
+ *      两轮分别撞在不同用例的 beforeEach 上。而 xAI 只接受
+ *      http://127.0.0.1:56121/callback,端口换不了。
+ *
+ * 两者是同一句话,所以只留一个判据:仅在引擎明确报出「端口被占用」时短暂重试,
+ * 其它启动失败原样抛出,不掩盖真正的问题。每次重试用全新实例,免得复用一个
+ * listen 失败过的 server。同族的客户端那一半由 send() 的 agent:false 处理。
+ *
+ * 判据必须与生产同源:start() 把底层错误包成新 Error、丢掉了 err.code,只剩文本可看,
+ * 而按端口号做子串匹配会连 EACCES / EADDRNOTAVAIL 一起收进来(它们的原文里同样带端口
+ * 号),把真正的启动故障当成「端口被占」白重试 100 次。所以整条比对生产导出的那句
+ * EADDRINUSE 专属提示。
+ */
+async function startFreshListener(): Promise<CallbackListener> {
+  for (let attempt = 1; ; attempt += 1) {
+    const candidate = new CallbackListener();
+    try {
+      await candidate.start();
+      return candidate;
+    } catch (err) {
+      candidate.close();
+      const occupied = err instanceof Error && err.message === XAI_CALLBACK_PORT_OCCUPIED_MESSAGE;
+      if (!occupied || attempt >= 100) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+}
+
 describe('CallbackListener(xAI loopback 回调)', () => {
   let listener: CallbackListener;
 
   beforeEach(async () => {
-    listener = new CallbackListener();
-    await listener.start();
+    listener = await startFreshListener();
   });
 
   afterEach(() => {
@@ -323,8 +360,12 @@ describe('CallbackListener(xAI loopback 回调)', () => {
 
   it('回调端口被占用时 start() 报可读错误', async () => {
     const blocker = new CallbackListener();
-    // beforeEach 已占 56121,新实例 start 应失败。
-    await expect(blocker.start()).rejects.toThrow('56121');
+    // beforeEach 已占 56121,新实例 start 应失败。整条比对,不按端口号做子串匹配
+    // ——后者对任何带端口号的 listen 失败都成立(见 startFreshListener 说明)。
+    await expect(blocker.start()).rejects.toThrow(XAI_CALLBACK_PORT_OCCUPIED_MESSAGE);
     blocker.close();
+    // 上面那条是同源比对,改文案不会让它失败;这句守住「用户看得见端口号」这个可读性
+    // 要求本身,顺带交叉校验测试里的 PORT 与生产的 REDIRECT_PORT 没有跑偏。
+    expect(XAI_CALLBACK_PORT_OCCUPIED_MESSAGE).toContain(String(PORT));
   });
 });

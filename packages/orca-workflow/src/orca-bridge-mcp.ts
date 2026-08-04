@@ -103,7 +103,15 @@ export interface OrcaBridgeMcpDeps {
     agentKind: AgentKind;
     remoteHostId: string;
     workingDir: string;
-  }) => Promise<void>;
+  }) => Promise<void | {
+    /**
+     * 宿主 preflight 归一化后的 per-session Maker Memory 开关 (全局设置
+     * backfill + stale-bridge 钳制, 与 IPC create/send 路径同一套 mutate)。
+     * rehydrate 的 createSession 必须用它 — 缺省 (老宿主 / no-op) 按 false
+     * 保守处理, 不得在未归一化的情况下注入记忆 (review R6 P2)。
+     */
+    makerMemoryEnabled?: boolean;
+  }>;
   orcaTeamStore?: OrcaTeamStore;
   dispatchInterAgentMessage?: (params: {
     targetSessionId: string;
@@ -431,13 +439,20 @@ async function ensureSessionFromMeta(
   // 远端 lead 重建前必须跑宿主 remote preflight (SSH 重连 / agent install /
   // 远端 MCP 注入):bridge 直调 core createSession 不经 maker-ipc, 跳过这步
   // 会让 app 重启后的首次 worker 回报 host-not-ready 或远端无协同 MCP。
+  let remoteMakerMemoryEnabled = false;
   if (meta.remoteHostId) {
-    await deps.ensureRemoteSessionStart?.({
+    const preflight = await deps.ensureRemoteSessionStart?.({
       sessionId: meta.sessionId,
       agentKind: meta.agentKind,
       remoteHostId: meta.remoteHostId,
       workingDir: meta.workingDir,
     });
+    // SSH remote 的 Maker Memory 与 IPC create/send 路径同语义:开关由
+    // preflight 归一化 (全局设置 backfill + stale-bridge 钳制) 后回传;
+    // 老宿主 / 未注入 preflight 时保守按 false — 不得在未归一化的情况下
+    // 注入 (review R6 P2:此前这里硬编码 false, 把远端 rehydrate 会话的
+    // 记忆永久关死, 与已放开的其余路径分叉)。
+    remoteMakerMemoryEnabled = preflight?.makerMemoryEnabled === true;
   }
   const session = await maker.createSession({
     id: meta.sessionId,
@@ -451,14 +466,10 @@ async function ensureSessionFromMeta(
     title: meta.title,
     ...(vendorOptions ? { vendorOptions } : {}),
     ...(meta.sdkSessionId ? { resumeSessionId: meta.sdkSessionId } : {}),
-    // 远端 lead 在同一台 SSH 主机上重建 (host 侧 createSession 会先做
-    // remote ensure); 本地 lead 无此字段。
-    // 远端 lead 在同一台 SSH 主机上重建 (host 侧 createSession 会先做
-    // remote ensure); 本地 lead 无此字段。makerMemoryEnabled=false 与 IPC
-    // create/send 路径的 remote ensure 归一化对齐 (ensure 里对 createOpts
-    // 的同款 mutate) — 远端 workdir 不得注入本地 Cindy Memory 上下文
-    // (codex-connector R22 P2;preflight 用临时 opts, mutation 到不了这里)。
-    ...(meta.remoteHostId ? { remoteHostId: meta.remoteHostId, makerMemoryEnabled: false } : {}),
+    // 远端 lead 在同一台 SSH 主机上重建; 本地 lead 无这两个字段。
+    ...(meta.remoteHostId
+      ? { remoteHostId: meta.remoteHostId, makerMemoryEnabled: remoteMakerMemoryEnabled }
+      : {}),
   });
   deps.wireSession(session);
   return session;

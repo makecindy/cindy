@@ -23,11 +23,12 @@ import type {
   InteractionDecision,
   InteractionRequest,
   PermissionMode,
+  TurnPermissionPolicy,
 } from '@cindy/maker-core';
-import type { ChannelIM, ImOutputDriver, IMUnsupportedEntry } from '@cindy/im';
+import type { ChannelIM, ImOutputDriver, IMMessageEvent, IMUnsupportedEntry } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
-export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat';
+export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -72,6 +73,11 @@ export interface ImSessionNamespace {
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
+   * 按 userId 收紧新会话的权限档(telegram guest lane → 'plan' 只读探索)。
+   * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
+   */
+  permissionModeFor?(userId: string): PermissionMode | null;
+  /**
    * 非接管会话 oneshot 生成正式标题时的前缀(如 'Slack · ' / '[飞书·DM] ')。
    *   - threadScoped 渠道(slack): 新 thread 会话的首条消息触发;
    *   - 非 threadScoped 渠道(feishu/discord): 新上下文(建行 / /new 后)的
@@ -96,6 +102,19 @@ export interface ImChannelAdapter {
   sessions: ImSessionNamespace;
   /** "已收到" ack 的 emoji(feishu: emoji_type 枚举名;slack: emoji 名)。 */
   processingEmoji: string;
+  /**
+   * turn 终态时把 ack 表情替换成结果表情(官方 Telegram bot 习惯:
+   * 成功 👍 / 失败 👎)。返回 null = 该终态不放表情(按默认撤掉 ack);
+   * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
+   */
+  terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
+  /**
+   * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
+   * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
+   * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
+   * ui.cards.project 必须提供(orchestrator 接线期断言)。
+   */
+  projectSwitching?: boolean;
   /**
    * thread = session 模型开关(slack: true)。开启后:
    *   - 入站事件的 scopeKey(thread root ts)参与会话路由与接管 binding
@@ -124,6 +143,31 @@ export interface ImChannelAdapter {
     userMessageId: string | null;
     persisted: boolean;
   }): Promise<void>;
+  /**
+   * 流式进度"只发正文"判定(按出站目标粒度)。Telegram 私聊的可编辑消息被
+   * 客户端渲染成带动画的 Rich draft, 过程时间线反复重排会清空重播 —— 返回
+   * true 时中间态只显示正文;零产出的过载重试窗口仍显示 notice 单行(否则
+   * 退避期间毫无反馈)。缺省 = 完整过程时间线(卡片渠道的既有行为)。
+   */
+  answerOnlyProgress?(userId: string): boolean;
+  /**
+   * 送模型正文的改写钩子(群上下文拼装等): 返回 agentText 替换发给 agent 的
+   * 文本 —— 落库与标题生成仍用渠道原文, 桌面 transcript 不被上下文前缀污染。
+   * commit 在路由解析成功(消息确定会被派发/排队)时调用, 是群窗口游标推进的
+   * 时机锚点; 路由失败(如鉴权缺失)不调用, 这批上下文下次仍会进入 prompt。
+   * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
+   */
+  prepareAgentTurnText?(event: IMMessageEvent): Promise<{
+    agentText: string;
+    commit?: () => void;
+  } | null>;
+  /**
+   * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用
+   * 强制确认卡, 卡片只认 owner 点击)。返回 undefined = 本轮不挂策略。
+   * 会话权限档不支持 turn 策略(acceptEdits/bypassPermissions)时 maker 拒跑
+   * 该轮(fail-closed), 不会静默放开。
+   */
+  turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
@@ -133,6 +177,11 @@ export interface ImUiTextPack {
   slash: {
     new: string;
     help: string;
+    /**
+     * `/start` 欢迎语(Telegram 私聊首次必发 /start — 点 START 按钮)。
+     * 提供则 /start 回它, 缺省渠道回 unknownCommand。
+     */
+    start?: string;
     unknownCommand: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
@@ -210,9 +259,40 @@ export interface ImUiTextPack {
       btnCancelFullAccess: string;
       fullAccessCancelled: string;
     };
+    /**
+     * `/project` 项目切换卡 — 仅 projectSwitching 渠道提供(接线期断言),
+     * 其它渠道省略。
+     */
+    project?: {
+      title: string;
+      /** 卡片提示行; currentName = 当前目录显示名('对话' 或项目名)。 */
+      hint: (currentName: string) => string;
+      emptyBody: string;
+      btnDialogue: string;
+      btnCancel: string;
+      resolvedPick: (displayName: string) => string;
+      resolvedDialogue: string;
+      resolvedCancel: string;
+      switchFailed: (reason: string) => string;
+      /** /ctr 接管期间不支持切项目(先 /exctr)。 */
+      attachedUnsupported: string;
+      /** 当前目录显示名为托管对话目录时的称呼。 */
+      dialogueName: string;
+    };
     control: {
       title: string;
       emptyBody: string;
+      /**
+       * `/session` 最近会话直达卡(可选;提供才放行 /session 命令)。
+       * 与 /ctr 的差异: 不按工作区分步, 直接列跨工作区最近 N 条。
+       */
+      recentSessions?: {
+        title: string;
+        hint: string;
+        emptyBody: string;
+        /** 按钮 label: `标题 · 目录名`(目录未知只有标题)。 */
+        optionLabel: (title: string, workspaceName: string | null) => string;
+      };
       hint: string;
       attachedSwitchHint: (sessionTitle: string) => string;
       btnExit: string;

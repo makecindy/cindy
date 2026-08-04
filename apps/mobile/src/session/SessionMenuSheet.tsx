@@ -44,6 +44,7 @@ import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { writeClipboardText } from '@/session/messageActions';
 import { normalizeExtraDirs } from '@/session/newSession';
@@ -169,7 +170,11 @@ export function SessionMenuSheet({
   const [renaming, setRenaming] = useState(false);
   const [renameGenerating, setRenameGenerating] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [titleDraft, setTitleDraft] = useState(session.title ?? '');
+  // 重命名输入框的预填值:哨兵先过投影,输入框里不能出现内部哨兵 "New Maker"
+  // (与桌面 SessionContentHeader 的预填同款)。用户不改直接确定时由 submitRename
+  // 的「没改就不落库」判据挡住,详见那里的注释。
+  const renamePrefill = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle'));
+  const [titleDraft, setTitleDraft] = useState(renamePrefill);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [extraDirsNotice, setExtraDirsNotice] = useState<string | null>(null);
   // 编辑轮次号:提交 / 取消 / 关闭都会 +1,自动起名的迟到结果据此丢弃(手动操作优先,
@@ -216,11 +221,11 @@ export function SessionMenuSheet({
   // 会话切换 / 远端改名后同步标题草稿,并退出编辑态。
   useEffect(() => {
     renameSeqRef.current += 1;
-    setTitleDraft(session.title ?? '');
+    setTitleDraft(renamePrefill);
     setRenaming(false);
     setRenameGenerating(false);
     setRenameError(null);
-  }, [session.id, session.title]);
+  }, [session.id, renamePrefill]);
 
   useEffect(() => () => {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
@@ -314,20 +319,22 @@ export function SessionMenuSheet({
     setRenaming(false);
     setRenameGenerating(false);
     setRenameError(null);
-    if (!next || next === session.title) {
-      setTitleDraft(session.title ?? '');
+    // 「没改就不落库」要同时比原始标题**和**预填的投影值:未起名会话预填的是本地化
+    // 兜底文案,只比原始标题会把这个文案写进 DB,哨兵被毁 → 自动起名永久跳过该会话。
+    if (!next || next === session.title || next === renamePrefill) {
+      setTitleDraft(renamePrefill);
       return;
     }
     onRename(next);
-  }, [onRename, session.title, titleDraft]);
+  }, [onRename, renamePrefill, session.title, titleDraft]);
 
   const cancelRename = useCallback(() => {
     renameSeqRef.current += 1;
     setRenaming(false);
     setRenameGenerating(false);
     setRenameError(null);
-    setTitleDraft(session.title ?? '');
-  }, [session.title]);
+    setTitleDraft(renamePrefill);
+  }, [renamePrefill]);
 
   // 自动起名:生成结果只回填输入框,停留在编辑态等用户按「确定」提交(2026-07-06
   // 产品确认,与桌面「生成即提交」刻意不同);生成期间用户手动提交 / 取消 →
@@ -374,7 +381,7 @@ export function SessionMenuSheet({
     if (action.disabled) return;
     switch (action.id) {
       case 'rename':
-        setTitleDraft(session.title ?? '');
+        setTitleDraft(renamePrefill);
         setRenameError(null);
         setRenaming(true);
         return;
@@ -396,7 +403,7 @@ export function SessionMenuSheet({
       default:
         return;
     }
-  }, [confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, session]);
+  }, [confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
 
   const currentExtraDirs = normalizeExtraDirs(session.extraDirs ?? undefined);
   const addExtraDir = useCallback((path: string) => {

@@ -127,9 +127,14 @@ export function DiffView({ oldString, newString, contextLines }: DiffViewProps) 
   // select-text:globals.css 全局禁用了文本选中(Electron 原生 app 风格),
   // diff 内容必须可读可复制,所以这里显式开。gutter / 符号列已通过 select-none
   // 排除,只有内容文本会被选中。
+  //
+  // diff-hscroll:横向滚动条常显(globals.css),否则长行只能靠 trackpad 盲滚。
+  // pre 的 `w-max min-w-full`:行是 flex 容器,pre 宽度若锁在 100% 容器宽,
+  // 长行内容会溢出到行的边界之外 —— 滚过去以后行背景(红/绿)在一屏宽处就断了。
+  // 让 pre 取 max-content(至少铺满容器),行宽 = 最长行宽,底色跟着滚动区一起延伸。
   return (
-    <div className="select-text overflow-x-auto rounded-[12px] border border-[var(--msg-tool-card-border)]">
-      <pre className="m-0 p-0 text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5] font-mono">
+    <div className="diff-hscroll select-text overflow-x-auto rounded-[12px] border border-[var(--msg-tool-card-border)]">
+      <pre className="m-0 w-max min-w-full p-0 text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5] font-mono">
         {rows.map((row, i) => {
           if (row.type === 'skip') {
             // 折叠占位行 — 不带行号,只显示 "··· N lines unchanged ···"

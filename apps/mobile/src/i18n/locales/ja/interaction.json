@@ -153,7 +153,8 @@
       "blocked": "保留中",
       "complete": "完了",
       "budgetLimited": "上限に到達",
-      "usageLimited": "使用量制限中"
+      "usageLimited": "使用量制限中",
+      "capacityLimited": "モデルサービスが混雑"
     },
     "goalLabel": "ゴール",
     "goalObjectiveAccessibility": "ゴールの内容",
@@ -165,6 +166,7 @@
     "noProgressLimit": "無進展の上限",
     "startGoal": "ゴールを開始",
     "goalMeta": "{{turns}} ターン · {{tokens}} token",
+    "goalCapacityHint": "上流に空き容量がありません。時間が来たら自動で再試行します",
     "pause": "一時停止",
     "resume": "再開",
     "clearGoal": "ゴールを終了",

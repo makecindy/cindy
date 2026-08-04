@@ -309,6 +309,60 @@ describe('ConversationSearchBox live search', () => {
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
   });
 
+  // 搜索结果行是「列表之外」的第二个标题出口:本 PR 早前只投影了侧边栏 / 会话头 / tab,
+  // 结果行仍渲染原始 title,于是列表写「未命名对话」、搜索结果写 "New Maker"。
+  // 匹配串(main 算下标)与渲染串(这里)必须是同一个 conversationSearchTitle 的结果。
+  it('未起名会话在结果行里显示兜底文案,并把 unnamedLabel 带进请求', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [
+        {
+          session: {
+            id: 'session-draft',
+            // main 返回的 summary 仍是**原始存储值**(投影只发生在渲染这一刻)。
+            title: 'New Maker',
+            workingDir: '/repo-a',
+            workspaceKind: 'project',
+            agentKind: 'cc',
+            status: 'active',
+            userSendAt: null,
+            updatedAt: '2026-06-14T00:00:00.000Z',
+            createdAt: '2026-06-14T00:00:00.000Z',
+            _count: { messages: 2 },
+          },
+          matchKind: 'title',
+          titleMatchIndices: [],
+          titleScore: 1,
+          contentHit: null,
+          contentHits: [],
+          rankScore: 1,
+        },
+      ],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+
+    renderSearchBox({ requestId: 1 });
+    await screen.findByTestId('conversation-search-popover');
+
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({ unnamedLabel: 'ccAgent.common.unnamedSession' }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+
+    // mock 的 t 对未识别 key 原样返回 key,所以兜底文案就是这个 key 串。
+    await waitFor(() => {
+      expect(screen.getAllByText('ccAgent.common.unnamedSession').length).toBeGreaterThan(0);
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+    expect(screen.queryByText('New Maker')).toBeNull();
+  });
+
   it('reapplies a same-project menu request when only requestId changes', async () => {
     const view = renderSearchBox({ requestId: 1 });
 

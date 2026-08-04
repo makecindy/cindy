@@ -58,13 +58,19 @@ export interface RemoteMediaDiskCache {
    * 把已取件成功的图片落盘(同 url 并发只下载一次;失败静默,缓存是纯优化)。
    * expectedSize(已知对象字节数)超过 maxBytes 时直接跳过——落盘只会立刻被
    * LRU 逐出,没必要为此把整个对象下载到手机。
+   *
+   * 返回值 = **本次是否真的写入了新字节**。false 覆盖三种"promise 正常完成但盘上
+   * 不是本次对象"的情形:超预算跳过、下载失败(按 IO 契约原子落位失败,现存同名
+   * 好文件被刻意保留)、落成 0 字节被作废。调用方据此决定能否改用本地文件——
+   * 只看 promise resolve 会把**已被证伪的旧文件**当成本次结果(PR #1125 review)。
    */
-  store(sourceUrl: string, downloadUrl: string, mimeType: string, expectedSize?: number): Promise<void>;
+  store(sourceUrl: string, downloadUrl: string, mimeType: string, expectedSize?: number): Promise<boolean>;
   /**
    * 把已在内存里的字节(base64,inline 缩略图回包)落盘,不经网络下载。
    * 与 store 共用同键串行化,防止同源并发写撕;IO 不支持 writeFileBase64 时静默跳过。
+   * 返回值语义同 store。
    */
-  storeBytes(sourceUrl: string, base64: string, mimeType: string): Promise<void>;
+  storeBytes(sourceUrl: string, base64: string, mimeType: string): Promise<boolean>;
 }
 
 const DEFAULT_MAX_BYTES = 150 * 1024 * 1024;
@@ -92,7 +98,7 @@ export function createRemoteMediaDiskCache(
   let entries: Map<string, IndexEntry> | null = null;
   let initPromise: Promise<void> | null = null;
   /** 进行中的落盘任务(按缓存键):记录 downloadUrl,同源不同地址不共用结果。 */
-  const downloading = new Map<string, { downloadUrl: string; task: Promise<void> }>();
+  const downloading = new Map<string, { downloadUrl: string; task: Promise<boolean> }>();
 
   async function init(): Promise<void> {
     if (entries) return;
@@ -125,6 +131,7 @@ export function createRemoteMediaDiskCache(
    *     刷新场景下 name 就是现存条目的好文件,不能误删;只清理并非现存条目的半成品;
    *   - size <= 0:0 字节文件已落位顶替,文件与同名旧条目一并作废,下次 lookup 重取;
    *   - 成功:mime 变化换扩展名时删除不再被引用的旧文件,登记条目并做配额回收。
+   * 返回 true 仅当本次确实登记了新写入的字节(见 store 返回值契约)。
    */
   async function commitWrittenFile(
     key: string,
@@ -132,12 +139,12 @@ export function createRemoteMediaDiskCache(
     prev: IndexEntry | undefined,
     size: number | null,
     mimeType: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (size === null) {
       if (!prev || prev.name !== name) {
         await Promise.resolve(io.deleteFile(name)).catch(() => undefined);
       }
-      return;
+      return false;
     }
     if (size <= 0 || !entries) {
       await Promise.resolve(io.deleteFile(name)).catch(() => undefined);
@@ -145,7 +152,7 @@ export function createRemoteMediaDiskCache(
         entries.delete(key);
         await persistIndex().catch(() => undefined);
       }
-      return;
+      return false;
     }
     if (prev && prev.name !== name) {
       await Promise.resolve(io.deleteFile(prev.name)).catch(() => undefined);
@@ -153,6 +160,9 @@ export function createRemoteMediaDiskCache(
     entries.set(key, { name, mimeType, size, lastUsedAt: now() });
     await evictOverBudget();
     await persistIndex().catch(() => undefined);
+    // 配额回收可能把刚写入的条目本身逐出(单对象接近 maxBytes 时);此时盘上已无
+    // 本次字节,不能报 true 让调用方改用本地文件。
+    return entries.get(key)?.name === name;
   }
 
   /** 超出预算按 lastUsedAt 淘汰最旧(调用方随后统一 persistIndex)。 */
@@ -189,13 +199,13 @@ export function createRemoteMediaDiskCache(
     async store(sourceUrl, downloadUrl, mimeType, expectedSize) {
       await init();
       // 单对象就超预算:落盘立刻会被 LRU 逐出,整个下载都是白费,直接跳过。
-      if (expectedSize !== undefined && expectedSize > maxBytes) return;
+      if (expectedSize !== undefined && expectedSize > maxBytes) return false;
       const key = cacheKeyOf(sourceUrl);
-      const run = async (): Promise<void> => {
+      const run = async (): Promise<boolean> => {
         const name = `${key}.${extOfMime(mimeType)}`;
         const prev = entries?.get(key);
         const size = await io.download(downloadUrl, name);
-        await commitWrittenFile(key, name, prev, size, mimeType);
+        return commitWrittenFile(key, name, prev, size, mimeType);
       };
       const pending = downloading.get(key);
       // 只合并**同一下载地址**的并发 store。forceRefresh 自愈会带全新 presign 地址,
@@ -203,7 +213,9 @@ export function createRemoteMediaDiskCache(
       // 不落盘——退屏清理还会删掉新 OSS 对象,下次进会话被迫重传。不同地址排在
       // 旧任务之后串行执行(旧任务成败都不影响新写入)。
       if (pending && pending.downloadUrl === downloadUrl) return pending.task;
-      const base = pending ? pending.task.catch(() => undefined).then(run) : run();
+      const base: Promise<boolean> = pending
+        ? pending.task.catch(() => undefined).then(run)
+        : run();
       const entry = { downloadUrl, task: base };
       entry.task = base.finally(() => {
         if (downloading.get(key) === entry) downloading.delete(key);
@@ -213,19 +225,21 @@ export function createRemoteMediaDiskCache(
     },
 
     async storeBytes(sourceUrl, base64, mimeType) {
-      if (!io.writeFileBase64 || !base64) return;
+      if (!io.writeFileBase64 || !base64) return false;
       await init();
       const key = cacheKeyOf(sourceUrl);
-      const run = async (): Promise<void> => {
+      const run = async (): Promise<boolean> => {
         const name = `${key}.${extOfMime(mimeType)}`;
         const prev = entries?.get(key);
         const size = await Promise.resolve(io.writeFileBase64!(name, base64)).catch(() => null);
-        await commitWrittenFile(key, name, prev, size, mimeType);
+        return commitWrittenFile(key, name, prev, size, mimeType);
       };
       // 与 store 共用同键串行化(防写撕);inline 写入无下载地址概念,不合并任何
       // 既有任务,一律排在其后执行(旧任务成败都不影响本次写入)。
       const pending = downloading.get(key);
-      const base = pending ? pending.task.catch(() => undefined).then(run) : run();
+      const base: Promise<boolean> = pending
+        ? pending.task.catch(() => undefined).then(run)
+        : run();
       const entry = { downloadUrl: 'inline:bytes', task: base };
       entry.task = base.finally(() => {
         if (downloading.get(key) === entry) downloading.delete(key);

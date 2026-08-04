@@ -6,6 +6,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
+  isAgentSelectableModel,
   modelSupportsFastMode,
   providerOffersModel,
 } from '@cindy/model-providers';
@@ -200,7 +201,17 @@ export function CreateWorkerPopover({
       const provider = routableProviders.find((p) => p.id === candidate);
       if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
       const catalogModel = getModel(provider, modelId, agent);
-      return catalogModel && catalogModel.disabled !== true ? candidate : null;
+      // 非聊天模型不该被当成 worker 的有效显式来源(issue #882 第 3 点,2026-07
+      // review):providerOffersModel 只看 id 是否存在,不看 mode——记忆来源的这份
+      // 具体条目若是非聊天,即便面板列表(activeModels,来自另一个来源的聊天分类)
+      // 里还看得到同 id,也不能提交这个来源,否则请求会发到 image/audio 端点。
+      // 停用(disabled)判据同上方 routableProviders 注:隐藏不再收窄(2026-07
+      // 启用/显示双轴拆分),故不查 isModelEnabled——记忆来源被隐藏仍合法可路由。
+      return catalogModel &&
+        catalogModel.disabled !== true &&
+        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        ? candidate
+        : null;
     },
     [agent, deviceId, routableProviders],
   );

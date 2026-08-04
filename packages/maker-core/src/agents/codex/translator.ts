@@ -32,7 +32,13 @@ import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limi
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -55,7 +61,7 @@ export interface CodexRuntimeState {
   reasoningStartedAt: Map<string, number>;
   /** item.id → reasoning 已 emit 文本字符长度 (上次 join 后总长)。 */
   reasoningTextLen: Map<string, number>;
-  /** item.id → agentMessage 已 emit 文本字符长度。 */
+  /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
@@ -112,6 +118,17 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  /**
+   * 服务过载错误的重投接管钩子 (由 agent 层注入)。
+   *
+   * 返回进度 = agent 层已排好退避重投, 这条错误必须透成**非终止**状态并带上
+   * 进度; 否则 UI 会先收口成失败再重投, 用户看到一次假失败闪烁。返回 null =
+   * 没有重投预算或不满足重投条件, 按原路径当终止错误报。
+   *
+   * 分工原因: 能否重投只有 agent 层知道 (要看本 turn 有没有产出、预算还剩多少、
+   * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
+   */
+  tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -238,10 +255,15 @@ export function translateErrorNotification(
   const signals = extractNonSecretErrorSignals(message);
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  // 结构化错误标识。过载判定优先吃它(见下方 capacity 分支), 同时透出到 error data
+  // 供诊断与下游归因。**不参与上面的 errorStatus 推断** —— 那条链路上挂着
+  // renderer 的 401 banner 与 auth 修复 UX, 改推断依据会连带改这些行为。
+  const errorInfoTag = codexErrorInfoTag(params.error?.codexErrorInfo);
   const safeErrorData = {
     message: safeMessage,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
+    ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
   };
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
@@ -301,10 +323,43 @@ export function translateErrorNotification(
     }
     ctx.rt.lastAuthErrorKey = key;
   }
+  // 服务过载 (`Selected model is at capacity`): OpenAI 侧不重试就把 turn 判死,
+  // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
+  // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
+  // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
+  const isCapacityError =
+    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  // 过载错误一律带上稳定 reason key。renderer 隔着 IPC 投影拿不到 codexErrorInfo,
+  // 靠这个 key 判定"是否过载"(ErrorBanner 的本地化文案 + 重试进度 + hideRetry 都由它
+  // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
+  // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
+  const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  if (!params.willRetry && isCapacityError) {
+    const progress = ctx.tryTakeOverOverload?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          ...overloadReason,
+          message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
   ctx.log.warn('codex turn error', { message: safeMessage, willRetry: params.willRetry, isAuthMissing, threadId: params.threadId, turnId: params.turnId });
   queue.push({
     type: 'error',
-    data: { ...safeErrorData, isTerminal: !params.willRetry, willRetry: params.willRetry },
+    data: {
+      ...safeErrorData,
+      ...overloadReason,
+      isTerminal: !params.willRetry,
+      willRetry: params.willRetry,
+    },
     source: 'codex',
   });
 }
@@ -572,27 +627,168 @@ interface ContextCompactionItem {
 // item.started / item.updated 出 delta (isFinal=false), item.completed 出 final 全文。
 // Phase 1 没订阅 item/agentMessage/delta, 增量靠 item.updated 的 text 全量字段算 diff。
 
+/**
+ * Codex 正文里的内部文件引用标记 `:codex-file-citation{path="..." ...}`——对用户
+ * 是不可读的内部语法,归一化成行内代码的文件路径。没有 path 属性的畸形标记整个
+ * 剥掉,不把内部语法漏给用户。
+ */
+// 属性区 = 「非引号非花括号字符 或 双引号串」的序列:双引号串内允许出现 { } ,
+// 且支持反斜杠转义(\" 表示文件名里的引号)——路径含花括号 / 引号都不会让标记
+// 匹配失败而把内部语法漏给用户。
+const CODEX_FILE_CITATION_RE = /:codex-file-citation\{((?:[^"{}]|"(?:[^"\\]|\\.)*")*)\}/g;
+const CODEX_FILE_CITATION_OPEN = ':codex-file-citation{';
+
+/**
+ * 路径包成 Markdown 行内代码:围栏取「比路径内最长反引号连跑多一个」的反引号数,
+ * 路径以反引号开头/结尾时按 CommonMark 规则两侧补空格——路径自身含反引号也不会
+ * 把 code span 撑破。
+ */
+function inlineCodePath(path: string): string {
+  const longestRun = path.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0;
+  const fence = '`'.repeat(longestRun + 1);
+  // 补空格垫的两种情形:路径以反引号开头/结尾(隔开围栏),或首尾都是空格且非全空格
+  // (CommonMark 渲染器对这种 code span 会各剥一个空格,不垫会把真实路径的首尾空白
+  // 剥掉指向别的文件;单侧空格渲染器不剥,不垫)。
+  const symmetricSpace = path.startsWith(' ') && path.endsWith(' ') && path.trim().length > 0;
+  const pad = path.startsWith('`') || path.endsWith('`') || symmetricSpace ? ' ' : '';
+  return `${fence}${pad}${path}${pad}${fence}`;
+}
+
+export function normalizeCodexFileCitations(text: string): string {
+  if (!text.includes(CODEX_FILE_CITATION_OPEN)) return text;
+  return text.replace(CODEX_FILE_CITATION_RE, (_all, attrs: string) => {
+    const path = extractCitationPath(attrs);
+    return path ? inlineCodePath(path) : '';
+  });
+}
+
+/**
+ * 属性区取 path 值并解码。
+ * - 属性名要求完整边界(串首或空白后的 `path=`):`display_path=` 这类「以 path 结尾」
+ *   的别名不当作 path,也不遮蔽其后真正的 path 属性(review 反馈)。
+ * - 只解 \" 与 \\ 两种转义——Windows 原生路径(C:\Users\...)里的反斜杠不是转义
+ *   前缀,全量 \\(.) 反转义会把路径毁成 C:Users...(review 反馈)。
+ * - UNC 前缀:开头**恰好两个**反斜杠视为原生 UNC 本体整体保留(\\server\share);
+ *   更长的开头连跑(如转义形态 \\\\server)与其余位置按转义对解码,转义 UNC 解出
+ *   恰好两个分隔符(review 反馈)。
+ * - 取出后不做 trim——文件名首尾空白是路径的一部分,悄悄改写会指向另一个文件。
+ */
+function extractCitationPath(attrs: string): string | undefined {
+  const raw = /(?:^|\s)path="((?:[^"\\]|\\.)*)"/.exec(attrs)?.[1];
+  if (raw === undefined) return undefined;
+  const nativeUnc = raw.startsWith('\\\\') && raw[2] !== '\\';
+  const head = nativeUnc ? '\\\\' : '';
+  const tail = (nativeUnc ? raw.slice(2) : raw).replace(/\\([\\"])/g, '$1');
+  return head + tail;
+}
+
+// 闭合扫描的两种「未找到」:UNFINISHED = 扫描到文本末尾仍未闭合(可能是尚未写完、
+// 会被后续 update 补全的截断尾巴);POISONED = 属性区出现裸 `{`,正则永不匹配,该
+// 标记已确定畸形且追加文本也不会改变这一判定。
+const CITATION_UNFINISHED = -1;
+const CITATION_POISONED = -2;
+
+/**
+ * 属性区闭合 `}` 的位置(与 CODEX_FILE_CITATION_RE 同一口径:双引号串内的花括号
+ * 不算边界);找不到时区分 CITATION_UNFINISHED 与 CITATION_POISONED。
+ */
+function findCitationClose(text: string, attrsStart: number): number {
+  let inQuote = false;
+  for (let i = attrsStart; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inQuote && ch === '\\') {
+      i += 1; // 引号串内的转义对(如 \")整体跳过,与正则同口径。
+    } else if (ch === '"') {
+      inQuote = !inQuote;
+    } else if (!inQuote && ch === '}') {
+      return i;
+    } else if (!inQuote && ch === '{') {
+      return CITATION_POISONED;
+    }
+  }
+  return CITATION_UNFINISHED;
+}
+
+/**
+ * 从左到右结构化扫描,返回第一个「扫描到文本末尾仍未闭合」的标记开头;没有 → -1。
+ * 完整标记整体跳过——路径引号串里出现的 OPEN 字面量属于已消费标记的内部,不会被
+ * 误认成新的开头(review 反馈:文件名本身含 `:codex-file-citation{` 时,按最后一个
+ * 裸字面量定位会带着错误的引号状态把完整标记判成未完成)。裸 `{` 的畸形标记(正则
+ * 永不匹配、追加文本也救不回来)原样透出:只跳过开头字面量继续扫,不吞它后面的正文。
+ */
+function findUnfinishedCitationOpen(text: string): number {
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf(CODEX_FILE_CITATION_OPEN, from);
+    if (open === -1) return -1;
+    const close = findCitationClose(text, open + CODEX_FILE_CITATION_OPEN.length);
+    if (close === CITATION_UNFINISHED) return open;
+    from = close === CITATION_POISONED ? open + CODEX_FILE_CITATION_OPEN.length : close + 1;
+  }
+}
+
+/**
+ * 流式安全边界:全量文本尾部可能是一个尚未写完的 citation 标记(标记会被后续
+ * update 补全),归一化后的文本对这段尾巴不是 append-only。返回可安全发出的原文
+ * 前缀长度,未写完的尾巴按住等下一轮;completed 时全量补发,不丢内容。
+ */
+/**
+ * final 文本统一口径(流式 completed 与历史 rollout 导入共用):先剥「扫描到文本
+ * 末尾仍未闭合」的确定截断残尾(它之后没有正文可吞),再做 citation 归一化。
+ * 契约:只做 raw→final 的**单次**转换(两个调用点都满足)。无标记文本原样返回,
+ * 但展示形不承诺严格幂等——路径本身解码出完整标记字面量的极端文件名,二次处理
+ * 会把生成的 code span 内容再替换;去重指纹因此不复用展示形,走独立的不动点
+ * 规范形(见 localDb worker 的 canonicalizeCodexCitations)。
+ */
+export function finalizeCodexCitationText(text: string): string {
+  const openAt = findUnfinishedCitationOpen(text);
+  return normalizeCodexFileCitations(openAt === -1 ? text : text.slice(0, openAt));
+}
+
+export function stableCitationBoundary(text: string): number {
+  const open = findUnfinishedCitationOpen(text);
+  if (open !== -1) {
+    return open;
+  }
+  const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
+  for (let k = maxProbe; k > 0; k -= 1) {
+    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) return text.length - k;
+  }
+  return text.length;
+}
+
 function handleAgentMessage(
   phase: ItemPhase,
   item: AgentMessageItem,
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const currentText = item.text ?? '';
+  const rawText = item.text ?? '';
+  // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
+  // diff 必须在归一化空间里做,不能混用原文长度。
+  const prevLen = ctx.rt.itemTextLen.get(item.id) ?? 0;
 
   if (phase === 'completed') {
     ctx.rt.itemTextLen.delete(item.id);
+    // 既有契约:completed 只出 final 全文、不补 delta(desktop codexTranslator.test
+    // 钉死 3 事件形状)。boundary 按住的尾段与「completed 才首次出现的文本」同一待遇:
+    // 不进 delta 流,由 final 全文兜底(main 落库层 onAssistantTextEvent 的 isFinal
+    // 分支以更长 final 覆盖 delta 累积,不丢内容)。
+    // 输出被截断在标记中间(有明确的 open、永远等不到 close)时,把残尾剥掉——
+    // 内部语法不该漏给用户;只剥「扫描到文本末尾仍未闭合」的确定截断残尾(它之后
+    // 没有正文可吞),疑似前缀(不足完整 open 字面量)可能是真实正文,保留。
+    // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: currentText, isFinal: true },
+      data: { text: finalizeCodexCitationText(rawText), isFinal: true },
       source: 'codex',
     });
     return;
   }
 
-  const prevLen = ctx.rt.itemTextLen.get(item.id) ?? 0;
-  const delta = currentText.slice(prevLen);
-  ctx.rt.itemTextLen.set(item.id, currentText.length);
+  const emitted = normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText)));
+  const delta = emitted.slice(prevLen);
+  ctx.rt.itemTextLen.set(item.id, emitted.length);
   if (delta.length === 0) return;
   queue.push({
     type: 'text',

@@ -36,8 +36,9 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
 }
 
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
-// 对话厂商组(anthropic..china)在前;非对话类型组(image/audio/video/embedding/other)在后——
-// 后者收纳网关多出的图像 / 语音 / 视频 / 向量等模型(它们默认关、不能当 agent 用,仅分类展示)。
+// 对话厂商组(anthropic..china)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
+// compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
+// 不能当 agent 用,仅分类展示,见 isChatEligible)。
 export type ModelCategory =
   | 'anthropic'
   | 'gpt'
@@ -46,9 +47,12 @@ export type ModelCategory =
   | 'google'
   | 'china'
   | 'image'
-  | 'audio'
   | 'video'
+  | 'tts'
+  | 'stt'
+  | 'realtime'
   | 'embedding'
+  | 'compression'
   | 'other';
 
 export const CATEGORY_ORDER: ModelCategory[] = [
@@ -59,46 +63,17 @@ export const CATEGORY_ORDER: ModelCategory[] = [
   'google',
   'china',
   'image',
-  'audio',
   'video',
+  'tts',
+  'stt',
+  'realtime',
   'embedding',
+  'compression',
   'other',
 ];
 
-// 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
-// gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
-export function categorize(id: string): ModelCategory {
-  if (id.startsWith('claude-')) return 'anthropic';
-  // 非对话类型(向量/图像/音频语音/视频)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
-  // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
-  // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
-  if (/embedding/.test(id) || id.startsWith('voyage/')) return 'embedding';
-  if (/image/.test(id)) return 'image';
-  if (
-    id.startsWith('elevenlabs/') ||
-    id.startsWith('gpt-4o-realtime') ||
-    /transcribe|audio|speech|tts|whisper|asr|gemini-omni/.test(id)
-  )
-    return 'audio';
-  if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id)) return 'video';
-  if (id === 'ai-gateway-doc') return 'other';
-  // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
-  // 路由 / 记账 gate 同源(本文件顶部),防漂移。
-  if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
-  if (id.startsWith('codex/')) return 'gpt-budget';
-  if (id.startsWith(XAI_MODEL_PREFIX) || id.startsWith('grok')) return 'grok';
-  if (id.startsWith('gemini-')) return 'google';
-  return 'china';
-}
-
-const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
-
-/**
- * 能作为 agent 对话模型被选择/路由的厂商分组(anthropic..china)。image / audio / video /
- * embedding / other 是网关多返回的**能力模型**:不能当 agent 用,永远不进对话模型选择面板
- * (硬排除,与显示开关无关),它们的「启用」只作用于媒体生成等专属链路。
- */
-const AGENT_MODEL_CATEGORIES: ReadonlySet<ModelCategory> = new Set([
+/** 对话厂商组:属于其一即被 isChatEligible 判定为可进 Agent availableModels。 */
+const CHAT_VENDOR_CATEGORIES = new Set<ModelCategory>([
   'anthropic',
   'gpt',
   'gpt-budget',
@@ -108,7 +83,213 @@ const AGENT_MODEL_CATEGORIES: ReadonlySet<ModelCategory> = new Set([
 ]);
 
 /**
- * 该模型是否属于可被 agent 选择的对话厂商分组(见 AGENT_MODEL_CATEGORIES)。
+ * 对话厂商组,按 CATEGORY_ORDER 原有相对顺序派生(供切来源 reconcile 之类
+ * 「只在聊天厂商组里找候选」的场景复用,不必各自手写排除非聊天分类的清单——
+ * 那份清单每新增一个非聊天分类就要改一处,已经是本次要修的那类耦合)。
+ */
+export const CHAT_VENDOR_CATEGORY_ORDER: readonly ModelCategory[] = CATEGORY_ORDER.filter((c) =>
+  CHAT_VENDOR_CATEGORIES.has(c),
+);
+
+/**
+ * Gateway 原生 `mode` → 展示分类(issue #882:mode 是权威信号,取值即
+ * LiteLLM/AIGateway 侧的原生字符串,未来新增值先落 other 并保留原串,不必
+ * 为每个新值改这里的正则)。'chat' 与缺省不出现在这里 —— 它们仍按厂商
+ * 前缀走 groupOf/categorize 归到 anthropic/gpt/grok/google/china 等分组,
+ * 因为"是聊天模型"和"属于哪个厂商分组"是两个独立问题。
+ * 取值以线上 Gateway 实际返回为准;这里先覆盖 LiteLLM 通用常见值,遇到确认
+ * 的新取值(如压缩类的真实 mode 字符串)再补充映射,未覆盖时不会丢数据,只是
+ * 先落 other 展示原始 mode。
+ */
+const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
+  embedding: 'embedding',
+  image_generation: 'image',
+  video_generation: 'video',
+  audio_speech: 'tts',
+  audio_transcription: 'stt',
+  realtime: 'realtime',
+};
+
+/**
+ * mode 取值里同样代表"语言模型、能聊天"的字符串集合 —— 不止字面的 'chat'。
+ * `responses` 是 LiteLLM/Gateway 用来标记"该模型只走 OpenAI Responses API
+ * (而非 Chat Completions)"的取值,语义仍是可对话的语言模型,只是 wire
+ * protocol 不同;Codex 这条 runtime 本来就默认走 openai-responses(见
+ * RoutingDescriptor.wireProtocol),不能把这类模型当成非聊天模型过滤掉
+ * (2026-07 review 第 16 轮)。
+ */
+const CHAT_CAPABLE_MODES = new Set(['chat', 'responses']);
+
+/**
+ * 去掉 id 的全部 `<namespace>/` 前缀,取最后一段。网关有时会给 id 加供应商命名空间
+ * (如 openai/dall-e-3、google/veo-3,catalog 本身就支持 openai/gpt-5.4 这类写法),
+ * 且可能嵌套多层(如 gateway/openai/dall-e-3);dall-e/sora/veo- 这几个锚定 id 开头的
+ * 关键字判定必须同时认「裸 id」与「去前缀后的尾部」,只剥一层的话嵌套命名空间仍会
+ * 漏网(2026-07 review 第 19 轮;多层修正见第 24 轮)。
+ */
+function stripNamespace(id: string): string {
+  const idx = id.lastIndexOf('/');
+  return idx === -1 ? id : id.slice(idx + 1);
+}
+
+// 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
+// gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
+// 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
+// classifyModel,不再猜 id。
+export function categorize(rawId: string): ModelCategory {
+  // 走 {id,name} 极简发现的自定义 OAuth 供应商常保留原始大小写(如
+  // Qwen/Qwen3-Embedding-8B、Qwen/Qwen3-Reranker-8B),下面全部关键词/前缀判定
+  // 统一按小写比较,不逐个正则补 i 标记漏改(2026-07 review 第 20 轮)。categorize
+  // 只返回分类标签,不回传 id,小写化不影响展示 / 请求用的原始 id。
+  const id = rawId.toLowerCase();
+  if (id.startsWith('claude-')) return 'anthropic';
+  // 非对话类型(向量/图像/语音/视频/压缩)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
+  // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
+  // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
+  // embed-english-v3.0 / embed-multilingual-v3.0(Cohere)等 id 里没有 "embedding"
+  // 字样,只靠 /embedding/ 关键词兜底会漏网(2026-07 review 第 17 轮,同 dall-e/
+  // sora/veo 这类命名不含类型关键词的情况);embed- 锚定 id 开头,带命名空间前缀
+  // (如 cohere/embed-english-v3.0)会漏网,同 dall-e/sora/veo- 的命名空间兜底
+  // 同理(2026-07 review 第 22 轮)。
+  if (
+    /embedding/.test(id) ||
+    id.startsWith('voyage/') ||
+    id.startsWith('embed-') ||
+    stripNamespace(id).startsWith('embed-')
+  )
+    return 'embedding';
+  // dall-e(OpenAI 图像)id 里没有 "image" 字样,靠关键词兜底会漏网(2026-07 review:
+  // 走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group,只能靠这份正则)。
+  if (/image/.test(id) || id.startsWith('dall-e') || stripNamespace(id).startsWith('dall-e'))
+    return 'image';
+  // sora(OpenAI 视频)/ veo(Google 视频)同理,id 里没有 "video" 字样。故意不认通用的
+  // "video" 关键词:llava-hf/LLaVA-NeXT-Video-7B-hf 这类视频理解多模态聊天模型 id
+  // 里带 "video" 却是走 Chat Completions 的正常聊天模型,不是纯视频生成端点——与
+  // 音频判定不认通用 "audio" 关键词同理(2026-07 review 第 23 轮)。只认
+  // seedance/happyhorse/-t2v/-i2v/-r2v 这几个真正专指视频生成的关键词。
+  if (
+    /seedance|happyhorse|-t2v|-i2v|-r2v/.test(id) ||
+    /^sora|^veo-/.test(id) ||
+    /^sora|^veo-/.test(stripNamespace(id))
+  )
+    return 'video';
+  if (id === 'ai-gateway-doc') return 'compression';
+  // moderation(如 omni-moderation-latest / text-moderation-latest)不是issue #882
+  // 列出的语义类型之一,落 other 保留原始 id/mode(2026-07 review:走 {id,name} 极简
+  // 发现的自定义 OAuth 供应商没有 mode,不挡的话会被 isChatEligible 误判为可聊天——
+  // moderation 端点不接受聊天请求)。
+  if (/moderation/.test(id)) return 'other';
+  // 遗留 Completions 端点(davinci-002/babbage-002/text-davinci-*等,OpenAI 已停售但
+  // 部分网关仍会同步)与 Rerank 端点(cohere/voyage 的 rerank-*)不接受 Chat Completions
+  // 请求,未列入 issue #882 语义类型,落 other 保留原始 id(2026-07 review:走 {id,name}
+  // 极简发现的自定义 OAuth 供应商没有 mode,靠正则兜底,否则会被 isChatEligible 误判为
+  // 可聊天)。只匹配这批已停售且无歧义的固定 id/前缀——不用 `-instruct$` 这种宽泛后缀,
+  // 因为 mistral/qwen/llama 的 "-instruct" 结尾模型是正常聊天模型,不能误杀。
+  if (/rerank/.test(id)) return 'other';
+  const LEGACY_COMPLETION_RE =
+    /^(babbage-002|davinci-002|gpt-3\.5-turbo-instruct|text-davinci-\d{3}|text-curie-001|text-babbage-001|text-ada-001|code-davinci-002)$/;
+  // 精确匹配前后都锚定,带供应商命名空间前缀(如 openai/babbage-002)会漏网,同
+  // dall-e/sora/veo- 的命名空间兜底同理(2026-07 review 第 21 轮)。
+  if (LEGACY_COMPLETION_RE.test(id) || LEGACY_COMPLETION_RE.test(stripNamespace(id))) return 'other';
+  // STT/ASR 必须在 realtime 判定之前:qwen3-asr-flash-realtime / fun-asr-realtime-* /
+  // gpt-realtime-whisper 的 id 里都含 "realtime",但语义是语音转写,不是实时多模态。
+  // 不能只认 elevenlabs 前缀——否则 gpt-4o-mini-tts / qwen-tts 这类其它厂商的语音模型
+  // 会漏网落进 gpt/china,被 isChatEligible 误判为可聊天(2026-07 review)。
+  if (id.startsWith('elevenlabs/scribe') || /transcribe|whisper|asr/.test(id)) return 'stt';
+  // 故意不认通用的 "audio" 关键词:isChatEligible 现在直接吃 categorize 的分类结果,
+  // 落进 tts 就等于判定"不能聊天"——而 gpt-4o-audio-preview 这类模型 id 里带
+  // "audio" 却是走 Chat Completions 的正常聊天模型(带音频输入/输出),不是纯语音
+  // 合成端点。只认 speech/tts 这两个真正专指语音合成的关键词(2026-07 review:
+  // 拆分前 audio 只影响展示分组,拆分后同一份 regex 还要决定聊天准入,精度要求变了)。
+  if (id.startsWith('elevenlabs/eleven') || /speech|tts/.test(id)) return 'tts';
+  // gpt-realtime-2 / gpt-realtime-mini / gpt-realtime-translate / gpt-4o-realtime-* /
+  // gemini-omni-* —— 真正的实时多模态,已排除上面的 STT 特例。gpt-4o-realtime 前缀是
+  // 旧一代命名,新一代改成了 gpt-realtime-*,兜底要同时认两种(2026-07 review)。
+  // gpt-realtime-/gpt-4o-realtime- 锚定 id 开头,带命名空间前缀(如
+  // openai/gpt-realtime-preview)会漏网落进聊天兜底组,同 dall-e/sora/veo- 的
+  // 命名空间兜底同理(2026-07 review 第 21 轮);gemini-omni 是子串匹配,已天然
+  // 兼容命名空间,不需要额外处理。
+  if (
+    /^gpt-realtime|^gpt-4o-realtime/.test(id) ||
+    /^gpt-realtime|^gpt-4o-realtime/.test(stripNamespace(id)) ||
+    /gemini-omni/.test(id)
+  )
+    return 'realtime';
+  // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量与
+  // 路由 / 记账 gate 同源(本文件顶部),防漂移。两个常量本身已是小写字面量,小写化后
+  // 直接比较无需再转换。
+  if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
+  if (id.startsWith('codex/')) return 'gpt-budget';
+  // x-ai/ 只是网关侧 grok 的命名空间前缀(展示分组用),与 XAI_MODEL_PREFIX
+  // ('xai/',订阅直连 bridge 语义)是两件事,不要合并常量。
+  if (id.startsWith(XAI_MODEL_PREFIX) || id.startsWith('x-ai/') || id.startsWith('grok'))
+    return 'grok';
+  if (id.startsWith('gemini-')) return 'google';
+  return 'china';
+}
+
+const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
+
+/**
+ * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
+ * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
+ * 避免出现没有 i18n 标签的空分组。不感知 `mode`——mode 优先分类见 classifyModel。
+ */
+export function groupOf(model: { id: string; group?: string }): ModelCategory {
+  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
+  return categorize(model.id);
+}
+
+/**
+ * 分类的**权威入口**(issue #882):`mode` 存在且不是聊天可用取值
+ * (CHAT_CAPABLE_MODES)时直接按 MODE_TO_CATEGORY 权威判定,忽略 id/group——
+ * 网关明确说了这不是聊天模型,不该再让 id 正则有机会猜错(如 gpt-realtime-2
+ * 猜成 gpt、x-ai/grok-4.5 猜成 china)。`mode` 缺省或落在 CHAT_CAPABLE_MODES
+ * (chat/responses)时,回退 groupOf(数据 group 优先 / id 正则兜底)——
+ * "是不是聊天模型"与"聊天模型属于哪个厂商分组"是两层判断,mode 只回答第一层,
+ * 第二层仍需 id/group。
+ */
+export function classifyModel(model: { id: string; group?: string; mode?: string }): ModelCategory {
+  if (model.mode !== undefined && !CHAT_CAPABLE_MODES.has(model.mode)) {
+    return MODE_TO_CATEGORY[model.mode] ?? 'other';
+  }
+  return groupOf(model);
+}
+
+/**
+ * 该模型能不能进 Agent `availableModels` / 新对话模型选择器(issue #882 第 3 点)。
+ * `mode` 存在时只信 CHAT_CAPABLE_MODES(chat / responses——Codex 走 Responses
+ * API 的语言模型,不是非聊天端点,2026-07 review 第 16 轮)。
+ *
+ * `mode` 缺省时,`group` 只在**声明已知的非聊天分类**(image/video/tts/stt/
+ * realtime/embedding/compression/other)时才采信、直接拒——这个方向上 group
+ * 比 id 更可信(PR #744:自定义/网关供应商显式打的能力标签,seedream-5 这类
+ * id 本身不含任何类型关键词的合成模型只能靠这个信号判定)。`group` 声明的是
+ * 聊天厂商分组(anthropic/gpt/.../china)时**不采信**,仍按 id 正则判——那只是
+ * 展示分组/品牌,网关的展示元数据完全可能把 `gpt-image-2` 这类图像模型的
+ * `group` 标成 'gpt'(品牌上归类到 GPT 家族,方便浏览),这里若信了会把非聊天
+ * 模型误判为可用(2026-07 review)。两种 group 取值的可信方向不对称,不能
+ * 一并处理。落进厂商聊天组只用于兜底判断,保证"mode 还没覆盖到、但已经在
+ * 正常工作的网关聊天模型"不会因为这次改动突然从 availableModels 消失
+ * (见 classification.test.ts 的回归锁)。
+ */
+export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
+  if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
+  if (
+    model.group &&
+    KNOWN_CATEGORIES.has(model.group) &&
+    !CHAT_VENDOR_CATEGORIES.has(model.group as ModelCategory)
+  ) {
+    return false;
+  }
+  return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));
+}
+
+/**
+ * `isChatEligible` 的别名,供「agent 对话模型能不能选」语境下的调用方使用(与 PR #744
+ * 的 `AGENT_MODEL_CATEGORIES`/`isAgentSelectableModel` 合流:同一个"能不能进对话选择面板"
+ * 判断,不再各自维护一份厂商分组常量——两份常量此前逐字相同,已收口为
+ * `CHAT_VENDOR_CATEGORIES` 单一定义)。
  *
  * `opts.userProvider` = 该条目来自用户自定义供应商(Provider.source === 'user',由
  * 调用方注入 —— 本模块纯逻辑不持 provider 上下文):此时目录带的**未知 group**
@@ -119,39 +300,30 @@ const AGENT_MODEL_CATEGORIES: ReadonlySet<ModelCategory> = new Set([
  * 例外**只限用户供应商**:网关条目缺 group 时 active-catalog 会补 `custom:xd`
  * (active-catalog.ts),若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
  * 绕过能力分类、重新漏进对话清单 —— 正是本过滤要堵的洞(PR #744 review 第二轮)。
- * 非用户供应商一律走 groupOf(显式已知组优先,未知/缺省回退 id 启发式)。
+ * 非用户供应商一律走 isChatEligible(mode 权威、id 正则兜底)。
  */
 export function isAgentSelectableModel(
-  model: { id: string; group?: string },
+  model: { id: string; group?: string; mode?: string },
   opts?: { userProvider?: boolean },
 ): boolean {
   if (opts?.userProvider === true && model.group && !KNOWN_CATEGORIES.has(model.group)) {
     return true;
   }
-  return AGENT_MODEL_CATEGORIES.has(groupOf(model));
+  return isChatEligible(model);
 }
 
-/**
- * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
- * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
- * 避免出现没有 i18n 标签的空分组。
- */
-export function groupOf(model: { id: string; group?: string }): ModelCategory {
-  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
-  return categorize(model.id);
-}
-
-/** groupModelsForDisplay 的最小模型形状(只需 id + 可选 group / sortOrder)。 */
+/** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */
 export interface DisplayModel {
   id: string;
   group?: string;
+  mode?: string;
   sortOrder?: number;
 }
 
 /**
  * 选择器右栏的「分组 + 排序」纯逻辑 —— **完全由目录数据驱动**:
  *   1. 先按 `sortOrder` 升序稳定排序(缺省排末尾,相等时保持入参顺序);
- *   2. 按 `groupOf`(group 字段优先 / 前缀兜底)分桶;
+ *   2. 按 `classifyModel`(mode 优先 / group 字段次之 / id 前缀兜底)分桶;
  *   3. 桶的先后 = 桶内首个模型在已排序列表里的出现序(= 该桶最小 sortOrder)。
  * 返回有序的 { category, models } 列表;不依赖写死的 CATEGORY_ORDER 决定展示顺序。
  */
@@ -164,7 +336,7 @@ export function groupModelsForDisplay<T extends DisplayModel>(
   );
   const map = new Map<ModelCategory, T[]>();
   for (const m of sorted) {
-    const cat = groupOf(m);
+    const cat = classifyModel(m);
     const list = map.get(cat) ?? [];
     list.push(m);
     map.set(cat, list);

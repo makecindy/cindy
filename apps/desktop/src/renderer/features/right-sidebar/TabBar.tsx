@@ -26,6 +26,7 @@ import {
   GitPullRequestArrow,
   UsersRound,
   ListTodo,
+  Pin,
   Plus,
   Puzzle,
   X,
@@ -48,6 +49,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { AddTabDropdown } from './AddTabDropdown';
 import { getTabKind, hydrateTabState } from './registry';
+import {
+  ghostIdOfTabKind,
+  isGhostTabPinned,
+  setGhostTabPinned,
+  useGhostTabPinsVersion,
+} from './lib/pinnedGhostTabs';
 import type { BuiltinTabKindId, TabKindId, TabState } from './types';
 
 interface TabBarProps {
@@ -289,6 +296,12 @@ export function TabStrip({
     tabId: string;
   } | null>(null);
   const closeContextMenu = () => setContextMenu(null);
+  // 右键菜单的钉住项:菜单开着时钉住状态被别处改掉也要跟着换文案。
+  useGhostTabPinsVersion();
+  const contextMenuTab = contextMenu
+    ? tabs.find((tab) => tab.id === contextMenu.tabId) ?? null
+    : null;
+  const contextMenuGhostId = contextMenuTab ? ghostIdOfTabKind(contextMenuTab.kind) : null;
 
   // 溢出渐变遮罩:只在对应侧**真的有溢出**时才启用那一侧的 fade。
   // 历史坑(2026-07-01):全量常开的 fade-mask 会把首尾 active pill 的 1px border
@@ -468,6 +481,21 @@ export function TabStrip({
         >
           {contextMenu && (
             <>
+              {contextMenuGhostId && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    closeContextMenu();
+                    setGhostTabPinned(contextMenuGhostId, !isGhostTabPinned(contextMenuGhostId));
+                  }}
+                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                >
+                  {t(
+                    isGhostTabPinned(contextMenuGhostId)
+                      ? 'rightSidebar.tabs.contextMenu.unpin'
+                      : 'rightSidebar.tabs.contextMenu.pin',
+                  )}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => {
                   const id = contextMenu.tabId;
@@ -537,6 +565,11 @@ function TabPill({
   const FallbackIcon = iconForTabKind(tab.kind);
   const TitleNode = plugin?.TabPillTitle;
   const IconNode = plugin?.TabPillIcon;
+  // 图钉状态订阅(钉/取消钉 → pill 重渲)。hook 必须无条件调用,非插件页签
+  // 只是不消费返回值。
+  useGhostTabPinsVersion();
+  const ghostId = ghostIdOfTabKind(tab.kind);
+  const pinned = ghostId !== null && isGhostTabPinned(ghostId);
   // raw tab.state 可能是 null(Phase 2 旧 tab 没 hydrate)或旧 schema —— 必须先
   // 规范化再喂给 plugin 的 Title/Icon,否则 plugin 内 `state.xxx` 直接 NPE。
   // 走 store 持久化时是 raw,展示前由 hydrateTabState 兜底 / 校正。
@@ -604,6 +637,30 @@ function TabPill({
           )}
         </span>
       </button>
+      {ghostId && (
+        // 插件面板页签专属的图钉切换:钉住态常驻显形(它同时是状态指示——用户
+        // 一眼看出这个面板会跟着所有对话走);未钉住态 hover 显形(纯动作按钮,
+        // 常态不占视觉注意力)。颜色只用灰阶文字 token,不引入新强调色。
+        <button
+          type="button"
+          data-no-drag
+          onClick={(e) => {
+            e.stopPropagation();
+            setGhostTabPinned(ghostId, !pinned);
+          }}
+          aria-label={pinned ? t('rightSidebar.tabs.unpinAria') : t('rightSidebar.tabs.pinAria')}
+          title={pinned ? t('rightSidebar.tabs.unpinAria') : t('rightSidebar.tabs.pinAria')}
+          aria-pressed={pinned}
+          className={cn(
+            'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-opacity hover:text-[var(--text-primary)]',
+            pinned
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--text-tertiary)] opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
+          )}
+        >
+          <Pin size={10} />
+        </button>
+      )}
       <button
         type="button"
         data-no-drag

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,7 +119,7 @@ describe('scheduler model popover overlay behavior', () => {
     );
   });
 
-  it('requests a silent refresh when the scheduler model selector opens', () => {
+  it('requests a silent refresh when the scheduler model selector opens', async () => {
     render(
       <ModelEffortChip
         agentKind="claude-code"
@@ -132,7 +132,11 @@ describe('scheduler model popover overlay behavior', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }));
+    // 打开既发起刷新、又把「发现在途」状态推给下拉内容(见 useModelDiscoveryPending):
+    // 那次刷新 resolve 后还有一次 setPending(false) 落在微任务里,所以要走 act。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }));
+    });
     expect(requestProviderModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
   });
 });

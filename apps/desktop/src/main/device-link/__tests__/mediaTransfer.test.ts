@@ -116,9 +116,9 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
       }),
     );
     const relayBaseUrl = apiFetch.mock.calls[0]?.[1]?.baseUrl;
-    expect(
-      typeof relayBaseUrl === 'function' ? relayBaseUrl() : relayBaseUrl,
-    ).toBe('http://relay.test:3335');
+    expect(typeof relayBaseUrl === 'function' ? relayBaseUrl() : relayBaseUrl).toBe(
+      'http://relay.test:3335',
+    );
     const [url, init] = undiciFetchMock.mock.calls[0];
     expect(url).toBe('https://oss.example/put');
     expect(init.method).toBe('PUT');
@@ -139,7 +139,12 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
 
   it('PUT 成功后取消响应体,及时归还底层连接', async () => {
     const cancel = vi.fn().mockResolvedValue(undefined);
-    undiciFetchMock.mockResolvedValue({ ok: true, status: 200, body: { cancel }, text: async () => '' });
+    undiciFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { cancel },
+      text: async () => '',
+    });
 
     await uploadLocalFile('/tmp/a.png');
 
@@ -637,7 +642,9 @@ describe('integrity regression coverage', () => {
     const size = __testing.STREAM_THRESHOLD + 1;
     statMock.mockResolvedValue({ isFile: () => true, size });
     createReadStreamMock.mockImplementation(() => Readable.from([Buffer.alloc(1024, 0x62)]));
-    undiciFetchMock.mockRejectedValue(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' }));
+    undiciFetchMock.mockRejectedValue(
+      Object.assign(new Error('socket reset'), { code: 'ECONNRESET' }),
+    );
     netFetchMock.mockRejectedValue(new TypeError('net::ERR_CONNECTION_RESET'));
 
     await expect(uploadLocalFile('/tmp/interrupted.mp4')).rejects.toThrow(

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { GhostPipeDispatcher, type PipeDispatcherDeps } from '../pipeDispatcher';
+import { GhostPipeDispatcher, toolNotFoundMessage, type PipeDispatcherDeps } from '../pipeDispatcher';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost';
 import type { GhostRuntimeState } from '../runtime/GhostRuntime';
 
@@ -82,11 +82,62 @@ describe('资格审(结构化错误分类)', () => {
     expect(r).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
   });
 
+  it('TOOL_NOT_FOUND 自愈文案:普通插件列出可用工具', async () => {
+    const h = makeHarness();
+    const r = await h.dispatcher.callGhostTool({ ...CALL, tool: 'nope' });
+    if (r.ok) throw new Error('应失败');
+    expect(r.message).toContain('gen_image');
+  });
+
+  it('TOOL_NOT_FOUND 自愈文案:二级分派插件回填 call_tool 正确形态', async () => {
+    const base = fakeGhost();
+    const dispatchGhost = fakeGhost({
+      manifest: {
+        ...base.manifest,
+        tools: [
+          { name: 'list_tools', description: '列操作' },
+          { name: 'call_tool', description: '分派' },
+        ],
+      },
+    });
+    const h = makeHarness({ ghost: dispatchGhost });
+    const r = await h.dispatcher.callGhostTool({ ...CALL, tool: 'create_pull_request_review' });
+    if (r.ok) throw new Error('应失败');
+    expect(r.errorCode).toBe('TOOL_NOT_FOUND');
+    expect(r.message).toContain('call_tool');
+    expect(r.message).toContain('create_pull_request_review');
+  });
+
   it('熔断中 → GHOST_CRASHED,不尝试拉起', async () => {
     const h = makeHarness({ state: 'fused' });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
     expect(h.deps.spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('toolNotFoundMessage(纯函数直测)', () => {
+  it('分派型插件:回填 agent 想调的名字并给出 call_tool 形态', () => {
+    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', [
+      { name: 'list_tools', description: '' },
+      { name: 'call_tool', description: '' },
+    ]);
+    expect(msg).toContain('cindy-github');
+    expect(msg).toContain('create_pull_request');
+    expect(msg).toContain('tool:"call_tool"');
+    expect(msg).toContain('name:"create_pull_request"');
+    expect(msg).toContain('list_tools');
+  });
+
+  it('普通插件:列出可用工具名', () => {
+    const msg = toolNotFoundMessage('art', 'nope', [{ name: 'gen_image', description: '' }]);
+    expect(msg).toContain('gen_image');
+    expect(msg).not.toContain('call_tool');
+  });
+
+  it('tools 缺省/空:不崩,提示未声明任何工具', () => {
+    expect(toolNotFoundMessage('art', 'nope', undefined)).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', [])).toContain('(未声明任何工具)');
   });
 });
 

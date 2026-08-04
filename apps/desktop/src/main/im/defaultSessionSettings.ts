@@ -8,11 +8,11 @@
 
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import {
+  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  providerOffersModel,
-  sourcesForModel,
+  isAgentSelectableModel,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -194,7 +194,10 @@ function hasModel(
   providers: ProviderView[] | null,
 ): boolean {
   if (providers) {
-    return sourcesForModel(providers, modelId, agentKind).length > 0;
+    // chatEligibleSourcesForModel(不是裸 sourcesForModel):否则一个已下架/从未是
+    // 聊天模型的 id(image/embedding/...)会被判定为可用默认值(issue #882 第 3 点,
+    // 2026-07 review)。
+    return chatEligibleSourcesForModel(providers, modelId, agentKind).length > 0;
   }
   return getMaker()
     .getCapabilities(agentKind)
@@ -203,9 +206,10 @@ function hasModel(
 
 function firstModel(agentKind: AgentKind, providers: ProviderView[] | null): string | null {
   if (providers) {
-    // 兜底选模型与宽松降级同口径(pickEnabledFallbackModel):跳过停用条目与能力
-    // 模型(图像/音频等),否则「保存的默认模型失效 → 取目录第一个」可能落在一份
-    // 被停用或根本不是对话模型的条目上(PR #744 review 第十轮)。
+    // 兜底选模型与宽松降级同口径(pickEnabledFallbackModel):跳过停用条目与非聊天
+    // 模型(图像/视频/TTS/STT/实时/Embedding/压缩等,issue #882 第 3 点),否则
+    // 「保存的默认模型失效 → 取目录第一个」可能落在一份被停用或根本不是聊天模型
+    // 的条目上(PR #744 review 第十轮)。
     return pickEnabledFallbackModel(providers, agentKind)?.model ?? null;
   }
   return getMaker().getCapabilities(agentKind).availableModels[0]?.id ?? null;
@@ -262,18 +266,34 @@ function resolveProviderId(
   const provider = connectedProvidersForAgent(providers, agentKind).find(
     (p) => p.id === providerId,
   );
-  if (
-    !provider ||
-    !providerOffersModel(provider, modelId, agentKind) ||
-    // 该 (来源, 模型) 拷贝被停用同样使保存的显式来源失效:B 家启用不豁免 A 家
-    // 停用拷贝(PR #744 review 第十轮)。
-    getModel(provider, modelId, agentKind)?.disabled === true
-  ) {
-    // 经**启用 rail** 解析替代来源并显式落地,而不是返回 null 走隐式默认 ——
-    // turnRunner 直建会话不过路由守卫,隐式默认落点可能恰是被停用的那份拷贝
-    // (provider-route 不查停用标志)。零启用来源 ⇒ null,交给既有失败路径。
+  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  if (!provider || !model || model.disabled === true) {
+    // 不存在,或该 (来源, 模型) 拷贝被停用:经**启用 rail** 解析替代来源并显式
+    // 落地,而不是返回 null 走隐式默认 —— turnRunner 直建会话不过路由守卫,隐式
+    // 默认落点可能恰是被停用的那份拷贝(provider-route 不查停用标志)。零启用
+    // 来源 ⇒ null,交给既有失败路径(PR #744 review 第十轮)。
     const fallback = effectiveSourceIdForModel(providers, null, modelId, agentKind);
     log.warn('im default provider unavailable; rerouting to enabled source', {
+      agentKind,
+      modelId,
+      providerId,
+      fallback,
+    });
+    return fallback;
+  }
+  if (!isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
+    // hasModel() 只证明"这个 id 在某个来源上是聊天模型"(any-source),不代表**这个**被
+    // 保存的 providerId 本身也是——同一 id 若在不同来源上 mode 不一致(如 A 是
+    // image_generation、B 是 chat),model 存在性校验会因 B 通过,但这里若只查
+    // providerOffersModel(仅看 id 是否存在,不看 mode),仍会把会话钉死在 A 上
+    // (2026-07 review:fresh evidence,与 hasModel 校验的是两件不同的事)。
+    // 必须**显式**解析聊天可用的替代来源,不能返回 null 了事:null 的语义是隐式
+    // 默认路由,运行时会落回原生默认来源——保存的 providerId 若恰好就是原生默认
+    // (如 XD),null 等于原路发回那份非聊天拷贝,什么也没挡住(2026-07 review 第
+    // 25 轮)。effectiveSourceIdForModel 走 chat 准入 rail,零可用 ⇒ null 交给既有
+    // 失败路径;数据异常本身留 warn 供排查。
+    const fallback = effectiveSourceIdForModel(providers, null, modelId, agentKind);
+    log.warn('im default provider is non-chat for this model; rerouting to chat-eligible source', {
       agentKind,
       modelId,
       providerId,
@@ -308,14 +328,26 @@ function findModel(
   providerId?: string | null,
 ) {
   if (providers) {
+    // 显式来源由调用方(resolveProviderId)已经裁决过存在性/停用/chat 准入,这里
+    // 直接取该来源自己的拷贝,不重复校验。
     if (providerId) {
       const provider = providers.find((p) => p.id === providerId);
       const model = provider ? getModel(provider, modelId, agentKind) : undefined;
       if (model) return model;
     }
+    // 隐式(无显式来源):跳过被停用的拷贝(PR #744 review 第二十五轮)与非聊天
+    // 来源的同 id 条目(2026-07 review,fresh evidence)——同一 id 若在排序更靠前
+    // 的来源上是停用或非聊天(efforts 元数据可能完全不同),这里不挡的话
+    // resolveEffort 会拿着错的 efforts/defaultEffort 去校验,即便 resolveProviderId
+    // 已经把会话正确路由到了后面那个启用的聊天来源。
     for (const provider of connectedProvidersForAgent(providers, agentKind)) {
       const model = getModel(provider, modelId, agentKind);
-      if (model && model.disabled !== true) return model;
+      if (
+        model &&
+        model.disabled !== true &&
+        isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+      )
+        return model;
     }
   }
   return getMaker()

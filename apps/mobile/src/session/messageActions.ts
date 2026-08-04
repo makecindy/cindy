@@ -36,6 +36,32 @@ export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): st
   return parts.filter((part) => part.trim().length > 0).join('\n\n');
 }
 
+export interface MobileMessageActionBarInput {
+  /** 归一化 kind(「user 行渲染系统卡」形态在渲染层已降级为 'system')。 */
+  kind: NormalizedRemoteMessage['kind'];
+  /** 该行渲染成系统边界卡(agent-switch / auto-resume / goal / slash 命令卡)。 */
+  hasSystemCard: boolean;
+  /** assistant 消息仍在流式输出。 */
+  isStreamingAssistant: boolean;
+  /** assistant 消息是本轮收尾正文(messageRenderModel 标注)。 */
+  isTurnFinalAssistant: boolean;
+}
+
+/**
+ * 消息行是否挂完成态操作条(复制 / 时间 / 花费 / More)。三条规则都对齐桌面:
+ * - 流式 assistant 只显示「生成中」,不挂完成态操作;
+ * - assistant 只有每轮收尾正文挂(桌面 AssistantMessage 的 showActionBar,#456);
+ * - 系统边界卡整行不挂:它不是任何人的发言,没有复制 / 分叉 / 消息锚点 / 发送时间
+ *   语义(桌面 MessageStream 对 systemCardType 提前 return SystemCard,卡片下方
+ *   不存在操作行)。漏掉这条时,手机版跨 Agent 切换的分隔线药丸下会多出一行
+ *   「··· 刚刚」。
+ */
+export function mobileMessageShowsActionBar(input: MobileMessageActionBarInput): boolean {
+  if (input.isStreamingAssistant) return false;
+  if (input.hasSystemCard) return false;
+  return input.kind !== 'assistant' || input.isTurnFinalAssistant;
+}
+
 export function buildMobileMessageControlItems(
   input: MobileMessageControlInput,
 ): MobileMessageControlActionId[] {

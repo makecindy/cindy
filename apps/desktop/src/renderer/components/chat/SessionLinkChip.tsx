@@ -20,6 +20,8 @@ import { CornerDownRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
+
 import { cn } from '@/lib/utils';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
@@ -124,7 +126,13 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
       );
     });
   };
-  const display = explicitLabel ?? fetchedTitle ?? remoteTitle ?? shortSessionId(sessionId);
+  // 未起名会话过投影再显示:chip 直接摆在消息流里,原样会露出内部哨兵 "New Maker"。
+  const resolvedTitle = fetchedTitle ?? remoteTitle;
+  const display = explicitLabel
+    ?? (resolvedTitle
+      ? projectDraftSessionTitle(resolvedTitle, t('ccAgent.common.unnamedSession'))
+      : null)
+    ?? shortSessionId(sessionId);
   const referenceDetails = referenceMetadata
     ? [
         t(

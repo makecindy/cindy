@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 
 import {
   addRegionalMoney,
-  DEFAULT_USAGE_CURRENCY,
   legacyUsdMoney,
   normalizeRegionalMoney,
   zeroUsageMoney,
@@ -11,6 +10,7 @@ import {
 import { dailySpend } from './schema.js';
 import { getDbClient } from './client/current.js';
 import { createLogger } from '../logger.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
 const log = createLogger('localDb/dailySpend');
 
@@ -71,16 +71,20 @@ export async function incrementDailySpend(
   if (!normalized || normalized.amount < 1e-10) {
     return { day, money: await getSpendForDay(day) };
   }
-  if (normalized.currency !== DEFAULT_USAGE_CURRENCY) {
+  // 单币种日账本:入口只接受本账号的结算币种。基准取 currentLedgerCurrency() 而不是
+  // 构建区域 —— 结算币种由服务端按账号所属租户下发,不保证等于发行区域;按区域判会把
+  // 以 USD 结算的账号在 CN 构建上的每一笔都拒收成不计费。
+  // 异币种(脏数据 / 上游 bug)仍然拒收,避免污染已有账本。
+  const ledgerCurrency = currentLedgerCurrency();
+  if (normalized.currency !== ledgerCurrency) {
     log.warn(
-      `daily spend rejected currency mismatch: ${normalized.currency} != ${DEFAULT_USAGE_CURRENCY}`,
+      `daily spend rejected currency mismatch: ${normalized.currency} != ${ledgerCurrency}`,
     );
     return { day, money: await getSpendForDay(day) };
   }
   const db = getDbClient().drizzle;
-  // 单币种日账本:入口只允许当前区域币种。升级前当天若仍是旧币种，
-  // 首笔新费用从当前区域币种重新起算；不猜测或换算旧聚合值，也不让当天
-  // 后续费用永久停记。CASE 与写入保持原子，避免并发混加不同单位。
+  // 升级前 / 换号前当天若仍是旧币种，首笔新费用从当前账本币种重新起算；不猜测或换算
+  // 旧聚合值，也不让当天后续费用永久停记。CASE 与写入保持原子，避免并发混加不同单位。
   const sameCurrency = sql`(${dailySpend.costCurrency} IS NULL OR ${dailySpend.costCurrency} = ${normalized.currency})`;
   await db
     .insert(dailySpend)

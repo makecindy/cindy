@@ -5,7 +5,7 @@
  * Layout matches the design稿 (skillhub Market sidebar pattern):
  *
  *   ┌──────────────────────────────────┐
- *   │ ← Back to Projects               │  ← h-9 rounded-full (slot of New Maker)
+ *   │ ← Back to Projects               │  ← h-9 rounded-full (slot of New Chat)
  *   ├──────────────────────────────────┤
  *   │ <workdir name>           [⇡⇣] [↻]│  ← collapse all / refresh
  *   ├──────────────────────────────────┤
@@ -633,7 +633,7 @@ export function WorkdirBrowseSidebar({
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
-      {/* Top slot — same geometry as the "New Maker" button (h-9 rounded-full,
+      {/* Top slot — same geometry as the "New Chat" button (h-9 rounded-full,
           pt-4 pr-3 pb-3.5 pl-3 + gap-0.5). Matches skillhub MarketCell when
           on /skillhub/market. */}
       <div className="flex flex-col gap-0.5 pt-4 pr-3 pb-3.5 pl-3">

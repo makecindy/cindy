@@ -327,6 +327,19 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       }
     }
 
+    // 上游 2xx 但 content-type 不是 SSE(反代/网关吐 JSON 或 HTML):大概率整流翻不出
+    // 任何事件,先留一条 warn ——零事件收尾时的合成 error 会带上正文前缀(#941)。
+    // 判定大小写不敏感(HTTP header 值的 media type 不区分大小写);真实状态码进日志,
+    // 本路径接受任意 2xx,不硬编码 200(review 反馈)。
+    const upstreamContentType = upstream.headers.get('content-type') ?? '';
+    if (!upstreamContentType.toLowerCase().includes('event-stream')) {
+      log.warn?.('upstream 2xx with non-SSE content-type', {
+        reqId,
+        status: upstream.status,
+        contentType: upstreamContentType || '(missing)',
+      });
+    }
+
     // 开始流式回写。
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -340,11 +353,47 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    // 零事件诊断:整流一条 Anthropic 事件都没写回时,CLI 只能报
+    // "empty or malformed response (HTTP 200)" 并盲目重试,真实错误被完全掩盖(#941)。
+    // 记录写回事件数与上游正文前缀,收尾时合成一条带上游信息的 error 事件 + warn 日志。
+    let eventsWritten = 0;
+    let rawPrefix = '';
+    const RAW_PREFIX_LIMIT = 500;
+    const writeOut = (ev: AnthropicSseEvent): void => {
+      eventsWritten += 1;
+      writeSseEvent(res, ev);
+    };
+    const finalizeStream = (): void => {
+      for (const outEv of translator.finish()) writeOut(outEv);
+      if (eventsWritten > 0) return;
+      const bodyPrefix = rawPrefix.trim().slice(0, 300);
+      log.warn?.('upstream stream yielded no translatable events', {
+        reqId,
+        contentType: upstreamContentType || '(missing)',
+        bodyPrefix,
+      });
+      writeOut({
+        event: 'error',
+        data: {
+          type: 'error',
+          error: {
+            type: 'api_error',
+            message:
+              `upstream returned HTTP ${upstream.status} but produced no translatable SSE events ` +
+              `(content-type: ${upstreamContentType || 'missing'}${bodyPrefix ? `; body: ${bodyPrefix}` : ''})`,
+          },
+        },
+      });
+    };
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
+        const chunkText = decoder.decode(value, { stream: true });
+        if (rawPrefix.length < RAW_PREFIX_LIMIT) {
+          rawPrefix = (rawPrefix + chunkText).slice(0, RAW_PREFIX_LIMIT);
+        }
+        buf += chunkText;
         // SSE 事件以空行分隔;逐行取 `data:` 负载。用游标扫描、chunk 末尾一次性 slice ——
         // 避免每行 slice 整个剩余缓冲(大 chunk 数百行时是 O(n²) 拷贝,这是每 token 热路径)。
         let start = 0;
@@ -361,16 +410,22 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           } catch {
             continue;
           }
-          for (const outEv of translator.push(ev)) writeSseEvent(res, outEv);
+          for (const outEv of translator.push(ev)) writeOut(outEv);
         }
         if (start > 0) buf = buf.slice(start);
       }
-      // 上游正常结束但没走 response.completed(极少)→ 兜底收尾。
-      for (const outEv of translator.finish()) writeSseEvent(res, outEv);
+      // 上游正常结束但没走 response.completed(极少)→ 兜底收尾;整流零事件时合成
+      // 带上游信息的 error 事件,绝不空 200 收尾。
+      finalizeStream();
     } catch (err) {
       if (!abort.signal.aborted) {
-        log.warn?.('upstream stream error', { reqId, err: err instanceof Error ? err.message : String(err) });
-        for (const outEv of translator.finish()) writeSseEvent(res, outEv);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.warn?.('upstream stream error', { reqId, err: errMsg });
+        // 断流不走 finalizeStream:已写出部分事件后再补 message_stop,Claude Code 会
+        // 把截断响应当正常完成、上游读取错误被掩盖(review 反馈 P1)。fail() 关块后
+        // 发 error 事件收尾(错误帧已收尾时返回空,不重复报错);流失败于任何事件
+        // 之前时 error 事件同样成立,零事件合成诊断只服务「干净结束却零事件」路径。
+        for (const outEv of translator.fail(`upstream stream error: ${errMsg}`)) writeOut(outEv);
       }
     } finally {
       res.end();

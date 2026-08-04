@@ -32,6 +32,7 @@ import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { projectIdentityKeyForSession } from '../lib/projectGrouping';
+import { getSessionDisplayTitle } from '../lib/sessionDisplayTitle';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
 import { railPanelStore, type RailPanelSection } from './railPanelStore';
@@ -154,7 +155,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
           isRunning ? 'text-[var(--cmd-palette-item-meta)]' : 'text-foreground',
         )}
       >
-        {session.title}
+        {getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'))}
       </div>
       {body && (
         <div
@@ -322,10 +323,13 @@ export function RailNav({
         const remoteLamp = remoteLampOf(session.id);
         const isRunning = runningSessionIds.has(session.id) || remoteLamp?.running === true;
         const hasUnread = notifications.has(session.id) || remoteLamp?.tone != null;
+        // 瓷砖短标签、aria-label、悬浮预览卡都用同一个显示标题:置顶一条刚建的会话时
+        // 原始标题是内部哨兵,原样用会让 rail 上出现 "New Maker"(短标签甚至会截成 "New")。
+        const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
         return (
           <button
             key={session.id}
-            aria-label={session.title}
+            aria-label={displayTitle}
             aria-current={isActive ? 'page' : undefined}
             onClick={() => void handlePinnedClick(session.id)}
             onMouseEnter={(e) => {
@@ -375,7 +379,7 @@ export function RailNav({
                   : 'text-[var(--text-secondary)] group-hover/pin:text-foreground',
               )}
             >
-              {pinnedTileLabel(session.title)}
+              {pinnedTileLabel(displayTitle)}
             </span>
           </button>
         );

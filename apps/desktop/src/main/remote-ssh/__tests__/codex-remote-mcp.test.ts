@@ -545,6 +545,47 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
     expect(written).not.toContain('cindy_ssh');
   });
 
+  it('adds cindy_memory to the managed block when Maker Memory is globally enabled', async () => {
+    // Maker Memory 开启时远端 daemon config 一并注入 cindy_memory (记忆读写
+    // 经 bridge 回本机 store);cindy_ssh 等其余 in-process server 仍不放行。
+    const { host, inputs } = fakeHost('host-memory-on', '');
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: ['cindy_orca', 'cindy_memory', 'orca_worker_bridge', 'cindy_ssh'],
+        bridgeInstanceId: 'bridge-1',
+      }),
+      hasLiveTurnOnHost: () => false,
+      isMakerMemoryEnabled: () => true,
+    });
+    expect(result.ok).toBe(true);
+    const written = decodeWrittenConfig(inputs);
+    expect(written).not.toBeNull();
+    expect(written).toContain('[mcp_servers.cindy_orca]');
+    expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).not.toContain('cindy_ssh');
+  });
+
+  it('keeps cindy_memory injected when collab is disabled but Maker Memory stays on', async () => {
+    const { host, inputs } = fakeHost('host-memory-only', '');
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: ['cindy_orca', 'cindy_memory', 'orca_worker_bridge'],
+        bridgeInstanceId: 'bridge-1',
+      }),
+      hasLiveTurnOnHost: () => false,
+      isCollabEnabled: () => false,
+      isMakerMemoryEnabled: () => true,
+    });
+    expect(result.ok).toBe(true);
+    const written = decodeWrittenConfig(inputs);
+    expect(written).not.toBeNull();
+    expect(written).toContain('[mcp_servers.cindy_memory]');
+    expect(written).not.toContain('[mcp_servers.cindy_orca]');
+    expect(written).not.toContain('[mcp_servers.orca_worker_bridge]');
+  });
+
   it('is a no-op success when the bridge exposes no whitelist server and nothing was ever injected', async () => {
     // collab plugin 禁用 → bridge 上没有 cindy_orca;远端 config 本来就没
     // 注入过 → merge('') 无漂移:不写 config, 不重启 daemon。
@@ -1129,7 +1170,7 @@ describe('codex-connector R21 regressions', () => {
 });
 
 describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
-  const base = { collabEnabled: true, token: 'tok', bridgeInstanceId: 'bridge-1' };
+  const base = { collabEnabled: true, makerMemoryEnabled: false, token: 'tok', bridgeInstanceId: 'bridge-1' };
 
   it('is true when the host was never injected (no applied fingerprint)', () => {
     expect(hasPendingRemoteMcpDrift('host-drift-new', base)).toBe(true);
@@ -1143,11 +1184,13 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     });
     expect(hasPendingRemoteMcpDrift('host-drift-match', {
       collabEnabled: true,
+      makerMemoryEnabled: false,
       token: 'test-persistent-token',
       bridgeInstanceId: 'bridge-1',
     })).toBe(false);
     expect(hasPendingRemoteMcpDrift('host-drift-match', {
       collabEnabled: true,
+      makerMemoryEnabled: false,
       token: 'test-persistent-token',
       bridgeInstanceId: 'bridge-2',
     })).toBe(true);
@@ -1162,12 +1205,13 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     await stripRemoteCodexMcpConfig(host, { hasLiveTurnOnHost: () => false });
     expect(hasPendingRemoteMcpDrift('host-drift-strip', {
       collabEnabled: true,
+      makerMemoryEnabled: false,
       token: 'test-persistent-token',
       bridgeInstanceId: null,
     })).toBe(true);
   });
 
-  it('follows cleanup semantics when collab is disabled or token is missing', async () => {
+  it('follows cleanup semantics when both gates are off or token is missing', async () => {
     const { host } = fakeHost('host-drift-collab-off', '');
     await ensureRemoteCodexMcpBridge(host, {
       ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
@@ -1177,6 +1221,23 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     expect(hasPendingRemoteMcpDrift('host-drift-collab-off', { ...base, token: null })).toBe(true);
     await stripRemoteCodexMcpConfig(host, { hasLiveTurnOnHost: () => false });
     expect(hasPendingRemoteMcpDrift('host-drift-collab-off', { ...base, collabEnabled: false })).toBe(false);
+  });
+
+  it('treats a Maker Memory toggle as drift (server set is part of the desired state)', async () => {
+    const { host } = fakeHost('host-drift-memory', '');
+    // 注入时 memory 关 → applied 只含协同集合。
+    await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    });
+    const opts = {
+      collabEnabled: true,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    };
+    expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: false })).toBe(false);
+    // 用户打开 Maker Memory → desired 集合多出 cindy_memory → 判 drift。
+    expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: true })).toBe(true);
   });
 });
 

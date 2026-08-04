@@ -185,3 +185,22 @@ export function estimateUtilityModelCostUsd(
 function normalizeTokenCount(value: number | undefined): number {
   return Number.isFinite(value) && value && value > 0 ? value : 0;
 }
+
+/**
+ * 快问快答(插件 cindy.text.oneshot)可钉的后端清单。
+ *
+ * 与图像/视频的"钉后端"同一口径:每一项就是一组**供应商 × 模型**。这里带上
+ * 传输通道当后缀——`gpt-5.4-mini` 同时经 Codex 订阅和网关提供,只写模型名会
+ * 出现两行同名项、用户选不中(GhostErrandPrefs 踩过同一个坑)。后缀用中立的
+ * 通道名而非中文,避免在 shared 层塞 UI 文案。
+ */
+export function utilityModelPinOptions(): Array<{ id: string; label: string }> {
+  return Object.values(UTILITY_MODEL_PROFILES).map((profile) => ({
+    id: profile.id,
+    label: `${profile.model} · ${utilityTransportLabel(profile.transport)}`,
+  }));
+}
+
+export function utilityTransportLabel(transport: UtilityModelTransport): string {
+  return transport === 'codex-responses' ? 'Codex' : 'Gateway';
+}

@@ -1,7 +1,8 @@
 /**
  * ExtraDirsButton —— composer 的「+」操作菜单(左置于权限选择器之前)。
  *
- * 合并了三类入口(参考 Codex 的 + 菜单):
+ * 合并了四类入口(参考 Codex 的 + 菜单):
+ *   - 添加文件、图片或视频→ 复用 composer 既有附件管线。
  *   - 新建目标(`onNewGoal` 提供时显示;仅会话中,父组件按 sessionId 决定)→ 打开 NewGoalDialog。
  *   - 已安装 Plugin:选择后由 ChatInput 把 command 放到消息开头,保留正文并聚焦末尾。
  *   - 附加只读引用目录(Claude vendor;`onChange` 提供时显示)→ 列表 / 添加。
@@ -17,8 +18,8 @@
  * main 端 extraDirsValidator.ts 兜底 — 这里只做 UX 预判。
  */
 
-import { useState } from 'react';
-import { Check, ClipboardList, FolderPlus, Plus, Target, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Check, ClipboardList, FolderPlus, Paperclip, Plus, Target, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -39,6 +40,8 @@ const MAX_EXTRA_DIRS = 10;
 export interface ExtraDirsButtonProps {
   extraDirs: string[];
   workingDir?: string | null;
+  /** 选择本机文件后交给 composer 的既有附件校验、缓存与发送管线。 */
+  onAddFiles?: (files: readonly File[]) => void | Promise<void>;
   /**
    * 父组件实现增删持久化(创建时写 draft store / 中途双 IPC 协调)。
    * 未提供时只显示目标、计划模式或 Plugin 入口，不显示引用目录段。
@@ -115,6 +118,7 @@ function basename(p: string): string {
 export function ExtraDirsButton({
   extraDirs,
   workingDir,
+  onAddFiles,
   onChange,
   onNewGoal,
   planMode,
@@ -127,6 +131,7 @@ export function ExtraDirsButton({
 }: ExtraDirsButtonProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { confirm } = useConfirmDialog();
 
   const hasReferenceDirs = onChange !== undefined;
@@ -136,8 +141,9 @@ export function ExtraDirsButton({
   // hover 展开「添加」文案已移除(2026-07-22 用户定稿:展开必须承载信息,
   // 图标自明的 + 不需要;裸态→hover 外框→点击直接长出菜单)。
 
-  // 能力感知:新建目标、计划模式、Plugin 与引用目录都由父组件是否接线决定。
-  if (!onNewGoal && !planMode && !hasReferenceDirs && plugins.length === 0) return null;
+  // 能力感知:附件、新建目标、计划模式、Plugin 与引用目录都由父组件是否接线决定。
+  if (!onAddFiles && !onNewGoal && !planMode && !hasReferenceDirs && plugins.length === 0)
+    return null;
 
   const atLimit = count >= MAX_EXTRA_DIRS;
 
@@ -194,52 +200,95 @@ export function ExtraDirsButton({
       startBorderColor="var(--border-default)"
       wrapperClassName="shrink-0"
       trigger={
-        <Tip
-          text={count === 0 ? t('extraDirs.tooltipEmpty') : t('extraDirs.tooltipCount', { count })}
-          side="top"
-        >
+        <>
+          {/* input 始终挂载:系统文件选择器打开期间菜单收合也不会卸载它。 */}
+          {onAddFiles && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              disabled={disabled}
+              className="hidden"
+              onChange={(event) => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                // 允许用户连续两次选择同一个文件。
+                event.currentTarget.value = '';
+                if (files.length > 0) void onAddFiles(files);
+              }}
+            />
+          )}
+          <Tip
+            text={count === 0 ? t('extraDirs.tooltipEmpty') : t('extraDirs.tooltipCount', { count })}
+            side="top"
+          >
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => setOpen((prev) => !prev)}
+              aria-expanded={open}
+              className={cn(
+                'flex shrink-0 items-center rounded-full transition-colors',
+                // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
+                // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
+                // 透明 border 常驻占位,避免 hover 时 1px 布局跳动。
+                'h-[30px]',
+                // count>0 加宽显示 ×N —— 会话内与新建草稿(create-agent)一致:引用目录
+                // 扩大 agent 可见范围,必须在收起态外显,不允许静默(2026-07-25 用户定稿,
+                // 取代此前 create-agent icon-only 紧凑态的决定)。
+                count > 0 && hasReferenceDirs
+                  ? 'min-w-max justify-center gap-1 px-2.5'
+                  : 'w-[30px] justify-center p-0',
+                'border border-transparent bg-transparent text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+              aria-label={t('extraDirs.menuAria')}
+            >
+              <Plus
+                size={isCreateAgentVariant ? 11 : dense ? 14 : 14}
+                className="shrink-0"
+              />
+              {count > 0 && hasReferenceDirs && (
+                <span
+                  className={cn(
+                    'font-normal tabular-nums',
+                    dense ? 'text-[12.5px]' : 'text-[13px]',
+                  )}
+                >
+                  ×{count}
+                </span>
+              )}
+            </button>
+          </Tip>
+        </>
+      }
+    >
+      {onAddFiles && (
+        <>
           <button
             type="button"
             disabled={disabled}
-            onClick={() => setOpen((prev) => !prev)}
-            aria-expanded={open}
-            aria-haspopup="menu"
+            onClick={() => {
+              fileInputRef.current?.click();
+              setOpen(false);
+            }}
             className={cn(
-              'flex shrink-0 items-center rounded-full transition-colors',
-              // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
-              // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              // 透明 border 常驻占位,避免 hover 时 1px 布局跳动。
-              'h-[30px]',
-              // count>0 加宽显示 ×N —— 会话内与新建草稿(create-agent)一致:引用目录
-              // 扩大 agent 可见范围,必须在收起态外显,不允许静默(2026-07-25 用户定稿,
-              // 取代此前 create-agent icon-only 紧凑态的决定)。
-              count > 0 && hasReferenceDirs
-                ? 'min-w-max justify-center gap-1 px-2.5'
-                : 'w-[30px] justify-center p-0',
-              'border border-transparent bg-transparent text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'flex w-full items-center gap-2 rounded-[8px] px-3 py-2',
+              'transition-colors hover:bg-[var(--model-item-hover)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
             )}
-            aria-label={t('extraDirs.menuAria')}
           >
-            <Plus
-              size={isCreateAgentVariant ? 11 : dense ? 14 : 14}
-              className="shrink-0"
-            />
-            {count > 0 && hasReferenceDirs && (
-              <span
-                className={cn(
-                  'font-normal tabular-nums',
-                  dense ? 'text-[12.5px]' : 'text-[13px]',
-                )}
-              >
-                ×{count}
-              </span>
-            )}
+            <Paperclip size={14} className="shrink-0 text-[var(--model-item-text)]" />
+            <span className="text-[13px] text-[var(--model-item-text)]">
+              {t('extraDirs.addFiles')}
+            </span>
           </button>
-        </Tip>
-      }
-    >
+          {(onNewGoal || planMode || plugins.length > 0 || hasReferenceDirs) && (
+            <div className="my-1 h-px bg-[var(--model-dropdown-border)]" />
+          )}
+        </>
+      )}
+
         {/* 新建目标(仅会话中;点击关菜单并由父组件打开 NewGoalDialog) */}
         {onNewGoal && (
           <button

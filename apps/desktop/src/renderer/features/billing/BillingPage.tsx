@@ -3,8 +3,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowRight,
   Check,
+  ChevronDown,
   CircleDollarSign,
   CreditCard,
+  ExternalLink,
   PackageOpen,
   RefreshCcw,
   X,
@@ -12,6 +14,13 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
@@ -233,6 +242,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [loadingSubscription, setLoadingSubscription] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState(false);
   const [cancelingSubscription, setCancelingSubscription] = useState(false);
+  const [openingSubscriptionPortal, setOpeningSubscriptionPortal] = useState(false);
   const [creditUsage, setCreditUsage] = useState<ModelAccessCreditUsage | null>(null);
   const [balance, setBalance] = useState<ModelAccessBalance | null>(null);
   const [usageDetailsUnavailable, setUsageDetailsUnavailable] = useState(false);
@@ -247,6 +257,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const checkout = useBillingCheckout(accountId);
   const previousCheckoutPhaseRef = useRef(checkout.state.phase);
   const cancelSubscriptionLockRef = useRef(false);
+  const subscriptionPortalLockRef = useRef(false);
+  const subscriptionPortalRefreshPendingRef = useRef(false);
   // 取消订阅的 DELETE 不带 subscriptionId,服务端按「请求时已认证的账号」执行。
   // ConfirmDialogProvider 挂在 AuthProvider 之外(见 App.tsx),弹窗会活过本 section
   // 因 dataOwnerId 变化而发生的卸载,所以必须记住确认时的账号与挂载态。
@@ -332,6 +344,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   useEffect(() => {
     void loadBillingState();
+  }, [loadBillingState]);
+
+  useEffect(() => {
+    const refreshAfterPortal = () => {
+      if (!subscriptionPortalRefreshPendingRef.current) return;
+      subscriptionPortalRefreshPendingRef.current = false;
+      void loadBillingState();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshAfterPortal();
+    };
+    window.addEventListener('focus', refreshAfterPortal);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', refreshAfterPortal);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [loadBillingState]);
 
   const closeCheckout = useCallback(() => {
@@ -535,11 +564,35 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       status: currentSubscription.status,
       price: plan ? formatMoney(plan.terms.amount, plan.terms.currency, billingLocale) : null,
       interval: plan?.offer.interval ?? null,
-      includedCredits: plan?.terms.creditAmount ?? null,
+      includedCredits: plan
+        ? formatMoney(plan.terms.creditAmount, plan.terms.currency, billingLocale)
+        : null,
       periodEndAt: formatBillingDate(currentSubscription.currentPeriodEndAt, billingLocale),
       cancelAtPeriodEnd: currentSubscription.cancelAtPeriodEnd,
     };
   }, [billingLocale, currentSubscription, planNameOf, t]);
+
+  const openSubscriptionPortal = useCallback(async () => {
+    if (subscriptionPortalLockRef.current || currentSubscription?.provider !== 'stripe') return;
+    subscriptionPortalLockRef.current = true;
+    setOpeningSubscriptionPortal(true);
+    subscriptionPortalRefreshPendingRef.current = true;
+    try {
+      const result = await billingApi.openSubscriptionPortal();
+      if (!result.success && !result.timedOut) {
+        subscriptionPortalRefreshPendingRef.current = false;
+      }
+      if (!result.success) {
+        toast.error(t('billing.settings.subscriptionCard.portalFailed'));
+      }
+    } catch {
+      subscriptionPortalRefreshPendingRef.current = false;
+      toast.error(t('billing.settings.subscriptionCard.portalFailed'));
+    } finally {
+      setOpeningSubscriptionPortal(false);
+      subscriptionPortalLockRef.current = false;
+    }
+  }, [currentSubscription?.provider, t]);
 
   const cancelCurrentSubscription = useCallback(async () => {
     if (
@@ -734,7 +787,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             type="button"
             onClick={() => void loadBillingState()}
             disabled={
-              loadingCatalog || loadingSubscription || loadingBalance || cancelingSubscription
+              loadingCatalog ||
+              loadingSubscription ||
+              loadingBalance ||
+              cancelingSubscription ||
+              openingSubscriptionPortal
             }
             className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:opacity-45"
           >
@@ -754,11 +811,19 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               loading={loadingSubscription}
               error={subscriptionError}
               showPlanChangeEntry={showPlanChangeEntry}
+              showPortalEntry={currentSubscription?.provider === 'stripe'}
               canceling={cancelingSubscription}
-              actionDisabled={loadingSubscription || subscriptionError || cancelingSubscription}
+              openingPortal={openingSubscriptionPortal}
+              actionDisabled={
+                loadingSubscription ||
+                subscriptionError ||
+                cancelingSubscription ||
+                openingSubscriptionPortal
+              }
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
               onCancelSubscription={() => void cancelCurrentSubscription()}
+              onOpenPortal={() => void openSubscriptionPortal()}
               onChangePlan={openPlanChange}
               onPurchase={() => openPurchaseDialog('SUBSCRIPTION')}
               onCancelPending={() => {
@@ -784,7 +849,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
             >
-              <UsageBreakdownCard usage={creditUsage} balance={balance} />
+              <UsageBreakdownCard
+                usage={creditUsage}
+                balance={balance}
+                hasNoActiveSubscription={
+                  !loadingSubscription && !subscriptionError && currentSubscription === null
+                }
+              />
             </BillingGroup>
           )}
 
@@ -803,14 +874,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
         </div>
-
-        <p className="mt-8 text-12 leading-5 text-[var(--text-tertiary)]">
-          {t(
-            BILLING_CURRENCY === 'usd'
-              ? 'billing.balance.creditParityUsd'
-              : 'billing.balance.creditParityCny',
-          )}
-        </p>
       </div>
 
       <BillingOfferDialog
@@ -891,11 +954,14 @@ function SubscriptionOverviewCard({
   loading,
   error,
   showPlanChangeEntry,
+  showPortalEntry,
   canceling,
+  openingPortal,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
   onCancelSubscription,
+  onOpenPortal,
   onChangePlan,
   onPurchase,
   onCancelPending,
@@ -904,11 +970,14 @@ function SubscriptionOverviewCard({
   loading: boolean;
   error: boolean;
   showPlanChangeEntry: boolean;
+  showPortalEntry: boolean;
   canceling: boolean;
+  openingPortal: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
   onCancelSubscription: () => void;
+  onOpenPortal: () => void;
   onChangePlan: () => void;
   onPurchase: () => void;
   onCancelPending: () => void;
@@ -981,33 +1050,80 @@ function SubscriptionOverviewCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
-          {facts &&
-            !facts.cancelAtPeriodEnd &&
-            SUBSCRIPTION_CANCELLABLE_STATUSES.includes(facts.status) && (
-              <button
-                type="button"
-                onClick={onCancelSubscription}
-                disabled={actionDisabled}
-                aria-label={t('billing.settings.subscriptionCard.cancelAction')}
-                className="inline-flex h-8 select-none items-center justify-center rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--error-fg)] transition-colors hover:bg-[var(--error-bg)] disabled:cursor-not-allowed disabled:opacity-40"
+          {facts ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={actionDisabled}
+                  className="group inline-flex h-8 min-w-[9.5rem] select-none items-center justify-center gap-1.5 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] data-[state=open]:bg-[var(--surface-chip)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {t('billing.settings.subscriptionCard.manageAction')}
+                  {canceling || openingPortal ? (
+                    <Spinner size={13} />
+                  ) : (
+                    <ChevronDown
+                      size={13}
+                      strokeWidth={1.75}
+                      className="transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                sideOffset={8}
+                className="w-[var(--radix-dropdown-menu-trigger-width)] rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-none"
               >
-                {canceling ? (
-                  <Spinner size={13} />
-                ) : (
-                  t('billing.settings.subscriptionCard.cancelAction')
+                <DropdownMenuItem
+                  onSelect={showPlanChangeEntry ? onChangePlan : onPurchase}
+                  disabled={actionDisabled}
+                  className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
+                >
+                  {showPlanChangeEntry
+                    ? t('billing.settings.subscriptionCard.changeAction')
+                    : t('billing.settings.subscriptionCard.action')}
+                </DropdownMenuItem>
+                {showPortalEntry && (
+                  <DropdownMenuItem
+                    onSelect={onOpenPortal}
+                    disabled={actionDisabled}
+                    className="h-9 gap-2 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
+                  >
+                    <ExternalLink size={14} aria-hidden="true" />
+                    {t('billing.settings.subscriptionCard.portalAction')}
+                  </DropdownMenuItem>
                 )}
-              </button>
-            )}
-          <button
-            type="button"
-            onClick={showPlanChangeEntry ? onChangePlan : onPurchase}
-            disabled={actionDisabled}
-            className="h-8 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {showPlanChangeEntry
-              ? t('billing.settings.subscriptionCard.changeAction')
-              : t('billing.settings.subscriptionCard.action')}
-          </button>
+                {!facts.cancelAtPeriodEnd &&
+                  SUBSCRIPTION_CANCELLABLE_STATUSES.includes(facts.status) && (
+                    <>
+                      <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                      <DropdownMenuItem
+                        onSelect={onCancelSubscription}
+                        disabled={actionDisabled}
+                        className="h-9 rounded-lg px-3 text-12 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg)]"
+                      >
+                        {canceling ? (
+                          <Spinner size={13} />
+                        ) : (
+                          t('billing.settings.subscriptionCard.cancelAction')
+                        )}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <button
+              type="button"
+              onClick={onPurchase}
+              disabled={actionDisabled}
+              className="h-8 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {t('billing.settings.subscriptionCard.action')}
+            </button>
+          )}
         </div>
       </div>
       {pendingPlanChange?.status === 'SCHEDULED' && (
@@ -1161,9 +1277,11 @@ function BalanceOverviewCard({
 function UsageBreakdownCard({
   usage,
   balance,
+  hasNoActiveSubscription,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
+  hasNoActiveSubscription: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1181,7 +1299,14 @@ function UsageBreakdownCard({
               ['purchased', usage.purchased],
               ['promotional', usage.promotional],
             ] as const
-          ).map(([key, pool]) => <CreditPoolRow key={key} label={poolLabels[key]} pool={pool} />)
+          ).map(([key, pool]) => (
+            <CreditPoolRow
+              key={key}
+              label={poolLabels[key]}
+              pool={pool}
+              noActiveSubscription={key === 'plan' && hasNoActiveSubscription}
+            />
+          ))
         : balance
           ? (
               [
@@ -1205,7 +1330,19 @@ function UsageBreakdownCard({
   );
 }
 
-function CreditPoolRow({ label, pool }: { label: string; pool: ModelAccessCreditPoolUsage }) {
+function isZeroCreditAmount(amount: string): boolean {
+  return /^[+-]?0+(?:\.0+)?$/.test(amount.trim());
+}
+
+function CreditPoolRow({
+  label,
+  pool,
+  noActiveSubscription,
+}: {
+  label: string;
+  pool: ModelAccessCreditPoolUsage;
+  noActiveSubscription: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const percent = usagePercent(pool);
@@ -1215,7 +1352,9 @@ function CreditPoolRow({ label, pool }: { label: string; pool: ModelAccessCredit
           used: formatMoney(pool.used, BILLING_CURRENCY, billingLocale),
           total: formatMoney(pool.total, BILLING_CURRENCY, billingLocale),
         })
-      : t('billing.usage.historyUnavailable');
+      : noActiveSubscription && isZeroCreditAmount(pool.remaining)
+        ? t('billing.usage.noPlanCredits')
+        : t('billing.usage.historyUnavailable');
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3.5">
       <div className="min-w-0">
@@ -1425,7 +1564,6 @@ function BillingOfferDialog({
               <StateCard
                 icon={<PackageOpen size={22} />}
                 title={t('billing.catalog.emptyTitle')}
-                description={t('billing.catalog.emptyDescription')}
               />
             ) : (
               <>
@@ -1459,19 +1597,30 @@ function BillingOfferDialog({
                         )}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div
+                            className={cn(
+                              'grid items-center gap-2',
+                              currentPlan || unavailableReason
+                                ? 'grid-cols-[6rem_minmax(0,1fr)]'
+                                : 'grid-cols-[minmax(0,1fr)]',
+                            )}
+                          >
                             <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                               {product.name}
                             </p>
-                            {currentPlan && (
-                              <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                {t('billing.catalog.currentPlan')}
-                              </span>
-                            )}
-                            {unavailableReason && (
-                              <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
-                              </span>
+                            {(currentPlan || unavailableReason) && (
+                              <div className="min-w-0">
+                                {currentPlan && (
+                                  <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                    {t('billing.catalog.currentPlan')}
+                                  </span>
+                                )}
+                                {unavailableReason && (
+                                  <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                    {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1489,7 +1638,13 @@ function BillingOfferDialog({
                             </p>
                             {offer.creditAmount && (
                               <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                                {t('billing.credits', { amount: offer.creditAmount })}
+                                {t('billing.credits', {
+                                  amount: formatMoney(
+                                    offer.creditAmount,
+                                    offer.currency,
+                                    billingLocale,
+                                  ),
+                                })}
                               </p>
                             )}
                           </div>
@@ -1612,7 +1767,7 @@ function StateCard({
 }: {
   icon: React.ReactNode;
   title: string;
-  description: string;
+  description?: string;
   action?: React.ReactNode;
 }) {
   return (
@@ -1621,7 +1776,7 @@ function StateCard({
         {icon}
       </div>
       <p className="mt-4 text-sm font-medium">{title}</p>
-      <p className="mt-1 text-12 text-[var(--text-secondary)]">{description}</p>
+      {description && <p className="mt-1 text-12 text-[var(--text-secondary)]">{description}</p>}
       {action}
     </div>
   );

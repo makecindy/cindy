@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import * as sessionService from '@/lib/sessionService';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
@@ -63,20 +64,26 @@ export function CredentialSwitchWaitBanner({
     };
   }, [blockersKey]);
 
+  // 未起名会话过投影再拼进文案:横幅里原样会露出内部哨兵 "New Maker"。
+  // 刻意在**渲染这一刻**投影、state 里存原始标题:切语言后本次渲染就跟着变,
+  // 不用为了刷新文案重新拉一遍标题(本 PR 的第 8 条不变量)。
+  const displayTitles = blockerTitles.map(
+    (title) => projectDraftSessionTitle(title, t('ccAgent.common.unnamedSession')),
+  );
   // 标题连接符跟随当前语言(zh/ja 顿号、en/ko 逗号等),不硬编码中文顿号。
   // Intl.ListFormat 在 Electron 的 V8 下全量可用;构造失败(异常 locale)回退简单逗号。
   let joinedTitles = '';
-  if (blockerTitles.length > 0) {
+  if (displayTitles.length > 0) {
     try {
       joinedTitles = new Intl.ListFormat(i18n.language || 'en', {
         style: 'narrow',
         type: 'unit',
-      }).format(blockerTitles);
+      }).format(displayTitles);
     } catch {
-      joinedTitles = blockerTitles.join(', ');
+      joinedTitles = displayTitles.join(', ');
     }
   }
-  const message = blockerTitles.length > 0
+  const message = displayTitles.length > 0
     ? t('chat.credentialSwitchWait.waitingForNamed', { titles: joinedTitles })
     : t('chat.credentialSwitchWait.waiting');
 

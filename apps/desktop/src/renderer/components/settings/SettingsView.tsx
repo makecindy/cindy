@@ -33,6 +33,7 @@ import { GitSafetySection } from './GitSafetySection';
 import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
+import { AgentResourceSection } from './AgentResourceSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
@@ -162,7 +163,7 @@ export function SettingsView() {
     [canAccessBilling, isMac],
   );
 
-  // deep-link: ?section=... → scroll to a section inside General settings.
+  // deep-link: ?section=... → scroll to a section inside the active tab.
   useEffect(() => {
     const section = searchParams.get('section');
     const sectionId =
@@ -170,7 +171,9 @@ export function SettingsView() {
         ? 'settings-collaboration'
         : section === 'notifications'
           ? 'settings-notifications'
-          : null;
+          : section === 'contacts'
+            ? 'settings-contacts'
+            : null;
     if (!sectionId) return;
     const el = document.getElementById(sectionId);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -314,6 +317,16 @@ export function SettingsView() {
                   <CollaborationSection />
                 </section>
 
+                {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。
+                    与 Collaboration(worker 上限)相邻:同属"agent 吃多少机器资源"的治理面。 */}
+                <section
+                  id="settings-agent-resource"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.agentResource')}
+                >
+                  <AgentResourceSection />
+                </section>
+
                 {/* Section — Git safety savepoints (formal setting, not experimental). */}
                 <section className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
                   <GitSafetySection />
@@ -363,11 +376,14 @@ export function SettingsView() {
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
-                {mode !== 'local' && (
-                  <section className="pb-[18px]" aria-label={t('settings.contacts.title')}>
-                    <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
-                  </section>
-                )}
+                {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
+                <section
+                  id="settings-contacts"
+                  className="pb-[18px]"
+                  aria-label={t('settings.contacts.title')}
+                >
+                  <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
+                </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
                   <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>

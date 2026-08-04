@@ -9,6 +9,7 @@ import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import { getSelfDeviceId, remoteInvoke as invokeRemote } from '../device-link/index.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
+import { readLatestSessionTerminal } from '../localDb/sessionTerminal.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -16,6 +17,7 @@ import {
   type AgentInputSessionRef,
   type AgentInputSessionReferenceContext,
   type AgentInputSessionReferenceMessage,
+  type AgentInputSessionReferenceTerminal,
 } from '../../shared/agentInputQueue.js';
 
 export const MAX_SESSION_REFERENCES = 8;
@@ -365,6 +367,19 @@ async function resolveLocal(
     .limit(1);
   if (!session) throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `找不到本机会话 ${ref.sessionId}`);
   const loaded = await readLocalRows(ref, messageLimit, session.clearedAt ?? null);
+  // A recent local snapshot may legitimately end at a partial assistant
+  // message when the turn failed.  Preserve only a safe status marker; never
+  // inject the persisted error body into the quoted context.
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
+  if (!ref.messageClientId) {
+    try {
+      terminal = await readLatestSessionTerminal(ref.sessionId, session.clearedAt ?? null);
+    } catch {
+      // Terminal status is diagnostic metadata; a transient read failure must
+      // not make an otherwise valid session reference fail closed.
+      terminal = undefined;
+    }
+  }
   const mappedWithAnchor = loaded.rows
     .map((row) => ({ message: toReferenceMessage(row), isAnchor: row.clientId === ref.messageClientId }))
     .filter((entry): entry is { message: AgentInputSessionReferenceMessage; isAnchor: boolean } => entry.message !== null);
@@ -389,6 +404,7 @@ async function resolveLocal(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: loaded.sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };
@@ -425,6 +441,20 @@ interface RemoteHistoryPage {
   items: Record<string, unknown>[];
   hasMore: boolean;
   nextCursor: RemoteHistoryCursor | null;
+  terminal: AgentInputSessionReferenceTerminal | undefined;
+}
+
+/** Rebuild the optional terminal marker from validated fields only (trust boundary). */
+function parseRemoteTerminal(value: unknown): AgentInputSessionReferenceTerminal | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.status !== 'error') return undefined;
+  return {
+    status: 'error',
+    ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+      ? { createdAt: record.createdAt }
+      : {}),
+  };
 }
 
 function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): RemoteHistoryPage {
@@ -439,6 +469,7 @@ function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): Remo
     items: page.items.filter((row): row is Record<string, unknown> =>
       !!row && typeof row === 'object' && !Array.isArray(row) && row.sessionId === ref.sessionId),
     hasMore: page.hasMore,
+    terminal: parseRemoteTerminal(page.terminal),
     nextCursor: page.nextCursor === null || page.nextCursor === undefined
       ? null
       : (() => {
@@ -511,9 +542,17 @@ async function readRemoteHistory(
   order: 'asc' | 'desc',
   fromMs: number | null,
   cursor: RemoteHistoryCursor | null = null,
-): Promise<{ items: Record<string, unknown>[]; sourceTruncated: boolean }> {
+): Promise<{
+  items: Record<string, unknown>[];
+  sourceTruncated: boolean;
+  terminal: AgentInputSessionReferenceTerminal | undefined;
+}> {
   const items: Record<string, unknown>[] = [];
   let sourceTruncated = false;
+  // 被控端把 terminal 与页面在同一 handler 调用内算好,只有第一页的标记
+  // 与本次快照同源;后续翻页捎带的标记忽略。
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   while (true) {
     const response = await invokeRemote(ref.deviceId!, DL_HISTORY_MESSAGES_CHANNEL, [
@@ -521,6 +560,10 @@ async function readRemoteHistory(
     ]);
     if (response.ok !== true) remoteFailure(ref, response);
     const page = parseRemoteHistoryPage(ref, response.result);
+    if (firstPage) {
+      terminal = page.terminal;
+      firstPage = false;
+    }
     items.push(...page.items);
     sourceTruncated ||= remoteRowsWereTrimmed(page.items);
     const visibleCount = items.reduce((count, row) => count + (toReferenceMessage(row) ? 1 : 0), 0);
@@ -539,6 +582,7 @@ async function readRemoteHistory(
   return {
     items,
     sourceTruncated: sourceTruncated || (limit === 0 && items.length > 0),
+    terminal,
   };
 }
 
@@ -569,9 +613,13 @@ async function resolveRemote(
   let mapped: AgentInputSessionReferenceMessage[];
   let anchorIndex: number | undefined;
   let sourceTruncated = false;
+  // 终态标记由被控端与首个历史页在同一 handler 调用内算好(见
+  // readRemoteHistory),与消息快照天然同源;锚点路径不带终态(与本地一致)。
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
   try {
     if (!ref.messageClientId) {
       const page = await readRemoteHistory(ref, messageLimit, 'desc', clearedAt);
+      terminal = page.terminal;
       const visibleRows = page.items
         .map(toReferenceMessage)
         .filter((row): row is AgentInputSessionReferenceMessage => row !== null)
@@ -657,6 +705,7 @@ async function resolveRemote(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };

@@ -153,7 +153,8 @@
       "blocked": "Pending",
       "complete": "Completed",
       "budgetLimited": "Limit reached",
-      "usageLimited": "Usage limited"
+      "usageLimited": "Usage limited",
+      "capacityLimited": "Model service busy"
     },
     "goalLabel": "Goal",
     "goalObjectiveAccessibility": "Goal content",
@@ -165,6 +166,7 @@
     "noProgressLimit": "No-progress limit",
     "startGoal": "Start goal",
     "goalMeta": "{{turns}} turns · {{tokens}} tokens",
+    "goalCapacityHint": "The upstream has no capacity right now — retrying automatically",
     "pause": "Pause",
     "resume": "Resume",
     "clearGoal": "Stop goal",

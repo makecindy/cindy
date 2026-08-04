@@ -5,7 +5,7 @@
  * 静默改写；非 thread 渠道通过 `/new` 显式应用。
  */
 
-import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import { connectedProvidersForAgent, getModel, isAgentSelectableModel } from '@cindy/model-providers';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -118,7 +118,15 @@ export function ImDefaultSettingsSection({
       const provider = connectedProvidersForAgent(providers, agentKind).find(
         (p) => p.id === providerId,
       );
-      return provider && providerOffersModel(provider, modelId, agentKind) ? providerId : null;
+      if (!provider) return null;
+      // 只看 id 是否存在不够(issue #882 第 3 点,2026-07 review 第 18 轮):该来源这份
+      // 具体条目若是非聊天类型,不能落成 IM 渠道的显式默认来源,否则渠道发消息会打进
+      // image/audio/embedding 端点。
+      const catalogModel = getModel(provider, modelId, agentKind);
+      return catalogModel &&
+        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        ? providerId
+        : null;
     },
     [providers],
   );

@@ -726,6 +726,13 @@ export interface AndroidMcpDeps {
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /**
+   * SSH remote 会话的 host id (本地会话缺省)。workingDir 此时是远端机器上的
+   * 路径字符串 — cindy_memory 等按 workdir 分区的工具必须用
+   * buildMemoryScopeKey(workingDir, remoteHostId) 定位 store, 不得把远端路径
+   * 直接当本地键 (会与本地同名路径互串)。
+   */
+  remoteHostId?: string;
   vendorOptions?: Record<string, unknown>;
   /**
    * Business 层 session id (host 在 createSession 时通过 opts.id 注入, maker-core

@@ -49,6 +49,10 @@ import {
   GHOST_CINDY_MAX_ASYNC_JOBS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
+  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+  GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
+  GHOST_ONESHOT_TEXT_MAX_TOKENS,
+  GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
   GHOST_VIDEO_RATIOS,
@@ -183,6 +187,23 @@ export interface CindySlotDeps {
   depositUsageBytes?(ghostId: string): Promise<number>;
   /** 撤回该意识对某指纹的寄存引用;返回是否真的删掉了行(false = 本就没有)。 */
   releaseDeposit?(params: { ghostId: string; hash: string }): Promise<boolean>;
+  /**
+   * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
+   * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
+   * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
+   * 不注入 = 能力在运行期不可用,资格审通过也回结构化拒绝(未接线的
+   * 宿主/测试环境天然 fail closed)。
+   */
+  oneshotText?(params: {
+    prompt: string;
+    maxTokens: number;
+    timeoutMs: number;
+    /** 用户在插件详情页把 text.oneshot 钉到的轻量档位(供应商×模型);没钉 = 跟随默认链。 */
+    pinnedProfileId?: string;
+  }): Promise<
+    | { ok: true; text: string; model?: string }
+    | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
+  >;
   /**
    * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
    * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
@@ -329,6 +350,16 @@ function describeUnsupportedVideoParams(
   return null;
 }
 
+/**
+ * 剥掉模型习惯性包裹的 ``` 围栏(仅整体包裹的情况;正文中途出现的围栏
+ * 不动)。expectJson 校验前的确定性清洗,导出供单测直测(规则 14)。
+ */
+export function stripJsonFences(text: string): string {
+  const trimmed = text.trim();
+  const m = /^```[a-zA-Z]*\r?\n([\s\S]*?)\r?\n?```$/.exec(trimmed);
+  return m ? m[1].trim() : trimmed;
+}
+
 export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
@@ -388,13 +419,27 @@ export class GhostCindySlot {
         return { ok: false, message: `${verb}失败:${message}` };
       }
     }
+    // 快问快答(text.oneshot):不经媒体生成链、不选型、秒级同步——单独
+    // 分支,自带兜底 catch("永不 reject"同纪律)。
+    if (p?.kind === 'oneshot_text') {
+      try {
+        return await this.handleOneshotText(ghostId, payload);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn('ghost cindy-request oneshot_text unexpected failure', {
+          ghostId,
+          error: message,
+        });
+        return { ok: false, message: `快问快答失败:${message}`, errorCode: 'INTERNAL' };
+      }
+    }
     const info = typeof p?.kind === 'string' ? KIND_INFO[p.kind] : undefined;
     if (!info) {
       return {
         ok: false,
         message:
           `未知的代办类型(当前支持 ${Object.keys(KIND_INFO).join(' / ')} / ` +
-          'deposit_media / release_media / query_job)',
+          'deposit_media / release_media / oneshot_text / query_job)',
       };
     }
     const kind = p.kind as string;
@@ -524,7 +569,12 @@ export class GhostCindySlot {
     }
     if (p.model !== undefined) {
       if (typeof p.model !== 'string' || !whitelist.has(p.model)) {
-        return { ok: false, message: '不支持的模型(不在主机白名单内)' };
+        // 拒绝话术带上当前可用清单:插件侧不再维护模型枚举(白名单单源执法,
+        // 2026-07),AI 点名失败时靠这份清单自愈,不用猜主机认哪些 id。
+        return {
+          ok: false,
+          message: `不支持的模型(不在主机白名单内)。当前可用:${cfg.models.length > 0 ? cfg.models.map((m) => m.id).join(' / ') : '(暂无可用型号)'}`,
+        };
       }
       model = p.model;
     }
@@ -790,6 +840,140 @@ export class GhostCindySlot {
       };
     }
     return null;
+  }
+
+  /**
+   * oneshot_text:快问快答(2026-07-31 开闸)。轻量任务模型链直答一次,
+   * 文字随本次 invoke 递回;不选型(链由用户在主机侧配置)、不产媒体、
+   * 不进任何会话。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
+   * 在途并发闸与媒体代办共用同一计数与用户上限——它们花的都是用户的额度。
+   */
+  private async handleOneshotText(
+    ghostId: string,
+    payload: unknown,
+  ): Promise<GhostPipeModelResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return { ok: false, message: '意识不在可用状态', errorCode: 'PERMISSION_DENIED' };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return {
+        ok: false,
+        message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+    const declared: readonly string[] = ghost.manifest.cindy?.text ?? [];
+    if (!declared.includes('oneshot')) {
+      return {
+        ok: false,
+        message:
+          '本意识未声明文本「快问快答」能力(身份卡 cindy.text 缺 "oneshot"),请意识作者更新声明',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+    const p = payload as {
+      prompt?: unknown;
+      expectJson?: unknown;
+      maxTokens?: unknown;
+      callId?: unknown;
+    };
+    if (typeof p.prompt !== 'string' || p.prompt.trim().length === 0) {
+      return { ok: false, message: 'prompt 不能为空', errorCode: 'INVALID_PARAMS' };
+    }
+    if (p.prompt.length > GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS) {
+      return {
+        ok: false,
+        message: `prompt 过长(上限 ${GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS} 字符)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (p.expectJson !== undefined && typeof p.expectJson !== 'boolean') {
+      return { ok: false, message: 'expectJson 必须是布尔值(或不传)', errorCode: 'INVALID_PARAMS' };
+    }
+    if (p.maxTokens !== undefined && !isPositiveIntWithin(p.maxTokens, GHOST_ONESHOT_TEXT_MAX_TOKENS)) {
+      return {
+        ok: false,
+        message: `maxTokens 不合法(1–${GHOST_ONESHOT_TEXT_MAX_TOKENS} 的整数,或不传)`,
+        errorCode: 'INVALID_PARAMS',
+      };
+    }
+    if (
+      p.callId !== undefined &&
+      (typeof p.callId !== 'string' || p.callId.length === 0 || p.callId.length > MAX_CALL_ID_LEN)
+    ) {
+      return { ok: false, message: 'callId 不合法(1–128 字符的字符串,或不传)', errorCode: 'INVALID_PARAMS' };
+    }
+    const callId = (p.callId as string | undefined) ?? 'unattributed';
+    const oneshot = this.deps.oneshotText;
+    if (!oneshot) {
+      return { ok: false, message: '主机当前不支持快问快答(能力未接线)', errorCode: 'INTERNAL' };
+    }
+
+    const inflight = this.inflight.get(ghostId) ?? 0;
+    const inflightLimit = this.deps.getInflightLimit?.(ghostId) ?? null;
+    if (inflightLimit !== null && inflight >= inflightLimit) {
+      return {
+        ok: false,
+        message: `同时进行的代办已达上限(${inflightLimit} 单),请稍后再试`,
+        errorCode: 'RATE_LIMITED',
+      };
+    }
+    this.inflight.set(ghostId, inflight + 1);
+    try {
+      this.deps.log?.info('ghost cindy-request oneshot_text start', { ghostId, callId });
+      const expectJson = p.expectJson === true;
+      // JSON 期望用确定性代码拼进 prompt(不甩给链路侧自由发挥),校验也在
+      // 本层做——链只负责"问一句答一句"。
+      const prompt = expectJson
+        ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
+        : p.prompt;
+      // 选型仍不在意识手里,但用户可以在插件详情页把这项能力钉到某个轻量档位
+      // (与 image.*/video.* 的"钉后端"同一张覆盖表、同一条 IPC)。
+      const pinnedProfileId = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      const outcome = await oneshot({
+        prompt,
+        maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+        timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
+        pinnedProfileId,
+      });
+      if (!outcome.ok) {
+        const errorCode =
+          outcome.reason === 'no_candidate'
+            ? 'NO_CANDIDATE'
+            : outcome.reason === 'timeout'
+              ? 'TIMEOUT'
+              : 'INTERNAL';
+        this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
+          ghostId,
+          callId,
+          reason: outcome.reason,
+        });
+        return { ok: false, message: outcome.message, errorCode };
+      }
+      let text = outcome.text;
+      if (expectJson) {
+        const cleaned = stripJsonFences(text);
+        try {
+          JSON.parse(cleaned);
+          text = cleaned;
+        } catch {
+          return {
+            ok: false,
+            errorCode: 'BAD_MODEL_OUTPUT',
+            message: `模型未按 JSON 输出(原始输出开头:${text.slice(0, 200)})`,
+          };
+        }
+      }
+      this.deps.log?.info('ghost cindy-request oneshot_text done', {
+        ghostId,
+        callId,
+        chars: text.length,
+      });
+      return { ok: true, text, ...(outcome.model !== undefined ? { model: outcome.model } : {}) };
+    } finally {
+      this.releaseInflight(ghostId);
+    }
   }
 
   /**

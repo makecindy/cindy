@@ -1336,6 +1336,58 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('projects the overload auto-retry marker as an overload attempt', () => {
+    // 上游过载退避与传输层重连共用同一个 attempt 字段, 但必须能分辨: 不认
+    // `(auto-retry N/M)` 的话, 整个退避窗口(最长约 30s)手机端只显示笼统的「思考中」
+    // (review #844 codex P1)。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message:
+            'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 2,
+      maxAttempts: 4,
+      kind: 'overload',
+    });
+
+    // Claude 侧的 529 走同一后缀。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message: 'SDK API request failed: overloaded (HTTP 529) (auto-retry 3/10)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 3,
+      maxAttempts: 10,
+      kind: 'overload',
+    });
+
+    // 重连仍是老形状(不带 kind), 既有投影与用例不受影响。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 1/5', willRetry: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 1,
+      maxAttempts: 5,
+    });
+  });
+
   it('tracks session running state from maker event push boundaries', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));

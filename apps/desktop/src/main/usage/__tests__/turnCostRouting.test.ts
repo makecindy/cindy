@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  __resetActiveLedgerCurrencyForTesting,
+  setActiveLedgerCurrency,
+} from '../ledgerCurrency';
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import { resolveClaudeTurnCostSinks } from '../turnCostCalculator';
 import type {
@@ -77,24 +81,29 @@ describe('turn cost routing regression', () => {
   });
 
   it('provider API USD cost converts at 6.7 only when entering the CN ledger', () => {
-    const result = resolveClaudeTurnCostSinks(
-      [
-        delta({ model: 'claude-opus-4-8', costUsdDelta: 1.5 }),
-        delta({ model: 'mystery-model', costUsdDelta: 2 }),
-      ],
-      null,
-      {
-        providerId: 'anthropic',
-        billingRoute: 'provider-api',
-        region: 'cn',
-      },
-    );
+    try {
+      setActiveLedgerCurrency('CNY');
+      const result = resolveClaudeTurnCostSinks(
+        [
+          delta({ model: 'claude-opus-4-8', costUsdDelta: 1.5 }),
+          delta({ model: 'mystery-model', costUsdDelta: 2 }),
+        ],
+        null,
+        {
+          providerId: 'anthropic',
+          billingRoute: 'provider-api',
+          region: 'cn',
+        },
+      );
 
-    expect(result.turnMoney).toMatchObject({
-      currency: 'CNY',
-      approximate: false,
-    });
-    expect(result.turnMoney?.amount).toBeCloseTo(23.45);
-    expect(result.perModel.map((item) => item.source)).toEqual(['sdk', 'sdk']);
+      expect(result.turnMoney).toMatchObject({
+        currency: 'CNY',
+        approximate: false,
+      });
+      expect(result.turnMoney?.amount).toBeCloseTo(23.45);
+      expect(result.perModel.map((item) => item.source)).toEqual(['sdk', 'sdk']);
+    } finally {
+      __resetActiveLedgerCurrencyForTesting();
+    }
   });
 });

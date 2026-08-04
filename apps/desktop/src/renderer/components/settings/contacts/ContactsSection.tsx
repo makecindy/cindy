@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { BookUser, Sparkles } from 'lucide-react';
+import { BookUser, Mail, MessageCircle, Users } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
 import { contactsService, contactsErrorI18nKey, type ContactsStats } from '@/lib/contactsService';
 import { ContactsManagerDialog } from './ContactsManagerDialog';
+import { ContactsImportDialog } from './ContactsImportDialog';
 import { prefillContactsAiSessionDraft } from './startContactsAiSession';
 
 const log = createLogger('ContactsSection');
@@ -30,6 +31,7 @@ export function ContactsSection() {
   const [togglePending, setTogglePending] = useState(false);
   const [stats, setStats] = useState<ContactsStats | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const reloadStats = useCallback(async () => {
     try {
@@ -83,6 +85,16 @@ export function ContactsSection() {
     setManagerOpen(false);
     navigate('/cc-agent/new');
   }, [navigate, t]);
+
+  /** 按来源预填"从邮件/IM 建库"草稿 — 与 startAiSession 同机制, 只是 prompt 不同 */
+  const startSourceSession = useCallback(
+    (promptKey: 'settings.contacts.guide.mailPrompt' | 'settings.contacts.guide.imPrompt') => {
+      prefillContactsAiSessionDraft(t(promptKey));
+      setManagerOpen(false);
+      navigate('/cc-agent/new');
+    },
+    [navigate, t],
+  );
 
   const statsLine =
     stats && (stats.people > 0 || stats.orgs > 0 || stats.groups > 0)
@@ -158,30 +170,62 @@ export function ContactsSection() {
         </div>
       </div>
 
-      {/* 首次引导: 开启后库还是空的 → 引导用户发起第一个"让 AI 整理"会话 */}
+      {/* 首次引导: 开启后库还是空的 → 三源起步(邮件 / IM 走预填草稿的 AI 会话,
+          系统通讯录/vCard 走既有导入弹窗), 让用户第一天就有一个非空的库 */}
       {enabled && stats && stats.people + stats.orgs === 0 && (
         <div
           className={cn(
-            'flex items-center justify-between gap-3 rounded-xl px-4 py-3',
+            'flex flex-col gap-2.5 rounded-xl px-4 py-3',
             'bg-[var(--settings-input-bg)]',
           )}
         >
           <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
             {t('settings.contacts.guide.hint')}
           </p>
-          <button
-            type="button"
-            onClick={startAiSession}
-            className={cn(
-              'flex h-[30px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-13 font-medium transition-colors',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
-            )}
-          >
-            <Sparkles size={13} />
-            {t('settings.contacts.guide.cta')}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => startSourceSession('settings.contacts.guide.mailPrompt')}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
+                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
+              )}
+            >
+              <Mail size={13} />
+              {t('settings.contacts.guide.sources.mail')}
+            </button>
+            <button
+              type="button"
+              onClick={() => startSourceSession('settings.contacts.guide.imPrompt')}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full px-6 py-2.5 text-13 transition-colors active:scale-[0.98]',
+                'text-[var(--settings-section-title)] bg-[var(--settings-theme-card-bg)]',
+                'border border-[var(--settings-theme-card-border)]',
+                'hover:bg-[var(--settings-menu-bg-hover)]',
+              )}
+            >
+              <MessageCircle size={13} />
+              {t('settings.contacts.guide.sources.im')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full px-6 py-2.5 text-13 transition-colors active:scale-[0.98]',
+                'text-[var(--settings-section-title)] bg-[var(--settings-theme-card-bg)]',
+                'border border-[var(--settings-theme-card-border)]',
+                'hover:bg-[var(--settings-menu-bg-hover)]',
+              )}
+            >
+              <Users size={13} />
+              {t('settings.contacts.guide.sources.import')}
+            </button>
+          </div>
         </div>
       )}
+
+      {/* 空库引导里的"导入"直达导入弹窗(与管理浮层里的入口同一组件, 状态各自独立) */}
+      <ContactsImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
       {/* "让 AI 整理"引导只在开关开启时提供 — 关着时 cindy_contacts MCP 未注册,
           引导出的会话拿不到工具, 空跑误导用户 */}

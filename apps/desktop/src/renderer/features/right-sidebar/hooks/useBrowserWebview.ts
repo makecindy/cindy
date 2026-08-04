@@ -55,6 +55,12 @@ function isSameNavigationUrl(a: string, b: string): boolean {
 export interface UseBrowserWebviewResult {
   /** webview 外层 wrapper DOM;caller appendChild 到自己的 body slot。 */
   wrapper: HTMLDivElement | null;
+  /**
+   * 当前 Pool entry 的 WebView 代际句柄。隐藏但仍由 Pool 保活时保持非空；
+   * entry 被淘汰 / 释放时变 null，重建后变为新的对象。依赖 guest 事件或
+   * 通信的功能必须以它为 effect dependency，不能只按 tabId 绑定。
+   */
+  webview: WebviewTag | null;
   /** 当前页面 URL(`did-navigate` / `did-navigate-in-page` 同步)。 */
   url: string;
   /** 当前页面 title(`page-title-updated`)。 */
@@ -285,6 +291,19 @@ export function useBrowserWebview(
         // the hook on a webContentsId we can't get.
       }
     };
+    // did-attach 早期上报:dom-ready 之前页面 head 同步脚本就可能 window.open(),
+    // 那时 registry 若还没本 tab 的记录,popup 的 opener 反查落空、归属丢失。
+    // did-attach 在导航提交前触发且 getWebContentsId 已可取,提早送映射进 main。
+    // report 幂等,与 dom-ready 的兜底上报共存。
+    const onDidAttach = () => {
+      if (!sessionId) return;
+      try {
+        const webContentsId = entry.webview.getWebContentsId();
+        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+      } catch {
+        /* attach in-flight —— dom-ready 兜底。 */
+      }
+    };
     // did-fail-load:404 / 网络错误 / SSL 错误,Electron 不会自动停 loading 态;
     // 显式翻 isLoading=false,UI 才能从"加载中"复位。errorCode -3 = ABORTED。
     // 如果 ABORTED 发生在还没收到真实导航事件时,要把 URL 从乐观 target
@@ -356,6 +375,7 @@ export function useBrowserWebview(
     entry.webview.addEventListener('did-redirect-navigation', onRedirect);
     entry.webview.addEventListener('did-start-loading', onStartLoading);
     entry.webview.addEventListener('did-stop-loading', onStopLoading);
+    entry.webview.addEventListener('did-attach', onDidAttach);
     entry.webview.addEventListener('dom-ready', onDomReady);
     entry.webview.addEventListener('did-fail-load', onFailLoad);
     entry.webview.addEventListener('audio-state-changed', onAudioState);
@@ -396,6 +416,7 @@ export function useBrowserWebview(
       entry.webview.removeEventListener('did-redirect-navigation', onRedirect);
       entry.webview.removeEventListener('did-start-loading', onStartLoading);
       entry.webview.removeEventListener('did-stop-loading', onStopLoading);
+      entry.webview.removeEventListener('did-attach', onDidAttach);
       entry.webview.removeEventListener('dom-ready', onDomReady);
       entry.webview.removeEventListener('did-fail-load', onFailLoad);
       entry.webview.removeEventListener('audio-state-changed', onAudioState);
@@ -485,11 +506,14 @@ export function useBrowserWebview(
     }
   }, []);
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
+  const currentEntry = browserWebviewPool.peek(tabId);
+  const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
 
   return {
     // 隐藏时仍观察已有 entry 的 guest 生命周期，但不把 wrapper 交给 caller，
     // 避免隐藏 Body 把它移出停车区并触发首次导航。
     wrapper: visible === true ? wrapper : null,
+    webview: currentWebview,
     url,
     title,
     favicon,

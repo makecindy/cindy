@@ -43,7 +43,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
-import { androidDeviceLabel, androidStatusFallback, describeAndroidDeviceStatus } from './androidStatusPresentation';
+import {
+  androidDeviceLabel,
+  androidStatusFallback,
+  describeAndroidDeviceStatus,
+  getAndroidConnectionGuideKind,
+} from './androidStatusPresentation';
 import {
   getComputerPermissionSwitchChecked,
   isComputerPermissionPreflightInconclusive,
@@ -1135,6 +1140,7 @@ export function ComputerUseSection({
     && !androidDevices.some((device) => device.device_serial === configuredDefaultAndroidDevice),
   );
   const androidDeviceStatusText = describeAndroidDeviceStatus(androidStatus, t);
+  const androidConnectionGuideKind = getAndroidConnectionGuideKind(androidStatus);
   const androidAdbSource = androidStatus?.adb_path_source ?? androidStatus?.adb_preparation?.source ?? null;
   const androidAdbSourceText = androidPreparePending
     ? t('settings.computerUse.android.adb.preparing')
@@ -1635,6 +1641,41 @@ export function ComputerUseSection({
             </button>
           </div>
         </div>
+        {androidConnectionGuideKind ? (
+          <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-3">
+            <div className="rounded-xl bg-[var(--settings-input-bg)] px-3 py-3">
+              <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
+                {t(
+                  `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.title`,
+                )}
+              </p>
+              {androidConnectionGuideKind === 'connect' ? (
+                <>
+                  <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    {t(
+                      'settings.computerUse.android.connectionGuide.connect.adbNote',
+                    )}
+                  </p>
+                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    {[1, 2, 3, 4].map((step) => (
+                      <li key={step}>
+                        {t(
+                          `settings.computerUse.android.connectionGuide.connect.step${step}`,
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              ) : (
+                <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                  {t(
+                    `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.body`,
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
           <div className="flex min-w-0 flex-col gap-1">
             <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">

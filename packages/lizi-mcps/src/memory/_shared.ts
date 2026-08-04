@@ -13,7 +13,7 @@
  * thread 的真实 workingDir。
  */
 
-import type { MakerMemoryStore } from '@cindy/maker-core';
+import { buildMemoryScopeKey, type MakerMemoryStore } from '@cindy/maker-core';
 
 import type { MemoryToolResult } from '../cindy_memoryToolRegistry.js';
 import type { MemoryMcpDeps } from '../types.js';
@@ -43,8 +43,11 @@ export async function withStore(
         true,
       );
     }
-    const workdir = deps.getSessionContext?.().workingDir ?? deps.workdir;
-    store = await manager.getStore(workdir);
+    const ctx = deps.getSessionContext?.();
+    const workdir = ctx?.workingDir ?? deps.workdir;
+    // SSH remote 会话 (ctx 带 remoteHostId) 的 workdir 是远端路径 — 经 scope
+    // key 定位, 与 agent 启动注入 (claude-code/codex index.ts) 同一键规则。
+    store = await manager.getStore(buildMemoryScopeKey(workdir, ctx?.remoteHostId));
   } catch (err) {
     const { code, message } = classifyMemoryError(err);
     return buildJsonResult({ ok: false, code, message }, true);

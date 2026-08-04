@@ -7,7 +7,9 @@
  * BUNDLED_CATALOG 派生每个 agent 的模型列表，经 capabilityAdditions 注入。
  *
  * union 规则：跳过 `routing[agent].disabled` 的 runtime，再按 `catalog.providers` 数组序
- * flatMap 各 provider 的 `models[agent]`，按 id **首见胜出**去重（provider 序即
+ * flatMap 各 provider 的 `models[agent]`，跳过非聊天模型(isAgentSelectableModel,issue #882 第 3 点:
+ * 网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent availableModels,但仍在
+ * 模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id **首见胜出**去重（provider 序即
  * anthropic → openai → xd）。禁用来源不占 seen，同 id 仍可由后续可用来源补上。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
@@ -15,7 +17,7 @@
  * 由 maker-host 的 catalogDerivedModels.test.ts 守。
  */
 
-import type { Catalog, CatalogModel, AgentKind } from '@cindy/model-providers';
+import { isAgentSelectableModel, type Catalog, type CatalogModel, type AgentKind } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
@@ -32,11 +34,19 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
     efforts: m.efforts,
     defaultEffort: m.defaultEffort,
   };
+  // 刻意**不**透传 contextWindowVerified:availableModels 是跨 provider 去重后的扁平表,
+  // provider 归属已丢,按 id 回查可能命中另一条路由的元数据。窗口能否作为上限必须按会话
+  // 实际路由解析 —— 见下方 resolveVerifiedContextWindow(provenance 只活在 host 侧,
+  // 不进这份跨端 descriptor)。
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
+  if (m.mode !== undefined) d.mode = m.mode;
+  // 默认可见性要透传：渲染层的种子默认模型取「排序第一**且默认可见**」的那个，没有它就会
+  // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
+  if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
   return d;
 }
 
@@ -48,11 +58,50 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
     if (provider.routing[agent]?.disabled === true) continue;
     for (const m of provider.models[agent] ?? []) {
       if (seen.has(m.id)) continue;
+      // provider-aware 谓词:合并目录里 source:'user' 的自定义供应商显式配置的模型带
+      // 未知 group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第
+      // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
+      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
       seen.add(m.id);
       out.push(toDescriptor(m));
     }
   }
   return out;
+}
+
+/**
+ * 解析某条**具体路由**上该模型已核实的上下文窗口上限；没有则返回 null。
+ *
+ * 为什么不能按 id 查 `availableModels`：那是跨 provider union + 首见去重的扁平表，同一
+ * model id 可以由多个 provider 提供（订阅直连发现的 `gpt-5.6-sol` 注入 `openai`、网关下发
+ * 的同 id 落在 `xd`；自定义 provider 也可能与内置重名），去重后 provider 归属就丢了。用错
+ * 路由的上限去收敛运行期上报值，比不收敛更糟。
+ *
+ * 所以收敛的取值交给 host —— 只有它同时持有完整目录与 provider 维度：
+ * - 给了 `providerId`（会话实际路由）→ 只认该 provider 的条目。
+ * - 没给（默认路由 / 解析不出）→ 要求全目录对该 id **无歧义**：恰好一个候选才用它。
+ * - 候选未标记 `contextWindowVerified` → null（那是派生兜底值，只够展示，见该字段注释）。
+ *
+ * 返回 null 一律意味着「不收敛」，也就是改动前的行为（fail-safe）。
+ */
+export function resolveVerifiedContextWindow(
+  catalog: Catalog,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  const candidates: CatalogModel[] = [];
+  for (const provider of catalog.providers) {
+    if (provider.routing[agent]?.disabled === true) continue;
+    if (providerId && provider.id !== providerId) continue;
+    for (const m of provider.models[agent] ?? []) {
+      if (m.id === modelId) candidates.push(m);
+    }
+  }
+  if (candidates.length !== 1) return null;
+  const only = candidates[0];
+  if (only.contextWindowVerified !== true) return null;
+  return only.contextWindow > 0 ? only.contextWindow : null;
 }
 
 /**

@@ -11,22 +11,22 @@ import os from 'node:os';
 import { app } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getCurrentMembershipDisplayName } from '../authManager';
-import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
-import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
-import { ghostSecretSaved } from '../secrets/providerSecretStore';
+import { createLogger } from '../logger.js';
 import { serverApiFetch } from '../serverApiClient';
 import { getClientEndpoint } from '../clientEndpointsService';
 import type { IssueConfirmBridge } from './issueConfirmBridge';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { buildGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import {
   submitGithubIssueWithConfirm,
   type GithubIssueSubmitResult,
   type SubmitIssueRequest,
 } from './githubIssueSubmitService';
+import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
+import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
-  CINDY_GITHUB_GHOST_ID,
-  CINDY_GITHUB_SECRET_KEY,
   postGithubIssueAsUser,
   resolveGithubIssueSubmissionIdentity,
   type GithubUserIssueSubmitterDeps,
@@ -34,6 +34,8 @@ import {
 
 export { IssueConfirmBridge } from './issueConfirmBridge';
 export type { IssueConfirmDecision } from './issueConfirmBridge';
+
+const log = createLogger('github-issue');
 
 let bridgeHolder: IssueConfirmBridge | null = null;
 
@@ -59,16 +61,10 @@ export async function submitGithubIssueForSession(
       message: 'Cindy 主进程 issue 提交服务尚未就绪,请告知用户稍等几秒后重试。',
     };
   }
-  const githubUserSubmitterDeps: GithubUserIssueSubmitterDeps = {
-    isGithubGhostEnabled: () =>
-      getGhostManager()
-        .list()
-        .some((ghost) => ghost.manifest.id === CINDY_GITHUB_GHOST_ID && ghost.enabled),
-    isGithubCredentialSaved: () => ghostSecretSaved(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY),
-    isGithubGhostDisabledForWorkdir: (workdir) =>
-      isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir),
-    callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
-  };
+  const githubUserSubmitterDeps: GithubUserIssueSubmitterDeps = buildGithubUserSubmitterDeps();
+  // 在**发起时**锁定账号作用域:提交要等用户确认 + 一次网络往返,期间完全可能切号。
+  // 记账时拿它核对,绝不把这条提交写进另一个账号的账本(见 recordSubmittedIssue)。
+  const submitScope = activeOwnerScopeKey();
   return submitGithubIssueWithConfirm(
     {
       confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
@@ -100,6 +96,23 @@ export async function submitGithubIssueForSession(
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),
       getSubmitterName: getCurrentMembershipDisplayName,
+      onSubmitted: (record) => {
+        try {
+          recordSubmittedIssue(record, submitScope);
+        } catch (err) {
+          // 账本只服务「我的 Issue」列表;写失败最多让这条不出现在列表里,
+          // 绝不能影响已经成功的提交。
+          log.warn('submitted issue ledger write failed', {
+            issueNumber: record.number,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } finally {
+          // **无论记账成功与否都要失效**:这两件事互相独立 —— 平台通道就绪时,列表
+          // 本来就能从服务端看到刚提交的那条,不该因为本机账本写失败而在 60s TTL 内
+          // 一直看不见。(放在同一个 try 里时,记账抛错会把它一起跳过。)
+          invalidateMyIssuesCache();
+        }
+      },
     },
     req,
   );

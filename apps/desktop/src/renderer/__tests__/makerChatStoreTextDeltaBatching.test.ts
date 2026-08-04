@@ -2640,7 +2640,7 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.at(-1)?.errorDismissed).not.toBe(true);
   });
 
-  it('forces DB-hydrated SSH UI triggers off controller-local Maker Memory', async () => {
+  it('keeps DB-hydrated SSH UI triggers on the controller-global Maker Memory setting', async () => {
     vi.mocked(sessionService.get).mockResolvedValueOnce({
       agentKind: 'codex',
       remoteHostId: 'remote-host',
@@ -2663,7 +2663,10 @@ describe('makerChatStore text delta batching', () => {
       expect.objectContaining({
         createOpts: expect.objectContaining({
           remoteHostId: 'remote-host',
-          makerMemoryEnabled: false,
+          // SSH remote 与本地同语义:跟随控制端全局 Maker Memory 设置
+          // (默认开启), 不再被强制 false;scope 隔离由 maker-core 按
+          // remoteHostId+workingDir 处理。
+          makerMemoryEnabled: true,
         }),
       }),
       expect.any(Object),

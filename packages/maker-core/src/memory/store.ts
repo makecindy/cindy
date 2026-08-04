@@ -248,3 +248,4 @@ export class MakerMemoryStore {
 
 // 跟 storage helper 同步导出, 让 manager 不用各处 import
 export { sanitizeWorkdir, buildFilename, parseFilename };
+export { memoryScopeDirName } from './storage.js';

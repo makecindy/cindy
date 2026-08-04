@@ -23,7 +23,7 @@ import type {
   ModelAccessPromotionalGrantState,
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
-import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
+import { isAllowedBillingRedirectUrl, isAllowedStripeBillingPortalUrl } from './paymentRedirect.js';
 
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 128;
@@ -362,6 +362,13 @@ function projectPaymentAction(value: unknown): BillingPaymentAction | null {
     return { type: 'REDIRECT', url: value.url, expiresAt };
   }
   return null;
+}
+
+export function projectBillingPortalSession(value: unknown): { url: string } {
+  if (!isRecord(value)) invalidResponse();
+  const url = value.url;
+  if (!isAllowedStripeBillingPortalUrl(url)) invalidResponse();
+  return { url };
 }
 
 function projectPurchaseOption(

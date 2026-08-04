@@ -309,6 +309,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     // user 以保留 turn 边界(上一段被截断 turn 的工具行按历史收敛),align 'agent'
     // 让卡片走系统卡的左侧版式而不是右侧用户气泡。
     if (message.role === 'user' && message.agentMeta?.autoResume === true) {
+      const autoResumeInfo = readRecord(message.agentMeta.autoResumeInfo) ?? {};
+      const autoResumeOutcome = message.agentMeta.autoResumeOutcome;
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -317,7 +319,13 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         label: 'user',
         body: '',
         systemCardType: 'auto-resume',
-        systemCardData: {},
+        isSyntheticTrigger: true,
+        systemCardData: {
+          ...autoResumeInfo,
+          ...(autoResumeOutcome === 'succeeded' || autoResumeOutcome === 'failed'
+            ? { outcome: autoResumeOutcome }
+            : {}),
+        },
         align: 'agent',
         createdAt: message.createdAt,
       });

@@ -7,10 +7,9 @@
  *
  * 形如 { [ghostId]: { minimized, x?, y? } }:
  *  - minimized:面板是否收进气泡(LayoutRoot 据此隐藏停靠 pane,树不动);
- *  - x/y:气泡视口位置(左上角 px)。恢复面板时**保留**,重最小化回老位置;
- *    只在首次真实拖放后才写入——没拖过的气泡由气泡层按默认位停靠,
- *    窗口缩放自动重排。位置不在 store 里 clamp(渲染时按当前视口 clamp,
- *    大屏存的位置换小屏不被破坏性改写)。
+ *  - x/y:**遗留字段**(2026-07-31 起气泡层只画一枚幽灵球,子气泡由球锚定,
+ *    不再各记各的位置;幽灵球落点在气泡层自己的独立键)。历史写入保留不清,
+ *    sanitize 照旧容忍,setGhostPanelBubblePosition 留作 API 兼容。
  *
  * reconcile 语义对齐 main/ghost-panel-window controller:卸载删条目;停用/
  * 无 panel/tab 形态/身份卡关按钮 → 强制还原(留位置)——气泡永不成死角。

@@ -216,6 +216,16 @@ export const MAKER_INVOKE = {
    * Phase 2 会加一个 submit-to-GitHub 动作(同 PAT 配置 + 去重相同 open issue)。
    */
   HELP_FEEDBACK_CREATE: 'maker:help:feedback:create',
+  /**
+   * /issues 页面的「我的 Issue」列表。三路合并去重,主次不要记反:
+   * 平台通道(按 Cindy 登录态取「我提交过的 issue」,唯一给实时状态且跨设备的来源)
+   * + 本机提交账本(平台未就绪时的兜底)
+   * + 用户自己的 GitHub 身份(**可选增强**,没有时列表照常工作)。
+   *
+   * 查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
+   * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
+   */
+  MY_ISSUES_LIST: 'maker:issues:list-mine',
   WRITE_PLAN_FILE: 'maker:write-plan-file',
   // Rewind / Fork (Stage 2 C2) — 取代老 cc-agent:rewind:* + local-db:sessions:fork
   REWIND_PREVIEW: 'maker:rewind:preview',
@@ -522,6 +532,9 @@ export const MAKER_INVOKE = {
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
   COLLABORATION_SETTINGS_RESET: 'maker:collaboration-settings:reset',
+  AGENT_RESOURCE_SETTINGS_GET: 'maker:agent-resource-settings:get',
+  AGENT_RESOURCE_SETTINGS_SET: 'maker:agent-resource-settings:set',
+  AGENT_RESOURCE_SETTINGS_RESET: 'maker:agent-resource-settings:reset',
   // Plugin system (Phase 1)
   PLUGINS_LIST: 'maker:plugins:list',
   // Read one plugin's enable state by id — works for plugins hidden from

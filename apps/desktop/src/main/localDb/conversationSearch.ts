@@ -12,6 +12,7 @@ import type {
   ConversationSearchSortBy,
   ConversationSearchStatusFilter,
 } from '../../shared/conversationSearch.js';
+import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
@@ -89,7 +90,11 @@ export async function searchConversations(
 
   const titleMatches = sessionRows
     .map((row, index) => {
-      const match = fuzzyTitleMatch(row.title, query);
+      // 匹配与命中下标都按**界面上显示的**标题算:未起名会话行上显示的是本地化兜底
+      // 文案,拿原始哨兵匹配会两头错位 —— 搜可见文案一条都搜不到,搜 "New Maker" 反而
+      // 命中一堆不显示这个词的行,高亮下标也会落在别的字上(PR #1031 review P1)。
+      // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
+      const match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
       if (!match) return null;
       const session = sessionSummaries.get(row.id);
       if (!session) return null;

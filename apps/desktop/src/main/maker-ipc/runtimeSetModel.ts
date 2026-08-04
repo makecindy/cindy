@@ -20,7 +20,7 @@ interface RuntimeSetModelSession {
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   model: string;
-  setModel: (model: string) => Promise<void>;
+  setModel: (model: string, opts?: { providerId?: string | null }) => Promise<void>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -205,6 +205,9 @@ export async function applyRuntimeSetModelChange(
     // 与本次显式选择打架(review P1 2026-07-04 第三轮);先清让两条 apply 路径读到
     // undefined 提前返回,本分支随后同步写入新 route。wake:false —— 此刻唤醒会让
     // drain 趁下面 await close 的窗口把队首派发到旧会话/旧凭证上,唤醒挪到收尾。
+    // 记下清除前的值:后续失败(非 busy)时恢复,不让用户的待定选择随异常丢失
+    // (Greptile review #1035)。
+    const clearedPending = input.getPendingCredentialSwitch?.(sessionId);
     input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
     try {
       await prepareLocalSessionCredentialModeSwitch({
@@ -225,6 +228,10 @@ export async function applyRuntimeSetModelChange(
           agentKind: sess.agentKind,
         });
         return { status: 'deferred' };
+      }
+      // 非 busy 失败:恢复被清除的 pending,用户的待定来源选择不随异常丢失。
+      if (clearedPending && input.registerPendingCredentialSwitch) {
+        input.registerPendingCredentialSwitch(sessionId, clearedPending);
       }
       throw err;
     }
@@ -262,10 +269,16 @@ export async function applyRuntimeSetModelChange(
     return { status: 'applied' };
   }
   try {
-    await sess.setModel(model);
+    await sess.setModel(model, { providerId: nextProviderId });
   } catch (err) {
     if (providerId !== undefined) {
       setSessionProvider(sessionId, currentProviderId);
+    }
+    // 热切失败:仅 model-only 分支(pendingTarget)恢复 pending —— 显式选源
+    // (providerId !== undefined)时旧 pending 已被本次明确选择覆盖,恢复它会静默
+    // 撤销用户最后一次选择(Greptile review #1035 七轮)。
+    if (pendingTarget && input.registerPendingCredentialSwitch) {
+      input.registerPendingCredentialSwitch(sessionId, pendingTarget);
     }
     throw err;
   }

@@ -229,5 +229,8 @@ export interface GoalControllerDeps {
    * 持久化一条 goal 提示记录(注入 createMessage,role:'assistant' + agentMeta.goalNotice)。
    * 目前用于 usageLimited 到点自动续跑时落一条"用量已恢复,继续目标"。
    */
-  persistGoalNotice?: (sessionId: string, kind: 'usage-resumed') => Promise<void>;
+  persistGoalNotice?: (
+    sessionId: string,
+    kind: 'usage-resumed' | 'capacity-resumed',
+  ) => Promise<void>;
 }

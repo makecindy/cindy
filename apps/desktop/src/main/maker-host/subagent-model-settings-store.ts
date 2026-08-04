@@ -6,6 +6,8 @@
 
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
+  isCodexSubagentEffort,
+  normalizeCodexSubagentConcurrency,
   normalizeSubagentModelId,
   type SubagentModelSettings,
   type SubagentModelSettingsPatch,
@@ -38,6 +40,14 @@ function normalize(raw: unknown): SubagentModelSettings {
       claudeCode === null ? null : normalizeSubagentModelId(input.claudeCodeProviderId),
     codex,
     codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
+    // effort 不依附模型(effort-only 是合法上游配置,见 shared 契约注释)。
+    codexEffort: isCodexSubagentEffort(input.codexEffort) ? input.codexEffort : null,
+    // 垃圾值回退方向按语义定:总开关 fail-open(保能力),嵌套 fail-closed(少放权)。
+    codexSubagentsEnabled: input.codexSubagentsEnabled === false ? false : true,
+    codexMaxConcurrentSubagents: normalizeCodexSubagentConcurrency(
+      input.codexMaxConcurrentSubagents,
+    ),
+    codexAllowNestedSubagents: input.codexAllowNestedSubagents === true,
   };
 }
 
@@ -49,7 +59,13 @@ const store = createOverrideSettingsFile<SubagentModelSettings>({
   label: 'subagent model',
 });
 
-/** 每次新建 agent 会话时读取；外部手改设置文件也能在下一会话生效。 */
+/**
+ * 每次新建 agent 会话 / codex app-server spawn 时读取。外部手改设置文件的生效
+ * 时机按派发通道分:Claude 每会话独立 spawn,下一会话即生效;codex 共享
+ * app-server,手改值在**下一次 app-server spawn**(应用重启或任一触发重启的
+ * 设置变更)才进 `-c` 注入 —— 手改是逃生舱,不接文件监听换即时性;受支持的
+ * 即时应用入口是设置 UI(变更会走 DeferredCodexRestart)。
+ */
 export function readSubagentModelSettings(): SubagentModelSettings {
   store.invalidateIfChanged();
   return store.read();

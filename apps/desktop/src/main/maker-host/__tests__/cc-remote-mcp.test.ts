@@ -352,4 +352,76 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(servers).toEqual({});
     expect(ensureForward).not.toHaveBeenCalled();
   });
+
+  it('injects cindy_memory alongside collab servers when the session Maker Memory flag is on, with remoteHostId in ctx', async () => {
+    const { bridge, registered } = fakeBridge();
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/remote/repo', makerMemoryEnabled: true },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge', 'cindy_memory', 'cindy_ssh'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        synthesizeVendorOptions: async () => ({}),
+      },
+    );
+    expect(Object.keys(servers).sort()).toEqual(['cindy_memory', 'cindy_orca', 'orca_worker_bridge']);
+    expect(servers.cindy_memory).toEqual({
+      type: 'http',
+      url: 'http://127.0.0.1:47921/mcp/cindy_memory?session=s1',
+      headers: { Authorization: 'Bearer persistent-test-token' },
+    });
+    // ctx 必须带 remoteHostId — cindy_memory 据此把远端路径隔离到
+    // ssh:<hostId>:<path> 的独立 store。
+    expect(registered.get('s1')).toMatchObject({ remoteHostId: 'host-1', workingDir: '/remote/repo' });
+  });
+
+  it('injects only cindy_memory when collab is disabled but the session Maker Memory flag is on', async () => {
+    const { bridge } = fakeBridge();
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/remote/repo', makerMemoryEnabled: true },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge', 'cindy_memory'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => false,
+        synthesizeVendorOptions: async () => ({}),
+      },
+    );
+    expect(Object.keys(servers)).toEqual(['cindy_memory']);
+  });
+
+  it('memory flag flips change the generation fingerprint (server set is part of the generation)', async () => {
+    const { bridge } = fakeBridge();
+    const deps = {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: ['cindy_orca', 'orca_worker_bridge', 'cindy_memory'],
+        bridge,
+      }),
+      ensureForward: vi.fn(async () => 47921),
+      getBridgeToken: async () => 'persistent-test-token',
+      synthesizeVendorOptions: async () => ({}),
+    };
+    const withMemory = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/remote/repo', makerMemoryEnabled: true },
+      deps,
+    );
+    const withoutMemory = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/remote/repo' },
+      deps,
+    );
+    expect(withMemory.fingerprint).toBeDefined();
+    expect(withoutMemory.fingerprint).toBeDefined();
+    // 开关翻转 = 注入集合变化 = 新代际, attach 回旧集合的 alive query 必须
+    // 被判 drift 重建。
+    expect(withMemory.fingerprint).not.toBe(withoutMemory.fingerprint);
+  });
 });

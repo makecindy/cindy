@@ -102,7 +102,23 @@ export function checkModelRoute(
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
   if (!copyAgentSelectable(wouldRoute, modelId, agent)) {
-    return { kind: 'reject', reason: 'capability-model' };
+    // 原生默认落点是能力模型拷贝:与停用轴同构,先解析聊天可用的替代来源
+    // (effectiveSourceIdForModel 走 chat 准入 rail,已排除停用),有 ⇒ 显式改道;
+    // 无 ⇒ reject。不能直接 reject 了事:UI 的发送检查(chatEligibleSourcesForModel)
+    // 会因他源的聊天拷贝判定"能发",创建却被这里拒掉,两个口径打架;也不能 pass ——
+    // 实际路由层对隐式来源走原生默认,不查 mode,放行等于把请求发进 image/audio
+    // 端点(2026-07 review 第 26 轮)。显式点名非聊天拷贝仍 reject(上方):点名是
+    // 明确表达,不静默换源。
+    const chatAlternative = effectiveSourceIdForModel([...views], null, modelId, agent);
+    const chatAlternativeProvider = chatAlternative
+      ? views.find((p) => p.id === chatAlternative)
+      : undefined;
+    return chatAlternative &&
+      chatAlternativeProvider &&
+      copyAgentSelectable(chatAlternativeProvider, modelId, agent) &&
+      !copyDisabled(chatAlternativeProvider, modelId, agent)
+      ? { kind: 'reroute', providerId: chatAlternative }
+      : { kind: 'reject', reason: 'capability-model' };
   }
   if (!copyDisabled(wouldRoute, modelId, agent)) return { kind: 'pass' };
 

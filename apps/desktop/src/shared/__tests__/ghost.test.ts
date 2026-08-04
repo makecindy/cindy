@@ -709,7 +709,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent 详单必须与槽成对，且目前只接受 background: true', () => {
+  it('agent 详单必须与槽成对，且只接受 background / errand 两项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -735,6 +735,56 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         ...goodChipManifest(),
         slots: ['panel', 'agent'],
         agent: { background: true, command: 'hidden' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('agent.errand 派活加档:单列高风险权限,可与 background 并存(2026-07-31)', () => {
+    const errand = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { errand: true },
+    });
+    expect(errand.ok).toBe(true);
+    if (!errand.ok) return;
+    expect(errand.manifest.agent).toEqual({ errand: true });
+    expect(ghostPermissionItems(errand.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:errand',
+          kind: 'agent',
+          labelKey: 'agentErrand',
+          detailKey: 'agentErrandDetail',
+        }),
+      ]),
+    );
+
+    const both = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { background: true, errand: true },
+    });
+    expect(both.ok).toBe(true);
+    if (!both.ok) return;
+    expect(both.manifest.agent).toEqual({ background: true, errand: true });
+    expect(ghostPermissionItems(both.manifest).map((item) => item.key)).toEqual(
+      expect.arrayContaining(['agent:user-action', 'agent:background', 'agent:errand']),
+    );
+
+    // errand: false 与 background 双双非 true = 详单没意义,拒(应省略字段)。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: false },
+      }).ok,
+    ).toBe(false);
+    // errand 非布尔 → 拒。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: 'yes' },
       }).ok,
     ).toBe(false);
   });
@@ -1213,6 +1263,42 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       image: ['generate', 'edit'],
       video: ['edit'],
       media: ['deposit'],
+    });
+  });
+
+  // 2026-07-31 快问快答:text 类目独立落位(同 #784 的落位纪律),权限清单
+  // 单独成行(cindy:text.oneshot,带固定说明)。
+  it('text 类目落进 cindy.text,并生成 cindy:text.oneshot 权限行', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'] });
+    expect(v.manifest.cindy?.image).toBeUndefined();
+    expect(v.manifest.cindy?.video).toBeUndefined();
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          kind: 'cindy',
+          labelKey: 'cindyTextOneshot',
+          detailKey: 'cindyTextOneshotDetail',
+        }),
+      ]),
+    );
+  });
+
+  it('text 类目未知动作 / 空数组 → 拒;四类目可同时声明', () => {
+    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate'], video: ['edit'], media: ['deposit'], text: ['oneshot'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate'],
+      video: ['edit'],
+      media: ['deposit'],
+      text: ['oneshot'],
     });
   });
 });

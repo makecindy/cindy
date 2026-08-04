@@ -8,9 +8,11 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyDesktopStartupConfigForPhase,
+	commandUsesUserDataDir,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
+	partitionDesktopDevProcesses,
 	readDesktopStartupStatus,
 	parseWorktreePaths,
 	osascriptLaunchDarwinTerminalArgs,
@@ -83,6 +85,74 @@ test("desktop restart recognizes dev processes from sibling repository worktrees
 		pid: 43,
 		command: `node ${path.join(unrelatedRoot, "node_modules/@electron-forge/cli")} electron-forge start`,
 	}, worktrees, 999), false);
+});
+
+test("restart kill scope only targets the checkout that runs the script", () => {
+	const ownRoot = path.resolve("/repo/cindy-feature");
+	const otherRoot = path.resolve("/repo/cindy-pi-sandbox");
+	const processes = [
+		{ pid: 1, command: `node ${path.join(ownRoot, "node_modules/@electron-forge/cli")} start` },
+		{ pid: 2, command: `${path.join(otherRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+		{ pid: 3, command: `node ${path.join(ownRoot, "node_modules/electron/dist")} --app-path=${path.join(ownRoot, "apps/desktop")}` },
+	];
+
+	const { targets, preserved } = partitionDesktopDevProcesses(processes, ownRoot);
+	assert.deepEqual(targets.map((proc) => proc.pid), [1, 3]);
+	assert.deepEqual(preserved.map((proc) => proc.pid), [2]);
+});
+
+test("userData conflict detection matches exact sandbox dirs only", () => {
+	const helper =
+		"/repo/cindy-pi-sandbox/node_modules/electron/dist/Electron Helper (Renderer).app/Contents/MacOS/Electron Helper (Renderer) " +
+		"--type=renderer --user-data-dir=/Users/dev/Library/Application Support/Cindy-dev-pi-latest --standard-schemes=xdt-image";
+
+	// 精确同名沙箱命中(路径含空格,值后面跟空格+下一个 flag)。
+	assert.equal(
+		commandUsesUserDataDir(helper, "/Users/dev/Library/Application Support/Cindy-dev-pi-latest"),
+		true,
+	);
+	// 前缀同名不许误命中: Cindy-dev ≠ Cindy-dev-pi-latest, Cindy ≠ Cindy-dev-*。
+	assert.equal(
+		commandUsesUserDataDir(helper, "/Users/dev/Library/Application Support/Cindy-dev"),
+		false,
+	);
+	assert.equal(
+		commandUsesUserDataDir(helper, "/Users/dev/Library/Application Support/Cindy"),
+		false,
+	);
+	// 行尾结束与尾斜杠归一。
+	assert.equal(
+		commandUsesUserDataDir(
+			"electron --user-data-dir=/Users/dev/Library/Application Support/Cindy-dev-a",
+			"/Users/dev/Library/Application Support/Cindy-dev-a/",
+		),
+		true,
+	);
+	// 完全无关的命令行不命中。
+	assert.equal(
+		commandUsesUserDataDir("node scripts/dev.mjs", "/Users/dev/Library/Application Support/Cindy-dev"),
+		false,
+	);
+});
+
+test("desktop restart runner forwards user args (incl. --isolated) into the kill stage", () => {
+	const root = "/repo/cindy";
+	const steps = buildDesktopRestartSteps(
+		["--region=global", "--isolated=tgbot-review", "--wait-ready"],
+		root,
+	);
+	assert.deepEqual(steps[0].args, [
+		stepScript(root, "restart-desktop-remote.mjs"),
+		"--region=global",
+		"--isolated=tgbot-review",
+		"--kill-only",
+	]);
+	assert.deepEqual(steps[steps.length - 1].args, [
+		stepScript(root, "restart-desktop-remote.mjs"),
+		"--region=global",
+		"--isolated=tgbot-review",
+		"--wait-ready",
+	]);
 });
 
 test("desktop restart runner keeps the kill-before-deps order by default", () => {

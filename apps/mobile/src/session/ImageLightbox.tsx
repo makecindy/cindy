@@ -49,6 +49,7 @@ import {
   clampLightboxScale,
   clampLightboxTranslation,
   lightboxBackgroundOpacity,
+  lightboxImageLayers,
   lightboxInitialIndex,
   lightboxPageIndex,
   lightboxPageLabel,
@@ -69,8 +70,11 @@ import {
   type AnnotationStroke,
 } from '@/session/imageAnnotationModel';
 
+// 缩略图垫底**不**挂在取件态里:它要跨过 loading → ready 的边界继续垫住原图
+// 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
+// 结构性丢失,把第二段空档裸露成纯黑。垫底地址单独存 previewMap。
 type PageResolveState =
-  | { status: 'loading'; previewUri?: string }
+  | { status: 'loading' }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
   | { status: 'error' };
 
@@ -165,6 +169,11 @@ export const ImageLightbox = memo(function ImageLightbox({
   const [activeIndex, setActiveIndex] = useState(() => lightboxInitialIndex(urls, initialUrl));
   const [zoomed, setZoomed] = useState(false);
   const [resolveMap, setResolveMap] = useState<Record<string, PageResolveState>>({});
+  /**
+   * trimmed url → 列表缩略图地址(渐进出图的垫底层)。独立于 resolveMap:
+   * 一旦拿到就长期有效,取件态怎么流转都不丢,直到原图 onLoad 才停止使用。
+   */
+  const [previewMap, setPreviewMap] = useState<Record<string, string>>({});
   /** 下滑拖动量(当前活跃页写入),驱动背景与 chrome 渐隐。 */
   const dismissY = useSharedValue(0);
 
@@ -296,23 +305,22 @@ export const ImageLightbox = memo(function ImageLightbox({
       .catch(() => {
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'error' } }));
       });
-    // 原图取件期间先垫列表缩略图:首开不黑屏转圈,原图到达后由 ready 态整体替换
-    // (规则 7)。cachedOnly:只复用列表已取过的缩略图缓存,绝不触发新取件——对
-    // gif/老被控端,thumbnail 请求会回落成整张原图下载,装饰性垫底叠加原图主取件
-    // 就是双下载。forceRefresh 是坏对象自愈路径,不垫可能同源的旧缩略图;取不到
-    // 缩略图保持纯 spinner,不影响原图路径。
+    // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
+    // 原图 onLoad(见 lightboxImageLayers)。写入**不看取件态** —— 原图可能在同
+    // 一批微任务里就从内存/磁盘缓存返回,旧实现要求"当前必须是 loading"才写垫底,
+    // 这条竞态下垫底被直接丢弃,画面又退回纯黑。
+    // cachedOnly:只复用列表已取过的缩略图缓存,绝不触发新取件——对 gif/老被控端,
+    // thumbnail 请求会回落成整张原图下载,装饰性垫底叠加原图主取件就是双下载。
+    // forceRefresh 是坏对象自愈路径,不垫可能同源的旧缩略图;取不到缩略图退回
+    // spinner(lightboxImageLayers 兜底),不影响原图路径。
     if (!forceRefresh) {
       void onResolveRemoteMedia(
         { kind: media.kind, url: media.url, previewable: media.previewable, thumbnail: true },
         { front: false, cachedOnly: true },
       )
         .then((thumb) => {
-          if (!thumb.previewable) return;
-          setResolveMap((prev) => {
-            const state = prev[key];
-            if (!state || state.status !== 'loading' || state.previewUri) return prev;
-            return { ...prev, [key]: { status: 'loading', previewUri: thumb.url } };
-          });
+          if (!thumb.previewable || !thumb.url) return;
+          setPreviewMap((prev) => (prev[key] ? prev : { ...prev, [key]: thumb.url }));
         })
         .catch(() => undefined);
     }
@@ -354,6 +362,17 @@ export const ImageLightbox = memo(function ImageLightbox({
     if (state?.status === 'ready' && state.media.previewable) return state.media.url;
     return null;
   }, [resolveMap]);
+
+  /**
+   * 该页的垫底缩略图。与原图地址相同时返回 null:磁盘缓存命中会让缩略图与
+   * 原图落到同一个 file://(缩不动的图按裸键落盘),此时垫同一张图纯属多解码
+   * 一份,且原图本就秒出。
+   */
+  const previewUriFor = useCallback((image: MobileMessageGalleryImage): string | null => {
+    const preview = previewMap[image.url];
+    if (!preview) return null;
+    return preview === displayUriFor(image) ? null : preview;
+  }, [previewMap, displayUriFor]);
 
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: lightboxBackgroundOpacity(dismissY.value, height),
@@ -459,6 +478,7 @@ export const ImageLightbox = memo(function ImageLightbox({
               onRequestClose={onClose}
               onRetry={handleRetryPage}
               onZoomChange={setZoomed}
+              previewUri={previewUriFor(item)}
               resolveState={item.payload.media.previewable ? null : resolveMap[item.url] ?? null}
               uri={displayUriFor(item)}
               width={width}
@@ -669,6 +689,7 @@ const LightboxPage = memo(function LightboxPage({
   onRequestClose,
   onRetry,
   onZoomChange,
+  previewUri,
   resolveState,
   uri,
   width,
@@ -701,6 +722,8 @@ const LightboxPage = memo(function LightboxPage({
   onRequestClose(): void;
   onRetry(image: MobileMessageGalleryImage): void;
   onZoomChange(zoomed: boolean): void;
+  /** 列表缩略图(渐进出图的垫底层);无则退 spinner。见 lightboxImageLayers。 */
+  previewUri: string | null;
   resolveState: PageResolveState | null;
   uri: string | null;
   width: number;
@@ -714,6 +737,34 @@ const LightboxPage = memo(function LightboxPage({
   const savedTranslateY = useSharedValue(0);
   const dragY = useSharedValue(0);
   const [pageZoomed, setPageZoomed] = useState(false);
+  /**
+   * 已 onLoad 成功的原图地址。存地址而不是 boolean:换图 / 强制重取换 url 后
+   * 天然失效,不需要额外 effect 复位(漏复位就会让新图那段又回到纯黑)。
+   */
+  const [loadedUri, setLoadedUri] = useState<string | null>(null);
+  /**
+   * 已确认加载失败的垫底图地址(同样存地址,换图天然失效)。
+   * 缩略图的磁盘文件可能被 150MB LRU 或系统清理掉,而取件队列的内存缓存仍持有那个
+   * 永不过期的 file:// —— 光看 URI 存在会把"没有像素"当成"已经出图",于是 spinner
+   * 被藏掉、垫底层又画不出东西,整段退回纯黑(PR #1125 review)。
+   */
+  const [failedPreviewUri, setFailedPreviewUri] = useState<string | null>(null);
+  /**
+   * 已确证 onError 的原图地址(同样存地址,换图 / 重取换 url 天然失效)。
+   * 桌面取件图有 forceRefresh 自愈 + 重试按钮兜底,失败终态由父层的 resolveMap 接管;
+   * 直连 http 图两者都没有,必须在本页给失败终态,否则会永远转圈谎报"还在加载"。
+   */
+  const [failedFullUri, setFailedFullUri] = useState<string | null>(null);
+  const media = image.payload.media;
+  // 可重取 = 桌面取件图:失败有 forceRefresh 自愈与重试按钮。直连 http / data 图两者皆无。
+  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
+  const layers = lightboxImageLayers({
+    fullUri: uri,
+    previewUri,
+    fullLoaded: !!uri && loadedUri === uri,
+    previewFailed: !!previewUri && failedPreviewUri === previewUri,
+    fullFailedTerminally: !retryable && !!uri && failedFullUri === uri,
+  });
 
   const setZoomedBoth = useCallback((value: boolean) => {
     setPageZoomed(value);
@@ -842,8 +893,6 @@ const LightboxPage = memo(function LightboxPage({
     ],
   }));
 
-  const media = image.payload.media;
-  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
   // 取件成功但 mime 非图片(unsupported)时 displayUriFor 恒为 null,若只认
   // status==='error' 会永远停在 spinner —— 一并视为失败,给到重试按钮。
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
@@ -868,9 +917,39 @@ const LightboxPage = memo(function LightboxPage({
       {uri ? (
         <GestureDetector gesture={gesture}>
           <Animated.View collapsable={false} style={styles.pageFill}>
+            {/*
+              渐进出图的垫底层:原图字节还在下载时,先用列表已解码的缩略图占住
+              整屏(此前这一段是裸黑屏——用户在列表已经看过这张图,点开反而先黑
+              一段)。共用同一份 imageStyle transform + contain,与原图几何完全
+              一致,原图 onLoad 后本层卸掉,视觉上无跳变。
+              绝对定位而非参与 flex:与原图同为 flex 子节点会被 Yoga 各分一半高度。
+            */}
+            {layers.showPreview && previewUri ? (
+              <Animated.Image
+                // 垫底图画不出来时必须撤掉并让 spinner 回来,不能停在纯黑(见
+                // failedPreviewUri)。乐观先渲染而不是等它 onLoad:本地文件解码只要
+                // 一两帧,为它先挂一帧 spinner 反而每次打开都闪一下,与本次「让用户
+                // 感知不到」的目标相反。
+                onError={() => setFailedPreviewUri(previewUri)}
+                resizeMode="contain"
+                source={{ uri: previewUri }}
+                style={[styles.pagePreviewLayer, imageStyle]}
+                testID="message.imageLightboxPreviewLayer"
+              />
+            ) : null}
             <Animated.Image
-              onError={onImageError && retryable ? () => onImageError(image) : undefined}
+              // 两条失败路径都要接:可重取的图交父层做一次 forceRefresh 自愈(再失败
+              // 落父层 error 态给重试按钮);直连图没有任何重取入口,只能在本页记下
+              // "这个地址确证没有像素",由 lightboxImageLayers 给失败终态——否则会
+              // 一直转圈谎报"还在加载"(此前是一直纯黑)。
+              onError={() => {
+                setFailedFullUri(uri);
+                if (onImageError && retryable) onImageError(image);
+              }}
               onLoad={(event) => {
+                // 撤垫底的唯一依据:原图真的有像素了。早于此撤(例如取件一完成
+                // 就撤)就会把下载窗口裸露成黑屏,正是本次修复的起因。
+                setLoadedUri(uri);
                 const source = event.nativeEvent?.source;
                 if (source && source.width > 0 && source.height > 0) {
                   onNaturalSize(image.key, { width: source.width, height: source.height });
@@ -880,6 +959,18 @@ const LightboxPage = memo(function LightboxPage({
               source={{ uri }}
               style={[styles.pageFill, imageStyle]}
             />
+            {/* 连缩略图都没有(直连 http 图 / 缓存未命中):至少给转圈,不留纯黑无反馈。 */}
+            {layers.showSpinner ? (
+              <View pointerEvents="none" style={styles.pageSpinnerLayer}>
+                <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" />
+              </View>
+            ) : null}
+            {/* 直连图加载失败:没有重取入口,给失败终态而不是永远转圈。单击关闭仍由手势层接管。 */}
+            {layers.showFailure ? (
+              <View pointerEvents="none" style={styles.pageSpinnerLayer}>
+                <Text style={styles.stateText}>{t('message.lightbox.loadFailed')}</Text>
+              </View>
+            ) : null}
             {overlayVisible ? (
               // 两遍绘制(先全部白描边、再全部红线):交叉处不会出现白边压
               // 红线的断裂感,与桌面 / 烧录一致。
@@ -952,16 +1043,22 @@ const LightboxPage = memo(function LightboxPage({
             </>
           ) : (
             <>
-              {resolveState?.status === 'loading' && resolveState.previewUri ? (
-                // 原图在途时垫列表缩略图(静态 contain,无缩放手势,点击仍由外层
-                // Pressable 单击关闭接管):首开不黑屏,原图到达切上面手势分支无缝替换。
+              {layers.showPreview && previewUri ? (
+                // 取件在途时垫列表缩略图(静态 contain,无缩放手势,点击仍由外层
+                // Pressable 单击关闭接管):首开不黑屏,原图到达切上面手势分支时
+                // 那边继续垫同一张图,两段之间不留空档。
                 <Animated.Image
+                  // 同上:垫底失败要退回 spinner,不能让取件在途这段变成纯黑。
+                  onError={() => setFailedPreviewUri(previewUri)}
                   resizeMode="contain"
-                  source={{ uri: resolveState.previewUri }}
+                  source={{ uri: previewUri }}
                   style={StyleSheet.absoluteFill}
+                  testID="message.imageLightboxPreviewLayer"
                 />
               ) : null}
-              <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" />
+              {layers.showSpinner ? (
+                <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" />
+              ) : null}
             </>
           )}
         </Pressable>
@@ -978,6 +1075,9 @@ const styles = StyleSheet.create({
   chrome: { ...absoluteFill, alignItems: 'center' },
   pageFill: { flex: 1, height: '100%', width: '100%' },
   pageCenter: { alignItems: 'center', gap: 16, justifyContent: 'center' },
+  // 垫底缩略图 / 转圈都脱离 flex 流:与原图同为 flex 子节点会被各分一半高度。
+  pagePreviewLayer: { ...absoluteFill },
+  pageSpinnerLayer: { ...absoluteFill, alignItems: 'center', justifyContent: 'center' },
   pageLabel: {
     color: 'rgba(255, 255, 255, 0.85)',
     fontSize: typeScale.footnote,

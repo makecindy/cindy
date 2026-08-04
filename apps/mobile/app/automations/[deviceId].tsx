@@ -55,6 +55,7 @@ import {
   summarizeSchedule,
 } from '@/scheduler/scheduleModel';
 import { shouldRefreshRunsForSchedule } from '@cindy/maker-shared/schedule-events';
+import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   applyMobileTemplateParams,
   applyTemplateToMobileScheduleDraft,
@@ -1160,7 +1161,9 @@ function ScheduleFormCard({
             <View style={styles.boundSessionOptions} testID="automations.form.boundSessionOptions">
               {boundSessionOptions.map((session) => (
                 <MainWindowRowButton
-                  accessibilityLabel={t('devices.automations.form.boundSessionA11y', { name: session.title || session.id })}
+                  accessibilityLabel={t('devices.automations.form.boundSessionA11y', {
+                    name: projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')) || session.id,
+                  })}
                   accessibilityRole="radio"
                   accessibilityState={{ checked: session.id === boundSessionInputValue.trim() }}
                   disabled={busy}
@@ -1172,7 +1175,9 @@ function ScheduleFormCard({
                 >
                   <View style={styles.boundSessionOptionText}>
                     <Text style={styles.boundSessionTitle} numberOfLines={1}>
-                      {session.title || session.workingDir || session.id}
+                      {/* 哨兵过投影:绑定会话选择器同样不能露出内部哨兵。 */}
+                      {projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle'))
+                        || session.workingDir || session.id}
                     </Text>
                     <Text style={styles.boundSessionMeta} numberOfLines={1}>
                       {formatSessionOptionMeta(session)}

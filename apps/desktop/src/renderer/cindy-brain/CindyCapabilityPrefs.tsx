@@ -82,7 +82,13 @@ export function CindyCapabilityPrefs({
         {t('settings.ghosts.detail.cindyPrefs.desc')}
       </p>
       {capabilities.map((capability) => {
-        const kind = capability.startsWith('video.') ? prefs.video : prefs.image;
+        // 按能力键的类目取对应清单。少一个分支的后果不是少个下拉,而是拿
+        // **图像模型清单**去填一个文本能力——用户存进去的值链路根本不认。
+        const kind = capability.startsWith('video.')
+          ? prefs.video
+          : capability.startsWith('text.')
+            ? prefs.text
+            : prefs.image;
         // 目录没给这个类目任何模型 = 能力暂不可用:行照旧显示(插件确实申请了
         // 这项能力),但右侧不给下拉,改一句不可点的灰字,不拿旧型号冒充可选。
         const defaultModel = kind.defaultModel;

@@ -3,6 +3,8 @@ import type { AgentKind } from '../types/common.js';
 export interface McpProviderContext {
   agentKind: AgentKind;
   workingDir: string;
+  /** SSH host id when the agent session runs on a remote machine; absent for local sessions. */
+  remoteHostId?: string;
   vendorOptions?: Record<string, unknown>;
   /**
    * Business 层 session id (host 通过 createSession 的 opts.id 提供, 由 maker.ts

@@ -39,6 +39,8 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
+import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
+
 import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
@@ -442,6 +444,12 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { state, triggerLogin, cancelLogin, logout } = useCodexAuth();
+  // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
+  // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
+  // 才渲染(远端目录可能撤掉该能力)。
+  const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
+    <ImageApiKeyRow secretId="openai-images" provider={provider} />
+  );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
@@ -510,7 +518,113 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       subtitle={t('settings.providers.openai.subtitle')}
       trailing={trailing}
       provider={provider}
+      detail={imagesKeyRow || undefined}
     />
+  );
+}
+
+/**
+ * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
+ * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
+ * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
+ * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
+ */
+function ImageApiKeyRow({
+  secretId,
+  provider,
+}: {
+  secretId: ProviderSecretId;
+  /**
+   * 供应商快照(useProviders)。别的窗口保存/清除 key 会广播 PROVIDER_CHANGED →
+   * 快照刷新 → 对象换新 → 本 effect 重查存在性,多窗口状态不滞留。
+   */
+  provider?: ProviderView;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [draftKey, setDraftKey] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.builtinApiKeyHas(secretId).then((has) => {
+      if (!cancelled) setConfigured(has);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [secretId, provider]);
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(secretId, key);
+      toast.success(t('settings.providers.imagesKey.toast.saved'));
+      setDraftKey('');
+      setConfigured(true);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, secretId, t]);
+
+  const handleClear = useCallback(async () => {
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(secretId);
+      toast.success(t('settings.providers.imagesKey.toast.cleared'));
+      setConfigured(false);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [secretId, t]);
+
+  if (configured === null) return null;
+  return (
+    <div className="flex items-center gap-2 pt-2">
+      <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+        {t('settings.providers.imagesKey.label')}
+      </span>
+      {configured ? (
+        <>
+          <span className="font-mono text-12" style={{ color: 'var(--text-tertiary)' }}>
+            ••••••••
+          </span>
+          <PillButton
+            label={t('settings.providers.imagesKey.clear')}
+            onClick={() => void handleClear()}
+            disabled={busy}
+          />
+        </>
+      ) : (
+        <>
+          <input
+            type="password"
+            value={draftKey}
+            onChange={(e) => setDraftKey(e.target.value)}
+            autoComplete="off"
+            placeholder={t('settings.providers.imagesKey.placeholder')}
+            className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--surface-elevated)',
+              color: 'var(--settings-section-title)',
+            }}
+          />
+          <PillButton
+            label={t('settings.providers.imagesKey.save')}
+            onClick={() => void handleSave()}
+            disabled={busy || draftKey.trim().length === 0}
+          />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -711,6 +825,129 @@ function GenericOAuthHeader({
       icon={providerIcon(provider, 18)}
       title={provider.name}
       subtitle={t('settings.providers.genericOAuth.subtitle')}
+      trailing={trailing}
+      provider={provider}
+      detail={detail}
+    />
+  );
+}
+
+/**
+ * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
+ * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
+ * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
+ * key 全程掩码,不回显明文。
+ */
+function BuiltinApiKeyHeader({
+  provider,
+  onChanged,
+}: {
+  provider: ProviderView;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(provider.id, key);
+      toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
+      setEditing(false);
+      setDraftKey('');
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, onChanged, provider.id, provider.name, t]);
+
+  const handleDisconnect = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
+      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+        name: provider.name,
+      }),
+      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(provider.id);
+      toast.success(
+        t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
+      );
+      onChanged();
+    } catch {
+      toast.error(
+        t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [confirm, onChanged, provider.id, provider.name, t]);
+
+  const trailing = (
+    <div className="flex shrink-0 items-center gap-2.5">
+      {provider.connected && <ConnectedPill />}
+      <PillButton
+        label={t(
+          editing
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.builtinApiKey.replaceKey',
+        )}
+        onClick={() => {
+          setDraftKey('');
+          setEditing((v) => !v);
+        }}
+        disabled={busy}
+      />
+      {provider.connected && (
+        <PillButton
+          label={t('settings.providers.button.disconnect')}
+          onClick={() => void handleDisconnect()}
+          disabled={busy}
+        />
+      )}
+    </div>
+  );
+
+  const detail = editing ? (
+    <div className="flex items-center gap-2 pt-2">
+      <input
+        type="password"
+        value={draftKey}
+        onChange={(e) => setDraftKey(e.target.value)}
+        autoComplete="off"
+        placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
+        className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+        style={{
+          borderColor: 'var(--border-default)',
+          backgroundColor: 'var(--surface-elevated)',
+          color: 'var(--settings-section-title)',
+        }}
+      />
+      <PillButton
+        label={t('settings.providers.builtinApiKey.saveKey')}
+        onClick={() => void handleSave()}
+        disabled={busy || draftKey.trim().length === 0}
+      />
+    </div>
+  ) : undefined;
+
+  return (
+    <DetailHeader
+      icon={providerIcon(provider, 18)}
+      title={provider.name}
+      subtitle={t('settings.providers.builtinApiKey.subtitle')}
       trailing={trailing}
       provider={provider}
       detail={detail}
@@ -1255,7 +1492,10 @@ export function ProvidersSection() {
       if (p.id === 'xd') continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
-        if (p.connected || (p.id === 'openai' && openaiReconnectRequired)) rows.push(p);
+        // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
+        // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
+        const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
+        if (p.connected || (p.id === 'openai' && openaiReconnectRequired) || openaiHasImageCap) rows.push(p);
         continue;
       }
       if (
@@ -1377,6 +1617,7 @@ export function ProvidersSection() {
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1459,6 +1700,9 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin' && p.auth.method === 'apiKey' && (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)) {
+      return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
+    }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
     return (
       <CustomProviderHeader

@@ -18,6 +18,11 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import {
+  invalidationAtRequestStart,
+  persistCachedMessages,
+  sessionCacheInvalidationToken,
+} from '@/features/device-link/mirrorCacheClient';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
@@ -192,14 +197,50 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
   return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
 }
 
-/** 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。 */
+/**
+ * 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。
+ *
+ * 远程会话取回**最新一页**(没有 before / beforeTs 游标)时顺手写进冷缓存
+ * (`mirrorCacheClient`),供下次冷启动 / 被控端离线时乐观渲染。这是缓存的**唯一写点**:
+ * 首拉、reconcileRemoteMessages、reconnect 重拉、turn 结束对账都经过这里,所以缓存
+ * 自然跟着最近一次对账保持新鲜。翻页(before/beforeTs)与本机会话都不写 ——
+ * 老窗口不是"最近一页",写进去会让下次冷开 hydrate 出一段历史中间的孤岛。
+ */
 export function listMessagesFor(
   sessionId: string,
   opts?: { limit?: number; before?: string; beforeTs?: number },
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.list(sessionId, opts);
-  return invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<Message[]>;
+  const promise = invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<
+    Message[]
+  >;
+  if (!opts?.before && opts?.beforeTs == null) {
+    // 发起时的作废令牌:/clear、rewind、删消息都会自增它(见 clearCachedMessages)。
+    const invalidationAtStart = sessionCacheInvalidationToken(sessionId);
+    // 同时记下 main 侧的会话级作废计数(跨窗口 / 跨进程可见);落盘时交给 main 比对。
+    // 还没有已知值时**在这里**(与远端请求同时)补读一次 —— main 拒绝没带令牌的非空写入,
+    // 而补读若拖到落盘前做,拿到的是清理之后的值,屏障就失效了(见 invalidationAtRequestStart)。
+    const mainInvalidationAtStart = invalidationAtRequestStart(deviceId, sessionId);
+    void promise
+      .then((rows) => {
+        if (!Array.isArray(rows)) return;
+        // 请求在途期间权威侧作废过这个会话的历史 → 手里这批是作废前的行,丢弃这次写,
+        // 否则它会排在那次空写之后落地,把已被清掉的正文重新写回盘上(review: pr-code-review)。
+        if (sessionCacheInvalidationToken(sessionId) !== invalidationAtStart) return;
+        // 请求在途期间这台设备可能已被撤销 / 关闭被控 / 本机停用控制,那条路径已经
+        // clearCachedDevice 清过盘了。迟到的响应若照写,会用清理**之后**的 main 代际
+        // 把被撤销对端的明文重新落盘,main 侧的作废闸挡不住它(review: codex P1)。
+        // 落盘前重核归属:mapping 已经不在(或已换设备)就直接丢弃这次写入。
+        if (getSessionDeviceId(sessionId) !== deviceId) return;
+        // 把"我取到内容时 main 侧的会话级作废计数"一起交上去:main 会再比对一次,于是
+        // **另一个窗口 / 另一个进程**的作废也能挡住这次写(renderer 令牌只在本进程内可见)。
+        persistCachedMessages(deviceId, sessionId, rows, mainInvalidationAtStart);
+      })
+      // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
+      .catch(() => undefined);
+  }
+  return promise;
 }
 
 // 已确认不支持 maker:get-workflow-progress 的被控设备(收到过 CHANNEL_NOT_ALLOWED):
@@ -324,11 +365,10 @@ export function deleteMessageFor(
 ): Promise<MessageDeletionResult> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.deleteMessage(sessionId, clientId);
-  return invokeRemote(
-    deviceId,
-    'maker:message:delete',
-    [sessionId, clientId],
-  ) as Promise<MessageDeletionResult>;
+  return invokeRemote(deviceId, 'maker:message:delete', [
+    sessionId,
+    clientId,
+  ]) as Promise<MessageDeletionResult>;
 }
 
 /** interrupted-turn-resume:中断提示「忽略」的显式确认(写一次 last_turn_ended_at),

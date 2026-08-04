@@ -18,6 +18,20 @@ import { isIgnoredSkillPackagePath } from './packageIgnore';
 
 const log = createLogger('skillhub:zipPacker');
 
+/**
+ * zip 条目时间戳固定为常量 UTC 瞬间:JSZip 缺省给每个条目盖打包瞬间的墙钟
+ * (DOS 时间 2 秒精度),同一内容两次打包跨过秒界 sha256 即漂移——"内容相同 ⇒
+ * 包字节相同"的确定性契约破产(publish 重试缓存与 server 端校验都以包 sha
+ * 为锚,CI 上 determinism 用例也会随机红)。
+ *
+ * 时区无关性:本仓 JSZip 3.10 写 DOS 字段用的是 **UTC getters**
+ * (generate/ZipFileWorker.js: getUTCHours / getUTCFullYear),固定 UTC 瞬间
+ * 在任何进程时区下写出的字节都相同;回归用例用 TZ 翻转锁住这一点,若未来
+ * 升级 JSZip 改回本地 getters,该用例会红。(zip DOS 时间下限 1980,不能用
+ * Unix epoch;条目真实 mtime 本就不进 manifest,无信息损失。)
+ */
+const ZIP_ENTRY_DATE = new Date(Date.UTC(2020, 0, 1));
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface PackResult {
@@ -108,7 +122,10 @@ async function walk(
 
     const content = await fs.promises.readFile(fullPath);
     checkPackState();
-    zip.file(relPath, content);
+    // createFolders: false —— JSZip 缺省会为子目录隐式生成文件夹条目,且该条目
+    // 盖打包瞬间墙钟(date 选项只作用于本文件),确定性再度破口;省略文件夹条目
+    // 是可复现打包的标准做法,解压工具一律按文件路径自建目录,语义无损。
+    zip.file(relPath, content, { date: ZIP_ENTRY_DATE, createFolders: false });
 
     const fileSha256 = await streamSha256(fullPath);
     checkPackState();

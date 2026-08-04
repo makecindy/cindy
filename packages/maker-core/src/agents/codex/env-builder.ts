@@ -44,10 +44,13 @@ export async function buildCodexEnv(
     if (typeof v === 'string') env[k] = v;
   }
 
-  // 函数形态按 spawn 凭证形态求值(与 claude-code/env-builder 同语义;Codex 当前无业务 flag)。
+  // 函数形态按 spawn 凭证形态求值(与 claude-code/env-builder 同语义)。
+  // spawnMode 恒传 'local':本函数产出的 env 只被**本地** transport 消费——远端
+  // spawn 虽也会执行到这里,但产物随后被远端 daemon transport 整体丢弃(见
+  // codex/index.ts 远端路径注释),真正落到子进程的只有本地分支。
   const behaviorFlags =
     typeof runtimeConfig.behaviorFlags === 'function'
-      ? runtimeConfig.behaviorFlags({ credentialMode: options.credentialMode })
+      ? runtimeConfig.behaviorFlags({ credentialMode: options.credentialMode, spawnMode: 'local' })
       : runtimeConfig.behaviorFlags;
   if (behaviorFlags) {
     Object.assign(env, behaviorFlags);

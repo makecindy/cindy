@@ -35,6 +35,7 @@ import {
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import {
   clearBuiltinTombstone,
@@ -138,8 +139,11 @@ import {
   type CindyVideoParams,
 } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
+import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
+import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
+import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
@@ -161,6 +165,7 @@ import { GhostExternalLinkGate, GhostPreviewGate, resolveGhostPanelMedia } from 
 import {
   ghostSecretSaved,
   readGhostSecret,
+  getProviderSecretStore,
   readGhostSecretTail,
   removeGhostSecret,
   removeGhostSecrets,
@@ -171,6 +176,8 @@ import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-acc
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
+import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -189,7 +196,9 @@ import {
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
-import type { GatewayImageModel } from '../cindy-proxy-media/types.js';
+import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
+import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -724,6 +733,7 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
         getGhostRuntime().stop(id);
         getGhostNodeRuntimeBroker().stop(id);
         getGhostAgentSlot().clearGhost(id);
+        getGhostErrandSlot().clearGhost(id);
       },
       onApplyStart: () => {
         tipShown = true;
@@ -914,6 +924,33 @@ export function getGhostAgentSlot(): GhostAgentSlot {
 /** maker-ipc 完成初始化后注入真实会话 runner；保持 cindy-brain 不反向依赖它。 */
 export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): void {
   getGhostAgentSlot().setRunner(runner);
+}
+
+let errandSlotSingleton: GhostErrandSlot | null = null;
+
+/** 派活取件槽单例(agent 槽 errand 加档):资格审/频控/任务表的统一守门点。 */
+export function getGhostErrandSlot(): GhostErrandSlot {
+  if (!errandSlotSingleton) {
+    errandSlotSingleton = new GhostErrandSlot({
+      getGhost: (id) => getGhostManager().list().find((g) => g.manifest.id === id) ?? null,
+      // wait 模式的署名单在途期间替管子那头的 tool-call 续命(同 cindy 槽契约)。
+      holdPipeCall: (ghostId, callId, budgetMs) =>
+        getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
+      releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      log,
+    });
+  }
+  return errandSlotSingleton;
+}
+
+/** maker-ipc 完成初始化后注入真实派活 runner;传 null 用于退出清理。 */
+export function setGhostErrandRunner(runner: GhostErrandRunner | null): void {
+  getGhostErrandSlot().setRunner(runner);
+}
+
+/** 插件展示名(errand 会话默认标题等宿主侧使用;未装返回 null)。 */
+export function getInstalledGhostName(id: string): string | null {
+  return getGhostManager().list().find((g) => g.manifest.id === id)?.manifest.name ?? null;
 }
 
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
@@ -1545,6 +1582,8 @@ export function getGhostPickSlot(): GhostPickSlot {
       // (与确认卡点允许同强度;dirDeposit 注释的授权语义包含本通道)。
       depositDir: (ghostId, dirAbs) =>
         getDirDepositVault().deposit({ ghostId, dirAbs, workdirAbs: null, userGranted: true }),
+      // 亲选事实进台账:errand 的 workingDir 转述据此对账(pickGrantsStore)。
+      recordPickedDir: recordGhostPickedDir,
       log,
     });
   }
@@ -1692,6 +1731,17 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
         isModelDisabled(access, providerId, modelId),
+      // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
+      // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
+      // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
+      // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
+      // (2026-07 review:与图像的就绪语义对齐)。
+      kind === 'image'
+        ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
+        : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
+      // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
+      // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
+      kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId) : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -1715,8 +1765,8 @@ function assertMediaModelStillEnabled(kind: 'image' | 'video', model: string): v
   if (!getCatalogMediaConfig(kind).models.some((m) => m.id === model)) {
     throw new Error(
       kind === 'image'
-        ? '图像模型已在设置中停用,本次生成已取消'
-        : '视频模型已在设置中停用,本次生成已取消',
+        ? '图像模型不可用(可能已停用或来源凭证未就绪),本次生成已取消'
+        : '视频模型不可用(可能已停用或来源凭证未就绪),本次生成已取消',
     );
   }
 }
@@ -1814,36 +1864,122 @@ const GHOST_ASPECT_TO_GATEWAY_SIZE: Record<GhostImageAspectRatio, string> = {
   '2:3': '1024x1536',
 };
 
-/** XD Gateway 图片响应 → 字节 + mime(gen / edit 同一解码口径)。 */
-function decodeImageResponse(res: {
-  data: Array<{ b64_json?: string }>;
-  output_format?: string;
-}): { buffer: Buffer; mimeType: string } {
-  const first = res.data[0];
-  if (!first?.b64_json) throw new Error('图片通道返回为空');
-  const buffer = Buffer.from(first.b64_json, 'base64');
-  const format = (res.output_format ?? 'png').toLowerCase();
-  const mimeType =
-    format === 'webp' ? 'image/webp' : format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
-  return { buffer, mimeType };
+/**
+ * 图像执行通道注册表单例(见 imageChannelRegistry.ts 头注)。xd 通道在此登记:
+ * ready 跟随网关能力(canUseCindyGateway;key 缺失时 requireApiKey 在派发时人话拒,
+ * 与历史行为一致),backend 是 cindyProxyMedia 的网关客户端,aspectRatio → 网关
+ * size 枚举的翻译在适配层完成(通道各家 wire 不同,意图翻译是通道自己的知识)。
+ * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
+ */
+let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
+function getImageChannelRegistry(): ImageChannelRegistry {
+  if (!imageChannelRegistrySingleton) {
+    const registry = new ImageChannelRegistry();
+    registry.register('xd', {
+      ready: () => getAppCapabilities().canUseCindyGateway,
+      generateImage: ({ model, prompt, aspectRatio }) =>
+        getCindyProxyMediaService().backend.generateImage({
+          model,
+          prompt,
+          // 不带画幅意图时不传 size,网关缺省 'auto'(模型自定)。
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
+        getCindyProxyMediaService().backend.editImage({
+          model,
+          prompt,
+          imagePaths,
+          // 改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致。
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+    });
+    // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
+    // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
+    // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
+    registry.register('gemini', createGeminiImageChannel({
+      getApiKey: () => getProviderSecretStore().get('gemini'),
+      // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
+      // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    }));
+    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
+    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
+    // 上游只认裸 id,适配层剥前缀。
+    const openaiImagesClient = createGatewayImageClient({
+      getApiKey: () => getProviderSecretStore().get('openai-images'),
+      // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
+      // 代理软件非 TUN 模式下会直连失败(2026-07 review;xd 网关通道不注 ——
+      // 网关域名境内直连,与现状一致)。
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      proxy: {
+        baseUrl: 'https://api.openai.com',
+        generatePath: '/v1/images/generations',
+        editPath: '/v1/images/edits',
+      },
+      brandLabel: 'OpenAI',
+      missingKeyMessage:
+        'OpenAI 图像 API key 未配置,请到「设置 → 模型供应商 → OpenAI」填入后重试',
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', `openai/${model}`),
+    });
+    const stripOpenaiPrefix = (id: string) =>
+      id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    registry.register('openai', {
+      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
+      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
+      generateImage: ({ model, prompt, aspectRatio }) =>
+        openaiImagesClient.generateImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
+        openaiImagesClient.editImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          imagePaths,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+    });
+    imageChannelRegistrySingleton = registry;
+  }
+  return imageChannelRegistrySingleton;
+}
+
+/**
+ * 按解析出的模型定位归属来源并取执行通道。归属 = 白名单条目的 providerId
+ * (cindyMediaCatalog first-wins 定格);白名单查无该模型时视同已停用
+ * (assertMediaModelStillEnabled 同窗口语义)。
+ */
+function resolveImageChannelForModel(model: string, operation: 'generate' | 'edit' = 'generate') {
+  const entry = getCatalogMediaConfig('image').models.find((m) => m.id === model);
+  if (!entry) {
+    const slash = model.indexOf('/');
+    if (slash > 0) getImageChannelRegistry().resolve(model.slice(0, slash));
+    throw new Error('图像模型不可用,本次生成已取消');
+  }
+  if (operation === 'edit' && !entry.supportsEdit) {
+    throw new Error(`图像来源 ${entry.providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
+  }
+  return getImageChannelRegistry().resolve(entry.providerId);
 }
 
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
-      getGhost: (id) =>
-        getAppCapabilities().canUseCindyGateway ? findAvailableGhost(id) : null,
-      // model 已在 modelSlot 按白名单校验(白名单 = GatewayImageModel 全集),
-      // 这里收窄类型是安全的。
+      getGhost: (id) => findAvailableGhost(id),
+      // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
+      // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
+          const channel = resolveImageChannelForModel(model);
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.generateImage({
-              model: model as GatewayImageModel,
+            await channel.generateImage({
+              model,
               prompt,
-              // 不带画幅意图时不传 size,网关缺省 'auto'(模型自定)。
-              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+              ...(aspectRatio ? { aspectRatio } : {}),
             }),
           );
         } catch (err) {
@@ -1853,14 +1989,13 @@ export function getGhostCindySlot(): GhostCindySlot {
       editImage: async ({ prompt, model, imagePaths, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
+          const channel = resolveImageChannelForModel(model, 'edit');
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.editImage({
-              model: model as GatewayImageModel,
+            await channel.editImage({
+              model,
               prompt,
               imagePaths,
-              // 同 generateImage:不带画幅意图时不传 size,网关缺省 'auto'
-              // (改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致)。
-              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+              ...(aspectRatio ? { aspectRatio } : {}),
             }),
           );
         } catch (err) {
@@ -1894,6 +2029,40 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
+      // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
+      // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
+      // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
+      // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
+      // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, pinnedProfileId }) => {
+        const [{ requestUtilityText }, { getMaker }] = await Promise.all([
+          import('../utility-model/oneShotCandidates.js'),
+          import('../maker-host/index.js'),
+        ]);
+        const r = await requestUtilityText(getMaker(), prompt, {
+          maxTokens,
+          timeoutMs,
+          pinnedProfileId,
+        });
+        if (r.ok) {
+          return { ok: true, text: r.text, model: `${r.providerId}/${r.model}` };
+        }
+        log.warn('ghost oneshot_text utility chain failed', {
+          reason: r.reason,
+          attempts: r.attempts.map((a) => `${a.providerId}/${a.model}:${a.reason}`),
+        });
+        if (r.reason === 'no_candidate') {
+          return {
+            ok: false,
+            reason: 'no_candidate',
+            message: '当前没有可用的快速通道模型(用户未配置或凭证不可用),请如实告知用户并优雅降级',
+          };
+        }
+        if (r.reason === 'timeout') {
+          return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
+        }
+        return { ok: false, reason: 'failed', message: '快速通道各候选均失败,请稍后再试' };
+      },
       // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
       // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
@@ -2534,6 +2703,7 @@ export async function installOrUpdateMarketGhostPackage(
     runtime.stop(expected.ghostId);
     getGhostNodeRuntimeBroker().stop(expected.ghostId);
     getGhostAgentSlot().clearGhost(expected.ghostId);
+    getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
       result = await manager.update(cindyFilePath);
@@ -2601,6 +2771,7 @@ export async function uninstallGhostAndCleanup(
     runtime.stop(id);
     getGhostNodeRuntimeBroker().stop(id);
     getGhostAgentSlot().clearGhost(id);
+    getGhostErrandSlot().clearGhost(id);
     getGhostSubscriptionGateway().dropGhost(id);
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
@@ -3144,7 +3315,8 @@ export function registerGhostIpc(): void {
   // 代办,返回值即结果)/ card-update(卡槽③供片,cardService 校验链)/
   // notify(系统提示,notifySlot 资格审+限速)/ fs-request(fs 槽代写文件,
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
-  // 守门)/ node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
+  // 守门)/ agent-errand-request(派活取件,agent.errand 加档 + 频控守门)/
+  // node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
   // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
   // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
   // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
@@ -3196,6 +3368,13 @@ export function registerGhostIpc(): void {
     // 进入 system prompt。票据、会话归属、模板和后台权限都在 agentSlot。
     if (type === 'agent-request') {
       return getGhostAgentSlot().handleRequest(id, payload);
+    }
+    // agent-errand-request = 派活取件(agent 槽 errand 加档):任务进插件
+    // 专属 errand 会话跑一轮,最终回复文字取回给插件;任务文本同样只进
+    // 普通 user 消息。资格审/频控/任务表在 errandSlot,会话与收口在注入
+    // 的 runner(maker-ipc)。
+    if (type === 'agent-errand-request') {
+      return getGhostErrandSlot().handleRequest(id, payload);
     }
     // node-request 只在 main.js → contextBridge → 主机方向开放。子进程反向
     // JSON-RPC 请求恒被 broker 拒绝，因此 Node 不能绕过 main.js 控制 Cindy。
@@ -3432,10 +3611,21 @@ export function registerGhostIpc(): void {
           standard === undefined ? null : (cfg.models.find((m) => m.id === standard) ?? null),
       };
     };
+    // 文本类(快问快答)的可选项不来自媒体目录,而是轻量任务模型链的档位表
+    // ——每一项就是一组供应商×模型。defaultModel = 当前"跟随默认"实际会用的
+    // 那一档(链首),让用户看得见跟的是谁。
+    const textChain = getUtilityModelChainProfiles();
+    const textOptions = utilityModelPinOptions();
+    const textDefaultId = textChain[0]?.id ?? null;
     event.returnValue = {
       overrides,
       image: byKind(getCatalogImageConfig()),
       video: byKind(getCatalogVideoConfig()),
+      text: {
+        options: textOptions,
+        defaultModel:
+          textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
+      },
     };
   });
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
@@ -3480,7 +3670,8 @@ export function registerGhostIpc(): void {
     }
     // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
     const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    if (model !== null && !cfg.models.some((m) => m.id === model)) {
+    const isEditCap = capability === 'image.edit';
+    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(
@@ -3493,6 +3684,28 @@ export function registerGhostIpc(): void {
       ref: `cindy-pref:${String(capability)}`,
     });
     return { overrides };
+  });
+
+  // ── agent 槽派活(errand)每插件配置(插件详情页「AI 代办」卡)──
+  // 读走 sendSync(与 cindy-prefs 同理:详情页首帧同帧渲染);写走 invoke,
+  // 整卡替换,值域清洗在存储层(errandPrefsStore.normalizeConfig 白名单,
+  // permissionMode 只认 plan/acceptEdits/auto——bypassPermissions 协议上不存在)。
+  // model/providerId 不在此处对目录校验:与 sessions:create 同一信任面
+  // (可信 renderer 配置面),过期值由 errand runner 建会话时按 mapper 兜底。
+  ipcMain.on('ghosts:errand-prefs', (event, ghostId: unknown) => {
+    event.returnValue = {
+      config: typeof ghostId === 'string' ? readGhostErrandConfig(ghostId) : {},
+    };
+  });
+  ipcMain.handle('ghosts:errand-prefs:set', (_event, ghostId: unknown, config: unknown) => {
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    if (config !== null && (typeof config !== 'object' || Array.isArray(config))) {
+      throwIpcError('INVALID_PARAMS', 'config must be an object or null');
+    }
+    const saved = writeGhostErrandConfig(ghostId, config as Record<string, unknown> | null);
+    return { config: saved };
   });
 
   ipcMain.handle('ghosts:install', async (event, lizFilePath: unknown, opts: unknown) => {
@@ -3554,6 +3767,7 @@ export function registerGhostIpc(): void {
     runtime.stop(inspected.manifest.id);
     getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
     getGhostAgentSlot().clearGhost(inspected.manifest.id);
+    getGhostErrandSlot().clearGhost(inspected.manifest.id);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
       result = await manager.update(lizFilePath, { expectedPackageSha256 });
@@ -3621,6 +3835,63 @@ export function registerGhostIpc(): void {
     }
     await uninstallGhostAndCleanup(id);
     return { ok: true };
+  });
+
+  // 详情页「导出 .cindy」:把已装插件的安装目录重新打成 zip 包,经系统
+  // 保存对话框写到用户选定的位置。取消选择返回 { status: 'canceled' },
+  // 不算错误;导出失败抛 IPC 错误(renderer 映射 toast)。
+  // 快照是一致性快照(签名包逐文件 sha256 比对 statement;未签名包
+  // 第二遍重读重哈希比对),导出与更新/卸载并发也不会产出混合版本
+  // 的坏包。
+  ipcMain.handle('ghosts:export', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    // 官方保留前缀在本地装入链路被拒,导出产物装不回——renderer 菜单
+    // 只是隐藏,handler 才是真正的强制边界(评审 P1)。
+    if (typeof id === 'string') rejectReservedGhostId(id);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await exportGhostPackage(id, {
+      listInstalled: () => manager.list(),
+      showSaveDialog: (opts) =>
+        win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts),
+      getDownloadsDir: () => app.getPath('downloads'),
+      fileTypeLabel: t('settings.ghosts.detail.exportFileType'),
+      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+      // 装入校验本尊 + 装入侧不变量:manager.inspect 带真实 trust
+      // registry;指令查重与 tokenBroker 门控只存在于 install/update,
+      // inspect 不覆盖,这里按同一口径补齐(评审 P1)。
+      inspectPackage: async (filePath) => {
+        const probe = await manager.inspect(filePath);
+        if ('rejection' in probe) return false;
+        // tokenBroker 门控(同 rejectUnauthorizedTokenBroker):第三方包
+        // 声明即不可装入,官方前缀豁免。
+        const brokered = (probe.manifest.network?.secrets ?? []).some(
+          (s) => s.oauth?.tokenBroker !== undefined,
+        );
+        if (brokered && !isOfficialGhostId(probe.manifest.id)) return false;
+        // 指令查重(同 install/update):与当前已装撞名即拒,排除自身。
+        const commandFold = probe.manifest.command?.toLowerCase();
+        if (commandFold === undefined) return true;
+        return !manager.list().some(
+          (g) =>
+            g.manifest.id !== probe.manifest.id &&
+            g.manifest.command !== undefined &&
+            g.manifest.command.toLowerCase() === commandFold,
+        );
+      },
+    });
+    switch (result.status) {
+      case 'saved':
+        log.info('ghost exported', { id: String(id) });
+        return { status: 'saved' as const, savedPath: result.savedPath };
+      case 'canceled':
+        return { status: 'canceled' as const };
+      case 'invalid_id':
+        return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+      case 'not_installed':
+        return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
+      case 'error':
+        return throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
+    }
   });
 
   // 内置意识状态(sendSync:设置页与已装清单同帧渲染,规则 7 无跳变)——

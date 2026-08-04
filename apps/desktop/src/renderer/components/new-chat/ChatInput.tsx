@@ -148,6 +148,7 @@ import {
 } from './pastePipeline';
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { composerDocIsEmpty } from './composerDocState';
+import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
   isInteractiveFocusedElement,
@@ -183,7 +184,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { effectiveSourceIdForModel, sourcesForModel } from '@cindy/model-providers';
+import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
 import {
   getProviderModelEffort,
@@ -1069,6 +1070,12 @@ export function ChatInput({
   addFilesRef.current = addFiles;
   const addFolderPathRef = useRef(addFolderPath);
   addFolderPathRef.current = addFolderPath;
+  const localAttachmentPickerEnabled = canUseLocalAttachmentPicker({
+    sessionId,
+    runtimeAgentKind,
+    remoteHostId,
+    deviceLinkDeviceId,
+  });
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -1260,11 +1267,14 @@ export function ChatInput({
     currentModelAgentKind,
     activeModel,
   );
-  // 已建会话(sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因
-  // 停用打断,请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。
-  // 草稿是新路由选择,保持准入口径(停用拷贝不算可发送来源)。
+  // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
+  // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
+  // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
+  // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
+  // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
+  // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
   const hasConnectedSendSource = currentModelAgentKind
-    ? sourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
+    ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
         onlyConnected: true,
         includeDisabled: !!sessionId,
       }).length > 0
@@ -2959,11 +2969,11 @@ export function ChatInput({
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
-      // workingDir 是被控端路径(SSH remoteHostId 才置 null 关扫描)。desktop 命令始终本地。
+      // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        isRemoteSession ? null : (workingDir ?? null),
-        opts,
+        workingDir,
+        { ...opts, skipAgentSkills: isRemoteSession },
         deviceLinkDeviceId,
       )
         .then((cmds) => {
@@ -3373,15 +3383,17 @@ export function ChatInput({
       // 预检(通用、provider-aware): 当前模型在当前 agent 下「一个已连接来源都没有」
       // 时,不把请求扔给 SDK 等 401,改弹确认框引导用户去「设置 → 模型供应商」连接。
       // 取代过去仅 cc + 仅 api_key 的写法 —— 现在 OAuth / XD 网关 / 未来自定义供应商
-      // 都按 ProviderView.connected 统一计入(sourcesForModel onlyConnected),未来加新
-      // 供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、~ms 级。
-      // 只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。currentModelAgentKind
-      // 解析不出(罕见:capabilities 未就绪)时不拦,交给下游处理,不误伤。
+      // 都按 ProviderView.connected 统一计入(chatEligibleSourcesForModel onlyConnected),
+      // 未来加新供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、
+      // ~ms 级。只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。
+      // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
+      // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
+      // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
       if (currentModelAgentKind) {
         // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
         // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
         // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
-        const connectedSources = sourcesForModel(providers, activeModel, currentModelAgentKind, {
+        const connectedSources = chatEligibleSourcesForModel(providers, activeModel, currentModelAgentKind, {
           onlyConnected: true,
           includeDisabled: !!sessionId,
         });
@@ -5218,43 +5230,38 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):新建目标 + 计划模式 + 引用目录(两端通用、同级)。
-                显示条件:有新建目标入口(会话内 → 内部 NewGoalDialog;首页 → onNewGoal 回调)、
-                计划模式入口(capability + 接线齐备),或有引用目录接线。 */}
-                {(inSessionGoalEnabled ||
-                  onNewGoal ||
-                  planModeEntry ||
-                  pluginsForMenu.length > 0 ||
-                  (extraDirs !== undefined && onExtraDirsChange)) && (
-                  <ExtraDirsButton
-                    extraDirs={extraDirs ?? []}
-                    workingDir={workingDir}
-                    planMode={planModeEntry}
-                    plugins={pluginsForMenu}
-                    pluginAvailableIds={pluginAvailableIds}
-                    onPluginSelect={handlePluginSelect}
-                    onChange={onExtraDirsChange}
-                    onNewGoal={
-                      inSessionGoalEnabled || onNewGoal
-                        ? () => {
-                            // 把输入框当前文字(去空白)作为目标默认内容。
-                            const ed = editorRef.current;
-                            const draftText =
-                              ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
-                            if (inSessionGoalEnabled) {
-                              setNewGoalInitial(draftText);
-                              setNewGoalOpen(true);
-                            } else {
-                              onNewGoal?.(draftText);
-                            }
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
+                交给远端 agent,因此不接本机文件选择器。 */}
+                <ExtraDirsButton
+                  extraDirs={extraDirs ?? []}
+                  workingDir={workingDir}
+                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
+                  planMode={planModeEntry}
+                  plugins={pluginsForMenu}
+                  pluginAvailableIds={pluginAvailableIds}
+                  onPluginSelect={handlePluginSelect}
+                  onChange={onExtraDirsChange}
+                  onNewGoal={
+                    inSessionGoalEnabled || onNewGoal
+                      ? () => {
+                          // 把输入框当前文字(去空白)作为目标默认内容。
+                          const ed = editorRef.current;
+                          const draftText =
+                            ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
+                          if (inSessionGoalEnabled) {
+                            setNewGoalInitial(draftText);
+                            setNewGoalOpen(true);
+                          } else {
+                            onNewGoal?.(draftText);
                           }
-                        : undefined
-                    }
-                    disabled={disabled}
-                    dense={effectiveDenseToolbar}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                  />
-                )}
+                        }
+                      : undefined
+                  }
+                  disabled={disabled}
+                  dense={effectiveDenseToolbar}
+                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                />
                 <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}

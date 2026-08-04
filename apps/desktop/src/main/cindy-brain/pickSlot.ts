@@ -45,6 +45,11 @@ export interface PickSlotDeps {
     ghostId: string,
     dirAbs: string,
   ): { ok: true; receipt: DirDepositReceiptShape } | { ok: false; message: string };
+  /**
+   * 亲选目录进台账(pickGrantsStore):errand 等能力据此对账"插件转述的
+   * 目录确实是用户亲手选过的"。只在成功交付(非取消)时调用。
+   */
+  recordPickedDir?(ghostId: string, dirAbs: string): void;
   now?(): number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -129,6 +134,9 @@ export class GhostPickSlot {
     if (picked === null) {
       return fail('CANCELLED', '用户取消了选择');
     }
+    // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
+    // 授权事实——用户确实选了)。
+    this.deps.recordPickedDir?.(ghostId, picked);
 
     const result: Extract<GhostPipePickResult, { ok: true }> = {
       ok: true,

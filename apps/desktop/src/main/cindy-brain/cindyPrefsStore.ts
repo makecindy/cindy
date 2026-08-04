@@ -22,7 +22,15 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 const log = desktopMakerLogger.child('cindy-prefs-store');
 
 /** cindy 槽能力键(类目.动作;与身份卡详单同一词汇表,当前包含 video)。 */
-export const CINDY_CAPABILITY_KEYS = ['image.generate', 'image.edit', 'video.generate', 'video.edit'] as const;
+// text.oneshot(快问快答)与图像/视频同表:每项覆盖记的都是一组供应商×模型。
+// 文本类的取值是轻量任务模型链的档位键(codex-gpt-5.4-mini 等),不是媒体目录模型 id。
+export const CINDY_CAPABILITY_KEYS = [
+  'image.generate',
+  'image.edit',
+  'video.generate',
+  'video.edit',
+  'text.oneshot',
+] as const;
 export type CindyCapabilityKey = (typeof CINDY_CAPABILITY_KEYS)[number];
 
 export interface GhostCindyPrefs {

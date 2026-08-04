@@ -77,6 +77,7 @@
     "@lezer/highlight": "^1.2.3",
     "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/anthropic-responses-bridge": "workspace:*",
+    "@cindy/responses-anthropic-bridge": "workspace:*",
     "@cindy/responses-chat-bridge": "workspace:*",
     "@cindy/browser-control-runtime": "workspace:*",
     "@cindy/device-link": "workspace:*",

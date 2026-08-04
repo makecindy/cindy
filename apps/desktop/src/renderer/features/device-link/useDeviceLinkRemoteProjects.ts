@@ -22,7 +22,13 @@
  *    明确不合格(关被控 / 被撤销 / 本机禁用控制)→ `unsubscribe` + removeDevice。
  *  - WS 重连 → 对每个合格设备重新 subscribe + 重新 bootstrap(被控端可能重启过、订阅 registry 清空)。
  *
- * 不在本地落库;登出 / stopped / 卸载即清空(被控端 DB 才是数据真相)。
+ * 不在本地落库(被控端 DB 才是数据真相);登出 / stopped / 卸载即清空内存镜像。
+ *
+ * 唯一的盘上痕迹是**非权威冷缓存**:列表快照落在 main 的 userData
+ * (`main/device-link/mirrorCacheStore.ts`),仅用于冷启动首屏 —— mount 时
+ * `hydrateFromCache` 把上次看到的行画出来并标 disconnected,bootstrap 一到即整片替换;
+ * 设备明确离场(撤销 / 关被控 / 禁用控制)时连它的缓存一起清。整棵缓存的删除归 owner
+ * 边界(main 的 teardownAuthAccountBoundary),这里只负责作废未落盘的回写。
  */
 
 import { useEffect } from 'react';
@@ -34,7 +40,13 @@ import {
   removeRemoteSessionActivityForDevice,
 } from './remoteSessionActivityStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
-import { refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import {
+  cancelSessionListPersist,
+  clearCachedDevice,
+  readCachedSessionList,
+  scheduleSessionListPersist,
+} from './mirrorCacheClient';
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
@@ -96,11 +108,19 @@ export function useDeviceLinkRemoteProjects(): void {
 
   useEffect(() => {
     if (!isAuthenticated || !selfDeviceId) {
+      // 同 'stopped' / unmount:cancel 在 clear 之后,免得 clear 的同步通知又排一次回写。
       remoteProjectsStore.clear();
+      cancelSessionListPersist();
       return;
     }
 
     let disposed = false;
+    /**
+     * 「已明确离场、不许被冷缓存种回来」的设备 id。撤销访问 / 关闭被控 / 本机停用控制这三条
+     * 路径都会往里加 —— 它们清盘是异步的,而 mount 时那次 readCachedSessionList 可能早已
+     * 读到旧快照(review: codex P1)。
+     */
+    const cacheHydrationBlocked = new Set<string>();
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline = false;
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
@@ -130,6 +150,9 @@ export function useDeviceLinkRemoteProjects(): void {
       revokedDevicesStore.markRevoked(deviceId);
       remoteProjectsStore.removeDevice(deviceId);
       removeRemoteSessionActivityForDevice(deviceId);
+      // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
+      cacheHydrationBlocked.add(deviceId);
+      clearCachedDevice(deviceId);
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
@@ -236,6 +259,10 @@ export function useDeviceLinkRemoteProjects(): void {
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
           removeRemoteSessionActivityForDevice(d.deviceId);
+          // 设备明确离场(关被控 / 本机禁用控制 / 是自己):它的冷缓存一起清掉,
+          // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
+          cacheHydrationBlocked.add(d.deviceId);
+          clearCachedDevice(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
         evictDeviceProviders(d.deviceId);
@@ -258,9 +285,50 @@ export function useDeviceLinkRemoteProjects(): void {
               isSelf: d.isSelf,
             });
           }
+          // 权威列表里**根本没有**的分片必须在这里收掉:applyDevice 只对返回的设备跑,
+          // 账号里已删除的设备(冷启动时由缓存种进来的)否则永远没人评估,会作为
+          // disconnected 项目常驻侧边栏,还会被后续快照一直写回盘(review: codex P1)。
+          // 只在 listDevices **成功**时做(catch 分支不清):拿不到权威集合就不能判定缺席。
+          // eligible 里的设备豁免 —— 它们由 presence 事件管理,listDevices 偶发缺项不该误删。
+          //
+          // 必须遍历 `getAllDeviceIds()`:缓存种入的分片一律标 disconnected,而
+          // `getDeviceIds()` 只返回 connected —— 用它的话这个收敛循环恰好**永远看不到**
+          // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
+          const authoritative = new Set(devices.map((d) => d.deviceId));
+          for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+            if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
+            log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
+            remoteProjectsStore.removeDevice(deviceId);
+            removeRemoteSessionActivityForDevice(deviceId);
+            // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
+            // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
+            // listDevices 离线时纠正不了(review: codex P1)。
+            cacheHydrationBlocked.add(deviceId);
+            clearCachedDevice(deviceId);
+          }
         })
         .catch((err) => log.debug('listDevices reseed failed', err));
     };
+
+    // 冷启动首屏:用上次落盘的列表快照把侧边栏画出来(标 disconnected),不等 bootstrap 往返。
+    // 已有分片的设备不覆盖;紧随其后的 bootstrap 用权威列表整片替换。
+    //
+    // 种入后**必须再 reseed 一次**:合格性判定(applyDevice → resolveIneligibleRemoteProjectAction)
+    // 依赖 `hasCachedShard`,而这次种入是异步的,很可能落在初始 reseed 之后 —— 那一轮看到
+    // 的是"没有分片"于是判 ignore,种进来的设备就没人再评估。app 关闭期间对端关掉被控 /
+    // 账号里删掉设备的情形,都靠补这一轮收敛(reseed 末尾还会清掉权威列表中缺席的分片)。
+    // 仍在 listDevices 里但离线的设备照既有语义保留为 disconnected —— 与「断连保留最近
+    // 一次快照让 All Sessions 稳定」一致,不是本次引入的行为。
+    void readCachedSessionList().then((devices) => {
+      if (disposed || devices.length === 0) return;
+      // 读快照这一跳期间被**明确移除**的设备(撤销访问 / 关闭被控 / 本机停用控制)不许种回来:
+      // 那些路径已经删了分片并清了盘,而这次种入拿的是它们之前读到的旧快照;紧随的 reseed
+      // 在 listDevices 离线时也纠正不了,于是那台设备会一直留在侧边栏(review: codex P1)。
+      const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
+      if (usable.length === 0) return;
+      remoteProjectsStore.hydrateFromCache(usable);
+      reseed();
+    });
 
     // sessions:created push(无 row 数据)/ applyPatch 的 unarchive 兜底 → 防抖重拉该设备(reconcile)。
     setRemoteReseedImpl((deviceId) => {
@@ -338,7 +406,13 @@ export function useDeviceLinkRemoteProjects(): void {
           remoteProjectsStore.markAllDisconnected();
           return;
         }
+        // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
+        // 订阅者,而此刻 offShardChange 仍挂着 → 它立刻排一个去抖回写;1200ms 后 shards
+        // 已空,整份快照被写成 [],main 侧据此把 session-list.json 删掉。于是「relay 停服
+        // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
+        // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         remoteProjectsStore.clear();
+        cancelSessionListPersist();
         clearRemoteSessionActivity();
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
@@ -370,6 +444,12 @@ export function useDeviceLinkRemoteProjects(): void {
           evictDeviceProviders(p.deviceId);
           evictDeviceGitSafetySettings(p.deviceId);
         }
+        // 本机关掉「控制这台设备」→ 盘上那份镜像缓存也要清。只清内存分片的话,下次冷启动
+        // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
+        // (review: greptile)。放在 if 外面:即使此刻内存里没有分片(本次会话从未连上它),
+        // 盘上仍可能留着上一次运行写下的缓存。
+        cacheHydrationBlocked.add(p.deviceId);
+        clearCachedDevice(p.deviceId);
         return;
       }
       reseed();
@@ -378,6 +458,16 @@ export function useDeviceLinkRemoteProjects(): void {
     // 设备改名:服务端 REST 改名不广播 presence,接入器对齐缓存名(store 分片由 renameDevice 即时改)。
     const offRename = remoteProjectsStore.subscribeRename((deviceId, name) => {
       if (eligible.has(deviceId)) eligible.set(deviceId, name);
+    });
+
+    // 冷缓存回写由「分片变更」驱动,而不是只在一次成功 refresh 之后:
+    // 被控端推来的 archived / deleted 增量(applyPatch)只改内存,若 app 在下一次 10 秒对账
+    // 之前退出,下次离线冷启动就会把那条已归档 / 已删除的会话又 hydrate 回侧边栏
+    // (review: codex P1)。订阅覆盖所有 mutation(snapshot / patch / 改名 / 断连 / 移除),
+    // 去抖 1200ms 合并高频变更,main 侧还有内容指纹去重 —— 内容没变根本不落盘。
+    const offShardChange = remoteProjectsStore.subscribe(() => {
+      if (disposed) return;
+      scheduleSessionListPersist(collectSessionListSnapshot);
     });
 
     return () => {
@@ -393,6 +483,7 @@ export function useDeviceLinkRemoteProjects(): void {
       offAccessRevoked();
       offControlTarget();
       offRename();
+      offShardChange();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。
       for (const deviceId of eligible.keys()) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});
@@ -400,7 +491,12 @@ export function useDeviceLinkRemoteProjects(): void {
         evictDeviceProviders(deviceId);
         evictDeviceGitSafetySettings(deviceId);
       }
+      // 卸载可能只是关了个窗口(镜像是每渲染进程一份),盘上缓存**不动** ——
+      // 只作废尚未落盘的回写,免得它把正在清空的分片写回去。
+      // cancel 放在 clear 之后(同 'stopped' 分支):这里 offShardChange 已退订,clear 通知不到
+      // 任何订阅者,但顺序保持一致,免得将来有人在两者之间插入新的订阅。
       remoteProjectsStore.clear();
+      cancelSessionListPersist();
       clearRemoteSessionActivity();
       revokedDevicesStore.clearAll();
     };

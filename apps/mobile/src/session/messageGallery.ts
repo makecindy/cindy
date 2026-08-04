@@ -136,6 +136,10 @@ export function collectMobileMessageGalleryImages(
       case 'fork_origin':
         // fork 来源标记只含导航 UI,no-op。
         break;
+      case 'pending_send':
+        // 待发送气泡:附件还是 `cindy-oss-attach://` 中转引用 / 本地预览,不是可供
+        // lightbox 分页的正式媒体;等消息回流后由 message 路径入图集。
+        break;
       default:
         // 穷尽性保证:新增 render-item 变体会被 typecheck 拦下(入参 never)。运行时降级为 log+skip
         // (不 throw),与 RenderItemView 一致——相册收集在 useMemo 路径,不能让单个未知 item 崩。

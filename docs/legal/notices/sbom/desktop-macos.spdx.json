@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/432b125431404c6ce264d111cde2d5409419e399c9da0fa3969567775906926a",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/23affa20a75c35d02a9c215426faa99556a71a4753d7b6be7e720dbb22eae339",
   "creationInfo": {
-    "created": "2026-07-27T21:02:23Z",
+    "created": "2026-07-28T11:22:53Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -165,23 +165,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40antfu/install-pkg@1.1.0"
-        }
-      ]
-    },
-    {
-      "name": "@anthropic-ai/sdk",
-      "SPDXID": "SPDXRef-Package-69d311a72cf4a3c3",
-      "versionInfo": "0.81.0",
-      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.81.0"
         }
       ]
     },
@@ -13521,11 +13504,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-90a75350ac517909"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-69d311a72cf4a3c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

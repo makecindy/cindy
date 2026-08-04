@@ -150,15 +150,21 @@ describe('Global 构建变体:登录改版四件事同样生效', () => {
     expect(screen.getByTestId('login-consent-row').style.top).toBe('642px');
   });
 
-  it('未勾选点「跳过登录」→ 无协议弹窗,直接进本地模式,且不写同意记录', async () => {
+  // 2026-07-29 拍板:跳过登录恢复过协议门(Global 构建同口径,不按区域分流)
+  it('未勾选点「跳过登录」→ 先弹协议弹窗;同意后进本地模式并写同意记录', async () => {
     mount(await globalIdentifierState());
     expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
-    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
+    expect(authEnterLocal).not.toHaveBeenCalled();
     expect(acceptPrivacyConsent).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-consent-agree'));
+    });
+    expect(authEnterLocal).toHaveBeenCalledTimes(1);
+    expect(acceptPrivacyConsent).toHaveBeenCalled();
   });
 
   it('其它个人登录链路的协议门未被误摘:未勾选点 Apple 圆钮仍先弹协议弹窗', async () => {

@@ -14,12 +14,12 @@
  */
 import {
   actualSourceIdForModel,
+  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
   modelSupportsFastMode,
   nativeDefaultSourceId,
-  sourcesForModel,
   type ProviderView,
 } from '@cindy/model-providers/registry';
 import {
@@ -163,9 +163,12 @@ export function isSelectedSourceDisconnected(args: {
   error: string | null;
 }): boolean {
   if (!args.providerId || args.loading || args.error !== null) return false;
-  // 实际路由口径(includeDisabled):本判定只回答「选中来源还连着吗」,停用是准入轴,
-  // 不打断已建会话 —— 按准入 rail 判会把停用当断开误报错误态(桌面同款)。
-  return !sourcesForModel([...args.providers], args.modelId, args.agentKind, {
+  // chatEligibleSourcesForModel + includeDisabled(issue #882 第 3 点 与 PR #744
+  // 停用轴合流,2026-07 review):与桌面 sourceSwitch.ts 的 isSelectedSourceDisconnected
+  // 同一份口径——选中来源若还在但这个 id 在它上面已经不是聊天模型了,也要判"断连",
+  // 不能只看 id 是否存在;但停用(disabled/suspended)是**另一根准入轴**,不打断已建
+  // 会话 —— 按准入 rail 判会把停用当断开误报错误态(桌面同款),故传 includeDisabled。
+  return !chatEligibleSourcesForModel([...args.providers], args.modelId, args.agentKind, {
     includeDisabled: true,
   }).some((provider) => provider.id === args.providerId);
 }

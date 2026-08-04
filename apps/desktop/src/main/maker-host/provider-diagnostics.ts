@@ -16,10 +16,12 @@
 
 import {
   appendProviderRequestPath,
+  isAgentSelectableModel,
   isLoopbackProviderUrl,
   type AgentKind,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
+import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
@@ -80,33 +82,41 @@ export function setDiagnosticsKeyReader(reader: KeyReader): void {
 function withoutCredentialHeaders(
   headers: Record<string, string> | undefined,
 ): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([name]) => {
-      const normalized = name.toLowerCase();
-      return normalized !== 'authorization' && normalized !== 'x-api-key';
-    }),
-  );
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    const lower = name.toLowerCase();
+    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+  }
+  return normalized;
+}
+
+function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    normalized[name.toLowerCase()] = value;
+  }
+  return normalized;
 }
 
 /** 构造探测请求（纯函数，单测直断言）。header 组合与 provider-route 的 api-key-header 分支对齐。 */
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    ...(mustStripCredentialHeaders
-      ? withoutCredentialHeaders(spec.headers)
-      : (spec.headers ?? {})),
-  };
-  if (spec.agent === 'claude-code') {
-    // Anthropic Messages wire。anthropic-version 为兼容端点普遍要求的必带头。
+  const headers = mustStripCredentialHeaders
+    ? withoutCredentialHeaders(spec.headers)
+    : normalizedHeaders(spec.headers);
+  headers['content-type'] = 'application/json';
+  const anthropicMessages =
+    spec.wireProtocol === 'anthropic-messages'
+    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  if (anthropicMessages) {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
       headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
-      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
+      url: joinAnthropicMessagesUrl(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
       init: {
         method: 'POST',
         headers,
@@ -316,8 +326,13 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   const routing = provider.routing[agent];
   if (!routing) throw new Error(`provider '${providerId}' has no runtime for '${agent}'`);
   if (routing.disabled) throw new Error(`provider '${providerId}' runtime '${agent}' is disabled`);
-  const model = (provider.models[agent] ?? [])[0];
-  if (!model) throw new Error(`provider '${providerId}' has no models for '${agent}'`);
+  // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
+  // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
+  // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
+  const model = (provider.models[agent] ?? []).find((m) =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
+  );
+  if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
   // 无 token → 探测会得到 AUTH_INVALID，这本身就是「先去登录」的正确结论。
   // token 走 authorization 头而**不走 apiKey 字段**——apiKey 会让 cc 探测同时发

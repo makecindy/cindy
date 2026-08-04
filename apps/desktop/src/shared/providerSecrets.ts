@@ -18,7 +18,15 @@
  */
 
 /** 供应商密钥的稳定标识。新增供应商时在此扩展。 */
-export type ProviderSecretId = 'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr';
+export type ProviderSecretId =
+  | 'xd'
+  | 'mivo'
+  | 'brave'
+  | 'tavily'
+  | 'xai'
+  | 'voice-asr'
+  | 'gemini'
+  | 'openai-images';
 
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
@@ -37,6 +45,12 @@ const STORAGE_KEYS: Record<ProviderSecretId, string> = {
   // Voice input's user-configured realtime ASR credential is intentionally
   // isolated from chat/model gateway keys.
   'voice-asr': 'voice_input_asr_api_key',
+  // Google Gemini API key(图像通道,2026-07 图像多来源)。按新供应商约定命名。
+  gemini: 'provider_key_gemini',
+  // OpenAI 平台 API key(仅图像通道,2026-07 图像多来源)。与 ChatGPT 订阅 OAuth
+  // (codex-home/auth.json)是两套凭证:订阅 token 调不了平台 images API(实测
+  // 401/403 缺 scope),聊天照旧走订阅,图像走这把平台 key。
+  'openai-images': 'provider_key_openai_images',
   // 未来新增示例(届时在 ProviderSecretId 与此处同步添加):
   //   anthropic: 'provider_key_anthropic',
   //   openai:    'provider_key_openai',
@@ -62,6 +76,8 @@ export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
 
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
+  STORAGE_KEYS['gemini'].toLowerCase(),
+  STORAGE_KEYS['openai-images'].toLowerCase(),
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
 

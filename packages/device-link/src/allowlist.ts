@@ -31,6 +31,11 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 /**
  * cindy_helper 跨设备历史读取。被控端只接受单 session 的结构化只读查询，
  * 并复用本机 history reader 的过滤、排序与游标语义。
+ *
+ * 响应除分页结果外附带可选 `terminal` 字段(会话尾部终态安全标记,
+ * { status:'error', createdAt? } 或 null):被控端与页面读取在同一次
+ * handler 调用内计算,保证标记与消息快照来自同一数据库时刻;错误正文
+ * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
 

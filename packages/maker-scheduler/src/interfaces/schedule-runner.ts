@@ -61,6 +61,56 @@ export interface FireContext {
    * fire() 返回后再保存，否则 fail-closed 的抛错路径会丢失诊断信息。
    */
   onPreRunHookCompleted?: (result: PreRunHookRunResult) => Promise<void> | void;
+  /**
+   * Runner 进入「纯等待」状态时上报。目前唯一的纯等待场景:心跳 prompt 撞上正忙的
+   * 目标会话被排进队列,等会话空闲后派发 —— 此刻没有 agent 子进程、没有 MCP 注册、
+   * 不烧 token。
+   *
+   * Scheduler 据此把该 run 的 phase 切到 'queued' 并**从并发闸门计数里摘出去**:
+   * 并发上限防的是"同时跑太多 agent",纯等待占着配额毫无收益,反而会让一个卡住的
+   * 会话拖死整个调度器(2026-07-29 实事故,见 ScheduleRunPhase 注释)。
+   *
+   * 必须与 endQueueWait 配对;optional,runner 不调则退回旧行为(排队期间照旧占槽)。
+   */
+  onQueueWaitStart?: () => void;
+  /**
+   * 结束纯等待。**必须**在每条离开等待的路径上调用一次(派发被接受 / 撤项 / 失败 /
+   * abort),否则该 run 会永远被算作"不占槽"。
+   *
+   * @param reclaimSlot true = 本轮要继续执行,需要重新占回执行槽;
+   *                    false = 本轮不再执行(撤项 / 失败 / abort),只复位记账。
+   * @returns reclaimSlot=true 时:false 表示**当前没有空槽**。此时调用方必须在
+   *          vendor dispatch **之前**中断本轮(撤项 + 按顺延收口),不得继续执行 ——
+   *          让出的槽位早已被 tick 补上新任务,继续执行就会突破 maxConcurrentRuns,
+   *          把当初防 OOM 的闸门架空(review #944 第二、三轮)。
+   *          reclaimSlot=false 时返回值无意义(恒 true)。
+   */
+  endQueueWait?: (reclaimSlot: boolean) => boolean;
+  /**
+   * Runner 每次真的把一条通知投进 notifier 后上报投了哪一类。Scheduler 只用它回答
+   * 一个问题:卡死守卫把本轮记成 failed 时,**还需不需要补一条失败通知**。
+   *
+   * 为什么不能靠"runner 有没有抛错"推断(review #944 第五轮 P1):守卫的 abort 可能
+   * 落在前置检查脚本、workspace / session 创建这类 setup await 上,runner 会在走到
+   * 任何 notifier 调用之前就抛出 —— 有 runError 却一条通知都没发。按旧判据(有错
+   * 即视为已通知)会静默吞掉唯一的失败提醒,配了桌面 / 飞书通知的用户什么都收不到。
+   *
+   * 补发判据是"runner 没投过 **failure**",而不是"没投过任何通知":runner 无错返回
+   * (abort 只 drain 出一个普通 done)时它投的是**成功**通知,与本轮记为 failed 矛盾,
+   * 必须补一条失败通知纠正(第三轮已确立的语义)。
+   *
+   * optional;runner 不实现则退回"总是补发" —— 宁可重复一条,不可静默(失败必须可见)。
+   */
+  onRunnerNotified?: (kind: 'success' | 'failure') => void;
+  /**
+   * Runner 收到任何一次执行进展信号（会话事件）时打点。Scheduler 用它做卡死判定:
+   * 「多久没有新反馈」而不是「总共跑了多久」—— 后者会误砍真在干活的长任务。
+   *
+   * 调用要求:热路径,实现必须廉价(引擎侧只写一个时间戳,不落库不广播)。
+   * optional;runner 不调则退回按 run 起始时间判定,长跑任务会被误判为卡死,
+   * 因此新 runner 都应该接。
+   */
+  onProgress?: () => void;
 }
 
 export interface FireResult {

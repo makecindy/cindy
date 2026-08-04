@@ -27,6 +27,7 @@ import { ipcRenderer } from 'electron';
 
 import {
   BROWSER_COMMENT_CANCEL_PENDING_CHANNEL,
+  BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
   BROWSER_COMMENT_COMMIT_PENDING_CHANNEL,
   BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL,
   BROWSER_COMMENT_DESIGN_PROPS,
@@ -36,7 +37,9 @@ import {
   BROWSER_COMMENT_EXIT_MODE_CHANNEL,
   BROWSER_COMMENT_MODE_EXITED_CHANNEL,
   BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL,
-  BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL,
+  type BrowserCommentCommandChannel,
+  type BrowserCommentCommandEnvelope,
+  type BrowserCommentCommandResult,
   type BrowserCommentCommitPendingPayload,
   type BrowserCommentDesignBaseline,
   type BrowserCommentDesignPreviewPayload,
@@ -874,10 +877,10 @@ function trySelectExistingTextSelection(): boolean {
 
 function enterMode(payload: BrowserCommentEnterModePayload): void {
   exitMode(); // 幂等:重复 enter 先拆旧的。
-  const markerNumber =
-    Number.isInteger(payload?.markerNumber) && payload.markerNumber > 0
-      ? payload.markerNumber
-      : 1;
+  if (!Number.isInteger(payload?.markerNumber) || payload.markerNumber <= 0) {
+    throw new Error('invalid marker number');
+  }
+  const markerNumber = payload.markerNumber;
   state = buildOverlay(markerNumber);
   const s = state;
   syncDocLayerScroll();
@@ -990,11 +993,22 @@ function exitMode(): void {
   state = null;
 }
 
-/** 恢复交互层可见 + crosshair(prepare-screenshot 之后 commit / cancel 共用)。 */
+/** 恢复点选态的 crosshair 与输入拦截(commit / cancel 共用)。 */
 function showInteraction(): void {
   if (!state) return;
   state.blocker.style.display = 'block';
   state.blocker.style.cursor = 'crosshair';
+}
+
+/**
+ * 截图只需要隐藏会留下像素的临时交互反馈。透明 blocker 必须继续接管输入：
+ * capture / cache 失败时 host 会保留 pending Popover，若这里释放 pointer events，
+ * 底层网页会在评论仍待处理时直接响应点击，造成 host / guest 交互语义分叉。
+ */
+function hideTransientInteractionVisuals(): void {
+  if (!state) return;
+  state.highlight.style.display = 'none';
+  state.dragRect.style.display = 'none';
 }
 
 /** 取消当前 pending:marker 与附加可视整组撤除,样式预览还原,回到点选状态。 */
@@ -1015,7 +1029,7 @@ function cancelPending(): void {
 /** 提交成功:pending marker 转常驻(附加可视撤除),样式预览转入 committed
  *  组保留在页面上(与截图所见一致),编号推进,继续点选。 */
 function commitPending(payload: BrowserCommentCommitPendingPayload): void {
-  if (!state) return;
+  if (!state?.pending) throw new Error('missing pending comment');
   // 设计预览记录打上归属评论编号:截图前对账时,归属已删除 chip 的预览
   // 要与常驻 marker 一起被剪除 / 还原。
   const commitNumber = state.pending?.number;
@@ -1045,12 +1059,10 @@ function commitPending(payload: BrowserCommentCommitPendingPayload): void {
 
 /** 截图前置:隐藏交互 UI,保留有效标注(常驻 marker 先按草稿白名单对账剪除
  *  + pending 组);两帧后回执。 */
-function prepareScreenshot(payload?: BrowserCommentPrepareScreenshotPayload): void {
-  if (!state) {
-    // 模式已丢(页面刚导航等)—— 仍回执,host 侧靠超时/空图兜底。
-    ipcRenderer.sendToHost(BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL);
-    return;
-  }
+async function prepareScreenshot(payload?: BrowserCommentPrepareScreenshotPayload): Promise<void> {
+  // 没有 pending 时截图不可能代表 host 正在提交的评论。明确失败，让 host
+  // 保留输入并等待用户重试；不能回一张无 marker 的“成功”截图。
+  if (!state?.pending) throw new Error('missing pending comment');
   // 对账:composer 里 chip 被单删 / 清空 / 随发送清草稿后,对应常驻 marker
   // 已无 `## Comment N` 块与之对应,截图前剪除,防孤儿 / 重号 marker 入图;
   // 归属这些评论的样式 / 文本预览同步还原(或做原值链拼接),防止截图展示
@@ -1064,54 +1076,61 @@ function prepareScreenshot(payload?: BrowserCommentPrepareScreenshotPayload): vo
     });
     pruneCommittedDesignForInvalidMarkers(valid);
   }
-  state.blocker.style.display = 'none';
-  state.highlight.style.display = 'none';
-  state.dragRect.style.display = 'none';
-  requestAnimationFrame(() => {
+  hideTransientInteractionVisuals();
+  await new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
-      ipcRenderer.sendToHost(BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL);
+      requestAnimationFrame(() => resolve());
     });
   });
 }
 
 // ── 入口:只注册监听,零 DOM 副作用 ─────────────────────────────────────────
 
-ipcRenderer.on(BROWSER_COMMENT_ENTER_MODE_CHANNEL, (_e, payload) => {
-  try {
-    enterMode(payload as BrowserCommentEnterModePayload);
-  } catch {
-    // guest 页面环境千奇百怪(CSP 不拦 preload,但 DOM 可能被页面脚本魔改),
-    // 任何异常都不能溢出到页面 console 之外的行为。
-  }
-});
-ipcRenderer.on(BROWSER_COMMENT_EXIT_MODE_CHANNEL, () => {
-  try {
-    exitMode();
-  } catch {
-    // see above
-  }
-});
-ipcRenderer.on(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL, () => {
-  try {
-    cancelPending();
-  } catch {
-    // see above
-  }
-});
-ipcRenderer.on(BROWSER_COMMENT_COMMIT_PENDING_CHANNEL, (_e, payload) => {
-  try {
-    commitPending(payload as BrowserCommentCommitPendingPayload);
-  } catch {
-    // see above
-  }
-});
-ipcRenderer.on(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL, (_e, payload) => {
-  try {
-    prepareScreenshot(payload as BrowserCommentPrepareScreenshotPayload | undefined);
-  } catch {
-    // see above
-  }
-});
+/**
+ * 注册一条带 request/ack 的关键命令。handler 可以等待动画帧；无论同步异常还是
+ * Promise rejection 都只向 host 返回 ok=false，不把不可信页面的错误细节带出去。
+ */
+function registerCommand<T>(
+  command: BrowserCommentCommandChannel,
+  handler: (payload: T) => void | Promise<void>,
+): void {
+  ipcRenderer.on(command, (_e, rawEnvelope) => {
+    const envelope = rawEnvelope as BrowserCommentCommandEnvelope<T> | undefined;
+    if (!envelope || typeof envelope.requestId !== 'string' || !envelope.requestId) return;
+    void Promise.resolve()
+      .then(() => handler(envelope.payload as T))
+      .then(
+        () => {
+          const result: BrowserCommentCommandResult = {
+            requestId: envelope.requestId,
+            command,
+            ok: true,
+          };
+          ipcRenderer.sendToHost(BROWSER_COMMENT_COMMAND_RESULT_CHANNEL, result);
+        },
+        () => {
+          const result: BrowserCommentCommandResult = {
+            requestId: envelope.requestId,
+            command,
+            ok: false,
+          };
+          ipcRenderer.sendToHost(BROWSER_COMMENT_COMMAND_RESULT_CHANNEL, result);
+        },
+      );
+  });
+}
+
+registerCommand<BrowserCommentEnterModePayload>(BROWSER_COMMENT_ENTER_MODE_CHANNEL, enterMode);
+registerCommand<void>(BROWSER_COMMENT_EXIT_MODE_CHANNEL, exitMode);
+registerCommand<void>(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL, cancelPending);
+registerCommand<BrowserCommentCommitPendingPayload>(
+  BROWSER_COMMENT_COMMIT_PENDING_CHANNEL,
+  commitPending,
+);
+registerCommand<BrowserCommentPrepareScreenshotPayload | undefined>(
+  BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL,
+  prepareScreenshot,
+);
 ipcRenderer.on(BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL, (_e, payload) => {
   try {
     applyDesignPreview(payload as BrowserCommentDesignPreviewPayload);

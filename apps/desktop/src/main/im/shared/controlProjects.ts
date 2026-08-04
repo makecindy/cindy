@@ -162,6 +162,52 @@ export async function readSessionTitle(sessionId: string): Promise<string> {
  * 拉取该 source/status 全集后在内存里 normalize 比对 — 数据量受 MAX_PROJECTS
  * 推论上限制约 (一台机器的 active session 总数, 不会大), 不需要走 SQL 索引。
  */
+export interface RecentControlSession extends ControlSession {
+  /** 会话所在目录显示名(basename;托管 IM 目录显示为空串, 由 UI 兜底)。 */
+  workspaceDisplayName: string;
+}
+
+/** `/session` 直达列表: 跨工作区取最近活跃会话(官方 bot 最近会话选择器同款)。 */
+export async function listRecentSessionsForPicker(
+  limit = 20,
+): Promise<RecentControlSession[]> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({
+      id: sessions.id,
+      title: sessions.title,
+      workingDir: sessions.workingDir,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+    })
+    .from(sessions)
+    .where(
+      and(
+        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        eq(sessions.status, 'active'),
+        isNotNull(sessions.workingDir),
+        attachableSessionPredicate(),
+      ),
+    )
+    .orderBy(desc(sessions.userSendAt), desc(sessions.updatedAt))
+    .limit(limit * 2); // UUID 目录(未选文件夹的草稿目录)过滤后再截断
+
+  const out: RecentControlSession[] = [];
+  for (const r of rows) {
+    const dir = normalizeWorkingDir(r.workingDir);
+    if (!dir) continue;
+    const base = dir.split('/').filter(Boolean).pop() ?? '';
+    out.push({
+      id: r.id,
+      title: r.title,
+      sortTimeMs: r.userSendAt ?? r.updatedAt,
+      workspaceDisplayName: UUID_RE.test(base) ? '' : base,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 export async function listSessionsForWorkspace(
   workingDir: string,
 ): Promise<ControlSession[]> {

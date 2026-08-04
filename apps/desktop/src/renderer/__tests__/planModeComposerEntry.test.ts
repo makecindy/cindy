@@ -74,6 +74,49 @@ afterEach(() => {
 });
 
 describe('ExtraDirsButton 计划模式菜单项', () => {
+  it('附件接线单独存在时也渲染「+」入口，并把多选文件交给 composer', () => {
+    const onAddFiles = vi.fn();
+    const { container } = render(
+      createElement(ExtraDirsButton, {
+        extraDirs: [],
+        onAddFiles,
+      }),
+    );
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).toBeTruthy();
+    expect(fileInput?.multiple).toBe(true);
+
+    const trigger = screen.getByLabelText('extraDirs.menuAria');
+    expect(trigger.getAttribute('aria-haspopup')).toBeNull();
+    fireEvent.click(trigger);
+    const openPicker = screen.getByRole('button', { name: 'extraDirs.addFiles' });
+    const inputClick = vi.spyOn(fileInput!, 'click');
+    fireEvent.click(openPicker);
+    expect(inputClick).toHaveBeenCalledTimes(1);
+
+    const image = new File(['image'], 'photo.png', { type: 'image/png' });
+    const video = new File(['video'], 'clip.mp4', { type: 'video/mp4' });
+    fireEvent.change(fileInput!, { target: { files: [image, video] } });
+    expect(onAddFiles).toHaveBeenCalledWith([image, video]);
+    expect(fileInput?.value).toBe('');
+  });
+
+  it('菜单打开后 composer 变为 disabled 时，附件行同步禁用', () => {
+    const onAddFiles = vi.fn();
+    const props = { extraDirs: [], onAddFiles };
+    const { container, rerender } = render(createElement(ExtraDirsButton, props));
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const inputClick = vi.spyOn(fileInput!, 'click');
+
+    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
+    rerender(createElement(ExtraDirsButton, { ...props, disabled: true }));
+
+    const openPicker = screen.getByRole('button', { name: 'extraDirs.addFiles' });
+    expect((openPicker as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(openPicker);
+    expect(inputClick).not.toHaveBeenCalled();
+  });
+
   it('codex 只凭 planMode 也渲染「+」入口, 菜单里出现计划模式 toggle', () => {
     const onToggle = vi.fn();
     render(

@@ -13,6 +13,13 @@ import type { AgentCredentialMode } from './auth-adapter.js';
 /** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态(undefined = 未显式指定,走 adapter fallback)。 */
 export interface BehaviorFlagsContext {
   credentialMode?: AgentCredentialMode;
+  /**
+   * 本次 spawn 落在哪台机器:'local' = 本机子进程,'remote' = 远端 daemon。
+   * host 据此决定"只对本机有意义"的 flag(如按本机核数算的工具链限核 env)
+   * 要不要注入 —— 本机核数注到远端机器纯属错误值。undefined 视同 'local'
+   * (未接入该字段的调用方保持旧行为)。
+   */
+  spawnMode?: 'local' | 'remote';
 }
 
 export interface AgentRuntimeConfig {
@@ -55,8 +62,10 @@ export interface AgentRuntimeConfig {
    * - undefined / blank: do not override the agent's native selection logic
    * - non-blank: the agent implementation injects the vendor-supported deterministic override
    *
-   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume it yet because
-   * its full-history fork path rejects model overrides in the currently bundled binary.
+   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field:
+   * the desktop host injects its subagent default via spawn-time `-c agents.default_subagent_model`
+   * overrides instead (see apps/desktop/src/main/maker-host/codex-subagent-config.ts) — the bundled
+   * codex binary treats it as a fallback that explicit spawn params may still override.
    *
    * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
    * 也压过每次 Task/Agent 调用传入的 `model` 参数,而平台不提供更低优先级的槽位。

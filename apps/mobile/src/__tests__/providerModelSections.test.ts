@@ -230,6 +230,20 @@ describe('isSelectedSourceDisconnected', () => {
       error: null,
     })).toBe(false);
   });
+
+  it('reports disconnected when the selected source\'s copy of the id is non-chat (issue #882, 2026-07 review: same as desktop sourceSwitch.ts)', () => {
+    const nonChatProviders = [
+      provider('xd', { codex: [{ ...model('shared-id'), mode: 'image_generation' }] }),
+    ];
+    expect(isSelectedSourceDisconnected({
+      providers: nonChatProviders,
+      providerId: 'xd',
+      modelId: 'shared-id',
+      agentKind: 'codex',
+      loading: false,
+      error: null,
+    })).toBe(true);
+  });
 });
 
 describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共享实现同源)', () => {

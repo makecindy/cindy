@@ -191,11 +191,11 @@ describe('maker:event hot path ordering', () => {
       /ipcMain\.handle\(MAKER_INVOKE\.CLOSE_SESSION,[\s\S]*?\n {2}\}\);/,
     )?.[0];
 
-    expect(closedBlock).toContain('handleAgentIslandSessionClosedAfterCleanup(session.id);');
+    expect(closedBlock).toContain("handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');");
     expectOrder(
       closedBlock,
       "cleanupPendingInteractionsForSession(session.id, 'session_closed');",
-      'handleAgentIslandSessionClosedAfterCleanup(session.id);',
+      "handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');",
     );
     expect(source).toContain('Agent Island session close cleanup failed after mandatory session cleanup');
     expect(closeSessionHandler).toBeTruthy();
@@ -289,24 +289,31 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).not.toContain('hasCodexOAuthLogin()');
     expect(codexDoneSource).toContain('promptTokens + completionTokens + cachedTokens');
     expect(codexDoneSource).not.toContain('promptTokens + completionTokens + reasoningTokens + cachedTokens');
-    expect(codexDoneSource).toContain('const isCodexBudgetRoute = pricingModel.startsWith(\'codex/\');');
-    expect(codexDoneSource).toContain('const isCodexXaiProviderRoute = pricingModel.startsWith(XAI_MODEL_PREFIX);');
+    expect(codexDoneSource).toContain('const isCustomProviderRoute =');
+    expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
+    expect(codexDoneSource).toContain("&& pricingModel.startsWith('codex/');");
+    expect(codexDoneSource).toContain('&& pricingModel.startsWith(XAI_MODEL_PREFIX);');
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
+    expect(codexDoneSource).toContain('!isCustomProviderRoute');
     expect(codexDoneSource).toContain('(sessionProvider === \'xd\' && hasGatewayKey)');
     expect(codexDoneSource).toContain('const isSubscriptionValue = isRemoteCodexSession ||');
     expect(codexDoneSource).toContain('isCodexXaiProviderRoute ||');
-    expect(codexDoneSource).toContain("(codexAuthInjection === 'oauth-bearer' && !hasEffectiveGatewayRoute)");
+    // 用正则而非整串匹配:这段条件已按多行排版,单行字面量会因换行/缩进调整而假失败。
+    // 要守的语义是——订阅计价只在「OpenAI 供应商 + oauth-bearer 注入 + 无生效网关路由」时成立。
+    expect(codexDoneSource).toMatch(
+      /isCodexOpenAiProviderRoute\s*&&\s*codexAuthInjection === 'oauth-bearer'\s*&&\s*!hasEffectiveGatewayRoute/,
+    );
     expect(codexDoneSource).toContain('const modelUsageKey = isSubscriptionValue');
     expect(codexDoneSource).toContain('? codexSubscriptionUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain(': codexApiUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? getSubscriptionDirectValuePrice(pricingModel)');
     expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
-    expect(codexDoneSource).toContain(": getModelPriceQuote(pricing, 'xd', pricingModel)");
+    expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");
     expect(codexDoneSource).toContain('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? await getModelPricing()');
-    expect(codexDoneSource).toContain(": await getModelPricingForModel('xd', pricingModel)");
+    expect(codexDoneSource).toContain("? await getModelPricingForModel('xd', pricingModel)");
     expect(codexDoneSource).toContain('price ?? undefined');
     expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
@@ -327,6 +334,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
     expect(codexDoneSource).toContain('money,');
     expect(codexDoneSource).toContain('if (!isRemoteCodexSession &&');
+    expect(codexDoneSource).toContain('!isCustomProviderRoute &&');
     expect(codexDoneSource).toContain("!model.startsWith(XAI_MODEL_PREFIX) &&");
     expect(codexDoneSource).toContain("(codexAuthInjection === 'env-key' || model.startsWith('codex/') || (sessionProvider === 'xd' && hasGatewayKey))");
     expect(codexDoneSource).not.toContain("sessionProvider !== 'xai'");

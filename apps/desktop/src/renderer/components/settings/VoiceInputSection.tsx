@@ -9,7 +9,9 @@ import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { SUPPORTED_LOCALES } from '@/i18n';
+import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
+import { extractIpcError } from '@/utils/ipcError';
 import { dictionaryTermKey } from '@cindy/voice-input-core';
 import {
   MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS,
@@ -18,6 +20,7 @@ import {
   mergeVoiceInputDictionaryCsvTerms,
   normalizeVoiceInputDictionaryEntryText,
   parseVoiceInputDictionaryCsv,
+  suspendVoiceInputGlobalShortcut,
   syncVoiceInputGlobalShortcut,
   useVoiceInputSettings,
   type VoiceInputDictionaryEntry,
@@ -38,6 +41,7 @@ import {
   findVoiceInputAppShortcutConflict,
   type AppShortcutComboEntry,
 } from '@/voice-input/appShortcutConflict';
+import { shouldShowInputMonitoringBadge } from '@/voice-input/inputMonitoringBadge';
 import {
   createVoiceInputModifierShortcut,
   createVoiceInputShortcutFromEvent,
@@ -61,6 +65,7 @@ import {
 } from '../../../shared/voiceInputCustomAsr';
 import type { VoiceInputConnectionTestFailureReason } from '../../../shared/voiceInputConnectionTest';
 
+const log = createLogger('VoiceInputSection');
 const LANGUAGE_OPTIONS: ReadonlyArray<VoiceInputLanguage> = ['auto', ...SUPPORTED_LOCALES];
 const AUTO_MICROPHONE_VALUE = '__auto__';
 const DICTIONARY_FILTERS = ['all', 'automatic', 'manual'] as const;
@@ -1071,6 +1076,9 @@ export function VoiceInputSection() {
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
   const [recordingShortcut, setRecordingShortcut] = useState(false);
   const [recordingShortcutPreview, setRecordingShortcutPreview] = useState<VoiceInputShortcut | null>(null);
+  // 录制期缺监听权限：Fn 类快捷键录不了（Fn 不走 DOM keydown，只能靠原生 listener 上报），
+  // 但裸修饰键和普通组合键仍然正常。所以这不是错误，只在提示区说明，不弹 toast。
+  const [fnRecordingBlocked, setFnRecordingBlocked] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [refinementRulesExpanded, setRefinementRulesExpanded] = useState(false);
   const [customDictionaryExpanded, setCustomDictionaryExpanded] = useState(false);
@@ -1094,6 +1102,12 @@ export function VoiceInputSection() {
   const pendingModifierShortcutCodeRef = useRef<string | null>(null);
   const pendingKeyboardShortcutRef = useRef<VoiceInputShortcut | null>(null);
   const shortcutSuspendPromiseRef = useRef<Promise<void> | null>(null);
+  // 快捷键提交的代次，见 commitRecordedShortcut。
+  const shortcutSubmissionRef = useRef(0);
+  // 正在飞的那次提交，见 commitRecordedShortcut 与录制 effect 的 cleanup。
+  const shortcutCommitPromiseRef = useRef<Promise<void> | null>(null);
+  // 录制轮次，见录制 effect 的 cleanup：迟到的恢复不能踩到新一轮的挂起。
+  const recordingSessionRef = useRef(0);
   const nativeFnShortcutActiveRef = useRef(false);
   const nativeFnComboSeenRef = useRef(false);
   const externalDictionaryLearningSupported = window.electronAPI.platform === 'darwin';
@@ -1211,6 +1225,112 @@ export function VoiceInputSection() {
     () => voiceInputShortcutNeedsMacNativeListener(settings.shortcut, window.electronAPI.platform),
     [settings.shortcut],
   );
+  /**
+   * 待授权 = 当前快捷键需要监听权限，且权限**明确**被拒。
+   *
+   * 只认 denied、不用 !ok：status 为 unknown 时（helper 跑不起来、权限状态压根问不出来）
+   * ok 同样是 false，但那是故障而非等授权，挂「授权后生效」会把用户引向错误的下一步。
+   * 与 main 侧 classifyMacNativeListenerFailure 的 denied/unknown 分界保持一致。
+   */
+  const shortcutAwaitingInputMonitoring =
+    shortcutNeedsKeyboardListenerPermission && permissions.inputMonitoring.status === 'denied';
+
+  // 只给 startFnKeyCapture 用：它的依赖数组必须为空（见下方说明），但仍要拿到当前语言的
+  // 文案。渲染期同步赋值，取到的就是本次渲染的 t，不会滞后一帧。
+  const translateRef = useRef(t);
+  translateRef.current = t;
+
+  /**
+   * 启动录制期的 Fn key capture，并把结果反映到提示区。
+   *
+   * 单独抽出来，是为了让「权限刚授予」这条路**只重启 capture**、不去重跑整个录制
+   * effect：重跑会先跑 cleanup 里的 syncVoiceInputGlobalShortcut(已保存快捷键)，再由
+   * setup 重新挂起，两步都是异步的，中间那个窗口里用户按下旧快捷键就会真的触发一次
+   * 语音输入——而他本意只是在录新键。
+   *
+   * 同理，这个 callback 的依赖必须**为空**：录制 effect 依赖它，任何依赖项变化都会
+   * 经由它的身份变化把整个录制 effect 重跑一遍，打开上面那段窗口。文案函数 `t` 的
+   * 身份随界面语言变化，所以走 ref 取最新值，不进依赖数组。
+   */
+  const startFnKeyCapture = useCallback(async (isCancelled: () => boolean): Promise<void> => {
+    if (window.electronAPI.platform !== 'darwin') return;
+    // main 侧那条 IPC 现在会对非应用外壳窗口的 sender 抛（授权闸）。合法路径不会走到，但不接住
+    // 就会变成 effect 里的 unhandled rejection —— 收成一次普通失败，走下面既有的分类。
+    const result = await window.electronAPI.voiceInput
+      .startModifierShortcutRecording()
+      .catch((error: unknown) => ({
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+        // 归到 'failed'（helper 起不来那档）:被闸拒不是缺权限,不该显示「Fn 需要监听权限」。
+        errorCode: 'failed' as const,
+      }));
+    // 只丢弃迟到的结果，不在这里补发 stop：那条 IPC 按 sender id 记账，而同一个设置页
+    // 连续两轮录制用的是同一个 id，第一轮迟到的 stop 会把用户刚开始的第二轮 capture
+    // 一起停掉。启动期间的取消由 main 侧 startChildProcess 的代次校验负责——那里才
+    // 拿得到 child 与启动状态，renderer 猜不了这个时序。
+    if (isCancelled()) return;
+    // 被更晚的一轮顶掉：这次调用已经过时，真正的结果由那一轮给出。不能在这里改提示或
+    // 弹错误，否则用户刚开始的第二轮录制会莫名收到一条上一轮的报错。
+    if (!result.ok && result.errorCode === 'superseded') return;
+    // blocked 只表示「确实缺权限」。以前只在成功时清掉，于是缺权限之后再来一次非权限
+    // 失败（listener 坏了）会继续挂着「Fn 需要监听权限」，把用户指向错误的原因。
+    const permissionBlocked = !result.ok && result.errorCode === 'permission';
+    setFnRecordingBlocked(permissionBlocked);
+    // 缺权限只挡住 Fn 检测，其它快捷键照录，所以在提示区说明而不是弹错误——
+    // 弹错误会让用户以为整个录制坏了，然后放弃。
+    if (result.ok || permissionBlocked) return;
+    const translate = translateRef.current;
+    toast.error(result.errorCode === 'failed'
+      ? translate('settings.voiceInput.shortcut.toast.listenerUnavailable')
+      : translate('settings.voiceInput.shortcut.toast.recordingFailed', { error: result.error }));
+  }, []);
+
+  // 用户去系统设置里打开开关后切回来（window focus 会触发 refreshPermissions），在这里
+  // 补一次注册：event tap 跑在独立 helper 子进程里，重新 spawn 就能拿到新授权，不需要
+  // 重启 App。少了这步，用户授权完会发现快捷键依然没反应，那个「去授权」入口就等于白点。
+  const inputMonitoringGrantedRef = useRef(permissions.inputMonitoring.ok);
+  useEffect(() => {
+    const granted = permissions.inputMonitoring.ok;
+    const justGranted = granted && !inputMonitoringGrantedRef.current;
+    inputMonitoringGrantedRef.current = granted;
+    if (!justGranted) return;
+    if (recordingShortcut) {
+      // 录制中：全局快捷键必须一直保持挂起，所以这里只补上之前失败的 Fn capture，
+      // 绝不碰挂起状态，也不让录制 effect 重跑（那会产生一段旧快捷键被短暂恢复的
+      // 窗口，用户此刻正在按键试录，会真的触发一次语音输入）。
+      //
+      // 必须带取消守卫：录制随时可能在这次 IPC 返回前结束（或组件卸载）。少了它，
+      // 迟到的结果会把只在录制期有意义的提示重新点亮，还会漏掉那个 helper。
+      let cancelled = false;
+      void startFnKeyCapture(() => cancelled);
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!shortcutNeedsKeyboardListenerPermission) return;
+    // 授权拿到了 ≠ 快捷键一定起得来：helper 仍可能 spawn 失败、启动超时、起来就退。
+    // 那时「待授权」说明会随权限转为已授权而消失，用户看到的是一切正常、按键却没反应。
+    // 所以这条路和直接提交那条路一样要把失败说出来（DESIGN.md §11：错误要有下一步）。
+    let cancelled = false;
+    void (async () => {
+      const result = await syncVoiceInputGlobalShortcut(settings.shortcut);
+      // 组件卸载 / 权限又变了：迟到的结果不再弹提示。
+      if (cancelled || result.ok) return;
+      // 'permission' = 权限其实还没到位（比如刚才那次读到的是过期快照）：待授权说明和
+      // 徽章都还在，不用再弹一条错误盖在上面。'superseded' 由顶掉它的那一轮负责报。
+      if (result.errorCode === 'permission' || result.errorCode === 'superseded') return;
+      toast.error(translateRef.current('settings.voiceInput.shortcut.toast.listenerUnavailable'));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    permissions.inputMonitoring.ok,
+    recordingShortcut,
+    settings.shortcut,
+    shortcutNeedsKeyboardListenerPermission,
+    startFnKeyCapture,
+  ]);
 
   const showAppShortcutConflict = useCallback(
     (conflictId: AppShortcutId) => {
@@ -1224,19 +1344,52 @@ export function VoiceInputSection() {
 
   const commitRecordedShortcut = useCallback(
     (shortcut: VoiceInputShortcut | null) => {
-      void (async () => {
+      // 提交代次。录制框在这次提交 await 期间仍然开着，用户可以再录一个键提交第二次；
+      // main 侧的串行队列只保证最终存盘是最后那次，两次的**结果**照旧都会回到这里。
+      //
+      // 少了这道闸，过时那次的副作用会照常执行：收口录制框、弹它自己的提示，甚至在用户
+      // 最新选的快捷键根本不需要监听权限时（比如改成了 F16）弹出 macOS 授权窗。
+      const submission = (shortcutSubmissionRef.current += 1);
+      const isStaleSubmission = (): boolean => shortcutSubmissionRef.current !== submission;
+      const commit = (async () => {
         await shortcutSuspendPromiseRef.current;
         const result = await setShortcut(shortcut);
+        if (isStaleSubmission()) return;
+        // 被更晚的一轮顶掉：那一轮才决定最终结果，这里静默丢弃，不报错也不收口录制态。
+        if (!result.ok && result.errorCode === 'superseded') return;
         if (!result.ok) {
-          toast.error(t('settings.voiceInput.shortcut.toast.registrationFailed', { error: result.error }));
+          // 'failed' = 原生 listener 起不来。main 已把细节消毒成固定英文（原文含内部
+          // 路径），所以这里改用自带下一步的中文文案，不再把那句英文插进模板。
+          toast.error(result.errorCode === 'failed'
+            ? t('settings.voiceInput.shortcut.toast.listenerUnavailable')
+            : t('settings.voiceInput.shortcut.toast.registrationFailed', { error: result.error }));
           if (shortcut) setRecordingShortcutPreview(shortcut);
           return;
         }
         setRecordingShortcutPreview(null);
         setRecordingShortcut(false);
+        // 快捷键已存下来但还缺监听权限：这是用户刚做完的动作，正是请求授权最自然的时机。
+        // 只弹系统授权请求，不额外打开「系统设置」面板（那个窗自带跳转按钮）。
+        if (result.pendingInputMonitoring) {
+          toast.info(t('settings.voiceInput.shortcut.toast.pendingInputMonitoring'));
+          try {
+            await window.electronAPI.voiceInput.requestInputMonitoringPermission();
+          } catch (error) {
+            // 请求本身失败不额外打扰用户：权限徽章与行内说明已经把状态和入口摆在那了。
+            // 但要留下可诊断的痕迹；main 侧已按 IPC 错误协议消毒过 message。
+            log.warn('input monitoring permission request failed:', extractIpcError(error)?.code ?? error);
+          }
+          schedulePermissionRefresh({ immediate: true });
+        }
       })();
+      // 录制 effect 的 cleanup 要靠它决定「现在能不能读存盘去恢复注册」：提交还在飞时
+      // 存盘里还是旧快捷键，此刻恢复等于在这次提交之后又把旧的注册回去。
+      shortcutCommitPromiseRef.current = commit;
+      void commit.finally(() => {
+        if (shortcutCommitPromiseRef.current === commit) shortcutCommitPromiseRef.current = null;
+      });
     },
-    [setShortcut, t],
+    [schedulePermissionRefresh, setShortcut, t],
   );
 
   const getAppShortcutEntries = useCallback(
@@ -1431,6 +1584,7 @@ export function VoiceInputSection() {
     nativeFnShortcutActiveRef.current = false;
     nativeFnComboSeenRef.current = false;
     setRecordingShortcutPreview(null);
+    setFnRecordingBlocked(false);
   }, [recordingShortcut]);
 
   useEffect(() => {
@@ -1442,18 +1596,21 @@ export function VoiceInputSection() {
     // The cleanup re-syncs the current shortcut value (whatever it is after
     // recording: the new key, unchanged old key on Escape, or null after
     // Backspace clear).
+    //
+    // 这个 effect **不**依赖监听权限：录制中途授权后只需补一次 Fn capture，那由权限
+    // effect 直接调 startFnKeyCapture 完成。若改成让本 effect 重跑，cleanup 会先异步
+    // 恢复已保存的全局快捷键、setup 再把它挂起，中间那段窗口里用户按下旧快捷键会真的
+    // 触发一次语音输入。
     document.body.dataset.appShortcutRecording = '1';
     window.electronAPI.appShortcuts.setRecording(true);
+    // 录制轮次。cleanup 里的恢复是异步的（要等在飞的提交），这期间用户可能已经开始下一轮
+    // 录制 —— 那一轮才拥有「挂起」这个状态，上一轮的恢复必须让位，见下。
+    const recordingSession = (recordingSessionRef.current += 1);
     let cancelled = false;
-    const suspendPromise = syncVoiceInputGlobalShortcut(null).then(() => {
-      if (!cancelled && window.electronAPI.platform === 'darwin') {
-        void window.electronAPI.voiceInput.startModifierShortcutRecording()
-          .then((result) => {
-            if (!cancelled && !result.ok) {
-              toast.error(result.error);
-            }
-          });
-      }
+    // 显式的「挂起」而不是 sync(null)：main 侧按存盘校验同步请求，而挂起故意与存盘不同。
+    const suspendPromise = suspendVoiceInputGlobalShortcut().then(() => {
+      if (cancelled) return;
+      return startFnKeyCapture(() => cancelled);
     });
     shortcutSuspendPromiseRef.current = suspendPromise;
     return () => {
@@ -1461,12 +1618,43 @@ export function VoiceInputSection() {
       shortcutSuspendPromiseRef.current = null;
       delete document.body.dataset.appShortcutRecording;
       window.electronAPI.appShortcuts.setRecording(false);
-      if (window.electronAPI.platform === 'darwin') {
-        void window.electronAPI.voiceInput.stopModifierShortcutRecording();
+      // 不分平台都要发：挂起那条 IPC 在 main 侧登记了录制会话（它也不分平台），而这条 stop
+      // 是唯一会把它摘掉的。只在 darwin 发的话，Windows 用户按 Esc 取消录制后会话一直挂着，
+      // 随后的恢复同步被 main 的「录制中」守卫拒掉 —— 原来的全局快捷键就一直是停用的，直到
+      // 这个 renderer 被销毁。stop handler 本身与平台无关（非 darwin 上 key capture 压根没起，
+      // stopKeyCapture 是空操作）。
+      void window.electronAPI.voiceInput.stopModifierShortcutRecording();
+      // 恢复注册必须等在飞的那次提交落地再读存盘。
+      //
+      // 切走设置 tab 会卸载本组件，cleanup 立刻跑；此刻提交还没存盘，getVoiceInputSettings()
+      // 读到的是**旧**快捷键，而它排到 main 队列里又在那次提交之后 —— 结果是存盘和界面都
+      // 指向新快捷键，实际生效的却是旧那个，直到下次进这个 tab 才被纠正。
+      //
+      // 等它落地就能对上：提交成功时读到的是新快捷键（重复注册同一个是幂等的），提交失败时
+      // 读到的仍是旧那个，而那正是此时该生效的。所以两条路都不需要额外判断。
+      //
+      // 而且必须让位给新一轮录制：第一轮提交没落地就结束录制、紧接着开始第二轮时，这条恢复
+      // 会经同一条 main 队列排在第二轮的「挂起」之后 —— 把旧快捷键又启用回来，用户在第二轮
+      // 按键试录就会真的触发一次语音输入。轮次对不上就直接放弃：那一轮自己会在结束时恢复。
+      const restoreRegistration = (): void => {
+        if (recordingSessionRef.current !== recordingSession) return;
+        void syncVoiceInputGlobalShortcut(getVoiceInputSettings().shortcut);
+      };
+      const pendingCommit = shortcutCommitPromiseRef.current;
+      if (pendingCommit) {
+        void pendingCommit.then(restoreRegistration, restoreRegistration);
+      } else {
+        restoreRegistration();
       }
-      void syncVoiceInputGlobalShortcut(getVoiceInputSettings().shortcut);
     };
-  }, [recordingShortcut]);
+  }, [recordingShortcut, startFnKeyCapture]);
+
+  // 组件卸载（切走设置 tab、关掉设置页）时作废在飞的提交：代次原先只在下一次提交时才推进，
+  // 于是切走之后迟到的结果照样会执行副作用 —— 弹一条已经无处安放的提示，甚至凭一个用户
+  // 早已离开的界面上的选择弹出 macOS 授权窗。注册本身由 main 侧负责，不受此影响。
+  useEffect(() => () => {
+    shortcutSubmissionRef.current += 1;
+  }, []);
 
   useEffect(() => {
     if (!settings.refinementEnabled) {
@@ -1772,11 +1960,13 @@ export function VoiceInputSection() {
         <VoiceInputInlineSettingRow
           label={t('settings.voiceInput.shortcut.label')}
           labelAction={
-            !supportsGlobalShortcutSetting ||
-            !shortcutNeedsKeyboardListenerPermission ||
-            permissions.inputMonitoring.status === 'not-required'
-              ? null
-              : (
+            shouldShowInputMonitoringBadge({
+              supportsGlobalShortcut: supportsGlobalShortcutSetting,
+              shortcutNeedsPermission: shortcutNeedsKeyboardListenerPermission,
+              fnRecordingBlocked,
+              permissionStatus: permissions.inputMonitoring.status,
+            })
+              ? (
                 <VoiceInputPermissionBadge
                   label={t('settings.voiceInput.permissions.inputMonitoring.label')}
                   granted={permissions.inputMonitoring.ok}
@@ -1784,10 +1974,26 @@ export function VoiceInputSection() {
                   tooltip={t('settings.voiceInput.permissions.inputMonitoring.tooltip')}
                 />
               )
+              : null
           }
           hint={
             supportsGlobalShortcutSetting
-              ? t('settings.voiceInput.shortcut.hint')
+              ? (
+                <>
+                  {t('settings.voiceInput.shortcut.hint')}
+                  {/* 录制中缺权限 → 解释 Fn 为什么按了没反应；已保存但待授权 → 解释快捷键
+                      为什么不生效。前者是用户当下正在做的事，优先显示。 */}
+                  {fnRecordingBlocked ? (
+                    <span className="mt-1 block">
+                      {t('settings.voiceInput.shortcut.fnNeedsInputMonitoring')}
+                    </span>
+                  ) : shortcutAwaitingInputMonitoring ? (
+                    <span className="mt-1 block">
+                      {t('settings.voiceInput.shortcut.awaitingInputMonitoring')}
+                    </span>
+                  ) : null}
+                </>
+              )
               : t('settings.voiceInput.shortcut.linuxUnsupported')
           }
         >

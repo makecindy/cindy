@@ -42,7 +42,7 @@ function createDb(): Database.Database {
 
 function insertMessage(
   sqlite: Database.Database,
-  input: { id: string; role: string; content: string; createdAt: number; rewindAt?: number | null },
+  input: { id: string; role: string; content: unknown; createdAt: number; rewindAt?: number | null },
 ): void {
   sqlite.prepare(`
     INSERT INTO messages (
@@ -88,6 +88,77 @@ describe('sessionReferenceResolver local visibility', () => {
     insertMessage(sqlite, { id: 'ssh-message', role: 'user', content: 'ssh history', createdAt: 101 });
     const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
     expect(context.messages).toEqual([{ role: 'user', content: 'ssh history', createdAt: 101 }]);
+  });
+
+  it('marks a recent local quote whose last turn ended with an error without exposing the error body', async () => {
+    insertMessage(sqlite, { id: 'partial-user', role: 'user', content: '请继续', createdAt: 101 });
+    insertMessage(sqlite, { id: 'partial-assistant', role: 'assistant', content: '我已经看到，但', createdAt: 102 });
+    insertMessage(sqlite, {
+      id: 'turn-error',
+      role: 'error',
+      content: { message: 'provider secret should not cross the quote boundary', reason: 'turn-failed' },
+      createdAt: 103,
+    });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
+
+    expect(context.messages).toEqual([
+      { role: 'user', content: '请继续', createdAt: 101 },
+      { role: 'assistant', content: '我已经看到，但', createdAt: 102 },
+    ]);
+    expect(context.terminal).toEqual({ status: 'error', createdAt: 103 });
+    expect(JSON.stringify(context)).not.toContain('provider secret');
+  });
+
+  it('does not mark an error that the user already dismissed', async () => {
+    insertMessage(sqlite, { id: 'user', role: 'user', content: 'question', createdAt: 101 });
+    insertMessage(sqlite, { id: 'assistant', role: 'assistant', content: 'partial', createdAt: 102 });
+    insertMessage(sqlite, {
+      id: 'dismissed-error',
+      role: 'error',
+      content: { message: 'failed', dismissed: true },
+      createdAt: 103,
+    });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
+
+    expect(context.terminal).toBeUndefined();
+  });
+
+  it('does not mark an error row that was rewound out of the visible history', async () => {
+    insertMessage(sqlite, { id: 'user', role: 'user', content: 'question', createdAt: 101 });
+    insertMessage(sqlite, { id: 'assistant', role: 'assistant', content: 'partial', createdAt: 102 });
+    insertMessage(sqlite, {
+      id: 'rewound-error',
+      role: 'error',
+      content: { message: 'old failure' },
+      createdAt: 103,
+      rewindAt: 104,
+    });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
+
+    expect(context.terminal).toBeUndefined();
+  });
+
+  it('does not mark an older error when a newer visible message is the tail', async () => {
+    insertMessage(sqlite, { id: 'user', role: 'user', content: 'question', createdAt: 101 });
+    insertMessage(sqlite, {
+      id: 'error',
+      role: 'error',
+      content: { message: 'recovered failure' },
+      createdAt: 103,
+    });
+    // Same-timestamp rows use rowid as the deterministic tail tie-breaker.
+    insertMessage(sqlite, { id: 'assistant', role: 'assistant', content: 'continued', createdAt: 103 });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
+
+    expect(context.messages).toEqual([
+      { role: 'user', content: 'question', createdAt: 101 },
+      { role: 'assistant', content: 'continued', createdAt: 103 },
+    ]);
+    expect(context.terminal).toBeUndefined();
   });
 
   // 深链是可复制的字符串:控制端生成的 `?device=` 链接被带回归属设备本机

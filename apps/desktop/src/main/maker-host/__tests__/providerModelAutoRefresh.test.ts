@@ -70,7 +70,13 @@ describe('provider model auto-refresh coordinator', () => {
     ]);
   });
 
-  it('joins auto/manual in-flight work and lets manual refresh bypass cooldown', async () => {
+  it('manual refresh queues behind an automatic flight instead of being represented by it', async () => {
+    // 行为变更（PR #1076 review，与 forced startup 同一个不变量）：手动刷新也是 forced
+    // 请求，撞上**非强制**在途时不再合并进去，而是排在它后面真跑一次。
+    //
+    // 理由与 startup 那条完全一致：用户点「获取模型列表」要的是这一刻的最新清单。合并到一次
+    // 早于点击发起的 auto refresh，用户可能拿到几秒前的结果；那次 auto 若因凭证未就绪失败，
+    // 他点了刷新却什么也没刷到。forced 请求不该被非 forced 的在途结果代表。
     const first = deferred();
     const refreshProvider = vi
       .fn<(providerId: 'xd' | 'anthropic' | 'openai' | 'xai') => Promise<void>>()
@@ -85,17 +91,22 @@ describe('provider model auto-refresh coordinator', () => {
 
     const automatic = coordinator.requestAutoRefresh('providers-open');
     await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
-    const manualJoining = coordinator.refreshManually('xd');
+    // 排队期间不重复 spawn —— in-flight 合并的收益仍在。
+    const manualQueued = coordinator.refreshManually('xd');
     expect(refreshProvider).toHaveBeenCalledOnce();
 
     first.resolve();
-    await Promise.all([automatic, manualJoining]);
-
-    await coordinator.requestAutoRefresh('model-selector-open');
-    expect(refreshProvider).toHaveBeenCalledOnce();
-
-    await coordinator.refreshManually('xd');
+    await Promise.all([automatic, manualQueued]);
+    // auto settle 后手动那次真跑了。
     expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    // 冷却仍挡住普通自动触发。
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    // 手动刷新照旧绕过冷却。
+    await coordinator.refreshManually('xd');
+    expect(refreshProvider).toHaveBeenCalledTimes(3);
   });
 
   it('starts fresh work after an account scope change and ignores stale failures', async () => {
@@ -126,6 +137,134 @@ describe('provider model auto-refresh coordinator', () => {
 
     now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
     await coordinator.requestAutoRefresh('foreground');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the startup trigger bypass the cooldown so a first run is not stuck on a stale snapshot', async () => {
+    // 回归全新机器首启：splash 期那次自动刷新跑在「owner 绑定还没认领、网关凭证还没下发」
+    // 之前，什么都发现不到，却已经吃掉 30 分钟冷却。账号就绪后的 startup 触发必须强制放行，
+    // 否则清单要等用户去打开设置页 / 模型选择器才更新。
+    const now = 1_000;
+    const refreshProvider =
+      vi.fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>();
+    refreshProvider.mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true), view('xd', true)],
+      refreshProvider,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['xd', 'openai']);
+
+    // 冷却内的普通触发照旧被挡。
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual([
+      'xd',
+      'openai',
+      'xd',
+      'openai',
+    ]);
+  });
+
+  it('still merges concurrent startup work instead of spawning one refresh per trigger', async () => {
+    // 强制放行不等于放弃 in-flight 合并 —— openai 的刷新会起 codex app-server，
+    // 启动期几个触发同时到达时绝不能各起一个。
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      now: () => 5_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const a = coordinator.requestAutoRefresh('startup');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+    const b = coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+
+    first.resolve();
+    await Promise.all([a, b]);
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+
+  it('forced startup 撞上非强制在途时排在它后面真跑一次,而不是合并进去', async () => {
+    // 回归 PR #1076 review:refresh() 在检查 force 之前就 return existing.promise。
+    // splash 期那次非强制刷新往往跑在 owner 绑定认领、网关凭证下发之前,什么都发现不到;
+    // 强制请求合并进去等于这次刷新从未发生,首启清单不全原样保留到下一个触发时机。
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // splash 期的非强制刷新(发现不到东西)。
+    const early = coordinator.requestAutoRefresh('foreground');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+
+    // 账号就绪后的强制刷新:此刻必须排队,不能合并。
+    const forced = coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+
+    first.resolve();
+    await Promise.all([early, forced]);
+    // 等前一次 settle 后真跑了第二次 —— 冷却在同一时刻本会挡住它,force 让它过。
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it('前一次强制在途时,后来的强制请求照常合并(同语义不重复 spawn)', async () => {
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const a = coordinator.requestAutoRefresh('startup');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+    const b = coordinator.requestAutoRefresh('startup');
+    first.resolve();
+    await Promise.all([a, b]);
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+
+  it('非强制在途失败时,排队的强制请求仍会跑', async () => {
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const early = coordinator.requestAutoRefresh('foreground');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+    const forced = coordinator.requestAutoRefresh('startup');
+    first.reject(new Error('splash-time attempt failed'));
+    await Promise.all([early, forced]);
     expect(refreshProvider).toHaveBeenCalledTimes(2);
   });
 

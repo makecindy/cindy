@@ -17,6 +17,10 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import { incrementDailySpend, localDayKey } from '../dailySpend';
 import { incrementDailyModelUsage } from '../dailyModelUsage';
 import { DEFAULT_USAGE_CURRENCY } from '../../../shared/regionalMoney';
+import {
+  __resetActiveLedgerCurrencyForTesting,
+  setActiveLedgerCurrency,
+} from '../../usage/ledgerCurrency';
 
 const DDL = `
   CREATE TABLE daily_spend (
@@ -196,6 +200,45 @@ describe('daily ledger currency invariant', () => {
         cache_read_tokens: 7,
       });
     } finally {
+      harness.close();
+    }
+  });
+
+  it('accepts the account settlement currency even when it differs from the build region', async () => {
+    // 结算币种由服务端按账号所属租户下发,不是构建区域:CN 构建 + USD 结算账号是正常
+    // 组合。基准若取构建区域,这些账号的每一笔都会被拒收 —— 等于完全不计费。
+    // setActiveLedgerCurrency 由模型目录同步时写入(见 usage/modelPricing)。
+    const harness = createHarness();
+    const settlement = conflictingMoney(1).currency;
+    setActiveLedgerCurrency(settlement);
+    try {
+      await incrementDailySpend(conflictingMoney(1.5));
+      await incrementDailyModelUsage({
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-8',
+        money: conflictingMoney(2),
+        inputTokensDelta: 100,
+        outputTokensDelta: 10,
+        cacheReadTokensDelta: 0,
+        cacheCreateTokensDelta: 0,
+      });
+
+      expect(
+        harness.sqlite.prepare('SELECT cost_amount, cost_currency FROM daily_spend').get(),
+      ).toEqual({ cost_amount: 1.5, cost_currency: settlement });
+      expect(
+        harness.sqlite
+          .prepare('SELECT cost_amount, cost_currency FROM daily_model_usage WHERE day = ?')
+          .get(localDayKey()),
+      ).toMatchObject({ cost_amount: 2, cost_currency: settlement });
+
+      // 反向:此时构建默认币种才是异币种,仍应被拒收以保护已有账本。
+      await incrementDailySpend(currentMoney(10));
+      expect(
+        harness.sqlite.prepare('SELECT cost_amount, cost_currency FROM daily_spend').get(),
+      ).toEqual({ cost_amount: 1.5, cost_currency: settlement });
+    } finally {
+      __resetActiveLedgerCurrencyForTesting();
       harness.close();
     }
   });

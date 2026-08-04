@@ -485,8 +485,8 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(parseToolJson(result)).toMatchObject({ ok: true, lead_session_id: 'lead-1' });
     expect(createSessionCalls).toHaveLength(1);
     expect(createSessionCalls[0]).toMatchObject({ id: 'lead-1', remoteHostId: 'host-remote-1' });
-    // R22 P2:远端 rehydrate 必须带 makerMemoryEnabled=false (与 IPC create/send
-    // 的 remote ensure 归一化对齐), 不注入本地 Maker Memory 上下文。
+    // R6 P2:未注入 ensureRemoteSessionStart (老宿主 / no-op) 时按 false 保守
+    // 处理 — 记忆开关必须经宿主 preflight 归一化后才允许开。
     expect(createSessionCalls[0]).toMatchObject({ makerMemoryEnabled: false });
   });
 
@@ -557,6 +557,63 @@ describe('orca_worker_bridge MCP helpers', () => {
       workingDir: '/remote/repo',
     });
     expect(order).toEqual(['ensure', 'create']);
+    // preflight 返回 void (老宿主形态) → 记忆保守关闭。
+    expect(base.createSessionCalls[0]).toMatchObject({ makerMemoryEnabled: false });
+  });
+
+  it('applies the preflight-normalized Maker Memory flag to remote rehydration (R6 P2)', async () => {
+    // SSH remote 与 IPC create/send 同语义:全局开着时远端 rehydrate 不再
+    // 硬编码 false;开关值 = 宿主 preflight 归一化 (backfill + stale-bridge
+    // 钳制) 后回传的结果。
+    const workerLink: OrcaWorkerLink = {
+      workerId: 'worker-1',
+      workflowId: 'workflow-1',
+      workerSessionId: 'worker-session-1',
+      leadSessionId: 'lead-1',
+      leadSession: {
+        sessionId: 'lead-1',
+        agentKind: 'claude-code',
+        workingDir: '/remote/repo',
+        model: 'claude-opus-4-7',
+        providerId: 'anthropic',
+        remoteHostId: 'host-remote-1',
+      },
+    };
+    const { createSessionCalls, maker } = makeProvider({ workerLink });
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker,
+      logger: makeLogger() as never,
+      persistUserMessage: async () => {},
+      wireSession: () => {},
+      ensureRemoteSessionStart: async () => ({ makerMemoryEnabled: true }),
+      orcaTeamStore: {
+        async getWorkerLink() {
+          return workerLink;
+        },
+        async updateWorkerStatus() {},
+      },
+    });
+    const server = getServer(provider, {
+      agentKind: 'claude-code',
+      workingDir: '/remote/repo',
+      vendorOptions: {
+        orcaRole: 'worker',
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    });
+
+    const result = await server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: 'hello remote lead',
+    });
+
+    expect(parseToolJson(result)).toMatchObject({ ok: true });
+    expect(createSessionCalls[0]).toMatchObject({
+      id: 'lead-1',
+      remoteHostId: 'host-remote-1',
+      makerMemoryEnabled: true,
+    });
   });
 
   it('does not run the remote preflight when rehydrating a local lead', async () => {

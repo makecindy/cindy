@@ -4299,12 +4299,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-SECTION 2: npm packages (1311 packages)
+SECTION 2: npm packages (1310 packages)
 ==============================================================================
 
 - @adobe/css-tools@4.5.0 — MIT — https://github.com/adobe/css-tools
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
-- @anthropic-ai/sdk@0.81.0 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @anthropic-ai/sdk@0.91.1 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @babel/code-frame@7.29.7 — MIT — https://github.com/babel/babel
 - @babel/compat-data@7.29.7 — MIT — https://github.com/babel/babel
@@ -26495,7 +26494,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[121] Applies to: npm:@anthropic-ai/sdk@0.81.0, npm:@anthropic-ai/sdk@0.91.1
+[121] Applies to: npm:@anthropic-ai/sdk@0.91.1
 ------------------------------------------------------------------------------
 Copyright 2023 Anthropic, PBC.
 

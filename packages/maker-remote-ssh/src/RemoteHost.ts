@@ -112,6 +112,13 @@ export interface RemoteForwardSpec {
   localPort: number;
   /** 远端 127.0.0.1 首选绑定端口; 缺省 DEFAULT_REMOTE_FORWARD_PORT_BASE。 */
   preferredRemotePort?: number;
+  /**
+   * true = 只绑 preferredRemotePort, 被占时**不**向后顺延探测 — 用于
+   * 「远端 env 写死固定端口」的隧道 (agent-proxy 固定端口模式): 端口漂移
+   * 意味着远端 daemon env 失效 + 必须重启 daemon, 比「暂时绑不上等重试」
+   * 代价大得多。被占时 armForward 抛错, 由调用方决定重试/清理残留监听。
+   */
+  exactRemotePort?: boolean;
   /** 断线重连后端口被重绑到不同值时回调一次 (首次绑定不回调)。 */
   onRearmed?: (remotePort: number) => void;
 }
@@ -544,6 +551,9 @@ export class RemoteHost {
     ) {
       throw new Error(`ensureRemoteForward: invalid preferredRemotePort ${spec.preferredRemotePort}`);
     }
+    if (spec.exactRemotePort && spec.preferredRemotePort === undefined) {
+      throw new Error('ensureRemoteForward: exactRemotePort requires preferredRemotePort');
+    }
     const key = forwardKey(spec);
     const existing = this.forwards.get(key);
     if (existing) {
@@ -674,9 +684,14 @@ export class RemoteHost {
     this.attachForwardListener(client);
 
     const base = record.spec.preferredRemotePort ?? DEFAULT_REMOTE_FORWARD_PORT_BASE;
-    const candidates = [record.remotePort];
-    for (let i = 0; i < REMOTE_FORWARD_PORT_SCAN_SPAN; i++) {
-      if (!candidates.includes(base + i)) candidates.push(base + i);
+    // exact 模式恒试 preferred 而非 record.remotePort (review: PR #992
+    // copilot): 同 key 的 record 可能是在非 exact 阶段顺延漂到别的端口的,
+    // 以漂移值为种子会把「固定端口」语义吃回去。
+    const candidates = record.spec.exactRemotePort ? [base] : [record.remotePort];
+    if (!record.spec.exactRemotePort) {
+      for (let i = 0; i < REMOTE_FORWARD_PORT_SCAN_SPAN; i++) {
+        if (!candidates.includes(base + i)) candidates.push(base + i);
+      }
     }
     const errors: string[] = [];
     for (const port of candidates) {

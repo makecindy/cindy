@@ -18,9 +18,30 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 
 vi.mock('../plugins', () => ({}));
 
+// eagerSpawnAndReport 会真的 acquire 一个 <webview> 并等 dom-ready(jsdom 里永远
+// 不来 → 8s 兜底),跨 session popup 用例只关心它前后的编排,所以桩掉这一个导出。
+const eagerSpawnAndReport = vi.fn(async (_s: string, _t: string, _u: string) => undefined);
+vi.mock('../lib/rsbBrowserBridge', async () => {
+  const actual =
+    await vi.importActual<typeof import('../lib/rsbBrowserBridge')>('../lib/rsbBrowserBridge');
+  return {
+    ...actual,
+    eagerSpawnAndReport: (s: string, t: string, u: string) => eagerSpawnAndReport(s, t, u),
+  };
+});
+
 import { RightSidebarShell } from '../RightSidebarShell';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
-import { _resetStore, closeTab } from '../store';
+import { _resetPopupRouterForTests } from '../lib/popupRouter';
+import {
+  _resetSidebarCommandsForTests,
+  onRequestRightSidebarVisibility,
+  type SidebarVisibilityRequest,
+  type SidebarVisibilityRequestOptions,
+} from '../lib/sidebarCommands';
+import { _resetStore, closeTab, getBucket } from '../store';
+import { setGhostTabPinned, setLastFocusedPinnedGhostKind } from '../lib/pinnedGhostTabs';
+import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
 interface RightSidebarTabsIpcStub {
@@ -40,6 +61,15 @@ type RsbBrowserCommand =
   | 'right-tab-next';
 
 let rsbBrowserCommandListeners: Array<(payload: { command: RsbBrowserCommand }) => void> = [];
+
+interface RsbBrowserPopupPayloadStub {
+  url: string;
+  disposition: string;
+  openerTabId?: string;
+  openerSessionId?: string;
+}
+
+let rsbBrowserPopupListeners: Array<(payload: RsbBrowserPopupPayloadStub) => void> = [];
 
 function makeRightSidebarTabsIpc(): RightSidebarTabsIpcStub {
   return {
@@ -122,7 +152,12 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false
         writeDisabledReasons: [],
       })),
     },
-    onRsbBrowserPopup: vi.fn(() => () => undefined),
+    onRsbBrowserPopup: vi.fn((callback: (payload: RsbBrowserPopupPayloadStub) => void) => {
+      rsbBrowserPopupListeners.push(callback);
+      return () => {
+        rsbBrowserPopupListeners = rsbBrowserPopupListeners.filter((cb) => cb !== callback);
+      };
+    }),
     onRsbBrowserCommand: (callback) => {
       rsbBrowserCommandListeners.push(callback);
       return () => {
@@ -170,7 +205,11 @@ describe('RightSidebarShell empty state', () => {
     });
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
     tabsIpc = makeRightSidebarTabsIpc();
     installElectronApi(tabsIpc);
   });
@@ -178,6 +217,7 @@ describe('RightSidebarShell empty state', () => {
   afterEach(() => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
@@ -649,5 +689,323 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onAllTabsClosed).not.toHaveBeenCalled();
+  });
+});
+
+describe('RightSidebarShell 跨 session popup 归属', () => {
+  let tabsIpc: RightSidebarTabsIpcStub;
+  let requests: Array<{
+    visibility: SidebarVisibilityRequest;
+    opts: SidebarVisibilityRequestOptions;
+  }>;
+  let unsubVisibility: () => void;
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetSidebarCommandsForTests();
+    rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
+    requests = [];
+    unsubVisibility = onRequestRightSidebarVisibility((visibility, opts) => {
+      requests.push({ visibility, opts });
+    });
+    tabsIpc = makeRightSidebarTabsIpc();
+    installElectronApi(tabsIpc);
+  });
+
+  afterEach(() => {
+    unsubVisibility();
+    _resetSidebarCommandsForTests();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  function renderShell(): void {
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+  }
+
+  async function emitCrossSessionPopup(): Promise<void> {
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://accounts.example.com/oauth',
+        disposition: 'foreground-tab',
+        openerTabId: 'tab-opener',
+        openerSessionId: 's2',
+      });
+      await Promise.resolve();
+    });
+  }
+
+  it('把 popup 落进 opener session,并以 userInitiated:false 请求展开', async () => {
+    renderShell();
+    await emitCrossSessionPopup();
+
+    await waitFor(() => expect(getBucket('s2').tabs).toHaveLength(1));
+    // 当前会话 s1 不该被塞进这个 tab。
+    expect(getBucket('s1').tabs).toHaveLength(0);
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].visibility).toBe('open');
+    expect(requests[0].opts.sessionId).toBe('s2');
+    // popup 是 guest 页面脚本催生的,不是用户手势:detached 形态下不得 show+focus
+    // 抢走用户前台(与 agent tab-op open 路径一致)。
+    expect(requests[0].opts.userInitiated).toBe(false);
+  });
+
+  it('Shell 卸载(route 切换)后 popup 仍被常驻 router 路由,不丢事件', async () => {
+    // popup 订阅在窗口级常驻模块,不随 Shell 生命周期:用户离开聊天视图 / main
+    // 端归属等待期间 route 切换,归属明确的 popup 照常落 opener session。
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    view.unmount();
+    // 卸载后 listener 仍在(常驻订阅不解绑)。
+    expect(rsbBrowserPopupListeners).toHaveLength(1);
+
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://accounts.example.com/oauth',
+        disposition: 'foreground-tab',
+        openerTabId: 'tab-opener',
+        openerSessionId: 's2',
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s2').tabs).toHaveLength(1));
+    await waitFor(() => expect(eagerSpawnAndReport).toHaveBeenCalledTimes(1));
+  });
+
+  it('无归属 popup 在 Shell 卸载后回落到最后已知 session(不丢弃)', async () => {
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    view.unmount();
+
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://plain.example.com/page',
+        disposition: 'foreground-tab',
+        // 无 openerSessionId:回落 fallback(最后看过的 s1)。
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+  });
+
+  it('当前 session 的 popup 也离屏物化并请求展开(折叠侧栏下 OAuth 不再卡死)', async () => {
+    // #700 之后隐藏 tab 不再首次物化:当前 session 侧栏折叠时 Shell 挂着但
+    // shellVisible=false,popup tab 若只靠 TabBody 出生 webview,授权页永远不
+    // 开始加载。popup 路径必须无条件 eagerSpawn,并对当前 session 发展开请求
+    // (折叠时展开;已展开 no-op)。
+    renderShell();
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://accounts.example.com/oauth',
+        disposition: 'foreground-tab',
+        openerTabId: 'tab-opener',
+        openerSessionId: 's1', // 归属就是当前 session
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    await waitFor(() => expect(eagerSpawnAndReport).toHaveBeenCalledTimes(1));
+    expect(eagerSpawnAndReport).toHaveBeenCalledWith(
+      's1',
+      getBucket('s1').tabs[0].id,
+      'https://accounts.example.com/oauth',
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].visibility).toBe('open');
+    expect(requests[0].opts.sessionId).toBe('s1');
+    expect(requests[0].opts.userInitiated).toBe(false);
+  });
+
+  it('物化期间 tab 已被关掉时,不再请求展开(否则把"收起"翻回"展开")', async () => {
+    // OAuth callback 页可能在 dom-ready 前就 window.close():guest 自关路径会关掉
+    // 最后一个 tab 并请求收起侧栏,此处若无条件再请求 open,用户切回该 session
+    // 只会看到一个空侧栏。
+    eagerSpawnAndReport.mockImplementation(async (sessionId: string, tabId: string) => {
+      await closeTab(sessionId, tabId);
+    });
+
+    renderShell();
+    await emitCrossSessionPopup();
+
+    await waitFor(() => expect(eagerSpawnAndReport).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getBucket('s2').tabs).toHaveLength(0);
+    expect(requests).toHaveLength(0);
+  });
+});
+
+describe('RightSidebarShell 钉住面板粘性展开(切会话把收着的侧栏打开)', () => {
+  let tabsIpc: RightSidebarTabsIpcStub;
+  let requests: Array<{
+    visibility: SidebarVisibilityRequest;
+    opts: SidebarVisibilityRequestOptions;
+  }>;
+  let unsubVisibility: () => void;
+
+  const GHOST_KIND = 'ghost:pr-signoff';
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    localStorage.clear();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetSidebarCommandsForTests();
+    setLastFocusedPinnedGhostKind(null);
+    rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
+    requests = [];
+    unsubVisibility = onRequestRightSidebarVisibility((visibility, opts) => {
+      requests.push({ visibility, opts });
+    });
+    setGhostTabPinned('pr-signoff', true); // 无条目 = 不算钉住,先钉上
+    tabsIpc = makeRightSidebarTabsIpc();
+    // 两个会话都带同一块钉住面板页签(补挂在真环境由注册表驱动,单测无插件
+    // 注册,直接让存档里就有)。
+    tabsIpc.list.mockImplementation(async () => ({
+      tabs: [{ id: 'tab-ghost', kind: GHOST_KIND, state: null }],
+      activeTabId: 'tab-ghost',
+    }));
+    installElectronApi(tabsIpc);
+  });
+
+  afterEach(() => {
+    unsubVisibility();
+    setLastFocusedPinnedGhostKind(null);
+    _resetSidebarCommandsForTests();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    localStorage.clear();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  function renderShell(sessionId: string): ReturnType<typeof render> {
+    return render(
+      createElement(RightSidebarShell, {
+        sessionId,
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+  }
+
+  function rerenderShell(view: ReturnType<typeof render>, sessionId: string): void {
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId,
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+  }
+
+  it('上一会话正看着钉住面板且侧栏展开 → 切会话请求展开收着的侧栏', async () => {
+    writePanelCollapsed('right-tabs', { sessionId: 's1' }, false); // s1 侧栏展开
+    // s2 无存档 = 默认收着
+
+    const view = renderShell('s1');
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    setLastFocusedPinnedGhostKind(GHOST_KIND); // 用户正看着钉住面板
+
+    rerenderShell(view, 's2');
+    await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+    expect(requests[0].visibility).toBe('open');
+    expect(requests[0].opts.sessionId).toBe('s2');
+    // 程序自发的跟随,不是用户手势:detached 形态下不得抢前台。
+    expect(requests[0].opts.userInitiated).toBe(false);
+  });
+
+  it('上一会话侧栏本来就收着 → 不弹', async () => {
+    writePanelCollapsed('right-tabs', { sessionId: 's1' }, true); // s1 也收着
+
+    const view = renderShell('s1');
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    setLastFocusedPinnedGhostKind(GHOST_KIND);
+
+    rerenderShell(view, 's2');
+    await waitFor(() => expect(getBucket('s2').tabs).toHaveLength(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  it('没有粘性焦点(用户没在看面板) → 不弹', async () => {
+    writePanelCollapsed('right-tabs', { sessionId: 's1' }, false);
+
+    const view = renderShell('s1');
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    // 不设粘性焦点
+
+    rerenderShell(view, 's2');
+    await waitFor(() => expect(getBucket('s2').tabs).toHaveLength(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  it('首帧(启动进第一个会话)不算切换 → 不弹', async () => {
+    writePanelCollapsed('right-tabs', { sessionId: 's1' }, true);
+    setLastFocusedPinnedGhostKind(GHOST_KIND);
+
+    renderShell('s1');
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(requests).toHaveLength(0);
   });
 });

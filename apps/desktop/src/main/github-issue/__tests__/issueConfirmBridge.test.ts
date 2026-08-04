@@ -211,3 +211,58 @@ describe('IssueConfirmBridge', () => {
     await expect(p2).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
   });
 });
+
+describe('onDesktopOnlyConfirmPending(#926)', () => {
+  it('request 派发确认卡后同步触发回调,带 sessionId', async () => {
+    const onPending = vi.fn();
+    const bridge = new IssueConfirmBridge({
+      broadcast: () => {},
+      timeoutMs: 50,
+      onDesktopOnlyConfirmPending: onPending,
+    });
+    const p = bridge.request(
+      'feishu_bot_ou_1',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'platform', login: 'cindy' },
+    );
+    expect(onPending).toHaveBeenCalledWith('feishu_bot_ou_1');
+    await p; // 超时收口,不留挂起 promise
+  });
+
+  it('未注入回调时行为不变(可选依赖)', async () => {
+    const bridge = new IssueConfirmBridge({ broadcast: () => {}, timeoutMs: 50 });
+    const decision = await bridge.request(
+      's1',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'github-user', login: 'u' },
+    );
+    expect(decision.confirmed).toBe(false);
+  });
+});
+
+describe('onDesktopOnlyConfirmPending 抛错防护(#1059 review)', () => {
+  it('回调同步抛错被吞掉只 warn,确认流程照常走到超时收口', async () => {
+    const warn = vi.fn();
+    const bridge = new IssueConfirmBridge({
+      broadcast: () => {},
+      timeoutMs: 50,
+      logger: { warn },
+      onDesktopOnlyConfirmPending: () => {
+        throw new Error('notifier exploded');
+      },
+    });
+    const decision = await bridge.request(
+      's-throw',
+      { title: 't', body: 'b', type: 'bug' },
+      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      { kind: 'github-user', login: 'u' },
+    );
+    expect(decision.confirmed).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      'onDesktopOnlyConfirmPending threw (ignored)',
+      expect.objectContaining({ sessionId: 's-throw' }),
+    );
+  });
+});

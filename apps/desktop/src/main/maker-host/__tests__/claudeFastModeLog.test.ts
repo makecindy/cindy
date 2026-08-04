@@ -160,14 +160,16 @@ describe('createClaudeFastModeResponseObserver (结尾)', () => {
     const sink = createClaudeFastModeResponseObserver(log)(ctx);
     sink!.onData?.(gzipSync(Buffer.from(`${messageStartFrame('fast')}\n\n`)));
     sink!.onEnd?.();
-    // 解压是流式异步的(zlib 线程池回调):固定两个 tick 在测试并发高、事件循环
-    // 忙时不够会 flaky,改为轮询等 debug 被调用(上限兜底防死等)。
-    for (let i = 0; i < 200 && log.debug.mock.calls.length === 0; i += 1) {
-      await new Promise((r) => setImmediate(r));
-    }
-    expect(log.debug).toHaveBeenCalledWith(
-      'claude fast mode applied (usage.speed observed)',
-      expect.objectContaining({ contentEncoding: 'gzip', responseSpeed: 'fast', appliedFast: true }),
+    // 解压是流式异步的(zlib 回调走 libuv 线程池)。原先用 setImmediate 轮询:它只
+    // 推进 tick、几乎不消耗真实时间,200 个 tick 不到 1ms 就烧完。而 vitest 的
+    // threads 池下多个测试文件共享同一个进程、也就共享同一个默认 4 线程的 libuv
+    // 线程池,回调的墙钟延迟被拉长,tick 预算根本等不到(CI 实测 debug 被调用 0 次)。
+    // 改用 vi.waitFor 按墙钟等,并且等的就是断言本身成立。
+    await vi.waitFor(() =>
+      expect(log.debug).toHaveBeenCalledWith(
+        'claude fast mode applied (usage.speed observed)',
+        expect.objectContaining({ contentEncoding: 'gzip', responseSpeed: 'fast', appliedFast: true }),
+      ),
     );
   });
 });

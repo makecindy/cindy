@@ -55,7 +55,12 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.model.length).toBeGreaterThan(0);
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
     expect(d.lastByVendor.codex.effort).toBe('high');
-    expect(d.lastByVendor.codex.model).toBe('gpt-5.4');
+    // 种子模型不再写死在 store 里（原先是 'gpt-5.4'，与 modelDefinitions 写死的 'gpt-5.5'
+    // 漂移，且两者在目录里都是默认隐藏的模型）。现在统一从 getDefaultModelForVendor 取，
+    // capabilities 未加载时它给冷启动占位 id —— 这里只锁「非空且与那个入口同源」。
+    const { coldStartModelIdForVendor } = await import('@/lib/modelDefinitions');
+    expect(d.lastByVendor.codex.model).toBe(coldStartModelIdForVendor('codex'));
+    expect(d.lastByVendor.cc.model).toBe(coldStartModelIdForVendor('cc'));
     expect(d.fastModeByModel).toEqual({});
     expect(d.effortByModel).toEqual({});
   });
@@ -451,6 +456,63 @@ describe('newMakerDraft store', () => {
       'gpt-5.5': true,
       'gpt-5.4': false,
       'claude-opus-4-7': false,
+    });
+  });
+
+  // #807:设备是独立于 workingDir 的一级维度。原先「workingDir 变 null 就无条件清设备」的
+  // 不变量会把「选设备」这个动作本身打死 —— 选设备传的正是 { deviceId, workingDir: null }。
+  describe('device-link 设备字段与 workingDir 的关系', () => {
+    it('显式带设备 + workingDir=null(选设备)→ 设备必须保留', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: null,
+      });
+      expect(getDraft().deviceLinkDeviceId).toBe('dev-a');
+      expect(getDraft().deviceLinkDeviceName).toBe('Studio Mac');
+      expect(getDraft().workingDir).toBeNull();
+    });
+
+    it('显式带设备 + 具体 workingDir(选该设备上的项目)→ 两者都保留', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host/proj',
+      });
+      expect(getDraft().deviceLinkDeviceId).toBe('dev-a');
+      expect(getDraft().workingDir).toBe('/host/proj');
+    });
+
+    it('改 workingDir 但不带设备字段 → 仍按老规则清设备(防本地项目被误当远程)', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host/proj' });
+      patchDraft({ workingDir: '/local/proj' });
+      expect(getDraft().deviceLinkDeviceId).toBeNull();
+      expect(getDraft().deviceLinkDeviceName).toBeNull();
+    });
+
+    it('清空 workingDir 且不带设备字段(发送后重置)→ 设备一并清掉', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
+      patchDraft({ workingDir: null, extraDirs: [] });
+      expect(getDraft().deviceLinkDeviceId).toBeNull();
+    });
+
+    it('显式把设备清成 null(回落本机)→ 照常生效', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
+      patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+      expect(getDraft().deviceLinkDeviceId).toBeNull();
+      expect(getDraft().deviceLinkDeviceName).toBeNull();
+    });
+
+    it('device-link 草稿禁用协同的既有不变量不受影响', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ collab: { enabled: true, worker: 'cc' } });
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
+      expect(getDraft().collab.enabled).toBe(false);
     });
   });
 });

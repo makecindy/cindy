@@ -9,6 +9,9 @@ import {
   isControllableDevice,
   toControllableDevices,
   sameControllableList,
+  isSelectableDevice,
+  toSelectableDevices,
+  sameSelectableList,
 } from '@/hooks/useControllableDevices';
 
 function dev(over: Partial<DeviceLinkDeviceView>): DeviceLinkDeviceView {
@@ -54,6 +57,63 @@ describe('toControllableDevices', () => {
   });
   it('空列表 → 空', () => {
     expect(toControllableDevices([])).toEqual([]);
+  });
+});
+
+/**
+ * #807 创建页设备切换器的准入。与上面的「可控目标」是两套语义:切换器要**列出离线设备**
+ * 并置灰,不能一掉线就整行消失(唯一对端掉线时 pill 会整个不见)。
+ */
+describe('isSelectableDevice(设备切换器,含离线)', () => {
+  it('在线 + 已开被控 → 可选', () => {
+    expect(isSelectableDevice(dev({}))).toBe(true);
+    expect(isSelectableDevice(dev({ busy: true }))).toBe(true);
+  });
+
+  it('离线仍可选(列出后由 UI 置灰禁用)', () => {
+    expect(isSelectableDevice(dev({ online: false }))).toBe(true);
+  });
+
+  it('离线时 remoteControlEnabled=false 不作数 —— 只有 online 的 false 才权威', () => {
+    // presence 掉线的行会把这一位报成 false,即使对方并没有主动关闭远程控制。
+    // 照它过滤会让配对设备一掉线就从切换器消失(与 useDeviceLinkRemoteProjects 同款判定)。
+    expect(isSelectableDevice(dev({ online: false, remoteControlEnabled: false }))).toBe(true);
+    // 在线却报 false = 对方确实关了被控 → 不可选。
+    expect(isSelectableDevice(dev({ online: true, remoteControlEnabled: false }))).toBe(false);
+  });
+
+  it('本机关闭了对它的控制 / 是本机 → 任何时候都不可选', () => {
+    expect(isSelectableDevice(dev({ controlEnabled: false }))).toBe(false);
+    expect(isSelectableDevice(dev({ controlEnabled: false, online: false }))).toBe(false);
+    expect(isSelectableDevice(dev({ isSelf: true }))).toBe(false);
+    expect(isSelectableDevice(dev({ isSelf: true, online: false }))).toBe(false);
+  });
+});
+
+describe('toSelectableDevices', () => {
+  it('保留离线设备并带上 online 标记,过滤本机与已关控制的', () => {
+    const out = toSelectableDevices([
+      dev({ deviceId: 'on', name: 'On', platform: 'darwin' }),
+      dev({ deviceId: 'off', name: 'Off', online: false, remoteControlEnabled: false }),
+      dev({ deviceId: 'noctl', online: true, remoteControlEnabled: false }),
+      dev({ deviceId: 'local-off', controlEnabled: false }),
+      dev({ deviceId: 'self', isSelf: true }),
+    ]);
+    expect(out).toEqual([
+      { deviceId: 'on', name: 'On', platform: 'darwin', online: true },
+      { deviceId: 'off', name: 'Off', platform: 'darwin', online: false },
+    ]);
+  });
+});
+
+describe('sameSelectableList(掉线/上线必须触发重渲染)', () => {
+  const a = { deviceId: 'd1', name: 'Mac', platform: 'darwin', online: true };
+  it('全等 → true', () => {
+    expect(sameSelectableList([a], [{ ...a }])).toBe(true);
+    expect(sameSelectableList([], [])).toBe(true);
+  });
+  it('online 翻转 → false(否则状态点不更新、离线行点不动却看着可点)', () => {
+    expect(sameSelectableList([a], [{ ...a, online: false }])).toBe(false);
   });
 });
 

@@ -21,7 +21,7 @@ function fakeGhost(
   overrides: {
     enabled?: boolean;
     slots?: string[];
-    model?: { image?: string[]; video?: string[]; media?: string[] } | null;
+    model?: { image?: string[]; video?: string[]; media?: string[]; text?: string[] } | null;
   } = {},
 ): InstalledGhost {
   return {
@@ -1168,5 +1168,142 @@ describe('寄存(deposit_media / release_media)', () => {
       ok: false,
     });
     expect(releaseDeposit).not.toHaveBeenCalled();
+  });
+});
+
+describe('快问快答(oneshot_text)', () => {
+  const ONESHOT = { type: 'cindy-request', kind: 'oneshot_text', prompt: '总结一下' };
+  const withText = (deps: Partial<CindySlotDeps> = {}) =>
+    makeSlot({
+      getGhost: () =>
+        fakeGhost({ model: { image: ['generate'], text: ['oneshot'] } }),
+      oneshotText: vi.fn(async () => ({ ok: true as const, text: '好的', model: 'chain/mini' })),
+      ...deps,
+    });
+
+  it('未声明 text.oneshot → PERMISSION_DENIED,不触发链路', async () => {
+    const oneshotText = vi.fn();
+    const { slot } = makeSlot({ oneshotText });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(oneshotText).not.toHaveBeenCalled();
+  });
+
+  it('载荷校验:空 prompt / 超长 prompt / 非法 maxTokens / 非法 expectJson → INVALID_PARAMS', async () => {
+    const { slot } = withText();
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, prompt: '  ' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, prompt: 'x'.repeat(32_769) }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, expectJson: 'yes' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+
+  it('能力未接线(deps 缺 oneshotText)→ 结构化拒绝,fail closed', async () => {
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      oneshotText: undefined,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens=1024', async () => {
+    const oneshotText = vi.fn(async () => ({ ok: true as const, text: '答案', model: 'chain/mini' }));
+    const { slot } = withText({ oneshotText });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: true, text: '答案', model: 'chain/mini' });
+    expect(oneshotText).toHaveBeenCalledWith({
+      prompt: '总结一下',
+      maxTokens: 1024,
+      timeoutMs: 60_000,
+    });
+  });
+
+  it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {
+    for (const [reason, errorCode] of [
+      ['no_candidate', 'NO_CANDIDATE'],
+      ['timeout', 'TIMEOUT'],
+      ['failed', 'INTERNAL'],
+    ] as const) {
+      const { slot } = withText({
+        oneshotText: vi.fn(async () => ({ ok: false as const, reason, message: '不行' })),
+      });
+      expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+        ok: false,
+        errorCode,
+        message: '不行',
+      });
+    }
+  });
+
+  it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
+    const good = withText({
+      oneshotText: vi.fn(async () => ({
+        ok: true as const,
+        text: '```json\n{"a":1}\n```',
+      })),
+    });
+    expect(await good.slot.handleModelRequest('art', { ...ONESHOT, expectJson: true })).toMatchObject(
+      { ok: true, text: '{"a":1}' },
+    );
+    const bad = withText({
+      oneshotText: vi.fn(async () => ({ ok: true as const, text: '这不是 JSON' })),
+    });
+    expect(await bad.slot.handleModelRequest('art', { ...ONESHOT, expectJson: true })).toMatchObject(
+      { ok: false, errorCode: 'BAD_MODEL_OUTPUT' },
+    );
+  });
+
+  it('expectJson 时提示里追加 JSON 要求(确定性拼接,不甩给链路)', async () => {
+    const oneshotText = vi.fn(async (_params: { prompt: string; maxTokens: number; timeoutMs: number }) => ({
+      ok: true as const,
+      text: '{}',
+    }));
+    const { slot } = withText({ oneshotText });
+    await slot.handleModelRequest('art', { ...ONESHOT, expectJson: true });
+    expect(oneshotText.mock.calls[0]?.[0]?.prompt).toContain('只输出 JSON');
+  });
+
+  it('在途并发闸与媒体代办共用:达到上限即 RATE_LIMITED', async () => {
+    let release: (() => void) | null = null;
+    const oneshotText = vi.fn(
+      () =>
+        new Promise<{ ok: true; text: string }>((resolve) => {
+          release = () => resolve({ ok: true, text: 'ok' });
+        }),
+    );
+    const { slot } = withText({ oneshotText, getInflightLimit: () => 1 });
+    const first = slot.handleModelRequest('art', ONESHOT);
+    await Promise.resolve();
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+    });
+    release!();
+    expect(await first).toMatchObject({ ok: true });
+  });
+
+  it('注入实现抛错 → 折叠为 INTERNAL,不向沙箱穿透异常', async () => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
   });
 });

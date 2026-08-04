@@ -102,6 +102,25 @@ describe('theme tokens', () => {
     expect(contrastRatio(darkColors.ctaText, darkColors.cta)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it('行内 code 压暗档:比正文淡但仍过 AA 4.5:1', () => {
+    // 移动端行内 code 走「零底色 + 文字压暗」形态(聊天流的 RN 嵌套 Text 做不出圆角
+    // 底);桌面端另走 GitHub 淡底 + 圆角,两端刻意不同,不要在这里做跨端一致性断言。
+    // 它承载 id / 路径 / 字段名 —— 正文流里的实义内容,所以 4.5:1 是硬线,不能为了
+    // "更像 code"继续压。
+    // 实测 light 4.56:1 / dark 5.81:1;对正文 Δ1.98 / Δ1.70(压暗肉眼可辨)。
+    expect(lightColors.chatInlineCodeText).toBe('#686B72');
+    expect(darkColors.chatInlineCodeText).toBe('#A3A3A3');
+    for (const palette of [lightColors, darkColors]) {
+      const dim = contrastRatio(palette.chatInlineCodeText, palette.surface);
+      expect(dim).toBeGreaterThanOrEqual(4.5);
+      // 方向:比正文更靠近底色 —— 是压暗,不是加重。
+      expect(dim).toBeLessThan(contrastRatio(palette.textPrimary, palette.surface));
+      // 刻意不复用 textSecondary(2.80:1 / 2.92:1,掉 AA)—— 钉住这个区别,
+      // 防止将来有人"顺手"把两者合并。
+      expect(palette.chatInlineCodeText).not.toBe(palette.textSecondary);
+    }
+  });
+
   it('毛玻璃 token 契约(R1 audit 模式1/3,E4M 新增 surfaceTranslucentSidebar / surfaceGlassPanel)', () => {
     // R1 audit:@2x 稿折半;模式1 侧栏 blur≈50 dark #120F0F@0.85 / light #F6F6F6@0.90;
     // 模式3 浮层卡 light #F8F8F8 / dark #3B3B3B@0.95。surface 不叠 blur 规避 Android 热路径。

@@ -153,7 +153,8 @@
       "blocked": "대기 중",
       "complete": "완료됨",
       "budgetLimited": "한도 도달",
-      "usageLimited": "사용량 제한됨"
+      "usageLimited": "사용량 제한됨",
+      "capacityLimited": "모델 서비스 혼잡"
     },
     "goalLabel": "목표",
     "goalObjectiveAccessibility": "목표 내용",
@@ -165,6 +166,7 @@
     "noProgressLimit": "무진전 한도",
     "startGoal": "목표 시작",
     "goalMeta": "{{turns}} 턴 · {{tokens}} token",
+    "goalCapacityHint": "상위 서비스에 여유 용량이 없습니다. 시간이 되면 자동으로 다시 시도합니다",
     "pause": "일시정지",
     "resume": "계속",
     "clearGoal": "목표 종료",

@@ -81,9 +81,18 @@ const h = vi.hoisted(() => {
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
-vi.mock('@cindy/maker-core', () => ({
-  isTerminalAgentErrorEvent: (ev: { type: string }) => ev.type === 'error',
-}));
+// 事件终止性判定与过载判定用**真实实现**: runner 现在按 isTerminal / willRetry
+// 区分"正在自动重试"与"真失败", 过载文案也直接复用 maker-core 的判定 —— 在这里
+// 复制一份桩会让两侧漂移时测试仍然全绿(旧桩把所有 error 都当终止, 恰好会掩盖
+// 非终止 error 的处理)。maker-core 零 Electron 依赖, 可直接加载。
+vi.mock('@cindy/maker-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/maker-core')>();
+  return {
+    isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
+    parseOverloadError: actual.parseOverloadError,
+    parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
+  };
+});
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
@@ -687,17 +696,19 @@ describe('进度快照(turn.progress 链路)', () => {
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
-      send: vi.fn(async (
-        _msg: unknown,
-        opts: {
-          beforeProviderStart?: () => Promise<void> | void;
-          onAccepted?: () => Promise<void>;
+      send: vi.fn(
+        async (
+          _msg: unknown,
+          opts: {
+            beforeProviderStart?: () => Promise<void> | void;
+            onAccepted?: () => Promise<void>;
+          },
+        ) => {
+          await opts.beforeProviderStart?.();
+          await opts.onAccepted?.();
+          return {};
         },
-      ) => {
-        await opts.beforeProviderStart?.();
-        await opts.onAccepted?.();
-        return {};
-      }),
+      ),
     };
   }
 
@@ -1022,6 +1033,206 @@ describe('进度快照(turn.progress 链路)', () => {
   });
 });
 
+describe('上游过载自动重试期间的渠道进度(零产出窗口)', () => {
+  function makeManualSession(id: string) {
+    return {
+      id,
+      workDir: 'D:/repo',
+      onEvent(cb: (ev: { type: string; data: unknown }) => void) {
+        h.eventCbs.set(id, cb);
+        return () => {
+          h.eventCbs.delete(id);
+        };
+      },
+      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
+        h.interactionListeners.set(id, listener);
+      },
+      send: vi.fn(
+        async (
+          _msg: unknown,
+          opts: {
+            beforeProviderStart?: () => Promise<void> | void;
+            onAccepted?: () => Promise<void>;
+          },
+        ) => {
+          await opts.beforeProviderStart?.();
+          await opts.onAccepted?.();
+          return {};
+        },
+      ),
+    };
+  }
+
+  async function flush(times = 30): Promise<void> {
+    for (let i = 0; i < times; i++) await Promise.resolve();
+  }
+
+  /**
+   * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是
+   * 空的。若非终止 error 不进过程区, 整个退避窗口(~22-38s)一帧 turn.progress 都
+   * 发不出去 —— 渠道那条占位消息一个字不变, 用户只能判断为"卡死"。
+   */
+  it('非终止过载 error 发出带进度的快照帧, turn 不收口', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toContain('⏳ 模型服务繁忙，正在自动重试（1/4）…');
+      // 零工作项时不报"0 项", 但耗时仍在走(用户能看出还在动)。
+      expect(emitted[0]).toContain('⚙️ 工作中 · 0s');
+      expect(emitted[0]).not.toContain('项 ·');
+
+      // 次数推进 -> 新一帧; 内容没变的 ticker 帧不重复发。
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted).toHaveLength(2);
+      expect(emitted[1]).toContain('（2/4）');
+
+      // 重投成功: 真实进展到达 -> 状态行消失, 不在时间线里冒充一项工作。
+      cb({
+        type: 'tool_use',
+        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: 'D:/repo/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const afterRecovery = emitted.at(-1)!;
+      expect(afterRecovery).toContain('工作中 · 1 项');
+      expect(afterRecovery).toContain('读取 a.ts');
+      expect(afterRecovery).not.toContain('自动重试');
+
+      cb({ type: 'text', data: { text: '好了。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toBe('好了。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Telegram 草稿在零正文时也给出重试提示, 有正文后只发正文', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          source: { im: 'telegram', userText: 'hello' },
+          onProgress: (t: string) => emitted.push(t),
+        }),
+      );
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: { message: 'model is at capacity (auto-retry 1/4)', isTerminal: false },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted).toEqual(['模型服务繁忙，正在自动重试（1/4）…']);
+
+      cb({ type: 'text', data: { text: '结论。', isFinal: false } });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted.at(-1)).toBe('结论。');
+
+      cb({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非过载的非终止 error 保持静默(不发帧, 不收口)', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: { message: 'stream disconnected (Reconnecting 1/3)', isTerminal: false },
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(emitted).toEqual([]);
+
+      cb({ type: 'done', data: null });
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({}));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('模型服务繁忙');
+    expect(outcome.errorMessage).toContain('在这里重发这条消息');
+    // 上游原文不外发到渠道, 只留在本地日志里。
+    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+  });
+
+  it('非过载的终态错误仍原样上报(不误改其它失败的诊断信息)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({}));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toBe('process exited with code 1');
+  });
+});
+
 describe('交互卡链路(interaction listener 覆盖)', () => {
   /** 带 setInteractionListener 的 fake session(不自动 done)。 */
   function makeInteractiveSession(id: string) {
@@ -1044,17 +1255,19 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
-      send: vi.fn(async (
-        _msg: unknown,
-        opts: {
-          beforeProviderStart?: () => Promise<void> | void;
-          onAccepted?: () => Promise<void>;
+      send: vi.fn(
+        async (
+          _msg: unknown,
+          opts: {
+            beforeProviderStart?: () => Promise<void> | void;
+            onAccepted?: () => Promise<void>;
+          },
+        ) => {
+          await opts.beforeProviderStart?.();
+          await opts.onAccepted?.();
+          return {};
         },
-      ) => {
-        await opts.beforeProviderStart?.();
-        await opts.onAccepted?.();
-        return {};
-      }),
+      ),
     };
   }
 
@@ -1409,5 +1622,208 @@ describe('extractToolResultImageUrls 的兜底账本回落(xdt_media_produced)',
   it('_xdt_render_image:false 哨兵优先,全部不外发', () => {
     const text = JSON.stringify({ ok: true, xdt_media_produced: [IMG], _xdt_render_image: false });
     expect(extractToolResultImageUrls(text)).toEqual([]);
+  });
+});
+
+describe('watchContinuation: 观察桌面端续跑并回流', () => {
+  /** 不自动 done 的 fake session(测试手动驱动事件流)。 */
+  function makeManualSession(id: string) {
+    return {
+      id,
+      workDir: 'D:/repo',
+      onEvent(cb: (ev: { type: string; data: unknown }) => void) {
+        h.eventCbs.set(id, cb);
+        return () => {
+          h.eventCbs.delete(id);
+        };
+      },
+    };
+  }
+
+  function watchReq(overrides?: Partial<Record<string, unknown>>) {
+    const events: string[] = [];
+    const ends: Array<{ status: string; finalText: string; errorMessage: string | null }> = [];
+    const req = {
+      sessionId: 'sess-live',
+      workingDir: 'D:/repo',
+      onClaim: () => events.push('claim'),
+      onProgress: (text: string) => events.push(`progress:${text}`),
+      onEnd: (o: { status: string; finalText: string; errorMessage: string | null }) => {
+        events.push(`end:${o.status}`);
+        ends.push(o);
+      },
+      onAbandon: () => events.push('abandon'),
+      ...overrides,
+    };
+    return { req, events, ends };
+  }
+
+  async function flush(times = 30): Promise<void> {
+    for (let i = 0; i < times; i++) await Promise.resolve();
+  }
+
+  it('会话不在进程里 -> 立刻 onAbandon(dispatcher 会把记账还回去), 撤销函数不炸', () => {
+    // 本调用发生在 vendor dispatch **之前**, live session 正常必然已就绪, 所以这是
+    // 兜底而非常规路径。放弃是安全方向, 且 dispatcher 收到 onAbandon 会还记账 ——
+    // 不需要在这里等任何窗口(等待发生在"意图 -> dispatch"那一段, 由 dispatch 信号收口)。
+    fakeMaker.getSession.mockReturnValue(undefined);
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events } = watchReq();
+    const cancel = runner.watchContinuation!(req as never);
+    expect(events).toEqual(['abandon']);
+    expect(() => cancel()).not.toThrow();
+  });
+
+  it('live session 跑在已撤销的目录里 -> 不观察(记账里的目录不算权威)', () => {
+    // 记账存的是失败那一轮的**持久化**目录, 而 live 实例可能仍跑在搬迁前的旧目录。
+    // 旧目录被移出映射、新目录仍在时, 只查记账就会放行 —— 续跑的输出与文件会从一个
+    // 已撤销的目录回流到渠道。run() 早已有这道校验(PR #733), 续跑路径必须同款。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events } = watchReq();
+    const cancel = runner.watchContinuation!({
+      ...(req as Record<string, unknown>),
+      isDirAuthorized: (dir: string) => dir !== 'D:/repo',
+    } as never);
+    expect(events).toEqual(['abandon']);
+    expect(() => cancel()).not.toThrow();
+  });
+
+  it('挂上即认领; 收口带最终正文', async () => {
+    // 归属已由 clientId 在 dispatch 前确认(见 uiContinuationSignal), 所以不必再等
+    // 首个事件来判断"这一轮是不是目标轮" —— 那套等待恰恰是误认的来源。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events, ends } = watchReq();
+    runner.watchContinuation!(req as never);
+    expect(events).toEqual(['claim']);
+
+    const cb = h.eventCbs.get('sess-live')!;
+    cb({ type: 'text', data: { text: '接着干', isFinal: false } });
+    cb({ type: 'text', data: { text: '完成了。', isFinal: true } });
+    cb({ type: 'done', data: null });
+    await flush();
+    expect(events.at(-1)).toBe('end:ok');
+    // isFinal 是**逐条**消息的完成信号, 不是整个 turn 的终稿 —— 它把该条追加进
+    // 已定稿段, 不整体替换累积文本。这里没带 source, 走保守的前缀启发式:
+    // 终稿不以已流增量开头 -> 接在后面(而不是把「接着干」丢掉)。
+    expect(ends[0]?.finalText).toBe('接着干完成了。');
+    expect(ends[0]?.errorMessage).toBeNull();
+  });
+
+  it('续跑轮同样吃到多消息累积语义: 两条 claude 消息都在, 不只剩最后一条', async () => {
+    // run() 与 watchContinuation 共用 observeHookTurn, 所以 2026-07-28 那个
+    // 「先回一句 → 思考 → 终答 只剩最后一条」的修订对续跑轮自动生效。抽取若
+    // 退回旧的"isFinal 整体替换", 这个用例会立刻红 —— 它就是防漂移的锁。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, ends } = watchReq();
+    runner.watchContinuation!(req as never);
+
+    const cb = h.eventCbs.get('sess-live')!;
+    cb({
+      type: 'text',
+      source: 'claude-code',
+      agentMeta: { uuid: 'm1' },
+      data: { text: '先回一句。', isFinal: true },
+    });
+    cb({
+      type: 'text',
+      source: 'claude-code',
+      agentMeta: { uuid: 'm2' },
+      data: { text: '这是终答。', isFinal: true },
+    });
+    cb({ type: 'done', data: null });
+    await flush();
+    // 不同消息(uuid 不同)之间空行分隔; 两条都保留
+    expect(ends[0]?.finalText).toBe('先回一句。\n\n这是终答。');
+  });
+
+  it('续跑轮自己失败 -> onEnd(error) 带错误信息', async () => {
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events, ends } = watchReq();
+    runner.watchContinuation!(req as never);
+    const cb = h.eventCbs.get('sess-live')!;
+    cb({ type: 'error', data: { message: '又崩了', isTerminal: true } });
+    await flush();
+    expect(events).toEqual(['claim', 'end:error']);
+    expect(ends[0]?.errorMessage).toBe('又崩了');
+    expect(ends[0]?.finalText).toBe('');
+  });
+
+  it('认领之后被撤销 -> 必须收口(否则渠道消息停在假的进行中)', async () => {
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events, ends } = watchReq();
+    const cancel = runner.watchContinuation!(req as never);
+    h.eventCbs.get('sess-live')!({ type: 'text', data: { text: 'x', isFinal: false } });
+    expect(events).toEqual(['claim']);
+
+    cancel();
+    await flush();
+    expect(events.at(-1)).toBe('end:error');
+    expect(ends[0]?.errorMessage).toContain('cancelled');
+    // 幂等: 再撤一次不重复收口
+    cancel();
+    await flush();
+    expect(events.filter((e) => e.startsWith('end:'))).toHaveLength(1);
+  });
+
+  it('被撤销 -> 以 error 收口(渠道消息已改成进行中, 不能就这么撂下)', async () => {
+    // 认领现在是立即的, 所以撤销必然发生在认领之后: 渠道那条消息已经被改成"进行中",
+    // 静默退场会把它永久留在假的进行中 —— 必须发一条终态帧收口。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events, ends } = watchReq();
+    const cancel = runner.watchContinuation!(req as never);
+    expect(events).toEqual(['claim']);
+    cancel();
+    await flush();
+    expect(events).toEqual(['claim', 'end:error']);
+    expect(ends[0]?.errorMessage).toBe('hook continuation cancelled');
+  });
+
+  it('长 turn 不被误杀: 几分钟不出事件也不该收口(兜底只有硬超时)', async () => {
+    // 曾经有过一条 2 分钟"空转"超时, 但它从不在有事件时清除 —— 任何跑过 2 分钟的
+    // 正常续跑都会被强制判成 error 并把那条错误写进渠道。现在兜底与 run() 一致,
+    // 只保留 1 小时硬超时: 认领之后这一轮已经在跑, 长 turn 几分钟不出事件很正常
+    // (或只出被本观察器忽略的账号级事件)。
+    vi.useFakeTimers();
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, events } = watchReq();
+      runner.watchContinuation!(req as never);
+      expect(events).toEqual(['claim']);
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(events).toEqual(['claim']);
+      expect(h.eventCbs.has('sess-live')).toBe(true);
+
+      // 正常收口照样成立。
+      h.eventCbs.get('sess-live')!({ type: 'done', data: null });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events.at(-1)).toBe('end:ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('彻底静默的一轮由硬超时收口, 摘掉监听', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, events, ends } = watchReq();
+      runner.watchContinuation!(req as never);
+
+      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
+      expect(events).toEqual(['claim', 'end:error']);
+      expect(ends[0]?.errorMessage).toContain('hard timeout');
+      expect(h.eventCbs.has('sess-live')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

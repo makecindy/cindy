@@ -72,11 +72,26 @@ export interface FileStat {
 function assertInsideWorkdir(workdir: string, relPath: string): string {
   // Normalize and reject anything that escapes the workdir. We resolve to
   // absolute and verify the resolved path starts with workdir + sep.
-  const cleaned = relPath.replace(/\\/g, '/').replace(/^\.?\/+/, '');
-  if (cleaned === '' || cleaned === '.') return '';
-  if (cleaned.startsWith('/')) {
+  // Reject anything absolute on ANY host OS, checked on the raw input so the
+  // guard is host-independent (this browser runs on macOS/Windows/Linux):
+  //  - path.posix.isAbsolute → POSIX absolute "/etc/passwd";
+  //  - path.win32.isAbsolute → "\x", UNC "\\srv\share", drive-absolute "C:\x"/"C:/x";
+  //  - /^[a-zA-Z]:/          → drive-*relative* "C:foo"/"C:", which win32.isAbsolute
+  //    misses yet path.resolve on Windows reinterprets against drive C:'s current
+  //    directory (NOT as a workdir entry literally named "C:foo"). A ":"-carrying
+  //    drive token is Windows path syntax and cannot be a workdir-relative POSIX
+  //    name cross-platform, so reject it rather than silently mis-resolving it.
+  if (
+    path.posix.isAbsolute(relPath) ||
+    path.win32.isAbsolute(relPath) ||
+    /^[a-zA-Z]:/.test(relPath)
+  ) {
     throw new Error(`absolute path not allowed: ${relPath}`);
   }
+  // What remains is a workdir-relative path: normalize separators and strip a
+  // leading "./". Traversal ("../…") is caught by the containment check below.
+  const cleaned = relPath.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (cleaned === '' || cleaned === '.') return '';
   const abs = path.resolve(workdir, cleaned);
   const wdAbs = path.resolve(workdir);
   if (abs !== wdAbs && !abs.startsWith(wdAbs + path.sep)) {

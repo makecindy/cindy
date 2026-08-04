@@ -92,7 +92,7 @@
 - **Collaboration** — Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。
   - 豁免范围：`desktop:settings.contacts.`
 - **Collapse** — 中文用「收起」（现状 29:7），与反义词「展开」（Expand，29/30 已统一）配对。ccAgent 与 rightSidebar 内部各自「收起 / 折叠」混用，是同模块自相矛盾。条件禁用：「折叠」在别处可能是正常中文，只在英文源含 Collapse 时判违规。
-- **Credits** — 计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。
+- **Credits** — 计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。(2026-07-30 更新:Desktop billing 界面弃用「点数」概念(PR #1053),计费文案与金额直接挂钩——新增计费文案一律用金额/余额(Balance=余额)措辞,en 源不再引入 Credit/Credits 用词,因此本条的 Credits→点数 映射不再适用于计费界面;裁决继续约束的只剩 alsoAllowed 覆盖的第三方原生 credits(Codex / ChatGPT 订阅余量)与 reset credits 语境。后续给计费界面添加文案时不要恢复「点数」。)
 - **Directory** — Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（"not a folder. Choose a project directory."、"re-select the working directory and wait for the folder badge"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。
 - **Dismiss** — 中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。
 - **Effort** — 模型的推理投入档位（low/medium/high/…）。用「推理强度」有三重依据：①同类工具 i18n 里断层第一（GitHub 代码搜索共现量级 1452，第二名「思考强度」431）；②OpenAI 简中帮助中心即用此词；③跨 provider 中立——Cindy 的 create_worker 用一个 effort 同时映射 Codex reasoning effort 与 Claude thinking 预算，而 Anthropic 官方简中叫「努力程度」、OpenAI 叫「推理强度」，需要不偏向任一方的词。禁用项各有硬理由：「思考深度」「推理深度」会与国内产品普遍的「深度思考」开关撞车，且语义错误（低 effort 是想得少，不是想得浅）；「努力程度」在中文里强烈指向人的绩效评价；「推理等级/级别」未入禁用但不推荐——Cindy 已有 model tier 概念，「等级」易被读成模型档位。
@@ -100,13 +100,13 @@
   - 豁免范围：`desktop:scheduler.editor.script.capabilityDescs.jira_comment`、`desktop:scheduler.editor.script.capabilityDescs.jira_read`
 - **Plugin** — 中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。
 - **Project** — 中文一律「项目」（现状 119:15）。同一个侧边栏里筛选叫「项目」、批量操作提示叫「Project」是既有 bug。小写 project 不入 forbidden——它常出现在路径与文件名里（project.json）。
-- **Provider** — 中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 "source"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。
-  - 豁免范围：`desktop:billing.balance.creditParityCny`、`desktop:billing.balance.creditParityUsd`、`desktop:login.ssoVerificationSubtitle`、`mobile/loginMessages:ssoVerificationSubtitle`
+- **Provider** — 中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 "source"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。(2026-07 更新:billing 弃用「点数」概念改用金额/余额,creditParityCny/Usd 两条文案已删除,对应豁免一并移除。)
+  - 豁免范围：`desktop:login.ssoVerificationSubtitle`、`mobile/loginMessages:ssoVerificationSubtitle`
 - **Proxy** — 网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。
 - **Quota** — 周期内的使用上限用「配额」（现状已有 3 处这么写）。与 credits 条目一起裁决：「额度」原先同时表示 Balance / Credits / Quota，三个概念在计费与限额提示里互相污染。「额度」的 forbidden 统一登记在 credits 条目下，不在这里重复——一个词只归属一个术语，否则同一处违规会被两个术语各报一次。（2026-07 修正：ko 原声明 쿼터 在全仓零出现，属凭空造词；ja 原声明 クォータ 仅 desktop 用、mobile 用 残量。定为 ja クォータ / ko 할당량——残量 语义偏 Balance 会与 残高 混淆，而 ko 的 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」三义合一的错误。）
 - **Running** — 状态标签用「运行中」（现状 16:9）。条件禁用是必需的——「进行中」是 In Progress 的正确译法、「执行中」在别处也可能对，无条件禁会大面积误伤。mobile/devices 的自动化面板上「运行中 / 执行中 / 重跑中」三种写法同屏出现。
 - **Session** — 面向用户一律叫「对话」——「会话」太生硬难懂（2026-07 裁决）。代码与内部标识仍用 Session，本条只约束 UI 文案。Chat 合并到同一个词，见 chat 条目。落地时把 440 处「会话」+ 22 处「聊天」统一改为「对话」。ja / ko 沿用既有音译，不受本条约束。豁免的 6 处是同形异义的技术 session（登录态、WebSocket 语音连接），与产品对话无关——同类的还有 Linux Computer Use 提示里的「桌面会话」——那是 OS 桌面会话（窗口读取与输入自动化的授权范围）。注意 login.errors 的「绑定会话」指账号绑定态，scheduler 的「绑定对话」才是产品对话，两者同名不同义，靠 key 精确区分。还豁免 archiveWorkerConfirmDesc:归档 Worker 时 orcaTeamService.archiveWorker() 先关掉它的 SDK 运行时 session,再归档存下来的产品对话——一句话里是两个生命周期,统称「对话」会让用户以为聊天记录也被停掉了。还豁免 stopBashTitle:它停后台任务但显式保留底层 session 进程,「对话进程」是个不存在的东西,还会模糊它与相邻的「关闭后台进程」的区别。另豁免 4 个 toggleHint 与 forkErrors.unsupportedHistory:英文原文明确区分 agent session(Agent 运行实例)与 conversation(产品对话),两者合并成「对话」会把语义说错——开关其实对「同一对话内重启的 Agent 会话」也生效,写成「只对新建对话生效」等于告诉用户要新开对话。unsupportedHistory 失效的是历史引擎 session,产品对话仍在。内置工具的两条 toast 同理豁免:英文是 takes effect on next session,指下一个 Agent 会话;写成「下次对话生效」会与紧邻的 toggleHint(说重启 Agent 会话即可)自相矛盾,让用户以为必须新开一个对话。personalization 说明也豁免:那三处英文全是 runtime session——设置在 Agent 会话创建时被快照,而终端直跑 / 其他 IDE 里的 Claude Code 根本不是 Cindy 的产品对话,受 SessionStart hook 管。称它们「对话」等于凭空造出 Cindy 之外的产品对话。「Claude Code 会话」四处同样豁免:英文是 Claude Code sessions,指 CC 子进程 / SDK 运行实例(调试日志由 XDT_CC_DEBUG_NET 在下一个 CC 会话启动时生效),不是存下来的产品对话。称它「对话」会让用户以为要新开一个对话才生效。subagentModels.hint 同样豁免:英文是 apply to new sessions,指 Agent 运行实例——runtime-configs 用 live getter 暴露该设置、buildClaudeEnv() 在 Agent 会话启动时快照,所以在同一个对话里重启 runtime 就能生效。写成「从新建对话开始生效」会让用户以为必须新开对话。切换 Agent 引擎的确认文案与 Codex 延迟生效提示同样豁免:英文分别是 the original engine’s session 与 new Codex sessions,指引擎的运行实例——切回原引擎时续接的是它的 runtime session,存下来的产品对话从没变过;Codex 那条重启后对下一个 Codex 运行实例生效,同一对话里重启也算。统称「对话」会让用户以为每个引擎各有一个对话、或必须新开对话。stopConfirmDesc 与 lspMode 的两条 toast 同样豁免:英文源分别是 The Worker session will be destroyed 与 takes effect in new sessions,指的都是 Agent 运行实例——结束协同时 disableOrcaInternal() 关掉 Worker 的 SDK 运行时后会把它存下来的对话标为 archived、聊天记录仍在,LSP 开关则在下一个 Agent 会话启动时才被读到。称它们「对话」会让用户以为聊天记录被销毁、或必须新开一个对话,与紧邻的归档确认文案自相矛盾。
-  - 豁免范围：`desktop:chat.backgroundActivity.stopBashTitle`、`desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED`、`desktop:chat.rewind.errors.remoteNotSupported`、`desktop:chat.systemCard.context.noLiveSession`、`desktop:chat.userMessage.forkErrors.unsupportedHistory`、`desktop:login.errors.INVALID_BIND_TICKET`、`desktop:login.errors.INVALID_LOGIN_TICKET`、`desktop:newChat.chatInput.agentSwitch.confirmation.description`、`desktop:newChat.collaboration.archiveWorkerConfirmDesc`、`desktop:newChat.collaboration.stopConfirmDesc`、`desktop:settings.about.debugLogDescription`、`desktop:settings.builtinTools.toast.disabled`、`desktop:settings.builtinTools.toast.enabled`、`desktop:settings.builtinTools.toggleHint`、`desktop:settings.computerUse.android.toggleHint`、`desktop:settings.computerUse.browser.toggleHint`、`desktop:settings.computerUse.codexRefreshDeferred`、`desktop:settings.computerUse.directControl.permissions.linuxHint`、`desktop:settings.computerUse.directControl.toggleHint`、`desktop:settings.lspMode.toast.disabled`、`desktop:settings.lspMode.toast.enabled`、`desktop:settings.personalization.placeholder`、`desktop:settings.subagentModels.hint`、`mobile/composer:voice.invalidSession`、`mobile/composer:voice.missingConnectionProvider`、`mobile/composer:voice.missingRefinerTargetProvider`、`mobile/composer:voice.sessionExpiredOrForbidden`、`mobile/composer:voice.sessionNotConnected`
+  - 豁免范围：`desktop:chat.backgroundActivity.stopBashTitle`、`desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED`、`desktop:chat.rewind.errors.remoteNotSupported`、`desktop:chat.systemCard.context.noLiveSession`、`desktop:chat.userMessage.forkErrors.unsupportedHistory`、`desktop:login.errors.INVALID_BIND_TICKET`、`desktop:login.errors.INVALID_LOGIN_TICKET`、`desktop:newChat.chatInput.agentSwitch.confirmation.description`、`desktop:newChat.collaboration.archiveWorkerConfirmDesc`、`desktop:newChat.collaboration.stopConfirmDesc`、`desktop:settings.about.debugLogDescription`、`desktop:settings.builtinTools.toast.disabled`、`desktop:settings.builtinTools.toast.enabled`、`desktop:settings.builtinTools.toggleHint`、`desktop:settings.computerUse.android.toggleHint`、`desktop:settings.computerUse.browser.toggleHint`、`desktop:settings.computerUse.codexRefreshDeferred`、`desktop:settings.computerUse.directControl.permissions.linuxHint`、`desktop:settings.computerUse.directControl.toggleHint`、`desktop:settings.lspMode.toast.disabled`、`desktop:settings.lspMode.toast.enabled`、`desktop:settings.personalization.placeholder`、`desktop:settings.subagentModels.hint`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.chatgpt`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.xai`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.generic`、`desktop:ccAgent.draft.remoteProviderUnsupported`、`desktop:ipcError.REMOTE_PROVIDER_UNSUPPORTED`、`mobile/composer:voice.invalidSession`、`mobile/composer:voice.missingConnectionProvider`、`mobile/composer:voice.missingRefinerTargetProvider`、`mobile/composer:voice.sessionExpiredOrForbidden`、`mobile/composer:voice.sessionNotConnected`
 - **Skill** — 中文用「技能」（现状 32:26 领先），偶尔保留英文 Skill 也允许，故 zh-CN 不设 forbidden——硬性禁用会逼出别扭的中文。ja / ko 则禁用 技能 / 기술：那是与 スキル / 스킬 并存的同义漂移，且只出现在 skillhub 内部（3 / 3 处）。ko 的 기술 是多义词（技术 / 记述 / 技能），两处非 Skill 义已按 key 豁免。SkillHub 作为产品名单独登记在 skillhub 条目。(2026-07 补充:alsoAllowed 允许保留英文,那就必须是规范形态 Skill——caseStandardFor 会把这类条目一并纳入大小写检查,skillhub 里原有 10 处小写 skill 已统一。)
   - 豁免范围：`desktop:localDbFatal.details`、`desktop:issueTracker.create.descriptionPlaceholder`
 - **SkillHub** — 产品名，四语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。
@@ -124,6 +124,10 @@
 
 **注意别指望 `--update-baseline` 帮你收尾。** `proposed` 存在的理由正是「已知有存量不一致」，改成 `decided` 的那一刻这些告警会变成阻断违规；而 `--update-baseline` 只删不加，遇到 baseline 里没有的指纹会直接拒绝。所以裁决时只有两条路：要么把命中逐条读语境改掉，要么先人工把已 review 过的指纹写进 `i18n/glossary-baseline.json` 冻结存量，之后再用 `--update-baseline` 做修剪。
 
+### Anthropic Messages
+
+Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
+
 ### Global region
 
 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
@@ -140,6 +144,14 @@
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
 
+### Context window
+
+模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。
+
+### Device
+
+device-link 里「可以选择在哪台机器上运行」这一维度，两端统一叫「设备」。desktop 的 machineSwitcher 本来就是 This device / このデバイス / 이 기기，mobile 原先用 computer 系（选择电脑 / パソコンを選択 / 컴퓨터 선택），2026-07 裁决为向 device 系对齐，与既有 device-code（设备码 / デバイスコード / 기기 코드）同口径。alsoAllowed 保留「电脑」系：指代桌面端物理机的文案（安装、导出、等待确认）换成「设备」反而不通中文，那是 desktop/PC 的意思，不是这里的目标维度。
+
 ### Device Code
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
@@ -152,6 +164,26 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
 
+### Compression
+
+issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。
+
+### Realtime Audio
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
+
+### Speech to Text
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
+
+### Text to Speech
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。
+
+### Not signed in
+
+跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
+
 ### OpenClaw
 
 腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。
@@ -160,21 +192,35 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### Pin
+
+右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
+
 ### Region badge
 
 桌面登录页标题旁的品牌红胶囊（DESIGN.md §16.3），指徽标这个 UI 元素本身。徽标上的标签值另立条目（region-code-cn / region-code-dev）——本条 en 为 Region badge、各语言译文均非英文原词，caseStandardFor 天然返回 null，所以本条约束不到标签值，也无需写 checkCase。作为待产品裁决术语登记：尚未拍板是否改为可译文案（如「中国大陆版 / Mainland China」），先登记以免后续界面自造“国内版／中国版／开发版”等多套说法。
 
 ### CN
 
-中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`），口径与徽标完全一致：global 不标。
+中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 
 已确定禁用：`中国版（仅当英文含 CN）`（zh-CN）、`国内版（仅当英文含 CN）`（zh-CN）、`中国版（仅当英文含 CN）`（ja）、`중국판（仅当英文含 CN）`（ko）
 
 ### Dev
 
-dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`），口径与徽标完全一致：global 不标。
+dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 
 已确定禁用：`开发版（仅当英文含 Dev）`（zh-CN）、`開発版（仅当英文含 Dev）`（ja）、`개발판（仅当英文含 Dev）`（ko）
+
+### shortcut listener permission
+
+macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Cindy 内的对外称法。产品侧只按用途讲: 这个权限只服务语音输入快捷键的监听, 不讲系统实现, 所以 zh-CN 沿用设置页权限项已有的「监听权限」(settings.voiceInput.permissions.inputMonitoring.label), 不引入「输入监控」这个直译——后者听起来像 Cindy 在监控用户的全部输入, 与实际能力(只识别快捷键按键组合)不符, 反而制造隐私误解。禁用项都挂 whenEn 条件: 要引用 macOS 系统设置面板名本身时那是 OS 的 UI 名称, 不受本条约束。四语的比喻不统一(en listener / ja 監視 / ko 감지)是现状登记而非裁决——各语言内部一致但跨语言不同, 保持 proposed 等产品拍板, 先把清单摆出来防止继续在 listener / monitoring / detection 之间漂移。
+
+已确定禁用：`输入监控（仅当英文含 shortcut listener permission）`（zh-CN）、`入力監視（仅当英文含 shortcut listener permission）`（ja）、`입력 모니터링（仅当英文含 shortcut listener permission）`（ko）
+
+### Skip Sign-In
+
+登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
 
 ### Voice dictionary
 

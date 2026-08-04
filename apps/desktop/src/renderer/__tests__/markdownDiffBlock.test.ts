@@ -22,7 +22,7 @@
  *   F3  MarkdownRenderer's `pre` renderer detects language-diff and routes
  *       to <MarkdownDiffBlock raw=.../>, leaving non-diff blocks on the
  *       default <pre><code> path.
- *   F4  inline code path (no className) is unchanged.
+ *   F4  inline code path is gated by structure (not fenced) AND no className.
  *   F5  parseDiffText: '+' / '-' produce add / del; '+++' / '---' / '@@'
  *       hunk headers stay as ctx (no color bleed onto file headers).
  */
@@ -177,11 +177,17 @@ describe('F3 — MarkdownRenderer routes ```diff to MarkdownDiffBlock', () => {
   });
 });
 
-describe('F4 — inline code path unchanged', () => {
-  it('inline = !className still gates the inline branch', () => {
-    expect(rendererSrc).toMatch(/const\s+isInline\s*=\s*!className/);
+describe('F4 — inline code 分派判据', () => {
+  // 判据从「有没有 className」改成「结构标记 + 没有 className」:className 只在
+  // 带语言标注时由 rehype-highlight 下发,```(无语言)围栏与缩进代码块会漏判成
+  // 行内 code。这里锚定两个合取项都在,防止任一半被删回退。
+  // 行为级断言见 markdownFencedCodeInline.test.ts。
+  it('inline 分支同时要求「非 fenced 结构」与「无 className」', () => {
+    expect(rendererSrc).toMatch(
+      /const\s+isFencedCode\s*=\s*node\?\.properties\?\.\[FENCED_CODE_PROP\]\s*!==\s*undefined/,
+    );
+    expect(rendererSrc).toMatch(/const\s+isInline\s*=\s*!isFencedCode\s*&&\s*!className/);
   });
-
 });
 
 describe('F5 — parseDiffText classification', () => {

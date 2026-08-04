@@ -98,6 +98,63 @@ describe('file-browser scanner symlink boundaries', () => {
   });
 });
 
+describe('file-browser scanner path boundaries', () => {
+  it('rejects absolute paths instead of silently resolving them workdir-relative', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      // assertInsideWorkdir's docstring promises a throw on absolute paths. A
+      // leading slash must not be silently stripped and reinterpreted as
+      // `${workdir}/etc/passwd` — that turns a caller bug into a wrong-file read.
+      await expect(readFile(root, '/etc/passwd')).rejects.toThrow(/absolute path not allowed/);
+      await expect(statEntry(root, '/etc/passwd')).rejects.toThrow(/absolute path not allowed/);
+      // Backslashes are normalized to '/' first, so a Windows-style absolute
+      // path hits the same guard rather than slipping through.
+      await expect(statEntry(root, '\\Windows\\system32')).rejects.toThrow(
+        /absolute path not allowed/,
+      );
+      // Windows drive paths are rejected via a host-independent check
+      // (path.win32.isAbsolute + a drive-letter regex), so they never reach
+      // path.resolve where a Windows host would mis-interpret them. This covers
+      // both drive-*absolute* ('C:\\x' / 'C:/x') and drive-*relative* ('C:foo' /
+      // 'C:') — the latter is Windows drive-relative syntax (resolved against
+      // drive C:'s CWD), not a literal workdir entry, so it must not slip through.
+      await expect(statEntry(root, 'C:\\Windows\\system32')).rejects.toThrow(
+        /absolute path not allowed/,
+      );
+      await expect(readFile(root, 'C:/Windows/system32')).rejects.toThrow(
+        /absolute path not allowed/,
+      );
+      await expect(statEntry(root, 'C:foo')).rejects.toThrow(/absolute path not allowed/);
+      await expect(statEntry(root, 'C:')).rejects.toThrow(/absolute path not allowed/);
+      await expect(readFile(root, 'c:bar')).rejects.toThrow(/absolute path not allowed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects parent-traversal that escapes the workdir', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      await expect(readFile(root, '../outside.txt')).rejects.toThrow(/escapes workdir/);
+      await expect(statEntry(root, '../../etc/passwd')).rejects.toThrow(/escapes workdir/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still normalizes a leading "./" to a plain workdir-relative path', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      await fsWriteFile(path.join(root, 'note.txt'), 'hi', 'utf8');
+      const stat = await statEntry(root, './note.txt');
+      expect(stat.relPath).toBe('note.txt');
+      expect(stat.type).toBe('file');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('readFileChunk', () => {
   it('reassembles a file losslessly across chunk boundaries (binary, no zero-padding)', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));

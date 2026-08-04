@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   GhostPipeToolCall,
   GhostToolCallResult,
+  GhostToolDecl,
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
@@ -74,6 +75,32 @@ const DEFAULT_TIMEOUT_MS = 330_000;
 /** 代办收工(release)后留给意识做后处理与交卷的余量窗口。 */
 const HOLD_SETTLE_GRACE_MS = 60_000;
 
+/**
+ * TOOL_NOT_FOUND 自愈文案。只报"没有什么"会让 agent 拿同一错误形态反复重试,
+ * 甚至误判"插件没有写能力"(2026-07-30 实测:二级分派型插件 cindy-github 的
+ * 操作名被两个模型先后当作顶层 tool 直调,均在此卡死)。
+ * 分派型插件(暴露了 call_tool)把 agent 想调的名字直接回填进正确调用形态;
+ * 普通插件列出实际可用的顶层工具名。
+ * 消费方:本派发器 + ghost_call 主路径预检(mcp-integrations/ghost.ts)+
+ * setup 恢复校验(maker-ipc/register.ts validateTarget)——所有 TOOL_NOT_FOUND
+ * 返回点必须共用本函数,新增返回点不得自写文案。导出供单测直测(规则 14)。
+ */
+export function toolNotFoundMessage(
+  ghostId: string,
+  tool: string,
+  declaredTools: GhostToolDecl[] | undefined,
+): string {
+  const names = (declaredTools ?? []).map((t) => t.name);
+  if (names.includes('call_tool')) {
+    return (
+      `插件 ${ghostId} 没有名为 ${tool} 的顶层工具——它采用二级分派:具体操作经 call_tool 下发,` +
+      `正确形态 ghost_call({ghost_id:"${ghostId}",tool:"call_tool",args:{name:"${tool}",args:{...}}});` +
+      `操作名与参数先调 list_tools 查询。不要据此判定插件缺少该能力。`
+    );
+  }
+  return `插件 ${ghostId} 没有工具 ${tool};可用工具: ${names.length > 0 ? names.join(', ') : '(未声明任何工具)'}`;
+}
+
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
 
@@ -110,7 +137,7 @@ export class GhostPipeDispatcher {
     }
     const declared = ghost.manifest.tools?.some((t) => t.name === tool);
     if (!declared) {
-      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `插件 ${ghostId} 没有工具 ${tool}` };
+      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
     }
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };

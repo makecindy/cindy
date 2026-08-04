@@ -1,17 +1,31 @@
 import {
   UnsupportedResponsesFeatureError,
   type ChatAssistantMessage,
+  type ChatAudioInput,
   type ChatBridgeCapabilities,
-  type ChatDeveloperRole,
   type ChatCompletionsRequest,
+  type ChatDeveloperRole,
+  type ChatFileInput,
   type ChatImageInput,
   type ChatMessage,
+  type ChatPassthroughField,
+  type ChatReasoningHistoryField,
   type ChatToolCallExtraContent,
   type ChatUserContentPart,
-  type ResponsesFunctionTool,
   type ResponsesInputItem,
   type ResponsesRequest,
 } from './types.js';
+import { ChatBridgeToolContext } from './tool-context.js';
+
+const TOOL_CALL_REASONING_PLACEHOLDER = 'tool call';
+const GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER = 'skip_thought_signature_validator';
+const TOOL_RESULT_MEDIA_MOVED_MARKER = '[media moved to the following user message]';
+
+interface ChatMediaCapabilities {
+  imageInput?: ChatImageInput;
+  fileInput?: ChatFileInput;
+  audioInput?: ChatAudioInput;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -24,6 +38,149 @@ function cloneToolCallExtraContent(value: unknown): ChatToolCallExtraContent | u
     ...rest,
     ...(isPlainObject(google) ? { google: { ...google } } : {}),
   };
+}
+
+function normalizeRole(role: string, developerRole: ChatDeveloperRole): 'system' | 'developer' | 'user' {
+  if (role === 'system' || role === 'developer') return developerRole;
+  return 'user';
+}
+
+function imagePart(part: Record<string, unknown>): ChatUserContentPart | undefined {
+  if (part.file_id !== undefined) {
+    throw new UnsupportedResponsesFeatureError('input_image.file_id');
+  }
+  const imageUrl = typeof part.image_url === 'string'
+    ? part.image_url
+    : isPlainObject(part.image_url) && typeof part.image_url.url === 'string'
+      ? part.image_url.url
+      : undefined;
+  if (!imageUrl) return undefined;
+  const detail = typeof part.detail === 'string' && part.detail
+    ? part.detail
+    : isPlainObject(part.image_url) && typeof part.image_url.detail === 'string'
+      ? part.image_url.detail
+      : undefined;
+  return {
+    type: 'image_url',
+    image_url: { url: imageUrl, ...(detail ? { detail } : {}) },
+  };
+}
+
+function filePart(part: Record<string, unknown>): ChatUserContentPart | undefined {
+  const source = isPlainObject(part.file) ? part.file : part;
+  if (source.file_id !== undefined) {
+    throw new UnsupportedResponsesFeatureError('input_file.file_id');
+  }
+  const file = {
+    ...(typeof source.file_data === 'string' ? { file_data: source.file_data } : {}),
+    ...(typeof source.file_url === 'string' ? { file_url: source.file_url } : {}),
+    ...(typeof source.filename === 'string' ? { filename: source.filename } : {}),
+  };
+  return Object.keys(file).length > 0 ? { type: 'file', file } : undefined;
+}
+
+function audioPart(part: Record<string, unknown>): ChatUserContentPart | undefined {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  if (typeof source.data !== 'string' || typeof source.format !== 'string') return undefined;
+  return { type: 'input_audio', input_audio: { data: source.data, format: source.format } };
+}
+
+function hasImageSource(part: Record<string, unknown>): boolean {
+  return part.file_id !== undefined
+    || (typeof part.image_url === 'string' && part.image_url.length > 0)
+    || (
+      isPlainObject(part.image_url)
+      && typeof part.image_url.url === 'string'
+      && part.image_url.url.length > 0
+    );
+}
+
+function hasFileSource(part: Record<string, unknown>): boolean {
+  const source = isPlainObject(part.file) ? part.file : part;
+  return source.file_id !== undefined
+    || typeof source.file_data === 'string'
+    || typeof source.file_url === 'string';
+}
+
+function hasAudioSource(part: Record<string, unknown>): boolean {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  return typeof source.data === 'string' && typeof source.format === 'string';
+}
+
+function mediaPart(
+  part: Record<string, unknown>,
+  capabilities: ChatMediaCapabilities,
+  failClosed = false,
+): ChatUserContentPart | undefined {
+  if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
+    if (!hasImageSource(part)) return undefined;
+    if (capabilities.imageInput !== 'image_url') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
+    return imagePart(part);
+  }
+  if (part.type === 'input_file' || part.type === 'file') {
+    if (!hasFileSource(part)) return undefined;
+    if (capabilities.fileInput !== 'file') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
+    return filePart(part);
+  }
+  if (part.type === 'input_audio') {
+    if (!hasAudioSource(part)) return undefined;
+    if (capabilities.audioInput !== 'input_audio') {
+      if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
+      return undefined;
+    }
+    return audioPart(part);
+  }
+  return undefined;
+}
+
+function messageContent(
+  item: Extract<ResponsesInputItem, { role: string }>,
+  itemIndex: number,
+  developerRole: ChatDeveloperRole,
+  mediaCapabilities: ChatMediaCapabilities,
+): string | ChatUserContentPart[] {
+  if (typeof item.content === 'string') return item.content;
+  if (!Array.isArray(item.content)) {
+    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+  }
+
+  const normalizedRole = item.role === 'assistant'
+    ? 'assistant'
+    : normalizeRole(item.role, developerRole);
+  let text = '';
+  let hasMedia = false;
+  const content: ChatUserContentPart[] = [];
+  for (const rawPart of item.content) {
+    if (!isPlainObject(rawPart) || typeof rawPart.type !== 'string') {
+      throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+    }
+    if (rawPart.type === 'input_text' || rawPart.type === 'output_text' || rawPart.type === 'text') {
+      if (typeof rawPart.text !== 'string') {
+        throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${rawPart.type}`);
+      }
+      text += rawPart.text;
+      content.push({ type: 'text', text: rawPart.text });
+      continue;
+    }
+    if (rawPart.type === 'refusal' && typeof rawPart.refusal === 'string') {
+      text += rawPart.refusal;
+      content.push({ type: 'text', text: rawPart.refusal });
+      continue;
+    }
+    const translatedMedia = mediaPart(rawPart, mediaCapabilities);
+    if (normalizedRole !== 'user' || !translatedMedia) {
+      throw new UnsupportedResponsesFeatureError(`input content part '${rawPart.type}'`);
+    }
+    hasMedia = true;
+    content.push(translatedMedia);
+  }
+  return hasMedia ? content : text;
 }
 
 function stringifyToolOutput(output: unknown): string {
@@ -40,140 +197,122 @@ function stringifyToolOutput(output: unknown): string {
     if (textParts.every((part): part is string => part !== null)) return textParts.join('\n');
   }
   try {
-    return JSON.stringify(output);
+    const serialized = JSON.stringify(output);
+    return typeof serialized === 'string' ? serialized : String(output ?? '');
   } catch {
     return String(output);
   }
 }
 
+function replaceToolMedia(
+  value: unknown,
+  media: ChatUserContentPart[],
+  mediaCapabilities: ChatMediaCapabilities,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((part) => replaceToolMedia(part, media, mediaCapabilities));
+  }
+  if (!isPlainObject(value)) return value;
+  const translated = mediaPart(value, mediaCapabilities, true);
+  if (translated) {
+    media.push(translated);
+    return { type: 'text', text: TOOL_RESULT_MEDIA_MOVED_MARKER };
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(
+      ([key, child]) => [key, replaceToolMedia(child, media, mediaCapabilities)],
+    ),
+  );
+}
+
+function splitToolOutput(
+  output: unknown,
+  mediaCapabilities: ChatMediaCapabilities,
+): { content: string; media: ChatUserContentPart[] } {
+  const media: ChatUserContentPart[] = [];
+  const replaced = replaceToolMedia(output, media, mediaCapabilities);
+  return {
+    content: stringifyToolOutput(media.length > 0 ? replaced : output),
+    media,
+  };
+}
+
 function customToolArguments(input: unknown): string {
-  if (input == null) return '{}';
-  if (typeof input === 'string') {
+  let rawInput: string;
+  if (typeof input === 'string') rawInput = input;
+  else {
     try {
-      const parsed: unknown = JSON.parse(input);
-      return JSON.stringify(isPlainObject(parsed) ? parsed : { input: parsed });
+      rawInput = JSON.stringify(input ?? '');
     } catch {
-      return JSON.stringify({ input });
+      rawInput = String(input ?? '');
+    }
+  }
+  return JSON.stringify({ input: rawInput });
+}
+
+function toolArguments(value: unknown): string {
+  if (typeof value === 'string') {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      return JSON.stringify({ input: value });
     }
   }
   try {
-    return JSON.stringify(isPlainObject(input) ? input : { input });
+    return JSON.stringify(value ?? {});
   } catch {
-    return JSON.stringify({ input: String(input) });
+    return '{}';
   }
 }
 
-function messageContent(
-  item: Extract<ResponsesInputItem, { role: string }>,
-  itemIndex: number,
-  developerRole: ChatDeveloperRole,
-  imageInput: ChatImageInput | undefined,
-): string | ChatUserContentPart[] {
-  if (typeof item.content === 'string') return item.content;
-  if (!Array.isArray(item.content)) {
-    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+function reasoningText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(reasoningText).filter(Boolean).join('');
+  if (!isPlainObject(value)) return '';
+  for (const key of ['reasoning_content', 'content', 'text', 'summary']) {
+    const text = reasoningText(value[key]);
+    if (text) return text;
   }
-
-  let text = '';
-  let hasImage = false;
-  const multimodal: ChatUserContentPart[] = [];
-  for (const part of item.content) {
-    if (!isPlainObject(part) || typeof part.type !== 'string') {
-      throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
-    }
-    if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
-      if (typeof part.text !== 'string') {
-        throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
-      }
-      text += part.text;
-      multimodal.push({ type: 'text', text: part.text });
-      continue;
-    }
-    if (part.type === 'input_image') {
-      const normalizedRole = item.role === 'assistant'
-        ? 'assistant'
-        : normalizeRole(item.role, developerRole);
-      if (
-        normalizedRole !== 'user'
-        || imageInput !== 'image_url'
-        || part.file_id !== undefined
-        || typeof part.image_url !== 'string'
-        || part.image_url.length === 0
-      ) {
-        throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
-      }
-      hasImage = true;
-      multimodal.push({
-        type: 'image_url',
-        image_url: { url: part.image_url },
-      });
-      continue;
-    }
-    throw new UnsupportedResponsesFeatureError(`input content part '${part.type}'`);
-  }
-  // 无图片时维持历史 JSON 形态(string)，不让 capability 改变纯文本供应商请求。
-  return hasImage ? multimodal : text;
+  return '';
 }
 
 interface TranslateInputOptions {
   developerRole: ChatDeveloperRole;
-  /** 仅明确支持视觉的 Chat 上游开启；未声明时 input_image 继续 fail closed。 */
-  imageInput?: ChatImageInput;
-  /** thinking 模型:为带 tool_calls 但缺 reasoning_content 的 assistant 消息注入占位。 */
+  mediaCapabilities: ChatMediaCapabilities;
+  reasoningHistoryField?: ChatReasoningHistoryField;
   toolCallReasoningPlaceholder: boolean;
-  /** Gemini 3 OpenAI 兼容层:为每步首个回放 tool call 注入官方允许的签名跳过值。 */
   googleThoughtSignaturePlaceholder: boolean;
-  /** 丢弃的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
-  onDroppedInputItem?: (type: string, index: number) => void;
+  toolContext: ChatBridgeToolContext;
 }
 
-/** cc-switch 的占位口径:kimi/DeepSeek 要求 tool_call assistant 消息带非空 reasoning_content。 */
-const TOOL_CALL_REASONING_PLACEHOLDER = 'tool call';
-/** Google 官方文档允许在无法取得原始签名的注入式 function call 上使用的校验跳过值。 */
-const GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER = 'skip_thought_signature_validator';
-
-function flushAssistant(
-  messages: ChatMessage[],
-  pending: ChatAssistantMessage | null,
-  opts: TranslateInputOptions,
-): null {
-  if (!pending) return null;
-  const hasToolCalls = (pending.tool_calls?.length ?? 0) > 0;
-  // 空 assistant(无 content / tool_calls)整条跳过 —— 部分后端(DeepSeek/xAI)拒收空 assistant。
-  if (pending.content == null && !hasToolCalls) return null;
-  if (hasToolCalls && opts.toolCallReasoningPlaceholder && !pending.reasoning_content) {
-    pending.reasoning_content = TOOL_CALL_REASONING_PLACEHOLDER;
-  }
-  if (hasToolCalls && opts.googleThoughtSignaturePlaceholder) {
-    const firstCall = pending.tool_calls?.[0];
-    const thoughtSignature = firstCall?.extra_content?.google?.thought_signature;
-    if (
-      firstCall
-      && (typeof thoughtSignature !== 'string' || thoughtSignature.trim().length === 0)
-    ) {
-      firstCall.extra_content = {
-        ...firstCall.extra_content,
-        google: {
-          ...firstCall.extra_content?.google,
-          thought_signature: GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER,
-        },
-      };
-    }
-  }
-  messages.push(pending);
-  return null;
+interface PendingToolCall {
+  id: string;
+  name: string;
 }
 
-/** Responses 角色 → Chat 角色。system/developer 归一到 capability 指定角色;
- *  user / latest_reminder / 未知一律归 user(不能透传,上游只认 system/user/assistant/tool)。 */
-function normalizeRole(role: string, developerRole: ChatDeveloperRole): 'system' | 'developer' | 'user' {
-  if (role === 'system' || role === 'developer') return developerRole;
-  return 'user';
+function ensureToolCallCompatibility(message: ChatAssistantMessage, opts: TranslateInputOptions): void {
+  const hasToolCalls = (message.tool_calls?.length ?? 0) > 0;
+  if (hasToolCalls && opts.toolCallReasoningPlaceholder && !message.reasoning_content?.trim()) {
+    message.reasoning_content = TOOL_CALL_REASONING_PLACEHOLDER;
+  }
+  if (!hasToolCalls || !opts.googleThoughtSignaturePlaceholder) return;
+  const firstCall = message.tool_calls?.[0];
+  const signature = firstCall?.extra_content?.google?.thought_signature;
+  if (!firstCall || (typeof signature === 'string' && signature.trim())) return;
+  firstCall.extra_content = {
+    ...firstCall.extra_content,
+    google: {
+      ...firstCall.extra_content?.google,
+      thought_signature: GOOGLE_THOUGHT_SIGNATURE_PLACEHOLDER,
+    },
+  };
 }
 
 /**
- * Responses input 是按时间排序的 item 列表，Chat 则把 assistant 文本和紧随其后的
- * function_call 合并进同一条 assistant message。其它角色/工具结果会结束该合并段。
+ * Convert the Responses item timeline to strict Chat history. Besides format conversion this
+ * repairs dangling/orphan tool rounds, because Kimi/Moonshot and several llama.cpp templates
+ * reject any assistant tool call not followed immediately by its tool result.
  */
 function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOptions): ChatMessage[] {
   if (typeof input === 'string') return [{ role: 'user', content: input }];
@@ -181,39 +320,178 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
 
   const messages: ChatMessage[] = [];
   let assistant: ChatAssistantMessage | null = null;
+  let pendingReasoning = '';
+  let pendingToolCalls: PendingToolCall[] = [];
+  const resolvedToolCallIds = new Set<string>();
+  let deferredBarriers: ChatMessage[] = [];
+  let pendingMedia: ChatUserContentPart[] = [];
+  let mintedCallId = 0;
+
+  const mintCallId = (prefix: string): string => `call_bridge_${prefix}_${++mintedCallId}`;
+
+  const attachReasoningToLastAssistant = (): void => {
+    const text = pendingReasoning;
+    pendingReasoning = '';
+    if (!text.trim()) return;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role !== 'assistant') continue;
+      message.reasoning_content = message.reasoning_content
+        ? `${message.reasoning_content}${text}`
+        : text;
+      return;
+    }
+  };
+
+  const flushPendingMedia = (): void => {
+    if (pendingMedia.length === 0) return;
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Media returned by the preceding tool result:' },
+        ...pendingMedia,
+      ],
+    });
+    pendingMedia = [];
+  };
+
+  const releaseDeferredBarriers = (): void => {
+    flushPendingMedia();
+    if (deferredBarriers.length === 0) return;
+    messages.push(...deferredBarriers);
+    deferredBarriers = [];
+  };
+
+  const closeUnresolvedToolRound = (): void => {
+    if (pendingToolCalls.length === 0) {
+      releaseDeferredBarriers();
+      return;
+    }
+    for (const call of pendingToolCalls) {
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content:
+          `No tool result was recorded for "${call.name}"; execution status is unknown. `
+          + 'Do not treat this as success, failure, or user-provided input.',
+      });
+      resolvedToolCallIds.add(call.id);
+    }
+    pendingToolCalls = [];
+    releaseDeferredBarriers();
+  };
+
+  const flushAssistant = (): void => {
+    if (!assistant) return;
+    const reasoning = pendingReasoning;
+    pendingReasoning = '';
+    if (reasoning.trim()) {
+      assistant.reasoning_content = assistant.reasoning_content
+        ? `${assistant.reasoning_content}${reasoning}`
+        : reasoning;
+    }
+    const hasToolCalls = (assistant.tool_calls?.length ?? 0) > 0;
+    if (assistant.content == null && !hasToolCalls && !assistant.reasoning_content) {
+      assistant = null;
+      return;
+    }
+    if (assistant.content == null && !hasToolCalls && assistant.reasoning_content) assistant.content = '';
+    ensureToolCallCompatibility(assistant, opts);
+    messages.push(assistant);
+    // Preserve completed IDs from older rounds so late duplicates remain detectable, but retire
+    // an ID when the new assistant round explicitly reuses it.
+    if (hasToolCalls) {
+      for (const call of assistant.tool_calls ?? []) resolvedToolCallIds.delete(call.id);
+    }
+    pendingToolCalls = (assistant.tool_calls ?? []).map((call) => ({
+      id: call.id,
+      name: call.function.name,
+    }));
+    assistant = null;
+  };
+
+  const pushBarrier = (message: ChatMessage): void => {
+    flushAssistant();
+    if (pendingReasoning) attachReasoningToLastAssistant();
+    if (pendingToolCalls.length > 0) deferredBarriers.push(message);
+    else {
+      releaseDeferredBarriers();
+      messages.push(message);
+    }
+  };
+
+  const pushToolOutput = (item: Record<string, unknown>, output: unknown): void => {
+    let callId = typeof item.call_id === 'string' && item.call_id
+      ? item.call_id
+      : typeof item.id === 'string' && item.id
+        ? item.id
+        : '';
+    const bufferedAssistantReusesCallId = callId
+      ? assistant?.tool_calls?.some((call) => call.id === callId) === true
+      : false;
+    // A late duplicate from the completed round must not flush unrelated buffered calls. The
+    // same ID in the buffered assistant instead starts a legitimate new round and takes priority.
+    if (callId && resolvedToolCallIds.has(callId) && !bufferedAssistantReusesCallId) return;
+    flushAssistant();
+    if (callId && resolvedToolCallIds.has(callId)) return;
+    let matchIndex = callId
+      ? pendingToolCalls.findIndex((call) => call.id === callId)
+      : -1;
+    if (matchIndex < 0) {
+      closeUnresolvedToolRound();
+      if (!callId) callId = mintCallId('orphan');
+      const fallbackName = typeof item.name === 'string' && item.name ? item.name : 'unknown_tool';
+      const synthesizedAssistant: ChatAssistantMessage = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: callId,
+          type: 'function',
+          function: { name: fallbackName, arguments: '{}' },
+        }],
+      };
+      ensureToolCallCompatibility(synthesizedAssistant, opts);
+      messages.push(synthesizedAssistant);
+      pendingToolCalls = [{ id: callId, name: fallbackName }];
+      matchIndex = 0;
+    }
+    const transformed = splitToolOutput(output, opts.mediaCapabilities);
+    messages.push({ role: 'tool', tool_call_id: callId, content: transformed.content });
+    pendingMedia.push(...transformed.media);
+    pendingToolCalls.splice(matchIndex, 1);
+    resolvedToolCallIds.add(callId);
+    if (pendingToolCalls.length === 0) releaseDeferredBarriers();
+  };
+
   for (let index = 0; index < input.length; index += 1) {
     const item = input[index];
     if (!isPlainObject(item)) throw new UnsupportedResponsesFeatureError(`input[${index}]`);
-    const itemType = typeof item.type === 'string' ? item.type : undefined;
-    if (
-      itemType === 'tool_search_call'
-      || itemType === 'tool_search_output'
-      || itemType === 'tool_search_call_output'
-    ) {
-      // Codex 内建 tool_search 的回放 item：与 namespace/web_search 工具声明同口径，
-      // 对第三方 Chat 上游无意义且不承载用户上下文，必须作为“非边界”item 剥掉降级
-      // —— 在 flushAssistant 之前处理，避免拆分本应合并的 assistant message。
-      opts.onDroppedInputItem?.(itemType, index);
-      continue;
-    }
+    const record = item as Record<string, unknown>;
 
     if ('role' in item && typeof item.role === 'string') {
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
         opts.developerRole,
-        opts.imageInput,
+        opts.mediaCapabilities,
       );
       if (item.role === 'assistant') {
-        // messageContent 只会为 user 图片返回数组；这里再守一次类型边界，避免未来扩展误放行。
         if (typeof content !== 'string') {
           throw new UnsupportedResponsesFeatureError(`input[${index}].content`);
         }
-        if (!assistant) assistant = { role: 'assistant', content };
-        else if (assistant.content == null) assistant.content = content;
-        else if (content) assistant.content += content;
+        if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
+        assistant ??= { role: 'assistant', content: null };
+        assistant.content = `${assistant.content ?? ''}${content}`;
+        if (opts.reasoningHistoryField === 'reasoning_content') {
+          const embeddedReasoning = reasoningText({
+            reasoning_content: record.reasoning_content,
+            reasoning: record.reasoning,
+          });
+          if (embeddedReasoning) {
+            assistant.reasoning_content = `${assistant.reasoning_content ?? ''}${embeddedReasoning}`;
+          }
+        }
       } else {
-        assistant = flushAssistant(messages, assistant, opts);
         const role = normalizeRole(item.role, opts.developerRole);
         if (role === 'user') {
           // 空 user(纯空白文本且无图片)整条跳过 —— Codex auto-compact 会把
@@ -222,194 +500,282 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
           const isEmptyUser =
             (typeof content === 'string' && content.trim().length === 0)
             || (Array.isArray(content) && content.length === 0);
-          if (!isEmptyUser) messages.push({ role, content });
+          if (!isEmptyUser) pushBarrier({ role, content });
         } else {
           if (typeof content !== 'string') {
             throw new UnsupportedResponsesFeatureError(`input[${index}].content`);
           }
-          messages.push({ role, content });
+          pushBarrier({ role, content });
         }
       }
       continue;
     }
 
-    if (item.type === 'custom_tool_call') {
-      if (typeof item.call_id !== 'string' || typeof item.name !== 'string') {
-        throw new UnsupportedResponsesFeatureError(`input[${index}].custom_tool_call`);
+    if (item.type === 'reasoning') {
+      if (opts.reasoningHistoryField === 'reasoning_content') {
+        pendingReasoning += reasoningText(item);
       }
-      assistant ??= { role: 'assistant', content: null, tool_calls: [] };
-      assistant.tool_calls ??= [];
-      assistant.tool_calls.push({
-        id: item.call_id,
-        type: 'function',
-        function: { name: item.name, arguments: customToolArguments(item.input) },
-      });
       continue;
     }
 
-    if (item.type === 'custom_tool_call_output') {
-      assistant = flushAssistant(messages, assistant, opts);
-      if (typeof item.call_id !== 'string') {
-        throw new UnsupportedResponsesFeatureError(`input[${index}].custom_tool_call_output`);
-      }
-      messages.push({
-        role: 'tool',
-        tool_call_id: item.call_id,
-        content: stringifyToolOutput(item.output),
-      });
-      continue;
-    }
-
-    if (item.type === 'function_call') {
-      if (typeof item.call_id !== 'string' || typeof item.name !== 'string' || typeof item.arguments !== 'string') {
-        throw new UnsupportedResponsesFeatureError(`input[${index}].function_call`);
+    if (item.type === 'function_call' || item.type === 'custom_tool_call' || item.type === 'tool_search_call') {
+      if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
+      const callId = typeof record.call_id === 'string' && record.call_id
+        ? record.call_id
+        : typeof record.id === 'string' && record.id
+          ? record.id
+          : mintCallId('missing');
+      let name: string;
+      let args: string;
+      if (item.type === 'tool_search_call') {
+        name = opts.toolContext.chatNameForResponse('tool_search', undefined, 'tool_search');
+        args = toolArguments(record.arguments ?? {
+          ...(typeof record.query === 'string' ? { query: record.query } : {}),
+          ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
+        });
+      } else {
+        if (typeof item.name !== 'string' || !item.name) {
+          throw new UnsupportedResponsesFeatureError(`input[${index}].${item.type}`);
+        }
+        name = opts.toolContext.chatNameForResponse(
+          String(record.name),
+          typeof record.namespace === 'string' ? record.namespace : undefined,
+          item.type === 'custom_tool_call' ? 'custom' : 'function',
+        );
+        args = item.type === 'custom_tool_call'
+          ? customToolArguments(record.input)
+          : toolArguments(record.arguments);
       }
       assistant ??= { role: 'assistant', content: null, tool_calls: [] };
       assistant.tool_calls ??= [];
       const extraContent = cloneToolCallExtraContent(item.extra_content);
       assistant.tool_calls.push({
-        id: item.call_id,
+        id: callId,
         type: 'function',
-        function: { name: item.name, arguments: item.arguments },
+        function: { name, arguments: args },
         ...(extraContent ? { extra_content: extraContent } : {}),
       });
       continue;
     }
 
-    assistant = flushAssistant(messages, assistant, opts);
-    if (item.type === 'function_call_output') {
-      if (typeof item.call_id !== 'string') {
-        throw new UnsupportedResponsesFeatureError(`input[${index}].function_call_output`);
-      }
-      messages.push({
-        role: 'tool',
-        tool_call_id: item.call_id,
-        content: stringifyToolOutput(item.output),
-      });
+    if (
+      item.type === 'function_call_output'
+      || item.type === 'custom_tool_call_output'
+      || item.type === 'tool_search_output'
+      || item.type === 'tool_search_call_output'
+    ) {
+      const output = record.output !== undefined
+        ? record.output
+        : item.type === 'tool_search_output' || item.type === 'tool_search_call_output'
+          ? record.tools
+          : undefined;
+      pushToolOutput(record, output);
       continue;
     }
-    if (item.type === 'reasoning') {
-      // Responses 会把上一轮 reasoning item 回放进 input。Chat 没有安全的等价输入形态；
-      // reasoning 本身不承载用户/工具上下文，明确丢弃而不是伪造 assistant 文本。
-      continue;
-    }
+
     throw new UnsupportedResponsesFeatureError(`input item '${String(item.type)}'`);
   }
-  flushAssistant(messages, assistant, opts);
+
+  flushAssistant();
+  if (pendingReasoning) attachReasoningToLastAssistant();
+  closeUnresolvedToolRound();
   return messages;
 }
 
-/**
- * 工具是**能力声明**,不是上下文:Chat Completions 只认标准 `function` 工具,而 Codex 每次
- * 请求都会注入自己的内建工具(`namespace` 多智能体分组、`local_shell`、`web_search`、
- * `image_generation` 等)。这些对第三方 Chat 上游无意义,必须**剥掉降级**(与 codex proxy
- * 的 xAI 兼容层同口径),不能 fail-closed —— 否则 Codex 首轮就带 namespace,整条桥接 100% 不可用。
- * 被剥掉的类型经 onDropped 回调交给 handler 记 log(no silent caps)。
- */
-function translateTools(
+function reportDroppedTools(
   tools: ResponsesRequest['tools'],
   onDropped?: (type: string, index: number) => void,
-): ChatCompletionsRequest['tools'] {
-  if (!tools?.length) return undefined;
-  const out: NonNullable<ChatCompletionsRequest['tools']> = [];
-  tools.forEach((tool, index) => {
-    if (!isPlainObject(tool) || tool.type !== 'function' || typeof tool.name !== 'string') {
-      onDropped?.(isPlainObject(tool) ? String(tool.type) : typeof tool, index);
-      return;
-    }
-    const functionTool = tool as unknown as ResponsesFunctionTool;
-    out.push({
-      type: 'function' as const,
-      function: {
-        name: functionTool.name,
-        ...(functionTool.description ? { description: functionTool.description } : {}),
-        // Kimi 等要求 root parameters.type 恰为 "object";Codex 偶尔发 null/缺失 → 归一。
-        parameters: normalizeFunctionParameters(functionTool.parameters),
-        ...(typeof functionTool.strict === 'boolean' ? { strict: functionTool.strict } : {}),
-      },
-    });
+): void {
+  tools?.forEach((tool, index) => {
+    if (typeof tool === 'string') return;
+    if (
+      isPlainObject(tool)
+      && ['function', 'custom', 'namespace', 'tool_search'].includes(String(tool.type))
+    ) return;
+    onDropped?.(isPlainObject(tool) ? String(tool.type) : typeof tool, index);
   });
-  return out.length > 0 ? out : undefined;
 }
 
-function normalizeFunctionParameters(parameters: unknown): Record<string, unknown> {
-  if (!isPlainObject(parameters)) return { type: 'object', properties: {} };
-  if (parameters.type == null) return { ...parameters, type: 'object' };
-  return parameters;
-}
-
-/**
- * tool_choice 归一。forceAutoToolChoice(思考模型)时,具名 / required 一律降级为 'auto' ——
- * DeepSeek reasoner 明确拒绝强制工具(`Thinking mode does not support this tool_choice`)。
- */
-function translateToolChoice(choice: unknown, forceAuto: boolean): unknown {
+function translateToolChoice(
+  choice: unknown,
+  forceAuto: boolean,
+  context: ChatBridgeToolContext,
+): unknown {
   if (choice === undefined || choice === 'auto' || choice === 'none') return choice;
   if (choice === 'required') return forceAuto ? 'auto' : choice;
-  if (isPlainObject(choice) && choice.type === 'function' && typeof choice.name === 'string') {
-    return forceAuto ? 'auto' : { type: 'function', function: { name: choice.name } };
+  if (!isPlainObject(choice)) throw new UnsupportedResponsesFeatureError('tool_choice');
+  if (forceAuto) return 'auto';
+  if (
+    (choice.type === 'function' || choice.type === 'custom')
+    && typeof choice.name === 'string'
+  ) {
+    return {
+      type: 'function',
+      function: {
+        name: context.chatNameForResponse(
+          choice.name,
+          typeof choice.namespace === 'string' ? choice.namespace : undefined,
+          choice.type,
+        ),
+      },
+    };
+  }
+  if (choice.type === 'tool_search') {
+    return {
+      type: 'function',
+      function: { name: context.chatNameForResponse('tool_search', undefined, 'tool_search') },
+    };
   }
   throw new UnsupportedResponsesFeatureError('tool_choice');
+}
+
+function applyReasoning(
+  out: ChatCompletionsRequest,
+  input: ResponsesRequest,
+  capabilities: ChatBridgeCapabilities,
+): void {
+  const effort = input.reasoning?.effort;
+  const field = capabilities.reasoningField ?? 'none';
+  if (typeof effort !== 'string' || field === 'none') return;
+  const mapped = capabilities.reasoningEffortMap?.[effort] ?? effort;
+  const mappedString = typeof mapped === 'string' ? mapped : effort;
+  switch (field) {
+    case 'reasoning_effort':
+      out.reasoning_effort = mappedString;
+      break;
+    case 'reasoning.effort':
+      out.reasoning = { effort: mappedString };
+      break;
+    case 'thinking.type':
+      out.thinking = { type: mappedString };
+      break;
+    case 'enable_thinking':
+      out.enable_thinking = typeof mapped === 'boolean'
+        ? mapped
+        : !['none', 'off', 'disabled', 'minimal'].includes(String(mapped).toLowerCase());
+      break;
+    case 'reasoning_split':
+      out.reasoning_split = typeof mapped === 'boolean'
+        ? mapped
+        : !['none', 'off', 'disabled'].includes(String(mapped).toLowerCase());
+      break;
+  }
+}
+
+function chatResponseFormat(value: unknown): unknown {
+  if (!isPlainObject(value) || value.type !== 'json_schema' || value.json_schema !== undefined) {
+    return value;
+  }
+  const { type: _type, ...jsonSchema } = value;
+  return { type: 'json_schema', json_schema: jsonSchema };
+}
+
+function applyPassthrough(
+  out: ChatCompletionsRequest,
+  input: ResponsesRequest,
+  fields: readonly ChatPassthroughField[] | undefined,
+): void {
+  for (const field of fields ?? []) {
+    const value = field === 'response_format'
+      ? chatResponseFormat(input.response_format ?? input.text?.format)
+      : input[field];
+    if (value !== undefined) {
+      (out as unknown as Record<string, unknown>)[field] = value;
+    }
+  }
 }
 
 export interface TranslateResponsesRequestOptions {
   model?: string;
   capabilities?: ChatBridgeCapabilities;
-  /** 被剥掉的非 function 工具(Codex 内建 namespace / local_shell 等)回调,供 handler 记 log。 */
   onDroppedTool?: (type: string, index: number) => void;
-  /** 被剥掉的无上下文内建 input item(Codex tool_search 等)回调,供 handler 记 log。 */
+  /** Retained for callers compiled against the previous bridge API; supported built-in history is no longer dropped. */
   onDroppedInputItem?: (type: string, index: number) => void;
 }
 
-/** Convert a Codex Responses request to a streaming Chat Completions request. */
-export function translateResponsesRequest(
+export interface TranslatedResponsesChatRequest {
+  request: ChatCompletionsRequest;
+  toolContext: ChatBridgeToolContext;
+}
+
+/** Convert a Responses request and retain the request-scoped tool catalog for response restoration. */
+export function translateResponsesRequestWithContext(
   input: ResponsesRequest,
   opts: TranslateResponsesRequestOptions = {},
-): ChatCompletionsRequest {
+): TranslatedResponsesChatRequest {
   if (!input || typeof input.model !== 'string' || input.model.length === 0) {
     throw new UnsupportedResponsesFeatureError('model');
   }
   const capabilities = opts.capabilities ?? {};
   const developerRole = capabilities.developerRole ?? 'system';
+  const toolContext = ChatBridgeToolContext.fromRequest(input);
+  reportDroppedTools(input.tools, opts.onDroppedTool);
   const messages = translateInput(input.input, {
     developerRole,
-    imageInput: capabilities.imageInput,
+    mediaCapabilities: capabilities,
+    reasoningHistoryField: capabilities.reasoningHistoryField,
     toolCallReasoningPlaceholder: capabilities.toolCallReasoningPlaceholder === true,
     googleThoughtSignaturePlaceholder: capabilities.googleThoughtSignaturePlaceholder === true,
-    onDroppedInputItem: opts.onDroppedInputItem,
+    toolContext,
   });
   if (input.instructions) {
-    messages.unshift({ role: developerRole, content: input.instructions });
+    const instructions = typeof input.instructions === 'string'
+      ? input.instructions
+      : input.instructions.map((part, index) => {
+        if (!isPlainObject(part) || typeof part.type !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`instructions[${index}]`);
+        }
+        if (
+          (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+          && typeof part.text === 'string'
+        ) {
+          return part.text;
+        }
+        if (part.type === 'refusal' && typeof part.refusal === 'string') {
+          return part.refusal;
+        }
+        throw new UnsupportedResponsesFeatureError(`instructions[${index}].${part.type}`);
+      }).join('');
+    if (instructions) messages.unshift({ role: developerRole, content: instructions });
   }
 
-  const out: ChatCompletionsRequest = {
+  const request: ChatCompletionsRequest = {
     model: opts.model ?? input.model,
     messages,
-    stream: true,
+    stream: input.stream !== false,
   };
-  const tools = translateTools(input.tools, opts.onDroppedTool);
-  // 空 tools 时**必须**连 tool_choice / parallel_tool_calls 一起省略:剥掉 Codex 内建工具后
-  // tools 可能变空,而 vLLM / 企业网关在没有 tools 却带 tool_choice 时会 400/503(cc-switch 同款守卫)。
+  const tools = toolContext.chatTools;
   if (tools) {
-    out.tools = tools;
-    const toolChoice = translateToolChoice(input.tool_choice, capabilities.forceAutoToolChoice === true);
-    if (toolChoice !== undefined) out.tool_choice = toolChoice;
+    request.tools = tools;
+    const toolChoice = translateToolChoice(
+      input.tool_choice,
+      capabilities.forceAutoToolChoice === true,
+      toolContext,
+    );
+    if (toolChoice !== undefined) request.tool_choice = toolChoice;
     if (capabilities.parallelToolCalls !== false && typeof input.parallel_tool_calls === 'boolean') {
-      out.parallel_tool_calls = input.parallel_tool_calls;
+      request.parallel_tool_calls = input.parallel_tool_calls;
     }
   }
   if (typeof input.max_output_tokens === 'number') {
     switch (capabilities.maxTokensField ?? 'omit') {
-      case 'max_tokens': out.max_tokens = input.max_output_tokens; break;
-      case 'max_completion_tokens': out.max_completion_tokens = input.max_output_tokens; break;
+      case 'max_tokens': request.max_tokens = input.max_output_tokens; break;
+      case 'max_completion_tokens': request.max_completion_tokens = input.max_output_tokens; break;
       case 'omit': break;
     }
   }
-  if (
-    (capabilities.reasoningField ?? 'none') === 'reasoning_effort' &&
-    typeof input.reasoning?.effort === 'string'
-  ) {
-    out.reasoning_effort = input.reasoning.effort;
+  applyReasoning(request, input, capabilities);
+  applyPassthrough(request, input, capabilities.passthroughFields);
+  if (request.stream && capabilities.streamUsage === true) {
+    request.stream_options = { include_usage: true };
   }
-  if (capabilities.streamUsage === true) out.stream_options = { include_usage: true };
-  return out;
+  return { request, toolContext };
+}
+
+/** Backward-compatible request-only entry point used by package consumers and unit tests. */
+export function translateResponsesRequest(
+  input: ResponsesRequest,
+  opts: TranslateResponsesRequestOptions = {},
+): ChatCompletionsRequest {
+  return translateResponsesRequestWithContext(input, opts).request;
 }

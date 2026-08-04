@@ -531,7 +531,7 @@ describe('new session model', () => {
       title: '还不能创建',
       subtitle: '请输入电脑端项目路径。',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：未选择项目路径',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：未填写',
@@ -546,9 +546,9 @@ describe('new session model', () => {
       model: 'claude-sonnet-4-6',
     }, 'Carol Mac')).toMatchObject({
       title: '准备创建并发送',
-      subtitle: '确认后会在被控电脑创建对话，并把首条消息加入队列。',
+      subtitle: '确认后会在被控设备创建对话，并把首条消息加入队列。',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：对话工作区',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：请帮我总结这个项目，并给出下一步建议。',
@@ -562,7 +562,7 @@ describe('new session model', () => {
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({
       title: '准备创建并发送',
       details: [
-        '电脑：Carol Mac',
+        '设备：Carol Mac',
         '位置：/repo/xdt-maker',
         '运行：Claude · claude-sonnet-4-6 · medium',
         '首条：仅发送附件',
@@ -936,6 +936,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');
     // 听写 mic 波形 caret 用正文色(对齐桌面 --chat-input-text,2026-07-28 用户定案),不用 statusReady 蓝绿。
     expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
+    // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
+    // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
+    expect(newSource).toContain('placeholderTextColor={colors.textTertiary}');
+    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: { start: end, end } });');
     expect(newSource).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');

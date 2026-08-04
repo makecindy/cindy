@@ -14,11 +14,30 @@ export interface RecentFolder {
 }
 
 export interface FolderPickerOption {
+  /** Stable key across machines. Falls back to path for local-only callers. */
+  key?: string;
   path: string;
   name: string;
   description?: string;
   /** true = 目录已不在磁盘上(迁移/删除),行置灰并提示,仍可选(磁盘可能重新挂载)。 */
   missing?: boolean;
+  /** Present only when this path belongs to a paired device. */
+  remoteDevice?: {
+    deviceId: string;
+    deviceName: string;
+  };
+}
+
+/**
+ * 项目区当前所属的设备(#807 方案 B)。设备由创建页的设备 pill 选定,这里只负责在**该设备的
+ * 语境内**渲染「对话 + 项目」:所以不需要跨设备分组,列表长度不随设备数膨胀,「对话」也只出现
+ * 一次(它归属当前设备,而不是悬在所有设备之上)。
+ */
+export interface FolderPickerDeviceScope {
+  deviceId: string;
+  deviceName: string;
+  /** 正在经隧道取该设备的最近项目。 */
+  loading?: boolean;
 }
 
 export type FolderPickerSelectSource = 'project' | 'recent' | 'browse' | 'dialogue';
@@ -77,15 +96,24 @@ function handleFolderPickerWheel(e: React.WheelEvent<HTMLElement>) {
 interface FolderPickerPopoverProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (folderPath: string, source: FolderPickerSelectSource) => void;
+  onSelect: (
+    folderPath: string,
+    source: FolderPickerSelectSource,
+    option?: FolderPickerOption,
+  ) => void;
   projectOptions?: readonly FolderPickerOption[];
+  /**
+   * 非空 = 项目区列的是这台对端设备的项目(本机时不传)。只用于空态文案与「浏览文件夹」
+   * 的目标设备,行本身的归属仍看每个 option 的 remoteDevice。
+   */
+  deviceScope?: FolderPickerDeviceScope;
+  onRemoveRemoteProject?: (option: FolderPickerOption) => void | Promise<void>;
   /**
    * 仅 isProjectPicker 模式下生效, 且只在传入时显示。回调激发 = 用户想从远端
    * 添加一个新的项目目录;调用方应关闭 popover 并打开 AddRemoteProjectDialog。
-   * 上层的可见性 gate (至少一台 host 勾了 autoConnect) 由调用方决定是否传入,
-   * 这里不做判断。
+   * 上层按当前可用的 SSH / device-link 目标决定是否传入,这里不做判断。
    */
-  onAddRemoteProject?: () => void;
+  onAddRemoteProject?: (deviceId?: string) => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
   align?: 'start' | 'center' | 'end';
   sideOffset?: number;
@@ -98,6 +126,8 @@ export function FolderPickerPopover({
   onOpenChange,
   onSelect,
   projectOptions,
+  deviceScope,
+  onRemoveRemoteProject,
   onAddRemoteProject,
   side,
   align = 'end',
@@ -110,12 +140,117 @@ export function FolderPickerPopover({
   const effectiveProjectOptions = projectOptions ?? [];
   const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
 
-  const handleSelectPath = (folderPath: string, source: FolderPickerSelectSource) => {
-    onSelect(folderPath, source);
+  const handleSelectPath = (
+    folderPath: string,
+    source: FolderPickerSelectSource,
+    option?: FolderPickerOption,
+  ) => {
+    onSelect(folderPath, source, option);
     onOpenChange(false);
   };
 
+  const handleRemoveProject = (project: FolderPickerOption) => {
+    if (project.remoteDevice) {
+      void onRemoveRemoteProject?.(project);
+      return;
+    }
+    void recentWorkdirsStore.remove(project.path);
+  };
+
+  const renderProject = (project: FolderPickerOption) => {
+    const canRemove = !project.remoteDevice || onRemoveRemoteProject !== undefined;
+    return (
+      /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
+         之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
+         那只换掉了 HTML 层面的问题:ARIA 同样不允许 role="button" 里再有交互后代,读屏可能把删除
+         按钮压平进项目按钮、或当成激活它的一部分,于是「删除」要么读不到、要么按下就选中了项目。
+         现在容器只负责布局与 hover 视觉(group),里面两个真正的 <button> 并列 —— 合法 HTML、
+         语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
+      <div
+        key={project.key ?? project.path}
+        className={cn(
+          'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
+          'transition-colors',
+          'hover:bg-[var(--folder-item-hover)]',
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => handleSelectPath(project.path, 'project', project)}
+          className={cn(
+            'flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left',
+            'outline-none',
+          )}
+        >
+          <Folder
+            size={20}
+            className={cn('shrink-0 text-[var(--folder-item-icon)]', project.missing && 'opacity-50')}
+          />
+          <div className="flex min-w-0 flex-1 flex-col items-start">
+            <span
+              className={cn(
+                'w-full truncate text-sm font-medium text-[var(--folder-item-name)]',
+                project.missing && 'opacity-50',
+              )}
+            >
+              {project.name}
+            </span>
+            {(project.description || project.missing) && (
+              <span
+                className={cn(
+                  'w-full truncate text-xs text-[var(--folder-item-path)]',
+                  project.missing && 'opacity-50',
+                )}
+              >
+                {project.missing && (
+                  <span className="text-[var(--error-fg)]">
+                    {t('newChat.folderPicker.missingDir')}
+                    {project.description ? ' · ' : ''}
+                  </span>
+                )}
+                {project.description}
+              </span>
+            )}
+          </div>
+        </button>
+        {canRemove && (
+          <button
+            type="button"
+            aria-label={t('newChat.folderPicker.removeFromList')}
+            onClick={() => handleRemoveProject(project)}
+            className={cn(
+              // 圆角走 pill:DESIGN.md §5 只允许 8px(内控件)/ 12px(容器)/ 9999px(pill)三档,
+              // 6px 是被明文禁止的中间值。这里选 pill 而非 8px —— §5 把 8px 限定为「小到无法戴
+              // pill 的交互件」(多行输入、行高亮、块内小格),24×24 的图标按钮戴上 pill 就是个
+              // 正圆,完全成立;而外层行本身已是 8px,内层再用 8px 也不满足「内圆角要比容器小」。
+              // 同款 hover 才显形的小图标按钮在 ChatInput / PendingQueuePanel 里都是 rounded-full。
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
+              'text-[var(--folder-item-path)] opacity-0 transition-opacity',
+              'group-hover:opacity-100 focus-visible:opacity-100',
+              'hover:bg-[var(--surface-hover)] hover:text-[var(--folder-item-name)]',
+              'outline-none',
+            )}
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const handleChooseDifferent = async () => {
+    // 远程设备语境下绝不能开本机原生目录对话框:选出来的是**控制端**路径,而草稿里的
+    // deviceId 仍指向对端 —— 发送时要么被被控端 path guard 拒掉,要么(路径恰好在对端也存在)
+    // 在一个毫不相关的远程目录里把会话建起来。改为打开设备域的远程浏览器,并带上当前设备。
+    // 判据只看 deviceScope,**不再 && onAddRemoteProject**:后者由上层按 hasAnyRemoteTarget 下发,
+    // 而选中的对端一旦离线、且它是唯一远程目标时那个 gate 会变 false —— 于是条件不成立、直接
+    // 落到下面的本机对话框,选出控制端路径配上远程 deviceId,又回到「被 path guard 拒 / 在对端
+    // 同名无关目录里建会话」。远程语境下宁可什么都不做,也绝不能开本机 picker。
+    if (deviceScope) {
+      onAddRemoteProject?.(deviceScope.deviceId);
+      onOpenChange(false);
+      return;
+    }
     const result = await window.electronAPI.showOpenDirectoryDialog();
     if (!result.canceled && result.path) {
       onSelect(result.path, 'browse');
@@ -169,88 +304,30 @@ export function FolderPickerPopover({
               data-folder-picker-scroll="true"
               className="pending-queue-scroll -mr-2 max-h-[224px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2"
             >
-              {effectiveProjectOptions.length > 0 ? (
-                effectiveProjectOptions.map((project) => (
-                  /* 行内有嵌套的删除按钮,外层不能再用 <button>(非法嵌套),
-                     改 div[role=button] + 键盘激活,视觉与其它行一致。 */
-                  <div
-                    key={project.path}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => handleSelectPath(project.path, 'project')}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleSelectPath(project.path, 'project');
-                      }
+              {deviceScope?.loading ? (
+                <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                  {t('newChat.addRemoteProject.existingLoading')}
+                </div>
+              ) : effectiveProjectOptions.length > 0 ? (
+                effectiveProjectOptions.map(renderProject)
+              ) : deviceScope && onAddRemoteProject ? (
+                /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
+                   否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
+                <div className="flex items-center justify-between gap-3 px-3 py-[10px]">
+                  <span className="min-w-0 text-xs text-[var(--folder-item-path)]">
+                    {t('newChat.addRemoteProject.existingEmpty')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onAddRemoteProject(deviceScope.deviceId);
+                      onOpenChange(false);
                     }}
-                    className={cn(
-                      'group flex w-full cursor-pointer items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
-                      'transition-colors outline-none',
-                      'hover:bg-[var(--folder-item-hover)]',
-                    )}
+                    className="shrink-0 text-xs font-medium text-[var(--folder-item-name)] hover:underline"
                   >
-                    <Folder
-                      size={20}
-                      className={cn(
-                        'shrink-0 text-[var(--folder-item-icon)]',
-                        project.missing && 'opacity-50',
-                      )}
-                    />
-                    <div className="flex min-w-0 flex-1 flex-col items-start">
-                      {/* w-full 缺失 → truncate 不生效;长 UUID / 长路径会撑爆容器
-                          触发横向滚动条。description 那行已有 w-full 是对的,这里
-                          补上。 */}
-                      <span
-                        className={cn(
-                          'w-full truncate text-sm font-medium text-[var(--folder-item-name)]',
-                          project.missing && 'opacity-50',
-                        )}
-                      >
-                        {project.name}
-                      </span>
-                      {(project.description || project.missing) && (
-                        <span
-                          className={cn(
-                            'w-full truncate text-xs text-[var(--folder-item-path)]',
-                            project.missing && 'opacity-50',
-                          )}
-                        >
-                          {project.missing && (
-                            <span className="text-[var(--error-fg)]">
-                              {t('newChat.folderPicker.missingDir')}
-                              {project.description ? ' · ' : ''}
-                            </span>
-                          )}
-                          {project.description}
-                        </span>
-                      )}
-                    </div>
-                    {/* hover / 键盘聚焦时浮现;删除 = 从最近列表移除(main 侧
-                        recent_workdirs 行),不动 sessions / 磁盘。 */}
-                    <button
-                      type="button"
-                      aria-label={t('newChat.folderPicker.removeFromList')}
-                      // 键盘事件也要拦:Enter/Space 的 keydown 会先冒泡到外层
-                      // div[role=button] 触发"选中项目",必须在按钮层截断。
-                      onKeyDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void recentWorkdirsStore.remove(project.path);
-                      }}
-                      className={cn(
-                        'flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px]',
-                        'text-[var(--folder-item-path)] opacity-0 transition-opacity',
-                        'group-hover:opacity-100 focus-visible:opacity-100',
-                        // 行 hover 已是 --folder-item-hover,内层按钮要再深一档才可辨
-                        'hover:bg-[var(--surface-hover)] hover:text-[var(--folder-item-name)]',
-                        'outline-none',
-                      )}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))
+                    {t('newChat.addRemoteProject.tabBrowse')}
+                  </button>
+                </div>
               ) : (
                 <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
                   {t('newChat.folderPicker.noProjects')}
@@ -322,8 +399,19 @@ export function FolderPickerPopover({
 
         {/* Phase D: 添加远程项目入口。仅 isProjectPicker 且上层传了
             onAddRemoteProject (即至少一台 host 勾了 autoConnect) 时显示,
-            位置紧贴「选择其他项目文件夹」下方 — 跟用户要求一致。 */}
-        {isProjectPicker && onAddRemoteProject && (
+            位置紧贴「选择其他项目文件夹」下方 — 跟用户要求一致。
+
+            **已选定远程设备时不出现**(2026-07-30 用户裁决)。三条理由:
+              · 职责已被上面那项承担 —— deviceScope 存在时「选择其他项目文件夹」点下去就是浏览
+                这台设备的文件夹(见 handleBrowse),两个入口并列只是让人以为它们是两件事;
+              · 它**不带 deviceId**,弹窗会让用户从头重选目标 —— 于是可以从设备 A 的语境里点一个
+                叫「添加远程项目」的入口、选到设备 B,等于绕过设备 pill 改掉了设备这一级维度。
+                #807 方案 B 的前提就是「设备是一级维度、由设备 pill 独占」,这条路径与之冲突;
+              · SSH 与 device-link 本就互斥(remoteHostId / deviceLinkDeviceId 二者只能有一个),
+                所以「在对端设备的语境里添加 SSH 项目」本身是语境错位;要用 SSH 先把设备切回本机,
+                与设备 pill 的语义一致。
+            对端一个项目都没有时的空态入口不受影响 —— 那条走 tabBrowse 且**带**设备身份。 */}
+        {isProjectPicker && onAddRemoteProject && !deviceScope && (
           <button
             type="button"
             onClick={() => {
