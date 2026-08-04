@@ -115,6 +115,12 @@ export function createCardActionHandler(
    * as expired.
    */
   const resolvedCardRetries = new Map<string, ResolvedCardRetry>();
+  /**
+   * The latest callback identity rendered for each message. A card edit can
+   * fail after a newer callback has already replaced the same message; the
+   * older failure must not repopulate a retry entry for the superseded card.
+   */
+  const latestResolvedCardActions = new Map<string, string>();
 
   function pruneResolvedCardRetries(now: number): void {
     for (const [key, entry] of resolvedCardRetries) {
@@ -122,7 +128,7 @@ export function createCardActionHandler(
     }
   }
 
-  function resolvedCardRetryKey(event: IMCardActionEvent, requestId: string): string {
+  function resolvedCardRetryIdentity(event: IMCardActionEvent, requestId: string): string {
     const isTerminalDecision =
       event.buttonId.startsWith('permission:') ||
       event.buttonId.startsWith('plan:') ||
@@ -132,7 +138,32 @@ export function createCardActionHandler(
     const renderedToken = event.callbackToken?.trim();
     const identity =
       renderedToken && !isTerminalDecision ? `token:${renderedToken}` : `request:${requestId}`;
-    return `${event.messageId}|${identity}`;
+    return identity;
+  }
+
+  function resolvedCardRetryKey(event: IMCardActionEvent, requestId: string): string {
+    return `${event.messageId}|${resolvedCardRetryIdentity(event, requestId)}`;
+  }
+
+  function clearResolvedCardRetriesForMessage(messageId: string): void {
+    const prefix = `${messageId}|`;
+    for (const key of resolvedCardRetries.keys()) {
+      if (key.startsWith(prefix)) resolvedCardRetries.delete(key);
+    }
+  }
+
+  function beginResolvedCardAction(event: IMCardActionEvent): void {
+    const requestId = String(event.payload.requestId ?? '');
+    latestResolvedCardActions.set(
+      event.messageId,
+      resolvedCardRetryIdentity(event, requestId),
+    );
+    clearResolvedCardRetriesForMessage(event.messageId);
+    while (latestResolvedCardActions.size > MAX_RESOLVED_CARD_RETRIES) {
+      const oldest = latestResolvedCardActions.keys().next().value;
+      if (oldest === undefined) break;
+      latestResolvedCardActions.delete(oldest);
+    }
   }
 
   function rememberResolvedCardRetry(
@@ -142,8 +173,10 @@ export function createCardActionHandler(
   ): void {
     const requestId = String(event.payload.requestId ?? '');
     if (!requestId) return;
-    const key = resolvedCardRetryKey(event, requestId);
-    resolvedCardRetries.delete(key);
+    const identity = resolvedCardRetryIdentity(event, requestId);
+    if (latestResolvedCardActions.get(event.messageId) !== identity) return;
+    const key = `${event.messageId}|${identity}`;
+    clearResolvedCardRetriesForMessage(event.messageId);
     resolvedCardRetries.set(key, { label, accountGeneration, at: Date.now() });
     while (resolvedCardRetries.size > MAX_RESOLVED_CARD_RETRIES) {
       const oldest = resolvedCardRetries.keys().next().value;
@@ -1446,6 +1479,7 @@ export function createCardActionHandler(
 
           const retryResult = await retryResolvedCardIfPending(im, event, accountGeneration);
           if (retryResult !== null) return retryResult;
+          beginResolvedCardAction(event);
 
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it

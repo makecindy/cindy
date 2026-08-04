@@ -840,6 +840,60 @@ describe('Telegram 失效交互卡', () => {
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledTimes(2);
   });
 
+  it('同一消息的新选择会清理旧终态重试缓存', async () => {
+    const im = makeIm();
+    im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
+    const telegramAdapter = {
+      ...adapter,
+      channel: 'telegram',
+      interactionExpiredNotice: '卡片已过期',
+    } as ImChannelAdapter;
+    const attach = createCardActionHandler(telegramAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void | boolean>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+
+    const eventA = {
+      channelName: 'telegram',
+      chatId: '111',
+      messageId: '111|42',
+      senderId: '111',
+      buttonId: 'model:pick',
+      callbackToken: 'model-token-a',
+      payload: {
+        requestId: 'model-pick-a',
+        sessionId: 'sess-target',
+        modelId: 'claude-opus-4-7',
+        modelLabel: 'Opus 4.7',
+        effort: 'high',
+        providerId: 'anthropic',
+      },
+    } as const;
+    const eventB = {
+      ...eventA,
+      callbackToken: 'model-token-b',
+      payload: {
+        ...eventA.payload,
+        requestId: 'model-pick-b',
+        modelId: 'claude-sonnet-4-5',
+        modelLabel: 'Sonnet 4.5',
+      },
+    } as const;
+
+    expect(await registeredHandler(handler)(eventA)).toBe(false);
+    expect(await registeredHandler(handler)(eventB)).toBe(true);
+    expect(await registeredHandler(handler)(eventA)).toBe(true);
+    expect(mocks.updateModelEffort).toHaveBeenCalledTimes(3);
+    expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledTimes(3);
+    expect(im.updateInteractiveCard).toHaveBeenLastCalledWith(
+      '111|42',
+      expect.objectContaining({ body: slackUi.cards.model.resolved('Opus 4.7', 'high') }),
+    );
+  });
+
   it('project 切换业务成功但卡片收口失败后重试只重放终态卡', async () => {
     const im = makeIm();
     im.updateInteractiveCard.mockRejectedValueOnce(new Error('telegram 500'));
