@@ -53,7 +53,11 @@ export function getManagedWorktreeNameFromBranch(branch: string): string | null 
   for (const prefix of MANAGED_WORKTREE_BRANCH_PREFIXES) {
     const marker = `${prefix}/`;
     if (branch.startsWith(marker) && branch.length > marker.length) {
-      return branch.slice(marker.length);
+      const name = branch.slice(marker.length);
+      // Worktree name 永远是单个合法路径段。`cindy/foo/bar` 仅是会阻塞
+      // `cindy/foo` 的 ref 后代，`xdt/foo/bar` 则只是普通 legacy 命名空间分支；
+      // 两者都不是托管 Worktree 的精确分支。
+      return name.includes('/') ? null : name;
     }
   }
   return null;

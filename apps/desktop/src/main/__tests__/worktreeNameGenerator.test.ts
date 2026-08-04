@@ -61,6 +61,8 @@ describe('nameGenerator', () => {
     ]);
     expect(getManagedWorktreeNameFromBranch('cindy/jolly-turing')).toBe('jolly-turing');
     expect(getManagedWorktreeNameFromBranch('xdt/jolly-turing')).toBe('jolly-turing');
+    expect(getManagedWorktreeNameFromBranch('cindy/jolly-turing/child')).toBeNull();
+    expect(getManagedWorktreeNameFromBranch('xdt/jolly-turing/child')).toBeNull();
     expect(getManagedWorktreeNameFromBranch('feature/jolly-turing')).toBeNull();
     expect(isManagedWorktreeBranchForName('cindy/jolly-turing', 'jolly-turing')).toBe(true);
     expect(isManagedWorktreeBranchForName('xdt/jolly-turing', 'jolly-turing')).toBe(true);

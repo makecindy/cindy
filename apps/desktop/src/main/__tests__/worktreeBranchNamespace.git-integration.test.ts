@@ -60,4 +60,14 @@ describe('managed Worktree branch namespace', () => {
     expect(() => git(repo, 'branch', 'cindy/foo')).toThrow();
     expect(blocksManagedWorktreeBranchNamespace('cindy')).toBe(true);
   });
+
+  it('keeps local origin/* branches distinct from origin tracking refs', () => {
+    const repo = makeRepo();
+    git(repo, 'branch', 'origin/cindy');
+    git(repo, 'update-ref', 'refs/remotes/origin/cindy', 'HEAD');
+
+    const refs = git(repo, 'branch', '--all', '--format=%(refname)').split(/\r?\n/);
+    expect(refs).toContain('refs/heads/origin/cindy');
+    expect(refs).toContain('refs/remotes/origin/cindy');
+  });
 });

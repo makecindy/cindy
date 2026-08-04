@@ -129,13 +129,15 @@ describe('removeWorktreeForSession', () => {
     try {
       gitExecMock.mockImplementation(async (args: string[]) => ({
         stdout:
-          args[0] === 'branch' ? 'cindy/pensive-lederberg\norigin/xdt/pensive-lederberg-2\n' : '',
+          args[0] === 'branch'
+            ? 'refs/heads/cindy/pensive-lederberg\nrefs/remotes/origin/xdt/pensive-lederberg-2\n'
+            : '',
         stderr: '',
       }));
 
       await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg-3');
       expect(gitExecMock).toHaveBeenCalledWith(
-        ['branch', '--all', '--format=%(refname:short)'],
+        ['branch', '--all', '--format=%(refname)'],
         BASE_REPO,
       );
     } finally {
@@ -147,7 +149,62 @@ describe('removeWorktreeForSession', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
       gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout: args[0] === 'branch' ? 'cindy/pensive-lederberg/child\n' : '',
+        stdout: args[0] === 'branch' ? 'refs/heads/cindy/pensive-lederberg/child\n' : '',
+        stderr: '',
+      }));
+
+      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg-2');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('suggestName ignores remote descendant refs because they do not block local heads', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      gitExecMock.mockImplementation(async (args: string[]) => ({
+        stdout:
+          args[0] === 'branch'
+            ? 'refs/remotes/origin/cindy/pensive-lederberg/child\n'
+            : '',
+        stderr: '',
+      }));
+
+      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('suggestName distinguishes local origin/* branches from origin tracking refs', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      gitExecMock.mockImplementation(async (args: string[]) => ({
+        stdout:
+          args[0] === 'branch'
+            ? [
+                'refs/heads/origin/cindy',
+                'refs/remotes/origin/cindy',
+                'refs/heads/origin/cindy/pensive-lederberg',
+              ].join('\n')
+            : '',
+        stderr: '',
+      }));
+
+      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('suggestName reserves exact origin tracking worktree branches', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      gitExecMock.mockImplementation(async (args: string[]) => ({
+        stdout:
+          args[0] === 'branch'
+            ? 'refs/remotes/origin/cindy/pensive-lederberg\n'
+            : '',
         stderr: '',
       }));
 
@@ -159,7 +216,7 @@ describe('removeWorktreeForSession', () => {
 
   it('suggestName reports a current-prefix namespace root before Git ref creation fails', async () => {
     gitExecMock.mockImplementation(async (args: string[]) => ({
-      stdout: args[0] === 'branch' ? 'cindy\n' : '',
+      stdout: args[0] === 'branch' ? 'refs/heads/cindy\n' : '',
       stderr: '',
     }));
 

@@ -19,6 +19,7 @@ import {
   generateUniqueName,
   avoidCollision,
   getBranchName,
+  getManagedWorktreeNameFromBranch,
   getManagedWorktreeReservedName,
   isManagedWorktreeBranchForName,
   validateWorktreeName,
@@ -312,27 +313,38 @@ async function getTakenNames(baseRepo: string): Promise<string[]> {
   }
   // 本地与 origin tracking 分支都纳入占用判定：否则本地无 xdt/foo、
   // 远端尚有 origin/xdt/foo 时又新建 cindy/foo，回收后会出现双候选歧义。
+  // 必须保留完整 ref namespace；短名 `origin/cindy` 既可能是本地
+  // refs/heads/origin/cindy，也可能是 refs/remotes/origin/cindy，不能靠字符串去前缀猜。
   let branchesOutput: string;
   try {
     ({ stdout: branchesOutput } = await gitExec(
-      ['branch', '--all', '--format=%(refname:short)'],
+      ['branch', '--all', '--format=%(refname)'],
       baseRepo,
     ));
   } catch {
     // ignore — 拿不到 git 分支时仅用 store
     return [...taken];
   }
+  const localRefPrefix = 'refs/heads/';
+  const originRefPrefix = 'refs/remotes/origin/';
   for (const line of branchesOutput.split(/\r?\n/)) {
-    const displayBranch = line.trim();
-    const branch = displayBranch.startsWith('origin/')
-      ? displayBranch.slice('origin/'.length)
-      : displayBranch;
-    if (blocksManagedWorktreeBranchNamespace(branch)) {
+    const ref = line.trim();
+    const isLocal = ref.startsWith(localRefPrefix);
+    const isOriginTracking = ref.startsWith(originRefPrefix);
+    if (!isLocal && !isOriginTracking) continue;
+
+    const branch = ref.slice((isLocal ? localRefPrefix : originRefPrefix).length);
+    const displayBranch = isLocal ? branch : `origin/${branch}`;
+    if (isLocal && blocksManagedWorktreeBranchNamespace(branch)) {
       throw new Error(
         `无法创建 Cindy Worktree：分支 "${displayBranch}" 占用了 "cindy/*" 命名空间。请先重命名或删除该分支。`,
       );
     }
-    const reservedName = getManagedWorktreeReservedName(branch);
+    // 本地 current-prefix 后代 ref 会在 refs/heads 下真实阻塞父级，需预留首段；
+    // origin tracking refs 与本地 heads 分属不同 namespace，仅精确托管分支参与占用。
+    const reservedName = isLocal
+      ? getManagedWorktreeReservedName(branch)
+      : getManagedWorktreeNameFromBranch(branch);
     if (reservedName) taken.add(reservedName);
   }
   return [...taken];
