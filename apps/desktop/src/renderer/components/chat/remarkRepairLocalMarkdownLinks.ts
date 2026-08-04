@@ -18,6 +18,17 @@ import { classifyMarkdownHref } from '@/lib/localPathResolver';
 const MALFORMED_LOCAL_LINK_START_RE = /\[((?:\\.|[^\]\n])*)\]\(/g;
 export const RAW_LOCAL_LINK_HREF_PROP = 'data-cindy-raw-local-link-href';
 
+function hasUnsafeSourceBeforeOpener(rawSource: string | undefined, decodedIndex: number) {
+  if (!rawSource) return false;
+  const windowStart = Math.max(0, decodedIndex - 32);
+  const windowEnd = Math.min(rawSource.length, decodedIndex + 4);
+  const sourceWindow = rawSource.slice(windowStart, windowEnd);
+  return (
+    sourceWindow.includes('\\') ||
+    /&(?:#(?:x[0-9a-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/i.test(sourceWindow)
+  );
+}
+
 function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
   const matches: Array<{
     start: number;
@@ -31,10 +42,9 @@ function findMalformedLocalLinkMatches(value: string, rawSource?: string) {
   let match: RegExpExecArray | null;
   while ((match = MALFORMED_LOCAL_LINK_START_RE.exec(value)) !== null) {
     // The parser may remove a single escape or collapse an entity before the
-    // opener. Inspect a small source window around that opener without trying
-    // to rebuild a full decoded-to-raw offset table.
-    const rawPrefix = rawSource?.slice(0, match.index + 2);
-    if (rawPrefix?.includes('\\') || rawPrefix?.includes('&')) continue;
+    // opener. Inspect only the nearby source window, so ordinary `&` text
+    // elsewhere in the sentence does not suppress an unrelated link.
+    if (hasUnsafeSourceBeforeOpener(rawSource, match.index)) continue;
     const image = match.index > 0 && value[match.index - 1] === '!';
     const hrefStart = MALFORMED_LOCAL_LINK_START_RE.lastIndex;
     const hrefSource = value.slice(hrefStart);

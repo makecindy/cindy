@@ -141,6 +141,24 @@ describe('remarkRepairLocalMarkdownLinks', () => {
     ]);
   });
 
+  it('does not let an ordinary ampersand before the opener suppress repair', () => {
+    const children = firstParagraphChildren('R&D: [产物](/tmp/My File.md)');
+
+    expect(children.map(withoutPositions)).toEqual([
+      { type: 'text', value: 'R&D: ' },
+      {
+        type: 'link',
+        url: '/tmp/My File.md',
+        children: [{ type: 'text', value: '产物' }],
+        data: {
+          hProperties: {
+            [RAW_LOCAL_LINK_HREF_PROP]: '/tmp/My File.md',
+          },
+        },
+      },
+    ]);
+  });
+
   it('still repairs an unescaped link after a CRLF line ending', () => {
     const children = firstParagraphChildren('line\r\n[示例](/tmp/My File.md)');
 
