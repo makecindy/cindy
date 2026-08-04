@@ -42,16 +42,17 @@ function describeOtherTool(toolName: string, input: Record<string, unknown>): st
   }
 }
 
-/** pi 只读内置工具(与 cindy-bridge READONLY_BUILTINS 同集)。入参路径字段统一为 `path`。 */
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'ls']);
-
 /**
- * 单文件读 vs 目录级递归读 —— 与 CC 的 READ_ONLY_TOOLS scope 判定同口径。
- * `read` 只读一个具名文件;`grep`/`find`/`ls` 会从给定根递归遍历,根在工作区外时能捞出区外
- * 凭证子路径(如 `grep {path:'/Users/me', pattern:'AKIA'}` 命中 ~/.aws/credentials,而 path
- * 本身不含凭证名、过不了 isSensitiveCredentialPath)→ 必须交 core 按边界升级。
+ * pi 只读内置工具(与 cindy-bridge READONLY_BUILTINS 同集)。入参路径字段统一为 `path`。
+ *
+ * 注意可达面:bridge 对这四个工具在**非凭证路径**时直接放行、根本不冒泡
+ * (`cindy-bridge-source.ts` 的 `READONLY_BUILTINS.has(toolName) && !credentialRead` → return),
+ * 所以能走到本 adapter 的只读调用只有「命中凭证路径」那一类,下面的凭证分支已经把它收成
+ * `prompt-each-time`。因此这里不做 CC 那套 `scope:'file' | 'tree'` 的区分 —— 加了也不会执行。
+ * Pi 的区外目录级递归读(`grep`/`find`/`ls` 根在工作区外)当前确实不经 host 审阅,与 Claude
+ * 存在行为差异;真正修它要动 bridge 的只读快路径,属独立改动(见 PR 描述里的后续项)。
  */
-const TREE_SCOPE_READ_TOOLS: ReadonlySet<string> = new Set(['grep', 'find', 'ls']);
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'ls']);
 
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */
 const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
@@ -95,11 +96,7 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
     // 的 touchesCredentialPath 同口径递归扫全字段;命中的字符串作为 path 交 core 判必问。
     const credentialHit = findCredentialLeaf(input);
-    return {
-      kind: 'read',
-      path: credentialHit ?? stringField(input, 'path'),
-      scope: TREE_SCOPE_READ_TOOLS.has(toolName) ? 'tree' : 'file',
-    };
+    return { kind: 'read', path: credentialHit ?? stringField(input, 'path') };
   }
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return { kind: 'file-write', path: stringField(input, 'path') };

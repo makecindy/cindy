@@ -82,19 +82,21 @@ describe('classifyPiToolForAutoReview', () => {
   });
 
   /**
-   * 与 Claude 的 READ_ONLY_TOOLS scope 判定对齐:目录级递归读(grep/find/ls)的根在工作区外时
-   * 必须升级 —— 根路径本身不含凭证名(过不了 isSensitiveCredentialPath),但递归能捞出区外凭证
-   * 子路径。Pi 此前不传 scope,这类调用被静默 auto-approve,比同输入下的 Claude 更宽松。
+   * 如实钉住只读工具在本 adapter 的**可达面**:bridge 对 read/grep/find/ls 在非凭证路径时
+   * 直接放行、不冒泡(`cindy-bridge-source.ts` 的 READONLY_BUILTINS 快路径),所以能走到这里的
+   * 只读调用只有命中凭证路径那一类 —— 由凭证分支收成 prompt-each-time。
+   *
+   * 反过来说:区外目录级递归读在 Pi 当前**不经** host 审阅(与 Claude 存在行为差异),但那不是
+   * 本 adapter 能修的 —— 在这一层加 CC 那套 scope 区分只会得到永不执行的死代码。真修要动
+   * bridge 的只读快路径,属独立改动。这条用例的作用是防止后人再次在错误的层加"看起来对"的补丁。
    */
-  it('escalates out-of-workspace recursive reads but keeps single-file reads cheap', () => {
-    for (const tool of ['grep', 'find', 'ls']) {
-      expect(verdict(tool, { path: '/Users/t' })).toBe('prompt');
+  it('keeps plain reads auto-approved regardless of root (bridge never bubbles them)', () => {
+    for (const tool of ['read', 'grep', 'find', 'ls']) {
+      expect(verdict(tool, { path: '/Users/t' })).toBe('auto-approve');
       expect(verdict(tool, { path: `${WS}/src` })).toBe('auto-approve');
     }
-    // 单文件读只碰一个具名文件,区外也不因"能遍历"而升级(凭证路径另有必问规则兜住)。
-    expect(verdict('read', { path: '/tmp/notes.txt' })).toBe('auto-approve');
-    // 路径缺失(如只给 pattern)时无根可判,保持原有放行语义。
-    expect(verdict('grep', { pattern: 'TODO' })).toBe('auto-approve');
+    // 唯一真会到达这里的只读形态:入参命中凭证路径 → 必问、不可记住。
+    expect(verdict('grep', { path: '/Users/t/.aws/credentials' })).toBe('prompt-each-time');
   });
 
   it('fails closed for MCP and unknown tools', () => {

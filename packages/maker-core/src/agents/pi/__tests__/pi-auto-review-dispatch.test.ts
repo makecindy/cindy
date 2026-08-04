@@ -841,6 +841,47 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   /**
+   * 只有 Full access 算「放宽」。Auto 的语义是「区内放行、越界升级」而不是全放行,挂起的卡
+   * 本就是被升级的越界动作 —— 切到 Auto 必须 deny 这张 stale 卡,让重试重新过 fail-closed 的
+   * Auto dispatcher,不能替用户橡皮图章(与 CC 的 moreOpen 裁决一致,codex review P1)。
+   */
+  it('denies a pending card when switching to Auto instead of rubber-stamping it', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_browser'],
+      policy: () => 'prompt',
+    });
+    handle.setInteractionResolver?.(async () => await new Promise(() => {}));
+    firePermissionRequest('r28', 'mcp__cindy_browser__call_tool', { name: 'browser' });
+    await flush();
+    await handle.setPermissionMode?.('auto');
+    expect(await waitForResponse('r28')).toEqual({
+      type: 'extension_ui_response', id: 'r28', confirmed: false,
+    });
+  });
+
+  /**
+   * 并发切档:被更晚意图取代的那次写会在代际检查处提前返回、但 promise 仍 resolve 成功。旧
+   * continuation 若照自己捕获的 transition 收卡,就会用一次早已作废的放宽把 pending 调用错误
+   * 放行(codex review P1)。这里 ask → bypass 紧接着再切回 ask,最终必须是拒绝。
+   */
+  it('ignores a superseded mode change when settling pending prompts', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt',
+    });
+    handle.setInteractionResolver?.(async () => await new Promise(() => {}));
+    firePermissionRequest('r29', 'mcp__cindy_ssh__ssh_exec', { command: 'uptime' });
+    await flush();
+    // 两次切换连续发起,第一次(放宽)会被第二次(收紧)取代。
+    const widening = handle.setPermissionMode?.('bypassPermissions');
+    const tightening = handle.setPermissionMode?.('ask');
+    await Promise.allSettled([widening, tightening]);
+    expect(await waitForResponse('r29')).toEqual({
+      type: 'extension_ui_response', id: 'r29', confirmed: false,
+    });
+  });
+
+  /**
    * 放宽档位不得替用户批准他还没表态的**高风险**调用:prompt-each-time 的挂起卡在切到
    * Full access 时仍按 fail-closed 拒绝(与 CC / Codex 的 forcePrompt 语义一致)。
    */
@@ -875,6 +916,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     firePermissionRequest('r25', 'mcp__cindy_ssh__ssh_exec', { command: 'rm -rf /' });
     expect(await waitForResponse('r25')).toEqual({
       type: 'extension_ui_response', id: 'r25', confirmed: false,
+    });
+  });
+
+  /**
+   * resolver 是 host 注入的外部回调,可能同步 throw(或返回非 Promise)。直接 `.then` 会让同步
+   * 异常绕过 finalize —— pending 条目不注销、请求永不 settle,调用悬挂(copilot 报)。同步失败
+   * 必须落进 fail-closed 分支:回帧 confirmed:false,而不是卡死。
+   */
+  it('fails closed when the interaction resolver throws synchronously', async () => {
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_ssh'],
+      policy: () => 'prompt',
+    });
+    handle.setInteractionResolver?.((() => {
+      throw new Error('resolver blew up synchronously');
+    }) as never);
+    firePermissionRequest('r30', 'mcp__cindy_ssh__ssh_exec', { command: 'uptime' });
+    expect(await waitForResponse('r30')).toEqual({
+      type: 'extension_ui_response', id: 'r30', confirmed: false,
     });
   });
 

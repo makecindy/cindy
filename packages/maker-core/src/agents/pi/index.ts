@@ -1724,12 +1724,22 @@ export class PiAgent extends BaseAgent {
           mode: nextMode,
         });
         // 写入成功后才 settle 挂起的卡(写失败会 fail-closed 抛出,档位没真变就不该收卡)。
-        // 放宽 → 替用户 allow(高风险 forcePrompt 仍 deny);收紧 → 一律 deny。
         // 没有这一步,用户切到 Full access 后仍要手动回答一张已失效的卡,调用一直卡着。
-        if (nextMode !== previousMode) {
+        //
+        // 只有**最新且已落盘**的那次切换可以收卡:被更晚意图取代的写会在代际检查处提前
+        // 返回、但 promise 仍 resolve 成功(见 writePermissionFile 的 `gen !== permissionWriteGen`),
+        // 旧 continuation 若照自己捕获的 transition 收卡,就会用一次早已作废的放宽把 pending
+        // 调用错误放行,而真正生效的收紧只能看到卡已经没了(codex review P1)。
+        const stillLatestIntent = requestedPermissionSnapshot.mode === nextMode;
+        const persisted = persistedPermissionSnapshot.mode === nextMode;
+        if (nextMode !== previousMode && stillLatestIntent && persisted) {
+          // **只有 bypassPermissions 算「放宽」**。Auto 的语义是「区内放行、越界升级」而不是
+          // 全放行,而挂起的卡本就是被升级的越界/风险动作 —— 切到 Auto 若替用户 allow,等于
+          // 把待确认的越界动作橡皮图章掉;应当 deny,让模型重试时重新过一遍 fail-closed 的
+          // Auto dispatcher。与 CC / Codex 的同名裁决一致(claude-code/index.ts 的 moreOpen)。
           dismissAllPendingPrompts(
             `permission_mode_changed_to_${nextMode}`,
-            permissionPrivilege(nextMode) > permissionPrivilege(previousMode) ? 'allow' : 'deny',
+            nextMode === 'bypassPermissions' ? 'allow' : 'deny',
           );
         }
       },
@@ -2235,12 +2245,15 @@ export class PiAgent extends BaseAgent {
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
             settle: (resolveAs) => finalize({ decided: true, approved: resolveAs === 'allow' }),
           });
-          resolver({
+          // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
+          // `.then` 会让同步异常绕过下面的 finalize —— pending 条目永不注销、这次请求永不
+          // settle,调用就此悬挂(copilot 报)。包一层把同步失败也收进 fail-closed 分支。
+          Promise.resolve().then(() => resolver({
             kind: 'permission',
             requestId: id,
             toolName,
             input,
-          }).then((decision) => {
+          })).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
                 toolName,
