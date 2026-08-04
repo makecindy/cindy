@@ -93,9 +93,16 @@ describe('runtime-configs', () => {
     for (const prompt of prompts) {
       expect(prompt).toContain('## Skill source precedence');
       expect(prompt).toMatch(
-        /Skills surfaced by\s+Cindy from its managed, user, or project sources/u,
+        /Cindy surfaces Skills from its own managed, user, and project\s+sources/u,
       );
       expect(prompt).toContain('Explicitly selecting the downstream Skill does not waive');
+      // 来源判定必须落在可观察的清单标注上，并且无标注时 fail-closed 回落到
+      // 「先跑 Cindy 侧 Skill」，否则这条规则对模型不可执行 (#1650 review)。
+      expect(prompt).toMatch(/available-Skills listing already labels each Skill/u);
+      expect(prompt).toMatch(
+        /no usable source\s+label, treat the Skill as downstream and still run the applicable Cindy-side Skill first/u,
+      );
+      // 产品侧只表达来源级规则：不得出现具体 selector、Skill 名或本机路径。
       expect(prompt).not.toMatch(/\$[\w:-]+|\/(?:Users|home)\/|[A-Z]:\\/u);
     }
   });
