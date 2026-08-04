@@ -9,10 +9,10 @@ describe('cindy-bridge extension source', () => {
     for (const tool of ['createBashTool', 'createFindTool', 'createGrepTool', 'createLsTool']) {
       expect(source).toContain(tool + ',');
     }
-    expect(source).toContain(
-      "const args = ['--files', '--hidden', '--no-require-git', '--glob', pattern]",
-    );
+    expect(source).toContain("const args = ['--files', '--hidden', '--no-require-git']");
     expect(source).toContain("const child = spawn('rg', args");
+    expect(source).toContain('path.matchesGlob(relative, pattern)');
+    expect(source).not.toContain("'--glob', pattern");
     expect(source).toContain('glob: rgGlob');
     expect(source).toContain('const grepTool = createGrepTool(process.cwd())');
     expect(source).toContain('const lsTool = createLsTool(process.cwd())');

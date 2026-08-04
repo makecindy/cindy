@@ -1182,6 +1182,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-managed-find-'));
       writeFileSync(path.join(workingDir, 'find-me.ts'), 'export {};\n');
       writeFileSync(path.join(workingDir, 'skip-me.txt'), 'skip\n');
+      writeFileSync(path.join(workingDir, '.gitignore'), 'ignored-by-git.ts\n');
+      writeFileSync(path.join(workingDir, 'ignored-by-git.ts'), 'secret\n');
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
@@ -1198,6 +1200,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
         expect(followUp.some((body) => body.includes('find-me.ts'))).toBe(true);
         expect(followUp.some((body) => body.includes('skip-me.txt'))).toBe(false);
+        expect(followUp.some((body) => body.includes('ignored-by-git.ts'))).toBe(false);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

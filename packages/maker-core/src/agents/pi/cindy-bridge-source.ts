@@ -462,7 +462,7 @@ async function connectServer(pi: any, server: McpServerRef, token: string): Prom
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
 // 提供 rg，因此把固定参数的 rg --files 适配成 Pi 原生 find operations。参数直接传
-// spawn、不经 shell，且只开放 glob 与固定 ignore，不能注入 rg 的执行型选项。
+// spawn、不经 shell；文件模式在 JS 里过滤，因为 rg 的 positive glob 会覆盖 .gitignore。
 function rgGlob(
   pattern: string,
   cwd: string,
@@ -470,7 +470,7 @@ function rgGlob(
 ): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const limit = Number.isFinite(options.limit) ? Math.max(1, Math.floor(options.limit)) : 1000;
-    const args = ['--files', '--hidden', '--no-require-git', '--glob', pattern];
+    const args = ['--files', '--hidden', '--no-require-git'];
     for (const ignored of options.ignore) args.push('--glob', '!' + ignored);
 
     const child = spawn('rg', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -486,7 +486,12 @@ function rgGlob(
     const reader = createInterface({ input: child.stdout });
     reader.on('line', (line) => {
       if (!line || lines.length >= limit) return;
-      lines.push(path.join(cwd, line.replace(/\r$/, '')));
+      const relative = line.replace(/\r$/, '');
+      // path.matchesGlob 默认不让 * 匹配点开头的段；rg glob 会匹配。保留原路径先匹配
+      // 显式点模式，再用等长占位符补齐 --hidden 下的普通通配语义。
+      const visibleRelative = relative.replace(/(^|[\\/])\./g, '$1_');
+      if (!path.matchesGlob(relative, pattern) && !path.matchesGlob(visibleRelative, pattern)) return;
+      lines.push(path.join(cwd, relative));
       if (lines.length >= limit && !child.killed) {
         stoppedAtLimit = true;
         child.kill();
