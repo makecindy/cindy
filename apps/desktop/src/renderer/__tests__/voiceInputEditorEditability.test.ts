@@ -35,9 +35,24 @@ describe('ChatInput voice lifecycle locks', () => {
     expect(permissionBlock).not.toContain('disabled={composerMutationLocked}');
   });
 
-  it('lets an alert dialog consume Escape before voice cancellation', () => {
-    expect(chatInputSource).toContain(
-      "event.target instanceof Element &&\n        event.target.closest('[role=\"alertdialog\"]')",
+  it('lets top-level permission surfaces consume Escape before voice cancellation', () => {
+    const shortcutHandlerStart = chatInputSource.indexOf(
+      'const handleKeyDown = (event: KeyboardEvent) => {',
+    );
+    expect(shortcutHandlerStart).toBeGreaterThanOrEqual(0);
+    const shortcutHandlerEnd = chatInputSource.indexOf(
+      'const enterIntent = resolveComposerEnterIntent(',
+      shortcutHandlerStart,
+    );
+    expect(shortcutHandlerEnd).toBeGreaterThan(shortcutHandlerStart);
+    const shortcutHandlerBlock = chatInputSource.slice(shortcutHandlerStart, shortcutHandlerEnd);
+
+    expect(shortcutHandlerBlock).toContain('[role="alertdialog"]');
+    expect(shortcutHandlerBlock).toContain('[data-morph-side]');
+    const voiceCancelStart = shortcutHandlerBlock.indexOf('voiceInputCancelRef.current()');
+    expect(voiceCancelStart).toBeGreaterThanOrEqual(0);
+    expect(shortcutHandlerBlock.indexOf('[data-morph-side]')).toBeLessThan(
+      voiceCancelStart,
     );
   });
 });

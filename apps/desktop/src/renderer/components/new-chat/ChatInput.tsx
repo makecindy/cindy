@@ -2540,10 +2540,12 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
+      // 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
+      // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
         event.target instanceof Element &&
-        event.target.closest('[role="alertdialog"]')
+        event.target.closest('[role="alertdialog"], [data-morph-side]')
       ) {
         return;
       }
