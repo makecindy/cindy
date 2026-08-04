@@ -895,13 +895,10 @@ export class GhostNodeRuntimeBroker {
   async stopAndWait(ghostId: string): Promise<void> {
     // 先封住新的 child spawn；这段没有 await，随后快照可覆盖所有已 fork 的进程。
     this.stoppedGhosts.add(ghostId);
-    const active = [...this.workers.values()].filter(
-      (entry) => entry.ghost.manifest.id === ghostId,
-    );
-    const processes = new Set<NodeWorkerProcess>([
-      ...active.flatMap((entry) => [entry.child, ...entry.children.values().map((child) => child.proc)]),
-      ...[...(this.startingChildren.get(ghostId) ?? [])].map((child) => child.proc),
-    ]);
+    // 以真实进程账本为准，而不是 workers/children 的业务状态。错误事件、父进程
+    // 退出或上一次停止超时都可能先移除业务记账；只要没有真实 exit，重试更新
+    // 仍必须等待同一 OS 进程，不能绕过 Windows 文件锁保护。
+    const processes = new Set(this.liveProcesses.get(ghostId) ?? []);
     const exited = [...processes].map((process) => this.waitForProcessExit(process, ghostId));
     this.stop(ghostId);
     await Promise.all(exited);
@@ -940,9 +937,26 @@ export class GhostNodeRuntimeBroker {
     });
   }
 
+  /** 所有已创建的 OS 进程：只认真实 exit 移除，error 不算退出证明。 */
+  private readonly liveProcesses = new Map<string, Set<NodeWorkerProcess>>();
+
+  private trackLiveProcess(ghostId: string, process: NodeWorkerProcess): void {
+    const processes = this.liveProcesses.get(ghostId) ?? new Set<NodeWorkerProcess>();
+    if (processes.has(process)) return;
+    processes.add(process);
+    this.liveProcesses.set(ghostId, processes);
+    process.once('exit', () => {
+      const current = this.liveProcesses.get(ghostId);
+      if (!current) return;
+      current.delete(process);
+      if (current.size === 0) this.liveProcesses.delete(ghostId);
+    });
+  }
+
   private readonly startingChildren = new Map<string, Set<StartingChildProcEntry>>();
 
   private trackStartingChild(ghostId: string, proc: NodeWorkerProcess): StartingChildProcEntry {
+    this.trackLiveProcess(ghostId, proc);
     const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false };
     const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
     children.add(entry);
@@ -1108,6 +1122,7 @@ export class GhostNodeRuntimeBroker {
     } catch (error) {
       throw new WorkerStartError(error instanceof Error ? error.message : String(error), true);
     }
+    this.trackLiveProcess(ghost.manifest.id, child);
     const entry: WorkerEntry = {
       ghost,
       entryRel,
@@ -1464,7 +1479,25 @@ export class GhostNodeRuntimeBroker {
       }
       return;
     }
-    if (entry.hardKillTimer) {
+    if (error && !entry.stopping && !entry.hardKillTimer) {
+      // error 只说明 utilityProcess 通道失效。业务状态可以立即收口，但 OS
+      // 进程仍须主动终止，并由 liveProcesses 保留到真实 exit。
+      try {
+        entry.child.kill('SIGTERM');
+        entry.hardKillTimer = this.setTimer(() => {
+          entry.hardKillTimer = null;
+          try {
+            entry.child.kill('SIGKILL');
+          } catch {
+            // already gone
+          }
+        }, PROCESS_STOP_GRACE_MS);
+        entry.hardKillTimer.unref?.();
+      } catch {
+        // stopAndWait 仍会以真实 exit 或有界超时收口。
+      }
+    }
+    if (!error && entry.hardKillTimer) {
       this.clearTimer(entry.hardKillTimer);
       entry.hardKillTimer = null;
     }
