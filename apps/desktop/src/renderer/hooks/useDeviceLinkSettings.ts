@@ -79,6 +79,8 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
+  // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
+  const ownershipEventVersion = useRef(0);
 
   const applyDisabledControlDeviceIds = useCallback((ids: string[]) => {
     disabledControlDeviceIdsRef.current = ids;
@@ -125,6 +127,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         mounted.current = false;
       };
     }
+    const offOwnership = window.electronAPI.deviceLink.onOwnershipChanged((p) => {
+      ownershipEventVersion.current += 1;
+      setStandby(p.standby === true);
+    });
+    const ownershipVersionAtGetState = ownershipEventVersion.current;
     void window.electronAPI.deviceLink
       .getState()
       .then((s) => {
@@ -132,7 +139,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
-        setStandby(s.standby === true);
+        if (ownershipEventVersion.current === ownershipVersionAtGetState) {
+          setStandby(s.standby === true);
+        }
         setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
@@ -149,9 +158,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     });
     const offIssue = window.electronAPI.deviceLink.onConnectionIssue((p) => {
       setConnectionIssue(p.issue);
-    });
-    const offOwnership = window.electronAPI.deviceLink.onOwnershipChanged((p) => {
-      setStandby(p.standby === true);
     });
     const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
       setControlledBy(p.controllers ?? []);

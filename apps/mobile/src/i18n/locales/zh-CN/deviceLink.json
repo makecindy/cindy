@@ -17,6 +17,14 @@
   "sectionAccessRevoked": "需要重新允许",
   "retryAccess": "重试访问",
   "recheck": "重新检查",
+  "authFailedTitle": "登录已失效",
+  "authFailedHint": "登录状态已过期，请退出后重新登录。",
+  "replacedTitle": "连接被顶替",
+  "replacedHint": "本设备的连接被另一处相同设备顶替，正在重新连接。",
+  "tooManyConnectionsTitle": "连接数已达上限",
+  "tooManyConnectionsHint": "当前账号同时在线的设备过多，请断开其它设备后重试。",
+  "versionMismatchTitle": "版本不匹配",
+  "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本。",
   "unstableTitle": "连接反复断开",
   "unstableHint": "本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。"
 }

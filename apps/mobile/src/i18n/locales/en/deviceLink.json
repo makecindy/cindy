@@ -17,6 +17,14 @@
   "sectionAccessRevoked": "Approve Access Again",
   "retryAccess": "Retry Access",
   "recheck": "Check Again",
+  "authFailedTitle": "Sign-in expired",
+  "authFailedHint": "Your sign-in has expired. Sign out and sign in again.",
+  "replacedTitle": "Connection replaced",
+  "replacedHint": "This device connection was replaced elsewhere. Reconnecting now.",
+  "tooManyConnectionsTitle": "Too many connections",
+  "tooManyConnectionsHint": "Too many devices are online for this account. Disconnect another device and try again.",
+  "versionMismatchTitle": "Version mismatch",
+  "versionMismatchHint": "This app version is incompatible with the service. Update to the latest version and try again.",
   "unstableTitle": "Connection keeps dropping",
   "unstableHint": "Connection keeps dropping and reconnecting — check the network, or restart the app if it persists."
 }

@@ -500,6 +500,86 @@ describe('DeviceLinkOwnershipArbiter', () => {
       await arbiter.stop();
       expect(arbiter.isStandby()).toBe(false);
     });
+
+    it('ownership store 短暂不可用时保留最近一次已确认的待命状态', async () => {
+      const base = memoryStore();
+      base.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 5_000 });
+      let store: OwnershipStore | null = base;
+      const onStandbyChanged = vi.fn();
+      const arbiter = new DeviceLinkOwnershipArbiter({
+        getStore: () => store,
+        instance: { ownerPid: 100, ownerLabel: 'test' },
+        newOwnerId: () => 'self',
+        onAcquire: vi.fn(),
+        onDemote: vi.fn(),
+        onStandbyChanged,
+        heartbeatMs: 5_000,
+        staleMs: 15_000,
+        now,
+      });
+
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+
+      store = {
+        ...base,
+        read: async () => {
+          throw new Error('temporary ownership store failure');
+        },
+      };
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+
+      store = null;
+      await arbiter.tick();
+      expect(arbiter.isStandby()).toBe(true);
+      expect(onStandbyChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('ownership read 本地超时时保留待命,直到明确结果推进状态', async () => {
+      vi.useFakeTimers();
+      try {
+        const base = memoryStore();
+        base.set({ ownerId: 'other', ownerPid: 200, heartbeatAt: clock - 5_000 });
+        let readHangs = false;
+        const store: OwnershipStore = {
+          ...base,
+          read: () => (readHangs ? new Promise<never>(() => {}) : base.read()),
+        };
+        const onStandbyChanged = vi.fn();
+        const arbiter = new DeviceLinkOwnershipArbiter({
+          getStore: () => store,
+          instance: { ownerPid: 100, ownerLabel: 'test' },
+          newOwnerId: () => 'self',
+          onAcquire: vi.fn(),
+          onDemote: vi.fn(),
+          onStandbyChanged,
+          heartbeatMs: 5_000,
+          staleMs: 15_000,
+          opTimeoutMs: 100,
+          now,
+        });
+
+        await arbiter.tick();
+        expect(arbiter.isStandby()).toBe(true);
+
+        readHangs = true;
+        const timedOutTick = arbiter.tick();
+        await vi.advanceTimersByTimeAsync(100);
+        await timedOutTick;
+        expect(arbiter.isStandby()).toBe(true);
+        expect(onStandbyChanged).toHaveBeenCalledTimes(1);
+
+        readHangs = false;
+        base.set(null);
+        await arbiter.tick();
+        expect(arbiter.isOwner()).toBe(true);
+        expect(arbiter.isStandby()).toBe(false);
+        expect(onStandbyChanged).toHaveBeenLastCalledWith(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

@@ -1424,7 +1424,9 @@ function _purgeSession(sessionId: string): void {
   lightSnapshotCache.delete(sessionId);
   titleUpdateCallbacks.delete(sessionId);
   _historyFetchInFlight.delete(sessionId);
-  invalidateHistoryFetch(sessionId);
+  // 会话已被永久移出缓存:在途请求由 sessions.has(sessionId) 守卫作废,token 条目无需
+  // 留作墓碑;新建同 id 会用全局递增 token,不会重新放行旧响应。
+  _historyFetchToken.delete(sessionId);
   _historyLoadOrigin.delete(sessionId);
   // 冷缓存 hydrate 的两个守卫随会话一起收掉(会话都没了,守卫留着只是无用条目)。
   _cacheHydrateStarted.delete(sessionId);
