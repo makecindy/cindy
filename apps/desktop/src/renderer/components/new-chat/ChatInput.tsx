@@ -2373,19 +2373,24 @@ export function ChatInput({
     [ghostsForCommand],
   );
   const atPluginItems = useMemo<AtResourceItem[]>(
-    () => pluginsForMenu
-      .filter((ghost) => pluginAvailableIds.has(ghost.manifest.id) && ghost.manifest.command)
-      .map((ghost) => ({
-        type: 'plugin-command',
-        name: ghost.manifest.name,
-        relPath: ghost.manifest.command!,
-        pluginId: ghost.manifest.id,
-        ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-        sourceLabel: ghost.manifest.command!,
-        _nameLower: `${ghost.manifest.name} ${ghost.manifest.command}`.toLowerCase(),
-        _relPathLower: `${ghost.manifest.command} ${ghost.manifest.id}`.toLowerCase(),
-      })),
-    [pluginsForMenu, pluginAvailableIds],
+    () => {
+      // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
+      // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
+      if (deviceLinkDeviceId) return [];
+      return pluginsForMenu
+        .filter((ghost) => pluginAvailableIds.has(ghost.manifest.id) && ghost.manifest.command)
+        .map((ghost) => ({
+          type: 'plugin-command',
+          name: ghost.manifest.name,
+          relPath: ghost.manifest.command!,
+          pluginId: ghost.manifest.id,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+          sourceLabel: ghost.manifest.command!,
+          _nameLower: `${ghost.manifest.name} ${ghost.manifest.command}`.toLowerCase(),
+          _relPathLower: `${ghost.manifest.command} ${ghost.manifest.id}`.toLowerCase(),
+        }));
+    },
+    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds],
   );
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
