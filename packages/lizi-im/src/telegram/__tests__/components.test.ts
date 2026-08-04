@@ -47,8 +47,10 @@ describe('buildCardPayload', () => {
     if (amp !== -1) expect(tail.slice(amp)).toContain(';');
   });
 
-  it('无按钮时不带 reply_markup', () => {
-    expect(buildCardPayload({ body: 'b', buttons: [] }).replyMarkup).toBeUndefined();
+  it('无按钮时显式发送空 reply_markup 以清除旧键盘', () => {
+    expect(buildCardPayload({ body: 'b', buttons: [] }).replyMarkup).toEqual({
+      inline_keyboard: [],
+    });
   });
 });
 

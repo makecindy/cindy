@@ -32,7 +32,10 @@ export function buildCardPayload(spec: InteractiveCardSpec): {
   const { html: body } = markdownToTelegramHtml(spec.body);
   const html = capCardText(`${title}${body}`);
 
-  if (spec.buttons.length === 0) return { html, replyMarkup: undefined };
+  // An empty keyboard must be sent explicitly when replacing a card. Omitting
+  // reply_markup only changes the text and leaves Telegram's old keyboard in
+  // place, so an expired/resolved card would still be clickable.
+  if (spec.buttons.length === 0) return { html, replyMarkup: { inline_keyboard: [] } };
 
   const rows: TelegramInlineKeyboardButton[][] = [];
   let pendingPair: TelegramInlineKeyboardButton | null = null;

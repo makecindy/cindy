@@ -285,6 +285,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
   private readonly ambientTriggerIds = new Set<string>();
+  /** Recent interaction callbacks already handed to desktop; suppress duplicate taps. */
+  private readonly handledInteractionCallbacks = new Map<string, number>();
   /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
   private readonly typingLoops = new Map<
     string,
@@ -1045,6 +1047,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private async stopPolling(): Promise<void> {
     this.clearPendingAlbums();
+    this.handledInteractionCallbacks.clear();
     this.pollAbort?.abort();
     this.pollAbort = null;
     if (this.pollLoop) {
@@ -1329,9 +1332,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     void answer({ callback_query_id: q.id });
+    const requestId = typeof event.payload.requestId === 'string' ? event.payload.requestId : '';
+    if (requestId) {
+      const now = Date.now();
+      for (const [key, at] of this.handledInteractionCallbacks) {
+        if (now - at > 5 * 60_000) this.handledInteractionCallbacks.delete(key);
+      }
+      const callbackKey = `${event.messageId}|${requestId}`;
+      if (this.handledInteractionCallbacks.has(callbackKey)) return;
+      this.handledInteractionCallbacks.set(callbackKey, now);
+      while (this.handledInteractionCallbacks.size > 512) {
+        const oldest = this.handledInteractionCallbacks.keys().next().value;
+        if (oldest === undefined) break;
+        this.handledInteractionCallbacks.delete(oldest);
+      }
+    }
     for (const h of this.cardActionHandlers) {
       try {
-        h(event);
+        void Promise.resolve(h(event)).catch(() => undefined);
       } catch {
         /* swallow */
       }
@@ -1656,6 +1674,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           message_id: Number(nativeMessageId),
           text: stripTelegramHtmlTags(html) || '…',
           link_preview_options: { is_disabled: true },
+          ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
         }).catch((fallbackErr) => {
           if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {
             return;

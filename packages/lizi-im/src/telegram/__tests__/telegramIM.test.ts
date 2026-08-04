@@ -299,6 +299,58 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(1);
   });
 
+  it('失效收口通过 editMessageText 显式发送空 reply_markup', async () => {
+    await connect();
+    const sent = await im.sendInteractiveCard(OWNER_ID, {
+      title: '需要确认',
+      body: '继续吗？',
+      buttons: [{ id: 'permission:allow:once', label: '允许', payload: { requestId: 'payload-1' } }],
+    });
+    api.calls.length = 0;
+
+    await im.updateInteractiveCard(sent.messageId, {
+      title: '卡片已过期',
+      body: '请重新发起操作。',
+      buttons: [],
+    });
+
+    expect(api.calls).toContainEqual({
+      method: 'editMessageText',
+      params: expect.objectContaining({
+        reply_markup: { inline_keyboard: [] },
+      }),
+    });
+  });
+
+  it('同一 interaction 的重复 callback 只派发一次', async () => {
+    await connect();
+    const handler = vi.fn();
+    im.onCardAction(handler);
+    api.pushUpdates([
+      {
+        update_id: 904,
+        callback_query: {
+          id: 'duplicate-1',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: encodeCallbackData('permission:allow:once', { requestId: 'duplicate-request' }),
+          message: { message_id: 904, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+      {
+        update_id: 905,
+        callback_query: {
+          id: 'duplicate-2',
+          from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+          data: encodeCallbackData('permission:deny', { requestId: 'duplicate-request' }),
+          message: { message_id: 904, chat: { id: Number(OWNER_ID), type: 'private' }, date: 1 },
+        },
+      },
+    ]);
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    expect(api.calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(2);
+  });
+
   it('set-config 失败(401): 状态 error 且凭证回滚', async () => {
     api = createFakeApi({ getMeError: new TelegramApiError('getMe', 401, 'Unauthorized') });
     ctx = createHost(tmpDir);
