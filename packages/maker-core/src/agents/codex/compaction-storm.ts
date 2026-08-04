@@ -25,13 +25,39 @@
 export const COMPACTION_STORM_MAX_INEFFECTIVE = 3;
 
 /**
- * 压缩后水位相对**上一次压缩后**水位至少要降到这个比例才算有效。
+ * 压缩后水位相对**同一次压缩之前**那条水位, 至少要降到这个比例才算有效。
  *
- * 实测正常压缩 241972 → 30738 (降到 12.7%); 风暴期间连续 8 次压缩后的水位是
- * 326503 / 325868 / 325922 / 327909 / 326767 / 326827 / 326952 / 327383 —— 彼此
- * 相差不到 0.5%, 甚至还会涨。0.9 把这两类分得很开, 不需要精调。
+ * **比的是同一次压缩的 pre → post, 不是「本次 post 与上一次 post」** (2026-08-05
+ * 修正, Codex review): 后者会误杀正常长会话 —— 一个长 autonomous turn 里合法地
+ * 压缩很多次, 每次压完都回到相近的 floor (30k / 31k / 29k / 32k), 那是压缩**正常
+ * 工作**的样子, 却会被"post 必须比上一个 post 更低"的要求连判无效, 累计几次后中断
+ * 一个健康的 turn。post 之间本来就不该被要求单调下降。
+ *
+ * pre 取「压缩边界前最后一条有效 usage」—— 实测那正是 codex 为生成摘要而发起的
+ * 那次调用, 输入即当时的完整历史, 所以 pre→post 的物理意义很干净:
+ * **把 pre 那么大的历史压成摘要之后, 总量变成了多少**。
+ *
+ * 实测两类的分离度 (rollout 019fcd52):
+ *   - 正常压缩: pre=241972 → post=30738, 比值 12.7%          → 有效
+ *   - 风暴期:   pre=32283 → post=325868, 比值 1009%           → 无效
+ *               pre=30544 → post=325922, 比值 1067%           → 无效
+ *     (历史已经压到底了 —— pre 只剩 30k, 而 post 仍有 326k, 膨胀全在 system prompt
+ *      与工具定义里, 压缩碰不到那部分。这正是"压了等于没压"的本质。)
+ * 0.9 把两类分得极开, 不需要精调。
  */
 export const COMPACTION_STORM_EFFECTIVE_DROP_RATIO = 0.9;
+
+/**
+ * 压缩边界之后, 最多跳过这么多条**非正值** usage 去找真正的压缩后水位。
+ *
+ * 实测 codex 在每个 contextCompaction 之后紧跟一条 `last.inputTokens = 0` 的
+ * usage (压缩完成标记), 15:28 那次连发了两条, 之后才是压缩后第一个正常请求的水位。
+ * 把这些 0 当成"压缩后水位"会让判据永远读不到真实的 post —— 熔断彻底失效。
+ *
+ * 但也不能无界等待: 压缩后若 turn 就此结束、再没有 usage, 标志会一直挂着, 下一个
+ * turn 里一条普通 usage 就会被冒名顶替成 post。有界跳过同时满足这两件事。
+ */
+export const COMPACTION_STORM_MAX_SKIPPED_USAGE = 5;
 
 export interface CompactionStormDecision {
   /** 达到连续无效次数, 应当熔断。 */
@@ -40,6 +66,8 @@ export interface CompactionStormDecision {
   ineffectiveCount: number;
   /** 本次压缩后的上下文水位 (input tokens)。 */
   contextTokens: number;
+  /** 同一次压缩之前那条水位, 供诊断与日志。 */
+  preCompactionTokens: number;
   /** 首次无效压缩至今的时长, 供诊断消息与日志。 */
   elapsedMs: number;
 }
@@ -47,9 +75,10 @@ export interface CompactionStormDecision {
 /**
  * 压缩不收敛跟踪器。
  *
- * 时序: codex 先投 `contextCompaction` item (completed), 随后下一次请求的
- * `thread/tokenUsage/updated` 才报出压缩后的水位 —— 所以 noteCompaction 只置
- * 「等下一条 usage」的标志, 真正的判定发生在 noteUsage。
+ * 时序 (实测 rollout 019fcd52, 每一轮都长这样):
+ *   … → usage(压缩前最后一条 = pre) → contextCompaction → usage(0) [× 1~2]
+ *     → usage(压缩后第一个正常请求 = post) → …
+ * 所以 noteCompaction 只是冻结 pre 并置「找 post」标志, 判定发生在拿到 post 时。
  *
  * **不按 turn 记账**: 实测那 8 次压缩跨了两个 turn, 病因却是会话级的 (窗口失配)。
  * 按 turn 清零会把一次连续风暴拆成两段、双双够不到阈值。清零只发生在两处 —— 一次
@@ -57,19 +86,24 @@ export interface CompactionStormDecision {
  * 判定机会, 而不是一朝熔断整个会话再不判定)。
  */
 export class CompactionStormTracker {
-  private awaitingUsage = false;
-  private lastPostCompactionTokens: number | null = null;
+  /** 最近一条有效 usage —— 下一次压缩的 pre。 */
+  private lastUsageTokens: number | null = null;
+  /** 正在找 post 时, 冻结下来的这一次压缩的 pre。 */
+  private pendingPre: number | null = null;
+  private awaitingPost = false;
+  private skippedSinceCompaction = 0;
   private ineffectiveCount = 0;
   private firstIneffectiveAt = 0;
 
-  /** 收到 contextCompaction 边界: 下一条 usage 就是压缩后的水位。 */
+  /** 收到 contextCompaction 边界: 冻结 pre, 开始找压缩后的第一条有效水位。 */
   noteCompaction(): void {
-    this.awaitingUsage = true;
+    this.pendingPre = this.lastUsageTokens;
+    this.awaitingPost = true;
+    this.skippedSinceCompaction = 0;
   }
 
   /**
-   * 喂入一条 usage。只有紧跟压缩边界的那一条参与判定, 其余直接忽略 —— turn 中途
-   * 的 usage 反映的是压缩后又累积上去的内容, 拿它比较会把正常增长误判成"没压动"。
+   * 喂入一条 usage。
    *
    * `contextTokens` 必须传 `tokenUsage.last.inputTokens`, 也就是**本次 API 请求的
    * 完整 prompt token 数** —— 它就是该次请求的绝对上下文水位, 正是判据要比的东西。
@@ -85,19 +119,35 @@ export class CompactionStormTracker {
    * 返回 null 表示这条 usage 不参与判定。
    */
   noteUsage(contextTokens: number, now: number): CompactionStormDecision | null {
-    if (!this.awaitingUsage) return null;
-    // **先消费 flag 再校验取值**: 压缩边界后的第一条 usage 无论有没有可用数字都
-    // 已经"用掉"了这次机会。留着 flag 会让紧随其后的普通 usage(turn 中途累积上去
-    // 的水位)被当成压缩后水位, 既可能凭空熔断, 也可能把真正的压后水位挤掉而漏判。
-    this.awaitingUsage = false;
-    if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
+    const valid = Number.isFinite(contextTokens) && contextTokens > 0;
+    if (!valid) {
+      // 压缩完成标记 (0) 与异常值都走这里。**不消费边界** —— 否则实测那条紧跟
+      // 压缩的 0 会把真正的 post 挤掉, 熔断永远读不到数据。但要有界, 见常量注释。
+      if (this.awaitingPost) {
+        this.skippedSinceCompaction += 1;
+        if (this.skippedSinceCompaction > COMPACTION_STORM_MAX_SKIPPED_USAGE) {
+          this.awaitingPost = false;
+          this.pendingPre = null;
+        }
+      }
+      return null;
+    }
 
-    const previous = this.lastPostCompactionTokens;
-    this.lastPostCompactionTokens = contextTokens;
-    // 第一次压缩没有可比对象 —— 只记基线, 不判定。
-    if (previous === null) return null;
+    if (!this.awaitingPost) {
+      // turn 中途的常规 usage: 只更新 pre 候选, 不参与判定。
+      this.lastUsageTokens = contextTokens;
+      return null;
+    }
 
-    const effective = contextTokens < previous * COMPACTION_STORM_EFFECTIVE_DROP_RATIO;
+    // 这是压缩后的第一条有效水位 = post。
+    this.awaitingPost = false;
+    const pre = this.pendingPre;
+    this.pendingPre = null;
+    this.lastUsageTokens = contextTokens;
+    // 压缩前没有可比的水位 (会话刚起就压缩) —— 只记基线, 不判定。
+    if (pre === null || pre <= 0) return null;
+
+    const effective = contextTokens < pre * COMPACTION_STORM_EFFECTIVE_DROP_RATIO;
     if (effective) {
       this.ineffectiveCount = 0;
       this.firstIneffectiveAt = 0;
@@ -110,14 +160,17 @@ export class CompactionStormTracker {
       escalate: this.ineffectiveCount >= COMPACTION_STORM_MAX_INEFFECTIVE,
       ineffectiveCount: this.ineffectiveCount,
       contextTokens,
+      preCompactionTokens: pre,
       elapsedMs: now - this.firstIneffectiveAt,
     };
   }
 
   /** 用户发来新消息 / session 复位时清零。 */
   reset(): void {
-    this.awaitingUsage = false;
-    this.lastPostCompactionTokens = null;
+    this.lastUsageTokens = null;
+    this.pendingPre = null;
+    this.awaitingPost = false;
+    this.skippedSinceCompaction = 0;
     this.ineffectiveCount = 0;
     this.firstIneffectiveAt = 0;
   }

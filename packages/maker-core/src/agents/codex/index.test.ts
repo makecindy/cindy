@@ -18361,6 +18361,7 @@ describe('CodexAgent compaction storm escalation', () => {
    * 反复压缩,每次压完水位纹丝不动。本仓修不了上游的窗口核算,但必须熔断并让用户看见。
    */
   function installStormHost(agent: CodexAgent) {
+    usageTotal = 0; // 每个用例独立累加,避免跨用例污染 total
     let turnSeq = 0;
     return installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
@@ -18378,29 +18379,65 @@ describe('CodexAgent compaction storm escalation', () => {
     return seen;
   }
 
-  /** 一次「压缩边界 + 压缩后水位」。inputTokens 直接取实测值。 */
-  function pushCompactionCycle(
+  let usageTotal = 0;
+
+  function pushUsageTokens(
     handlers: ThreadEventHandlers,
     turnId: string,
-    seq: number,
     inputTokens: number,
   ): void {
-    handlers.itemCompleted?.({
-      threadId: 'start-thread-id',
-      turnId,
-      item: { id: `compact-${seq}`, type: 'contextCompaction' },
-    } as never);
+    usageTotal += inputTokens;
     handlers.tokenUsageUpdated?.({
       threadId: 'start-thread-id',
       turnId,
       tokenUsage: {
-        total: { inputTokens, cachedInputTokens: 0, outputTokens: 0 },
+        // total 是累加值,与 last 不同量级 —— 不把两者设成相同,否则测不出字段映射。
+        total: { inputTokens: usageTotal, cachedInputTokens: 0, outputTokens: 0 },
         last: { inputTokens, cachedInputTokens: 0, outputTokens: 0 },
         // 上游的 bug:切模型后仍报旧模型的 258400。
         modelContextWindow: 258_400,
       },
     } as never);
   }
+
+  /**
+   * 一轮真实压缩:压缩前水位 → contextCompaction → 一条 0(codex 的压缩完成标记)
+   * → 压缩后水位。实测每轮都是这个形状(rollout 019fcd52),那条 0 必须照实喂 ——
+   * 少了它,测的就是一个现实里不存在的时序。
+   */
+  function pushCompactionCycle(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    seq: number,
+    pre: number,
+    post: number,
+  ): void {
+    pushUsageTokens(handlers, turnId, pre);
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId,
+      item: { id: `compact-${seq}`, type: 'contextCompaction' },
+    } as never);
+    pushUsageTokens(handlers, turnId, 0);
+    pushUsageTokens(handlers, turnId, post);
+  }
+
+  /** 实测风暴的前四轮 (pre, post):历史已压到底只剩 30k,总量却仍是 326k。 */
+  const STORM_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [176_539, 326_503],
+    [32_283, 325_868],
+    [30_544, 325_922],
+    [30_513, 327_909],
+  ];
+
+  /** 健康的长 turn:每轮都把 ~200k 的历史压回 30k 上下(floor 之间不单调下降)。 */
+  const HEALTHY_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [210_000, 30_000],
+    [205_000, 31_000],
+    [198_000, 29_000],
+    [212_000, 32_000],
+    [207_000, 30_500],
+  ];
 
   /** eventQueue 消费端是 async 迭代器,同步推完事件要让出两拍才收得到。 */
   const flushEvents = async (): Promise<void> => {
@@ -18430,9 +18467,9 @@ describe('CodexAgent compaction storm escalation', () => {
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
 
-    // 实测风暴序列:压完水位几乎不动。
-    for (const [i, tokens] of [326_503, 325_868, 325_922, 327_909].entries()) {
-      pushCompactionCycle(handlers, 'turn-1', i, tokens);
+    // 实测风暴序列:把 30k 的历史压完,总量仍是 326k。
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
     }
 
     await flushEvents();
@@ -18462,9 +18499,9 @@ describe('CodexAgent compaction storm escalation', () => {
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
 
-    // 实测正常压缩 241972 → 30738,每轮都把水位打回低位。
-    for (const [i, tokens] of [241_972, 30_738, 210_000, 26_000, 190_000, 24_000].entries()) {
-      pushCompactionCycle(handlers, 'turn-1', i, tokens);
+    // 健康长 turn:每轮都把大历史压回 floor,floor 之间不要求单调下降。
+    for (const [i, [pre, post]] of HEALTHY_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
     }
 
     await flushEvents();
@@ -18492,8 +18529,8 @@ describe('CodexAgent compaction storm escalation', () => {
     if (!handle.setModel) throw new Error('expected setModel support');
     for (const m of switches) await handle.setModel(m);
 
-    for (const [i, tokens] of [326_503, 325_868, 325_922, 327_909].entries()) {
-      pushCompactionCycle(handlers, 'turn-1', i, tokens);
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
     }
     await flushEvents();
     const terminal = findStormError(seen);
@@ -18556,8 +18593,8 @@ describe('CodexAgent compaction storm escalation', () => {
     if (!handlers) throw new Error('expected thread handlers');
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
 
-    for (const [i, tokens] of [326_503, 325_868, 325_922, 327_909].entries()) {
-      pushCompactionCycle(handlers, 'turn-1', i, tokens);
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
     }
 
     await flushEvents();

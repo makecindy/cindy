@@ -7454,6 +7454,9 @@ export class CodexAgent extends BaseAgent {
             threadId,
             turnId: params.turnId,
             ineffectiveCount: stormDecision.ineffectiveCount,
+            // pre / post 一起记: 排查时最有说服力的一行就是"把 pre 那么大的历史压完,
+            // 总量还是 post" —— 风暴时典型是 30k 的历史压出 326k 的总量。
+            preCompactionTokens: stormDecision.preCompactionTokens,
             contextTokens: stormDecision.contextTokens,
             elapsedMs: stormDecision.elapsedMs,
             reportedContextWindow: params.tokenUsage?.modelContextWindow ?? null,

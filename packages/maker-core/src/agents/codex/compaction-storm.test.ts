@@ -3,142 +3,204 @@ import {
   CompactionStormTracker,
   buildCompactionStormMessage,
   COMPACTION_STORM_MAX_INEFFECTIVE,
+  COMPACTION_STORM_MAX_SKIPPED_USAGE,
 } from './compaction-storm.js';
 
 /**
- * 实测数据 (rollout 019fcd52-6903, 2026-08-04): 切模型前一次正常压缩 241972 → 30738,
- * 切模型后连续 8 次压缩的压后水位几乎不动。用例直接拿这些数字当 fixture, 避免判据
- * 被改成"在合成数据上能过、在真实故障上不触发"。
+ * 所有 fixture 取自 rollout 019fcd52-6903 (2026-08-04) 的真实事件序列。
+ *
+ * 实测每一轮压缩都长这样 —— **压缩边界后紧跟一条 `last.inputTokens = 0`**
+ * (压缩完成标记, 15:28 那次连发两条), 之后才是压缩后第一个正常请求的水位:
+ *   usage(pre) → contextCompaction → usage(0)[×1~2] → usage(post)
+ * 用例必须把那些 0 一起喂进去, 否则测的是一个现实里不存在的时序。
  */
-const STORM_POST_COMPACTION_TOKENS = [
-  326503, 325868, 325922, 327909, 326767, 326827, 326952, 327383,
+type Step =
+  | { kind: 'usage'; tokens: number }
+  | { kind: 'compaction' };
+
+const u = (tokens: number): Step => ({ kind: 'usage', tokens });
+const compact = (): Step => ({ kind: 'compaction' });
+
+/** 实测正常压缩: pre=241972 → post=30738 (降到 12.7%)。 */
+const HEALTHY_COMPACTION: Step[] = [
+  u(236_640), u(241_972), compact(), u(0), u(30_738), u(41_455),
 ];
 
-/** 走一遍「压缩边界 → 压后水位」序列, 返回每一步的判定。 */
-function runSequence(
+/**
+ * 实测风暴的前四轮 (15:24:52 / 15:25:36 / 15:26:08 / 15:28:35)。
+ * 每轮 pre 只有 30k 上下(历史已被压到底), post 却仍是 326k(system prompt +
+ * MCP 工具定义撑着) —— 压缩碰不到那部分, 所以压了等于没压。
+ */
+const STORM_ROUNDS: Step[] = [
+  u(470_586), u(176_539), compact(), u(0), u(326_503), u(326_503),
+  u(32_283), compact(), u(0), u(325_868), u(325_868),
+  u(30_544), compact(), u(0), u(325_922), u(325_922),
+  u(30_513), compact(), u(0), u(0), u(327_909),
+];
+
+/** 按步骤喂给 tracker, 返回每一步的判定 (usage 步才有)。 */
+function run(
   tracker: CompactionStormTracker,
-  tokens: readonly number[],
+  steps: readonly Step[],
   startMs = 0,
-  stepMs = 40_000,
+  stepMs = 10_000,
 ): Array<ReturnType<CompactionStormTracker['noteUsage']>> {
-  return tokens.map((t, i) => {
-    tracker.noteCompaction();
-    return tracker.noteUsage(t, startMs + i * stepMs);
+  const out: Array<ReturnType<CompactionStormTracker['noteUsage']>> = [];
+  steps.forEach((s, i) => {
+    if (s.kind === 'compaction') tracker.noteCompaction();
+    else out.push(tracker.noteUsage(s.tokens, startMs + i * stepMs));
   });
+  return out;
 }
 
 describe('CompactionStormTracker', () => {
-  it('实测风暴序列会在连续无效次数达阈值时熔断', () => {
+  it('实测风暴序列会熔断(含压缩后紧跟的 0 标记)', () => {
     const tracker = new CompactionStormTracker();
-    const decisions = runSequence(tracker, STORM_POST_COMPACTION_TOKENS);
-
-    // 第 1 条只建立基线, 不判定。
-    expect(decisions[0]).toBeNull();
-    // 之后每条都是无效压缩, 第 COMPACTION_STORM_MAX_INEFFECTIVE 次触发。
-    const escalatedAt = decisions.findIndex((d) => d?.escalate);
-    expect(escalatedAt).toBe(COMPACTION_STORM_MAX_INEFFECTIVE);
-    expect(decisions[escalatedAt]?.ineffectiveCount).toBe(COMPACTION_STORM_MAX_INEFFECTIVE);
-    expect(decisions[escalatedAt]?.contextTokens).toBe(STORM_POST_COMPACTION_TOKENS[escalatedAt]);
-    // elapsedMs 从**首次**无效压缩起算, 不是从序列起点。
-    expect(decisions[escalatedAt]?.elapsedMs).toBe(
-      (COMPACTION_STORM_MAX_INEFFECTIVE - 1) * 40_000,
-    );
+    const decisions = run(tracker, STORM_ROUNDS);
+    const escalated = decisions.filter((d) => d?.escalate);
+    expect(escalated.length).toBeGreaterThan(0);
+    expect(escalated[0]?.ineffectiveCount).toBe(COMPACTION_STORM_MAX_INEFFECTIVE);
+    // pre 与 post 都要如实带出来供诊断: 30k 的历史压出 326k 的总量。
+    expect(escalated[0]?.preCompactionTokens).toBeLessThan(50_000);
+    expect(escalated[0]?.contextTokens).toBeGreaterThan(300_000);
   });
 
-  it('压缩确实生效时不熔断 —— 正常长会话不会被误杀', () => {
+  // 回归 (2026-08-05): 压缩后那条 0 若被当成"压缩后水位", 判据永远读不到真实 post,
+  // 熔断彻底失效。这条用例专门钉住"跳过 0、继续找 post"这个语义。
+  it('压缩后紧跟的 0 不会被当成压缩后水位', () => {
     const tracker = new CompactionStormTracker();
-    // 每次压缩都把水位打到 12% 左右 (实测正常压缩 241972 → 30738)。
-    const decisions = runSequence(tracker, [241_972, 30_738, 210_000, 26_000, 190_000, 24_000]);
-    expect(decisions.every((d) => !d?.escalate)).toBe(true);
+    // 单轮: pre=32283 → 0 → post=325868, 必须判成一次无效压缩。
+    const decisions = run(tracker, [
+      u(326_503), u(32_283), compact(), u(0), u(325_868),
+    ]);
+    const judged = decisions.filter((d) => d !== null);
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.ineffectiveCount).toBe(1);
+    expect(judged[0]?.preCompactionTokens).toBe(32_283);
+    expect(judged[0]?.contextTokens).toBe(325_868);
+  });
+
+  it('连发两条 0 也照样找到 post', () => {
+    const tracker = new CompactionStormTracker();
+    const decisions = run(tracker, [
+      u(325_922), u(30_513), compact(), u(0), u(0), u(327_909),
+    ]);
+    expect(decisions.filter((d) => d !== null)).toHaveLength(1);
+  });
+
+  it('非正值超过上限后放弃这次边界, 不让后续普通 usage 冒名顶替', () => {
+    const tracker = new CompactionStormTracker();
+    const zeros: Step[] = Array.from(
+      { length: COMPACTION_STORM_MAX_SKIPPED_USAGE + 1 },
+      () => u(0),
+    );
+    const decisions = run(tracker, [
+      u(200_000), compact(), ...zeros,
+      // 边界已被放弃, 这两条只是普通 usage —— 不该产生任何判定。
+      u(320_000),
+      u(330_000),
+    ]);
+    expect(decisions.every((d) => d === null)).toBe(true);
+  });
+
+  // Codex review 提的核心误杀场景。
+  it('长 turn 里多次有效压缩、每次回到相近 floor —— 不熔断', () => {
+    const tracker = new CompactionStormTracker();
+    // 一个健康的 autonomous turn: 上下文涨到 ~200k 就压一次, 每次都压回 30k 上下。
+    // floor 之间**不单调下降**(30k → 31k → 29k → 32k), 这正是正常压缩的样子。
+    const steps: Step[] = [];
+    for (const [pre, post] of [
+      [210_000, 30_000],
+      [205_000, 31_000],
+      [198_000, 29_000],
+      [212_000, 32_000],
+      [207_000, 30_500],
+    ] as const) {
+      steps.push(u(pre), compact(), u(0), u(post));
+    }
+    const decisions = run(tracker, steps);
+    expect(decisions.some((d) => d?.escalate)).toBe(false);
+    // 每一次都判为有效压缩, 一次无效都不该记。
+    expect(decisions.every((d) => d === null)).toBe(true);
+  });
+
+  it('实测正常压缩不熔断', () => {
+    const tracker = new CompactionStormTracker();
+    const decisions = run(tracker, HEALTHY_COMPACTION);
+    expect(decisions.every((d) => d === null)).toBe(true);
   });
 
   it('中途一次有效压缩就清零连续计数', () => {
     const tracker = new CompactionStormTracker();
-    // 无效 ×2 (差一次熔断) → 一次有效压缩清零 → 再无效 ×2。全程不该熔断。
-    const decisions = runSequence(tracker, [326_000, 325_900, 326_100, 30_000, 320_000, 319_500]);
+    const steps: Step[] = [
+      u(30_000), compact(), u(0), u(326_000), // 无效 #1
+      u(30_100), compact(), u(0), u(326_100), // 无效 #2 (差一次熔断)
+      u(200_000), compact(), u(0), u(30_000), // 有效 → 清零
+      u(30_200), compact(), u(0), u(325_000), // 无效 #1 (重新计)
+      u(30_300), compact(), u(0), u(325_500), // 无效 #2
+    ];
+    const decisions = run(tracker, steps);
     expect(decisions.some((d) => d?.escalate)).toBe(false);
-    expect(decisions[2]?.ineffectiveCount).toBe(2);
-    expect(decisions[3]).toBeNull(); // 有效压缩不返回判定
-    // 清零生效的判据: 若计数续着前面走, 这里会是 4 并且早已熔断。
-    expect(decisions.at(-1)?.ineffectiveCount).toBe(2);
+    const judged = decisions.filter((d) => d !== null);
+    // 清零生效的判据: 若计数续着前面走, 最后一条会是 4 且早已熔断。
+    expect(judged.at(-1)?.ineffectiveCount).toBe(2);
   });
 
-  it('水位不降反涨同样算无效压缩', () => {
+  it('水位不降反涨算无效压缩', () => {
     const tracker = new CompactionStormTracker();
-    const decisions = runSequence(tracker, [300_000, 310_000, 320_000, 330_000]);
+    const decisions = run(tracker, [
+      u(300_000), compact(), u(0), u(310_000),
+      u(310_000), compact(), u(0), u(320_000),
+      u(320_000), compact(), u(0), u(330_000),
+    ]);
     expect(decisions.at(-1)?.escalate).toBe(true);
   });
 
-  it('不紧跟压缩边界的 usage 不参与判定', () => {
+  it('turn 中途的常规 usage 不参与判定, 只更新 pre 候选', () => {
     const tracker = new CompactionStormTracker();
-    tracker.noteCompaction();
-    expect(tracker.noteUsage(326_000, 0)).toBeNull(); // 基线
+    // 没有压缩边界时, 水位一路涨也不该判定。
+    const decisions = run(tracker, [u(120_000), u(180_000), u(240_000)]);
+    expect(decisions.every((d) => d === null)).toBe(true);
 
-    // turn 中途的常规 usage: 水位一路涨, 但没有压缩边界 —— 全部忽略,
-    // 否则正常的上下文增长会被当成"压了没效果"。
-    for (const t of [340_000, 360_000, 380_000]) {
-      expect(tracker.noteUsage(t, 1_000)).toBeNull();
-    }
-
-    tracker.noteCompaction();
-    const d = tracker.noteUsage(325_900, 40_000);
-    // 比较对象是**上一次压缩后**的 326000, 不是中途那些 380000。
-    expect(d?.ineffectiveCount).toBe(1);
-    expect(d?.escalate).toBe(false);
+    // 压缩用的 pre 是紧邻边界的那条 240000 —— post 回到 30k, 判有效。
+    const after = run(tracker, [compact(), u(0), u(30_000)], 100_000);
+    expect(after.every((d) => d === null)).toBe(true);
   });
 
   it('跨 turn 的连续压缩照常累计 —— 病因是会话级的', () => {
     const tracker = new CompactionStormTracker();
-    // 实测那 8 次压缩跨了两个 turn; tracker 不按 turn 记账, 所以不会被拆成两段。
-    const decisions = runSequence(tracker, STORM_POST_COMPACTION_TOKENS.slice(0, 4));
-    expect(decisions.at(-1)?.escalate).toBe(true);
+    // 实测那 8 次压缩跨了两个 turn; tracker 不按 turn 记账, 不会被拆成两段。
+    const decisions = run(tracker, STORM_ROUNDS);
+    expect(decisions.some((d) => d?.escalate)).toBe(true);
   });
 
   it('reset 后重新计数 (用户发新消息)', () => {
     const tracker = new CompactionStormTracker();
-    runSequence(tracker, STORM_POST_COMPACTION_TOKENS.slice(0, 4));
+    run(tracker, STORM_ROUNDS);
     tracker.reset();
 
-    const decisions = runSequence(tracker, STORM_POST_COMPACTION_TOKENS.slice(0, 3));
-    // reset 抹掉了基线, 所以第一条重新成为基线, 三条只累计到 2 次, 够不到阈值。
-    expect(decisions[0]).toBeNull();
+    // reset 抹掉了 pre 基线, 第一轮只能重新建立, 够不到阈值。
+    const decisions = run(tracker, [
+      u(30_000), compact(), u(0), u(326_000),
+      u(30_100), compact(), u(0), u(326_100),
+    ]);
     expect(decisions.some((d) => d?.escalate)).toBe(false);
+  });
+
+  it('会话刚起就压缩 (没有 pre) 时只建基线, 不判定', () => {
+    const tracker = new CompactionStormTracker();
+    const decisions = run(tracker, [compact(), u(0), u(326_000)]);
+    expect(decisions.every((d) => d === null)).toBe(true);
   });
 
   it('无效或非正的 token 数不参与判定', () => {
     const tracker = new CompactionStormTracker();
-    tracker.noteCompaction();
     expect(tracker.noteUsage(0, 0)).toBeNull();
     expect(tracker.noteUsage(Number.NaN, 0)).toBeNull();
   });
 
-  // 回归: 压缩边界后的第一条 usage 即使数字不可用, 也已经"用掉"了这次机会。
-  // 若 awaitingUsage 留着, 紧随其后的普通 usage(turn 中途累积的水位)会被冒名顶替
-  // 成压缩后水位 —— 既可能凭空熔断, 也可能把真正的压后水位挤掉而漏判。
-  it('无效 usage 消费掉压缩边界后, 后续普通 usage 不再被当成压后水位', () => {
-    const tracker = new CompactionStormTracker();
-
-    tracker.noteCompaction();
-    expect(tracker.noteUsage(Number.NaN, 0)).toBeNull(); // 无效, 但消费掉这次边界
-
-    // 没有新的压缩边界 —— 这些普通 usage 必须被完全忽略, 不能建立基线。
-    expect(tracker.noteUsage(120_000, 1_000)).toBeNull();
-    expect(tracker.noteUsage(240_000, 2_000)).toBeNull();
-
-    // 下一次真正的压缩边界才重新开始: 这条只建立基线, 不判定。
-    tracker.noteCompaction();
-    expect(tracker.noteUsage(326_503, 40_000)).toBeNull();
-
-    tracker.noteCompaction();
-    const d = tracker.noteUsage(325_868, 80_000);
-    // 比较对象是上一次压缩后的 326503, 而不是中途那些 120000 / 240000。
-    expect(d?.ineffectiveCount).toBe(1);
-    expect(d?.escalate).toBe(false);
-  });
-
-  // Greptile 提出「last 可能是增量而非绝对水位」。用 rollout 019fcd52 的真实 payload
-  // 固定语义: total 与 last **不相等**(total 是 last 的累加), 判据必须吃 last。
-  // 证据见 noteUsage 的注释: total[n]-total[n-1] === last[n], 且 cached[n] ≈ last[n-1]。
+  // Greptile 提出「last 可能是增量而非绝对水位」。用真实 payload 固定语义:
+  // total 与 last **不相等**(total 是 last 的累加), 判据必须吃 last。
   it('吃 last.inputTokens(单次请求的完整 prompt)才判得对; 喂 total 会失效', () => {
     // 真实相邻样本: (last, cached, total) —— total 明显是累加值, 与 last 不同量级。
     const REAL = [
@@ -158,25 +220,22 @@ describe('CompactionStormTracker', () => {
       expect(REAL[i].cached).toBeGreaterThan(REAL[i - 1].last * 0.95);
     }
 
-    // 喂 last: 实测风暴序列正常熔断。
-    const onLast = new CompactionStormTracker();
-    expect(runSequence(onLast, STORM_POST_COMPACTION_TOKENS).some((d) => d?.escalate)).toBe(true);
+    // 喂 last: 实测风暴熔断、实测正常压缩不熔断。
+    expect(run(new CompactionStormTracker(), STORM_ROUNDS).some((d) => d?.escalate)).toBe(true);
+    expect(run(new CompactionStormTracker(), HEALTHY_COMPACTION).every((d) => d === null)).toBe(
+      true,
+    );
 
-    // 喂 total(单调累加)则永远"在增长", 每次都判无效 —— 但会把正常压缩也判成无效,
-    // 也就是说这个字段根本不承载"压缩效果"信息。用实测的正常压缩序列证明这一点:
-    // 同一批数据下 last 口径不熔断, total 口径却会熔断。
-    const healthyLast = [241_972, 30_738, 210_000, 26_000, 190_000, 24_000];
-    const healthyTotal: number[] = [];
-    healthyLast.reduce((acc, v) => {
-      healthyTotal.push(acc + v);
-      return acc + v;
-    }, 0);
-
-    const onHealthyLast = new CompactionStormTracker();
-    expect(runSequence(onHealthyLast, healthyLast).some((d) => d?.escalate)).toBe(false);
-
-    const onHealthyTotal = new CompactionStormTracker();
-    expect(runSequence(onHealthyTotal, healthyTotal).some((d) => d?.escalate)).toBe(true);
+    // 喂 total(单调累加)则 post 永远远大于 pre, 正常压缩也会被判成无效 ——
+    // 说明这个字段根本不承载"压缩效果"信息, 字段选择本身是有判别力的。
+    let acc = 0;
+    const healthyAsTotal: Step[] = HEALTHY_COMPACTION.map((s) => {
+      if (s.kind === 'compaction') return s;
+      acc += s.tokens;
+      return u(acc);
+    });
+    const repeated = [...healthyAsTotal, ...healthyAsTotal, ...healthyAsTotal];
+    expect(run(new CompactionStormTracker(), repeated).some((d) => d?.escalate)).toBe(true);
   });
 });
 
