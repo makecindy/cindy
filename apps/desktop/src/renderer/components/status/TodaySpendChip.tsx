@@ -1713,14 +1713,21 @@ export function TodaySpendChip({
   const showClaudeSubscriptionFallbackAlert =
     QUOTA_SEVERITY_RANK[visibleClaudeQuotaSeverity]
       < QUOTA_SEVERITY_RANK[claudeSubscriptionAlertSeverity];
+  // 隐藏窗口 / 状态告警的整 chip 兜底也保留最终等级：
+  // warn 用琥珀色，crit 才用红色，与可见额度段共用语义 token。
+  const claudeSubscriptionFallbackToneClass = showClaudeSubscriptionFallbackAlert
+    ? claudeSubscriptionAlertSeverity === 'warn'
+      ? 'text-[var(--quota-bar-warn)] hover:text-[var(--quota-bar-warn)]'
+      : 'text-[var(--quota-bar-crit)] hover:text-[var(--quota-bar-crit)]'
+    : null;
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
-    showClaudeSubscriptionFallbackAlert
-      ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
+    claudeSubscriptionFallbackToneClass
+      ? claudeSubscriptionFallbackToneClass
       // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
       : cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),
     'border-0 bg-transparent p-0 m-0',

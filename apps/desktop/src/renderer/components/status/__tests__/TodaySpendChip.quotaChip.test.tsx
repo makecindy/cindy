@@ -245,7 +245,41 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('剩余 5%');
     expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
-      .toContain('text-[var(--error-fg)]');
+      .toContain('text-[var(--quota-bar-crit)]');
+  });
+
+  it('可见窗口均正常但隐藏总周限为 warning 时显示琥珀色兜底', () => {
+    setClaudeUsage(20, 20);
+    mocks.claudeSnapshot!.sevenDay!.severity = 'warning';
+    mocks.claudeSnapshot!.scoped = [{
+      utilization: 20,
+      modelDisplayName: 'Opus',
+      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+    }];
+    const { container } = renderClaudeSubscriptionChip();
+
+    const segments = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
+    );
+    expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
+    const buttonClass = screen.getByRole('button', { name: '打开 Claude 用量页面' }).className;
+    expect(buttonClass).toContain('text-[var(--quota-bar-warn)]');
+    expect(buttonClass).not.toContain('--quota-bar-crit');
+    expect(buttonClass).not.toContain('--error-fg');
+  });
+
+  it('rejected 状态在可见窗口均正常时仍显示红色兜底', () => {
+    setClaudeUsage(20, 20);
+    mocks.claudeSnapshot!.rateLimitStatus = 'rejected';
+    const { container } = renderClaudeSubscriptionChip();
+
+    const segments = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
+    );
+    expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
+    const buttonClass = screen.getByRole('button', { name: '打开 Claude 用量页面' }).className;
+    expect(buttonClass).toContain('text-[var(--quota-bar-crit)]');
+    expect(buttonClass).not.toContain('--quota-bar-warn');
   });
 
   it('隐藏总周限利用率仅 50% 但服务端为 critical 时仍显示红色兜底', () => {
@@ -262,7 +296,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('周限 剩余 50%');
     expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
-      .toContain('text-[var(--error-fg)]');
+      .toContain('text-[var(--quota-bar-crit)]');
   });
 
   it('隐藏总周限利用率 50% 且服务端为 normal 时保持原有警告段展示', () => {
