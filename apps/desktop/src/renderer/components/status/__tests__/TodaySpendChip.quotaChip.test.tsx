@@ -167,6 +167,9 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(warningSegment?.className).toContain('text-[var(--quota-bar-warn)]');
+    expect(screen.getByRole('button', {
+      name: '打开 Claude 用量页面 接近套餐限额',
+    })).toBeTruthy();
     expect(container.querySelector('[data-quota-critical-dot]')).toBeNull();
   });
 
@@ -181,7 +184,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(warningSegment?.getAttribute('aria-label')).toBe(
       '5小时 剩余 50% 接近套餐限额',
     );
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
@@ -196,7 +199,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(criticalSegment?.getAttribute('aria-label')).toBe(
       '5小时 剩余 50% 已触发套餐限额，请求可能被拒绝',
     );
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
@@ -217,6 +220,9 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
     expect(criticalSegment?.textContent).toBe('5小时 剩余 7%');
     expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
+    expect(screen.getByRole('button', {
+      name: '打开 Claude 用量页面 已触发套餐限额，请求可能被拒绝',
+    })).toBeTruthy();
 
     const dot = criticalSegment?.parentElement?.querySelector<HTMLElement>(
       '[data-quota-critical-dot]',
@@ -232,7 +238,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(normalSegment?.textContent).toBe('6天 剩余 80%');
     expect(normalSegment?.getAttribute('class')).toBeNull();
     expect(normalSegment?.parentElement?.querySelector('[data-quota-critical-dot]')).toBeNull();
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
@@ -253,7 +259,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(container.textContent).toContain('5小时 剩余 24%');
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('剩余 5%');
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .toContain('text-[var(--quota-bar-crit)]');
   });
 
@@ -271,7 +277,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
       container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
     );
     expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
-    const buttonClass = screen.getByRole('button', { name: '打开 Claude 用量页面' }).className;
+    const buttonClass = screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className;
     expect(buttonClass).toContain('text-[var(--quota-bar-warn)]');
     expect(buttonClass).not.toContain('--quota-bar-crit');
     expect(buttonClass).not.toContain('--error-fg');
@@ -286,7 +292,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
       container.querySelectorAll<HTMLElement>('[data-quota-severity]'),
     );
     expect(segments.map((segment) => segment.dataset.quotaSeverity)).toEqual(['normal', 'normal']);
-    const buttonClass = screen.getByRole('button', { name: '打开 Claude 用量页面' }).className;
+    const buttonClass = screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className;
     expect(buttonClass).toContain('text-[var(--quota-bar-crit)]');
     expect(buttonClass).not.toContain('--quota-bar-warn');
   });
@@ -304,7 +310,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(container.textContent).toContain('5小时 剩余 24%');
     expect(container.textContent).toContain('Opus 6天 剩余 80%');
     expect(container.textContent).not.toContain('周限 剩余 50%');
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .toContain('text-[var(--quota-bar-crit)]');
   });
 
@@ -321,7 +327,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(container.textContent).not.toContain('周限 剩余 50%');
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
@@ -337,7 +343,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const criticalSegment = container.querySelector<HTMLElement>('[data-quota-severity="crit"]');
     expect(criticalSegment?.textContent).toBe('Opus 6天 剩余 7%');
     expect(criticalSegment?.className).toContain('text-[var(--quota-bar-crit)]');
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
@@ -354,7 +360,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
     expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
     expect(container.textContent).not.toContain('周限 剩余 80%');
-    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+    expect(screen.getByRole('button', { name: /打开 Claude 用量页面/ }).className)
       .not.toContain('--error-fg');
   });
 
