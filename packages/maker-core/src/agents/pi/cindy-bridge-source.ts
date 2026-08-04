@@ -487,10 +487,15 @@ function rgGlob(
     reader.on('line', (line) => {
       if (!line || lines.length >= limit) return;
       const relative = line.replace(/\r$/, '');
+      // 与 fd -g 对齐：纯 basename glob 在整棵树递归匹配；只有带路径分隔符时
+      // 才把 pattern 当作相对路径 glob。
+      const candidate = pattern.includes('/') || pattern.includes('\\')
+        ? relative
+        : path.basename(relative);
       // path.matchesGlob 默认不让 * 匹配点开头的段；rg glob 会匹配。保留原路径先匹配
       // 显式点模式，再用等长占位符补齐 --hidden 下的普通通配语义。
-      const visibleRelative = relative.replace(/(^|[\\/])\./g, '$1_');
-      if (!path.matchesGlob(relative, pattern) && !path.matchesGlob(visibleRelative, pattern)) return;
+      const visibleCandidate = candidate.replace(/(^|[\\/])\./g, '$1_');
+      if (!path.matchesGlob(candidate, pattern) && !path.matchesGlob(visibleCandidate, pattern)) return;
       lines.push(path.join(cwd, relative));
       if (lines.length >= limit && !child.killed) {
         stoppedAtLimit = true;
