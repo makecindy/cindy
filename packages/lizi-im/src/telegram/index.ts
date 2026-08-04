@@ -252,8 +252,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   /**
    * 实例级取消源(dispose 时 abort)。pollAbort 只覆盖"正在轮询"的时段, 而出站也
    * 会发生在连接建立中与下线收尾这类没有轮询的窗口 —— 那时退避等待要靠这个收口。
+   *
+   * **不可 readonly**: 同一实例支持 dispose → init 复用(退出登录再登录, init 里
+   * 就有 `this.disposing = false`)。一次性的控制器 abort 之后永远是 aborted 态,
+   * 新世代的每次退避都会当场判定"已停止"而跳过重试 —— 等于把 429 重试永久关掉。
+   * 由 resetLifetimeAbort() 在新 init 世代重建。
    */
-  private readonly lifetimeAbort = new AbortController();
+  private lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
@@ -326,6 +331,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
+    this.resetLifetimeAbort();
     const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
     if (tokenResult.kind === 'error') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
@@ -1582,8 +1588,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
+   * 新 init 世代重建生命周期取消源。只在已 abort 时重建: 未 abort 说明没经历
+   * dispose, 此时换掉控制器会让在途退避失去被后续 dispose 取消的能力。
+   */
+  private resetLifetimeAbort(): void {
+    if (!this.lifetimeAbort.signal.aborted) return;
+    this.lifetimeAbort = new AbortController();
+  }
+
+  /**
    * 出站退避的取消信号: 轮询期用当前世代的 pollAbort(下线/重连即 abort),
    * 并始终叠加实例级 lifetimeAbort(覆盖没有轮询的出站窗口)。
+   * 每次调用都重读字段 —— 不得缓存, 否则拿不到新 init 世代的控制器。
    */
   private outboundAbortSignal(): AbortSignal {
     const poll = this.pollAbort?.signal;
@@ -2145,7 +2161,18 @@ function botIdFromToken(token: string): number {
   return Number.isSafeInteger(n) && n > 0 ? n : 0;
 }
 
+/**
+ * 可取消等待。abort 时提前 resolve(不 reject) —— 调用方靠自己的世代/状态核验
+ * 决定醒来后做什么。
+ *
+ * **进来时就已 aborted 必须立刻返回**: `addEventListener('abort')` 对已经发生过
+ * 的 abort 不会再触发, 于是定时器会走满全程。这条路径是可达的 —— dispose() 先
+ * 同步 abort 生命周期取消源, 再 `await stopPolling()`(那里要等 pollLoop 才把
+ * this.api 置空), 落在这个窗口里的出站拿到的就是一个已取消的信号; 少了这行,
+ * 一次 429 会在 dispose 之后干等满一整个退避周期。
+ */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, ms);
     function done(): void {

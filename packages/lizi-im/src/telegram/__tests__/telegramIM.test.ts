@@ -1747,6 +1747,67 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(sendAttempts).toBe(1));
   });
 
+  it('dispose() 后重新 init(): 退避重试在新世代恢复可用', async () => {
+    await connect();
+    // 退出登录 → 再登录(同一实例复用; init 里就有 this.disposing = false)。
+    await im.dispose();
+    await im.init();
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        if (sendAttempts === 1) {
+          throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+        }
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '新世代的出站');
+      await vi.advanceTimersByTimeAsync(26_000);
+      await sending;
+    } finally {
+      vi.useRealTimers();
+    }
+    // 一次性的生命周期控制器若不重建, 新世代每次退避都当场判"已停止"→ 永久
+    // 关掉 429 重试, 这里就只会有 1 次尝试。
+    expect(sendAttempts).toBe(2);
+  });
+
+  it('dispose 收尾窗口里的出站: 已取消信号不再干等满整个退避', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      // dispose 的同步段已经 abort 了生命周期取消源, 但它随后要 await stopPolling
+      // (那里等 pollLoop 才把 this.api 置空) —— 这个窗口里的出站拿到的是一个
+      // **进来就已 aborted** 的信号。
+      const disposing = im.dispose();
+      const sending = im.sendText(OWNER_ID, '收尾窗口的出站').catch((err: unknown) => err);
+      await disposing;
+      // 一个定时器都不推进: 已取消的等待必须当场结束, 否则这里会挂到用例超时
+      // (旧实现 addEventListener 对已发生的 abort 不触发, 会干等满 26s)。
+      expect(await sending).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('429 退避期间下线(stopPolling): 不再发第二次请求', async () => {
     await connect();
     const originalCall = api.call.bind(api);
