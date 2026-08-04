@@ -34,10 +34,7 @@ import { createLogger } from '../logger.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
-import {
-  DESKTOP_CAPABILITY_ROUTING_POLICY,
-  refreshDesktopCapabilityRoutingPolicy,
-} from './capability-routing.js';
+import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import { relinkSharedCodexAuth } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
@@ -1047,7 +1044,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       (r) => ({ ok: true as const, label: 'shared-skills' as const, warnings: r.warnings }),
       (err: Error) => ({ ok: false as const, label: 'shared-skills' as const, err }),
     );
-    if (sharedOutcome.ok) refreshDesktopCapabilityRoutingPolicy();
 
     const [skillsOutcome, rulesOutcome, pluginsOutcome] = await Promise.all([
       prepareCodexGlobalSkillsLinks(this.codexHome).then(

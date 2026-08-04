@@ -81,14 +81,6 @@ export interface CapabilityReplacement {
   id: string;
 }
 
-export interface CapabilitySkillPrerequisite {
-  kind: 'cindy-skill';
-  /** Stable Skill id exposed by Cindy's shared Skill roots. */
-  id: string;
-  /** Canonical file used to disambiguate same-named project or harness Skills. */
-  skillFile: string;
-}
-
 export interface CapabilityRouteOverride {
   /** Product-level identity shared across implementations. */
   capabilityId: string;
@@ -104,8 +96,6 @@ export interface CapabilityRouteOverride {
    * never unlock a source in a sentence such as "do not use Feishu Delegate".
    */
   explicitSelectors?: readonly string[];
-  /** Cindy workflow Skills that must be applied before this downstream Skill. */
-  prerequisiteSkills?: readonly CapabilitySkillPrerequisite[];
   replacement?: CapabilityReplacement;
   reason?: string;
 }

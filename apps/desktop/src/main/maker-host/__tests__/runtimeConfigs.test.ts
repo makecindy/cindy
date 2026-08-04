@@ -55,7 +55,9 @@ describe('runtime-configs', () => {
       readMemorySettings: () => memorySettings,
     }));
 
-    const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import('../runtime-configs.js');
+    const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import(
+      '../runtime-configs.js'
+    );
 
     const claudeConfig = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
 
@@ -75,5 +77,26 @@ describe('runtime-configs', () => {
     expect(claudeConfig.makerMemoryEnabled).toBe(false);
     expect(desktopCodexRuntimeConfig.memoryEnabled).toBe(true);
     expect(desktopCodexRuntimeConfig.makerMemoryEnabled).toBe(false);
+  });
+
+  it('places generic Cindy-side Skill precedence in Claude and Codex only', async () => {
+    vi.doMock('../memory-settings-store.js', () => ({
+      readMemorySettings: () => memorySettings,
+    }));
+
+    const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import(
+      '../runtime-configs.js'
+    );
+    const claudeConfig = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
+    const prompts = [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt];
+
+    for (const prompt of prompts) {
+      expect(prompt).toContain('## Skill source precedence');
+      expect(prompt).toMatch(
+        /Skills surfaced by\s+Cindy from its managed, user, or project sources/u,
+      );
+      expect(prompt).toContain('Explicitly selecting the downstream Skill does not waive');
+      expect(prompt).not.toMatch(/\$[\w:-]+|\/(?:Users|home)\/|[A-Z]:\\/u);
+    }
   });
 });
