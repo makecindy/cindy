@@ -55,11 +55,15 @@ import {
 } from './migrationRunner';
 import {
   acquireSchemaMigrationWriterLease,
+  acquireSchemaStartupLease,
   SchemaMigrationReaderLeaseLifecycle,
   type SchemaMigrationLease,
 } from './schemaMigrationLease';
 import { runSchemaStartupPolicy } from './schemaStartupPolicy';
-import { buildSharedDbCompatibilityMessage } from './sharedDbCompatibilityMessage';
+import {
+  buildPackagedReadOnlyCompatibilityMessage,
+  buildSharedDbCompatibilityMessage,
+} from './sharedDbCompatibilityMessage';
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
 
 import { createLogger } from '../logger';
@@ -152,60 +156,28 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   // the existing schema in read-only startup mode instead of failing before opening
   // the database.  If compatibility is not exact, the policy below still fails
   // closed and the user gets the normal update/isolated recovery path.
-  let schemaMaintenanceReadOnly = false;
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
-  if (passiveSharedUserData) {
-    const leaseResult = schemaMigrationReaderLeaseLifecycle.ensure(filePath);
-    if (!leaseResult.acquired) {
-      const message =
-        'passive dev 暂时无法打开共享数据库：另一个实例正在执行 schema migration。' +
-        '请稍后重试，或改用 --isolated。';
-      showFatalDialog('passive dev 等待数据库迁移', message, 'MIGRATE_FAILED');
-      return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
-    }
-    readerLeaseAcquiredThisCall = leaseResult.newlyAcquired;
-  } else {
-    const leaseResult = acquireSchemaMigrationWriterLease(filePath);
-    if (!leaseResult.acquired) {
-      // Do not let a passive dev reader make an otherwise compatible packaged
-      // install unstartable.  We deliberately do not bypass the lease: the
-      // packaged instance enters the read-only schema policy below, so no
-      // migration, drift repair, runtime-manifest write, or schema cleanup can
-      // race the reader.  A pending/ahead/drifted schema remains fail-closed.
-      if (app.isPackaged && leaseResult.reason === 'readers-active') {
-        const readerLeaseResult = schemaMigrationReaderLeaseLifecycle.ensure(filePath);
-        if (!readerLeaseResult.acquired) {
-          const message =
-            '共享数据库的 schema 状态正在变化，Cindy 暂时无法安全打开它。请稍后重试。';
-          showFatalDialog('数据库 schema 正在维护', message, 'MIGRATE_FAILED');
-          return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
-        }
-        schemaMaintenanceReadOnly = true;
-        readerLeaseAcquiredThisCall = readerLeaseResult.newlyAcquired;
-        log.warn(
-          JSON.stringify({
-            event: 'localDb.ensureReady.packagedPassiveReader.readOnlyStartup',
-            userId,
-            dbPath: filePath,
-            activeReaderCount: leaseResult.activeReaderCount ?? 0,
-          }),
-        );
-      } else {
-        const readerHint = leaseResult.activeReaderCount
-          ? `（当前有 ${leaseResult.activeReaderCount} 个 passive 实例）`
-          : '';
-        const message =
-          `当前不能执行数据库 schema 启动维护${readerHint}。` +
-          '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
-        showFatalDialog('数据库 schema 正被其它实例使用', message, 'MIGRATE_FAILED');
-        return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
-      }
-    } else {
-      startupWriterLease = leaseResult.lease;
-    }
+  const startupLease = acquireSchemaStartupLease({
+    dbFilePath: filePath,
+    packaged: app.isPackaged,
+    sharedPassive: passiveSharedUserData,
+    readerLifecycle: schemaMigrationReaderLeaseLifecycle,
+  });
+  if (!startupLease.acquired) {
+    const readerHint = startupLease.activeReaderCount
+      ? `（当前有 ${startupLease.activeReaderCount} 个 passive 实例）`
+      : '';
+    const message =
+      `当前不能执行数据库 schema 启动维护${readerHint}。` +
+      '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+    showFatalDialog('数据库 schema 正被其它实例使用', message, 'MIGRATE_FAILED');
+    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
   }
+  const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
+  readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
+  if (startupLease.kind === 'writer') startupWriterLease = startupLease.lease;
 
   const releaseSchemaLeasesAfterFailure = (): void => {
     startupWriterLease?.release();
@@ -308,7 +280,8 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 
   try {
     const schemaStartup = await runSchemaStartupPolicy({
-      sharedPassive: passiveSharedUserData || schemaMaintenanceReadOnly,
+      sharedPassive: passiveSharedUserData,
+      readOnly: schemaMaintenanceReadOnly,
       checkCompatibility: () => checkMigrationCompatibility(db, getDrizzleDir(), filePath),
       prepareRuntimeManifest: () => {
         const prepared = prepareMigrationRuntimeManifest(
@@ -332,10 +305,14 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     });
     if (!schemaStartup.ready) {
       const compatibility = schemaStartup.compatibility;
-      const message = buildSharedDbCompatibilityMessage(compatibility);
+      const message = schemaMaintenanceReadOnly
+        ? buildPackagedReadOnlyCompatibilityMessage(compatibility)
+        : buildSharedDbCompatibilityMessage(compatibility);
       log.error(
         JSON.stringify({
-          event: 'localDb.ensureReady.passiveMigrationMismatch',
+          event: schemaMaintenanceReadOnly
+            ? 'localDb.ensureReady.packagedReadOnlyCompatibilityMismatch'
+            : 'localDb.ensureReady.passiveMigrationMismatch',
           userId,
           dbPath: filePath,
           databaseVersion: compatibility.databaseVersion,
@@ -344,13 +321,19 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
         }),
       );
       closeDb({ preserveSchemaMigrationLease: !readerLeaseAcquiredThisCall });
-      showFatalDialog('当前开发版与本地数据版本不兼容', message, 'MIGRATE_FAILED');
+      showFatalDialog(
+        schemaMaintenanceReadOnly ? '安装版无法打开本地数据' : '当前开发版与本地数据版本不兼容',
+        message,
+        'MIGRATE_FAILED',
+      );
       return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
     }
     if (schemaStartup.compatibility) {
       log.info(
         JSON.stringify({
-          event: 'localDb.ensureReady.passiveMigrationCompatible',
+          event: schemaMaintenanceReadOnly
+            ? 'localDb.ensureReady.packagedReadOnlyCompatible'
+            : 'localDb.ensureReady.passiveMigrationCompatible',
           userId,
           dbPath: filePath,
           schemaVersion: schemaStartup.compatibility.databaseVersion,

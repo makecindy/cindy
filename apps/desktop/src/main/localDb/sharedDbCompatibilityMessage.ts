@@ -5,10 +5,20 @@
  * 历史记录或运行时身份不一致必须改用兼容 checkout 或隔离数据库。
  */
 
-import type {
-  MigrationCompatibilityIssue,
-  MigrationCompatibilityReport,
-} from './migrationRunner';
+import type { MigrationCompatibilityIssue, MigrationCompatibilityReport } from './migrationRunner';
+
+export function buildPackagedReadOnlyCompatibilityMessage(
+  compatibility: MigrationCompatibilityReport,
+): string {
+  const issueSummary = compatibility.issues
+    .slice(0, 3)
+    .map((issue) => issue.kind)
+    .join(', ');
+  return (
+    '当前安装版无法安全打开共享数据库。请关闭其它开发实例后重试，或安装包含该本地数据 schema 的更新版本。' +
+    `（详情：${issueSummary || 'unknown'}）`
+  );
+}
 
 function hasIssue(
   issues: readonly MigrationCompatibilityIssue[],

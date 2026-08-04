@@ -11,6 +11,7 @@ export interface SchemaCompatibilityResult {
 
 interface RunSchemaStartupPolicyOptions<T extends SchemaCompatibilityResult> {
   sharedPassive: boolean;
+  readOnly?: boolean;
   checkCompatibility: () => T;
   prepareRuntimeManifest: () => void;
   runMigrations: () => Promise<void>;
@@ -24,7 +25,7 @@ export type SchemaStartupPolicyResult<T extends SchemaCompatibilityResult> =
 export async function runSchemaStartupPolicy<T extends SchemaCompatibilityResult>(
   options: RunSchemaStartupPolicyOptions<T>,
 ): Promise<SchemaStartupPolicyResult<T>> {
-  if (options.sharedPassive) {
+  if (options.sharedPassive || options.readOnly) {
     const compatibility = options.checkCompatibility();
     return compatibility.compatible
       ? { ready: true, compatibility }
