@@ -51,7 +51,19 @@ interface ToolUseLike {
  */
 function dedupeKeyForPath(abs: string): string {
   const isWindowsShape = /^[a-zA-Z]:[\\/]/.test(abs) || abs.includes('\\');
-  return isWindowsShape ? abs.toLowerCase() : abs;
+  // 斜杠也归一:`C:/x/a.md`(命令文本常见形态)与 `C:\x\a.md`(Write 记录)是
+  // 同一文件,不折叠会重复出 chip。
+  return isWindowsShape ? abs.replace(/\//g, '\\').toLowerCase() : abs;
+}
+
+/**
+ * Windows 形态的绝对路径统一成反斜杠本机形态再往下传:Explorer `/select`
+ * (定位)对正斜杠路径静默无反应,`shell.openPath` 在仅用户层文件关联的机器上
+ * 对正斜杠也会解析失败(实测「本轮产出」卡 docx chip 打不开的根因)。POSIX
+ * 路径原样保留。
+ */
+function canonicalizeWindowsShape(abs: string): string {
+  return /^[a-zA-Z]:[\\/]/.test(abs) ? abs.replace(/\//g, '\\') : abs;
 }
 
 /** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。 */
@@ -151,7 +163,7 @@ export function collectGeneratedFiles(
     if (!toolName) continue;
 
     const addPath = (rawPath: string, source: GeneratedFileRef['source']): void => {
-      const abs = resolveToolFilePath(rawPath, workingDir);
+      const abs = canonicalizeWindowsShape(resolveToolFilePath(rawPath, workingDir));
       const key = dedupeKeyForPath(abs);
       if (source === 'command' && editedKeys.has(key)) return;
       const prev = byKey.get(key);

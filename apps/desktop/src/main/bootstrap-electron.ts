@@ -5403,6 +5403,9 @@ const registerIpcHandlers = () => {
         if (!absPath) {
           return { success: false, error: 'url 或 filePath 必须二选一' };
         }
+        // Windows Explorer /select 不认正斜杠路径(showItemInFolder 会静默无反应),
+        // 归一成本机分隔符;POSIX 幂等。
+        absPath = path.normalize(absPath);
         if (!isPathAllowed(absPath)) {
           return { success: false, error: '不允许访问该路径' };
         }

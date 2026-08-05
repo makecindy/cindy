@@ -106,6 +106,22 @@ describe('collectGeneratedFiles', () => {
     expect(files[0].source).toBe('command');
   });
 
+  it('canonicalizes Windows-shaped paths to backslashes and dedupes across slash forms', () => {
+    // 正斜杠 Windows 路径(命令文本常见)必须归一成反斜杠本机形态:Explorer
+    // /select 与 shell.openPath 对正斜杠会失败;且与 Write 记录的反斜杠形态
+    // 是同一文件,不归一会重复出 chip。
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'C:\\work\\report.docx', content: 'x' }),
+        toolUse('Bash', { command: "open 'C:/work/report.docx'" }),
+        toolUse('Bash', { command: "save 'C:/work/输出/表格.xlsx'" }),
+      ],
+      'C:\\work',
+    );
+    expect(files.map((f) => f.path)).toEqual(['C:\\work\\report.docx', 'C:\\work\\输出\\表格.xlsx']);
+    expect(files[0].source).toBe('tool');
+  });
+
   it('excludes command mentions of files edited by file tools this turn', () => {
     // 编码会话形态:Edit 改了源码文件,随后命令引用它(跑测试)。它是编辑不是
     // 新建,不能因 mtime 落在本轮窗口就被当成产物。
