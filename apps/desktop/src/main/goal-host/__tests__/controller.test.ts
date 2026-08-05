@@ -1834,6 +1834,41 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
   });
 
+  it('honors one manual Resume for a blocked goal after the old turn becomes idle', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1'); // Explicit Stop leaves a cancelled lifecycle boundary.
+    const sendsBeforeResume = local.session.sends.length;
+
+    await local.controller.resumeGoal('s1');
+    expect((await local.storage.get('s1'))?.status).toBe('blocked');
+    expect(local.session.sends).toHaveLength(sendsBeforeResume);
+
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('active');
+    expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
+  });
+
+  it('lets a later Stop cancel a deferred manual Resume', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.pauseGoal('s1');
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('blocked');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
   it('does not let an older Resume consume the fresh boundary from a later Stop', async () => {
     await startGoal(h);
     await h.controller.pauseGoal('s1');
