@@ -21,6 +21,9 @@ interface UnreadEntry {
 const unread = new Map<string, UnreadEntry>();
 const listeners = new Set<() => void>();
 let ready = false;
+// Bumped on every mutation so the sorted entries snapshot can be cached by identity
+// (useSyncExternalStore requires getSnapshot to return a stable ref when nothing changed).
+let version = 0;
 
 interface UnreadSnapshotEntry {
   ghostId: string;
@@ -42,6 +45,7 @@ function api(): GhostUnreadApi | undefined {
 }
 
 function emit(): void {
+  version += 1;
   for (const cb of [...listeners]) cb();
 }
 
@@ -146,6 +150,43 @@ export function useGhostUnreadSummary(ghostId: string): string | undefined {
       return unread.get(ghostId)?.summary;
     },
     () => undefined,
+  );
+}
+
+/** 某意识当前未读通知的点亮时刻(用于排序),没有未读时 undefined。 */
+export interface GhostUnreadOrderEntry {
+  ghostId: string;
+  at: number;
+}
+
+const EMPTY_UNREAD_ENTRIES: readonly GhostUnreadOrderEntry[] = [];
+let cachedEntries: { version: number; value: readonly GhostUnreadOrderEntry[] } | null = null;
+
+/**
+ * 全部未读条目的快照,按点亮时刻 `at` 从新到旧排序。
+ * 按 version 缓存:表没变就返回同一引用,满足 useSyncExternalStore 的稳定性要求;
+ * 插件页用它把「有未读通知」的插件排到已安装区最前(见 sortInstalledForDisplay)。
+ */
+function unreadEntriesSnapshot(): readonly GhostUnreadOrderEntry[] {
+  if (unread.size === 0) return EMPTY_UNREAD_ENTRIES;
+  if (!cachedEntries || cachedEntries.version !== version) {
+    const value = [...unread.entries()]
+      .map(([ghostId, entry]) => ({ ghostId, at: entry.at }))
+      .sort((a, b) => b.at - a.at);
+    cachedEntries = { version, value };
+  }
+  return cachedEntries.value;
+}
+
+/** 全部未读条目(id + 点亮时刻),新→旧;用于已安装区排序。 */
+export function useGhostUnreadEntries(): readonly GhostUnreadOrderEntry[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => {
+      ensureReady();
+      return unreadEntriesSnapshot();
+    },
+    () => EMPTY_UNREAD_ENTRIES,
   );
 }
 
@@ -280,5 +321,6 @@ export function __ingestGhostBadgeForTest(
 export function __resetGhostUnreadForTest(): void {
   unread.clear();
   listeners.clear();
+  version += 1;
   ready = false;
 }

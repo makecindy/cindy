@@ -57,7 +57,11 @@ import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/instal
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { useGhostUnread, useGhostUnreadSummary } from '@/cindy-brain/ghostUnreadStore';
+import {
+  useGhostUnread,
+  useGhostUnreadEntries,
+  useGhostUnreadSummary,
+} from '@/cindy-brain/ghostUnreadStore';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
@@ -85,7 +89,7 @@ import {
   ghostPrimaryAction,
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
-  sortGhostPluginItemsByRecentUse,
+  sortInstalledForDisplay,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
@@ -477,53 +481,25 @@ export function GhostPluginPage() {
     return counts;
   }, [searchedAvailableMarketItems]);
 
-  // ── 排序快照:进页(市场快照首次就绪)时排一次,页内交互不重排 ──
-  // 可更新的排最前,其余按最近使用;停留期间清未读/装更新都不许让卡片跳位。
-  const [orderSnapshot, setOrderSnapshot] = useState<string[] | null>(null);
-  // 换账号/模式要丢弃旧顺序:两个 owner 的已装集合、可更新集合与最近使用
-  // 都不同,沿用账号 A 的 id 顺序会把 B 的非更新项排到更新项前面,违背
-  // 「可更新优先」。清空后由下面的 effect 基于**新 owner 的首个市场快照**重排。
-  const orderOwnerKeyRef = useRef(panelOwnerKey);
-  useEffect(() => {
-    if (orderOwnerKeyRef.current === panelOwnerKey) return;
-    orderOwnerKeyRef.current = panelOwnerKey;
-    setOrderSnapshot(null);
-  }, [panelOwnerKey]);
-  useEffect(() => {
-    if (orderSnapshot !== null) return;
-    if (marketSnapshot === null) return;
-    const updatable = new Set(
-      installedItems.filter((item) => item.marketUpdate !== null).map((item) => item.id),
-    );
-    const byRecentUse = sortGhostPluginItemsByRecentUse(installedItems, recentGhostIds);
-    const ids = byRecentUse
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aUp = updatable.has(a.item.id) ? 0 : 1;
-        const bUp = updatable.has(b.item.id) ? 0 : 1;
-        if (aUp !== bUp) return aUp - bUp;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item.id);
-    setOrderSnapshot(ids);
-  }, [orderSnapshot, marketSnapshot, installedItems, recentGhostIds]);
-  const displayInstalledItems = useMemo(() => {
-    if (orderSnapshot === null) return searchedInstalledItems;
-    const orderIndex = new Map(orderSnapshot.map((id, index) => [id, index]));
-    return searchedInstalledItems
-      .map((item, stableIndex) => ({ item, stableIndex }))
-      .sort((a, b) => {
-        const aIndex = orderIndex.get(a.item.id);
-        const bIndex = orderIndex.get(b.item.id);
-        if (aIndex !== undefined && bIndex !== undefined && aIndex !== bIndex) {
-          return aIndex - bIndex;
-        }
-        if (aIndex !== undefined && bIndex === undefined) return -1;
-        if (aIndex === undefined && bIndex !== undefined) return 1;
-        return a.stableIndex - b.stableIndex;
-      })
-      .map(({ item }) => item);
-  }, [orderSnapshot, searchedInstalledItems]);
+  // ── 已安装区排序:未读通知(新→旧) → 最近使用 → 基础序,实时计算 ──
+  // 反应式而非冻结快照:排序信号变化即重排。安全边界——`markUsed` 只在对话里
+  // 触发(ChatInput),插件页自身不打点,所以「最近使用」的变化只发生在离开本页
+  // 之后,回到页面即已重排,不会在用户眼皮下洗牌;后台到达的未读通知冒头则正是
+  // 目的所在。切账号/模式时 recentGhostIds 与未读表都会随 owner 快照整体作废,
+  // 无需本地再存一份顺序。marketUpdate 刻意不作排序键——更新已有统一横幅兜底。
+  const unreadEntries = useGhostUnreadEntries();
+  const unreadAtById = useMemo(
+    () => new Map(unreadEntries.map((entry) => [entry.ghostId, entry.at])),
+    [unreadEntries],
+  );
+  const displayInstalledItems = useMemo(
+    () =>
+      sortInstalledForDisplay(searchedInstalledItems, {
+        recentIds: recentGhostIds,
+        unreadAtById,
+      }),
+    [searchedInstalledItems, recentGhostIds, unreadAtById],
+  );
 
   // ── 更新横幅与批量更新(设计定稿:全部更新;扩权单独确认,绝不静默放行)──
   const updatableInstalledItems = useMemo(
