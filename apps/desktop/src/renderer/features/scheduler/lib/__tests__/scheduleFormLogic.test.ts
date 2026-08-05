@@ -33,6 +33,7 @@ import {
   isFollowingSessionSelection,
   needsBoundSessionGenerationRouteResolution,
   resolveScheduleGenerationProviderId,
+  resolveScheduleModelEfforts,
   resolveTemplateAgentFields,
   sessionAgentKindToScheduleAgentKind,
   shouldFollowBoundSessionGenerationRoute,
@@ -92,6 +93,51 @@ describe('resolveScheduleGenerationProviderId', () => {
       model: 'gpt-5.5',
       agentKind: 'codex',
     })).toBe('tapsvc');
+  });
+});
+
+describe('resolveScheduleModelEfforts', () => {
+  const fallbackProvider: ProviderView = {
+    ...tapsvcProvider,
+    id: 'openai',
+    name: 'OpenAI',
+    source: 'builtin',
+    models: {
+      codex: [{
+        ...tapsvcProvider.models.codex![0],
+        efforts: ['medium'],
+        defaultEffort: 'medium',
+      }],
+    },
+  };
+
+  it('preserves effort when a pinned provider is disconnected instead of validating against a fallback', () => {
+    expect(resolveScheduleModelEfforts({
+      providers: [{ ...tapsvcProvider, connected: false }, fallbackProvider],
+      providerId: 'tapsvc',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+      fallbackEfforts: ['low'],
+    })).toBeUndefined();
+  });
+
+  it('uses the effective fallback source only when providerId is empty', () => {
+    expect(resolveScheduleModelEfforts({
+      providers: [{ ...tapsvcProvider, connected: false }, fallbackProvider],
+      providerId: '',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+      fallbackEfforts: ['low'],
+    })).toEqual(['medium']);
+  });
+
+  it('validates effort against a connected pinned provider', () => {
+    expect(resolveScheduleModelEfforts({
+      providers: [tapsvcProvider, fallbackProvider],
+      providerId: 'tapsvc',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+    })).toEqual(['high']);
   });
 });
 

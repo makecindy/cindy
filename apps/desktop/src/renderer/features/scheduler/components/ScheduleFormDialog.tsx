@@ -12,8 +12,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import {
-  effectiveSourceIdForModel,
-  getModel,
   sessionModelSupportsFastMode,
 } from '@cindy/model-providers';
 import type { UtilityTextAttemptReason, UtilityTextFailure } from '../../../../shared/utilityTextResult';
@@ -40,6 +38,7 @@ import {
   needsBoundSessionGenerationRouteResolution,
   parsePreRunHookTimeoutMs,
   resolveScheduleGenerationProviderId,
+  resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
@@ -433,17 +432,13 @@ export function ScheduleFormDialog({
   }, [caps.capabilities, form.model]);
 
   const currentModelEfforts = useMemo(() => {
-    if (!form.model) return undefined;
-    const sourceId = effectiveSourceIdForModel(
+    return resolveScheduleModelEfforts({
       providers,
-      form.providerId || null,
-      form.model,
-      form.agentKind,
-    );
-    const source = sourceId ? providers.find((provider) => provider.id === sourceId) : undefined;
-    return source
-      ? getModel(source, form.model, form.agentKind)?.efforts
-      : currentModel?.efforts;
+      providerId: form.providerId,
+      model: form.model,
+      agentKind: form.agentKind,
+      fallbackEfforts: currentModel?.efforts,
+    });
   }, [currentModel, form.agentKind, form.model, form.providerId, providers]);
 
   // form.model 为空时回填默认模型（三级回退,所见即所存）。

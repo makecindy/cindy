@@ -17,6 +17,7 @@
 import type { CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
 import {
   effectiveSourceIdForModel,
+  getModel,
   type AgentKind,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -68,6 +69,36 @@ export function resolveScheduleGenerationProviderId(input: {
     model,
     input.agentKind,
   );
+}
+
+/**
+ * Resolve effort options without crossing an explicit provider boundary.
+ * A stale pinned provider preserves its effort until the provider is repaired;
+ * only an unpinned selection may follow the effective fallback.
+ */
+export function resolveScheduleModelEfforts(input: {
+  providers: ProviderView[];
+  providerId: string;
+  model: string;
+  agentKind: AgentKind;
+  fallbackEfforts?: readonly string[];
+}): readonly string[] | undefined {
+  const model = input.model.trim();
+  if (!model) return undefined;
+  const explicitProviderId = input.providerId.trim();
+  const sourceId = effectiveSourceIdForModel(
+    input.providers,
+    explicitProviderId || null,
+    model,
+    input.agentKind,
+  );
+  if (explicitProviderId && sourceId !== explicitProviderId) return undefined;
+  const source = sourceId
+    ? input.providers.find((provider) => provider.id === sourceId)
+    : undefined;
+  return source
+    ? getModel(source, model, input.agentKind)?.efforts
+    : input.fallbackEfforts;
 }
 
 export interface ScheduleFormState {
