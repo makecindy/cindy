@@ -561,10 +561,13 @@ function SplitPaneView({
           focusSession(viewSessionId);
         }}
         onFocusCapture={(event) => {
+          const focusMovedWithinPane = event.currentTarget.contains(
+            event.relatedTarget as Node | null,
+          );
           if (
             isOwner ||
-            event.currentTarget.contains(event.relatedTarget as Node | null) ||
-            isSplitPaneNoFocusTarget(event.target)
+            isSplitPaneNoFocusTarget(event.target) ||
+            (focusMovedWithinPane && !isSplitPaneNoFocusTarget(event.relatedTarget))
           ) {
             return;
           }

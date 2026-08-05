@@ -349,6 +349,29 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 
+  it('键盘焦点从 pane 内豁免控件移到普通控件时切换路由主权', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    renderSplitGroup('session-a');
+    const sessionAView = screen.getByTestId('session-view-session-a');
+    const routeAction = screen.getByTestId('route-action-session-b');
+    const composerAction = screen.getByTestId('composer-action-session-b');
+
+    act(() => {
+      fireEvent.focus(routeAction, { relatedTarget: sessionAView });
+    });
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.focus(composerAction, { relatedTarget: routeAction });
+      await Promise.resolve();
+    });
+
+    expect(resolveSessionRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveSessionRouteMock).toHaveBeenCalledWith('session-b', null);
+  });
+
   it('pane 内显式子路由操作直接接管目标路由，不额外切换来源 pane', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
