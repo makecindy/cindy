@@ -9,6 +9,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -324,7 +325,6 @@ describe('normalizeTaskSource', () => {
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
   });
-
 });
 
 describe('dispatcher 核心语义', () => {
@@ -475,7 +475,8 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch(
       'conn-1',
       dispatch({
-        prompt: '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
+        prompt:
+          '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
         source: { im: 'x', userText: '你来解释下这个问题' },
       }),
       c.send,
@@ -1652,6 +1653,175 @@ describe('dispatcher 核心语义', () => {
 
     expect(c.ofType('turn.end')).toHaveLength(1);
     expect(stored.records[0]?.delivery).toBe('sent');
+  });
+
+  it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '等待接管' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+      expect(c.ofType('turn.end')[1]).toEqual(c.ofType('turn.end')[0]);
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'accepted',
+        attempt: 0,
+        retryAt: null,
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ACK server 断线期间完成的 turn.end 在重连后进入 ACK 缓冲，retrying 也视为已接管', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const first = collector();
+    const second = collector();
+    try {
+      d.onConnected('conn-1', first.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), first.send);
+      await tick();
+      d.onDisconnected('conn-1');
+      fr.finish({ finalText: '离线完成' });
+      await tick();
+      expect(first.ofType('turn.end')).toHaveLength(0);
+
+      d.onConnected('conn-1', second.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      expect(second.ofType('turn.end')).toHaveLength(1);
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'retrying',
+        attempt: 1,
+        retryAt: Date.now() + 60_000,
+        error: { code: 'X_UNAVAILABLE', message: 'retrying', retryable: true },
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(second.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['delivered', 'failed'] as const)('终态 %s 也会释放待重放正文', async (state) => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '终态确认' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state,
+        attempt: 1,
+        retryAt: null,
+        error:
+          state === 'failed'
+            ? { code: 'X_REQUEST_REJECTED', message: 'rejected', retryable: false }
+            : null,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ACK 模式下账本保持 pending, 收到回执才收口为 sent', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const terminalLedger = memoryTerminalLedger();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: 'ACK 账本收口' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+      expect(terminalLedger.records[0]?.delivery).toBe('pending');
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'accepted',
+        attempt: 0,
+        retryAt: null,
+        error: null,
+      });
+      expect(terminalLedger.records[0]?.delivery).toBe('sent');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ACK 模式回执前重启 -> 新 dispatcher 从账本经 ACK 缓冲补发, 回执后收口 sent', async () => {
+    vi.useFakeTimers();
+    const firstRunner = fakeRunner();
+    const terminalLedger = memoryTerminalLedger();
+    const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
+    const firstCollector = collector();
+    try {
+      first.d.onConnected('conn-1', firstCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      first.d.handleDispatch('conn-1', dispatch(), firstCollector.send);
+      await tick();
+      firstRunner.finish({ finalText: '重启前完成' });
+      await tick();
+      expect(terminalLedger.records[0]?.delivery).toBe('pending');
+      first.d.dispose();
+
+      const secondRunner = fakeRunner();
+      const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
+      const secondCollector = collector();
+      second.d.onConnected('conn-1', secondCollector.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      expect(secondRunner.calls).toHaveLength(0);
+      expect(secondCollector.ofType('turn.end')).toHaveLength(1);
+      expect(secondCollector.last('turn.end')?.payload).toMatchObject({
+        requestId: 'req-1',
+        finalText: '重启前完成',
+      });
+      // 回执到达前账本保持 pending; 回执后收口, 停止重放。
+      expect(terminalLedger.records[0]?.delivery).toBe('pending');
+      second.d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'accepted',
+        attempt: 0,
+        retryAt: null,
+        error: null,
+      });
+      expect(terminalLedger.records[0]?.delivery).toBe('sent');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(secondCollector.ofType('turn.end')).toHaveLength(1);
+      second.d.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

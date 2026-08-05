@@ -1832,6 +1832,11 @@
         "confirm": "연동 해제",
         "cancel": "취소"
       },
+      "lifecycleAnnouncement": {
+        "label": "온라인/오프라인 알림",
+        "cellLabel": "메시지 알림",
+        "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
@@ -3157,6 +3162,8 @@
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
         "installedSection": "설치됨",
+        "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
+        "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
@@ -3196,10 +3203,12 @@
         },
         "install": "설치",
         "details": "상세",
+        "detailsAria": "{{name}} 상세 보기",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
         "conflict": "플러그인 ID 충돌",
+        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
@@ -3382,6 +3391,8 @@
         "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
+        "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3503,7 +3514,8 @@
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
             "video.edit": "이미지로 영상",
-            "text.oneshot": "빠른 답변(텍스트)"
+            "text.oneshot": "빠른 답변(텍스트)",
+            "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
@@ -4173,6 +4185,29 @@
       "latestTurnTitle": "최근 턴",
       "latestUserTurnTitle": "최근 사용자 턴 합계"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5시간",
+    "weeklyLabel": "주간",
+    "modelWeeklyLabel": "{{model}} 주간",
+    "windowsRegionLabel": "할당량 구간 목록",
+    "usedPercent": "사용 {{percent}}%",
+    "resetAt": "{{at}} 재설정",
+    "noWindows": "할당량 구간 데이터가 없습니다",
+    "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
+    "limitWarning": "플랜 한도에 근접했습니다",
+    "extraUsageEnabled": "추가 사용량 활성화됨",
+    "costLine": "이번 메시지 비용: {{cost}}",
+    "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
+    "latestMessageTitle": "최근 메시지 합계",
+    "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
+    "cacheLabel": "캐시",
+    "modelLabel": "모델",
+    "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
     "costLine": "이번 턴 비용: {{cost}}",
@@ -5151,9 +5186,7 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
-      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
+      "sourceTooltip": "worktree 소스 브랜치"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",

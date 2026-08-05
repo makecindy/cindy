@@ -450,6 +450,23 @@ export const GHOST_CINDY_TEXT_ACTIONS = ['oneshot'] as const;
 export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
 
 /**
+ * cindy 槽·向量类可申请的动作(2026-08-04 开闸)。
+ *
+ * `text` = 文本转向量:意识递一批文字,主机经统一 embedding 通道
+ * (embedding-host 的 embedSync,与聊天历史语义检索同一条付费链路)返回等长的
+ * 向量数组。**只生成、不存储**——主机不给意识碰向量表(那是宿主自己语义检索的
+ * 家当,维度与表名都钉死),向量原样递回沙箱,存哪儿、怎么建索引由意识自己在
+ * 自己的 kv / 文件里解决。
+ *
+ * 为什么与 text.oneshot 分成两档而不是塞进同一个能力键:两者花的是不同的钱
+ * (轻量任务模型链 vs embedding 模型),用户在能力偏好里钉的也是两套不同的型号,
+ * 合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
+ * 能力,不进会话。
+ */
+export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
+export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
  * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
@@ -464,6 +481,8 @@ export interface GhostCindyNeeds {
   media?: GhostCindyMediaAction[];
   /** 文本类:oneshot=快问快答(轻量任务模型链直答一次,无 agent 无工具)。 */
   text?: GhostCindyTextAction[];
+  /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
+  embed?: GhostCindyEmbedAction[];
 }
 
 /**
@@ -1532,6 +1551,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'video.edit': 'cindyVideoEdit',
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
+  'embed.text': 'cindyEmbedText',
 };
 
 /**
@@ -1542,6 +1562,9 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
 const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   'media.deposit': 'cindyMediaDepositDetail',
   'text.oneshot': 'cindyTextOneshotDetail',
+  // 向量:用户要知道的是"文字会被送去算向量"(计费面)与"结果不落主机"
+  // (向量归意识自己保管)。单次条数上限一并插值,同 deposit 的口径。
+  'embed.text': 'cindyEmbedTextDetail',
 };
 
 /**
@@ -1579,6 +1602,10 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
           // 持久媒体占用上限);改常量四份 locale 自动跟随。
           ...(cap === 'media.deposit'
             ? { detailArgs: { quota: formatGhostQuotaSize(GHOST_CINDY_DEPOSIT_QUOTA_BYTES) } }
+            : {}),
+          // 向量单次条数上限同样单源插值:改常量四份 locale 自动跟随。
+          ...(cap === 'embed.text'
+            ? { detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) } }
             : {}),
         });
       }
@@ -2986,6 +3013,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       video: GHOST_MODEL_VIDEO_ACTIONS,
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
+      embed: GHOST_CINDY_EMBED_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       const allowed = actionTable[category];
@@ -3017,13 +3045,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
+      else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
     }
     if (
       cindy.image === undefined &&
       cindy.video === undefined &&
       cindy.media === undefined &&
-      cindy.text === undefined
+      cindy.text === undefined &&
+      cindy.embed === undefined
     ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
@@ -4383,7 +4413,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
  *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
  *     无需声明卡槽、无用户数据与凭证内容。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
- *     无需另配对)。gen_image / edit_image;须声明 'cindy' 卡槽与能力详单。
+ *     无需另配对)。gen_image / edit_image / gen_video / edit_video /
+ *     deposit_media / release_media / oneshot_text / embed_text;须声明
+ *     'cindy' 卡槽与能力详单。
  *   - fetch-request:network 槽代理 HTTP(invoke 返回值即响应,无需另配对)。
  *     须声明 'network' 卡槽与域名详单;凭证由主机注入,意识永不经手。
  *   - pick-request:pick 槽——请主机弹系统级选文件夹窗口(用户亲选即授权)。
@@ -5408,6 +5440,25 @@ export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 
 /**
+ * ── embed_text 政策参数(2026-08-04 开闸)──────────────────────────────
+ * 上限不是抄上游 API 的(Voyage / OpenAI 都收到 1000 条一批),而是被**回传体积**
+ * 钉住的:向量原样穿管子回沙箱,一条 3072 维 float 序列化成 JSON 约 60KB ——
+ * 32 条就是 ~2MB 一次 postMessage。再往上抬会让沙箱与主机同时卡在序列化上,
+ * 而分批对调方只是多一次 await。
+ *
+ * 单条字符上限比 oneshot 低一档:embedding 模型的 context 本就短(最小的
+ * gemini-embedding-2 只有 8K token),超长文本该由调方按语义切块,而不是指望
+ * 上游 truncation 静默截掉后半段 —— 那样返回的向量代表的是被截断的文本,
+ * 检索质量的坑不可见。
+ */
+export const GHOST_CINDY_EMBED_MAX_TEXTS = 32;
+export const GHOST_CINDY_EMBED_MAX_CHARS_PER_TEXT = 8_192;
+/** 单批的总字符预算(防 32 条 × 8K 顶格叠加成一次巨型请求)。 */
+export const GHOST_CINDY_EMBED_MAX_TOTAL_CHARS = 65_536;
+/** 单次向量代办的等待上限(毫秒;同 oneshot,超时按结构化失败收单)。 */
+export const GHOST_CINDY_EMBED_TIMEOUT_MS = 60_000;
+
+/**
  * 上行:cindy 槽代办请求(请 Cindy 本体出图 / 改图)。协议 type 为
  * 'cindy-request'(2026-07-11 由 'model-request' 更名,主机对旧名保持
  * 静默兼容)。选型双轨:
@@ -5607,7 +5658,79 @@ export type GhostPipeCindyRequest =
       maxTokens?: number;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
+    }
+  | {
+      /**
+       * 文本转向量(2026-08-04 开闸):把一批文字交给主机的统一 embedding
+       * 通道,返回等长的向量数组。须声明 'cindy' 卡槽 +
+       * `cindy.embed: ["text"]`。
+       *
+       * **只生成、不存储**:主机不代管向量,返回值即全部交付物——存哪儿、
+       * 怎么建索引、什么时候重算,全在意识自己手里(面板 kv / 自带文件)。
+       * 主机的向量表是宿主语义检索的家当,不对意识开放。
+       *
+       * 选型同媒体代办的双轨(tier / model),但**换模型 = 换向量空间**:
+       * 不同模型(乃至同模型不同维度)的向量不可比,混着存进同一个索引会让
+       * 相似度失去意义。所以拿到 `model` 与 `dim` 后请一并存下,下次检索前
+       * 比对——不一致就得重嵌,而不是接着用。
+       */
+      type: 'cindy-request';
+      kind: 'embed_text';
+      /**
+       * 待嵌文本(1–32 条,单条 1–8192 字符,合计 ≤65536 字符)。
+       * 超长文本请自己按语义切块再递进来:上游会静默截断,那样拿到的向量
+       * 代表的是被截掉后半段的文本,坑不可见。
+       */
+      texts?: string[];
+      /**
+       * 上下文化嵌入(可选,与 texts 二选一):按文档分组的 chunk 序列,
+       * 每个内层数组 = 一个文档的若干 chunk。**同一文档内的 chunk 互为上下文**,
+       * 因此同一段文字放进不同文档会得到不同向量 —— 这正是它比逐块独立嵌入好的
+       * 地方(适合长文档检索),也意味着它必须整篇一起嵌,不能拆开分次。
+       *
+       * 只有支持上下文化的型号能用(voyage-context-*);其它型号传了会被明拒。
+       * 返回值是 `documentEmbeddings`(三层:文档 → chunk → 维度),不是
+       * `embeddings`。
+       *
+       * 分组上限与 texts 同一套预算:chunk 总数 ≤ 32、单 chunk ≤ 8192 字符、
+       * 合计 ≤65536 字符。
+       */
+      documents?: string[][];
+      /**
+       * 检索用途(可选):'document' = 要入库被检索的内容,'query' = 用来检索的
+       * 提问。主机按所选模型的家族翻成对应的上游参数(各家值域互不兼容,主机
+       * 负责翻译,意识只表达意图)。不传 = 不加任何检索偏置。
+       *
+       * **建索引与查索引必须用同一套约定**:两侧都不传,或者存的时候
+       * 'document'、查的时候 'query'。一侧传一侧不传不会报错,只是召回悄悄变差。
+       *
+       * 有的模型家族根本没有这个概念(OpenAI 系),此时主机静默不发 —— 传了不报
+       * 错也不生效,所以别把它当"一定生效"的开关。
+       */
+      inputType?: GhostCindyEmbedInputType;
+      /**
+       * 期望维度(可选)。不传 = 该模型的默认维度(回执 `dim` 为准)。
+       * 降维能显著压缩存储与回传体积(3072 → 1024 少 2/3),代价是检索精度略降。
+       * 该模型不支持所要维度时按结构化失败收单('INVALID_PARAMS'),不会静默给
+       * 另一个长度。
+       */
+      dimensions?: number;
+      tier?: GhostModelTier;
+      model?: string;
+      /** 归因号(同 gen_image 分支)。 */
+      callId?: string;
     };
+
+/**
+ * embed_text 的检索用途档(中立值;主机按模型家族翻成上游 wire 值)。
+ *
+ * 2026-08-04 经 XD 网关实测的家族差异(主机据此翻译,意识无需关心):
+ *   - Voyage 系认小写 query / document;
+ *   - Gemini 系走 Vertex 的大写枚举 RETRIEVAL_QUERY / RETRIEVAL_DOCUMENT;
+ *   - OpenAI 系没有这个参数,主机不发。
+ */
+export const GHOST_CINDY_EMBED_INPUT_TYPES = ['document', 'query'] as const;
+export type GhostCindyEmbedInputType = (typeof GHOST_CINDY_EMBED_INPUT_TYPES)[number];
 
 /**
  * 视频代办实际生效的画面参数回执(仅视频类代办)。取值优先用上游任务
@@ -5630,6 +5753,37 @@ export interface GhostVideoResultParams {
    * 提交值 / 该型号的已知默认,不是上游上报的实测结果。
    */
   audio?: boolean;
+}
+
+/**
+ * embed_text 两种成功形态共有的交付元数据。
+ *
+ * `model` 与 `dim` 是**必须一并存下**的:换了模型或维度,旧向量与新向量不在同一
+ * 空间,相似度不可比,存量必须重嵌 —— 这是它跟出图最不一样的地方(出图换型号只是
+ * 风格变了,向量换型号会让整个索引静默失效)。
+ */
+interface GhostCindyEmbedResultMeta {
+  /**
+   * 实际执行的模型 id,**主机白名单里的那个别名** —— 也就是可以原样回传给
+   * `embed_text` 的那个值。
+   *
+   * 不回上游解析出的带版本号型号(PR #1707 review):手册要求调方把这个值存下、
+   * 检索时原样传回,而 `model` 参数要过主机白名单;回一个不在白名单里的上游 id
+   * 会让"入库成功 → 按回执检索"这条主路径确定性地撞 INVALID_PARAMS。
+   */
+  model: string;
+  /**
+   * 上游实际使用的型号 id(带版本号 / 服务端解析后的实现),**仅当它与 `model`
+   * 不同时出现**。审计与"要不要重算存量"用,不要回传给 `embed_text`。
+   *
+   * 有什么用:同一别名的后端实现被换掉时(维度可能都没变),向量空间未必仍然可比,
+   * 而只看别名是察觉不到的。
+   */
+  upstreamModel?: string;
+  /** 实际返回的向量维度。 */
+  dim: number;
+  /** 模型展示名(目录 label;给用户看的场合用这个,不用裸 id)。 */
+  modelLabel: string;
 }
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
@@ -5718,12 +5872,34 @@ export type GhostPipeModelResult =
       /** 实际应答的供应商/模型标识(轻量链解析结果;仅诊断展示用)。 */
       model?: string;
     }
+  /**
+   * embed_text 成功 —— 两种形态**互斥**,写成两个分支而不是一个"两个字段都可选"
+   * 的分支(PR #1707 review):后者在类型层允许"两个都缺"和"两个都有"这两种非法
+   * 响应,加新路径时 TS 不会拦。拆开之后每个分支各有一个**必填**的独占成员,既锁死
+   * 二选一,也让它们与其它 ok:true 分支的判别更牢靠。wire 形态与拆分前完全一致。
+   */
+  | ({
+      /** 逐条独立嵌(请求传 texts)。 */
+      ok: true;
+      /** 与请求 texts 等长、顺序一一对应。 */
+      embeddings: number[][];
+      documentEmbeddings?: never;
+    } & GhostCindyEmbedResultMeta)
+  | ({
+      /** 上下文化嵌入(请求传 documents)。 */
+      ok: true;
+      embeddings?: never;
+      /** 与请求 documents 同形:文档 → chunk → 维度。 */
+      documentEmbeddings: number[][][];
+    } & GhostCindyEmbedResultMeta)
   | {
       ok: false;
       message: string;
       /**
-       * 结构化错误码(2026-07-31 起 oneshot_text 填写;媒体代办暂只有
-       * message)。稳定值:'NO_CANDIDATE'(快速通道无可用模型/凭证)、
+       * 结构化错误码(2026-07-31 起 oneshot_text 填写,2026-08-04 起
+       * embed_text 同样填写;媒体代办暂只有 message)。稳定值:
+       * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
+       * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
        * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'。
        */

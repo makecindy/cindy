@@ -1833,6 +1833,11 @@
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
+      "lifecycleAnnouncement": {
+        "label": "Online/Offline Notifications",
+        "cellLabel": "Message Notifications",
+        "hint": "Have the Discord Bot send a message when this device goes online or offline"
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",
@@ -3158,6 +3163,8 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
+        "installedExpand": "Show all {{count}} installed plugins",
+        "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
@@ -3197,10 +3204,12 @@
         },
         "install": "Install",
         "details": "Details",
+        "detailsAria": "View details for {{name}}",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
         "conflict": "Plugin ID conflict",
+        "conflictAria": "{{name}} has a plugin ID conflict",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
@@ -3383,6 +3392,8 @@
         "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
+        "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -3504,7 +3515,8 @@
             "image.edit": "Image editing",
             "video.generate": "Video generation",
             "video.edit": "Image-to-video",
-            "text.oneshot": "Quick answer (text)"
+            "text.oneshot": "Quick answer (text)",
+            "embed.text": "Text to vector"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
@@ -4175,6 +4187,29 @@
       "latestTurnTitle": "Latest turn",
       "latestUserTurnTitle": "Latest user-turn total"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5 hours",
+    "weeklyLabel": "Weekly",
+    "modelWeeklyLabel": "{{model}} weekly",
+    "windowsRegionLabel": "Quota Windows",
+    "usedPercent": "Used {{percent}}%",
+    "resetAt": "Resets {{at}}",
+    "noWindows": "No quota window data available",
+    "limitRejected": "Plan limit reached; requests may be rejected",
+    "limitWarning": "Approaching plan limit",
+    "extraUsageEnabled": "Extra usage enabled",
+    "costLine": "Cost this message: {{cost}}",
+    "valueLine": "Token value this message: {{cost}}",
+    "noBilledCost": "Cost unavailable for this message; showing usage only",
+    "latestMessageTitle": "Latest message total",
+    "turnCostUnavailable": "Cost unavailable for this message",
+    "tokenLabel": "Tokens",
+    "tokenBreakdown": "(input {{input}} · output {{output}})",
+    "cacheLabel": "Cache",
+    "modelLabel": "Model",
+    "staleData": "Data updated {{minutes}} minutes ago",
+    "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
     "costLine": "Cost this turn: {{cost}}",
@@ -5153,9 +5188,7 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch",
-      "worktreeHint": "Picking another branch starts this chat in an isolated worktree",
-      "exitWorktreeHint": "Picking the current branch leaves worktree and starts directly on it"
+      "sourceTooltip": "Worktree source branch"
     },
     "folderPicker": {
       "selectFolder": "Select folder",

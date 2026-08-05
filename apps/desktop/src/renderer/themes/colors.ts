@@ -1288,6 +1288,25 @@ registerColor('annotation-accent', {
   dark: '#FF3B30',
 }, 'Annotation Red — 与烧录笔迹同色,语义豁免');
 
+// Claude 额度条只保留组件 alias；色值收敛到已批准的中性 / 告警语义槽，
+// 让内置与导入主题都跟随同一语义，不再冻结一组独立暖色。
+registerColor('quota-bar-fill', {
+  light: 'var(--text-secondary)',
+  dark: 'var(--text-secondary)',
+}, 'Claude 额度条正常填充(alias 到中性次要文字色)');
+registerColor('quota-bar-warn', {
+  light: 'var(--warning-fg)',
+  dark: 'var(--warning-fg)',
+}, 'Claude 额度条警告填充(alias 到已批准 warning 前景)');
+registerColor('quota-bar-crit', {
+  light: 'var(--error-flat)',
+  dark: 'var(--error-flat)',
+}, 'Claude 额度条临界填充(alias 到已批准 error 前景)');
+registerColor('quota-bar-track', {
+  light: 'var(--surface-chip)',
+  dark: 'var(--surface-chip)',
+}, 'Claude 额度条轨道(alias 到中性 chip 表面)');
+
 // Running Status Bar (F-SDK-3)
 registerColor('status-bar-accent', {
   light: 'var(--warning-accent)',

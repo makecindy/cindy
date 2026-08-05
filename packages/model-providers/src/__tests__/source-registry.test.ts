@@ -240,6 +240,30 @@ describe('mergeWithBundled', () => {
     expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
   });
 
+  it('旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义', () => {
+    // 与 xai 图像清单同一个道理(PR #1707 review):向量清单是客户端新增的 bundled
+    // 元数据,远端 / 本地目录里同 id 的 xd 可能还是升级前的结构。primary 整体优先
+    // 会让旧结构把新字段整段遮掉 → 目录派生空清单 → 设置页"无可用模型"、所有
+    // embed_text 直接 NO_CANDIDATE,能力等于没上线。
+    const bundledXd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
+    const oldRemoteXd = JSON.parse(JSON.stringify(bundledXd)) as Provider;
+    delete oldRemoteXd.embeddingModels;
+    delete oldRemoteXd.embeddingDefaults;
+    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXd] });
+    const inheritedXd = inherited.providers.find((p) => p.id === 'xd');
+    expect(inheritedXd?.embeddingModels).toEqual(bundledXd.embeddingModels);
+    expect(inheritedXd?.embeddingDefaults).toEqual(bundledXd.embeddingDefaults);
+
+    // 显式 `[]` = "这个供应商不提供向量",不能被 bundled 顶回来。
+    const explicitlyDisabled = mergeWithBundled({
+      version: '2',
+      providers: [{ ...oldRemoteXd, embeddingModels: [] }],
+    });
+    expect(
+      explicitlyDisabled.providers.find((p) => p.id === 'xd')?.embeddingModels,
+    ).toEqual([]);
+  });
+
   it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;

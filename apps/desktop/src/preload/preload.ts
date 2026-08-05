@@ -978,6 +978,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      /** 向量类(文本转向量):同 image/video 走目录派生。 */
+      embed: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
     } => ipcRenderer.sendSync('ghosts:cindy-prefs', id),
     setCindyPref: (
       id: string,
@@ -1666,6 +1671,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:get-status'),
     setConfig: (payload: {
       token: string;
@@ -1693,6 +1699,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
+    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+      ok: boolean;
+      lifecycleAnnouncement: boolean;
+    }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('discordBot:check-session-auth'),
     onStatusChange: fanOutDiscordBotStatusChange,
@@ -4058,11 +4068,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitContext: {
     /** 读 workdir 当前分支(非 git 目录返回 head=null)。 */
     get: (workdir: string): Promise<unknown> => ipcRenderer.invoke('git-context:get', workdir),
-    /** 按 session 解析「对话真实工作目录」+ HEAD + 来源(遥测/worktree/working_dir)。 */
+    /** 按 session 解析「对话真实工作目录」+ HEAD + 来源(含 SSH 远端)。 */
     getForSession: (input: {
       sessionId: string;
       workingDir: string | null;
       worktreePath: string | null;
+      remoteHostId?: string | null;
     }): Promise<unknown> => ipcRenderer.invoke('git-context:get-for-session', input),
     /** 开始监听该 workdir 的 HEAD 变化(refcount;变化经 onChanged 推送)。 */
     watch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:watch', workdir),
@@ -5874,6 +5885,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         model?: string;
         /** 绑定会话任务:workingDir 空时 main 按会话 meta.workDir 解析落盘/自测目录。 */
         targetSessionId?: string;
+        /** 绑定任务的缺省模型/来源维度由 targetSessionId 的会话路由补齐。 */
+        resolveBoundSessionRoute?: boolean;
         currentCommand?: string;
       }): Promise<
         | {

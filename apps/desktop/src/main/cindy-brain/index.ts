@@ -154,7 +154,11 @@ import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
-import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
+import {
+  deriveCindyMediaConfig,
+  type CindyCapabilityKind,
+  type CindyMediaCatalogConfig,
+} from './cindyMediaCatalog.js';
 import {
   GhostCindySlot,
   type CindyImageCapabilities,
@@ -238,8 +242,10 @@ import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
+import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import {
   CINDY_CAPABILITY_KEYS,
+  cindyCapabilityValueDomain,
   readGhostCindyOverrides,
   readGhostCindyInflightLimit,
   writeGhostCindyOverride,
@@ -2363,7 +2369,7 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
  * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
  * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig {
+function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConfig {
   try {
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
@@ -2377,12 +2383,23 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
-        isModelDisabled(access, providerId, modelId),
+        isModelDisabled(access, providerId, modelId) ||
+        // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
+        // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
+        // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
+        // 变成 INTERNAL。UI 先宣称可用、下单才失败是最难排查的一种坏体验
+        // (PR #1707 review)。滤掉后按既有语义降级:被滤条目不占 first-wins,
+        // 目录默认指向它时回落清单首项;整份清单都不认识才是空清单 → NO_CANDIDATE。
+        // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
+        (kind === 'embed' && !isKnownEmbeddingModel(modelId)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
       // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
       // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
       // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
       // (2026-07 review:与图像的就绪语义对齐)。
+      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求网关能力在场
+      // (本地模式没有网关 key,embedSync 必然 AUTH_FAILED —— 那种型号不该出现在
+      // 清单里让用户钉选)。
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
         : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
@@ -2401,6 +2418,7 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
 
 const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image');
 const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video');
+const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('embed');
 
 /**
  * 派发前重查(PR #744 review 第二十轮):cindySlot 从白名单校验到实际下单之间隔着
@@ -2723,6 +2741,55 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       getImageConfig: getCatalogImageConfig,
       getVideoConfig: getCatalogVideoConfig,
+      getEmbedConfig: getCatalogEmbedConfig,
+      // 文本转向量(embed.text):走主机统一 embedding 通道(与聊天历史语义检索
+      // 同一条付费链路)。只生成不存储 —— embedSync 明确不入队、不写 vec 表,
+      // 向量原样返回给意识自己保管。
+      //
+      // 动态 import 同 oneshotText,且**只对 embedding-host 一家**:它的传递依赖会
+      // 拽起 localDb → runtime-configs,静态引入会让所有 import 本模块的单测炸在
+      // electron mock 上(PR #1707 review 实测:collabSendOutcome.test.ts 报
+      // app.getAppPath is not a function)。@cindy/embedding-client 是零运行依赖的
+      // 纯包,已改为顶层静态 import,不必陪着动态化。
+      embedText: async ({ texts, model, inputType, dimensions, timeoutMs }) => {
+        // ensureEmbeddingServiceForPluginVector 而不是 getEmbeddingService:host 的启停
+        // 不归「聊天嵌入」开关独占 —— 那个开关关着时 host 不启动,直接取 service 必抛
+        // not-started,已授权的 embed_text 全变 INTERNAL(PR #1707 review)。这里打标
+        // 成"插件向量 consumer 在用"并按需懒启动。
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
+        // 白名单已在 slot 层校验过,这里是纵深防御:目录里出现了 embedding catalog
+        // 不认识的 id(两边不同步)时早失败,而不是把不认识的 id 发去网关。
+        if (!isKnownEmbeddingModel(model)) {
+          throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
+        }
+        const res = await ensureEmbeddingServiceForPluginVector().embedSync(texts, {
+          modelId: model,
+          ...(inputType !== undefined ? { inputType } : {}),
+          ...(dimensions !== undefined ? { dimensions } : {}),
+          // slot 层给的时间预算必须原样递到 client —— 中间任何一层吞掉它,
+          // 插件那侧就又变成"网关不返数据即永久挂住一格在途额度"。
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        });
+        return { embeddings: res.embeddings, modelUsed: res.modelUsed };
+      },
+      // 上下文化嵌入(voyage-context-* 索引侧):同上,只是 input 按文档分组。
+      embedDocuments: async ({ documents, model, inputType, dimensions, timeoutMs }) => {
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
+        if (!isKnownEmbeddingModel(model)) {
+          throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
+        }
+        const res = await ensureEmbeddingServiceForPluginVector().embedDocumentsSync(documents, {
+          modelId: model,
+          ...(inputType !== undefined ? { inputType } : {}),
+          ...(dimensions !== undefined ? { dimensions } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        });
+        return { embeddings: res.embeddings, modelUsed: res.modelUsed };
+      },
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
@@ -3291,6 +3358,9 @@ export function getGhostFsSlot(): GhostFsSlot {
       // callId → 归属/会话反查:与卡片供片同一本账(ghost_call 派单时
       // cardService.registerCall 登记),不信意识自报。
       callInfo: (callId) => getGhostCardService().callInfoOf(callId),
+      // 严格在途反查:脚本通道(无会话)的 workdir 写盘授权走它——交卷即失效,
+      // 不享宽限窗(目录授权上下文用完即废,与 workspace 槽同一判据)。
+      inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       getSessionSnapshot: (sessionId) => getSessionFsSnapshot(sessionId),
       requestWriteConfirm: async (sessionId, payload) => {
         const bridge = getGhostGrantConfirmBridge();
@@ -4608,6 +4678,8 @@ export function registerGhostIpc(): void {
         defaultModel:
           textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
       },
+      // 向量类与图像/视频同源(都走目录派生),不同于文本类的轻量链档位。
+      embed: byKind(getCatalogEmbedConfig()),
     };
   });
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
@@ -4650,10 +4722,22 @@ export function registerGhostIpc(): void {
     if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
       throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
     }
-    // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
-    const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    const isEditCap = capability === 'image.edit';
-    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
+    // 白名单按能力键的**取值域**取,映射由 cindyCapabilityValueDomain 穷举
+    // (漏一个类目 = 该类目的下拉界面上能选、一选就被别人的白名单拒掉、回滚成
+    // 一句通用 toast;PR #1707 review)。text.oneshot 的取值是轻量链档位键,
+    // 不在任何媒体目录里,必须对着 pin 选项校验。
+    const capKey = capability as CindyCapabilityKey;
+    const domain = cindyCapabilityValueDomain(capKey);
+    const allowed: ReadonlyArray<{ id: string; supportsEdit?: boolean }> =
+      domain === 'utilityChain'
+        ? utilityModelPinOptions()
+        : domain === 'video'
+          ? getCatalogVideoConfig().models
+          : domain === 'embed'
+            ? getCatalogEmbedConfig().models
+            : getCatalogImageConfig().models;
+    const isEditCap = capKey === 'image.edit';
+    if (model !== null && !allowed.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(

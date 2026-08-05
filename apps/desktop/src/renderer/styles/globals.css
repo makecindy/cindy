@@ -58,6 +58,19 @@
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
+
+    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
+  }
+
+  .dark {
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
   }
 
   body {
@@ -364,7 +377,16 @@ html:lang(ko) {
 [data-chat-input-root] .ProseMirror :is(ul, ol) {
   margin: 0;
   --composer-list-padding: 1.5em;
-  padding-inline-start: var(--composer-list-padding, 1.5em);
+  --composer-list-marker-extra: 0em;
+  padding-inline-start: calc(
+    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
+  );
+}
+/* The ideographic comma is a full-width glyph, unlike the period / closing
+   parenthesis in the other ordered markers. Keep its extra width separate
+   from the digit budget so multi-digit ordinals still compose correctly. */
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] {
+  --composer-list-marker-extra: 0.7em;
 }
 [data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
   --composer-list-padding: 2.2em;

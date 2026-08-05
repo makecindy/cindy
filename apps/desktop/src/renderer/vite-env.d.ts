@@ -1177,6 +1177,11 @@ interface ElectronAPI {
         options: Array<{ id: string; label: string }>;
         defaultModel: { id: string; label: string } | null;
       };
+      /** 向量类(文本转向量):同 image/video 走目录派生。 */
+      embed: {
+        options: Array<{ id: string; label: string }>;
+        defaultModel: { id: string; label: string } | null;
+      };
     };
     /** 写/清一项覆盖(model=null 即恢复跟随默认);返回该意识最新覆盖表。 */
     setCindyPref: (
@@ -1894,6 +1899,7 @@ interface ElectronAPI {
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
     }>;
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: DiscordBotTransportStatus;
@@ -1902,6 +1908,10 @@ interface ElectronAPI {
     }>;
     disconnect: () => Promise<{
       status: DiscordBotTransportStatus;
+    }>;
+    setLifecycleAnnouncement: (enabled: boolean) => Promise<{
+      ok: boolean;
+      lifecycleAnnouncement: boolean;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
     onStatusChange: (
@@ -3673,6 +3683,7 @@ interface ElectronAPI {
       sessionId: string;
       workingDir: string | null;
       worktreePath: string | null;
+      remoteHostId?: string | null;
     }) => Promise<import('@/lib/gitContext.types').SessionGitDirResult>;
     watch: (workdir: string) => Promise<void>;
     unwatch: (workdir: string) => Promise<void>;
@@ -5491,6 +5502,8 @@ interface ElectronAPI {
         model?: string;
         /** 绑定会话任务:workingDir 空时 main 按会话 meta.workDir 解析落盘/自测目录。 */
         targetSessionId?: string;
+        /** 绑定任务的缺省模型/来源维度由 targetSessionId 的会话路由补齐。 */
+        resolveBoundSessionRoute?: boolean;
         currentCommand?: string;
       }) => Promise<
         | {

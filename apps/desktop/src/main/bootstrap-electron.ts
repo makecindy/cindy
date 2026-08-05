@@ -272,7 +272,15 @@ import {
 import { freezeSessionActiveTurnMarkers } from './localDb/sessionActiveTurn';
 import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
-import { startEmbeddingHost, stopEmbeddingHost, isEmbeddingHostStarted } from './embedding-host';
+import {
+  startEmbeddingHost,
+  stopEmbeddingHost,
+  isEmbeddingHostStarted,
+  getEmbeddingService,
+  isPluginVectorConsumerActive,
+  registerEmbeddingHostLazyStart,
+  type EmbeddingService,
+} from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
@@ -826,59 +834,71 @@ const _scheduleIpcRegistered = new WeakSet<object>();
 /**
  * embedding-host (Phase 1.1/1.2): localDb ensureReady 完成后按需启动。
  *
- * **chat-embedding setting 控制整个 host 启停**:
- *   - settings.enabled=false → 完全不启动 (没 Worker setInterval, 没 Provider 注册,
- *     没 hook 副作用) — 用户感受不到任何后台轮询
- *   - settings.enabled=true → startEmbeddingHost + setupChatHistoryEmbedder +
- *     setEnabled(true) 触发 cutoff 写入
+ * **host 启停由「有没有 consumer 要用」决定, 不归属任何单个开关** (PR #1707 review)。
+ * 现有两个 consumer:
+ *   - chat (聊天嵌入设置): ON 才注册 chat-history-embedder + setEnabled(true) 写 cutoff
+ *   - 插件向量 (embed.text): 按需 —— 首次请求时 ensureEmbeddingServiceForPluginVector()
+ *     打标并回调本函数懒启动
+ * 两个都不要用 → 完全不启动 (没 Worker setInterval, 没 Provider 注册, 没 hook 副作用),
+ * 用户感受不到任何后台轮询; 这条承诺在"关掉聊天嵌入且插件从没用过向量"时依然成立。
  *
- * 当前只有 chat 一个 consumer, 直接对齐它的开关最简单。未来加 memory / document
- * 等 consumer 时再重构成"任一 consumer ON → host start"的引用计数模式。
- *
- * 幂等: 第二次调直接 return (isEmbeddingHostStarted 守卫)。sqlite-vec 不可用时
- * 仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
+ * 幂等且可重入: host 已起时复用现有 service, 只补 chat consumer 的注册 —— 关键在于
+ * 插件先把 host 拉起、用户之后才打开聊天嵌入的顺序下, chat provider / cutoff 也必须
+ * 补齐 (否则 setChatEmbeddingEnabled 撞 _deps=null, 聊天嵌入静默不工作)。
+ * sqlite-vec 不可用时仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
  */
 function attemptStartEmbeddingHost(): void {
-  if (isEmbeddingHostStarted()) return;
-  try {
-    getDbClient();
-  } catch (err) {
+  // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
+  // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
+  const chatEnabled = readChatEmbeddingSettings().enabled;
+  if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
-      '[bootstrap-electron] attemptStartEmbeddingHost: DbClient not ready yet:',
-      err instanceof Error ? err.message : String(err),
+      '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
     );
     return;
   }
-  // setting OFF → 不启动 host, 不创建 Worker, 不注册 hook。
-  // 用户 toggle ON 时 CHAT_EMBEDDING_SET IPC 会重新调本函数。
-  const settings = readChatEmbeddingSettings();
-  if (!settings.enabled) {
-    console.log(
-      '[bootstrap-electron] chat embedding disabled by settings; embeddingHost not started',
-    );
-    return;
+  let service: EmbeddingService;
+  if (isEmbeddingHostStarted()) {
+    service = getEmbeddingService();
+  } else {
+    try {
+      getDbClient();
+    } catch (err) {
+      console.log(
+        '[bootstrap-electron] attemptStartEmbeddingHost: DbClient not ready yet:',
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    try {
+      service = startEmbeddingHost({
+        getDbClient: () => getDbClient(),
+        isVecAvailable: () => {
+          try {
+            return getDbClient().vecAvailable;
+          } catch {
+            return false;
+          }
+        },
+        // XD Gateway /v1/embeddings 走 Bearer ANTHROPIC_API_KEY (与 art / claude 同源)
+        getApiKey: () => readClaudeApiKey(),
+        // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
+        gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
+        // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
+        // (见 maker-host/outbound-fetch.ts)。
+        fetchImpl: outboundFetch,
+        log: createSchedulerLogger('embeddingHost'),
+      });
+    } catch (err) {
+      console.error('[bootstrap-electron] startEmbeddingHost failed (non-fatal):', err);
+      return;
+    }
   }
-  try {
-    const service = startEmbeddingHost({
-      getDbClient: () => getDbClient(),
-      isVecAvailable: () => {
-        try {
-          return getDbClient().vecAvailable;
-        } catch {
-          return false;
-        }
-      },
-      // XD Gateway /v1/embeddings 走 Bearer ANTHROPIC_API_KEY (与 art / claude 同源)
-      getApiKey: () => readClaudeApiKey(),
-      // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
-      gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
-      // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
-      // (见 maker-host/outbound-fetch.ts)。
-      fetchImpl: outboundFetch,
-      log: createSchedulerLogger('embeddingHost'),
-    });
-    // chat-history-embedder consumer 注册 + setEnabled(true) 触发 cutoff 落盘。
-    // 走到这里说明 settings.enabled=true, setEnabled 直接传 true。
+  // chat consumer 只在设置 ON 时挂载。插件独自把 host 拉起来的场景下这里不执行 ——
+  // 没有 chat provider、没有 cutoff、hook 守卫仍是 false, 聊天数据一条都不会被嵌。
+  if (chatEnabled) {
+    // setupChatHistoryEmbedder 幂等 (Map.set 覆盖), setChatEmbeddingEnabled(true)
+    // 重复调不会重置 cutoff, 所以补挂是安全的。
     try {
       setupChatHistoryEmbedder({
         service,
@@ -889,9 +909,34 @@ function attemptStartEmbeddingHost(): void {
     } catch (err) {
       console.error('[bootstrap-electron] setupChatHistoryEmbedder failed (non-fatal):', err);
     }
-  } catch (err) {
-    console.error('[bootstrap-electron] startEmbeddingHost failed (non-fatal):', err);
   }
+}
+
+// 插件向量 consumer 的懒启动接线:cindy-brain 的 embed.text 走
+// ensureEmbeddingServiceForPluginVector(), 由它回调这里完成真正的启动 (启动需要
+// DbClient / api key / gateway url 这些只有 bootstrap 有的依赖)。
+registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
+
+/**
+ * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
+ * 向量 consumer 时才停 host —— 否则会把另一个 consumer 的能力一起关掉 (插件的
+ * embed_text 全变 INTERNAL)。
+ *
+ * 插件在用时保留 host 的副作用是: chat provider 仍注册着, 已入队的旧 job 会继续做完。
+ * 这与 chat-history-embedder 自己的设计一致 (开关只控制入队, 不取消 provider 注册,
+ * 旧 pending job 不浪费用户已花的钱)。
+ */
+async function shutdownChatEmbeddingConsumer(): Promise<void> {
+  setChatEmbeddingEnabled(false);
+  if (!isEmbeddingHostStarted()) return;
+  if (isPluginVectorConsumerActive()) {
+    console.log(
+      '[bootstrap-electron] chat embedding off; embeddingHost kept alive for plugin vector consumer',
+    );
+    return;
+  }
+  await stopEmbeddingHost();
+  resetChatEmbedderCache();
 }
 
 // Codex / Claude / Pi binary 下载 + 状态查询 全部走 agent-binaries (按 kind 分派)。
@@ -2966,23 +3011,14 @@ const registerIpcHandlers = () => {
     // 先落盘 setting (即使后续 host 启停失败, 用户偏好已记下, 下次启动会用)
     writeChatEmbeddingEnabled(enabled);
     if (enabled) {
-      // ON: 按需启动 embeddingHost (attemptStartEmbeddingHost 内部会读新 settings,
-      // setupChatHistoryEmbedder + setChatEmbeddingEnabled(true) 触发 cutoff 写入)。
-      // 极少见: host 已 started (理论上不会, 因为 ON→ON 没意义), 直接 setEnabled(true) 触底。
-      if (!isEmbeddingHostStarted()) {
-        attemptStartEmbeddingHost();
-      } else {
-        setChatEmbeddingEnabled(true);
-      }
+      // ON: 交给 attemptStartEmbeddingHost —— 它会读新 settings, host 没起就起、
+      // 已被插件 consumer 起过就复用, 两种情况都补上 setupChatHistoryEmbedder +
+      // setChatEmbeddingEnabled(true) (后者第一次为 true 时写 cutoff)。
+      attemptStartEmbeddingHost();
     } else {
-      // OFF: 先 setEnabled(false) 让 hook 守卫立即生效 (新消息不再 enqueue),
-      // 然后 stopEmbeddingHost 清掉 Worker setInterval (彻底没轮询),
-      // 最后 reset chat-embedder 模块级 state (cutoff cache / deps), 下次 ON 时重新挂。
-      setChatEmbeddingEnabled(false);
-      if (isEmbeddingHostStarted()) {
-        await stopEmbeddingHost();
-        resetChatEmbedderCache();
-      }
+      // OFF: 先 setEnabled(false) 让 hook 守卫立即生效 (新消息不再 enqueue);
+      // 没有插件向量 consumer 时才停 Worker setInterval + reset 模块级 state。
+      await shutdownChatEmbeddingConsumer();
     }
     return chatEmbeddingWire();
   });
@@ -2990,17 +3026,9 @@ const registerIpcHandlers = () => {
     requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     const settings = resetChatEmbeddingSettings();
     if (settings.enabled) {
-      if (!isEmbeddingHostStarted()) {
-        attemptStartEmbeddingHost();
-      } else {
-        setChatEmbeddingEnabled(true);
-      }
+      attemptStartEmbeddingHost();
     } else {
-      setChatEmbeddingEnabled(false);
-      if (isEmbeddingHostStarted()) {
-        await stopEmbeddingHost();
-        resetChatEmbedderCache();
-      }
+      await shutdownChatEmbeddingConsumer();
     }
     return chatEmbeddingWire();
   });

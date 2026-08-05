@@ -42,8 +42,10 @@ import {
   makeTurnEnd,
   makeTurnProgress,
   makeTurnReopen,
+  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
+  type HookTurnEndMessage,
   type InteractionButton,
   type InteractionDecisionPayload,
   type TaskAckPayload,
@@ -51,6 +53,7 @@ import {
   type TaskDispatchPayload,
   type TaskRejectReason,
   type TaskSource,
+  type TurnDeliveryPayload,
   type TurnEndPayload,
 } from '@cindy/slack-hook-protocol';
 
@@ -337,6 +340,8 @@ export interface HookDispatcher {
    * 正在执行的任务)后按 interactionId 配对 resolve; 未知 / 迟到的静默忽略。
    */
   handleInteractionDecision(connectionId: string, payload: InteractionDecisionPayload): void;
+  /** X server 对普通 turn.end 的持久接管 / 渠道发布状态回执。 */
+  handleTurnDelivery(connectionId: string, payload: TurnDeliveryPayload): void;
   /** Re-open ingress after the next account DB is ready. */
   activateAccount(): void;
   /** Close ingress, abort old-account turns and await their final async boundary. */
@@ -353,6 +358,10 @@ export interface HookDispatcher {
 const MAX_QUEUE_PER_SESSION = 20;
 /** 单连接离线 turn.end 缓存上限(FIFO 丢最老)。 */
 const MAX_PENDING_TURN_ENDS = 100;
+/** ACK 能力启用后，普通 turn.end 在未获 server 接管确认前的首轮等待。 */
+const TURN_DELIVERY_ACK_TIMEOUT_MS = 10_000;
+/** 重发退避封顶；完整正文仍保留到 ACK、账号切换或容量淘汰。 */
+const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 
 /**
  * 失败任务的续跑记账保留时长。
@@ -512,7 +521,7 @@ interface PendingTask {
 }
 
 interface PendingTurnEnd {
-  message: HookMessage;
+  message: HookTurnEndMessage;
   terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>;
 }
 
@@ -609,6 +618,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const sendFns = new Map<string, (m: HookMessage) => boolean>();
   /** 离线积压的 turn.end, 按连接缓存; durable terminal 先记 pending, 发送成功后标 sent。 */
   const pendingTurnEnds = new Map<string, PendingTurnEnd[]>();
+  /** 双向 ACK 已协商时，等待 server durable accepted 的完整 turn.end 副本。 */
+  const pendingDeliveryTurnEnds = new Map<
+    string,
+    {
+      connectionId: string;
+      message: HookTurnEndMessage;
+      attempts: number;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
   /** 正在执行 turn 的 session(本模块发起的)。 */
   const running = new Set<string>();
   /**
@@ -827,12 +846,85 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return withoutAttachments;
   }
 
+  function supportsDeliveryAck(connectionId: string): boolean {
+    return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_TURN_DELIVERY) === true;
+  }
+
+  function clearPendingDelivery(key: string): void {
+    const pending = pendingDeliveryTurnEnds.get(key);
+    if (pending?.timer) clearTimeout(pending.timer);
+    pendingDeliveryTurnEnds.delete(key);
+  }
+
+  function enforcePendingDeliveryLimit(connectionId: string): void {
+    const keys = [...pendingDeliveryTurnEnds]
+      .filter(([, pending]) => pending.connectionId === connectionId)
+      .map(([key]) => key);
+    while (keys.length > MAX_PENDING_TURN_ENDS) {
+      const oldest = keys.shift();
+      if (oldest !== undefined) {
+        const evictedRequestId = pendingDeliveryTurnEnds.get(oldest)?.message.payload.requestId;
+        clearPendingDelivery(oldest);
+        log.warn(
+          `turn.end ACK buffer full; oldest result evicted: connectionId=${connectionId} requestId=${evictedRequestId ?? 'unknown'}`,
+        );
+      }
+    }
+  }
+
+  function sendPendingDelivery(
+    key: string,
+    pending: NonNullable<ReturnType<typeof pendingDeliveryTurnEnds.get>>,
+    sendOverride?: (m: HookMessage) => boolean,
+  ): void {
+    if (pendingDeliveryTurnEnds.get(key) !== pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = null;
+    const send = sendOverride ?? sendFns.get(pending.connectionId);
+    if (!send || !send(pending.message)) return;
+    pending.attempts += 1;
+    const delay = Math.min(
+      TURN_DELIVERY_ACK_TIMEOUT_MS * 2 ** Math.min(3, Math.max(0, pending.attempts - 1)),
+      TURN_DELIVERY_ACK_MAX_DELAY_MS,
+    );
+    const timer = setTimeout(() => {
+      if (pendingDeliveryTurnEnds.get(key) !== pending) return;
+      pending.timer = null;
+      log.warn(
+        `turn.end ACK timed out; replaying unchanged result: ${pending.message.payload.requestId}`,
+      );
+      sendPendingDelivery(key, pending);
+    }, delay);
+    timer.unref?.();
+    pending.timer = timer;
+  }
+
+  function trackPendingDelivery(connectionId: string, msg: HookTurnEndMessage): void {
+    const key = ackKey(connectionId, msg.payload.requestId);
+    const existing = pendingDeliveryTurnEnds.get(key);
+    if (existing !== undefined) {
+      sendPendingDelivery(key, existing);
+      return;
+    }
+    const pending = { connectionId, message: msg, attempts: 0, timer: null };
+    pendingDeliveryTurnEnds.set(key, pending);
+    enforcePendingDeliveryLimit(connectionId);
+    if (pendingDeliveryTurnEnds.get(key) === pending) sendPendingDelivery(key, pending);
+  }
+
   function sendOrBuffer(
     connectionId: string,
-    message: HookMessage,
+    message: HookTurnEndMessage,
     terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>,
   ): void {
     const durable = persistTerminal({ ...terminal, delivery: 'pending' });
+    if (supportsDeliveryAck(connectionId)) {
+      // ACK 模式: 会话内重发由 pendingDeliveryTurnEnds 负责; 账本保持 pending,
+      // 收到任一 turn.delivery 回执才收口为 sent(见 handleTurnDelivery), 跨重启
+      // 由账本补发兜底「accepted 前进程崩溃」的窗口。
+      trackPendingDelivery(connectionId, message);
+      return;
+    }
     const send = sendFns.get(connectionId);
     if (send && send(message)) {
       if (durable) {
@@ -1848,6 +1940,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
+      for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
       // 能力快照按连接存, 而连接身份含账号指纹 —— 换账号后旧条目永远不会再被
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
@@ -1983,6 +2076,29 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         `interaction.decision ${payload.interactionId} button=${payload.buttonId} resolved=${resolved}`,
       );
     },
+    handleTurnDelivery(connectionId, payload) {
+      if (!accountActive) return;
+      const key = ackKey(connectionId, payload.requestId);
+      clearPendingDelivery(key);
+      // 任一回执都表示 server 已持久接管: 账本从 pending 收口为 sent, 重启后
+      // 不再补发。标记失败时保持 pending, 由重连补发 + server 收据幂等兜底。
+      if (terminalLedger) markTerminalSent(connectionId, payload.requestId);
+      if (payload.state === 'retrying') {
+        log.warn(
+          `turn.end accepted; X publish retrying: requestId=${payload.requestId} attempt=${payload.attempt} retryAt=${payload.retryAt ?? 'unknown'} code=${payload.error?.code ?? 'unknown'}`,
+        );
+        return;
+      }
+      if (payload.state === 'failed') {
+        log.warn(
+          `turn.end delivery failed: requestId=${payload.requestId} attempt=${payload.attempt} code=${payload.error?.code ?? 'unknown'}`,
+        );
+        return;
+      }
+      log.info(
+        `turn.end delivery ${payload.state}: requestId=${payload.requestId} attempt=${payload.attempt}`,
+      );
+    },
     cancel(connectionId, requestId) {
       if (!accountActive) return;
       // 1) 排队中的: 从队列摘除, 立即回 cancelled(任务从未开始)
@@ -2034,6 +2150,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     onDisconnected(connectionId) {
       sendFns.delete(connectionId);
+      for (const pending of pendingDeliveryTurnEnds.values()) {
+        if (pending.connectionId !== connectionId || pending.timer === null) continue;
+        clearTimeout(pending.timer);
+        pending.timer = null;
+      }
       // 断连是续跑回流的终局(协议阶段 18): server 此刻会收口那条消息并解绑这一轮
       // 的 requestId。观察器若活到重连后, 它的 progress / turn.end 会带着那个已被
       // 解绑的 id 发到新 socket(dispatchId 在重连间稳定, 所以真的发得出去), 被当
@@ -2062,6 +2183,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       pendingReopens.clear();
       serverFeatures.clear();
       sendFns.clear();
+      pendingTurnEnds.clear();
+      for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
     },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;
@@ -2069,22 +2192,38 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 老实例不宣告 turn.reopen 时必须立刻停用回流, 不能拿上一次的快照发帧。
       serverFeatures.set(connectionId, features ? [...features] : []);
       sendFns.set(connectionId, send);
+      const deliveryAck = supportsDeliveryAck(connectionId);
+      for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
+        if (pending.connectionId !== connectionId) continue;
+        if (deliveryAck) {
+          sendPendingDelivery(key, pending, send);
+        } else if (send(pending.message)) {
+          // 滚动发布回落到老 server：按历史 fire-and-forget 语义收口。
+          clearPendingDelivery(key);
+        }
+      }
       const buf = pendingTurnEnds.get(connectionId);
       const flushedRequestIds = new Set<string>();
       if (buf?.length) {
         // 当前进程的完整帧优先(可能带附件); 发送失败时保留剩余项。
+        // 新 server 转入 ACK 缓冲重放, 老 server 沿用 fire-and-forget。
         while (buf.length > 0) {
           const pending = buf[0];
-          if (!send(pending.message)) return;
+          if (deliveryAck) {
+            // 账本保持 pending, 收到 turn.delivery 回执才收口(见 handleTurnDelivery)。
+            trackPendingDelivery(connectionId, pending.message);
+          } else {
+            if (!send(pending.message)) return;
+            if (!markTerminalSent(connectionId, pending.terminal.requestId)) {
+              persistTerminalRecord({
+                ...pending.terminal,
+                delivery: 'sent',
+                completedAt: Date.now(),
+              });
+            }
+          }
           buf.shift();
           flushedRequestIds.add(pending.terminal.requestId);
-          if (!markTerminalSent(connectionId, pending.terminal.requestId)) {
-            persistTerminalRecord({
-              ...pending.terminal,
-              delivery: 'sent',
-              completedAt: Date.now(),
-            });
-          }
         }
         pendingTurnEnds.delete(connectionId);
       }
@@ -2099,7 +2238,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // ledger failed, do not immediately duplicate it with the text-only
         // durable frame during the same reconnect attempt.
         if (flushedRequestIds.has(pending.requestId)) continue;
-        if (!pending.turnEnd || !send(makeTurnEnd(pending.turnEnd))) return;
+        if (!pending.turnEnd) continue;
+        if (deliveryAck) {
+          // 已在 ACK 缓冲中的条目由本函数开头的循环重放, 不再用文本帧重复补发。
+          if (pendingDeliveryTurnEnds.has(ackKey(connectionId, pending.requestId))) continue;
+          trackPendingDelivery(connectionId, makeTurnEnd(pending.turnEnd));
+          continue;
+        }
+        if (!send(makeTurnEnd(pending.turnEnd))) return;
         if (!markTerminalSent(connectionId, pending.requestId)) {
           persistTerminalRecord({ ...pending, delivery: 'sent' });
         }

@@ -76,3 +76,34 @@ describe('normalize(坏形态清洗)', () => {
     ).toEqual({ overrides: {}, inflightLimits: { art: 2 } });
   });
 });
+
+/**
+ * 取值域映射 —— 写入校验拿哪份白名单全看它。
+ *
+ * 这不是形式主义:映射漏一个类目时,该类目的下拉在设置里照常渲染、照常可选,
+ * 一选就被别的类目的白名单拒掉,前端回滚成一句通用 toast —— 界面上看不出是
+ * "这个能力的钉选功能整个不工作"(PR #1707 review 实际发生过两次)。
+ */
+describe('cindyCapabilityValueDomain(取值域映射)', () => {
+  it('每个已登记的能力键都有映射,没有落进兜底分支的', async () => {
+    const { CINDY_CAPABILITY_KEYS, cindyCapabilityValueDomain } = await import(
+      '../cindyPrefsStore'
+    );
+    for (const key of CINDY_CAPABILITY_KEYS) {
+      expect(cindyCapabilityValueDomain(key), key).toMatch(
+        /^(image|video|embed|utilityChain)$/,
+      );
+    }
+  });
+
+  it('类目归属逐条锁死(embed 不能落到 image;text 不走媒体目录)', async () => {
+    const { cindyCapabilityValueDomain } = await import('../cindyPrefsStore');
+    expect(cindyCapabilityValueDomain('image.generate')).toBe('image');
+    expect(cindyCapabilityValueDomain('image.edit')).toBe('image');
+    expect(cindyCapabilityValueDomain('video.generate')).toBe('video');
+    expect(cindyCapabilityValueDomain('video.edit')).toBe('video');
+    expect(cindyCapabilityValueDomain('embed.text')).toBe('embed');
+    // 轻量链档位键(codex-gpt-5.4-mini 等)与媒体目录 model id 不是同一个词汇表。
+    expect(cindyCapabilityValueDomain('text.oneshot')).toBe('utilityChain');
+  });
+});

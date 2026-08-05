@@ -225,6 +225,25 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
   });
 
+  it('向量清单也合成能力行,可停用(否则停用轴有实现无入口)', () => {
+    // 派生侧(deriveCindyMediaConfig)一直按 isModelDisabled 过滤向量型号,但设置页
+    // 此前只为 image/video 合成行 —— 用户没法单独拦住某个向量型号的付费调用,只能
+    // 整家停用 XD(PR #1707 review)。
+    const withEmbedding = {
+      ...provider,
+      embeddingModels: [
+        { id: 'voyage/voyage-4', name: 'Voyage 4' },
+        { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large', disabled: true },
+      ],
+    } as ProviderView;
+    const rows = buildUnionRows(withEmbedding);
+    const v4 = rows.find((r) => r.id === 'voyage/voyage-4')!;
+    expect(isCapabilityRow(v4, false)).toBe(true);
+    expect(isRowDisabled(v4)).toBe(false);
+    const large = rows.find((r) => r.id === 'voyage/voyage-4-large')!;
+    expect(isRowDisabled(large)).toBe(true);
+  });
+
   it('能力模型行按分组判定(image → 能力行;对话厂商/兜底分组 → 否)', () => {
     const withImage = {
       ...provider,

@@ -28,6 +28,7 @@ import {
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SLACK_TOOLS,
+  HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
   makeBindStart,
   makeHello,
@@ -751,6 +752,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_BIND,
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_TURN_DELIVERY,
     ],
     isEnabled: () => store.get().xEnabled,
     setEnabled: (enabled) => {
@@ -2303,6 +2305,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           send(makeQueryResponse(response));
         }),
       );
+      return;
+    }
+    if (msg.type === 'turn.delivery') {
+      if (
+        expectedProvider !== 'x' ||
+        lane?.serverFeatures.includes(HOOK_FEATURE_TURN_DELIVERY) !== true
+      ) {
+        log.warn('turn.delivery ignored without negotiated X delivery ACK capability');
+        return;
+      }
+      if (dispatcher) {
+        dispatcher.handleTurnDelivery(dispatchId('x'), msg.payload);
+      } else {
+        log.warn('turn.delivery ignored (no dispatcher)');
+      }
       return;
     }
     if (msg.type === 'task.cancel') {
