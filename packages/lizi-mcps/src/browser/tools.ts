@@ -225,6 +225,19 @@ function toRuntimeRequest(args: Record<string, unknown>): BrowserControlRequest 
   return out as unknown as BrowserControlRequest;
 }
 
+const LOCAL_PREVIEW_ERROR_CODES: Record<string, BrowserControlErrorCode> = {
+  PATH_NOT_ALLOWED: 'BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED',
+  UNSUPPORTED_FILE: 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNSUPPORTED_FILE',
+  NOT_FOUND: 'BROWSER_RUNTIME_LOCAL_PREVIEW_NOT_FOUND',
+  UNAVAILABLE: 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE',
+};
+
+/** Map a host-side LocalPreviewError code prefix to a stable MCP error code. */
+function localPreviewErrorCode(message: string): BrowserControlErrorCode {
+  const m = /^(PATH_NOT_ALLOWED|UNSUPPORTED_FILE|NOT_FOUND|UNAVAILABLE):/.exec(message);
+  return (m && LOCAL_PREVIEW_ERROR_CODES[m[1]]) ?? 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE';
+}
+
 /**
  * previewLocalHtml: sandboxed preview of a workspace-local HTML file.
  *
@@ -281,11 +294,10 @@ async function handlePreviewLocalHtml(
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const code = message.includes('PATH_NOT_ALLOWED')
-      ? 'BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED'
-      : message.includes('UNSUPPORTED_FILE')
-        ? 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNSUPPORTED_FILE'
-        : 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE';
+    // Host errors carry a machine-readable code prefix (e.g. "PATH_NOT_ALLOWED: …").
+    // Parse it instead of substring-matching the whole message — substrings can
+    // appear accidentally in the free-text part.
+    const code = localPreviewErrorCode(message);
     return errorResult('previewLocalHtml', `本地预览创建失败: ${message}`, code);
   }
   const runtime = getRuntime(deps);

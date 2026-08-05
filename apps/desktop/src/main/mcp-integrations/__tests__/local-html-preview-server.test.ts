@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -72,6 +72,7 @@ describe('local-html-preview-server', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('content-security-policy')).toContain("connect-src 'self'");
     expect(res.headers.get('content-security-policy')).toContain("form-action 'none'");
+    expect(res.headers.get('content-security-policy')).toContain("navigate-to 'self'");
     // no remote subresources: https: must appear in NO directive
     expect(res.headers.get('content-security-policy')).not.toContain('https:');
     await res.arrayBuffer();
@@ -106,6 +107,22 @@ describe('local-html-preview-server', () => {
     expect((await get(`${base}/secret.json`)).status).toBe(404); // json lives outside entry dir — also covered below
     expect((await get(`${base}/..`)).status).toBe(404); // directory-ish
     expect((await get(url)).status).toBe(200); // sanity
+  });
+
+  it('rejects symlink/junction escapes pointing outside the serving root', async () => {
+    const { url } = await createUrl();
+    const base = url.slice(0, url.lastIndexOf('/'));
+    // A whitelisted-looking file that is actually a symlink to a file OUTSIDE
+    // the entry directory must not be served (realpath re-check rejects it).
+    const linkPath = nodePath.join(workingDir, 'dist', 'link.html');
+    try {
+      await symlink(nodePath.join(workingDir, 'secret.json'), linkPath);
+    } catch {
+      // Platform without symlink permission (e.g. Windows w/o developer mode):
+      // nothing to assert, the rest of the suite still covers the boundary.
+      return;
+    }
+    expect((await get(`${base}/link.html`)).status).toBe(404);
   });
 
   it('rejects hidden directory segments even when the file extension is whitelisted', async () => {

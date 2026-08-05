@@ -125,6 +125,7 @@ const CSP =
   "media-src 'self' data:; " +
   "connect-src 'self'; " +
   "form-action 'none'; " +
+  "navigate-to 'self'; " +
   "base-uri 'none'; " +
   "object-src 'none'; " +
   "frame-src 'none'";
