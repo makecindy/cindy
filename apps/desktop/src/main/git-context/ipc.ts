@@ -35,9 +35,10 @@ import {
 } from './sessionDirResolver.js';
 import {
   resolveAuthoritativeSessionGitTarget,
+  resolveReadyRemoteGitHost,
   resolveRemoteSessionGitDir,
 } from './remoteSessionDirResolver.js';
-import { getRemoteSshPool } from '../remote-ssh/index.js';
+import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
@@ -208,18 +209,18 @@ export function registerGitContextIpc(): void {
       }
     }
     if (remoteHostId) {
-      const host = getRemoteSshPool().get(remoteHostId);
+      const host = await resolveReadyRemoteGitHost(remoteHostId, {
+        ensureReady: ensureRemoteHostReady,
+        getHost: (hostId) => getRemoteSshPool().get(hostId),
+      });
       if (!host) return { workdir: null, head: null, source: null };
-      const telemetryPath =
-        host.getStatus() === 'ready'
-          ? await getSessionGitTelemetryCandidateLive(
-              sessionId,
-              // SSH sessions run through the bash-based remote runtime; a
-              // device-link session without nested SSH probes its controlled
-              // Desktop filesystem and must retain that process platform.
-              'linux',
-            )
-          : null;
+      const telemetryPath = await getSessionGitTelemetryCandidateLive(
+        sessionId,
+        // SSH sessions run through the bash-based remote runtime; a
+        // device-link session without nested SSH probes its controlled
+        // Desktop filesystem and must retain that process platform.
+        'linux',
+      );
       return resolveRemoteSessionGitDir({
         telemetryPath,
         fallbackWorktreePath,

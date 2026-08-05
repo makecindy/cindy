@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   probeRemoteGitDir,
   resolveAuthoritativeSessionGitTarget,
+  resolveReadyRemoteGitHost,
   resolveRemoteSessionGitDir,
   type RemoteGitHost,
 } from '../git-context/remoteSessionDirResolver';
@@ -47,6 +48,37 @@ describe('probeRemoteGitDir', () => {
   it('远端未连接或执行失败时降级为空', async () => {
     await expect(probeRemoteGitDir(makeHost('', { status: 'disconnected' }).host, '/repo')).resolves.toBeNull();
     await expect(probeRemoteGitDir(makeHost('', { reject: true }).host, '/repo')).resolves.toBeNull();
+  });
+});
+
+describe('resolveReadyRemoteGitHost', () => {
+  it('冷启动时先 hydrate/connect,再返回 ready host', async () => {
+    const { host } = makeHost('branch:main\n');
+    const ensureReady = vi.fn().mockResolvedValue(undefined);
+    const getHost = vi.fn().mockReturnValue(host);
+
+    await expect(resolveReadyRemoteGitHost('ssh-1', { ensureReady, getHost })).resolves.toBe(host);
+    expect(ensureReady).toHaveBeenCalledWith('ssh-1');
+    expect(getHost).toHaveBeenCalledWith('ssh-1');
+  });
+
+  it('连接失败时保持 Git context 静默降级为空', async () => {
+    const ensureReady = vi.fn().mockRejectedValue(new Error('auth failed'));
+    const getHost = vi.fn();
+
+    await expect(resolveReadyRemoteGitHost('ssh-1', { ensureReady, getHost })).resolves.toBeNull();
+    expect(getHost).not.toHaveBeenCalled();
+  });
+
+  it('ensure 成功但 host 仍未 ready 时不执行 probe', async () => {
+    const { host } = makeHost('', { status: 'reconnecting' });
+
+    await expect(
+      resolveReadyRemoteGitHost('ssh-1', {
+        ensureReady: vi.fn().mockResolvedValue(undefined),
+        getHost: vi.fn().mockReturnValue(host),
+      }),
+    ).resolves.toBeNull();
   });
 });
 

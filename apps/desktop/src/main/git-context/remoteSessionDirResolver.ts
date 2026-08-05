@@ -22,6 +22,29 @@ export interface RemoteGitHost {
   ): Promise<{ stdout: string }>;
 }
 
+/**
+ * Rehydrate and connect an SSH host before a remote Git probe.
+ *
+ * Git context is a best-effort header query: a missing host, expired
+ * credentials, or a transient network failure should keep the task usable and
+ * return the same empty projection as any other unavailable remote path.
+ */
+export async function resolveReadyRemoteGitHost(
+  remoteHostId: string,
+  deps: {
+    ensureReady: (hostId: string) => Promise<void>;
+    getHost: (hostId: string) => RemoteGitHost | null | undefined;
+  },
+): Promise<RemoteGitHost | null> {
+  try {
+    await deps.ensureReady(remoteHostId);
+  } catch {
+    return null;
+  }
+  const host = deps.getHost(remoteHostId);
+  return host?.getStatus() === 'ready' ? host : null;
+}
+
 export interface StoredSessionGitTarget {
   workingDir: string | null;
   worktreePath: string | null;
