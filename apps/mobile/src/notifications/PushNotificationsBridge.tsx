@@ -102,7 +102,7 @@ export function PushNotificationsBridge() {
       const dedupeKey = identifier ? `id:${identifier}` : `deepLink:${deepLink}`;
       if (consumedNotificationResponseKeys.has(dedupeKey)) return;
       consumedNotificationResponseKeys.add(dedupeKey);
-      void Notifications.clearLastNotificationResponseAsync?.().catch(() => undefined);
+      void Notifications.clearLastNotificationResponseAsync?.()?.catch(() => undefined);
       pendingDeepLinkRef.current = deepLink;
       flushPendingDeepLink();
     };
