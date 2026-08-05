@@ -1668,17 +1668,20 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (terminalReplay) {
       cacheAck(connectionId, terminalReplay.ack);
       const ackDelivered = send(makeTaskAck(terminalReplay.ack));
+      if (!terminalReplay.turnEnd) return;
+      if (!ackDelivered) {
+        persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
+        return;
+      }
+      if (!send(makeTurnEnd(terminalReplay.turnEnd))) {
+        persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
+        return;
+      }
       if (
-        ackDelivered &&
-        terminalReplay.turnEnd &&
-        send(makeTurnEnd(terminalReplay.turnEnd))
+        terminalReplay.delivery === 'pending' &&
+        !markTerminalSent(connectionId, payload.requestId)
       ) {
-        if (
-          terminalReplay.delivery === 'pending' &&
-          !markTerminalSent(connectionId, payload.requestId)
-        ) {
-          persistTerminalRecord({ ...terminalReplay, delivery: 'sent' });
-        }
+        persistTerminalRecord({ ...terminalReplay, delivery: 'sent' });
       }
       return;
     }

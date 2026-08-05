@@ -1364,6 +1364,55 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
+  it('durable replay 的 ACK 或 turn.end 发送失败时, 回退 pending 并在重连补发', async () => {
+    for (const failedType of ['task.ack', 'turn.end'] as const) {
+      const fr = fakeRunner();
+      const stored = memoryTerminalLedger();
+      const requestId = `replay-${failedType}`;
+      stored.set({
+        connectionId: 'conn-1',
+        requestId,
+        ack: {
+          requestId,
+          result: 'accepted',
+          reason: null,
+          sessionId: `session-${failedType}`,
+          queuePosition: null,
+        },
+        turnEnd: {
+          requestId,
+          externalKey: `team-slack:C1:${failedType}`,
+          sessionId: `session-${failedType}`,
+          status: 'ok',
+          finalText: '重连补发结果',
+          errorMessage: null,
+          usage: { durationMs: 1 },
+        },
+        delivery: 'sent',
+        completedAt: 123_456,
+      });
+
+      const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: stored });
+      const sent: HookMessage[] = [];
+      d.handleDispatch('conn-1', dispatch({ requestId }), (message) => {
+        sent.push(message);
+        return message.type !== failedType;
+      });
+      await tick();
+
+      expect(fr.calls).toHaveLength(0);
+      expect(sent.map((message) => message.type)).toEqual(
+        failedType === 'task.ack' ? ['task.ack'] : ['task.ack', 'turn.end'],
+      );
+      expect(stored.records[0]?.delivery).toBe('pending');
+
+      const reconnected = collector();
+      d.onConnected('conn-1', reconnected.send);
+      expect(reconnected.ofType('turn.end')).toHaveLength(1);
+      expect(stored.records[0]?.delivery).toBe('sent');
+    }
+  });
+
   it('重建 dispatcher 时请求尚未终结 -> 没有 durable terminal, 仍允许恢复执行', async () => {
     const terminalLedger = memoryTerminalLedger();
     const firstRunner = fakeRunner();
