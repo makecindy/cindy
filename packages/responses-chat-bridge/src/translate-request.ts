@@ -601,6 +601,8 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       } else {
         assistant ??= { role: 'assistant', content: null };
         assistant.content = assistant.content ? `${assistant.content}\n${content}` : content;
+        const nextItem = input[index + 1];
+        if (!isPlainObject(nextItem) || nextItem.type !== 'agent_message') flushAssistant();
       }
       continue;
     }

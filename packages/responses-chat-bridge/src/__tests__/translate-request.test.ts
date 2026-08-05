@@ -371,6 +371,7 @@ describe('translateResponsesRequest', () => {
           author: 'observer',
           content: [{ type: 'output_text', text: '   ' }],
         },
+        { type: 'message', role: 'assistant', content: 'Final answer' },
         { type: 'message', role: 'user', content: 'finish' },
       ],
     }));
@@ -385,6 +386,7 @@ describe('translateResponsesRequest', () => {
           '[collab message from observer; empty content]',
         ].join('\n'),
       },
+      { role: 'assistant', content: 'Final answer' },
       { role: 'user', content: 'finish' },
     ]);
   });
