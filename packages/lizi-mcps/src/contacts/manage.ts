@@ -303,10 +303,14 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
         // host 侧 writeSystemContacts 单批上限 200; ids 路径有 zod cap 而 group 路径
         // 条数不受限 — 超限前分批执行, 否则 dry_run 能过、真执行整批被拒。
         // 批上限可通过 deps.systemWriteBatchSize 注入(测试用小值省建卡开销)。
-        // 只接受正整数;0/负数/非整数会让下方 for 步进失序或死循环, 非法值回退默认。
+        // 只接受 1..200 的正整数:0/负数/非整数会让下方 for 步进失序或死循环,
+        // 超过 200 会让单批 slice 超出 host 硬限制被拒 — 非法/超限一律回退默认 200。
         const injected = deps.systemWriteBatchSize;
         const SYSTEM_WRITE_BATCH =
-          typeof injected === 'number' && Number.isInteger(injected) && injected > 0
+          typeof injected === 'number' &&
+          Number.isInteger(injected) &&
+          injected > 0 &&
+          injected <= 200
             ? injected
             : 200;
         const results: SystemContactWriteResult[] = [];

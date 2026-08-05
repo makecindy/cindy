@@ -43,7 +43,7 @@ function noopLogger() {
 /** 测试用的小批上限:注入 deps.systemWriteBatchSize 让分批在几笔建卡内触发,
  * 避免为跨过 host 默认 200 上限而建 201 张卡(Windows 慢 runner 上撞 vitest 5s
  * 超时, 见 #1598)。分批/锚点回归意图不变。 */
-const SYSTEM_WRITE_BATCH = 5;
+const TEST_SYSTEM_WRITE_BATCH_SIZE = 5;
 
 function parseResult(res: { content: Array<{ type: string; text?: string }> }): {
   ok: boolean;
@@ -82,7 +82,7 @@ describe('cindy_contacts tools', () => {
         mutations += 1;
       },
       // 测试用小批上限:分批/锚点回归在几笔建卡内触发, 避免建 201 张卡撞超时
-      systemWriteBatchSize: SYSTEM_WRITE_BATCH,
+      systemWriteBatchSize: TEST_SYSTEM_WRITE_BATCH_SIZE,
       // stub 回写器: 记录计划, created 返回伪 apple id
       writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
         writeCalls.push(items);
@@ -431,15 +431,15 @@ describe('cindy_contacts tools', () => {
       id: string;
     };
     const ids: string[] = [];
-    for (let i = 0; i < SYSTEM_WRITE_BATCH + 1; i += 1) {
+    for (let i = 0; i < TEST_SYSTEM_WRITE_BATCH_SIZE + 1; i += 1) {
       ids.push(store.createContact({ kind: 'person', displayName: `批量成员${i}`, source: 'agent' }).id);
     }
     store.addToGroup(g.id, ids);
 
     const res = parseResult(await registry.call('contacts_export_system', { group: '大组' }));
     expect(res.ok).toBe(true);
-    expect((res.data as { created: number }).created).toBe(SYSTEM_WRITE_BATCH + 1);
-    expect(writeCalls.map((batch) => batch.length)).toEqual([SYSTEM_WRITE_BATCH, 1]);
+    expect((res.data as { created: number }).created).toBe(TEST_SYSTEM_WRITE_BATCH_SIZE + 1);
+    expect(writeCalls.map((batch) => batch.length)).toEqual([TEST_SYSTEM_WRITE_BATCH_SIZE, 1]);
   });
 
   it('系统回写: 锚点每批立即回填, 后续批失败时已建卡不失锚', async () => {
@@ -450,7 +450,7 @@ describe('cindy_contacts tools', () => {
     const failingDeps: ContactsMcpDeps = {
       getManager: () => manager,
       isEnabled: () => true,
-      systemWriteBatchSize: SYSTEM_WRITE_BATCH,
+      systemWriteBatchSize: TEST_SYSTEM_WRITE_BATCH_SIZE,
       writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
         call += 1;
         if (call > 1) throw new Error('[PERMISSION_DENIED] revoked mid-run');
@@ -470,7 +470,7 @@ describe('cindy_contacts tools', () => {
       id: string;
     };
     const ids: string[] = [];
-    for (let i = 0; i < SYSTEM_WRITE_BATCH + 1; i += 1) {
+    for (let i = 0; i < TEST_SYSTEM_WRITE_BATCH_SIZE + 1; i += 1) {
       ids.push(store.createContact({ kind: 'person', displayName: `中断成员${i}`, source: 'agent' }).id);
     }
     store.addToGroup(g.id, ids);
@@ -481,7 +481,7 @@ describe('cindy_contacts tools', () => {
     const anchored = ids.filter((id) =>
       store.getContact(id).identities.some((i) => i.platform === 'apple-contacts'),
     );
-    expect(anchored).toHaveLength(SYSTEM_WRITE_BATCH);
+    expect(anchored).toHaveLength(TEST_SYSTEM_WRITE_BATCH_SIZE);
   });
 
   it('write/manage 工具成功后触发 onMutated, 只读工具不触发(UI 刷新通道)', async () => {

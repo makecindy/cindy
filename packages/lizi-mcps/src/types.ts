@@ -402,7 +402,8 @@ export interface ContactsMcpDeps {
   ) => Promise<import('@cindy/maker-core').SystemContactWriteResult[]>;
   /**
    * 系统通讯录回写的单批上限(host 侧 writeSystemContacts 一次能接收的最大条数)。
-   * 缺省 200(host 硬限制);测试注入小值可省去大量建卡开销, 仍能验证分批边界。
+   * 只接受 1..200 的整数, 缺省 200(host 硬限制);非法值/超限回退 200。
+   * 测试注入小值可省去大量建卡开销, 仍能验证分批边界。
    */
   systemWriteBatchSize?: number;
   /**
