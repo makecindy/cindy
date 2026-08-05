@@ -42,7 +42,6 @@ import {
 import {
   providerSecretStorageKey,
   customMcpSecretStorageKey,
-  customProviderHeaderStorageKey,
   customProviderSecretStorageKey,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
@@ -92,23 +91,6 @@ describe('providerSecrets registry', () => {
     expect(isRendererAccessibleSafeStorageKey('VOICE_INPUT_ASR_API_KEY')).toBe(false);
     expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('xd'))).toBe(true);
     expect(isRendererAccessibleSafeStorageKey(customMcpSecretStorageKey('example'))).toBe(true);
-  });
-
-  it('keeps the Gemini API key behind its dedicated main-only IPC boundary', () => {
-    expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('gemini'))).toBe(false);
-    expect(isRendererAccessibleSafeStorageKey('PROVIDER_KEY_GEMINI')).toBe(false);
-  });
-
-  it('keeps the OpenAI images API key behind its dedicated main-only IPC boundary', () => {
-    expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('openai-images'))).toBe(false);
-    expect(isRendererAccessibleSafeStorageKey('PROVIDER_KEY_OPENAI_IMAGES')).toBe(false);
-  });
-
-  it('keeps custom-provider header blobs behind the main-only boundary', () => {
-    const key = customProviderHeaderStorageKey('my_or', 'pi');
-    expect(key).toBe('provider_headers_my_or_pi');
-    expect(isRendererAccessibleSafeStorageKey(key)).toBe(false);
-    expect(() => customProviderHeaderStorageKey('bad/path', 'pi')).toThrow(/illegal characters/);
   });
 
   it('动态键名构造前校验片段字符集,路径逃逸类 id 直接抛错', () => {

@@ -352,7 +352,6 @@ describe('inputProjection', () => {
       queueAbortPending: true,
       error: 'failed',
       errorRetryText: 'retry',
-      autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
 
     expect(projection).toMatchObject({
@@ -366,7 +365,6 @@ describe('inputProjection', () => {
       queueAbortPending: true,
       error: 'failed',
       errorRetryText: 'retry',
-      autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
   });
 

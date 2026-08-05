@@ -31,13 +31,8 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 **Right-click actions:**
 
-- On a regular session: **Pin / Unpin**, **Rename**, **Move to project** (submenu), **Copy session link** (a `cindy://session/<id>` deep link), **Open in new window**, **Archive**, **Delete**.
-- On an archived session: **Rename**, **Unarchive**, **Copy session link**, **Delete**.
-
-**Removing a project from the sidebar:**
-
-- Open a local project's overflow menu and choose **Remove Project from Sidebar**. Cindy asks for confirmation, removes the project from the sidebar, and keeps its existing sessions available in the **Chat** section. Individually pinned sessions remain in **Pinned**. Those sessions are not archived or stopped, and files on your computer are not deleted.
-- To restore the project, choose **Add Project** and select the same directory again. Cindy restores the existing sessions under their original project grouping instead of creating an empty session.
+- On a regular session: **Pin / Unpin**, **Rename**, **Move to project** (submenu), **Copy conversation link** (a `cindy://session/<id>` deep link), **Open in new window**, **Archive**, **Delete**.
+- On an archived session: **Rename**, **Unarchive**, **Copy conversation link**, **Delete**.
 
 **Session statuses:**
 

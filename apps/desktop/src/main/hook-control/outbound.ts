@@ -49,7 +49,7 @@ const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
  * 请求或加以引用/臆测。删改这句 guard 会让该误读复发。
  */
 export function buildHookPromptNote(im: string | undefined): string {
-  const platform = im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : 'Slack';
+  const platform = im === 'telegram' ? 'Telegram' : 'Slack';
   const attachmentNote =
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
@@ -60,19 +60,6 @@ export function buildHookPromptNote(im: string | undefined): string {
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
     '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
-  if (im === 'x') {
-    return (
-      `${attachmentNote}\n` +
-      // session-runner 会先用 observer.finalText() 按桌面消息流规则拼出正式正文,
-      // 再由服务端 X 发送层收口成一条回复。不要退回旧的“只取最后一条消息”描述。
-      // 标题、列表、表格等结构仍参与正式正文判定,发布时才转换为纯文本。
-      '[X 回复说明] 当前账号为付费账号,不受 280 个字符限制,' +
-      '无需针对当前渠道调整回答篇幅。系统会从本轮消息中按桌面版规则拼出正式正文,' +
-      '再以一条回复发回 X。正文可以使用标题、列表、表格、普通段落或代码块组织内容,' +
-      '发布时会转换为纯文本;上述附件引用除外。在 X 中除上述附件引用外,尽量避免输出其他 URL 链接。' +
-      '不要解释或复述这些格式要求。'
-    );
-  }
   if (im !== 'telegram') return attachmentNote;
   return (
     `${attachmentNote}\n` +
@@ -149,17 +136,6 @@ export interface OutboundDeps {
   resolveImageUrl: (url: string) => { absPath: string };
   /** xdt-file:// 允许读取的根目录; 未提供时 fail-closed, 不读取任何本地文件。 */
   allowedFileRoots?: string[];
-  /**
-   * 扫描出站引用的文本范围; 省略 = 就用 finalText。
-   *
-   * 给"正文与引用扫描范围不同"的渠道用。当前 X 虽然一次 mention 只有一条公开
-   * 回帖, 正文仍先按桌面折叠规则拼成正式答复; **正文范围与引用范围必须分开**:
-   * agent 常在被折叠的工作过程里贴图/贴文件, 两者绑在一起的话那些附件会静默
-   * 丢失(PR #1272 review 指出)。
-   *
-   * 正文变换仍然只作用于 finalText —— 这里扩大的只是"哪些引用要被收集成附件"。
-   */
-  refScanText?: string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -267,14 +243,10 @@ export async function collectOutboundAttachments(
     return true;
   };
 
-  // 引用扫描范围可以宽于正文(见 deps.refScanText)。下面两轮扫描一律用它,
-  // 第 3 步的正文变换一律用 finalText —— 引用扫描可以覆盖被折叠的工作过程。
-  const refScanText = deps.refScanText ?? finalText;
-
   // 1. 图片: 文本引用 + tool_result 旁路, 按 absPath 去重(模型常重复引用)
   const imageAbsPaths: string[] = [];
   const seenImage = new Set<string>();
-  for (const m of refScanText.matchAll(XDT_IMAGE_REGEX)) {
+  for (const m of finalText.matchAll(XDT_IMAGE_REGEX)) {
     try {
       const { absPath } = deps.resolveImageUrl(m[2]);
       imageAbsPathByUrl.set(m[2], absPath);
@@ -301,7 +273,7 @@ export async function collectOutboundAttachments(
 
   // 2. 文件引用(去重同上)
   const seenFile = new Set<string>();
-  for (const m of refScanText.matchAll(XDT_FILE_REGEX)) {
+  for (const m of finalText.matchAll(XDT_FILE_REGEX)) {
     const url = m[2];
     if (fileAbsPathByUrl.has(url)) continue;
     let absPath: string;

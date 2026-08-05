@@ -30,8 +30,6 @@ import {
   type VoiceInputSettings,
 } from '../../shared/voiceInputData';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
-import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
-import { getComposerSendShortcutPreference } from './useComposerSendShortcutPreference';
 
 export {
   DEFAULT_VOICE_INPUT_REFINEMENT_INSTRUCTIONS,
@@ -147,12 +145,7 @@ export type VoiceInputShortcutUpdateResult =
     pendingInputMonitoring?: boolean;
   }
   // 用 IPC 契约的固定联合而不是裸 string，避免误传/误判不存在的 code。
-  | {
-    ok: false;
-    error: string;
-    errorCode?: VoiceInputGlobalErrorCode;
-    conflict?: 'composer-voice-input';
-  };
+  | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 
 /**
  * 录制期挂起全局快捷键。
@@ -321,20 +314,6 @@ export function useVoiceInputSettings(): {
 
   const setShortcut = useCallback(
     async (shortcut: VoiceInputShortcut | null): Promise<VoiceInputShortcutUpdateResult> => {
-      if (
-        findComposerVoiceInputConflict(
-          getComposerSendShortcutPreference(),
-          shortcut,
-          window.electronAPI?.platform,
-        )
-      ) {
-        return {
-          ok: false,
-          conflict: 'composer-voice-input',
-          error: 'Voice Input shortcut conflicts with the Composer send shortcut',
-        };
-      }
-
       try {
         const result = await window.electronAPI.voiceInput.updateShortcutSetting(shortcut);
         if (!result.ok) log.warn('voice input shortcut setting update failed:', result.error);

@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { ChannelIM, IMMessageEvent } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -27,7 +27,6 @@ import {
 } from '../accountBoundary';
 
 import { getControlScope, isInControl } from './controlState';
-import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
@@ -38,13 +37,16 @@ import type { ImChannelAdapter } from './types';
  * 用 `!` 而非 slash 前缀: Slack 会把 `/` 开头的输入截为原生 slash command,
  * 普通 DM 文本里只有 `!` 前缀能原样到达 bot。
  */
-export { isStopCommand } from './controlCommands';
+export function isStopCommand(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized === '!stop' || normalized === '！stop';
+}
 
 export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
   turnRunner: ImTurnRunner,
-): (im: TextChannelIM) => () => void {
+): (im: ChannelIM) => () => void {
   const { ui, channel, threadScoped } = adapter;
   const log = createLogger(`im:${channel}:msg`);
 
@@ -52,7 +54,7 @@ export function createMessageHandler(
   const userLocks = new Map<string, Promise<void>>();
 
   async function processOne(
-    im: TextChannelIM,
+    im: ChannelIM,
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
@@ -60,34 +62,6 @@ export function createMessageHandler(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
     );
-
-    // ── 控制命令的主人门: 群成员的 !stop / slash 静默丢弃 ────────────────────
-    // 群消息的 senderId 是**群 lane**(telegram g/<chatId>、钉钉
-    // encodeLaneUserId(conversationId)), 所以群成员发的 !stop 会解析到同一个群
-    // 会话 —— 等于掐掉主人正在跑的那一轮; slash 则会去动主人的目录/会话。
-    // 静默(不回提示)与 telegram 入站层同口径: 群里不可被探测。也不落到 agent,
-    // 否则命令会变成一句普通 prompt。
-    //
-    // 放在 /ctr 拦截**之前**: 否则主人正走 /ctr 时, 群成员发命令会收到一句
-    // "控制流程中" —— 等于把主人的状态回给了没有权限的人。
-    //
-    // 只有**纯文本**才算控制命令: 附件与 unsupported(音视频/超限/未知类型等)都要
-    // 让消息走 unsupportedNotice / unsupportedOnly / agent 的原有路径, 不能被当成
-    // 一句裸命令吞掉 —— 那会连"你那个音频我处理不了"的反馈一起吃掉。
-    // 这个判据必须与下面两条命令分支**逐字一致**: 门比分支窄一点, 非主人的
-    // `!stop` + unsupported 就会穿过门再被分支执行, 洞等于没堵。
-    const pureTextCommandInput =
-      event.text.length > 0 && event.attachments.length === 0 && event.unsupported.length === 0;
-    const commandLike =
-      pureTextCommandInput &&
-      (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
-    if (commandLike && !isCommandAuthorized(event)) {
-      log.info(
-        `dropped non-owner command sender=...${event.senderId.slice(-8)} ` +
-          `speaker=...${(event.speaker?.id ?? '').slice(-8)}`,
-      );
-      return;
-    }
 
     // ── /ctr 原子化拦截 ────────────────────────────────────────────────
     // 该 (bot, owner) 处于 /ctr 流程中 → 任何消息都不路由到 slash/agent,
@@ -117,10 +91,10 @@ export function createMessageHandler(
     }
 
     // ── !stop 控制指令: 中止当前 turn, 绝不作为普通消息入队 ─────────────────
-    // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
-    // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
+    // 放在 slash 之前; 与 slash 同口径只认无附件的纯文本。turn 运行期间
+    // userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (pureTextCommandInput && isStopCommand(event.text)) {
+    if (event.text && event.attachments.length === 0 && isStopCommand(event.text)) {
       let reply: string;
       try {
         const result = await turnRunner.stopActiveTurn({
@@ -146,8 +120,8 @@ export function createMessageHandler(
       return;
     }
 
-    // ── slash command (only on plain text: no attachments, no unsupported) ──
-    if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+    // ── slash command (only on plain text, no attachments) ──────────────────
+    if (event.text && event.attachments.length === 0 && looksLikeSlashCommand(event.text)) {
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
@@ -249,7 +223,7 @@ export function createMessageHandler(
     }
   }
 
-  return function attachMessageHandler(im: TextChannelIM): () => void {
+  return function attachMessageHandler(im: ChannelIM): () => void {
     return im.onMessage((event) => {
       // Capture synchronously, before entering the per-user queue. A boolean
       // check at execution time could accept old-account work after relogin.

@@ -28,8 +28,6 @@ export type {
   IMMessageEvent,
   IMCardActionEvent,
   IMStatus,
-  IMErrorCode,
-  IMSecretReadResult,
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,
@@ -45,31 +43,11 @@ export { TelegramIM, createTelegramIM } from './telegram/index.js';
 export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
-export { WecomIM, createWecomIM } from './wecom/index.js';
-export type { WecomIMOptions } from './wecom/index.js';
-export {
-  decodeWecomLane,
-  encodeWecomGroupLane,
-  chunkWecomMarkdown,
-  escapeWecomMarkdown,
-} from './wecom/codec.js';
-export { stripXdtFileLinks, stripXdtImageLinks } from './xdtRefs.js';
 export {
   decodeLaneUserId as decodeTelegramLaneUserId,
   encodeLaneUserId as encodeTelegramLaneUserId,
   decodeMessageId as decodeTelegramMessageId,
 } from './telegram/codec.js';
-
-export { DingTalkIM, createDingTalkIM } from './dingtalk/index.js';
-export type {
-  DingTalkIMOptions,
-  DingTalkPublicState,
-  DingTalkStreamClient,
-} from './dingtalk/index.js';
-export {
-  decodeLaneUserId as decodeDingTalkLaneUserId,
-  encodeLaneUserId as encodeDingTalkLaneUserId,
-} from './dingtalk/codec.js';
 
 export type {
   IdentityKey,

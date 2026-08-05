@@ -14,16 +14,6 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-async function primeOwnerFence(): Promise<void> {
-  const { __testing: dataOwnerGenerationTesting, setDataOwnerGeneration } =
-    await import('@/contexts/dataOwnerGeneration');
-  const { __testing: remoteDataOwnerPushFenceTesting } =
-    await import('@/lib/remoteDataOwnerPushFence');
-  dataOwnerGenerationTesting.reset();
-  remoteDataOwnerPushFenceTesting.reset();
-  setDataOwnerGeneration('owner-a', 1);
-}
-
 const GOAL_TUNNEL_CHANNELS = [
   'maker:goal:set',
   'maker:goal:clear',
@@ -116,7 +106,6 @@ describe('goalApiFor 路由', () => {
     const { onRemotePush, makerSpies, remotePushListeners } = stubElectron();
     const { subscribeGoalStatusChanged } = await import('@/lib/makerTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-    await primeOwnerFence();
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
 
     const cb = vi.fn();
@@ -170,7 +159,6 @@ describe('learnApiFor 路由', () => {
     const { learnSpies, remotePushListeners } = stubElectron();
     const { subscribeLearnEvents } = await import('@/features/learn/learnTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-    await primeOwnerFence();
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
 
     const cb = vi.fn();
@@ -211,7 +199,6 @@ describe('origin 注入竞态(Codex review #548 回归)', () => {
     const { learnSpies, remotePushListeners } = stubElectron();
     const { subscribeLearnEvents } = await import('@/features/learn/learnTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-    await primeOwnerFence();
 
     const cb = vi.fn();
     subscribeLearnEvents('rs', cb); // origin 未注册 → 先绑本机

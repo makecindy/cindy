@@ -88,7 +88,7 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
-      agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
+      agentKind: z.enum(AGENT_KIND).describe('claude-code 或 codex'),
       kind: z
         .literal('cron')
         .default('cron')

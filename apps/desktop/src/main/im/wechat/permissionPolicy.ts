@@ -6,9 +6,6 @@ import type {
 
 import { checkDestructiveToolCall } from '../../destructiveGuard';
 
-export const WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED =
-  'TURN_PERMISSION_POLICY_UNSUPPORTED';
-
 function record(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -72,16 +69,4 @@ export function supportsWechatTurnPermissionMode(
     policy?.supported.supported === true &&
     !policy.unsupportedPermissionModes.includes(mode)
   );
-}
-
-export function createWechatTurnPermissionPolicyForMode(
-  taskId: string,
-  capabilities: Capabilities,
-  mode: PermissionMode,
-  options?: Parameters<typeof createWechatTurnPermissionPolicy>[1],
-): TurnPermissionPolicy {
-  if (!supportsWechatTurnPermissionMode(capabilities, mode)) {
-    throw new Error(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:${mode}`);
-  }
-  return createWechatTurnPermissionPolicy(taskId, options);
 }

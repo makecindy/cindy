@@ -44,7 +44,6 @@ import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import {
   deviceLinkProjectKey,
   normalizeProjectKey,
-  projectKeyComparisonKey,
   projectIdentityKey,
   type ProjectScope,
 } from '../../../../shared/projectKeys';
@@ -53,7 +52,6 @@ import type { RemoteProjectMachineIdentity } from './remoteProjectIdentity';
 export {
   deviceLinkProjectKey,
   normalizeProjectKey,
-  projectKeyComparisonKey,
   projectIdentityKey,
 };
 

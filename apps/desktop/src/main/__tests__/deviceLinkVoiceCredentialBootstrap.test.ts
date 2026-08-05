@@ -43,10 +43,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
     expect(deviceLinkHost).toContain('const available = snap.online && snap.remoteControlEnabled;');
-    // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后首帧
-    // presence(wasAvailable=undefined)同样必须触发重放——它是 DEVICE_OFFLINE
-    // 永久放弃后的唯一恢复事件(#1520 review P1)。
-    expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
+    expect(deviceLinkHost).toContain('if (available && wasAvailable === false)');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
   });
 

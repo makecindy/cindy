@@ -18,7 +18,6 @@
  */
 
 import { createLogger } from '@/lib/logger';
-import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import { gzipTextToBase64, gunzipBase64ToText } from './gzipBase64';
 
@@ -231,10 +230,9 @@ export function onFileTreeEventFor(
   cb: (event: FileTreeEventPayload) => void,
 ): () => void {
   if (!deviceId) return window.electronAPI.fileBrowser.onEvent(cb);
-  return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
+  return window.electronAPI.deviceLink.onRemotePush((push) => {
     if (push.deviceId !== deviceId) return;
     if (push.channel !== FILE_BROWSER_EVENT_CHANNEL) return;
-    if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
     cb(push.payload as FileTreeEventPayload);
   });
 }

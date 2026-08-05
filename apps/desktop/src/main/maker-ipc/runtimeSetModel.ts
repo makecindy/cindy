@@ -1,4 +1,4 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind } from '@cindy/maker-core';
 
 import {
   getSessionProvider,
@@ -20,7 +20,7 @@ interface RuntimeSetModelSession {
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   model: string;
-  setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
+  setModel: (model: string, opts?: { providerId?: string | null }) => Promise<void>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -46,7 +46,6 @@ export interface ApplyRuntimeSetModelChangeInput {
   sessionId: string;
   model: string;
   providerId?: string | null;
-  effort?: Effort;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -112,7 +111,7 @@ export type ApplyRuntimeSetModelChangeResult =
 export async function applyRuntimeSetModelChange(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
-  const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;
+  const { maker, sessionId, model, providerId, isSessionInTurn, logger } = input;
   const normalizedProviderId = normalizeSessionProviderId(providerId);
   const sess = maker.getSession(sessionId);
   const currentProviderId = getSessionProvider(sessionId);
@@ -270,10 +269,7 @@ export async function applyRuntimeSetModelChange(
     return { status: 'applied' };
   }
   try {
-    await sess.setModel(model, {
-      providerId: nextProviderId,
-      ...(effort !== undefined ? { effort } : {}),
-    });
+    await sess.setModel(model, { providerId: nextProviderId });
   } catch (err) {
     if (providerId !== undefined) {
       setSessionProvider(sessionId, currentProviderId);

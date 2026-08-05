@@ -59,9 +59,7 @@ export async function restoreSessionForGoal(
       fastMode: meta.fastMode,
       resumeSessionId: meta.sdkSessionId,
       remoteHostId: meta.remoteHostId,
-      // A persisted null explicitly selects the Cindy default route for Pi;
-      // only a missing row has no route value to pass through.
-      providerId: row?.providerId,
+      providerId: row?.providerId ?? undefined,
     };
 
     await (deps.prepareOrcaStart ?? preparePersistedOrcaSessionStart)(sessionId, opts);

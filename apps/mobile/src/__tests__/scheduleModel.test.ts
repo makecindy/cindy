@@ -94,18 +94,12 @@ describe('schedule model', () => {
     expect(summary).toMatchObject({
       title: '巡检 xdt-maker',
       subtitle: '上次 1 小时前 · 2 小时后',
-      detail: 'cron 0 9 * * * · 新任务 · Claude · xdt-maker',
+      detail: 'cron 0 9 * * * · 新会话 · Claude · xdt-maker',
       runSessionDetail: null,
-      runSessionLabel: '新任务',
+      runSessionLabel: '新会话',
       statusLabel: '运行中',
       unreadCount: 1,
     });
-  });
-
-  it('labels a Pi automation as Pi (not silently mis-shown as Claude)', () => {
-    // 桌面创建的 agentKind:'pi' 任务在手机上必须正确标识为 Pi,而不是回落到 Claude。
-    expect(summarizeSchedule(schedule({ agentKind: 'pi' }), [], NOW).detail)
-      .toBe('cron 0 9 * * * · 新任务 · Pi · xdt-maker');
   });
 
   it('summarizes persistent and bound schedule session behavior', () => {
@@ -113,9 +107,9 @@ describe('schedule model', () => {
       persistentSession: true,
       targetSessionId: 'session-persistent-123',
     }), [], NOW)).toMatchObject({
-      detail: 'cron 0 9 * * * · 持续任务 · Claude · xdt-maker',
-      runSessionDetail: '持续任务 session-',
-      runSessionLabel: '持续任务',
+      detail: 'cron 0 9 * * * · 持续会话 · Claude · xdt-maker',
+      runSessionDetail: '持续会话 session-',
+      runSessionLabel: '持续会话',
     });
 
     expect(summarizeSchedule(schedule({
@@ -123,9 +117,9 @@ describe('schedule model', () => {
       workingDir: '',
       useWorktree: true,
     }), [], NOW)).toMatchObject({
-      detail: 'cron 0 9 * * * · 绑定任务 · Claude · 未设置目录',
+      detail: 'cron 0 9 * * * · 绑定会话 · Claude · 未设置目录',
       runSessionDetail: '绑定到 session-',
-      runSessionLabel: '绑定任务',
+      runSessionLabel: '绑定会话',
     });
   });
 
@@ -174,7 +168,7 @@ describe('schedule model', () => {
     expect(summarizeRun(runs[1], NOW)).toMatchObject({
       title: '失败',
       detail: 'boom',
-      meta: '耗时未知 · 未创建任务',
+      meta: '耗时未知 · 未创建会话',
       canDelete: true,
       canMarkRead: true,
       canOpenSession: false,
@@ -192,9 +186,9 @@ describe('schedule model', () => {
     }), NOW)).toMatchObject({
       title: '执行中',
       detail: null,
-      meta: '已运行 1 分 30 秒 · 任务 session-',
+      meta: '已运行 1 分 30 秒 · 会话 session-',
       openSessionLabel: '打开',
-      sessionDetail: '任务 session-',
+      sessionDetail: '会话 session-',
       canDelete: false,
       canMarkRead: false,
       canOpenSession: true,

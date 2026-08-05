@@ -42,12 +42,6 @@ const oauthRefreshMock = vi.hoisted(() => ({
 }));
 vi.mock('../claude-oauth-refresh.js', () => oauthRefreshMock);
 
-// HTTP discovery tests inject global fetch responses; keep the production
-// proxy-aware transport out of this unit's network boundary.
-vi.mock('../outbound-fetch.js', () => ({
-  outboundFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-}));
-
 import {
   evaluateHttpShrink,
   isDegenerateModelListShrink,
@@ -80,20 +74,6 @@ function anthropicModel(id: string) {
 
 afterAll(async () => {
   await fsp.rm(TEST_USER_DATA, { recursive: true, force: true });
-});
-
-/**
- * registry-free 基线:本文件验 discovery 登录门控/合并纪律,与 registry 实体化层
- * (bundled registry 的 status=active 条目会独立长实体,见 modelPlane.test.ts)隔离。
- */
-function bundledWithoutRegistry(): Catalog {
-  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-  delete catalog.modelRegistry;
-  return catalog;
-}
-
-beforeEach(() => {
-  setActiveCatalog(bundledWithoutRegistry());
 });
 
 afterEach(() => {
@@ -157,8 +137,6 @@ describe('mapAnthropicSdkModels', () => {
   });
 
   it('SDK 未下发窗口时使用目录中的官方窗口', () => {
-    setActiveCatalog(BUNDLED_CATALOG); // 这三例正要用 bundled registry 的官方窗口基线
-
     const out = mapAnthropicSdkModels([
       { value: 'claude-opus-5', displayName: 'Opus 5' },
       { value: 'claude-opus-4-5', displayName: 'Opus 4.5' },
@@ -171,36 +149,13 @@ describe('mapAnthropicSdkModels', () => {
     ]);
   });
 
-  it('active registry 快照提供窗口和 effort 基线', () => {
-    const catalog = bundledWithoutRegistry();
-    catalog.modelRegistry = {
-      schemaVersion: 1,
-      updatedAt: '2026-07-31T00:00:00.000Z',
-      models: [
-        {
-          id: 'anthropic/claude-sonnet-4-5',
-          name: 'Remote Sonnet 4.5',
-          contextWindow: 200_000,
-          efforts: [],
-          routes: [{
-            providerId: 'anthropic',
-            modelId: 'claude-sonnet-4-5',
-            agents: ['claude-code'],
-          }],
-        },
-        {
-          id: 'anthropic/claude-opus-5',
-          name: 'Opus 5',
-          contextWindow: 1_000_000,
-          efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-          defaultEffort: 'high',
-          routes: [{
-            providerId: 'anthropic',
-            modelId: 'claude-opus-5',
-            agents: ['claude-code'],
-          }],
-        },
-      ],
+  it('active v1 元数据缺字段时仍从 bundled v1 取得窗口和 effort', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.cindyModelMeta = {
+      version: 1,
+      models: {
+        'claude-sonnet-4-5': { name: 'Remote Sonnet 4.5' },
+      },
     };
     setActiveCatalog(catalog);
 
@@ -277,7 +232,7 @@ describe('mapAnthropicSdkModels', () => {
     ]);
     expect(out.map((e) => e.model.id)).toEqual(['claude-fable-5', 'claude-opus-4-8']);
     expect(out[0].model.name).toBe('Fable 5'); // first-wins
-    // 归一化前 [1m] id 查不到 registry 基线,会塌回合成三档;归一化后按裸 id 命中。
+    // 归一化前 [1m] id 查不到 cindyModelMeta 基线,会塌回合成三档;归一化后按裸 id 命中。
     expect(out[0].model.efforts).toContain('xhigh');
   });
 
@@ -330,16 +285,12 @@ describe('mapAnthropicHttpModels', () => {
     expect(out[0].explicitContextWindow).toBe(900_000);
     expect(out[0].model).toMatchObject({
       contextWindow: 900_000, // max_input_tokens 优先于 1M 规则
-      // HTTP 明说的窗口是已核实的真实上限,可用于收敛运行期上报值。
-      contextWindowVerified: true,
       efforts: ['low', 'high', 'max'],
       supportsFastMode: true,
     });
   });
 
   it('HTTP 未下发 max_input_tokens 时使用目录中的官方窗口', () => {
-    setActiveCatalog(BUNDLED_CATALOG); // 这三例正要用 bundled registry 的官方窗口基线
-
     const out = mapAnthropicHttpModels([
       { id: 'claude-opus-5', display_name: 'Opus 5', type: 'model' },
       { id: 'claude-opus-4-5', display_name: 'Opus 4.5', type: 'model' },
@@ -350,15 +301,6 @@ describe('mapAnthropicHttpModels', () => {
       ['claude-opus-4-5', 200_000],
       ['claude-sonnet-4-5', 200_000],
     ]);
-  });
-
-  it('未知新模型的启发式窗口不标记为已核实(不得拿它收敛上报值)', () => {
-    const out = mapAnthropicHttpModels([
-      { id: 'claude-sonnet-9-unknown', display_name: 'Sonnet 9', type: 'model' },
-    ]);
-    // 目录没有该模型、HTTP 也没给 max_input_tokens → 1M 是猜的,只能展示。
-    expect(out[0].model.contextWindow).toBe(1_000_000);
-    expect(out[0].model.contextWindowVerified).toBeUndefined();
   });
 
   it('HTTP 未知新模型缺 capability 时同样使用 5 档临时基线', () => {
@@ -870,8 +812,6 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
   });
 
   it('磁盘缓存会按当前目录修正未明确声明的旧窗口', async () => {
-    setActiveCatalog(BUNDLED_CATALOG);
-
     const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
     await fsp.mkdir(cacheDir, { recursive: true });
     await fsp.writeFile(
@@ -980,89 +920,6 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     // SDK 覆盖能力字段,但窗口保留 HTTP 明说的 900k,不回退 contextWindowFor 的 1M。
     expect(anthropicModel('claude-opus-4-8')).toMatchObject({
       contextWindow: 900_000,
-      efforts: ['low', 'high'],
-    });
-  });
-
-  // 磁盘缓存里可能带着上一版目录算出的 contextWindowVerified。若该模型在新版目录里被移除、
-  // 且不在 explicitWindows(命中目录的窗口不进那张表)里,重载会走启发式分支 —— 残留的
-  // true 会盖在猜测值上,得到一个「已核实」的启发式窗口。Haiku 这种残留 200K 而运行期真实
-  // 1M 的情形,反倒会把上报值压小,正是本 PR 要消除的失败模式。
-  it('磁盘缓存重载抹掉旧 provenance,不让启发式窗口冒充已核实', async () => {
-    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
-    await fsp.mkdir(cacheDir, { recursive: true });
-    await fsp.writeFile(
-      path.join(cacheDir, 'anthropic-models.json'),
-      JSON.stringify({
-        fetchedAt: '2026-07-19T00:00:00.000Z',
-        models: [
-          {
-            // 目录里没有这个 id、也没有 explicitWindows 记录 → 重载必须落到启发式。
-            id: 'claude-haiku-removed-from-catalog',
-            name: 'Haiku (removed)',
-            group: 'anthropic',
-            sortOrder: 0,
-            contextWindow: 200_000,
-            contextWindowVerified: true, // 上一版目录留下的陈旧标记
-            efforts: [],
-            defaultEffort: null,
-            supportsFastMode: false,
-            status: 'active',
-          },
-        ],
-      }),
-      'utf-8',
-    );
-    await loadAnthropicModelsFromDiskCache();
-
-    const reloaded = anthropicModel('claude-haiku-removed-from-catalog');
-    // 窗口按启发式重算(id 含 haiku → 200K),但**不得**再声称已核实。
-    expect(reloaded?.contextWindow).toBe(200_000);
-    expect(reloaded?.contextWindowVerified).toBeUndefined();
-  });
-
-  // 目录里**没有**的新模型:HTTP 的 max_input_tokens 是它唯一的已核实窗口。SDK 通道
-  // 重新映射时走「无 explicit」分支(落到启发式、不带标记),恢复 explicitWindows 时
-  // 只覆盖 contextWindow 会把 provenance 静默擦掉 —— 之后就不再用这个真实上限收敛
-  // 虚高的上报值了。
-  it('SDK 重映射不得擦掉 HTTP 明说窗口的 provenance(目录未覆盖的新模型)', async () => {
-    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
-    await fsp.mkdir(cacheDir, { recursive: true });
-    await fsp.writeFile(
-      path.join(cacheDir, 'anthropic-models.json'),
-      JSON.stringify({
-        fetchedAt: '2026-07-19T00:00:00.000Z',
-        models: [
-          {
-            id: 'claude-brandnew-9',
-            name: 'Brand New 9',
-            group: 'anthropic',
-            sortOrder: 0,
-            contextWindow: 640_000,
-            contextWindowVerified: true,
-            efforts: ['low', 'medium', 'high'],
-            defaultEffort: 'high',
-            supportsFastMode: false,
-            status: 'active',
-          },
-        ],
-        explicitWindows: { 'claude-brandnew-9': 640_000 },
-      }),
-      'utf-8',
-    );
-    await loadAnthropicModelsFromDiskCache();
-    expect(anthropicModel('claude-brandnew-9')).toMatchObject({
-      contextWindow: 640_000,
-      contextWindowVerified: true,
-    });
-
-    noteAnthropicSdkSupportedModels([
-      { value: 'claude-brandnew-9', displayName: 'Brand New 9', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
-    ]);
-    expect(anthropicModel('claude-brandnew-9')).toMatchObject({
-      contextWindow: 640_000,
-      // 关键:标记必须一起恢复,不能只留数值。
-      contextWindowVerified: true,
       efforts: ['low', 'high'],
     });
   });

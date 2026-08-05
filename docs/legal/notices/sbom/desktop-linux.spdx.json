@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/156d44a61ecf03e9226484f8e891de84ed099853480e30fba697a651bf84af24",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/464bff7eabf005aa01e25a654671aa5dede2568cb57ada4e9a58a912d0b71fbf",
   "creationInfo": {
-    "created": "2026-08-02T09:08:05Z",
+    "created": "2026-07-27T21:02:23Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -72,8 +72,8 @@
       "copyrightText": "NOASSERTION"
     },
     {
-      "name": "OpenAI Codex CLI (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-4f22132a77577bcb",
+      "name": "OpenAI Codex CLI (bundled binary)",
+      "SPDXID": "SPDXRef-Package-2533cecb0b1ad2d4",
       "versionInfo": "0.145.0",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
@@ -86,16 +86,6 @@
       "SPDXID": "SPDXRef-Package-4e840ef8561a058f",
       "versionInfo": "vendored",
       "downloadLocation": "https://github.com/openclaw/openclaw",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION"
-    },
-    {
-      "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-04c1add3e48a9e5c",
-      "versionInfo": "0.83.0",
-      "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -165,6 +155,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40antfu/install-pkg@1.1.0"
+        }
+      ]
+    },
+    {
+      "name": "@anthropic-ai/sdk",
+      "SPDXID": "SPDXRef-Package-69d311a72cf4a3c3",
+      "versionInfo": "0.81.0",
+      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.81.0"
         }
       ]
     },
@@ -1151,23 +1158,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40isaacs/cliui@8.0.2"
-        }
-      ]
-    },
-    {
-      "name": "@isaacs/fs-minipass",
-      "SPDXID": "SPDXRef-Package-97d240f40344ec43",
-      "versionInfo": "4.0.1",
-      "downloadLocation": "https://github.com/npm/fs-minipass",
-      "filesAnalyzed": false,
-      "licenseConcluded": "ISC",
-      "licenseDeclared": "ISC",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40isaacs/fs-minipass@4.0.1"
         }
       ]
     },
@@ -3654,23 +3644,6 @@
       ]
     },
     {
-      "name": "@wecom/aibot-node-sdk",
-      "SPDXID": "SPDXRef-Package-52dee735109446cd",
-      "versionInfo": "1.0.7",
-      "downloadLocation": "https://github.com/WecomTeam/aibot-node-sdk",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40wecom/aibot-node-sdk@1.0.7"
-        }
-      ]
-    },
-    {
       "name": "@xterm/addon-clipboard",
       "SPDXID": "SPDXRef-Package-8eaddaef2aabf7b6",
       "versionInfo": "0.1.0",
@@ -4466,23 +4439,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/chownr@1.1.4"
-        }
-      ]
-    },
-    {
-      "name": "chownr",
-      "SPDXID": "SPDXRef-Package-7dfd744a612fd9bb",
-      "versionInfo": "3.0.0",
-      "downloadLocation": "https://github.com/isaacs/chownr",
-      "filesAnalyzed": false,
-      "licenseConcluded": "BlueOak-1.0.0",
-      "licenseDeclared": "BlueOak-1.0.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/chownr@3.0.0"
         }
       ]
     },
@@ -5881,23 +5837,6 @@
       ]
     },
     {
-      "name": "dingtalk-stream",
-      "SPDXID": "SPDXRef-Package-90f04b6ed7221e7d",
-      "versionInfo": "v2.1.5",
-      "downloadLocation": "https://github.com/open-dingtalk/dingtalk-stream-sdk-nodejs",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/dingtalk-stream@v2.1.5"
-        }
-      ]
-    },
-    {
       "name": "discord-api-types",
       "SPDXID": "SPDXRef-Package-c1fb6106ccdf0317",
       "versionInfo": "0.38.50",
@@ -6370,23 +6309,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/etag@1.8.1"
-        }
-      ]
-    },
-    {
-      "name": "eventemitter3",
-      "SPDXID": "SPDXRef-Package-858b4b7f616d0453",
-      "versionInfo": "5.0.4",
-      "downloadLocation": "https://github.com/primus/eventemitter3",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/eventemitter3@5.0.4"
         }
       ]
     },
@@ -6931,23 +6853,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/get-caller-file@2.0.5"
-        }
-      ]
-    },
-    {
-      "name": "get-east-asian-width",
-      "SPDXID": "SPDXRef-Package-d60bc4ed2cc53300",
-      "versionInfo": "1.6.0",
-      "downloadLocation": "https://github.com/sindresorhus/get-east-asian-width",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/get-east-asian-width@1.6.0"
         }
       ]
     },
@@ -9247,23 +9152,6 @@
       ]
     },
     {
-      "name": "mdast-util-to-markdown-cjk-friendly",
-      "SPDXID": "SPDXRef-Package-d34528f8f0b2d6a4",
-      "versionInfo": "1.0.0",
-      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/mdast-util-to-markdown-cjk-friendly@1.0.0"
-        }
-      ]
-    },
-    {
       "name": "mdast-util-to-string",
       "SPDXID": "SPDXRef-Package-236fb819698c71e4",
       "versionInfo": "4.0.0",
@@ -9379,40 +9267,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/micromark-core-commonmark@2.0.3"
-        }
-      ]
-    },
-    {
-      "name": "micromark-extension-cjk-friendly",
-      "SPDXID": "SPDXRef-Package-c36e3ff21cfabdb2",
-      "versionInfo": "2.0.1",
-      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/micromark-extension-cjk-friendly@2.0.1"
-        }
-      ]
-    },
-    {
-      "name": "micromark-extension-cjk-friendly-util",
-      "SPDXID": "SPDXRef-Package-6210e203ddfb6030",
-      "versionInfo": "3.0.1",
-      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/micromark-extension-cjk-friendly-util@3.0.1"
         }
       ]
     },
@@ -10042,23 +9896,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/minipass@7.1.3"
-        }
-      ]
-    },
-    {
-      "name": "minizlib",
-      "SPDXID": "SPDXRef-Package-8ce1e429d2efadea",
-      "versionInfo": "3.1.0",
-      "downloadLocation": "https://github.com/isaacs/minizlib",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/minizlib@3.1.0"
         }
       ]
     },
@@ -11542,23 +11379,6 @@
       ]
     },
     {
-      "name": "remark-cjk-friendly",
-      "SPDXID": "SPDXRef-Package-0265a938fcf75432",
-      "versionInfo": "2.3.1",
-      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/remark-cjk-friendly@2.3.1"
-        }
-      ]
-    },
-    {
       "name": "remark-gfm",
       "SPDXID": "SPDXRef-Package-5d0ce434ea600ea7",
       "versionInfo": "4.0.1",
@@ -12630,23 +12450,6 @@
       ]
     },
     {
-      "name": "tar",
-      "SPDXID": "SPDXRef-Package-da81b03287f1279a",
-      "versionInfo": "7.5.22",
-      "downloadLocation": "https://github.com/isaacs/node-tar",
-      "filesAnalyzed": false,
-      "licenseConcluded": "BlueOak-1.0.0",
-      "licenseDeclared": "BlueOak-1.0.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/tar@7.5.22"
-        }
-      ]
-    },
-    {
       "name": "tar-fs",
       "SPDXID": "SPDXRef-Package-50b2e8b027599681",
       "versionInfo": "2.1.5",
@@ -13548,23 +13351,6 @@
       ]
     },
     {
-      "name": "yallist",
-      "SPDXID": "SPDXRef-Package-25126929995410cf",
-      "versionInfo": "5.0.0",
-      "downloadLocation": "https://github.com/isaacs/yallist",
-      "filesAnalyzed": false,
-      "licenseConcluded": "BlueOak-1.0.0",
-      "licenseDeclared": "BlueOak-1.0.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/yallist@5.0.0"
-        }
-      ]
-    },
-    {
       "name": "yargs",
       "SPDXID": "SPDXRef-Package-21406978061a0749",
       "versionInfo": "15.4.1",
@@ -13684,17 +13470,12 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-4f22132a77577bcb"
+      "relatedSpdxElement": "SPDXRef-Package-2533cecb0b1ad2d4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4e840ef8561a058f"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-04c1add3e48a9e5c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13725,6 +13506,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-90a75350ac517909"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-69d311a72cf4a3c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -14015,11 +13801,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-40e45c962a7c40a3"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-97d240f40344ec43"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -14754,11 +14535,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-52dee735109446cd"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-8eaddaef2aabf7b6"
     },
     {
@@ -14990,11 +14766,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3ff4ca23766c70e5"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-7dfd744a612fd9bb"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15409,11 +15180,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-90f04b6ed7221e7d"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-c1fb6106ccdf0317"
     },
     {
@@ -15550,11 +15316,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-51fac920df3d7558"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-858b4b7f616d0453"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15715,11 +15476,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d72432ec68d04997"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d60bc4ed2cc53300"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16399,11 +16155,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-d34528f8f0b2d6a4"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-236fb819698c71e4"
     },
     {
@@ -16435,16 +16186,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-6537e377a4711f98"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c36e3ff21cfabdb2"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-6210e203ddfb6030"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16630,11 +16371,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4a3171b7ab83a8ed"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-8ce1e429d2efadea"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -17074,11 +16810,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-0265a938fcf75432"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5d0ce434ea600ea7"
     },
     {
@@ -17394,11 +17125,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-da81b03287f1279a"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-50b2e8b027599681"
     },
     {
@@ -17660,11 +17386,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-8e532c67f7b65656"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-25126929995410cf"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

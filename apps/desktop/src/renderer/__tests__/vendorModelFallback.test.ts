@@ -27,9 +27,9 @@ function model(id: string): CatalogModel {
 function provider(
   id: string,
   source: Provider['source'],
-  models: Partial<Record<'claude-code' | 'codex' | 'pi', string[]>>,
+  models: Partial<Record<'claude-code' | 'codex', string[]>>,
 ): ProviderView {
-  const agents = Object.keys(models) as Array<'claude-code' | 'codex' | 'pi'>;
+  const agents = Object.keys(models) as Array<'claude-code' | 'codex'>;
   return {
     id,
     name: id,
@@ -40,7 +40,6 @@ function provider(
     models: {
       ...(models['claude-code'] ? { 'claude-code': models['claude-code'].map(model) } : {}),
       ...(models.codex ? { codex: models.codex.map(model) } : {}),
-      ...(models.pi ? { pi: models.pi.map(model) } : {}),
     },
     connected: true,
   };
@@ -56,7 +55,6 @@ const PROVIDERS: ProviderView[] = [
   provider('openai', 'builtin', { codex: ['gpt-5.5', 'gpt-5.4'] }),
   provider('xd', 'builtin', { 'claude-code': ['gpt-5.4'], codex: ['gpt-5.5', 'gpt-5.4'] }),
   provider('mimo', 'user', { 'claude-code': ['claude-mimo'], codex: ['mimo-codex'] }),
-  provider('pi-local', 'user', { pi: ['pi-local-model', 'gpt-5.4'] }),
 ];
 
 describe('shouldFallbackVendorModel', () => {
@@ -87,12 +85,5 @@ describe('shouldFallbackVendorModel', () => {
     expect(shouldFallbackVendorModel(PROVIDERS, 'gpt-5.5', 'claude-code')).toBe(true);
     // gpt-5.4 is offered under cc too → kept.
     expect(shouldFallbackVendorModel(PROVIDERS, 'gpt-5.4', 'claude-code')).toBe(false);
-  });
-
-  it('handles Pi as a real third vendor when checking genuine cross-vendor mismatches', () => {
-    expect(shouldFallbackVendorModel(PROVIDERS, 'pi-local-model', 'pi')).toBe(false);
-    expect(shouldFallbackVendorModel(PROVIDERS, 'claude-opus-4-8', 'pi')).toBe(true);
-    // Shared ids stay valid when Pi itself offers them.
-    expect(shouldFallbackVendorModel(PROVIDERS, 'gpt-5.4', 'pi')).toBe(false);
   });
 });

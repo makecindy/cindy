@@ -45,7 +45,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
-import { createLogger } from '@/lib/logger';
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   isDefaultDraftSessionTitle,
@@ -57,13 +56,10 @@ import {
   onPatch,
   onRefresh,
 } from '@/lib/sessionsBus';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 // V1.7：取消 16 条上限，全量拉取由 Sidebar 中部滚动条承载。
 // 后端硬上限 1000，覆盖几乎所有真实用户的 Session 总数。
 const DEFAULT_LIMIT = 1000;
-const startupPerfLog = createLogger('perf/startup');
-const initialFetchLogged = new Set<ListStatusFilter>();
 
 const cache = new Map<ListStatusFilter, Session[]>();
 const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
@@ -116,7 +112,7 @@ function mergeSession(prev: Session, patch: Partial<Session>): Session {
  * 为什么必须是叠加层、而不是一次性 patchLocal：新建会话的 `sessions:created` push 会
  * 触发 `forceRefreshAll`，那次重拉从 DB 拿回的行**仍带默认哨兵**（权威标题要等
  * `maker:auto-title` 落库才有），会把只写进缓存的乐观标题冲掉 —— 表现为标题先显示
- * 用户那句话、又退回「未命名任务」，直到 IPC 回来（PR #1031 review P1）。
+ * 用户那句话、又退回「未命名对话」，直到 IPC 回来（PR #1031 review P1）。
  *
  * 语义与 device-link 远程侧的 `remoteProjectsStore.pendingTitlePreview` 对称：只在
  * **权威标题仍是哨兵**时顶替显示，权威标题一到就自动让位并回收条目，不需要显式失效。
@@ -161,7 +157,7 @@ function applyAutoTitlePreviews(list: Session[]): Session[] {
  *
  * 典型时序(新建会话):`sessions:created` push → `forceRefreshAll()` 起飞(快照里是
  * 哨兵)→ main 写完占位 → `sessions:patched` 落进缓存 → 那个更早的请求才回来,把哨兵
- * 写回去,界面退到「未命名任务」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
+ * 写回去,界面退到「未命名对话」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
  * 规则回收,没人再替它顶回来(PR #1031 review P1)。
  *
  * 方向与 {@link autoTitlePreviews} 互补:那一层管「请求发起于乐观写入**之后**、DB 里还
@@ -247,29 +243,15 @@ async function fetchFilter(filter: ListStatusFilter): Promise<Session[]> {
   // 不一致，必须把 filter 原样透传，由 IPC handler 决定过滤语义。
   const spendRevisionAtStart = sessionSpendRevision;
   const titleRevisionAtStart = sessionTitleRevision;
-  const startedAt = performance.now();
   const sessions = await sessionService.list(DEFAULT_LIMIT, filter);
   // 顺序:先把「请求发起之后到达的权威标题」补回去,再叠乐观预览。反过来的话预览会先
   // 盖在旧标题上、随后又被权威值挤掉,中间多一次跳变。
-  const result = applyAutoTitlePreviews(
+  return applyAutoTitlePreviews(
     applySessionTitleOverrides(
       applySessionSpendOverrides(sessions, spendRevisionAtStart),
       titleRevisionAtStart,
     ),
   );
-  const fields = {
-    event: 'renderer.sessions.initial-fetch.done',
-    filter,
-    rows: result.length,
-    elapsedMs: Math.round(performance.now() - startedAt),
-    rendererUptimeMs: Math.round(performance.now()),
-  };
-  if (initialFetchLogged.has(filter)) startupPerfLog.debug(fields);
-  else {
-    initialFetchLogged.add(filter);
-    startupPerfLog.info(fields);
-  }
-  return result;
 }
 
 export const sessionsStore = {
@@ -379,7 +361,7 @@ export const sessionsStore = {
     // **包括「权威标题与预览逐字相同」的常见情形**(两端共用 normalizeAutoTitle,占位本来
     // 就该一样)。曾经在这里放过 `preview !== patch.title` 的例外,结果是缓存里那个串到底
     // 是「叠加上去的乐观值」还是「已落库的权威值」再也分不出来 —— 随后的失败撤回会把
-    // **已经落库**的标题打回哨兵、界面退到「未命名任务」并与 DB 不一致(PR #1031 review P1)。
+    // **已经落库**的标题打回哨兵、界面退到「未命名对话」并与 DB 不一致(PR #1031 review P1)。
     // 语义上也该无条件回收:DB 已经有值,叠加层的唯一用途(盖住仍是哨兵的行)已经消失。
     //
     // 乐观预览不走这个门(见 {@link applyOptimisticTitle}),所以这里见到的标题一律是
@@ -515,7 +497,6 @@ export const sessionsStore = {
     sessionSpendOverrides.clear();
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
-    initialFetchLogged.clear();
     notify('reset');
   },
 };
@@ -569,8 +550,7 @@ if (typeof window !== 'undefined') {
   });
 
   window.electronAPI?.onUsageSessionSpendChanged?.(
-    ({ sessionId, totalMoney, totalCostUsd }, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    ({ sessionId, totalMoney, totalCostUsd }) => {
       sessionsStore.patchLocal(sessionId, {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
@@ -580,12 +560,10 @@ if (typeof window !== 'undefined') {
 
   const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
   if (sessionsPush) {
-    sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
-      sessionsStore.patchLocal(sessionId, patch);
-    });
-    sessionsPush.onCreated((_payload, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    sessionsPush.onPatched(({ sessionId, patch }) =>
+      sessionsStore.patchLocal(sessionId, patch),
+    );
+    sessionsPush.onCreated(() => {
       // payload 只有 sessionId 不带完整 Session row，prependCreated 用不上 ——
       // 直接重拉所有已加载桶让新 session 出现在 sidebar。
       void sessionsStore.forceRefreshAll();
@@ -594,8 +572,7 @@ if (typeof window !== 'undefined') {
 
   const scheduleApi = window.electronAPI?.maker?.schedule;
   if (scheduleApi) {
-    scheduleApi.onEvent((event: unknown, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    scheduleApi.onEvent((event: unknown) => {
       if (
         event &&
         typeof event === 'object' &&

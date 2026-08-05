@@ -575,8 +575,7 @@ function sourceFailure(ref: MobileSessionReference, error: unknown): MobileSessi
     code === 'DEVICE_OFFLINE' ||
     code === 'LINK_NOT_OPEN' ||
     code === 'INVOKE_TIMEOUT' ||
-    code === 'NOT_CONNECTED' ||
-    code === 'BACKPRESSURE'
+    code === 'NOT_CONNECTED'
   ) {
     return new MobileSessionReferenceError(
       'SESSION_REFERENCE_OFFLINE',
@@ -789,30 +788,18 @@ export async function resolveMobileSessionReferences(
  * This deliberately removes stale snapshots first, so editing a link away cannot retain
  * previously trusted history and steering a display-safe projection always re-reads source data.
  */
-function stripMobileSessionReferenceSideChannels<T extends MobileQueuedReferenceCarrier>(
+export async function prepareMobileQueuedSessionReferences<T extends MobileQueuedReferenceCarrier>(
   item: T,
-): T {
+  invoke: RemoteInvoke,
+  deviceIdForSession: (sessionId: string) => string | undefined,
+  targetDeviceId: string,
+): Promise<T> {
+  const refs = extractMobileSessionReferences(item.text, deviceIdForSession, item.sessionRefs);
   const prepared = { ...item };
   delete prepared.sessionRefs;
   delete prepared.trustedSessionReferenceContexts;
   delete prepared.sessionReferencesRequireTrustedSnapshot;
-  return prepared;
-}
-
-function warnMobileSessionReferenceFallback(
-  phase: 'target-capability' | 'source-resolution' | 'stored-snapshot',
-  error: unknown,
-): void {
-  console.warn('[session-references] trusted history unavailable; preserving raw link text', {
-    phase,
-    code: error instanceof MobileSessionReferenceError ? error.code : 'UNKNOWN',
-  });
-}
-
-async function assertMobileTargetSessionReferenceCapability(
-  invoke: RemoteInvoke,
-  targetDeviceId: string,
-): Promise<void> {
+  if (refs.length === 0) return prepared;
   try {
     const capability = await invoke<unknown>(
       targetDeviceId,
@@ -859,45 +846,9 @@ async function assertMobileTargetSessionReferenceCapability(
       `The target device is unavailable: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-}
-
-/**
- * Prepare optional trusted history for a queued mobile message.
- *
- * A session link may point at another account or an unavailable device. In
- * that case the safe fallback is the already-present raw link text: omit all
- * trusted-reference side channels and let the Agent handle the link itself.
- */
-export async function prepareMobileQueuedSessionReferences<T extends MobileQueuedReferenceCarrier>(
-  item: T,
-  invoke: RemoteInvoke,
-  deviceIdForSession: (sessionId: string) => string | undefined,
-  targetDeviceId: string,
-): Promise<T> {
-  const refs = extractMobileSessionReferences(item.text, deviceIdForSession, item.sessionRefs);
-  const prepared = stripMobileSessionReferenceSideChannels(item);
-  if (refs.length === 0) return prepared;
-  try {
-    await assertMobileTargetSessionReferenceCapability(invoke, targetDeviceId);
-  } catch (error) {
-    if (!(error instanceof MobileSessionReferenceError) ||
-        error.code !== 'SESSION_REFERENCE_UNSUPPORTED') {
-      throw error;
-    }
-    warnMobileSessionReferenceFallback('target-capability', error);
-    return prepared;
-  }
-  try {
-    const contexts = await resolveMobileSessionReferences(refs, invoke);
-    return {
-      ...prepared,
-      sessionRefs: refs,
-      trustedSessionReferenceContexts: contexts,
-    };
-  } catch (error) {
-    warnMobileSessionReferenceFallback('source-resolution', error);
-    return prepared;
-  }
+  prepared.sessionRefs = refs;
+  prepared.trustedSessionReferenceContexts = await resolveMobileSessionReferences(refs, invoke);
+  return prepared;
 }
 
 /** Reuse the target's trusted snapshot only when the source cannot currently be read. */
@@ -915,32 +866,15 @@ export async function prepareMobileQueuedSessionReferencesForSteer<T extends Mob
   deviceIdForSession: (sessionId: string) => string | undefined,
   targetDeviceId: string,
 ): Promise<T> {
-  const refs = extractMobileSessionReferences(item.text, deviceIdForSession, item.sessionRefs);
-  const prepared = stripMobileSessionReferenceSideChannels(item);
-  if (refs.length === 0) return prepared;
   try {
-    await assertMobileTargetSessionReferenceCapability(invoke, targetDeviceId);
+    return await prepareMobileQueuedSessionReferences(
+      item,
+      invoke,
+      deviceIdForSession,
+      targetDeviceId,
+    );
   } catch (error) {
-    if (!(error instanceof MobileSessionReferenceError) ||
-        error.code !== 'SESSION_REFERENCE_UNSUPPORTED') {
-      throw error;
-    }
-    warnMobileSessionReferenceFallback('target-capability', error);
-    return prepared;
-  }
-  try {
-    const contexts = await resolveMobileSessionReferences(refs, invoke);
-    return {
-      ...prepared,
-      sessionRefs: refs,
-      trustedSessionReferenceContexts: contexts,
-    };
-  } catch (error) {
-    if (canFallbackToStoredMobileSessionReferenceSnapshot(error)) {
-      warnMobileSessionReferenceFallback('stored-snapshot', error);
-      return item;
-    }
-    warnMobileSessionReferenceFallback('source-resolution', error);
-    return prepared;
+    if (!canFallbackToStoredMobileSessionReferenceSnapshot(error)) throw error;
+    return item;
   }
 }

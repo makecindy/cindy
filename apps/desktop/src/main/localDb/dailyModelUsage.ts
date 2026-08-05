@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import {
   addRegionalMoney,
+  DEFAULT_USAGE_CURRENCY,
   legacyUsdMoney,
   normalizeRegionalMoney,
   zeroUsageMoney,
@@ -11,12 +12,11 @@ import { dailyModelUsage } from './schema.js';
 import { localDayKey } from './dailySpend.js';
 import { getDbClient } from './client/current.js';
 import { createLogger } from '../logger.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
 const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex';
   model: string;
   money?: RegionalMoney | null;
   inputTokensDelta: number;
@@ -44,19 +44,16 @@ export async function incrementDailyModelUsage(
   delta: DailyModelUsageDelta,
   ts: number = Date.now(),
 ): Promise<void> {
-  // 每 (天, agent, 模型, 币种) 一行,各币种各自累加。异币种金额不再被丢弃,也不再覆盖
-  // 当天该模型的已有累计 —— 账本币种会因为换号、跨租户、上游漏发币种而切换,那两种
-  // 做法都会静默丢账。
-  const money = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
-  const ledgerCurrency = currentLedgerCurrency();
-  if (money && money.currency !== ledgerCurrency) {
+  const normalizedMoney = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
+  const money =
+    normalizedMoney?.currency === DEFAULT_USAGE_CURRENCY
+      ? normalizedMoney
+      : undefined;
+  if (normalizedMoney && !money) {
     log.warn(
-      `daily model usage currency differs from ledger: ${money.currency} != ${ledgerCurrency}; ` +
-        'recording into its own currency row',
+      `daily model usage rejected currency mismatch: ${normalizedMoney.currency} != ${DEFAULT_USAGE_CURRENCY}`,
     );
   }
-  // 纯 token 行(无金额)归到当前账本币种,让它和同轮的金额落在同一行。
-  const rowCurrency = money?.currency ?? ledgerCurrency;
   const inputTokens = sanitizeTokens(delta.inputTokensDelta);
   const outputTokens = sanitizeTokens(delta.outputTokensDelta);
   const cacheReadTokens = sanitizeTokens(delta.cacheReadTokensDelta);
@@ -74,6 +71,11 @@ export async function incrementDailyModelUsage(
   const day = localDayKey(ts);
   const model = delta.model || 'unknown';
   const db = getDbClient().drizzle;
+  // 单币种行:错误币种金额被忽略但 token 仍累计。升级前当天若仍是旧币种，
+  // 首笔当前币种费用重新起算该金额列；历史 token 不受币种影响继续累计。
+  const sameCurrency = money
+    ? sql`(${dailyModelUsage.costCurrency} IS NULL OR ${dailyModelUsage.costCurrency} = ${money.currency})`
+    : sql`0`;
   await db
     .insert(dailyModelUsage)
     .values({
@@ -81,7 +83,7 @@ export async function incrementDailyModelUsage(
       agentKind: delta.agentKind,
       model,
       costAmount: money?.amount ?? 0,
-      costCurrency: rowCurrency,
+      costCurrency: money?.currency ?? null,
       costIsApproximate: money?.approximate ?? false,
       inputTokens,
       outputTokens,
@@ -90,15 +92,15 @@ export async function incrementDailyModelUsage(
       updatedAt: ts,
     })
     .onConflictDoUpdate({
-      target: [
-        dailyModelUsage.day,
-        dailyModelUsage.agentKind,
-        dailyModelUsage.model,
-        dailyModelUsage.costCurrency,
-      ],
+      target: [dailyModelUsage.day, dailyModelUsage.agentKind, dailyModelUsage.model],
       set: {
-        costAmount: sql`${dailyModelUsage.costAmount} + ${money?.amount ?? 0}`,
-        costIsApproximate: sql`(${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0})`,
+        costAmount: money
+          ? sql`CASE WHEN ${sameCurrency} THEN ${dailyModelUsage.costAmount} + ${money.amount} ELSE ${money.amount} END`
+          : sql`${dailyModelUsage.costAmount}`,
+        costCurrency: money?.currency ?? sql`${dailyModelUsage.costCurrency}`,
+        costIsApproximate: money
+          ? sql`CASE WHEN ${sameCurrency} THEN (${dailyModelUsage.costIsApproximate} OR ${money.approximate ? 1 : 0}) ELSE ${money.approximate ? 1 : 0} END`
+          : sql`${dailyModelUsage.costIsApproximate}`,
         inputTokens: sql`${dailyModelUsage.inputTokens} + ${inputTokens}`,
         outputTokens: sql`${dailyModelUsage.outputTokens} + ${outputTokens}`,
         cacheReadTokens: sql`${dailyModelUsage.cacheReadTokens} + ${cacheReadTokens}`,

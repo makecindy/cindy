@@ -614,20 +614,14 @@ function composerNodeFromAgentReference(
       titled: Boolean(reference.title),
     });
   }
-  if (reference.kind === 'project') {
-    return {
-      type: 'mention',
-      kind: 'project',
-      label: reference.name,
-      raw,
-      href: reference.href,
-      workingDir: reference.workingDir,
-    };
-  }
-  // Desktop-only live context and Plugin resources have no Mobile atom yet.
-  // Preserve the exact wire span as editable text instead of miscasting it as
-  // a project mention or dropping user-visible content.
-  return { type: 'text', text: raw };
+  return {
+    type: 'mention',
+    kind: 'project',
+    label: reference.name,
+    raw,
+    href: reference.href,
+    workingDir: reference.workingDir,
+  };
 }
 
 function composerNodesFromTextSegment(

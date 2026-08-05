@@ -25,25 +25,24 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
-import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
 import { installProviderUpstreamErrorToastListener } from '@/lib/providerUpstreamErrorToast';
 import { installAutoPermissionFallbackToastListener } from '@/lib/autoPermissionFallbackToast';
-import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { installCcMgrUpgradeListener } from '@/state/ccMgrUpgradeStore';
 import {
   preloadLocalCatalogSnapshot,
   refreshLocalCatalogSnapshot,
 } from '@/lib/localCatalogSnapshot';
-import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
-  getDraftForPreferenceSync,
+  useResyncAgentIslandSettingsAfterLogin,
+} from '@/hooks/useAgentIslandSettings';
+import {
+  getDraft,
   subscribeDraft,
   setEffortForModel,
   setFastModeForModel,
-  setWorktreePreference,
   patchVendorPrefs,
   patchVendorPrefsPreservingModelChoice,
 } from '@/state/newMakerDraft';
@@ -73,19 +72,23 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
           被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}
-      <LoginFirstLaunchLightGateBridge authResolved={!isInitializing} canEnterApp={canEnterApp} />
+      <LoginFirstLaunchLightGateBridge
+        authResolved={!isInitializing}
+        canEnterApp={canEnterApp}
+      />
       {children}
     </LoginHandoffProvider>
   );
 }
 
 function MakerBootstrap() {
-  const { isAuthenticated, dataOwnerId } = useAuth();
+  const { isAuthenticated } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 
   useEffect(() => {
     makerChatStore.syncActiveTurnsFromMain();
+    void preloadLocalCatalogSnapshot();
     // main 先提交 active catalog + capabilities 再广播；renderer 收到任一目录/鉴权变化后
     // 联合重拉 providers 与两份 capabilities，整组成功且代际最新时才切换。
     const refresh = () => {
@@ -98,19 +101,7 @@ function MakerBootstrap() {
       offProviders?.();
     };
   }, []);
-
-  // Auth 广播的多个 listener 没有顺序契约；等 AuthContext 提交新 owner 后再预热一次，
-  // 保证 provider 快照与 capabilities 不会沿用或提交前一个 owner 的在途结果。
-  useEffect(() => {
-    void preloadLocalCatalogSnapshot();
-  }, [dataOwnerId]);
   return null;
-}
-
-function OwnerScopedRouter() {
-  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
-  const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
-  return <RouterProvider key={ownerKey} router={router} />;
 }
 
 export function App() {
@@ -136,9 +127,7 @@ export function App() {
     //  - syncNewMakerDraft: 给 collab mode spawn worker 用 (双 vendor + 按模型记忆)
     // 都是 ipcRenderer.send fire-and-forget; handler 在 createWindow 前已注册。
     const syncPrefs = () => {
-      // 多 renderer 的模块内存彼此独立；跨窗口通知必须从共享持久快照同步，避免旧窗口把
-      // 自己的 model / workingDir 等完整旧草稿覆盖进 main 缓存。
-      const draft = getDraftForPreferenceSync();
+      const draft = getDraft();
       const cc = draft.lastByVendor.cc;
       window.electronAPI.syncDesktopCcPrefs({
         model: cc.model,
@@ -167,8 +156,6 @@ export function App() {
         },
         fastModeByModel: draft.fastModeByModel,
         effortByModel: draft.effortByModel,
-        // worktree 勾选记忆(vendor 无关根字段):远程草稿(手机 / 桌面控制端)播种用。
-        worktreeEnabled: draft.worktreeEnabled,
       });
     };
     syncPrefs();
@@ -191,10 +178,9 @@ export function App() {
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
       ({ agent, providerId, modelId, active, effort, fast, markModelChoice }) => {
-        const vendor = agentKindToVendor(agent);
+        const vendor = agent === 'claude-code' ? 'cc' : 'codex';
         if (active) {
-          const patch =
-            markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs;
+          const patch = markModelChoice === false ? patchVendorPrefsPreservingModelChoice : patchVendorPrefs;
           const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;
           if (shouldPatchActiveModel) {
             patch(vendor, {
@@ -236,15 +222,9 @@ export function App() {
         });
       },
     );
-    // 控制端写穿的「新建会话默认启用 worktree」:按共享 localStorage 的最新对象只合并
-    // 该字段;写入触发 subscribeDraft → SYNC_NEW_MAKER_DRAFT re-mirror → 广播回流。
-    const offWorktree = window.electronAPI.onMakerWorktreePrefApply(({ worktreeEnabled }) => {
-      setWorktreePreference(worktreeEnabled === true);
-    });
     return () => {
       offDraft();
       offSession();
-      offWorktree();
     };
   }, []);
 
@@ -298,28 +278,18 @@ export function App() {
                         {/* 副窗口(「在新窗口打开」)/ 右侧栏子窗口跳过 splash:env/热更检查
                             由主窗启动时完成,附属窗 EnvCheckProvider 初始即 'passed',
                             不需要也不应再走 splash 流程。 */}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                          <LoginBrandStage />
-                        )}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                          <SplashScreen />
-                        )}
+                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <LoginBrandStage />}
+                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <SplashScreen />}
                         <EnvCheckGuard>
                           <MakerBootstrap />
                           <ProjectAutomationNotifyBridge />
-                          {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider
-                              内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
-                              都挂、谁收到谁弹,不按窗口类型 gate。 */}
-                          <GhostConfirmDialogHost />
-                          <OwnerScopedRouter />
+                          <RouterProvider router={router} />
                         </EnvCheckGuard>
                       </LoginHandoffHost>
                       <FindInPageBar />
                       <ToastContainer />
                       {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
-                      {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                        <LegacyMigrationDialog />
-                      )}
+                      {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <LegacyMigrationDialog />}
                     </Tooltip.Provider>
                   </PrRefsProvider>
                 </WorktreeProvider>

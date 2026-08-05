@@ -78,38 +78,6 @@ export const DL_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DL_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 
 /**
- * 个人 Telegram bot 的跨设备上下线 channel(控制端 → 被控端)。
- *
- * 背景:个人 Telegram bot 是 BYO token 直连 Bot API 的 getUpdates 长轮询,
- * 同一 token 同时只有一台设备能收消息(Telegram 侧 409),而两台设备之间**没有
- * 任何通信通道**。换机器时想让另一端让位, 除了人肉去那台机器操作, 没有别的办法
- * —— 这两个 channel 就是补这个缺口。
- *
- * 为什么不直接把 telegramBot:set-online 放进 allowlist: IM 的所有 IPC 在
- * host.ipc.handle 里统一包了 assertTrustedAppRendererEvent(见 im/host.ts),
- * 只认 Electron 持有的真实 sender; 而 dispatchLocalInvoke 用的是合成 event
- * (sender: undefined), 必然判定不可信。那道闸是有意拦着的(IM 凭证/配置面全算
- * 敏感面), 不该为远程下线放宽 —— 故与 media:fetch / voice:* 同款: 不是
- * ipcMain handler, 由被控端 dispatch 在通用路由前拦截执行。
- *
- * 准入论证(对照本文件顶部三条判据):
- *  1. 不依赖 event.sender / 窗口;
- *  2. 无本机 UI / shell / 对话框副作用;
- *  3. 语义只在被控端执行才正确 —— 要停的正是那台机器的轮询。
- * 与"永不放行"的两类刻意划清界限:**不碰凭证**(token / owner id 不读不写不
- * 外传, 下线只写一个布尔标志、解绑仍然只能本机操作), 也**不是通用设置写**
- * (单一用途、只切轮询, 不是 *_SET 那种任意配置面)。
- *
- * status 是只读投影, 且刻意不含 ownerUserId —— 控制端只需要知道"哪台在用、
- * 用的哪个 bot", 没有理由让 Telegram 用户 id 过网线。
- *
- * 老被控端不识别 → CHANNEL_NOT_ALLOWED, 控制端据此显示「该设备版本不支持」
- * 而不是静默失败。
- */
-export const DL_TELEGRAM_STATUS_CHANNEL = 'device-link:telegram:status';
-export const DL_TELEGRAM_SET_ONLINE_CHANNEL = 'device-link:telegram:set-online';
-
-/**
  * 手机端语音词典学习回写 channel。
  *
  * 手机端只负责检测用户是否把一次 voice refine 结果改成了专有名词/术语修正;
@@ -193,10 +161,6 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
   'maker:set-extra-dirs',
-  // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
-  // SDK leaf 与 SQLite 可见时间线，不依赖 sender/窗口，真相也只在被控端。
-  'maker:get-session-tree',
-  'maker:navigate-session-tree',
   // 会话「非选中模型」effort/fast 写穿(控制端 → 被控端):控制端纯显示,改非选中行的预设记忆时
   // 通知被控端,被控端调它原来的本地 setter(setSessionModelEffort/Fast)写真实存储。选中模型仍走
   // maker:set-model/effort/fast-mode + sessions:patched,不经此 channel。被控端转发给自身 renderer
@@ -216,30 +180,15 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // re-mirror 回 main 并广播。被控端转发给自身 renderer 执行(无 sender 依赖、无本机副作用)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉,退回一次性 pull 行为。
   'maker:apply-new-maker-draft-pref',
-  // device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端):worktree 勾选记忆是
-  // 被控端 newMakerDraft 的 vendor 无关根字段,「这台工作端新建会话是否默认进 worktree」的真相
-  // 在被控端。被控端 handler 校验布尔后转发给自身 renderer 写真实草稿(无 sender 依赖、无本机
-  // UI 副作用);回读经 maker:get-new-maker-defaults + NEW_MAKER_DRAFT_CHANGED 回流。
-  // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
-  'maker:apply-new-maker-worktree-pref',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
-  // 会话标题旁的 Git / GitHub 上下文(分支、PR 引用与实时状态)必须在被控端查询,
-  // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
-  'git-context:get-for-session',
-  'git-context:pr-refs:list',
-  'git-context:pr-status',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
-  // Read-only indexed task search for the remote Composer @ palette. Older
-  // controlled clients reject this channel and the controller falls back to
-  // the bounded legacy sessions:list projection.
-  'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
@@ -406,14 +355,6 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:scan-at-resources',
   // —— 插件列表(只读)——
   'maker:plugins:list',
-  // 单个插件的启停状态(只读)。与 maker:plugins:list 同类,差别只在它不跳过
-  // HOSTED_ELSEWHERE 插件、且按 id 精确查。准入三条:handler 只读 settings + 项目
-  // `.cindy/plugins.json`,不依赖 event.sender、无 UI/shell 副作用;插件启停真相在
-  // 被控端(控制端拿被控端的路径查自己本机只会读到自己的用户级开关,判定可能与被控端
-  // main 的 assertCollabProjectEnabled 相反 —— issue #1170 的「入口能点但走不完」)。
-  // 用途:device-link 项目的协同入口按被控端的项目级 collab 开关置灰。老被控端无此
-  // channel → CHANNEL_NOT_ALLOWED → 控制端 fail-closed 置灰并提示设备版本过旧。
-  'maker:plugins:get-state',
   // —— 路径解析(被控端解析语义正确;新建会话选目录用)——
   'fs:resolve-path',
   'fs:resolve-path-batch',
@@ -462,23 +403,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // validateWorktreeName 白名单校验,不接受任意路径),且 baseRepo 在被控端 dispatch
   // 层过 remote-workdir-guard 同款收敛(见 dispatch.ts PATH_GUARDED)。device-link
   // 已是同账号 + remoteControlEnabled 显式 opt-in,控制端本就能在项目目录跑 agent
-  // (任意 exec),不扩大攻击面。removal-preview 只读、用于删除前警告；通用删除路径仍不放行。
-  // discard-precreated 是唯一窄删除例外：常规收 sessionId + create 回包的精确 path；
-  // 若手机在 create 回包前退出，则收其在 create 前已持久化、并与被控端 worktree
-  // 元数据精确匹配的随机 recoveryKey。两路都重新核对 store 归属、无 DB/live
-  // session、无 dirty/keep/live-ref 后才删；recoveryKey create/discard 另按 sessionId
-  // 串行，且本口与 maker:create-session 共用 session 锁，专门补偿两步创建的失败窗口。
-  // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 控制端按对应能力降级。
+  // (任意 exec),不扩大攻击面。removal-preview 只读、用于删除前警告；实际删除路径不放行
+  // (removeWorktreeForSession 只在被控端状态变更流程内部触发)。老被控端无这些 channel →
+  // CHANNEL_NOT_ALLOWED → 控制端保持"worktree 不可用"降级。
   'worktree:detect-cwd',
   'worktree:list-branches',
   'worktree:suggest-name',
   'worktree:create',
-  'worktree:discard-precreated',
   'worktree:removal-preview',
-  // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
-  // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
-  DL_TELEGRAM_STATUS_CHANNEL,
-  DL_TELEGRAM_SET_ONLINE_CHANNEL,
 ];
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
@@ -540,20 +472,12 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 逐 channel 的 invoke 隧道超时覆盖(ms),双向使用:
+ * 逐 channel 的 invoke 隧道超时覆盖(ms)。
  *
- * **放宽**:client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的
- * channel 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道
- * 30s 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
+ * client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的 channel
+ * 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道 30s
+ * 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
  * 的正确语义。此表给这类 channel「执行预算 + 回程余量」的覆盖值。
- *
- * **收紧**:listing tier 的轻量 DB 读(sessions:list / sessions:get)在被控端是毫秒级
- * 查询,等满默认 30s 只可能是链路不通。它们又是控制端周期对账的高频 channel,弱网下
- * 每个 30s 超时都占着重试与并发预算(2026-08 实测:单日 2253 次 sessions:list 等满
- * 30s 超时)。给短超时让失败尽快暴露,把「设备无响应」判定交给控制端熔断器。
- * 注意:被控端 dispatch 的 REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 取 max(30s, ...本表),
- * 收紧条目不影响被控端的等待窗口。
- *
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
@@ -562,13 +486,6 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 被控端 worktree:create 含 git worktree add(--no-checkout)+ 白名单文件选择性
   // checkout + .claude/.sivi 拷贝;大仓库 / 慢盘上可能超默认 30s,给足执行预算 + 回程余量。
   'worktree:create': 60_000,
-  // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
-  'worktree:discard-precreated': 60_000,
-  // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
-  // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
-  // 不吃满超时),不会误伤首拉重试。
-  'local-db:sessions:list': 12_000,
-  'local-db:sessions:get': 12_000,
 };
 
 /**

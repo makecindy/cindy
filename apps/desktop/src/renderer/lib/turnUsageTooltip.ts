@@ -47,7 +47,7 @@ function modelLabel(details: TurnUsageDetails, t: TFunction): string | null {
 const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
 const LOW_CACHE_MAX_HIT_RATE = 0.2;
 
-export function getTurnUsageSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
+function suggestion(details: TurnUsageDetails, t: TFunction): string | null {
   const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
   if (
     inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS &&
@@ -108,13 +108,9 @@ export function buildTurnUsageTooltipLines({
     const model = modelLabel(details, t);
     if (model) lines.push(t('usageDetails.modelLine', { model }));
   }
-  const suggestionText = getTurnUsageSuggestion(details, t);
+  const suggestionText = suggestion(details, t);
   if (suggestionText) {
     lines.push(t('usageDetails.suggestionLine', { suggestion: suggestionText }));
-  }
-  // 无金额时交代一句,避免「只有 token、没有钱」被读成事实缺失；这一层不猜测具体原因。
-  if (!formattedCost) {
-    lines.push(t('usageDetails.noBilledCost'));
   }
   return lines;
 }

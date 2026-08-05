@@ -4,7 +4,6 @@ import type {
   ConversationSearchSessionSummary,
   ConversationSearchSortBy,
 } from '../../shared/conversationSearch.js';
-import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 
 const Bonus = {
@@ -255,8 +254,7 @@ export function normalizeConversationContentPreview(
 
 export function visibleMessageTextForConversationSearch(role: string, content: unknown): string {
   const parsed = typeof content === 'string' ? tryParseJsonLike(content) : content;
-  const rawText = roleVisibleText(role, parsed);
-  const text = role === 'assistant' ? stripInternalWebCitations(rawText) : rawText;
+  const text = roleVisibleText(role, parsed);
   return text.replace(/\s+/g, ' ').trim();
 }
 

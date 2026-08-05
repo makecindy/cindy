@@ -185,13 +185,13 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         fontFamily: CODE_FONT_STACK,
         lineHeight: '1.5',
       },
-      // Selection uses the app-wide selection token so editor and document
-      // selections remain identical when focus moves into an embedded webview.
+      // Selection uses the shared focus ring alpha token so alternate themes can
+      // keep editor selection aligned with the rest of the app.
       '.cm-selectionBackground, ::selection': {
-        background: 'var(--text-selection-bg) !important',
+        background: 'var(--focus-ring-soft) !important',
       },
       '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        background: 'var(--text-selection-bg)',
+        background: 'var(--focus-ring-soft)',
       },
       // No active-line highlight (user disliked it earlier).
       '.cm-activeLine, .cm-activeLineGutter': { background: 'transparent' },
@@ -281,10 +281,10 @@ function makePlainEditorTheme(isDark: boolean) {
         lineHeight: '1.6',
       },
       '.cm-selectionBackground, ::selection': {
-        background: 'var(--text-selection-bg) !important',
+        background: 'var(--focus-ring-soft) !important',
       },
       '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        background: 'var(--text-selection-bg)',
+        background: 'var(--focus-ring-soft)',
       },
       '.cm-activeLine, .cm-activeLineGutter': { background: 'transparent' },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: text },
@@ -670,10 +670,10 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         wordBreak: 'break-word',
       },
       '.cm-selectionBackground, ::selection': {
-        background: 'var(--text-selection-bg) !important',
+        background: 'var(--focus-ring-soft) !important',
       },
       '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-        background: 'var(--text-selection-bg)',
+        background: 'var(--focus-ring-soft)',
       },
       '.cm-activeLine, .cm-activeLineGutter': { background: 'transparent' },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: text },

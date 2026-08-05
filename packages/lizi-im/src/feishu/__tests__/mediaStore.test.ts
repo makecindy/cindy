@@ -55,13 +55,7 @@ function wireHost(mediaDir: string, media?: IMHostMediaCache): void {
       read: () => null,
       remove: () => {},
     },
-    ipc: {
-      throwIpcError: (code: 'INVALID_PARAMS', message: string) => {
-        throw new Error(`[${code}] ${message}`);
-      },
-      handle: () => {},
-      broadcast: () => {},
-    },
+    ipc: { handle: () => {}, broadcast: () => {} },
     httpPostForm: async () => ({ status: 200, body: {} }),
   } as unknown as IMHost;
   setHost(host, defaultLogger('im:feishu:test'));

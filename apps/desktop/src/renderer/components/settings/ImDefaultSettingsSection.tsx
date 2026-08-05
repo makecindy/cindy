@@ -5,17 +5,15 @@
  * 静默改写；非 thread 渠道通过 `/new` 显式应用。
  */
 
-import {
-  connectedProvidersForAgent,
-  getModel,
-  isModelSelectableForNewRoute,
-} from '@cindy/model-providers';
+import { connectedProvidersForAgent, getModel, isAgentSelectableModel } from '@cindy/model-providers';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
+import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -31,21 +29,22 @@ import {
   type ImDefaultSettingsPatch,
   type ImDefaultSettingsState,
   isImDefaultEffort,
+  isImDefaultPermissionMode,
+  isWechatUnsupportedPermissionMode,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import {
-  buildAgentSettingsPatch,
-  mergeSettingsPatch,
-  resolveAgentSwitchSettings,
-} from './imDefaultSettingsLogic';
+import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
 
-function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'claude-code' ? 'cc' : agentKind;
-}
+const AGENT_OPTIONS: Array<{
+  kind: ImDefaultAgentKind;
+  Mark: typeof ClaudeMark;
+}> = [
+  { kind: 'claude-code', Mark: ClaudeMark },
+  { kind: 'codex', Mark: CodexMark },
+];
 
-/** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
-function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
-  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
+function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' {
+  return agentKind === 'codex' ? 'codex' : 'cc';
 }
 
 export interface ImDefaultSettingsSummary {
@@ -55,21 +54,10 @@ export interface ImDefaultSettingsSummary {
 
 export function ImDefaultSettingsSection({
   channel,
-  descriptionChannel = channel,
   embedded = false,
   onSummaryChange,
 }: {
-  /** Omit to edit the global defaults used by official hook channels. */
-  channel?: ImDefaultSettingsChannel;
-  /**
-   * 只换说明文案的键(不影响读写 scope)。
-   *
-   * 官方 hook 卡曾有一个 'officialHook' 变体(写 global scope), 已随「新对话配置」
-   * 区块一并移除 —— 它与目录行的 agent/model/effort 是同一份配置的两个入口, 画成
-   * 平级两套只会让人以为可以分别设。global scope 仍是目录行的兜底层, 只是不再有
-   * UI 入口(与 X 卡今天一致)。
-   */
-  descriptionChannel?: ImDefaultSettingsChannel;
+  channel: ImDefaultSettingsChannel;
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
@@ -77,7 +65,6 @@ export function ImDefaultSettingsSection({
   const { providers } = useProviders();
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
-  const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -112,11 +99,8 @@ export function ImDefaultSettingsSection({
     // 准入口径:IM 默认模型是「从零挑一个」的清单,停用的供应商/模型与能力模型
     // 不该可选 —— 否则 headless runner 派发时才降级换模型,用户无感(PR #744 review)。
     const fromProviders = {
-      'claude-code': deriveModelsFromProviders(providers, 'claude-code', {
-        admissionFiltered: true,
-      }),
+      'claude-code': deriveModelsFromProviders(providers, 'claude-code', { admissionFiltered: true }),
       codex: deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true }),
-      pi: deriveModelsFromProviders(providers, 'pi', { admissionFiltered: true }),
     };
     return {
       'claude-code': fromProviders['claude-code'].length
@@ -125,11 +109,8 @@ export function ImDefaultSettingsSection({
       codex: fromProviders.codex.length
         ? fromProviders.codex
         : (codex.capabilities?.availableModels ?? []),
-      pi: fromProviders.pi.length
-        ? fromProviders.pi
-        : (pi.capabilities?.availableModels ?? []),
     };
-  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [providers, cc.capabilities, codex.capabilities]);
 
   const resolveProviderId = useCallback(
     (agentKind: ImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {
@@ -143,7 +124,7 @@ export function ImDefaultSettingsSection({
       // image/audio/embedding 端点。
       const catalogModel = getModel(provider, modelId, agentKind);
       return catalogModel &&
-        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
+        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },
@@ -218,17 +199,7 @@ export function ImDefaultSettingsSection({
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
-    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
-    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
-    const next = resolveAgentSwitchSettings({
-      current: settings.agents[agentKind],
-      available: modelsByAgent[agentKind],
-      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
-      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
-      resolveProviderId: (modelId, providerId) =>
-        resolveProviderId(agentKind, modelId, providerId),
-    });
-    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
+    void persist({ agentKind });
   };
 
   const changeModel = (model: string, providerId: string | null = activeSettings.providerId) => {
@@ -252,6 +223,17 @@ export function ImDefaultSettingsSection({
         effort,
       }),
     );
+  };
+
+  const changePermissionMode = (permissionMode: string) => {
+    if (
+      !isImDefaultPermissionMode(permissionMode) ||
+      isWechatUnsupportedPermissionMode(permissionMode) ||
+      permissionMode === settings.permissionMode
+    ) {
+      return;
+    }
+    void persist({ permissionMode });
   };
 
   return (
@@ -278,7 +260,7 @@ export function ImDefaultSettingsSection({
               {t('settings.imBot.defaults.title')}
             </h3>
             <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
-              {t(`settings.imBot.defaults.channelDescriptions.${descriptionChannel}`)}
+              {t(`settings.imBot.defaults.channelDescriptions.${channel}`)}
             </p>
           </div>
         </div>
@@ -294,18 +276,36 @@ export function ImDefaultSettingsSection({
           <span className="text-[12px] font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.agentLabel')}
           </span>
-          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
-              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
-          <AgentSelect
-            value={vendorKeyFor(settings.agentKind)}
-            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
-            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
-            triggerVariant="field"
-            side="bottom"
-            disabled={pending}
-            ariaContext={t('settings.imBot.defaults.agentLabel')}
-            onChange={(next) => changeAgent(agentKindOfVendor(next))}
-          />
+          <div
+            className="flex h-10 items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
+            role="tablist"
+            aria-label={t('settings.imBot.defaults.agentLabel')}
+          >
+            {AGENT_OPTIONS.map(({ kind, Mark }) => {
+              const active = kind === settings.agentKind;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  disabled={pending}
+                  onClick={() => changeAgent(kind)}
+                  className={cn(
+                    'flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-3',
+                    'border text-[13px] leading-none transition-colors',
+                    active
+                      ? 'border-[var(--border-default)] bg-[var(--surface-elevated)] font-medium text-[var(--settings-section-title)]'
+                      : 'border-transparent font-normal text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                    pending && 'cursor-not-allowed opacity-55',
+                  )}
+                >
+                  <Mark size={14} className="shrink-0" />
+                  <span className="truncate">{t(`settings.imBot.defaults.agents.${kind}`)}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">
@@ -328,6 +328,29 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {channel === 'wechat' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+            {t('settings.wechatBot.permission.label')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.permissionMode}
+            onPermissionModeChange={changePermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            disabled={pending}
+            triggerVariant="field"
+            ariaContext={t('settings.wechatBot.permission.label')}
+            disabledModes={{
+              bypassPermissions: t('settings.wechatBot.permission.fullAccessDisabled'),
+              acceptEdits: t('settings.wechatBot.permission.permissionModeDisabled'),
+            }}
+          />
+          <p className="text-[12px] leading-[1.5] text-[var(--settings-section-desc)]">
+            {t('settings.wechatBot.permission.hint')}
+          </p>
+        </div>
+      )}
     </section>
   );
 }

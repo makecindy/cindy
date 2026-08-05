@@ -760,12 +760,6 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     base.unshift(`resources/${UPDATER_EXE}`);
   }
 
-  // macOS 「帮助 → 安装到命令行」symlink 的目标脚本(<App>/Contents/Resources/cli/cindy)。
-  // 仅 darwin 有此功能,其它平台不打进包。exec 位由 git 跟踪,extraResource 拷贝时保留。
-  if (targetPlatform === 'darwin') {
-    base.push('resources/cli');
-  }
-
   return base;
 }
 
@@ -1196,8 +1190,6 @@ const config: ForgeConfig = {
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
-      NSLocalNetworkUsageDescription:
-        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
@@ -1340,19 +1332,6 @@ const config: ForgeConfig = {
           entry: 'src/main/im/wechat/silkWorker.ts',
           config: 'vite.silk-worker.config.ts',
           // SILK/WASM 解码隔离在线程中，避免阻塞 Electron main。
-          target: 'preload',
-        },
-        {
-          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
-          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
-          target: 'preload',
-        },
-        {
-          entry: 'src/main/mcp-integrations/forgeIconConversionProcess.ts',
-          config: 'vite.forge-icon-conversion-process.config.ts',
-          // Sharp/libvips 转换在一次性 utility process 中执行；超时可 kill，
-          // 不把不可取消的 native 任务留在 Electron main。
           target: 'preload',
         },
         {

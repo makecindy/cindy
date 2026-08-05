@@ -17,10 +17,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Message, Session } from '@/lib/ccAgent.types';
-import {
-  __testing as dataOwnerTesting,
-  setDataOwnerGeneration,
-} from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -44,7 +40,6 @@ vi.mock('@/lib/imageRef', () => ({
 }));
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
-  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }] }),
 }));
 
@@ -53,13 +48,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 
 // ─── 忠实的被控端内存替身(单一真相源)───────────────────────────────────────────
 
-const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
-type RemotePush = {
-  deviceId: string;
-  channel: string;
-  payload: unknown;
-  ownerStamp?: typeof TEST_OWNER_STAMP;
-};
+type RemotePush = { deviceId: string; channel: string; payload: unknown };
 
 function emptyProjection(sessionId: string) {
   return {
@@ -118,7 +107,7 @@ function makeFakeHost(deviceId: string, deviceName: string) {
     invoke,
     /** 注册控制端 onRemotePush 回调(被控端经此向控制端转发广播)。 */
     registerPush(cb: (p: RemotePush) => void): () => void {
-      pushCb = (push) => cb({ ...push, ownerStamp: push.ownerStamp ?? TEST_OWNER_STAMP });
+      pushCb = cb;
       return () => {
         pushCb = null;
       };
@@ -187,8 +176,6 @@ const sid = () => `ctrl-scn-${n++}`;
 let host: FakeHost;
 
 beforeEach(() => {
-  dataOwnerTesting.reset();
-  setDataOwnerGeneration(TEST_OWNER_STAMP.dataOwnerId, TEST_OWNER_STAMP.ownerGeneration);
   host = makeFakeHost(DEVICE_ID, 'Mac A');
   stubElectronApi(host);
   makerChatStore.initGlobalListeners();
@@ -199,7 +186,6 @@ afterEach(() => {
   remoteProjectsStore.clear();
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
-  dataOwnerTesting.reset();
 });
 
 describe('device-link controller mirror — end-to-end scenarios', () => {

@@ -13,7 +13,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ScheduleRun, SchedulerEvent } from '@cindy/maker-scheduler';
 
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { subscribeScheduleRunReadSync } from '../lib/scheduleRunReadSync';
 
 export interface UseRunsResult {
@@ -80,8 +79,7 @@ export function useRuns(scheduleId: string | null, limit = 50): UseRunsResult {
       return;
     }
     void refresh();
-    const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    const off = window.electronAPI.maker.schedule.onEvent((raw) => {
       const ev = raw as SchedulerEvent;
       if (ev.type === 'all-read') {
         void refresh();
@@ -107,8 +105,7 @@ export function useRuns(scheduleId: string | null, limit = 50): UseRunsResult {
     const offReadSync = subscribeScheduleRunReadSync(() => void refresh());
     // Codex 费用在 done 后异步查价并落 message/run 账本，可能晚于 completed 事件。
     // 监听费用广播，避免历史卡永久保留 completed 时读到的旧快照。
-    const offTurnCost = window.electronAPI.onUsageMessageTurnCost?.((_payload, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    const offTurnCost = window.electronAPI.onUsageMessageTurnCost?.(() => {
       void refresh();
     });
     return () => {

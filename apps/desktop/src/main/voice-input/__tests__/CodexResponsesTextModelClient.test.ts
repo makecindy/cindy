@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // CodexResponsesTextModelClient uses undici.fetch + Agent for the shared
-// keepalive pool. Keep the real Undici exports and replace only fetch so the
-// tests stay hermetic without changing the transport module's shape.
+// keepalive pool. Stub them so the tests stay hermetic; Agent is a no-op since
+// we don't exercise pool behavior here.
 const undiciFetchMock = vi.fn();
-vi.mock('undici', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    fetch: (...args: unknown[]) => undiciFetchMock(...args),
-  };
-});
+vi.mock('undici', () => ({
+  fetch: (...args: unknown[]) => undiciFetchMock(...args),
+  Agent: class { /* no-op stub */ },
+}));
 
 import { CodexResponsesTextModelClient } from '../CodexResponsesTextModelClient.js';
 

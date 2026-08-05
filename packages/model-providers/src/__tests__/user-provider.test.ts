@@ -63,20 +63,6 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
-  it('preserves an explicit Anthropic Messages protocol for Codex routing', () => {
-    const p = buildUserProvider({
-      ...codexOnly,
-      runtimes: {
-        codex: { ...codexOnly.runtimes.codex!, wireProtocol: 'anthropic-messages' },
-      },
-    });
-    expect(p.routing.codex).toMatchObject({
-      upstream: 'https://openrouter.ai/api/v1',
-      authStrategy: 'api-key-header',
-      wireProtocol: 'anthropic-messages',
-    });
-  });
-
   it('preserves a non-standard inference request path in routing', () => {
     const p = buildUserProvider({
       ...codexOnly,
@@ -136,37 +122,6 @@ describe('buildUserProvider (per-runtime)', () => {
       ['long-context', 1_000_000],
       ['default-context', DEFAULT_CUSTOM_CONTEXT_WINDOW],
     ]);
-    // 只有用户自己填的窗口算「已核实」,可以拿去收敛运行期上报值;走 200K 兜底的那条
-    // 不标记 —— 否则真实 1M 的端点会被这个展示用默认值压到 200K。
-    expect(p.models.codex?.map((m) => [m.id, m.contextWindowVerified])).toEqual([
-      ['long-context', true],
-      ['default-context', undefined],
-    ]);
-    // 显式配置打标、缺省物化不打标:编辑表单靠它区分「显式 200K」与「默认 200K」,
-    // 不能靠与默认等值推断(显式覆盖必须在默认升级后原样保留)。
-    expect(p.models.codex?.map((m) => [m.id, m.contextWindowExplicit ?? null])).toEqual([
-      ['long-context', true],
-      ['default-context', null],
-    ]);
-  });
-
-  it('marks an explicit contextWindow equal to the current default as explicit', () => {
-    const p = buildUserProvider({
-      ...codexOnly,
-      runtimes: {
-        codex: {
-          ...codexOnly.runtimes.codex!,
-          models: [
-            { id: 'pinned-default', name: 'Pinned', contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW },
-          ],
-        },
-      },
-    });
-    expect(p.models.codex?.[0]).toMatchObject({
-      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
-      contextWindowVerified: true,
-      contextWindowExplicit: true,
-    });
   });
 
   it('attaches per-runtime custom headers (still no api key)', () => {
@@ -268,66 +223,5 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.agents).toEqual([]);
     expect(p.routing).toEqual({});
     expect(p.models).toEqual({});
-  });
-
-  it('keeps legacy Pi custom models non-reasoning until the capability is explicitly enabled', () => {
-    const p = buildUserProvider({
-      id: 'localollama',
-      name: 'Local Ollama',
-      auth: { method: 'none' },
-      runtimes: {
-        pi: {
-          baseUrl: 'http://127.0.0.1:11434/v1',
-          wireProtocol: 'openai-chat',
-          models: [{ id: 'qwen3:8b', name: 'Qwen3 8B', supportsImageInput: true }],
-        },
-      },
-    });
-    expect(p.agents).toEqual(['pi']);
-    expect(p.auth).toEqual({ method: 'none' });
-    expect((p.models.pi ?? []).map((m) => m.id)).toEqual(['qwen3:8b']);
-    expect((p.models.pi ?? [])[0]?.efforts).toEqual([]);
-    expect((p.models.pi ?? [])[0]?.defaultEffort).toBeNull();
-    expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
-    expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
-  });
-
-  it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
-    const p = buildUserProvider({
-      id: 'reasoning-pi',
-      name: 'Reasoning Pi',
-      runtimes: {
-        pi: {
-          baseUrl: 'https://example.test/v1',
-          wireProtocol: 'openai-responses',
-          models: [
-            {
-              id: 'reasoner',
-              name: 'Reasoner',
-              reasoning: true,
-              reasoningEfforts: ['low', 'high', 'xhigh'],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(p.models.pi?.[0]).toMatchObject({
-      efforts: ['low', 'high', 'xhigh'],
-      defaultEffort: 'high',
-    });
-  });
-
-  it('orders pi after claude-code and codex (AGENT_ORDER)', () => {
-    const p = buildUserProvider({
-      id: 'multi',
-      name: 'Multi',
-      runtimes: {
-        pi: { baseUrl: 'http://127.0.0.1:8000/v1', models: [{ id: 'pi-m', name: 'Pi M' }] },
-        codex: { baseUrl: 'https://v.ai/openai/v1', models: [{ id: 'cx-m', name: 'Cx M' }] },
-        'claude-code': { baseUrl: 'https://v.ai/anthropic', models: [{ id: 'cc-m', name: 'Cc M' }] },
-      },
-    });
-    expect(p.agents).toEqual(['claude-code', 'codex', 'pi']);
   });
 });

@@ -9,14 +9,12 @@ overrides:
   protobufjs: 7.6.5
   tar: ^7.5.21
   brace-expansion@^5.0.0: ^5.0.8
-  '@anthropic-ai/sdk': 0.91.1
   js-yaml@^4.0.0: ^4.3.0
   zod: 4.3.6
   tmp: ^0.2.7
   fast-uri: ^3.1.4
   sharp: ^0.35.0
   '@esbuild-kit/core-utils>esbuild': ^0.25.0
-  builder-util-runtime: ^9.7.0
 
 patchedDependencies:
   expo-paste-input@0.2.2:
@@ -109,9 +107,6 @@ importers:
       '@cindy/remote-file-service':
         specifier: workspace:*
         version: link:../../packages/remote-file-service
-      '@cindy/responses-anthropic-bridge':
-        specifier: workspace:*
-        version: link:../../packages/responses-anthropic-bridge
       '@cindy/responses-chat-bridge':
         specifier: workspace:*
         version: link:../../packages/responses-chat-bridge
@@ -370,9 +365,6 @@ importers:
       rehype-slug:
         specifier: ^6.0.0
         version: 6.0.0
-      remark-cjk-friendly:
-        specifier: ^2.3.1
-        version: 2.3.1(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(unified@11.0.5)
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
@@ -394,9 +386,6 @@ importers:
       tailwind-merge:
         specifier: ^2.6.0
         version: 2.6.1
-      tar:
-        specifier: ^7.5.21
-        version: 7.5.22
       undici:
         specifier: ^8.3.0
         version: 8.7.0
@@ -712,6 +701,15 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  cindy-protocol/packages/content-moderation-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   cindy-protocol/packages/device-link-protocol:
     devDependencies:
       typescript:
@@ -965,12 +963,6 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.71.1
-      '@wecom/aibot-node-sdk':
-        specifier: 1.0.7
-        version: 1.0.7
-      dingtalk-stream:
-        specifier: ^2.1.5
-        version: 2.1.5
       discord.js:
         specifier: ^14.16.0
         version: 14.27.0
@@ -1077,7 +1069,7 @@ importers:
         specifier: 0.2.112
         version: 0.2.112(zod@4.3.6)
       '@anthropic-ai/sdk':
-        specifier: 0.91.1
+        specifier: ^0.91.1
         version: 0.91.1(zod@4.3.6)
       '@cindy/maker-shared':
         specifier: workspace:*
@@ -1182,10 +1174,6 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/model-providers:
-    dependencies:
-      '@cindy/model-access-protocol':
-        specifier: workspace:*
-        version: link:../../cindy-protocol/packages/model-access-protocol
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -1202,9 +1190,6 @@ importers:
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../maker-core
-      '@cindy/maker-shared':
-        specifier: workspace:*
-        version: link:../maker-shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -1314,27 +1299,6 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  packages/responses-anthropic-bridge:
-    devDependencies:
-      '@eslint/js':
-        specifier: ^9.0.0
-        version: 9.39.5
-      '@types/node':
-        specifier: '*'
-        version: 25.9.5
-      eslint:
-        specifier: ^9.0.0
-        version: 9.39.5(jiti@2.7.0)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      typescript-eslint:
-        specifier: ^8.0.0
-        version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
   packages/responses-chat-bridge:
     devDependencies:
       '@eslint/js':
@@ -1406,6 +1370,15 @@ packages:
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: 4.3.6
+
+  '@anthropic-ai/sdk@0.81.0':
+    resolution: {integrity: sha512-D4K5PvEV6wPiRtVlVsJHIUhHAmOZ6IT/I9rKlTf84gR7GyyAurPJK7z9BOf/AZqC5d1DhYQGJNKRmV+q8dGhgw==}
+    hasBin: true
+    peerDependencies:
+      zod: 4.3.6
+    peerDependenciesMeta:
+      zod:
+        optional: true
 
   '@anthropic-ai/sdk@0.91.1':
     resolution: {integrity: sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw==}
@@ -4765,9 +4738,6 @@ packages:
   '@webassemblyjs/wast-printer@1.14.1':
     resolution: {integrity: sha512-kPSSXE6De1XOR820C90RIo2ogvZG+c3KiHzqUoO/F34Y2shGzesfqv7o57xrxovZJH/MetF5UjroJ/R/3isoiw==}
 
-  '@wecom/aibot-node-sdk@1.0.7':
-    resolution: {integrity: sha512-51w+sTqunry6GD3HFvmuh0gArMSJDFE418vyvR1wMJHj1N6DaFuGD3HuaY2fazZs3mb9FWeQFX3+vU5t0Qhwmw==}
-
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
@@ -5208,8 +5178,8 @@ packages:
     resolution: {integrity: sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==}
     engines: {node: '>=10.0.0'}
 
-  builder-util-runtime@9.7.0:
-    resolution: {integrity: sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw==}
+  builder-util-runtime@9.2.4:
+    resolution: {integrity: sha512-upp+biKpN/XZMLim7aguUyW8s0FUpDvOtK6sbanMFDAMBzpHDqdhgVYm6zc9HJ6nWo7u2Lxk60i2M6Jd3aiNrA==}
     engines: {node: '>=12.0.0'}
 
   builder-util@24.13.1:
@@ -5909,9 +5879,6 @@ packages:
 
   dijkstrajs@1.0.3:
     resolution: {integrity: sha512-qiSlmBq9+BCdCA/L46dw8Uy93mloxsPSbwnm5yrKn2vMPiy8KyAskTF6zuV/j5BMsmOGZDPs7KjU+mjb670kfA==}
-
-  dingtalk-stream@2.1.5:
-    resolution: {integrity: sha512-6H3tSc/mE6hMj4RBB5ntkI4ycC498RobmtMxfLS8eBTRPjBZlhUdDYEHA0asOoTLSzC2PHqupr4D4HVoaU7bRQ==}
 
   dir-compare@3.3.0:
     resolution: {integrity: sha512-J7/et3WlGUCxjdnD3HAAzQ6nsnc0WL6DD7WcwJb7c39iH1+AWfg+9OqzJNaI6PkBwBvm1mhZNL9iY/nRiZXlPg==}
@@ -6925,10 +6892,6 @@ packages:
     resolution: {integrity: sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg==}
     engines: {node: 6.* || 8.* || >= 10.*}
 
-  get-east-asian-width@1.6.0:
-    resolution: {integrity: sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA==}
-    engines: {node: '>=18'}
-
   get-folder-size@2.0.1:
     resolution: {integrity: sha512-+CEb+GDCM7tkOS2wdMKTn9vU7DgnKUTuDlehkNJKNSovdCOVxs14OfKCk4cvSaR3za4gj+OBdl9opPN9xrJ0zA==}
     hasBin: true
@@ -7928,15 +7891,6 @@ packages:
   mdast-util-to-hast@13.2.1:
     resolution: {integrity: sha512-cctsq2wp5vTsLIcaymblUriiTcZd0CwWtCbLvrOzYCDZoWyMNV8sZ7krj09FSnsiJi3WVsHLM4k6Dq/yaPyCXA==}
 
-  mdast-util-to-markdown-cjk-friendly@1.0.0:
-    resolution: {integrity: sha512-BoaAm8mlJ+LAYz0Qs532Y3ciTuQYgBUPZcSFbvC/ZKmEMAKgulw84YvQK1gI34t/vL2euSfuaWlqczkTBgamkw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@types/mdast': '*'
-    peerDependenciesMeta:
-      '@types/mdast':
-        optional: true
-
   mdast-util-to-markdown@2.1.2:
     resolution: {integrity: sha512-xj68wMTvGXVOKonmog6LwyJKrYXZPvlwabaryTjLh9LuvovB/KAH+kvi8Gjj+7rJjsFi23nkUxRQv1KqSroMqA==}
 
@@ -8044,25 +7998,6 @@ packages:
 
   micromark-core-commonmark@2.0.3:
     resolution: {integrity: sha512-RDBrHEMSxVFLg6xvnXmb1Ayr2WzLAWjeSATAoxwKYJV94TeNavgoIdA0a9ytzDSVzBy2YKFK+emCPOEibLeCrg==}
-
-  micromark-extension-cjk-friendly-util@3.0.1:
-    resolution: {integrity: sha512-GcbXqTTHOsiZHyF753oIddP/J2eH8j9zpyQPhkof6B2JNxfEJabnQqxbCgzJNuNes0Y2jTNJ3LiYPSXr6eJA8w==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      micromark-util-types: '*'
-    peerDependenciesMeta:
-      micromark-util-types:
-        optional: true
-
-  micromark-extension-cjk-friendly@2.0.1:
-    resolution: {integrity: sha512-OkzoYVTL1ChbvQ8Cc1ayTIz7paFQz8iS9oIYmewncweUSwmWR+hkJF9spJ1lxB90XldJl26A1F4IkPOKS3bDXw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      micromark: ^4.0.0
-      micromark-util-types: ^2.0.0
-    peerDependenciesMeta:
-      micromark-util-types:
-        optional: true
 
   micromark-extension-gfm-autolink-literal@2.1.0:
     resolution: {integrity: sha512-oOg7knzhicgQ3t4QCjCWgTmfNhvQbDDnJeVu9v81r7NltNCVmhPy1fJRX27pISafdjL+SVc4d3l48Gb6pbRypw==}
@@ -9193,16 +9128,6 @@ packages:
 
   rehype-slug@6.0.0:
     resolution: {integrity: sha512-lWyvf/jwu+oS5+hL5eClVd3hNdmwM1kAC0BUvEGD19pajQMIzcNUd/k9GsfQ+FfECvX+JE+e9/btsKH0EjJT6A==}
-
-  remark-cjk-friendly@2.3.1:
-    resolution: {integrity: sha512-f+pKZRxCRwNEGFBKNRAZAqU91GIK1SAo3ZyFHWRUgC9zcxRR0BXKd6YwqgSsxtW0rNpUDtONj7H5nje2WL3fcA==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@types/mdast': ^4.0.0
-      unified: ^11.0.0
-    peerDependenciesMeta:
-      '@types/mdast':
-        optional: true
 
   remark-gfm@4.0.1:
     resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
@@ -10514,7 +10439,7 @@ snapshots:
 
   '@anthropic-ai/claude-agent-sdk@0.2.112(zod@4.3.6)':
     dependencies:
-      '@anthropic-ai/sdk': 0.91.1(zod@4.3.6)
+      '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
@@ -10530,6 +10455,12 @@ snapshots:
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
+
+  '@anthropic-ai/sdk@0.81.0(zod@4.3.6)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 4.3.6
 
   '@anthropic-ai/sdk@0.91.1(zod@4.3.6)':
     dependencies:
@@ -12767,7 +12698,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.71.1':
     dependencies:
-      axios: 1.18.1(debug@4.4.3)
+      axios: 1.18.1
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -14638,17 +14569,6 @@ snapshots:
       '@webassemblyjs/ast': 1.14.1
       '@xtuc/long': 4.2.2
 
-  '@wecom/aibot-node-sdk@1.0.7':
-    dependencies:
-      axios: 1.18.1(debug@4.4.3)
-      eventemitter3: 5.0.4
-      ws: 8.21.1
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - supports-color
-      - utf-8-validate
-
   '@xmldom/xmldom@0.8.13': {}
 
   '@xmldom/xmldom@0.9.10': {}
@@ -14835,7 +14755,7 @@ snapshots:
       async-exit-hook: 2.0.1
       bluebird-lst: 1.0.9
       builder-util: 24.13.1
-      builder-util-runtime: 9.7.0
+      builder-util-runtime: 9.2.4
       chromium-pickle-js: 0.2.0
       debug: 4.4.3
       dmg-builder: 24.13.3(electron-builder-squirrel-windows@24.13.3)
@@ -14955,9 +14875,9 @@ snapshots:
       postcss: 8.5.19
       postcss-value-parser: 4.2.0
 
-  axios@1.18.1(debug@4.4.3):
+  axios@1.18.1:
     dependencies:
-      follow-redirects: 1.16.0(debug@4.4.3)
+      follow-redirects: 1.16.0
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -15182,7 +15102,7 @@ snapshots:
   buildcheck@0.0.7:
     optional: true
 
-  builder-util-runtime@9.7.0:
+  builder-util-runtime@9.2.4:
     dependencies:
       debug: 4.4.3
       sax: 1.6.0
@@ -15195,7 +15115,7 @@ snapshots:
       '@types/debug': 4.1.13
       app-builder-bin: 4.0.0
       bluebird-lst: 1.0.9
-      builder-util-runtime: 9.7.0
+      builder-util-runtime: 9.2.4
       chalk: 4.1.2
       cross-spawn: 7.0.6
       debug: 4.4.3
@@ -15911,16 +15831,6 @@ snapshots:
 
   dijkstrajs@1.0.3: {}
 
-  dingtalk-stream@2.1.5:
-    dependencies:
-      axios: 1.18.1(debug@4.4.3)
-      debug: 4.4.3
-      ws: 8.21.1
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
   dir-compare@3.3.0:
     dependencies:
       buffer-equal: 1.0.1
@@ -15958,7 +15868,7 @@ snapshots:
     dependencies:
       app-builder-lib: 24.13.3(dmg-builder@24.13.3)(electron-builder-squirrel-windows@24.13.3)
       builder-util: 24.13.1
-      builder-util-runtime: 9.7.0
+      builder-util-runtime: 9.2.4
       fs-extra: 10.1.0
       iconv-lite: 0.6.3
       js-yaml: 4.3.0
@@ -16091,7 +16001,7 @@ snapshots:
     dependencies:
       '@types/fs-extra': 9.0.13
       builder-util: 24.13.1
-      builder-util-runtime: 9.7.0
+      builder-util-runtime: 9.2.4
       chalk: 4.1.2
       fs-extra: 10.1.0
       lazy-val: 1.0.5
@@ -17042,9 +16952,7 @@ snapshots:
 
   flow-enums-runtime@0.0.6: {}
 
-  follow-redirects@1.16.0(debug@4.4.3):
-    optionalDependencies:
-      debug: 4.4.3
+  follow-redirects@1.16.0: {}
 
   fontfaceobserver@2.3.0: {}
 
@@ -17168,8 +17076,6 @@ snapshots:
   gensync@1.0.0-beta.2: {}
 
   get-caller-file@2.0.5: {}
-
-  get-east-asian-width@1.6.0: {}
 
   get-folder-size@2.0.1:
     dependencies:
@@ -18314,16 +18220,6 @@ snapshots:
       unist-util-visit: 5.1.0
       vfile: 6.0.3
 
-  mdast-util-to-markdown-cjk-friendly@1.0.0(@types/mdast@4.0.4)(micromark-util-types@2.0.2):
-    dependencies:
-      mdast-util-to-markdown: 2.1.2
-      micromark-extension-cjk-friendly-util: 3.0.1(micromark-util-types@2.0.2)
-      micromark-util-symbol: 2.0.1
-    optionalDependencies:
-      '@types/mdast': 4.0.4
-    transitivePeerDependencies:
-      - micromark-util-types
-
   mdast-util-to-markdown@2.1.2:
     dependencies:
       '@types/mdast': 4.0.4
@@ -18583,25 +18479,6 @@ snapshots:
       micromark-util-resolve-all: 2.0.1
       micromark-util-subtokenize: 2.1.0
       micromark-util-symbol: 2.0.1
-      micromark-util-types: 2.0.2
-
-  micromark-extension-cjk-friendly-util@3.0.1(micromark-util-types@2.0.2):
-    dependencies:
-      get-east-asian-width: 1.6.0
-      micromark-util-character: 2.1.1
-      micromark-util-symbol: 2.0.1
-    optionalDependencies:
-      micromark-util-types: 2.0.2
-
-  micromark-extension-cjk-friendly@2.0.1(micromark-util-types@2.0.2)(micromark@4.0.2):
-    dependencies:
-      devlop: 1.1.0
-      micromark: 4.0.2
-      micromark-extension-cjk-friendly-util: 3.0.1(micromark-util-types@2.0.2)
-      micromark-util-chunked: 2.0.1
-      micromark-util-resolve-all: 2.0.1
-      micromark-util-symbol: 2.0.1
-    optionalDependencies:
       micromark-util-types: 2.0.2
 
   micromark-extension-gfm-autolink-literal@2.1.0:
@@ -19864,17 +19741,6 @@ snapshots:
       hast-util-heading-rank: 3.0.0
       hast-util-to-string: 3.0.1
       unist-util-visit: 5.1.0
-
-  remark-cjk-friendly@2.3.1(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(unified@11.0.5):
-    dependencies:
-      mdast-util-to-markdown-cjk-friendly: 1.0.0(@types/mdast@4.0.4)(micromark-util-types@2.0.2)
-      micromark-extension-cjk-friendly: 2.0.1(micromark-util-types@2.0.2)(micromark@4.0.2)
-      unified: 11.0.5
-    optionalDependencies:
-      '@types/mdast': 4.0.4
-    transitivePeerDependencies:
-      - micromark
-      - micromark-util-types
 
   remark-gfm@4.0.1:
     dependencies:

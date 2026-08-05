@@ -254,14 +254,6 @@ registerColor('input', {
   light: 'var(--border-shadcn-hsl)',
   dark: 'var(--border-shadcn-hsl)',
 }, 'input');
-registerColor('switch-track-off', {
-  light: 'var(--text-secondary)',
-  dark: 'var(--text-secondary)',
-}, '共享 Switch 未选中轨道；跟随主题次要前景，与默认/悬停表面及滑块保持至少 3:1 非文字组件对比度，同时弱于开启态');
-registerColor('switch-thumb-off', {
-  light: 'var(--surface-on-card)',
-  dark: 'var(--surface-on-card)',
-}, '共享 Switch 未选中滑块；跟随主题反相前景，与未选中轨道保持至少 3:1 非文字组件对比度');
 registerColor('ring', {
   light: 'var(--text-primary-hsl)',
   dark: 'var(--text-primary-hsl)',
@@ -1025,6 +1017,15 @@ registerColor('model-section-label', {
   light: 'var(--text-secondary)',
   dark: 'var(--text-secondary)',
 }, 'Stone — "Effort" header');
+registerColor('model-budget-badge-bg', {
+  light: '#dcfce7',
+  dark: '#14532d',
+}, 'Budget model badge background');
+registerColor('model-budget-badge-text', {
+  light: '#16a34a',
+  dark: '#86efac',
+}, 'Budget model badge text');
+
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',
@@ -1287,25 +1288,6 @@ registerColor('annotation-accent', {
   light: '#FF3B30',
   dark: '#FF3B30',
 }, 'Annotation Red — 与烧录笔迹同色,语义豁免');
-
-// Claude 额度条只保留组件 alias；色值收敛到已批准的中性 / 告警语义槽，
-// 让内置与导入主题都跟随同一语义，不再冻结一组独立暖色。
-registerColor('quota-bar-fill', {
-  light: 'var(--text-secondary)',
-  dark: 'var(--text-secondary)',
-}, 'Claude 额度条正常填充(alias 到中性次要文字色)');
-registerColor('quota-bar-warn', {
-  light: 'var(--warning-fg)',
-  dark: 'var(--warning-fg)',
-}, 'Claude 额度条警告填充(alias 到已批准 warning 前景)');
-registerColor('quota-bar-crit', {
-  light: 'var(--error-flat)',
-  dark: 'var(--error-flat)',
-}, 'Claude 额度条临界填充(alias 到已批准 error 前景)');
-registerColor('quota-bar-track', {
-  light: 'var(--surface-chip)',
-  dark: 'var(--surface-chip)',
-}, 'Claude 额度条轨道(alias 到中性 chip 表面)');
 
 // Running Status Bar (F-SDK-3)
 registerColor('status-bar-accent', {
@@ -1972,10 +1954,6 @@ registerColor('focus-ring-soft', {
   light: 'rgba(65, 124, 221, 0.5)',
   dark: 'rgba(65, 124, 221, 0.5)',
 }, '50% alpha focus ring(随 focus-ring #417CDD,定稿 2026-07-17)— 替代 ring-[#xxx]/50 写法');
-registerColor('text-selection-bg', {
-  light: 'var(--focus-ring-soft)',
-  dark: 'var(--focus-ring-soft)',
-}, '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
 registerColor('shadow-menu', {
   light: '0 4px 16px rgba(0, 0, 0, 0.15)',
   dark: '0 4px 16px rgba(0, 0, 0, 0.5)',

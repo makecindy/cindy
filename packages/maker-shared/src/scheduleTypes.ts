@@ -1,5 +1,5 @@
 export type RemoteScheduleStatus = 'active' | 'paused' | 'expired';
-export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi';
+export type RemoteScheduleAgentKind = 'claude-code' | 'codex';
 export type RemoteScheduleWorkspaceKind = 'project' | 'dialogue';
 export type RemoteScheduleRunStatus = 'running' | 'success' | 'failed' | 'aborted' | 'interrupted' | 'skipped';
 export type RemoteScheduleExecutionMode = 'agent' | 'script';
@@ -9,7 +9,6 @@ export type RemoteTimestamp = number | string | null | undefined;
 export interface RemoteScheduleNotifyConfig {
   desktop?: boolean;
   feishu?: boolean;
-  wecomGroup?: boolean;
 }
 
 export interface RemoteScheduleWriteInput {
@@ -20,18 +19,9 @@ export interface RemoteScheduleWriteInput {
   timezone: string;
   recurring: boolean;
   manual?: boolean;
-  /**
-   * Interval 语义间隔(毫秒)。这个类型跨 device-link 的 JSON 边界传输,而
-   * JSON.stringify 会丢掉值为 undefined 的 key——所以「清空间隔、退回 cron
-   * 壁钟语义」必须用可序列化的 null 表达(desktop 接收端归一化成引擎的
-   * 「带 key 的 undefined」)。省略 key 的含义随用途而不同:本类型同时服务
-   * create() 与 update() 的 patch(见 mobileMakerTransport 的 schedule 面),
-   * create 里省略 = 不设间隔(纯 cron 语义),update 里省略 = 不修改现有值。
-   */
-  intervalMs?: number | null;
+  intervalMs?: number;
   agentKind: RemoteScheduleAgentKind;
   model?: string;
-  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   workspaceKind?: RemoteScheduleWorkspaceKind;
@@ -66,7 +56,6 @@ export interface RemoteScheduleTemplate {
   recurring?: boolean;
   agentKind?: RemoteScheduleAgentKind;
   model?: string;
-  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   useWorktree?: boolean;
@@ -101,7 +90,6 @@ export interface RemoteSchedule {
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
   model?: string;
-  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   workspaceKind?: RemoteScheduleWorkspaceKind;
@@ -143,7 +131,7 @@ export interface RemoteScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
   >;
 }
 

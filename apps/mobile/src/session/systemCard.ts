@@ -10,7 +10,6 @@ import {
   type SystemCardType,
 } from '@cindy/maker-shared/system-card';
 import { i18n } from '@/i18n';
-import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -125,29 +124,10 @@ export function formatMobileSystemCard(
       rows: [],
     };
   }
-  if (type === 'auto-resume') return formatAutoResumeCard(data);
+  if (type === 'auto-resume') return { title: i18n.t('message.systemCard.autoResume'), rows: [] };
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);
   return formatSystemCard(type, data);
-}
-
-function formatAutoResumeCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
-  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-  const error = typeof data?.error === 'string' && data.error.trim() ? data.error : undefined;
-  const attempt = number(data?.attempt);
-  const maxAttempts = number(data?.maxAttempts);
-  const sessionTotal = number(data?.sessionTotal);
-  const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
-  const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
-  if (!hasInterruptionContext) return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
-  const title = data?.live === true
-    ? attempt && maxAttempts
-      ? i18n.t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts })
-      : i18n.t('message.systemCard.autoResume.pending')
-    : i18n.t(`message.systemCard.autoResume.${outcome ?? 'neutral'}`);
-  const subtitle = attempt && maxAttempts && sessionTotal
-    ? i18n.t('message.systemCard.autoResume.details', { attempt, total: maxAttempts, count: sessionTotal }) : undefined;
-  return { title, ...(error ? { body: error } : {}), subtitle, rows: [] };
 }
 
 /**
@@ -157,8 +137,9 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
  * 这里仅保留为 formatMobileSystemCard 在该 union 分支上的类型完备兜底。
  */
 function formatAgentSwitchCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
-  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
-  const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
+  const engineLabel = (kind: unknown): string => (kind === 'codex' ? 'Codex' : 'Claude Code');
+  const from = engineLabel(data?.fromAgentKind);
+  const to = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。

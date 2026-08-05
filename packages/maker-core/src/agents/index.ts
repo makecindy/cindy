@@ -7,7 +7,6 @@ export { CodexAgent } from './codex/index.js';
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
 export { finalizeCodexCitationText, normalizeCodexFileCitations } from './codex/translator.js';
-export { PiAgent } from './pi/index.js';
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
@@ -48,32 +47,9 @@ export {
   type OverloadError,
   type OverloadErrorKind,
 } from './shared/overload-error.js';
-// Desktop main 的 IM / hook 渠道与 maker-core 同 bundle，直接复用终态 429 的
-// reason + marker 解析契约，避免渠道侧再维护一份正则。
-export {
-  TERMINAL_RATE_LIMIT_RETRY_REASON,
-  parseTerminalRateLimitRetryProgress,
-} from './codex/terminal-rate-limit-retry.js';
-// 同上理由(同 bundle 直接复用): desktop main 的错误投影 / IM 渠道要认「上下文超限」
-// 这一类 —— 原样重试必败, 恢复动作是压缩上下文或新开会话, 与过载 / 网络类的自动
-// 重试语义相反。详见 shared/context-overflow-error.ts 的模块注释(#1429)。
-export {
-  CONTEXT_OVERFLOW_REASON,
-  isContextOverflowErrorMessage,
-} from './shared/context-overflow-error.js';
 // 同上理由(同 bundle 直接复用,不造第三份):desktop 的中断自愈判据要认「网络到不了
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
 export { isNetworkishErrorMessage } from './shared/network-error.js';
-export {
-  AUTO_REVIEW_UNAVAILABLE_CODE,
-  getAutoReviewActionTextLength,
-  isAutoReviewUnavailableNotice,
-  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
-  type AutoReviewDecision,
-  type AutoReviewDelegate,
-  type AutoReviewRequest,
-} from './shared/auto-review-decision.js';
-export type { ReviewableAction } from './shared/auto-review.js';
 // host 侧会话分享(导出/导入 .xdtshare)需要按 cwd 复算 CLI 转录目录、
 // 定位/落位 jsonl。规则单点维护在 claude-projects-fs.ts,这里仅 re-export。
 export {

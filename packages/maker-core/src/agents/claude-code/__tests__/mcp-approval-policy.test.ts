@@ -11,8 +11,6 @@
  *  - prompt-each-time → 照常弹窗, 但 suggestion 被剥掉(不许持久化授权)
  *  - 策略抛错 / 返回非法值 → 按最保守的 prompt-each-time 处理, 绝不 fail-open
  *  - 非 MCP 内置工具不查策略; MCP 工具名按 `mcp__<server>__<tool>` 正确拆分
- *  - fail-closed 闸绑定的是「resolver 在不在」而非「有没有界面」: 裸 handle 下(含 auto 档)
- *    连可信 MCP 也 deny, 而有 resolver 的无界面会话照旧静默放行
  */
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -27,14 +25,10 @@ import type {
   TurnPermissionPolicy,
 } from '../../base-agent.js';
 import type { PermissionMode } from '../../../types/common.js';
-import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type {
-  McpProvider,
-  McpProviderContext,
-} from '../../../interfaces/mcp-provider.js';
+import type { McpProvider } from '../../../interfaces/mcp-provider.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -110,53 +104,14 @@ function createDeps(
 }
 
 /** 最小可用的 SDK Query 假实现: 消息流永远挂起, 控制方法全部记录调用。 */
-function createFakeQuery(
-  initMcpServerNames: readonly string[] = [],
-  failedInitMcpServerNames: readonly string[] = [],
-  mcpServerStatuses: ReadonlyArray<{
-    name: string;
-    status: string;
-    scope?: string;
-  }> = initMcpServerNames.map((name) => ({
-    name,
-    status: 'connected',
-    scope: 'dynamic',
-  })),
-) {
-  let initEmitted = false;
+function createFakeQuery() {
   return {
     [Symbol.asyncIterator]() {
-      return {
-        next: () => {
-          if (
-            !initEmitted &&
-            (initMcpServerNames.length > 0 || failedInitMcpServerNames.length > 0)
-          ) {
-            initEmitted = true;
-            return Promise.resolve({
-              done: false as const,
-              value: {
-                type: 'system',
-                subtype: 'init',
-                session_id: 'sdk-mcp-policy',
-                mcp_servers: initMcpServerNames.map((name) => ({
-                  name,
-                  status: 'connected',
-                })).concat(failedInitMcpServerNames.map((name) => ({
-                  name,
-                  status: 'failed',
-                }))),
-              },
-            });
-          }
-          return new Promise<IteratorResult<unknown>>(() => {});
-        },
-      };
+      return { next: () => new Promise<IteratorResult<unknown>>(() => {}) };
     },
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
-    mcpServerStatus: vi.fn(async () => [...mcpServerStatuses]),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -191,30 +146,16 @@ async function startSession(
     /** true 时不注入 resolver，用于验证 fail-closed 分支。 */
     bare?: boolean;
     permissionMode?: PermissionMode;
-    capabilityRouting?: CapabilityRoutingPolicy;
-    initMcpServerNames?: readonly string[];
-    failedInitMcpServerNames?: readonly string[];
-    mcpServerStatuses?: ReadonlyArray<{
-      name: string;
-      status: string;
-      scope?: string;
-    }>;
   },
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
 
-  const fakeQuery = createFakeQuery(
-    options?.initMcpServerNames,
-    options?.failedInitMcpServerNames,
-    options?.mcpServerStatuses,
-  );
+  const fakeQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(fakeQuery);
 
-  const deps = createDeps(policy, options?.mcpServerNames);
-  deps.capabilityRouting = options?.capabilityRouting;
-  const agent = new ClaudeCodeAgent(deps);
+  const agent = new ClaudeCodeAgent(createDeps(policy, options?.mcpServerNames));
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
     model: 'claude-opus-4-6',
@@ -222,13 +163,7 @@ async function startSession(
     permissionMode: options?.permissionMode ?? 'default',
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
-    | {
-        canUseTool?: CanUseToolFn;
-        hooks?: Record<
-          string,
-          Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
-        >;
-      }
+    | { canUseTool?: CanUseToolFn }
     | undefined;
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
 
@@ -244,13 +179,7 @@ async function startSession(
     });
   }
 
-  return {
-    agent,
-    handle,
-    canUseTool: queryOptions.canUseTool,
-    hooks: queryOptions.hooks,
-    seen,
-  };
+  return { agent, handle, canUseTool: queryOptions.canUseTool, seen };
 }
 
 /** 取出 resolver 收到的 permission 请求(测试只会产生这一类)。 */
@@ -272,204 +201,6 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
-  it('injects the local route as a PreToolUse guard even in Full access', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: [
-            '/feishu-delegate:message-feishu-coworkers',
-          ],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const { handle, hooks } = await startSession(undefined, {
-      permissionMode: 'bypassPermissions',
-      capabilityRouting,
-      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
-      mcpServerStatuses: [{
-        name: 'plugin:feishu-delegate:feishu-delegate',
-        status: 'connected',
-        scope: 'dynamic',
-      }],
-    });
-    const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!preToolUse) throw new Error('expected capability routing hook');
-    const toolInput = {
-      hook_event_name: 'PreToolUse',
-      tool_name:
-        'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
-    };
-
-    await handle.send({ type: 'user', content: '查一下康康的飞书消息' });
-    await expect(preToolUse(toolInput)).resolves.toMatchObject({
-      hookSpecificOutput: { permissionDecision: 'deny' },
-    });
-
-    await handle.steer({
-      type: 'user',
-      content:
-        '/feishu-delegate:message-feishu-coworkers 改用这个来源',
-    });
-    await expect(preToolUse(toolInput)).resolves.toEqual({ continue: true });
-    await handle.close();
-  });
-
-  it('keeps a normalized-prefix-colliding user MCP on the normal permission chain', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: [
-            '/feishu-delegate:message-feishu-coworkers',
-          ],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const userServerId = 'plugin_feishu-delegate_feishu-delegate';
-    const { handle, hooks, canUseTool, seen } = await startSession(
-      () => 'prompt',
-      {
-        capabilityRouting,
-        mcpServerNames: [userServerId],
-      },
-    );
-    const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!preToolUse) throw new Error('expected capability routing hook');
-    const toolName = `mcp__${userServerId}__read_messages`;
-
-    await handle.send({ type: 'user', content: '查一下康康的飞书消息' });
-    await expect(
-      preToolUse({
-        hook_event_name: 'PreToolUse',
-        tool_name: toolName,
-      }),
-    ).resolves.toEqual({ continue: true });
-    await expect(
-      canUseTool(toolName, {}, { toolUseID: 'tool-user-mcp-collision' }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(seen)).toHaveLength(1);
-    await handle.close();
-  });
-
-  it('uses the SDK init registry to preserve a colliding settings MCP', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const userServerId = 'plugin_feishu-delegate_feishu-delegate';
-    const { handle, hooks, canUseTool, seen } = await startSession(
-      () => 'prompt',
-      {
-        capabilityRouting,
-        mcpServerNames: [],
-        initMcpServerNames: [
-          'plugin:feishu-delegate:feishu-delegate',
-          userServerId,
-        ],
-        mcpServerStatuses: [
-          {
-            name: 'plugin:feishu-delegate:feishu-delegate',
-            status: 'connected',
-            scope: 'dynamic',
-          },
-          { name: userServerId, status: 'connected', scope: 'project' },
-        ],
-      },
-    );
-    const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!preToolUse) throw new Error('expected capability routing hook');
-    const toolName = `mcp__${userServerId}__read_messages`;
-
-    await handle.send({ type: 'user', content: '查一下康康的飞书消息' });
-    await vi.waitFor(async () => {
-      await expect(
-        preToolUse({
-          hook_event_name: 'PreToolUse',
-          tool_name: toolName,
-        }),
-      ).resolves.toEqual({ continue: true });
-    });
-    await expect(
-      canUseTool(toolName, {}, { toolUseID: 'tool-settings-mcp-collision' }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(seen)).toHaveLength(1);
-    await handle.close();
-
-    const exact = await startSession(() => 'prompt', {
-      capabilityRouting,
-      mcpServerNames: [],
-      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
-      mcpServerStatuses: [{
-        name: 'plugin:feishu-delegate:feishu-delegate',
-        status: 'connected',
-        scope: 'user',
-      }],
-    });
-    const exactPreToolUse = exact.hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!exactPreToolUse) throw new Error('expected capability routing hook');
-    await exact.handle.send({ type: 'user', content: '查一下康康的飞书消息' });
-    await vi.waitFor(async () => {
-      await expect(
-        exactPreToolUse({
-          hook_event_name: 'PreToolUse',
-          tool_name:
-            'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
-        }),
-      ).resolves.toEqual({ continue: true });
-    });
-    await exact.handle.close();
-
-    const failed = await startSession(() => 'prompt', {
-      capabilityRouting,
-      mcpServerNames: [],
-      initMcpServerNames: [],
-      failedInitMcpServerNames: [userServerId],
-    });
-    const failedPreToolUse = failed.hooks?.PreToolUse?.[0]?.hooks[0];
-    if (!failedPreToolUse) throw new Error('expected capability routing hook');
-    await failed.handle.send({ type: 'user', content: '查一下康康的飞书消息' });
-    await vi.waitFor(async () => {
-      await expect(
-        failedPreToolUse({
-          hook_event_name: 'PreToolUse',
-          tool_name: toolName,
-        }),
-      ).resolves.toMatchObject({
-        hookSpecificOutput: { permissionDecision: 'deny' },
-      });
-    });
-    await failed.handle.close();
-  });
-
   it('runs the per-turn policy before MCP auto-approval and drops session grants', async () => {
     const { handle, canUseTool, seen } = await startSession(
       () => 'auto-approve',
@@ -762,40 +493,6 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
-  it('passes the runtime session instance id into Claude MCP provider context', async () => {
-    const configDir = await makeTempDir();
-    process.env.CLAUDE_CONFIG_DIR = configDir;
-    const workingDir = await makeTempDir();
-    sdkMock.query.mockReturnValue(createFakeQuery());
-    let capturedContext: McpProviderContext | undefined;
-    const deps = createDeps();
-    deps.mcpProviders = [
-      {
-        name: 'cindy_probe',
-        toClaudeSdkConfig: (context) => {
-          capturedContext = context;
-          return { type: 'stdio', command: 'true' };
-        },
-      },
-    ];
-
-    const handle = await new ClaudeCodeAgent(deps).startSession({
-      sessionId: 'session-instance-context',
-      sessionInstanceId: 'instance-claude-context',
-      model: 'claude-opus-4-6',
-      workingDir,
-      permissionMode: 'default',
-    });
-
-    expect(capturedContext).toMatchObject({
-      agentKind: 'claude-code',
-      sessionId: 'session-instance-context',
-      sessionInstanceId: 'instance-claude-context',
-      workingDir,
-    });
-    await handle.close();
-  });
-
   it('keeps the first registration when two providers share a name', async () => {
     const configs: Array<{ name: string; marker: string }> = [];
     const contexts: McpToolApprovalContext[] = [];
@@ -865,20 +562,6 @@ describe('a custom server cannot take over a builtin name', () => {
   });
 });
 
-/**
- * 这道闸绑定的是「resolver 在不在」，**不是**「有没有界面」。两者常被混为一谈，所以
- * 正反两面都要钉住（见 issue #1577）：
- *
- * - 无 resolver（misconfiguration / 不经 Session 直用裸 handle）→ 连可信 MCP 也 deny。
- *   `canReviewWithoutUi` 刻意只对内建工具成立：host 策略回答的是「值不值得打扰用户」，
- *   不代表「没有人在场也可以跑」，而裸 handle 下没有任何人能撤销误判。Auto 档不例外。
- * - 有 resolver 但没有界面（Telegram / 飞书 bot、scheduler 定时任务、Orca headless
- *   worker）→ 可信 MCP 在 dispatch **之前**就短路放行。这类会话恒有 resolver：
- *   `Session` 构造函数里那次 `handle.setInteractionResolver(...)` 必定注入（没接
- *   listener 时该 resolver 自身
- *   返回 deny），所以它们走的从来不是上面那条 fail-closed 分支。少了这条用例，很容易
- *   把「headless 下 orca_worker_bridge 会被拒」当成缺陷去改，反而把裸 handle 的边界拆了。
- */
 describe('fail-closed still precedes the MCP policy', () => {
   it('denies trusted MCP tools when no interaction resolver is attached', async () => {
     const { handle, canUseTool } = await startSession(() => 'auto-approve', { bare: true });
@@ -889,48 +572,13 @@ describe('fail-closed still precedes the MCP policy', () => {
     expect(result.behavior).toBe('deny');
     await handle.close();
   });
-
-  it('denies trusted MCP tools in auto mode too when no resolver is attached', async () => {
-    const { handle, canUseTool } = await startSession(() => 'auto-approve', {
-      bare: true,
-      permissionMode: 'auto',
-    });
-
-    // Auto 只让**内建**工具在无 UI 下由本地规则/轻量 reviewer 自决;mcp__* 被刻意排除。
-    const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-bare-auto' });
-
-    expect(result.behavior).toBe('deny');
-    await handle.close();
-  });
-
-  it('auto-approves trusted MCP tools in auto mode without dispatching an interaction', async () => {
-    const { handle, canUseTool, seen } = await startSession(() => 'auto-approve', {
-      permissionMode: 'auto',
-    });
-
-    const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-auto-trusted' });
-
-    // 无界面会话靠这条短路:逐次弹窗只会让远端 daemon 等审批超时、回报断链。
-    expect(result.behavior).toBe('allow');
-    // 断言 seen 整体为空,而不只是 permission 类:用例声称的是「完全不 dispatch」,
-    // 只查 permission 会让将来改成发 plan_review / ask_user_question 的实现误通过。
-    expect(seen).toHaveLength(0);
-    await handle.close();
-  });
 });
 
 describe('remote sessions share the same permission semantics', () => {
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
-    options?: {
-      attachResolver?: (req: InteractionRequest) => InteractionDecision;
-      capabilityRouting?: CapabilityRoutingPolicy;
-      mcpServerNames?: readonly string[];
-      permissionMode?: PermissionMode;
-      initMcpServerNames?: readonly string[];
-      failedInitMcpServerNames?: readonly string[];
-    },
+    options?: { attachResolver?: (req: InteractionRequest) => InteractionDecision },
   ) {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -938,44 +586,25 @@ describe('remote sessions share the same permission semantics', () => {
 
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
     const deps = createDeps(policy);
-    deps.capabilityRouting = options?.capabilityRouting;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
-    deps.mcpProviders = (
-      options?.mcpServerNames ?? ['cindy_browser', 'cindy_contacts']
-    ).map((name) => ({
-      name,
-      toClaudeSdkConfig: () => ({ type: 'http', url: `https://x/${name}` }),
-    })) as McpProvider[];
-    let remoteStartParams: Record<string, unknown> | undefined;
-    let remoteIdentity: { sessionId: string; sessionInstanceId?: string } | undefined;
+    deps.mcpProviders = [
+      { name: 'cindy_browser', toClaudeSdkConfig: () => ({ type: 'http', url: 'https://x/mcp' }) },
+      { name: 'cindy_contacts', toClaudeSdkConfig: () => ({ type: 'http', url: 'https://y/mcp' }) },
+    ] as McpProvider[];
     deps.remoteCcQueryFactory = (async (args: {
-      sessionId: string;
-      sessionInstanceId?: string;
       onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
-      startParams: Record<string, unknown>;
     }) => {
       onApprovalRequest = args.onApprovalRequest;
-      remoteStartParams = args.startParams;
-      remoteIdentity = {
-        sessionId: args.sessionId,
-        ...(args.sessionInstanceId
-          ? { sessionInstanceId: args.sessionInstanceId }
-          : {}),
-      };
-      return createFakeQuery(
-        options?.initMcpServerNames,
-        options?.failedInitMcpServerNames,
-      ) as never;
+      return createFakeQuery() as never;
     }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
 
     const agent = new ClaudeCodeAgent(deps);
     const handle = await agent.startSession({
       sessionId: 'session-remote-mcp-policy',
-      sessionInstanceId: 'instance-remote-mcp-policy',
       model: 'claude-opus-4-6',
       workingDir,
       remoteHostId: 'remote-1',
-      permissionMode: options?.permissionMode ?? 'default',
+      permissionMode: 'default',
     });
     const seen: InteractionRequest[] = [];
     if (options?.attachResolver) {
@@ -985,18 +614,8 @@ describe('remote sessions share the same permission semantics', () => {
       });
     }
     if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
-    return { handle, onApprovalRequest, seen, remoteStartParams, remoteIdentity };
+    return { handle, onApprovalRequest, seen };
   }
-
-  it('passes the runtime session instance id into the remote Claude factory', async () => {
-    const { handle, remoteIdentity } = await startRemoteSession(() => 'auto-approve');
-
-    expect(remoteIdentity).toEqual({
-      sessionId: 'session-remote-mcp-policy',
-      sessionInstanceId: 'instance-remote-mcp-policy',
-    });
-    await handle.close();
-  });
 
   it('auto-approves trusted MCP tools without prompting', async () => {
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {
@@ -1110,262 +729,5 @@ describe('remote sessions share the same permission semantics', () => {
     });
     expect(allowed.behavior).toBe('allow');
     await handle.close();
-  });
-
-  it('guards plugin MCPs on remote sessions, including bypass mode, while preserving explicit selection', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
-          replacement: {
-            kind: 'cindy-plugin',
-            id: 'xd-feishu',
-          },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const options = {
-      capabilityRouting,
-      permissionMode: 'bypassPermissions' as const,
-      attachResolver: (request: InteractionRequest): InteractionDecision =>
-        request.kind === 'plan_review'
-          ? {
-              kind: 'plan_review',
-              behavior: 'allow',
-              editedPlan:
-                '1. /feishu-delegate:message-feishu-coworkers 查询消息',
-            }
-          : { kind: 'permission', behavior: 'allow' },
-    };
-
-    const natural = await startRemoteSession(() => 'auto-approve', options);
-    await natural.handle.send({ type: 'user', content: '查一下我和康康的飞书消息' });
-    // The daemon-side PreToolUse guard works even in Full access, so Cindy
-    // does not need to weaken the user's selected permission mode.
-    expect(natural.remoteStartParams?.permissionMode).toBe(
-      'bypassPermissions',
-    );
-    expect(natural.remoteStartParams?.toolGuards).toEqual([
-      {
-        toolNamePrefix:
-          'mcp__plugin_feishu-delegate_feishu-delegate__',
-        sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
-        invocation: 'explicit-only',
-        explicitSelectors: [
-          '/feishu-delegate:message-feishu-coworkers',
-        ],
-        denialMessage:
-          'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
-      },
-    ]);
-    await expect(
-      natural.onApprovalRequest({
-        requestId: 'r-natural-feishu',
-        kind: 'permission',
-        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'deny' });
-    await expect(
-      natural.onApprovalRequest({
-        requestId: 'r-plan-feishu',
-        kind: 'plan_review',
-        plan: '1. 查询飞书消息',
-      }),
-    ).resolves.toMatchObject({
-      behavior: 'allow',
-      editedPlan:
-        '1. /feishu-delegate:message-feishu-coworkers 查询消息',
-    });
-    await expect(
-      natural.onApprovalRequest({
-        requestId: 'r-edited-plan-feishu',
-        kind: 'permission',
-        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    // Defense-in-depth: if the SDK does request approval despite bypass mode,
-    // unrelated tools still preserve Full access behavior.
-    await expect(
-      natural.onApprovalRequest({
-        requestId: 'r-bypass-bash',
-        kind: 'permission',
-        toolName: 'Bash',
-        input: { command: 'pwd' },
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    await natural.handle.close();
-
-    const dismissed = await startRemoteSession(() => 'auto-approve', {
-      ...options,
-      attachResolver: (request): InteractionDecision =>
-        request.kind === 'plan_review'
-          ? {
-              kind: 'plan_review',
-              behavior: 'deny',
-              reason:
-                'system dismissed /feishu-delegate:message-feishu-coworkers',
-              dismissed: true,
-            }
-          : { kind: 'permission', behavior: 'allow' },
-    });
-    await dismissed.handle.send({ type: 'user', content: '查一下飞书消息' });
-    await dismissed.onApprovalRequest({
-      requestId: 'r-dismissed-plan-feishu',
-      kind: 'plan_review',
-      plan: '1. 查询飞书消息',
-    });
-    await expect(
-      dismissed.onApprovalRequest({
-        requestId: 'r-after-dismissed-plan-feishu',
-        kind: 'permission',
-        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'deny' });
-    await dismissed.handle.close();
-
-    const explicit = await startRemoteSession(() => 'auto-approve', options);
-    await explicit.handle.send({
-      type: 'user',
-      content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
-    });
-    await expect(
-      explicit.onApprovalRequest({
-        requestId: 'r-explicit-feishu',
-        kind: 'permission',
-        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    await explicit.handle.close();
-  });
-
-  it('serializes the remote guard while preserving a connected user MCP alias', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const userServerId = 'plugin_feishu-delegate_feishu-delegate';
-    const remote = await startRemoteSession(() => 'prompt', {
-      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
-      capabilityRouting,
-      mcpServerNames: [userServerId],
-    });
-
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
-    await expect(
-      remote.onApprovalRequest({
-        requestId: 'r-user-mcp-collision',
-        kind: 'permission',
-        toolName: `mcp__${userServerId}__read_messages`,
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(remote.seen)).toHaveLength(1);
-    await remote.handle.close();
-  });
-
-  it('uses the remote SDK init registry to preserve a colliding settings MCP', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const userServerId = 'plugin_feishu-delegate_feishu-delegate';
-    const remote = await startRemoteSession(() => 'prompt', {
-      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
-      capabilityRouting,
-      mcpServerNames: [userServerId],
-      initMcpServerNames: [
-        'plugin:feishu-delegate:feishu-delegate',
-        userServerId,
-      ],
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    await expect(
-      remote.onApprovalRequest({
-        requestId: 'r-settings-user-mcp-collision',
-        kind: 'permission',
-        toolName: `mcp__${userServerId}__read_messages`,
-        input: {},
-        metadata: { capabilityRoutingChecked: true },
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(remote.seen)).toHaveLength(1);
-    await remote.handle.close();
-
-    const exact = await startRemoteSession(() => 'prompt', {
-      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
-      capabilityRouting,
-      mcpServerNames: [userServerId],
-      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await expect(
-      exact.onApprovalRequest({
-        requestId: 'r-exact-settings-mcp-collision',
-        kind: 'permission',
-        toolName:
-          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
-        input: {},
-        metadata: { capabilityRoutingChecked: true },
-      }),
-    ).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(exact.seen)).toHaveLength(1);
-    await exact.handle.close();
-
-    const failed = await startRemoteSession(() => 'prompt', {
-      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
-      capabilityRouting,
-      mcpServerNames: [userServerId],
-      initMcpServerNames: [],
-      failedInitMcpServerNames: [userServerId],
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
-    await expect(
-      failed.onApprovalRequest({
-        requestId: 'r-failed-settings-mcp-collision',
-        kind: 'permission',
-        toolName: `mcp__${userServerId}__read_messages`,
-        input: {},
-      }),
-    ).resolves.toMatchObject({ behavior: 'deny' });
-    expect(permissionRequests(failed.seen)).toHaveLength(0);
-    await failed.handle.close();
   });
 });

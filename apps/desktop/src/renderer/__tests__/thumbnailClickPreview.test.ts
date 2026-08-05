@@ -43,17 +43,6 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
     );
   });
 
-  it('uses the shared image hover preview so composer and message chips stay identical', () => {
-    expect(chatInput).toContain(
-      "import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';",
-    );
-    const startIdx = chatInput.indexOf('function ThumbnailItem');
-    const block = chatInput.slice(startIdx);
-    expect(block).toContain('<ImageHoverPreview');
-    expect(block).toContain('open={isHovered}');
-    expect(block).toContain('anchorRef={thumbRef}');
-  });
-
   it('ThumbnailItem preview button uses cursor-pointer (hand) and an onClick handler', () => {
     // Slice the ThumbnailItem function body so we don't accidentally match
     // some other unrelated `cursor-pointer` token elsewhere in the file.
@@ -65,8 +54,7 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
 
     // The preview button carries the hand cursor; the outer wrapper owns the
     // hover boundary so moving onto the remove button does not hide the preview.
-    expect(block).toContain("isDownloadOnly ? 'cursor-default' : 'cursor-pointer'");
-    expect(block).toContain('disabled={isDownloadOnly}');
+    expect(block).toMatch(/className="h-full w-full cursor-pointer/);
 
     // A click handler that delegates to handleOpenPreview must exist.
     expect(block).toMatch(/onClick=\{handleOpenPreview\}/);
@@ -77,9 +65,6 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
     expect(block).toMatch(/file\.category === 'image'/);
     expect(block).toMatch(/<ImageLightbox\s+src=\{lightboxSrc\}/);
     expect(block).toMatch(/<TextLightbox[\s\S]+filePath=\{file\.path\}/);
-    expect(block).toMatch(
-      /if \(isDownloadOnly\) return;[\s\S]+shouldOpenTextLightbox\(file\.path\)/,
-    );
   });
 
   it('keeps thumbnail hover state on the outer wrapper so the remove button does not dismiss preview', () => {

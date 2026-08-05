@@ -31,6 +31,7 @@ describe('composer narrow toolbar contract', () => {
     );
     expect(modelSelectorSource).toContain("'w-[148px] min-w-[72px]'");
     expect(modelSelectorSource).toContain("'w-[64px] min-w-[64px]'");
+    expect(modelSelectorSource).toContain('triggerPromotionLabel && !isCompactToolbar');
     expect(modelSelectorSource).toContain('effortLabel && !isCompactToolbar');
     expect(permissionSelectorSource).toContain(
       'const isIconOnly = iconOnly && !isFieldTrigger;',

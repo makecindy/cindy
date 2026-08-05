@@ -40,7 +40,6 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../../device-link/broadcast-tap', () => ({
-  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
 vi.mock('../../../logger', () => ({

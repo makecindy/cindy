@@ -8,66 +8,25 @@ const registerSource = readFileSync(
   'utf8',
 ).replace(/\r\n/g, '\n');
 
-describe('host-owned interaction lifecycle contract', () => {
-  it('recovers every Host-owned snapshot without treating Desktop confirms as Agent busy state', () => {
-    const snapshotHelperStart = registerSource.indexOf(
-      'function getPendingInteractionsForSession(',
-    );
-    const snapshotHelperEnd = registerSource.indexOf('\n}\n', snapshotHelperStart) + 2;
-    const snapshotHelper = registerSource.slice(snapshotHelperStart, snapshotHelperEnd);
+describe('plugin setup interaction lifecycle contract', () => {
+  it('counts Setup snapshots in queue busy and zombie-turn reconciliation', () => {
     const helperStart = registerSource.indexOf(
-      'function hasPendingAgentInteractionForSession(sessionId: string): boolean',
+      'function hasPendingInteractionForSession(sessionId: string): boolean',
     );
     const helperEnd = registerSource.indexOf('\n}\n', helperStart) + 2;
     const helper = registerSource.slice(helperStart, helperEnd);
 
-    for (const bridgeName of [
-      'issueConfirmBridge',
-      'renameSessionsConfirmBridge',
-      'ghostGrantConfirmBridge',
-      'ghostSetupInteractionBridge',
-    ]) {
-      expect(snapshotHelper).toMatch(
-        new RegExp(`${bridgeName}\\s*\\.pendingSnapshots\\(sessionId\\)`),
-      );
-    }
-    expect(helper).toMatch(
-      /ghostSetupInteractionBridge\s*\.pendingSnapshots\(sessionId\)\.length > 0/,
-    );
-    for (const bridgeName of [
-      'issueConfirmBridge',
-      'renameSessionsConfirmBridge',
-      'ghostGrantConfirmBridge',
-    ]) {
-      expect(helper).not.toContain(bridgeName);
-    }
-    expect(registerSource).toContain(
-      'const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);',
+    expect(helper).toContain(
+      'ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0',
     );
     expect(registerSource).toContain(
-      'hasPendingInteraction: hasPendingAgentInteractionForSession,',
+      'const hadZombieInteraction = hasPendingInteractionForSession(sessionId);',
     );
     expect(registerSource).toContain(
-      "cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');",
+      'hasPendingInteraction: hasPendingInteractionForSession,',
     );
-    expect(registerSource).not.toContain(
+    expect(registerSource).toContain(
       "cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');",
-    );
-
-    const ownershipHelperStart = registerSource.indexOf(
-      'function isPendingDesktopOnlyConfirmation(requestId: string): boolean',
-    );
-    const ownershipHelperEnd = registerSource.indexOf('\n}\n', ownershipHelperStart) + 2;
-    const ownershipHelper = registerSource.slice(ownershipHelperStart, ownershipHelperEnd);
-    for (const bridgeName of [
-      'issueConfirmBridge',
-      'renameSessionsConfirmBridge',
-      'ghostGrantConfirmBridge',
-    ]) {
-      expect(ownershipHelper).toContain(bridgeName);
-    }
-    expect(registerSource).toMatch(
-      /assertResolveInteractionOrigin\(\s*decision,\s*isPendingDesktopOnlyConfirmation\(requestId\),?\s*\);/,
     );
   });
 

@@ -80,10 +80,9 @@ function thinkingActivityForMessage(
   message: ChatMessage,
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
-  const rawContent = message.content.trim();
-  const content = rawContent.replace(/\s+/g, ' ');
+  const content = message.content.replace(/\s+/g, ' ').trim();
   return content
-    ? { kind: 'thinking', key: message.clientId, rawContent, content }
+    ? { kind: 'thinking', key: message.clientId, content }
     : null;
 }
 
@@ -129,72 +128,21 @@ function ThinkingActivityRow({
 }: {
   activity: ProjectedThinkingActivity;
 }) {
-  const rawContent = activity.rawContent;
-  const hasExplicitLineBreak = /[\r\n]/.test(rawContent);
-  const textRef = useRef<HTMLSpanElement>(null);
-  const [canExpand, setCanExpand] = useState(hasExplicitLineBreak);
-  const { expanded, setExpanded } = useExpandedBlockMemory(`thinking:${activity.key}`);
-
-  useLayoutEffect(() => {
-    if (expanded) {
-      setCanExpand(true);
-      return;
-    }
-    const textElement = textRef.current;
-    if (!textElement) return;
-    const updateOverflow = () => {
-      setCanExpand(
-        hasExplicitLineBreak || textElement.scrollWidth > textElement.clientWidth + 1,
-      );
-    };
-    updateOverflow();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(updateOverflow);
-    observer.observe(textElement);
-    return () => observer.disconnect();
-  }, [activity.content, expanded, hasExplicitLineBreak]);
-
   return (
-    <button
-      type="button"
+    <div
       data-live-work-activity="thinking"
-      data-work-thinking-expandable={canExpand ? 'true' : 'false'}
-      disabled={!canExpand}
-      aria-expanded={canExpand ? expanded : undefined}
-      onClick={() => setExpanded((value) => !value)}
-      className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
-      )}
+      className="flex min-w-0 items-center gap-[6px] px-2 py-[3px]"
     >
-      <span
-        aria-hidden="true"
-        className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
-      >
+      <span className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]">
         <Sparkles size={13} />
       </span>
       <span
-        ref={textRef}
-        className={cn(
-          'min-w-0 flex-1 text-[14px] italic text-[var(--thinking-body-text)]',
-          expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
-        )}
-        title={expanded ? undefined : activity.content}
+        className="min-w-0 truncate text-[14px] italic text-[var(--thinking-body-text)]"
+        title={activity.content}
       >
-        <ThinkingText content={expanded ? rawContent : activity.content} />
+        <ThinkingText content={activity.content} />
       </span>
-      {canExpand && (
-        <span aria-hidden="true" className="inline-flex h-[18px] shrink-0 items-center text-[var(--msg-tool-card-chevron)]">
-          <ChevronRight
-            size={13}
-            className={cn(
-              'transition-transform duration-[var(--motion-fast,150ms)]',
-              expanded && 'rotate-90',
-            )}
-          />
-        </span>
-      )}
-    </button>
+    </div>
   );
 }
 
@@ -209,11 +157,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
   const { expanded, setExpanded } = useExpandedBlockMemory(`thinking:${message.clientId}`);
 
   useLayoutEffect(() => {
-    if (!activity) return;
-    if (expanded) {
-      setCanExpand(true);
-      return;
-    }
+    if (!activity || expanded) return;
     const textElement = textRef.current;
     if (!textElement) return;
     const updateOverflow = () => {
@@ -252,14 +196,11 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
       className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left',
         canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
       )}
     >
-      <span
-        aria-hidden="true"
-        className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
-      >
+      <span className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]">
         <Sparkles size={13} />
       </span>
       <span
@@ -273,7 +214,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
         <ThinkingText content={expanded ? rawContent : activity.content} />
       </span>
       {canExpand && (
-        <span aria-hidden="true" className="inline-flex h-[18px] shrink-0 items-center text-[var(--msg-tool-card-chevron)]">
+        <span className="inline-flex h-[18px] shrink-0 items-center text-[var(--msg-tool-card-chevron)]">
           <ChevronRight
             size={13}
             className={cn(

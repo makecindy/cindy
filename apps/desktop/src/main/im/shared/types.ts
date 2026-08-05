@@ -25,17 +25,10 @@ import type {
   PermissionMode,
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
-import type { ImOutputDriver, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
+import type { ChannelIM, ImOutputDriver, IMMessageEvent, IMUnsupportedEntry } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
-export type ImChannelName =
-  | 'feishu'
-  | 'slack'
-  | 'discord'
-  | 'wechat'
-  | 'telegram'
-  | 'dingtalk'
-  | 'wecom';
+export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -92,7 +85,7 @@ export interface ImSessionNamespace {
    * 缺省时 threadScoped 渠道回落 FBot 前缀, 非 threadScoped 渠道不起名
    * (保持 defaultTitle)。接管 session 一律沿用 FBot 前缀, 不走这里。
    */
-  generatedTitlePrefix?: string | (() => string);
+  generatedTitlePrefix?: string;
 }
 
 /**
@@ -100,8 +93,8 @@ export interface ImSessionNamespace {
  */
 export interface ImChannelAdapter {
   channel: ImChannelName;
-  /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
-  im: TextChannelIM;
+  /** 收发能力(@cindy/im ChannelIM 契约)。 */
+  im: ChannelIM;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
   config: ImOrchestratorConfig;
@@ -140,13 +133,23 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
+  handleTextInteraction?(
+    userId: string,
+    request: InteractionRequest,
+  ): Promise<InteractionDecision>;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;
     userMessageId: string | null;
     persisted: boolean;
   }): Promise<void>;
+  /**
+   * 流式进度"只发正文"判定(按出站目标粒度)。Telegram 私聊的可编辑消息被
+   * 客户端渲染成带动画的 Rich draft, 过程时间线反复重排会清空重播 —— 返回
+   * true 时中间态只显示正文;零产出的过载重试窗口仍显示 notice 单行(否则
+   * 退避期间毫无反馈)。缺省 = 完整过程时间线(卡片渠道的既有行为)。
+   */
+  answerOnlyProgress?(userId: string): boolean;
   /**
    * 送模型正文的改写钩子(群上下文拼装等): 返回 agentText 替换发给 agent 的
    * 文本 —— 落库与标题生成仍用渠道原文, 桌面 transcript 不被上下文前缀污染。
@@ -180,11 +183,6 @@ export interface ImUiTextPack {
      */
     start?: string;
     unknownCommand: (cmd: string) => string;
-    /**
-     * Text-only channels use this when a slash command requires interactive
-     * cards. Missing copy falls back to unknownCommand.
-     */
-    interactiveCommandUnsupported?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

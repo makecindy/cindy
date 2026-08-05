@@ -52,28 +52,6 @@ describe('buildUnionRows', () => {
     expect(rows[1].avail).toEqual(['claude-code']);
     expect(rows[2].avail).toEqual(['codex']);
   });
-
-  it('三 Agent 同模型合并为一行并保留独立 PI 开关维度', () => {
-    const threeAgent = {
-      ...provider,
-      agents: ['claude-code', 'codex', 'pi'],
-      models: {
-        ...provider.models,
-        pi: [model('shared', 500_000), model('pi-only')],
-      },
-    } as ProviderView;
-    const rows = buildUnionRows(threeAgent);
-    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual([
-      'claude-code',
-      'codex',
-      'pi',
-    ]);
-    expect(countModelsByAgent(threeAgent)).toEqual([
-      { agent: 'claude-code', on: 2, total: 2 },
-      { agent: 'codex', on: 2, total: 2 },
-      { agent: 'pi', on: 2, total: 2 },
-    ]);
-  });
 });
 
 describe('buildUnionRows — 桥接命名空间归一', () => {
@@ -223,25 +201,6 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
     expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
-  });
-
-  it('向量清单也合成能力行,可停用(否则停用轴有实现无入口)', () => {
-    // 派生侧(deriveCindyMediaConfig)一直按 isModelDisabled 过滤向量型号,但设置页
-    // 此前只为 image/video 合成行 —— 用户没法单独拦住某个向量型号的付费调用,只能
-    // 整家停用 XD(PR #1707 review)。
-    const withEmbedding = {
-      ...provider,
-      embeddingModels: [
-        { id: 'voyage/voyage-4', name: 'Voyage 4' },
-        { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large', disabled: true },
-      ],
-    } as ProviderView;
-    const rows = buildUnionRows(withEmbedding);
-    const v4 = rows.find((r) => r.id === 'voyage/voyage-4')!;
-    expect(isCapabilityRow(v4, false)).toBe(true);
-    expect(isRowDisabled(v4)).toBe(false);
-    const large = rows.find((r) => r.id === 'voyage/voyage-4-large')!;
-    expect(isRowDisabled(large)).toBe(true);
   });
 
   it('能力模型行按分组判定(image → 能力行;对话厂商/兜底分组 → 否)', () => {

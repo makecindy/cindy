@@ -20,7 +20,6 @@ import {
   ArchiveRestore,
   ChevronRight,
   Copy,
-  GitBranch,
   Info,
   Link2,
   Pencil,
@@ -123,14 +122,11 @@ export interface SessionMenuSheetProps {
   onRegenerateTitle(): Promise<{ title: string | null }>;
   /** 打开工作目录(复用文件浏览页);调用方负责关 sheet 并跳转。 */
   onOpenWorkspace(): void;
-  /** Pi 原生会话树入口；只有 host runtime 真正返回 Pi 会话时由父级注入。 */
-  onOpenSessionTree?: () => void;
   onTogglePinned(): void;
   onArchive(): void;
   onRestore(): void;
   onDelete(): void;
   onClose(): void;
-  onClosed?: () => void;
   keyboardAvoidingBehavior: 'height' | 'padding' | undefined;
 }
 
@@ -155,13 +151,11 @@ export function SessionMenuSheet({
   onRename,
   onRegenerateTitle,
   onOpenWorkspace,
-  onOpenSessionTree,
   onTogglePinned,
   onArchive,
   onRestore,
   onDelete,
   onClose,
-  onClosed,
   keyboardAvoidingBehavior,
 }: SessionMenuSheetProps) {
   const styles = useThemedStyles(makeStyles);
@@ -587,15 +581,6 @@ export function SessionMenuSheet({
           </View>
 
           <View style={styles.actionGroup}>
-            {session.agentKind === 'pi' && onOpenSessionTree ? (
-              <MenuActionRow
-                icon={GitBranch}
-                label={t('session.menu.branches')}
-                onPress={onOpenSessionTree}
-                testID="session.branchesButton"
-                trailing={<ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
-              />
-            ) : null}
             <MenuActionRow
               icon={Info}
               label={t('session.menu.sessionInfo')}
@@ -807,7 +792,6 @@ export function SessionMenuSheet({
       keyboardAvoiding
       keyboardAvoidingBehavior={keyboardAvoidingBehavior}
       onBackdropPress={onClose}
-      onClosed={onClosed}
       onRequestClose={handleRequestClose}
       visible={visible}
     >

@@ -57,7 +57,6 @@ const mocks = vi.hoisted(() => ({
   resolveXdtImageUrl: vi.fn(),
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
-  materializeLocalMarkdownImages: vi.fn(),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -99,14 +98,9 @@ vi.mock('../../../imageCacheStore', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
-vi.mock('../localMarkdownImages', () => ({
-  materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
-}));
-
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
+  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -507,7 +501,6 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     mocks.takePendingInteractionsForSession.mockReturnValue([]);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
-    mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
   });
 
   afterEach(async () => {
@@ -545,23 +538,6 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.stringContaining('错误'),
       expect.anything(),
     );
-  });
-
-  it('passes persisted null Pi providerId through cold IM session creation', async () => {
-    // Pi core 将 null 解释为“清除显式来源”；undefined 会反查同名 BYOM provider。
-    mocks.findActiveSession.mockResolvedValue({
-      id: 'feishu-session', agentKind: 'pi', workingDir: 'F:\\XDMaker', model: 'gpt-5',
-      effort: 'high', permissionMode: 'auto', fastMode: false, sdkSessionId: null, providerId: null,
-    });
-    mocks.listProviders.mockResolvedValue([{ id: 'xd', name: 'XD', source: 'builtin', connected: true,
-      agents: ['pi'], models: { pi: [{ id: 'gpt-5' }] }, routing: { pi: { upstream: 'https://gateway.example/v1', authStrategy: 'gateway-key' } } }]);
-    const h = createSessionHarness(async () => ({ accepted: true }));
-    const maker = createMakerHarness(h.session);
-    mocks.getMaker.mockReturnValue(maker);
-
-    await runDefaultTurn();
-
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'pi', providerId: null }));
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {
@@ -1266,12 +1242,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   it('commits one terminal payload for a chunked-text output driver', async () => {
     const previousOutput = fakeAdapter.output;
-    const beginReply = vi.fn(async () => undefined);
     const commitFinal = vi.fn(async () => undefined);
     fakeAdapter.output = {
       kind: 'chunked-text',
       im: mocks.feishuIm as unknown as ChannelIM,
-      beginReply,
       commitFinal,
     };
     try {
@@ -1279,70 +1253,17 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       const { turnPromise } = await startDefaultTurn();
       await turnPromise;
 
-      h.emit({
-        type: 'text',
-        data: {
-          text: 'complete text only\uE200cite\uE202turn17search1\uE202turn17search2\uE201',
-          isFinal: true,
-        },
-      });
+      h.emit({ type: 'text', data: { text: 'complete text only', isFinal: true } });
       h.emit({ type: 'done', data: {} });
       await flushMicrotasks();
 
       expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
-      expect(beginReply).toHaveBeenCalledOnce();
-      expect(beginReply).toHaveBeenCalledWith('ou_user');
       expect(commitFinal).toHaveBeenCalledTimes(1);
       expect(commitFinal).toHaveBeenCalledWith({
         userId: 'ou_user',
         text: 'complete text only',
         terminal: 'done',
         threadTs: undefined,
-        allowedFileRoots: ['F:\\XDMaker'],
-      });
-    } finally {
-      fakeAdapter.output = previousOutput;
-    }
-  });
-
-  it('materializes local Markdown images before committing chunked-text output', async () => {
-    const previousOutput = fakeAdapter.output;
-    const commitFinal = vi.fn(async () => undefined);
-    fakeAdapter.output = {
-      kind: 'chunked-text',
-      im: mocks.feishuIm as unknown as ChannelIM,
-      commitFinal,
-    };
-    mocks.materializeLocalMarkdownImages.mockResolvedValue({
-      absPaths: ['C:\\cindy-media\\generated.png'],
-      text: '测试图片',
-    });
-    try {
-      const h = setupSession(async () => ({ accepted: true }));
-      const { turnPromise } = await startDefaultTurn();
-      await turnPromise;
-
-      h.emit({
-        type: 'text',
-        data: { text: '![测试图片](F:\\XDMaker\\generated.png)', isFinal: true },
-      });
-      h.emit({ type: 'done', data: {} });
-      await flushMicrotasks();
-
-      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
-        text: '![测试图片](F:\\XDMaker\\generated.png)',
-        workingDir: 'F:\\XDMaker',
-        sessionId: 'feishu-session',
-        maxImages: 4,
-        existingAbsPaths: [],
-      });
-      expect(commitFinal).toHaveBeenCalledWith({
-        userId: 'ou_user',
-        text: '测试图片',
-        terminal: 'done',
-        threadTs: undefined,
-        mediaAbsPaths: ['C:\\cindy-media\\generated.png'],
-        allowedFileRoots: ['F:\\XDMaker'],
       });
     } finally {
       fakeAdapter.output = previousOutput;

@@ -1,1 +1,0 @@
-Infer the user's primary language from the conversation and any explicit language preference. Whenever practical, use that language by default for reasoning, planning, explanations, and user-facing content. Preserve the language required by code, commands, identifiers, quoted material, external interfaces, or an explicit user request.

@@ -71,12 +71,10 @@ describe('transcribeRemoteVoiceInput', () => {
       sourceLanguage: 'zh-CN',
     });
 
-    expect(transcribeVoiceInputAudioFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mimeType: 'audio/wav',
-        sourceLanguage: 'zh-CN',
-      }),
-    );
+    expect(transcribeVoiceInputAudioFile).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: 'audio/wav',
+      sourceLanguage: 'zh-CN',
+    }));
   });
 
   it('rejects invalid requests before touching OSS', async () => {
@@ -91,9 +89,7 @@ describe('transcribeRemoteVoiceInput', () => {
       contentType: 'audio/mp4',
     });
 
-    await expect(transcribeRemoteVoiceInput({ ossKey: 'huge-key' })).rejects.toThrow(
-      '语音录音超过上限',
-    );
+    await expect(transcribeRemoteVoiceInput({ ossKey: 'huge-key' })).rejects.toThrow('语音录音超过上限');
 
     expect(transcribeVoiceInputAudioFile).not.toHaveBeenCalled();
     expect(removeRemote).toHaveBeenCalledWith('huge-key');

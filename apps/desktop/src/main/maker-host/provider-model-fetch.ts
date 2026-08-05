@@ -11,11 +11,7 @@
  *   - fetch 可注入（单测不联网）。
  */
 
-import {
-  isLoopbackProviderUrl,
-  type AgentKind,
-  type ProviderWireProtocol,
-} from '@cindy/model-providers';
+import { isLoopbackProviderUrl, type AgentKind } from '@cindy/model-providers';
 
 import {
   classifyProviderError,
@@ -32,8 +28,6 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
   agent: AgentKind;
-  /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
-  wireProtocol?: ProviderWireProtocol;
   baseUrl: string;
   /** 表单态鉴权方式；main IPC 用它强制 none 只访问 loopback。 */
   authMethod?: 'apiKey' | 'oauth' | 'none';
@@ -43,19 +37,13 @@ export interface ProviderModelsFetchSpec {
   apiKey?: string | null;
   /** 附加请求头（自定义供应商的 headers 配置）。 */
   headers?: Record<string, string>;
-  /**
-   * 已保存自定义供应商 id：给出时 main 侧按 (id, agent) 读取已存的 main-only 鉴权请求头
-   * 并并入 `headers`，无需 renderer 回读明文头（headers 是 main-only 密文，见
-   * isRendererAccessibleSafeStorageKey）。仅用于“刷新模型”复用已存请求头鉴权的端点。
-   */
-  savedProviderId?: string;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
-  /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
-  models?: { id: string; name: string; contextWindow?: number }[];
+  /** 拉到的模型清单（ok=true 时给出；已按 id 去重）。 */
+  models?: { id: string; name: string }[];
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -76,20 +64,12 @@ function sameOrigin(a: string, b: string): boolean {
 function withoutCredentialHeaders(
   headers: Record<string, string> | undefined,
 ): Record<string, string> {
-  const normalized: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers ?? {})) {
-    const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
-  }
-  return normalized;
-}
-
-function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
-  const normalized: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers ?? {})) {
-    normalized[name.toLowerCase()] = value;
-  }
-  return normalized;
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== 'authorization' && normalized !== 'x-api-key';
+    }),
+  );
 }
 
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
@@ -98,17 +78,12 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
-    : normalizedHeaders(spec.headers);
-  const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages'
-    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
-  if (anthropicMessages) {
+    : { ...(spec.headers ?? {}) };
+  if (spec.agent === 'claude-code') {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
-      // `buildLocalHandlerHeaders` 已把 agent 自带凭证替换为 Provider-owned key。
-      // 同时发送标准 Anthropic x-api-key 与兼容网关常用的 Bearer，和真实会话保持一致。
       headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
   } else if (spec.apiKey) {

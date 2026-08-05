@@ -7,7 +7,6 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDiscordBot } from '@/hooks/useDiscordBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
-import { ImLifecycleAnnouncementSection } from './ImLifecycleAnnouncementSection';
 
 const DISCORD_DEVELOPER_PORTAL_URL = 'https://discord.com/developers/applications';
 
@@ -50,8 +49,6 @@ export function DiscordBotSection({
     ownerUserId,
     setOwnerUserId,
     status,
-    lifecycleAnnouncement,
-    setLifecycleAnnouncement,
     validationError,
     isSaving,
     isDisconnecting,
@@ -266,19 +263,6 @@ export function DiscordBotSection({
               : t('settings.discordBot.connect')}
           </button>
         </div>
-      )}
-
-      {hasSavedCreds && (
-        <>
-          <div className="h-px w-full bg-[var(--border-default)]" />
-          <ImLifecycleAnnouncementSection
-            label={t('settings.discordBot.lifecycleAnnouncement.label')}
-            cellLabel={t('settings.discordBot.lifecycleAnnouncement.cellLabel')}
-            hint={t('settings.discordBot.lifecycleAnnouncement.hint')}
-            checked={lifecycleAnnouncement}
-            onCheckedChange={setLifecycleAnnouncement}
-          />
-        </>
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">

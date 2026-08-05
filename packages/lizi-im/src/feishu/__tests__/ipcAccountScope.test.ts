@@ -9,12 +9,7 @@ const mocks = vi.hoisted(() => ({
     () => 'idle' | 'testing' | 'connected' | 'reconnecting' | 'conflict' | 'error'
   >(() => 'idle'),
   readCredentials: vi.fn(
-    () =>
-      null as {
-        appId: string;
-        appSecret: string;
-        service: 'feishu' | 'lark';
-      } | null,
+    () => null as { appId: string; appSecret: string } | null,
   ),
   writeCredentials: vi.fn(() => true),
   writeOwnerOpenId: vi.fn(() => true),
@@ -88,9 +83,6 @@ const host = {
     remove: () => {},
   },
   ipc: {
-    throwIpcError: (code: 'INVALID_PARAMS', message: string) => {
-      throw new Error(`[${code}] ${message}`);
-    },
     handle: (channel: string, handler: IpcHandler) => {
       handlers.set(channel, handler);
     },
@@ -144,170 +136,13 @@ afterEach(() => {
 });
 
 describe('Feishu IPC account scope', () => {
-  it('starts app registration with the selected verification service', async () => {
-    mocks.requestRegistration.mockResolvedValue({
-      deviceCode: 'device-code',
-      userCode: 'user-code',
-      verificationUrl: 'https://example.test',
-      interval: 60,
-      expiresIn: 60,
-    });
-    const begin = handlers.get('feishuBot:registration-begin');
-
-    await expect(Promise.resolve(begin?.({ service: 'lark' }))).resolves.toMatchObject({
-      ok: true,
-    });
-
-    expect(mocks.requestRegistration).toHaveBeenCalledWith(host.httpPostForm, 'lark');
-    cancelAppRegistration();
-  });
-
-  it('switches to Lark immediately when Feishu reports the tenant while pending', async () => {
-    vi.useFakeTimers();
-    mocks.requestRegistration.mockResolvedValue({
-      deviceCode: 'device-code',
-      userCode: 'user-code',
-      verificationUrl: 'https://open.larksuite.com/page/cli',
-      interval: 1,
-      expiresIn: 600,
-    });
-    mocks.pollRegistration
-      .mockResolvedValueOnce({
-        status: 'pending',
-        tenantBrand: 'lark',
-      })
-      .mockResolvedValueOnce({
-        status: 'pending',
-      })
-      .mockResolvedValueOnce({
-        status: 'success',
-        result: {
-          clientId: 'cli_lark',
-          clientSecret: 'lark-secret',
-          tenantBrand: null,
-          ownerOpenId: 'ou_lark_owner',
-        },
-      });
-
-    const begin = handlers.get('feishuBot:registration-begin');
-    await expect(
-      Promise.resolve(begin?.({ service: 'lark' })),
-    ).resolves.toMatchObject({
-      ok: true,
-    });
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      1,
-      host.httpPostForm,
-      'feishu',
-      'device-code',
-      1,
-    );
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      2,
-      host.httpPostForm,
-      'lark',
-      'device-code',
-      1,
-    );
-    expect(mocks.writeCredentials).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      3,
-      host.httpPostForm,
-      'lark',
-      'device-code',
-      1,
-    );
-    expect(mocks.writeCredentials).toHaveBeenCalledWith({
-      appId: 'cli_lark',
-      appSecret: 'lark-secret',
-      service: 'lark',
-    });
-  });
-
-  it('keeps polling Lark when the first cross-domain poll is still pending', async () => {
-    vi.useFakeTimers();
-    mocks.requestRegistration.mockResolvedValue({
-      deviceCode: 'device-code',
-      userCode: 'user-code',
-      verificationUrl: 'https://open.larksuite.com/page/cli',
-      interval: 1,
-      expiresIn: 600,
-    });
-    mocks.pollRegistration
-      .mockResolvedValueOnce({
-        status: 'success',
-        result: {
-          clientId: 'cli_lark',
-          clientSecret: '',
-          tenantBrand: 'lark',
-          ownerOpenId: 'ou_lark_owner',
-        },
-      })
-      .mockResolvedValueOnce({ status: 'pending' })
-      .mockResolvedValueOnce({
-        status: 'success',
-        result: {
-          clientId: 'cli_lark',
-          clientSecret: 'lark-secret',
-          tenantBrand: 'lark',
-          ownerOpenId: 'ou_lark_owner',
-        },
-      });
-
-    const begin = handlers.get('feishuBot:registration-begin');
-    await expect(
-      Promise.resolve(begin?.({ service: 'lark' })),
-    ).resolves.toMatchObject({
-      ok: true,
-    });
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      1,
-      host.httpPostForm,
-      'feishu',
-      'device-code',
-      1,
-    );
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      2,
-      host.httpPostForm,
-      'lark',
-      'device-code',
-      1,
-    );
-    expect(mocks.writeCredentials).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
-      3,
-      host.httpPostForm,
-      'lark',
-      'device-code',
-      1,
-    );
-    expect(mocks.writeCredentials).toHaveBeenCalledWith({
-      appId: 'cli_lark',
-      appSecret: 'lark-secret',
-      service: 'lark',
-    });
-  });
-
   it('does not reconnect when credential save loses its account generation', async () => {
     const gate = deferred<void>();
     operationGate = gate.promise;
     const save = handlers.get('feishuBot:save');
     expect(save).toBeDefined();
 
-    const saving = Promise.resolve(
-      save?.({ appId: 'cli_test', appSecret: 'secret', service: 'feishu' }),
-    );
+    const saving = Promise.resolve(save?.({ appId: 'cli_test', appSecret: 'secret' }));
     await vi.waitFor(() => expect(accountRun).toHaveBeenCalledWith(accountToken));
 
     active = false;
@@ -341,7 +176,7 @@ describe('Feishu IPC account scope', () => {
     mocks.pollRegistration.mockReturnValue(poll.promise);
 
     const begin = handlers.get('feishuBot:registration-begin');
-    await expect(Promise.resolve(begin?.({ service: 'feishu' }))).resolves.toMatchObject({
+    await expect(Promise.resolve(begin?.())).resolves.toMatchObject({
       ok: true,
     });
     await vi.advanceTimersByTimeAsync(1000);
@@ -366,11 +201,7 @@ describe('Feishu IPC account scope', () => {
 });
 
 describe('Feishu credential connection semantics', () => {
-  const credentials = {
-    appId: 'cli_test',
-    appSecret: 'secret',
-    service: 'feishu' as const,
-  };
+  const credentials = { appId: 'cli_test', appSecret: 'secret' };
 
   it('delegates owner clearing to stop before the idle status is broadcast', async () => {
     await clearAndDisconnect();
@@ -401,7 +232,7 @@ describe('Feishu credential connection semantics', () => {
     mocks.getCurrentStatus.mockReturnValue('connected');
 
     await expect(
-      saveAndConnect(credentials.appId, credentials.appSecret, credentials.service, {
+      saveAndConnect(credentials.appId, credentials.appSecret, {
         replacementOwnerOpenId: 'ou_registered_owner',
       }),
     ).resolves.toEqual({ verdict: 'connected' });
@@ -418,7 +249,7 @@ describe('Feishu credential connection semantics', () => {
     mocks.writeOwnerOpenId.mockReturnValue(false);
 
     await expect(
-      saveAndConnect(credentials.appId, credentials.appSecret, credentials.service, {
+      saveAndConnect(credentials.appId, credentials.appSecret, {
         replacementOwnerOpenId: 'ou_registered_owner',
       }),
     ).rejects.toThrow('[OWNER_PERSIST_FAILED]');
@@ -466,9 +297,7 @@ describe('Feishu credential connection semantics', () => {
   it('suppresses lifecycle announcements for an explicit manual reconnect', async () => {
     mocks.readCredentials.mockReturnValue(credentials);
 
-    await expect(reconnectSavedCredentials()).resolves.toEqual({
-      verdict: 'connected',
-    });
+    await expect(reconnectSavedCredentials()).resolves.toEqual({ verdict: 'connected' });
 
     expect(mocks.stop).toHaveBeenCalledWith({
       announceOffline: false,
@@ -492,33 +321,7 @@ describe('Feishu credential connection semantics', () => {
       clearOwnerBeforeIdle: true,
     });
     expect(mocks.start).toHaveBeenCalledWith(
-      { appId: 'cli_other', appSecret: 'other-secret', service: 'feishu' },
-      { reason: 'credentials-replaced' },
-    );
-  });
-
-  it('treats switching between Feishu and Lark as a new owner boundary', async () => {
-    mocks.readCredentials.mockReturnValue(credentials);
-
-    await expect(saveAndConnect(credentials.appId, credentials.appSecret, 'lark')).resolves.toEqual(
-      { verdict: 'connected' },
-    );
-
-    expect(mocks.writeCredentials).toHaveBeenCalledWith({
-      appId: credentials.appId,
-      appSecret: credentials.appSecret,
-      service: 'lark',
-    });
-    expect(mocks.stop).toHaveBeenCalledWith({
-      reason: 'credentials-replaced',
-      clearOwnerBeforeIdle: true,
-    });
-    expect(mocks.start).toHaveBeenCalledWith(
-      {
-        appId: credentials.appId,
-        appSecret: credentials.appSecret,
-        service: 'lark',
-      },
+      { appId: 'cli_other', appSecret: 'other-secret' },
       { reason: 'credentials-replaced' },
     );
   });
@@ -527,7 +330,7 @@ describe('Feishu credential connection semantics', () => {
     mocks.readCredentials.mockReturnValue(credentials);
 
     await expect(
-      saveAndConnect('cli_registered', 'registered-secret', 'feishu', {
+      saveAndConnect('cli_registered', 'registered-secret', {
         replacementOwnerOpenId: 'ou_registered_owner',
       }),
     ).resolves.toEqual({ verdict: 'connected' });
@@ -548,7 +351,7 @@ describe('Feishu credential connection semantics', () => {
     mocks.writeOwnerOpenId.mockReturnValue(false);
 
     await expect(
-      saveAndConnect('cli_registered', 'registered-secret', 'feishu', {
+      saveAndConnect('cli_registered', 'registered-secret', {
         replacementOwnerOpenId: 'ou_registered_owner',
       }),
     ).rejects.toThrow('[OWNER_PERSIST_FAILED]');

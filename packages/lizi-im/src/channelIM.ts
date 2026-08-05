@@ -85,33 +85,7 @@ export interface RichChannelIM extends TextChannelIM {
   sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
-    opts?: {
-      threadTs?: string;
-      /**
-       * **只有授权类(permission)卡片**可以传 true: 群 lane 里把卡片改投宿主私聊 ——
-       * 群里的授权卡消不掉, 而且只有宿主本人能回答它。
-       *
-       * 命令卡 / 会话选择卡(`/ctr` 等)**绝不能传**: 它们的回调要落在原群 lane
-       * (exitControl 释放的是那把群锁), 投到私聊会让锁与卡片对不上。
-       * 渠道不支持该语义时忽略即可(按原 lane 投递), 不要吞掉卡片。
-       */
-      deliverToOwnerDm?: boolean;
-      /**
-       * `deliverToOwnerDm` 生效时加在卡片正文顶部的说明。**用户可见文案由调用方给**,
-       * 传输层不造文案(它没有 locale, 也不该持有产品措辞)。
-       */
-      ownerDmNote?: string;
-      /**
-       * 触发本轮的那条渠道消息 id(本接口的 messageId 形态)。`deliverToOwnerDm` 生效时
-       * 用来拼「来源」深链 —— 宿主在私聊里收到的卡片否则看不出是哪个群、哪个问题。
-       *
-       * **必须由调用方给**: 只有它知道这张卡属于哪一轮业务 turn。传输层能看到的只有
-       * 回挂状态与流式 handle 生命周期, 两者都不等于业务轮次 —— 回挂目标在
-       * `replyQuoteGroup:'first'` 下发出首条回复就被消耗, 而发卡前调用方会主动收口
-       * 流式 handle。不传则不渲染深链(不猜)。
-       */
-      ownerDmSourceMessageId?: string;
-    },
+    opts?: { threadTs?: string },
   ): Promise<{ messageId: string }>;
 
   /** 原地替换一张已发出的交互卡片(spec 全量覆盖)。 */
@@ -146,8 +120,6 @@ export interface ImFinalOutput {
   errorCode?: string;
   /** Managed local media discovered in the terminal assistant output. */
   mediaAbsPaths?: string[];
-  /** Host-approved roots for model-authored local file attachment links. */
-  allowedFileRoots?: string[];
 }
 
 /**
@@ -162,10 +134,5 @@ export type ImOutputDriver =
   | {
       kind: 'chunked-text';
       im: TextChannelIM;
-      /**
-       * Reserve an inbound reply context before a potentially long turn.
-       * Transports with callback deadlines may emit a non-terminal placeholder.
-       */
-      beginReply?(userId: string): Promise<void>;
       commitFinal(output: ImFinalOutput): Promise<void>;
     };

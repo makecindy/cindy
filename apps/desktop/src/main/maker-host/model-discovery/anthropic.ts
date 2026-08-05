@@ -32,7 +32,7 @@
  * 串行队列 + 原子 rename,保证登出删缓存不会被较早的 SDK 持久化反向覆盖。
  *
  * contextWindow 规则:
- *   HTTP 响应带 max_input_tokens 用之;否则读取当前 modelRegistry 的已知窗口；
+ *   HTTP 响应带 max_input_tokens 用之;否则读取当前 cindyModelMeta 的已知窗口；
  *   目录未知时默认 1M,仅 id 含 "haiku" 例外 200k。这样已知旧模型不会被错误提升到
  *   1M,未来新模型仍可在目录更新前按当代默认工作。
  *
@@ -140,25 +140,12 @@ function normalizeModelId(raw: string): string {
   return raw.replace(/\[[^\]]*\]$/, '').replace(/-20\d{6}$/, '');
 }
 
-/**
- * contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。
- *
- * 前两档是**显式声明**的真实上限,一并标记 contextWindowVerified 让下游可以拿它收敛
- * 运行期上报的窗口;最后一档是猜的,不标记 —— 否则未知模型会被一个启发式常量当成硬
- * 上限(见 CatalogModel.contextWindowVerified 注释)。返回可直接展开进 CatalogModel。
- */
-function contextWindowFor(
-  id: string,
-  explicit?: number,
-): { contextWindow: number; contextWindowVerified?: true } {
-  if (typeof explicit === 'number' && explicit > 0) {
-    return { contextWindow: explicit, contextWindowVerified: true };
-  }
+/** contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。 */
+function contextWindowFor(id: string, explicit?: number): number {
+  if (typeof explicit === 'number' && explicit > 0) return explicit;
   const catalogWindow = getCindyModelContextWindow(id);
-  if (catalogWindow !== null) {
-    return { contextWindow: catalogWindow, contextWindowVerified: true };
-  }
-  return { contextWindow: /haiku/.test(id) ? 200_000 : 1_000_000 };
+  if (catalogWindow !== null) return catalogWindow;
+  return /haiku/.test(id) ? 200_000 : 1_000_000;
 }
 
 function pickDefaultEffort(efforts: Effort[]): Effort | null {
@@ -290,7 +277,7 @@ function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort:
  * SDK `supportedModels()` 条目 → 映射结果。纯函数。
  * 只收 `claude` 开头的显式版本 id(规则 10:禁止 opus/sonnet 裸别名进目录)。
  * ModelInfo 的能力字段全部 optional:字段在场时 SDK 是能力权威(supportsEffort=false =
- * 不可调);**字段缺席 = 该字段未知**,按 modelRegistry 基线 / 确定性默认合成,
+ * 不可调);**字段缺席 = 该字段未知**,按 cindyModelMeta 基线 / 确定性默认合成,
  * 合并时保留该字段已精化的旧值——不能把「CLI 没填」解读成「不支持」而抹掉档位。
  */
 export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
@@ -345,7 +332,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
         ...(typeof e.description === 'string' && e.description.length > 0
           ? { description: e.description }
           : {}),
-        ...contextWindowFor(id),
+        contextWindow: contextWindowFor(id),
         efforts,
         defaultEffort,
         supportsFastMode: e.supportsFastMode === true,
@@ -419,7 +406,7 @@ function mergeCapabilitiesWithPrevious(
 /**
  * HTTP `GET /v1/models` 单页条目数组 → 映射结果。纯函数,对响应形状容错:
  * 能力字段(capabilities.efforts / fast_mode)是 Anthropic 侧未固化的扩展,逐字段识别；
- * effort 认不出时按 modelRegistry 能力基线合成,目录也没有才回落当代旗舰 5 档
+ * effort 认不出时按 cindyModelMeta 能力基线合成,目录也没有才回落当代旗舰 5 档
  * (low/medium/high/xhigh/max,默认 high),haiku 系例外 0 档。fastMode 未知时先为 false,
  * 合并阶段会保留已明确探测过的旧值。
  */
@@ -463,7 +450,7 @@ export function mapAnthropicHttpModels(raw: unknown): HttpMappedModel[] {
         name: typeof e.display_name === 'string' && e.display_name.length > 0 ? e.display_name : id,
         group: 'anthropic',
         sortOrder: out.length,
-        ...contextWindowFor(id, maxInput ?? undefined),
+        contextWindow: contextWindowFor(id, maxInput ?? undefined),
         efforts,
         defaultEffort,
         supportsFastMode: caps?.fast_mode === true,
@@ -645,15 +632,9 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
       const effortBaseline = restoredExplicitEffortIds.has(model.id)
         ? null
         : fallbackEffortBaseline(model.id);
-      // 必须先抹掉缓存里的旧 provenance 再让 contextWindowFor 重新判定:它的启发式分支
-      // **不返回** contextWindowVerified 键,残留的 true 会盖在新算出的启发式窗口上。
-      // 触发面窄但后果正是本次要消除的那种:某模型被新版目录移除、又不在 explicitWindows
-      // 里(命中目录的窗口不进那张表)时,会得到一个「已核实」的猜测值 —— 例如 Haiku 残留
-      // 200K 而运行期真实 1M,反倒把上报值压小。这也是上面那条刷新不变量的要求。
-      const { contextWindowVerified: _staleProvenance, ...rest } = model;
       return {
-        ...rest,
-        ...contextWindowFor(model.id, explicitWindows.get(model.id)),
+        ...model,
+        contextWindow: contextWindowFor(model.id, explicitWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
     });
@@ -683,14 +664,7 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
     const explicit = explicitWindows.get(model.id);
-    // explicitWindows 存的是 HTTP 明说过的 max_input_tokens —— 恢复它时必须连
-    // contextWindowVerified 一起恢复。SDK 通道重新映射同一模型时走的是「无 explicit」
-    // 分支(目录里没有该模型就落到启发式、不带标记), 只覆盖 contextWindow 会把这份
-    // provenance 静默擦掉, 之后就不再拿这个真实上限去收敛虚高的上报值了。
-    const base =
-      explicit !== undefined
-        ? { ...model, contextWindow: explicit, contextWindowVerified: true as const }
-        : model;
+    const base = explicit !== undefined ? { ...model, contextWindow: explicit } : model;
     return { model: base, hasEffortInfo, hasFastModeInfo };
   });
   const { models, explicitEffortIds, explicitFastModeIds } =

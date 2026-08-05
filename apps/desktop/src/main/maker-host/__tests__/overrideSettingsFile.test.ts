@@ -17,9 +17,9 @@ const DEFAULTS: TestSettings = {
   nested: { a: 1, b: 2 },
 };
 
-function createTempStore(existing?: { dir: string; file: string }) {
-  const dir = existing?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
-  const file = existing?.file ?? path.join(dir, 'settings.json');
+function createTempStore() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
+  const file = path.join(dir, 'settings.json');
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -77,20 +77,6 @@ describe('createOverrideSettingsFile', () => {
         customizedKeys: ['enabled'],
       });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('reuses the initial stat snapshot when caching a readable file', () => {
-    const { dir, file, store } = createTempStore();
-    const statSync = vi.spyOn(fs, 'statSync');
-    try {
-      fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
-      store.readState();
-      expect(statSync).toHaveBeenCalledTimes(1);
-      expect(statSync).toHaveBeenCalledWith(file);
-    } finally {
-      statSync.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -210,29 +196,6 @@ describe('createOverrideSettingsFile', () => {
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('serializes atomic patches from separate instances without losing unrelated keys', async () => {
-    const first = createTempStore();
-    const second = createTempStore({ dir: first.dir, file: first.file });
-    try {
-      // 两个实例都先缓存同一份旧状态，复现共享 userData 的并发读改写窗口。
-      expect(first.store.read()).toEqual(DEFAULTS);
-      expect(second.store.read()).toEqual(DEFAULTS);
-
-      await Promise.all([
-        first.store.writePatchAtomic({ enabled: false }),
-        second.store.writePatchAtomic({ limit: 9 }),
-      ]);
-
-      expect(JSON.parse(fs.readFileSync(first.file, 'utf-8'))).toEqual({
-        enabled: false,
-        limit: 9,
-      });
-      expect(fs.existsSync(`${first.file}.lock`)).toBe(false);
-    } finally {
-      fs.rmSync(first.dir, { recursive: true, force: true });
     }
   });
 });

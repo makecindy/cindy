@@ -601,11 +601,10 @@ function buildDailySpendUpsertQuery(
     .values({
       day,
       costUsd: costUsdDelta,
-      costCurrency: 'USD',
       updatedAt: ts,
     })
     .onConflictDoUpdate({
-      target: [dailySpend.day, dailySpend.costCurrency],
+      target: dailySpend.day,
       set: {
         costUsd: sql`${dailySpend.costUsd} + ${costUsdDelta}`,
         updatedAt: ts,

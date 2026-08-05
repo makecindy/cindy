@@ -5,53 +5,17 @@
  * 改动即写 main 侧 store(transport 每次使用现读), 无需重启 bot。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { contactsService } from '@/lib/contactsService';
 import { cn } from '@/lib/utils';
-import type {
-  TelegramHookBehavior,
-  TelegramHookBehaviorState,
-  TelegramHookGroupActivationMode,
-  TelegramHookKnownGroup,
-} from '../../../shared/hookControlIpc';
 
-type Behavior = TelegramHookBehavior;
-type SettingsSource = 'personal' | 'official';
-
-function i18nRoot(source: SettingsSource): string {
-  return source === 'official' ? 'settings.remoteControl.hook.telegram' : 'settings.telegramBot';
-}
+type Behavior = TelegramBotBehavior;
 
 const EMOJI_OPTIONS: Behavior['emojiReactions'][] = ['off', 'minimal', 'expressive'];
 const GROUP_QUOTE_OPTIONS: Behavior['replyQuoteGroup'][] = ['off', 'first', 'all'];
 const DM_QUOTE_OPTIONS: Behavior['replyQuoteDm'][] = ['off', 'first'];
-
-function mergeOfficialGroupActivation(
-  groups: readonly TelegramHookKnownGroup[],
-  groupActivation: TelegramHookBehaviorState['groupActivation'],
-): TelegramHookKnownGroup[] {
-  const merged = new Map(
-    groups.map((group) => [
-      group.chatId,
-      {
-        ...group,
-        activation:
-          groupActivation[group.chatId] === 'always' ? ('always' as const) : ('mention' as const),
-      },
-    ]),
-  );
-  for (const [chatId, activation] of Object.entries(groupActivation)) {
-    if (merged.has(chatId)) continue;
-    merged.set(chatId, {
-      chatId,
-      chatName: chatId,
-      activation: activation === 'always' ? 'always' : 'mention',
-    });
-  }
-  return [...merged.values()];
-}
 
 function SegmentedRow<T extends string>(props: {
   label: string;
@@ -63,10 +27,7 @@ function SegmentedRow<T extends string>(props: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div
-        className="text-12 font-medium text-[var(--settings-section-desc)]"
-        style={{ letterSpacing: '0.12px' }}
-      >
+      <div className="text-12 font-medium text-[var(--settings-section-desc)]" style={{ letterSpacing: '0.12px' }}>
         {props.label}
       </div>
       <div className="flex gap-1.5">
@@ -97,219 +58,61 @@ function SegmentedRow<T extends string>(props: {
   );
 }
 
-function SettingsRequestError(props: { message: string; retryLabel: string; onRetry: () => void }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-11 text-[var(--settings-section-desc)]">
-      <span>{props.message}</span>
-      <button
-        type="button"
-        onClick={props.onRetry}
-        className="h-[26px] shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-3 font-medium text-[var(--settings-btn-secondary-text)] transition-colors"
-      >
-        {props.retryLabel}
-      </button>
-    </div>
-  );
-}
-
-export function TelegramBehaviorSettings({
-  source = 'personal',
-  bindingId,
-}: {
-  source?: SettingsSource;
-  bindingId?: string;
-}) {
+export function TelegramBehaviorSettings() {
   const { t } = useTranslation();
   const [behavior, setBehavior] = useState<Behavior | null>(null);
-  const [error, setError] = useState<'load' | 'save' | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const behaviorRef = useRef<Behavior | null>(null);
-  const confirmedRef = useRef<Behavior | null>(null);
-  const pendingWrites = useRef(0);
-  const saveFailed = useRef(false);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
-  const latestRevision = useRef(0);
-  const mounted = useRef(true);
-  const root = i18nRoot(source);
-  const bindingKey = `${source}:${bindingId ?? ''}`;
-  const activeBindingKey = useRef(bindingKey);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    activeBindingKey.current = bindingKey;
-    behaviorRef.current = null;
-    confirmedRef.current = null;
-    pendingWrites.current = 0;
-    saveFailed.current = false;
-    saveQueue.current = Promise.resolve();
-    latestRevision.current += 1;
-    setBehavior(null);
-    setError(null);
-  }, [bindingKey]);
 
   useEffect(() => {
     let cancelled = false;
-    let loadSettled = false;
-    let pushedDuringLoad: TelegramHookBehaviorState | null = null;
-    saveFailed.current = false;
-    setError(null);
-    const unsubscribe =
-      source === 'official'
-        ? window.electronAPI.hookControl.onTelegramBehaviorChanged((value) => {
-            if (cancelled || value.bindingId !== bindingId) return;
-            if (!loadSettled) {
-              pushedDuringLoad = value;
-              return;
-            }
-            if (pendingWrites.current > 0) return;
-            behaviorRef.current = value;
-            confirmedRef.current = value;
-            setBehavior(value);
-            setError(null);
-          })
-        : undefined;
-    const load =
-      source === 'official'
-        ? window.electronAPI.hookControl
-            .getTelegramBehavior(bindingId as string)
-            .then((value) => value.behavior)
-        : window.electronAPI.telegramBot.getBehavior();
-    void load
-      .then((value) => {
-        loadSettled = true;
-        if (cancelled) return;
-        const effective = pushedDuringLoad ?? value;
-        if (pendingWrites.current > 0) return;
-        behaviorRef.current = effective;
-        confirmedRef.current = effective;
-        setBehavior(effective);
-      })
-      .catch(() => {
-        loadSettled = true;
-        if (!cancelled) setError('load');
-      });
+    void window.electronAPI.telegramBot.getBehavior().then((value) => {
+      if (!cancelled) setBehavior(value);
+    });
     return () => {
       cancelled = true;
-      unsubscribe?.();
     };
-  }, [bindingId, reloadToken, source]);
+  }, []);
 
-  if (!behavior) {
-    return error === 'load' ? (
-      <SettingsRequestError
-        message={t(`${root}.behavior.error.load`)}
-        retryLabel={t(`${root}.behavior.error.retry`)}
-        onRetry={() => setReloadToken((value) => value + 1)}
-      />
-    ) : null;
-  }
+  if (!behavior) return null;
 
   const patch = (partial: Partial<Behavior>) => {
-    const writeBindingKey = bindingKey;
-    const writeBindingId = bindingId;
-    const writeSource = source;
-    const optimistic = { ...(behaviorRef.current ?? behavior), ...partial };
-    behaviorRef.current = optimistic;
-    setBehavior(optimistic);
-    setError(null);
-    const revision = ++latestRevision.current;
-    pendingWrites.current += 1;
-    saveQueue.current = saveQueue.current.then(async () => {
-      try {
-        const saved =
-          writeSource === 'official'
-            ? await window.electronAPI.hookControl
-                .setTelegramBehavior(writeBindingId as string, partial)
-                .then((value) => value.behavior)
-            : await window.electronAPI.telegramBot.setBehavior(partial);
-        if (activeBindingKey.current !== writeBindingKey) return;
-        confirmedRef.current = saved;
-        if (mounted.current && revision === latestRevision.current) {
-          behaviorRef.current = saved;
-          setBehavior(saved);
-          setError(null);
-        }
-      } catch {
-        if (activeBindingKey.current === writeBindingKey) saveFailed.current = true;
-      } finally {
-        if (activeBindingKey.current !== writeBindingKey) return;
-        pendingWrites.current -= 1;
-        if (pendingWrites.current === 0 && saveFailed.current) {
-          const reconcileRevision = latestRevision.current;
-          let authoritative = confirmedRef.current;
-          try {
-            authoritative =
-              writeSource === 'official'
-                ? await window.electronAPI.hookControl
-                    .getTelegramBehavior(writeBindingId as string)
-                    .then((value) => value.behavior)
-                : await window.electronAPI.telegramBot.getBehavior();
-            confirmedRef.current = authoritative;
-          } catch {
-            // Keep the last confirmed snapshot; the inline retry remains available.
-          }
-          if (
-            mounted.current &&
-            activeBindingKey.current === writeBindingKey &&
-            pendingWrites.current === 0 &&
-            reconcileRevision === latestRevision.current &&
-            authoritative !== null
-          ) {
-            saveFailed.current = false;
-            behaviorRef.current = authoritative;
-            setBehavior(authoritative);
-            setError('save');
-          }
-        }
-      }
-    });
+    // 乐观更新; main 侧 store 白名单校验后回真值。
+    setBehavior({ ...behavior, ...partial });
+    void window.electronAPI.telegramBot.setBehavior(partial).then(setBehavior);
   };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
-        {t(`${root}.behavior.title`)}
+        {t('settings.telegramBot.behavior.title')}
       </div>
-      {error !== null && (
-        <SettingsRequestError
-          message={t(`${root}.behavior.error.${error}`)}
-          retryLabel={t(`${root}.behavior.error.retry`)}
-          onRetry={() => setReloadToken((value) => value + 1)}
-        />
-      )}
       <SegmentedRow
-        label={t(`${root}.behavior.emojiLabel`)}
-        hint={t(`${root}.behavior.emojiHint.${behavior.emojiReactions}`)}
+        label={t('settings.telegramBot.behavior.emojiLabel')}
+        hint={t(`settings.telegramBot.behavior.emojiHint.${behavior.emojiReactions}`)}
         options={EMOJI_OPTIONS}
         value={behavior.emojiReactions}
-        optionLabel={(o) => t(`${root}.behavior.emojiOption.${o}`)}
+        optionLabel={(o) => t(`settings.telegramBot.behavior.emojiOption.${o}`)}
         onChange={(emojiReactions) => patch({ emojiReactions })}
       />
       <SegmentedRow
-        label={t(`${root}.behavior.groupQuoteLabel`)}
-        hint={t(`${root}.behavior.groupQuoteHint.${behavior.replyQuoteGroup}`)}
+        label={t('settings.telegramBot.behavior.groupQuoteLabel')}
+        hint={t(`settings.telegramBot.behavior.groupQuoteHint.${behavior.replyQuoteGroup}`)}
         options={GROUP_QUOTE_OPTIONS}
         value={behavior.replyQuoteGroup}
-        optionLabel={(o) => t(`${root}.behavior.quoteOption.${o}`)}
+        optionLabel={(o) => t(`settings.telegramBot.behavior.quoteOption.${o}`)}
         onChange={(replyQuoteGroup) => patch({ replyQuoteGroup })}
       />
       <SegmentedRow
-        label={t(`${root}.behavior.dmQuoteLabel`)}
-        hint={t(`${root}.behavior.dmQuoteHint.${behavior.replyQuoteDm}`)}
+        label={t('settings.telegramBot.behavior.dmQuoteLabel')}
+        hint={t(`settings.telegramBot.behavior.dmQuoteHint.${behavior.replyQuoteDm}`)}
         options={DM_QUOTE_OPTIONS}
         value={behavior.replyQuoteDm}
-        optionLabel={(o) => t(`${root}.behavior.quoteOption.${o}`)}
+        optionLabel={(o) => t(`settings.telegramBot.behavior.quoteOption.${o}`)}
         onChange={(replyQuoteDm) => patch({ replyQuoteDm })}
       />
     </div>
   );
 }
+
 
 /** 「人格」节: bot 名字 + soul 文本(soul.md 语义), 可一键同步名字到 Telegram 资料页。 */
 export function TelegramPersonaSettings() {
@@ -432,11 +235,12 @@ export function TelegramPersonaSettings() {
   );
 }
 
+
 /**
  * 智能通讯录接线状态引导(Chris 2026-07-30: 通讯录关着时自动记人静默失效,
  * 没有任何引导 — 在群聊节明示状态, 关着给一键开启)。
  */
-function ContactsAutoRegisterHint({ root }: { root: string }) {
+function ContactsAutoRegisterHint() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -460,14 +264,14 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
   if (enabled) {
     return (
       <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
-        {t(`${root}.groups.contactsOn`)}
+        {t('settings.telegramBot.groups.contactsOn')}
       </div>
     );
   }
   return (
     <div className="flex items-center gap-2">
       <span className="text-11 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t(`${root}.groups.contactsOff`)}
+        {t('settings.telegramBot.groups.contactsOff')}
       </span>
       <button
         type="button"
@@ -488,207 +292,48 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
           busy && 'cursor-not-allowed opacity-40',
         )}
       >
-        {t(`${root}.groups.contactsEnable`)}
+        {t('settings.telegramBot.groups.contactsEnable')}
       </button>
     </div>
   );
 }
 
 /** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
-export function TelegramGroupActivationSettings({
-  source = 'personal',
-  bindingId,
-}: {
-  source?: SettingsSource;
-  bindingId?: string;
-}) {
+export function TelegramGroupActivationSettings() {
   const { t } = useTranslation();
-  const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
-  const [error, setError] = useState<'load' | 'save' | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const groupsRef = useRef<TelegramHookKnownGroup[] | null>(null);
-  const confirmedRef = useRef<TelegramHookKnownGroup[] | null>(null);
-  const pendingWrites = useRef(0);
-  const saveFailed = useRef(false);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
-  const latestRevision = useRef(0);
-  const mounted = useRef(true);
-  const root = i18nRoot(source);
-  const bindingKey = `${source}:${bindingId ?? ''}`;
-  const activeBindingKey = useRef(bindingKey);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    activeBindingKey.current = bindingKey;
-    groupsRef.current = null;
-    confirmedRef.current = null;
-    pendingWrites.current = 0;
-    saveFailed.current = false;
-    saveQueue.current = Promise.resolve();
-    latestRevision.current += 1;
-    setGroups(null);
-    setError(null);
-  }, [bindingKey]);
+  const [groups, setGroups] = useState<
+    Array<{ chatId: string; chatName: string | null; activation: 'mention' | 'always' }> | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
-    let loadSettled = false;
-    let pushedDuringLoad: TelegramHookBehaviorState | null = null;
-    saveFailed.current = false;
-    setError(null);
-    const unsubscribe =
-      source === 'official'
-        ? window.electronAPI.hookControl.onTelegramBehaviorChanged((behavior) => {
-            if (cancelled || behavior.bindingId !== bindingId) return;
-            if (!loadSettled) {
-              pushedDuringLoad = behavior;
-              return;
-            }
-            if (pendingWrites.current > 0) return;
-            const next =
-              groupsRef.current === null
-                ? null
-                : mergeOfficialGroupActivation(groupsRef.current, behavior.groupActivation);
-            groupsRef.current = next;
-            confirmedRef.current = next;
-            setGroups(next);
-            setError(null);
-          })
-        : undefined;
-    const load =
-      source === 'official'
-        ? window.electronAPI.hookControl.listTelegramGroups(bindingId as string)
-        : window.electronAPI.telegramBot.listGroups();
-    void load
-      .then((result) => {
-        loadSettled = true;
-        if (cancelled) return;
-        const next =
-          pushedDuringLoad === null
-            ? result.groups
-            : mergeOfficialGroupActivation(result.groups, pushedDuringLoad.groupActivation);
-        groupsRef.current = next;
-        confirmedRef.current = next;
-        setGroups(next);
-      })
-      .catch(() => {
-        loadSettled = true;
-        if (!cancelled) setError('load');
-      });
+    void window.electronAPI.telegramBot.listGroups().then((result) => {
+      if (!cancelled) setGroups(result.groups);
+    });
     return () => {
       cancelled = true;
-      unsubscribe?.();
     };
-  }, [bindingId, reloadToken, source]);
+  }, []);
 
-  if (!groups) {
-    return error === 'load' ? (
-      <SettingsRequestError
-        message={t(`${root}.groups.error.load`)}
-        retryLabel={t(`${root}.groups.error.retry`)}
-        onRetry={() => setReloadToken((value) => value + 1)}
-      />
-    ) : null;
-  }
+  if (!groups) return null;
 
-  const setMode = (chatId: string, mode: TelegramHookGroupActivationMode) => {
-    const writeBindingKey = bindingKey;
-    const writeBindingId = bindingId;
-    const writeSource = source;
-    const optimistic = (groupsRef.current ?? groups).map((group) =>
-      group.chatId === chatId ? { ...group, activation: mode } : group,
-    );
-    groupsRef.current = optimistic;
-    setGroups(optimistic);
-    setError(null);
-    const revision = ++latestRevision.current;
-    pendingWrites.current += 1;
-    saveQueue.current = saveQueue.current.then(async () => {
-      try {
-        if (writeSource === 'official') {
-          const result = await window.electronAPI.hookControl.setTelegramGroupActivation(
-            writeBindingId as string,
-            chatId,
-            mode,
-          );
-          if (activeBindingKey.current !== writeBindingKey) return;
-          const authoritative = mergeOfficialGroupActivation(
-            groupsRef.current ?? optimistic,
-            result.behavior.groupActivation,
-          );
-          confirmedRef.current = authoritative;
-          if (mounted.current && revision === latestRevision.current) {
-            groupsRef.current = authoritative;
-            setGroups(authoritative);
-          }
-        } else {
-          await window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
-          if (activeBindingKey.current !== writeBindingKey) return;
-          confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
-            group.chatId === chatId ? { ...group, activation: mode } : group,
-          );
-        }
-        if (mounted.current && revision === latestRevision.current) setError(null);
-      } catch {
-        if (activeBindingKey.current === writeBindingKey) saveFailed.current = true;
-      } finally {
-        if (activeBindingKey.current !== writeBindingKey) return;
-        pendingWrites.current -= 1;
-        if (pendingWrites.current === 0 && saveFailed.current) {
-          const reconcileRevision = latestRevision.current;
-          let authoritative = confirmedRef.current;
-          try {
-            authoritative = (
-              writeSource === 'official'
-                ? await window.electronAPI.hookControl.listTelegramGroups(writeBindingId as string)
-                : await window.electronAPI.telegramBot.listGroups()
-            ).groups;
-            confirmedRef.current = authoritative;
-          } catch {
-            // Keep the last confirmed snapshot; the inline retry remains available.
-          }
-          if (
-            mounted.current &&
-            activeBindingKey.current === writeBindingKey &&
-            pendingWrites.current === 0 &&
-            reconcileRevision === latestRevision.current &&
-            authoritative !== null
-          ) {
-            saveFailed.current = false;
-            groupsRef.current = authoritative;
-            setGroups(authoritative);
-            setError('save');
-          }
-        }
-      }
-    });
+  const setMode = (chatId: string, mode: 'mention' | 'always') => {
+    setGroups(groups.map((g) => (g.chatId === chatId ? { ...g, activation: mode } : g)));
+    void window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
   };
 
   return (
     <div className="flex flex-col gap-3">
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
-        {t(`${root}.groups.title`)}
+        {t('settings.telegramBot.groups.title')}
       </div>
       <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
-        {t(`${root}.groups.hint`)}
+        {t('settings.telegramBot.groups.hint')}
       </div>
-      {error !== null && (
-        <SettingsRequestError
-          message={t(`${root}.groups.error.${error}`)}
-          retryLabel={t(`${root}.groups.error.retry`)}
-          onRetry={() => setReloadToken((value) => value + 1)}
-        />
-      )}
-      <ContactsAutoRegisterHint root={root} />
+      <ContactsAutoRegisterHint />
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
-          {t(`${root}.groups.empty`)}
+          {t('settings.telegramBot.groups.empty')}
         </div>
       ) : (
         groups.map((group) => (
@@ -717,7 +362,7 @@ export function TelegramGroupActivationSettings({
                         : 'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
                     )}
                   >
-                    {t(`${root}.groups.mode.${mode}`)}
+                    {t(`settings.telegramBot.groups.mode.${mode}`)}
                   </button>
                 );
               })}

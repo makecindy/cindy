@@ -38,23 +38,6 @@ export const DEVICE_LINK_INVOKE = {
   REVOKE: 'device-link:revoke',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
-  // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
-  // 纯本机读写,**不进 device-link 隧道 allowlist**:缓存是每台控制端自己的首屏加速物,
-  // 远程/手机控制端有各自的本地缓存,谁也不需要读别人的。
-  /** 读某 (设备, 会话) 缓存的最近一页消息 */
-  MIRROR_CACHE_GET_MESSAGES: 'device-link:mirror-cache:messages:get',
-  /** 写某 (设备, 会话) 缓存的最近一页消息(空数组 = 清掉该条) */
-  MIRROR_CACHE_PUT_MESSAGES: 'device-link:mirror-cache:messages:put',
-  /** 读侧边栏远程会话列表快照 */
-  MIRROR_CACHE_GET_SESSION_LIST: 'device-link:mirror-cache:session-list:get',
-  /** 写侧边栏远程会话列表快照 */
-  MIRROR_CACHE_PUT_SESSION_LIST: 'device-link:mirror-cache:session-list:put',
-  /**
-   * 清某台设备的缓存。deviceId 必填(缺失 / 空白一律 INVALID_PARAMS)——
-   * 「整体清」刻意不开放给 renderer:登出走 main 内部的 clearAll()(见
-   * teardownAuthAccountBoundary)。
-   */
-  MIRROR_CACHE_CLEAR: 'device-link:mirror-cache:clear',
 } as const;
 
 /** main → renderer push */
@@ -94,14 +77,6 @@ export const DEVICE_LINK_PUSH = {
    * payload: { keepAwake: boolean } —— renderer 据此同步开关显示状态。
    */
   KEEP_AWAKE_CHANGED: 'device-link:keep-awake-changed',
-  /** 同机单持有者仲裁角色变化。payload: { standby: boolean }。 */
-  OWNERSHIP_CHANGED: 'device-link:ownership-changed',
-  /**
-   * 控制端:某目标设备的「无响应」熔断状态翻转(连续 invoke 超时判定,弱网 / 对端
-   * 卡死;presence 可能仍显示在线)。payload: { deviceId, unresponsive: boolean }。
-   * renderer 据此显示「通路不稳定」降级态,恢复(探测拿到真实回包)时自动清除。
-   */
-  RESPONSIVENESS_CHANGED: 'device-link:responsiveness-changed',
 } as const;
 
 /** 控制本机的控制端信息(同 main/device-link/dispatch.ts ActiveController) */
@@ -118,9 +93,7 @@ export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
   | 'replaced'
   | 'too-many-connections'
-  | 'version-mismatch'
-  /** 连续多次握手成功后仍在稳定期内断开。 */
-  | 'unstable';
+  | 'version-mismatch';
 
 /** 连接问题(同 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 export interface DeviceLinkConnectionIssue {
@@ -149,19 +122,12 @@ export interface DeviceLinkState {
   linkStatus: DeviceLinkStatus;
   /** 当前连接问题(null = 无;变化走 CONNECTION_ISSUE push) */
   connectionIssue: DeviceLinkConnectionIssue | null;
-  /** 本机另一个 Cindy 实例持有 device-link,当前实例处于待命。 */
-  standby: boolean;
   /** 当前正在控制本机的控制端(被控端可见性初值;后续变化走 CONTROLLED_STATE push) */
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
-  /**
-   * 「无响应」熔断中的目标设备(控制端本地判定;初值,后续变化走 RESPONSIVENESS_CHANGED
-   * push)。presence 在线但连续 invoke 超时的弱网 / 对端卡死态。
-   */
-  unresponsiveDeviceIds: string[];
 }
 
 /** LIST_DEVICES 返回的设备视图(同 server REST DeviceView) */

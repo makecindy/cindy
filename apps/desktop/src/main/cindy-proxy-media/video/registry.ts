@@ -7,7 +7,7 @@
  * Stateless, no I/O. Constructed once per CindyProxyMediaService.
  */
 
-import type { VideoModelAlias, VideoProvider, VideoRefMode } from './types.js';
+import type { VideoModelAlias, VideoProvider } from './types.js';
 
 interface ResolvedAlias {
   provider: VideoProvider;
@@ -83,25 +83,20 @@ export class VideoProviderRegistry {
     resolutions: string[];
     ratios: string[];
     fps: number[];
-    /** 逐 refMode 的张数上界(取各 provider 的最大值);没有任何 provider
-     *  支持的用法不会出现在表里。 */
-    maxImagesUpperBoundByRefMode: Partial<Record<VideoRefMode, number>>;
+    maxImagesUpperBound: 0 | 1 | 2;
   } {
     const durations = new Set<number>();
     const resolutions = new Set<string>();
     const ratios = new Set<string>();
     const fps = new Set<number>();
-    const maxImagesUpperBoundByRefMode: Partial<Record<VideoRefMode, number>> = {};
+    let maxImagesUpperBound: 0 | 1 | 2 = 0;
     for (const p of this.providers.values()) {
       for (const d of p.capabilities.supportedDurations) durations.add(d);
       for (const r of p.capabilities.supportedResolutions) resolutions.add(r);
       for (const r of p.capabilities.supportedRatios) ratios.add(r);
       for (const f of p.capabilities.supportedFps) fps.add(f);
-      for (const [mode, max] of Object.entries(p.capabilities.maxImagesByRefMode)) {
-        if (max === undefined) continue;
-        const key = mode as VideoRefMode;
-        const prev = maxImagesUpperBoundByRefMode[key];
-        if (prev === undefined || max > prev) maxImagesUpperBoundByRefMode[key] = max;
+      if (p.capabilities.maxImages > maxImagesUpperBound) {
+        maxImagesUpperBound = p.capabilities.maxImages;
       }
     }
     return {
@@ -109,7 +104,7 @@ export class VideoProviderRegistry {
       resolutions: Array.from(resolutions),
       ratios: Array.from(ratios),
       fps: Array.from(fps).sort((a, b) => a - b),
-      maxImagesUpperBoundByRefMode,
+      maxImagesUpperBound,
     };
   }
 }

@@ -41,11 +41,10 @@ function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefin
 
 export interface ListAvailableModelsDeps {
   listAvailableModels: (params: {
-    agent?: 'claude-code' | 'codex' | 'pi';
+    agent?: 'claude-code' | 'codex';
   }) => Promise<ControlResult<{
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
-    pi?: ModelDescriptor[];
   }>>;
 }
 
@@ -79,9 +78,9 @@ export function registerListAvailableModelsTool(
     description: DESCRIPTION,
     inputShape: {
       agent: z
-        .enum(['codex', 'claude-code', 'pi'])
+        .enum(['codex', 'claude-code'])
         .optional()
-        .describe('可选, 只查某一 agent 的 model 列表; 不传返三者'),
+        .describe('可选, 只查某一 agent 的 model 列表; 不传返两者'),
     },
     handler: async ({ agent }) => {
       const result = await deps.listAvailableModels({ agent });
@@ -94,7 +93,6 @@ export function registerListAvailableModelsTool(
       return okPayload({
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
-        pi: tagTier(result.pi),
       });
     },
   });

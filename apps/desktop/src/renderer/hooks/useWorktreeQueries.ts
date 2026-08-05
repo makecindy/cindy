@@ -1,6 +1,6 @@
 /**
  * useWorktreeQueries — 三个一次性 IPC hook（M3）：
- *   - useDetectCwd(cwd, deviceLinkDeviceId?, refreshEpoch?) → 探测当前 cwd 是否合法 git 仓库
+ *   - useDetectCwd(cwd, deviceLinkDeviceId?)     → 探测当前 cwd 是否合法 git 仓库
  *   - useBranches(baseRepo, deviceLinkDeviceId?) → 拉分支列表 + current
  *   - useSuggestName(baseRepo, deviceLinkDeviceId?) → 让 main 生成一个友好的 worktree 名
  *
@@ -55,37 +55,9 @@ function invokeSuggestName(baseRepo: string, deviceId?: string | null): Promise<
   return window.electronAPI.worktreeSuggestName({ baseRepo });
 }
 
-export interface DetectCwdState {
+interface DetectCwdState {
   data: DetectCwdResp | null;
   loading: boolean;
-}
-
-export interface DetectCwdTarget {
-  cwd: string;
-  deviceLinkDeviceId: string | null;
-}
-
-export interface DetectCwdSnapshot extends DetectCwdState {
-  target: DetectCwdTarget | null;
-}
-
-/**
- * 只向当前设备/目录暴露同 target 的探测结果。effect 要到 commit 后才会重置 state；
- * render 阶段先做同步 fence，切项目或设备后的首帧不会复用上一仓库的 repoRoot。
- */
-export function detectCwdStateForTarget(
-  snapshot: DetectCwdSnapshot,
-  target: DetectCwdTarget | null,
-): DetectCwdState {
-  if (!target) return { data: null, loading: false };
-  if (
-    !snapshot.target
-    || snapshot.target.cwd !== target.cwd
-    || snapshot.target.deviceLinkDeviceId !== target.deviceLinkDeviceId
-  ) {
-    return { data: null, loading: true };
-  }
-  return { data: snapshot.data, loading: snapshot.loading };
 }
 
 /**
@@ -99,44 +71,35 @@ export function detectCwdStateForTarget(
 export function useDetectCwd(
   cwd: string | null | undefined,
   deviceLinkDeviceId?: string | null,
-  refreshEpoch = 0,
 ): DetectCwdState {
-  const [snapshot, setSnapshot] = useState<DetectCwdSnapshot>({
-    target: null,
+  const [state, setState] = useState<DetectCwdState>({
     data: null,
     loading: false,
   });
-  const target: DetectCwdTarget | null = cwd
-    ? { cwd, deviceLinkDeviceId: deviceLinkDeviceId ?? null }
-    : null;
 
   useEffect(() => {
     if (!cwd) {
-      setSnapshot({ target: null, data: null, loading: false });
+      setState({ data: null, loading: false });
       return;
     }
-    const requestTarget: DetectCwdTarget = {
-      cwd,
-      deviceLinkDeviceId: deviceLinkDeviceId ?? null,
-    };
     let cancelled = false;
-    setSnapshot({ target: requestTarget, data: null, loading: true });
+    setState((s) => ({ ...s, loading: true }));
     invokeDetectCwd(cwd, deviceLinkDeviceId)
       .then((data) => {
         if (cancelled) return;
-        setSnapshot({ target: requestTarget, data, loading: false });
+        setState({ data, loading: false });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         log.warn('[useDetectCwd] failed:', err);
-        setSnapshot({ target: requestTarget, data: null, loading: false });
+        setState({ data: null, loading: false });
       });
     return () => {
       cancelled = true;
     };
-  }, [cwd, deviceLinkDeviceId, refreshEpoch]);
+  }, [cwd, deviceLinkDeviceId]);
 
-  return detectCwdStateForTarget(snapshot, target);
+  return state;
 }
 
 interface BranchesState {
@@ -149,33 +112,6 @@ interface BranchesState {
   refetch: () => void;
 }
 
-export interface BranchesTarget {
-  baseRepo: string;
-  deviceLinkDeviceId: string | null;
-}
-
-export interface BranchesSnapshot extends Omit<BranchesState, 'refetch'> {
-  target: BranchesTarget | null;
-}
-
-export function branchesStateForTarget(
-  snapshot: BranchesSnapshot,
-  target: BranchesTarget | null,
-): Omit<BranchesState, 'refetch'> {
-  if (!target) {
-    return { branches: [], current: null, loading: false, failed: false };
-  }
-  if (
-    !snapshot.target
-    || snapshot.target.baseRepo !== target.baseRepo
-    || snapshot.target.deviceLinkDeviceId !== target.deviceLinkDeviceId
-  ) {
-    return { branches: [], current: null, loading: true, failed: false };
-  }
-  const { branches, current, loading, failed } = snapshot;
-  return { branches, current, loading, failed };
-}
-
 /**
  * 拉 baseRepo 的本地分支列表。baseRepo 为 null 时返回空集合。
  * 失败置 failed(hook 不自动重试),由调用方经 refetch() 重拉。
@@ -184,17 +120,13 @@ export function useBranches(
   baseRepo: string | null,
   deviceLinkDeviceId?: string | null,
 ): BranchesState {
-  const [snapshot, setSnapshot] = useState<BranchesSnapshot>({
-    target: null,
+  const [state, setState] = useState<Omit<BranchesState, 'refetch'>>({
     branches: [],
     current: null,
     loading: false,
     failed: false,
   });
   const [tick, setTick] = useState(0);
-  const target: BranchesTarget | null = baseRepo
-    ? { baseRepo, deviceLinkDeviceId: deviceLinkDeviceId ?? null }
-    : null;
 
   const refetch = useCallback(() => {
     setTick((t) => t + 1);
@@ -202,32 +134,15 @@ export function useBranches(
 
   useEffect(() => {
     if (!baseRepo) {
-      setSnapshot({
-        target: null,
-        branches: [],
-        current: null,
-        loading: false,
-        failed: false,
-      });
+      setState({ branches: [], current: null, loading: false, failed: false });
       return;
     }
-    const requestTarget: BranchesTarget = {
-      baseRepo,
-      deviceLinkDeviceId: deviceLinkDeviceId ?? null,
-    };
     let cancelled = false;
-    setSnapshot({
-      target: requestTarget,
-      branches: [],
-      current: null,
-      loading: true,
-      failed: false,
-    });
+    setState((s) => ({ ...s, loading: true }));
     invokeListBranches(baseRepo, deviceLinkDeviceId)
       .then((res: ListBranchesResp) => {
         if (cancelled) return;
-        setSnapshot({
-          target: requestTarget,
+        setState({
           branches: res.branches ?? [],
           current: res.current ?? null,
           loading: false,
@@ -237,20 +152,14 @@ export function useBranches(
       .catch((err: unknown) => {
         if (cancelled) return;
         log.warn('[useBranches] failed:', err);
-        setSnapshot({
-          target: requestTarget,
-          branches: [],
-          current: null,
-          loading: false,
-          failed: true,
-        });
+        setState({ branches: [], current: null, loading: false, failed: true });
       });
     return () => {
       cancelled = true;
     };
   }, [baseRepo, deviceLinkDeviceId, tick]);
 
-  return { ...branchesStateForTarget(snapshot, target), refetch };
+  return { ...state, refetch };
 }
 
 interface SuggestNameState {
@@ -258,30 +167,6 @@ interface SuggestNameState {
   loading: boolean;
   /** 重新拉一次（"换一个"按钮可调）。 */
   regenerate: () => void;
-}
-
-export interface SuggestNameTarget {
-  baseRepo: string;
-  deviceLinkDeviceId: string | null;
-}
-
-export interface SuggestNameSnapshot extends Omit<SuggestNameState, 'regenerate'> {
-  target: SuggestNameTarget | null;
-}
-
-export function suggestNameStateForTarget(
-  snapshot: SuggestNameSnapshot,
-  target: SuggestNameTarget | null,
-): Omit<SuggestNameState, 'regenerate'> {
-  if (!target) return { name: '', loading: false };
-  if (
-    !snapshot.target
-    || snapshot.target.baseRepo !== target.baseRepo
-    || snapshot.target.deviceLinkDeviceId !== target.deviceLinkDeviceId
-  ) {
-    return { name: '', loading: true };
-  }
-  return { name: snapshot.name, loading: snapshot.loading };
 }
 
 /**
@@ -292,15 +177,9 @@ export function useSuggestName(
   baseRepo: string | null,
   deviceLinkDeviceId?: string | null,
 ): SuggestNameState {
-  const [snapshot, setSnapshot] = useState<SuggestNameSnapshot>({
-    target: null,
-    name: '',
-    loading: false,
-  });
+  const [name, setName] = useState('');
+  const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
-  const target: SuggestNameTarget | null = baseRepo
-    ? { baseRepo, deviceLinkDeviceId: deviceLinkDeviceId ?? null }
-    : null;
 
   const regenerate = useCallback(() => {
     setTick((t) => t + 1);
@@ -308,33 +187,28 @@ export function useSuggestName(
 
   useEffect(() => {
     if (!baseRepo) {
-      setSnapshot({ target: null, name: '', loading: false });
+      setName('');
+      setLoading(false);
       return;
     }
-    const requestTarget: SuggestNameTarget = {
-      baseRepo,
-      deviceLinkDeviceId: deviceLinkDeviceId ?? null,
-    };
     let cancelled = false;
-    setSnapshot({ target: requestTarget, name: '', loading: true });
+    setLoading(true);
     invokeSuggestName(baseRepo, deviceLinkDeviceId)
       .then((res: SuggestNameResp) => {
         if (cancelled) return;
-        setSnapshot({
-          target: requestTarget,
-          name: res.name ?? '',
-          loading: false,
-        });
+        setName(res.name ?? '');
+        setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         log.warn('[useSuggestName] failed:', err);
-        setSnapshot({ target: requestTarget, name: '', loading: false });
+        setName('');
+        setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [baseRepo, deviceLinkDeviceId, tick]);
 
-  return { ...suggestNameStateForTarget(snapshot, target), regenerate };
+  return { name, loading, regenerate };
 }

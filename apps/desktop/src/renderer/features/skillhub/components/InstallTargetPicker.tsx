@@ -1,7 +1,7 @@
 /**
  * InstallTargetPicker — F-UI-2
  *
- * 选择安装位置的弹窗。市场 Clone 与本地导入共用。
+ * 选择安装位置的弹窗。用户点击"Clone"后触发。
  *
  * 布局：固定全屏蒙版 + 居中弹窗（width=480, cornerRadius=12）。
  * 行高：全局行 + 项目行均为 h-12 (48px)，超出 4 行时容器内可滚动。
@@ -27,41 +27,13 @@ import {
   joinSkillInstallPath,
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
-
-/** Minimal skill identity for the picker (market Clone or local import). */
-export interface InstallTargetSkill {
-  name: string;
-  /** Shown in import / custom subtitle. */
-  versionLabel?: string;
-  /** Market Clone passes latestVersion; used when versionLabel is absent. */
-  latestVersion?: string | number;
-  description?: string;
-}
-
-export type InstallTargetActionResult =
-  | { success: true; absolutePath?: string }
-  | { success: false; errorCode?: string; message?: string };
+import type { MarketSkill } from '../hooks/useMarketList';
 
 interface InstallTargetPickerProps {
   open: boolean;
-  skill: InstallTargetSkill | null;
+  skill: MarketSkill | null;
   onClose: () => void;
-  onInstallComplete: (result?: { absolutePath?: string; name: string }) => void;
-  /**
-   * Install / import executor. Defaults to market `skillhub.install`.
-   * Import mode passes a closure that calls `skillhub.importLocal`.
-   */
-  runAction?: (params: {
-    name: string;
-    installPath?: string;
-    force?: boolean;
-  }) => Promise<InstallTargetActionResult>;
-  /** i18n key override for dialog title (default installPicker.title). */
-  titleKey?: string;
-  /** When set, subtitle uses this key with { name, version, description }. */
-  subtitleKey?: string;
-  successToastKey?: string;
-  failedToastKey?: string;
+  onInstallComplete: () => void;
 }
 
 // 最多可见的项目行数（超出滚动）
@@ -69,11 +41,11 @@ const MAX_VISIBLE_PROJECTS = 4;
 const PROJECT_ROW_H = 48;
 const INSTALL_PICKER_TITLE_ID = 'skillhub-install-picker-title';
 
-async function runMarketInstall(params: {
+async function runInstall(params: {
   name: string;
   installPath?: string;
   force?: boolean;
-}): Promise<InstallTargetActionResult> {
+}): Promise<{ success: boolean; errorCode?: string; message?: string; absolutePath?: string }> {
   return window.electronAPI.skillhub.install({
     name: params.name,
     installPath: params.installPath,
@@ -81,17 +53,7 @@ async function runMarketInstall(params: {
   });
 }
 
-export function InstallTargetPicker({
-  open,
-  skill,
-  onClose,
-  onInstallComplete,
-  runAction = runMarketInstall,
-  titleKey = 'skillhub.installPicker.title',
-  subtitleKey = 'skillhub.installPicker.subtitle',
-  successToastKey = 'skillhub.installPicker.installSuccess',
-  failedToastKey = 'skillhub.installPicker.installFailed',
-}: InstallTargetPickerProps) {
+export function InstallTargetPicker({ open, skill, onClose, onInstallComplete }: InstallTargetPickerProps) {
   const { t } = useTranslation();
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
@@ -113,17 +75,8 @@ export function InstallTargetPicker({
         setInstalledPaths(paths);
       })
       .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [open, skill?.name]);
-
-  useEffect(() => {
-    if (!open) {
-      setBannerError(null);
-      setInstalling(false);
-    }
-  }, [open]);
 
   if (!open || !skill) return null;
 
@@ -145,15 +98,13 @@ export function InstallTargetPicker({
     setBannerError(null);
     setInstalling(true);
     try {
-      const res = await runAction({ name: skill.name, installPath });
+      const res = await runInstall({ name: skill.name, installPath });
       if (res.success) {
-        toast.success(
-          t(successToastKey, {
-            name: skill.name,
-            suffix: res.absolutePath ? ` → ${res.absolutePath}` : '',
-          }),
-        );
-        onInstallComplete({ name: skill.name, absolutePath: res.absolutePath });
+        toast.success(t('skillhub.installPicker.installSuccess', {
+          name: skill.name,
+          suffix: res.absolutePath ? ` → ${res.absolutePath}` : '',
+        }));
+        onInstallComplete();
         return;
       }
       if (res.errorCode === 'CONFLICT_USER_OWNED') {
@@ -168,22 +119,20 @@ export function InstallTargetPicker({
           cancelText: t('skillhub.installPicker.conflictDialog.cancel'),
         });
         if (!ok) return;
-        const forced = await runAction({ name: skill.name, installPath, force: true });
+        const forced = await runInstall({ name: skill.name, installPath, force: true });
         if (forced.success) {
-          toast.success(
-            t(successToastKey, {
-              name: skill.name,
-              suffix: forced.absolutePath ? ` → ${forced.absolutePath}` : '',
-            }),
-          );
-          onInstallComplete({ name: skill.name, absolutePath: forced.absolutePath });
+          toast.success(t('skillhub.installPicker.installSuccess', {
+            name: skill.name,
+            suffix: forced.absolutePath ? ` → ${forced.absolutePath}` : '',
+          }));
+          onInstallComplete();
         } else if (forced.errorCode !== 'CANCELLED') {
-          setBannerError(forced.message ?? t(failedToastKey));
+          setBannerError(forced.message ?? t('skillhub.installPicker.installFailed'));
         }
         return;
       }
       if (res.errorCode !== 'CANCELLED') {
-        setBannerError(res.message ?? t(failedToastKey));
+        setBannerError(res.message ?? t('skillhub.installPicker.installFailed'));
       }
     } catch (err) {
       setBannerError(err instanceof Error ? err.message : String(err));
@@ -199,8 +148,6 @@ export function InstallTargetPicker({
     await handleInstall(installPath);
   };
 
-  const versionForSubtitle = String(skill.versionLabel ?? skill.latestVersion ?? '');
-
   const dialog = (
     <div className="fixed inset-0 z-[9000] flex items-center justify-center">
       <button
@@ -210,6 +157,7 @@ export function InstallTargetPicker({
         style={{ backgroundColor: 'var(--overlay-modal)' }}
         onClick={onClose}
       />
+      {/* 弹窗主体 */}
       <div
         role="dialog"
         aria-modal="true"
@@ -220,31 +168,22 @@ export function InstallTargetPicker({
         )}
         style={{ width: '480px' }}
       >
+        {/* 头部 */}
         <div
           className="flex items-start justify-between gap-3"
           style={{ padding: '20px 18px 12px 18px' }}
         >
           <div className="flex min-w-0 flex-col" style={{ gap: '6px' }}>
-            <span
-              id={INSTALL_PICKER_TITLE_ID}
-              className="text-[var(--msg-assistant-text)]"
-              style={{ fontSize: '16px', fontWeight: 500 }}
-            >
-              {t(titleKey)}
+            <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: '16px', fontWeight: 500 }}>
+              {t('skillhub.installPicker.title')}
             </span>
             <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '12px' }}>
-              {t(subtitleKey, {
-                name: skill.name,
-                version: versionForSubtitle,
-                description: skill.description ?? '',
-              })}
+              {t('skillhub.installPicker.subtitle', { name: skill.name, version: skill.latestVersion })}
             </span>
           </div>
           <button
             type="button"
-            onClick={() => {
-              void handleOtherDirectory();
-            }}
+            onClick={() => { void handleOtherDirectory(); }}
             disabled={installing}
             className={cn(
               'flex shrink-0 items-center gap-[6px] rounded-full transition-colors',
@@ -259,19 +198,20 @@ export function InstallTargetPicker({
           </button>
         </div>
 
+        {/* 错误提示 */}
         {bannerError && (
           <div className="mx-2 mb-1 rounded-lg border border-[var(--cmd-palette-border)] bg-transparent px-4 py-2 text-sm text-[var(--settings-section-desc)]">
             {bannerError}
           </div>
         )}
 
+        {/* 安装目标列表 */}
         <div className="flex flex-col" style={{ padding: '4px 12px 12px 12px' }}>
+          {/* 全局行 */}
           <button
             type="button"
             disabled={installing || !!globalInstalledVersion}
-            onClick={() => {
-              void handleInstall(undefined);
-            }}
+            onClick={() => { void handleInstall(undefined); }}
             className={cn(
               'flex w-full items-center gap-3 rounded-xl text-left transition-colors',
               'border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
@@ -296,10 +236,7 @@ export function InstallTargetPicker({
               </span>
             </div>
             {globalInstalledVersion ? (
-              <span
-                className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]"
-                style={{ fontSize: '11px' }}
-              >
+              <span className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '11px' }}>
                 <Check size={12} /> v{globalInstalledVersion}
               </span>
             ) : (
@@ -307,7 +244,11 @@ export function InstallTargetPicker({
             )}
           </button>
 
-          <div className="flex items-center gap-[10px]" style={{ padding: '10px 8px 6px 8px' }}>
+          {/* 项目分隔符 */}
+          <div
+            className="flex items-center gap-[10px]"
+            style={{ padding: '10px 8px 6px 8px' }}
+          >
             <span
               className="shrink-0 text-[var(--settings-theme-icon)]"
               style={{ fontSize: '10px', fontWeight: 500, letterSpacing: '0.5px' }}
@@ -317,6 +258,7 @@ export function InstallTargetPicker({
             <div className="h-px flex-1 bg-[var(--cmd-palette-border)]" />
           </div>
 
+          {/* 项目列表（最多可见 4 行，超出滚动） */}
           {projectsLoading ? (
             <div
               className="flex items-center justify-center text-sm text-[var(--cmd-palette-item-meta)]"
@@ -348,9 +290,7 @@ export function InstallTargetPicker({
                     key={p.projectRoot}
                     type="button"
                     disabled={installing || isRowInstalled}
-                    onClick={() => {
-                      void handleInstall(installPath);
-                    }}
+                    onClick={() => { void handleInstall(installPath); }}
                     className={cn(
                       'flex w-full items-center gap-3 rounded-xl text-left transition-colors',
                       'border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
@@ -367,10 +307,7 @@ export function InstallTargetPicker({
                       <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
                     </div>
                     <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
-                      <span
-                        className="truncate text-[var(--msg-assistant-text)]"
-                        style={{ fontSize: '13px', fontWeight: 500 }}
-                      >
+                      <span className="truncate text-[var(--msg-assistant-text)]" style={{ fontSize: '13px', fontWeight: 500 }}>
                         {p.displayName}
                       </span>
                       <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '11px' }}>
@@ -378,10 +315,7 @@ export function InstallTargetPicker({
                       </span>
                     </div>
                     {isRowInstalled ? (
-                      <span
-                        className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]"
-                        style={{ fontSize: '11px' }}
-                      >
+                      <span className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '11px' }}>
                         <Check size={12} /> v{rowVersion}
                       </span>
                     ) : (
@@ -392,6 +326,7 @@ export function InstallTargetPicker({
               })}
             </div>
           )}
+
         </div>
       </div>
     </div>

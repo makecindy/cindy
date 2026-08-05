@@ -2,7 +2,6 @@
  * apps/desktop/src/main/agent-binaries/index.ts
  *
  * Agent 二进制下载/管理统一入口 —— 按 agentKind 分派,合并自原 vendor/{claude,codex}/binaryProvisioner.ts。
- * 2026-08 起 pi 也走本模块(整目录 tar.gz 分发,可选资产,失败由 pi-host 降级)。
  *
  * 公开 API (全部走 (kind, ...) 形态, 调用方不再分 claude/codex 各导一份):
  *   prepare(kind, opts?)             — splash 下载入口, 真做 dev fallback / OSS 下载 / SHA256 校验 / IPC 进度广播
@@ -10,7 +9,7 @@
  *   getReadyBinaryPath(kind)         — 读 prepare() 成功后写入的 cache 路径 (maker-host 构造期同步注入)
  *   peekNeedsDownload(kind)          — splash 顺序检查用
  *   getInstallState(kind)            — 详细安装状态
- *   broadcastResetForStep(kind, step, totalSteps) — splash 多步下载切换时归零进度条
+ *   broadcastResetForStep2(kind)     — splash 多步下载切换时归零进度条
  *   broadcastBinaryDownloadProgress  — splash 进度 IPC 推送 (本模块内部 + cleanup hook 外部用)
  *
  * 设计:
@@ -49,19 +48,11 @@ import type {
 
 // ── kind 配置表 ──────────────────────────────────────────────────────────────
 //
-// agent-binaries 的 kind 直接复用 maker-core AgentKind 字面量
-// ('claude-code' | 'codex' | 'pi'), 跟 maker-core 保持同步; vendorKey 字段是给底层
-// createBinaryProvisioner 用的内部 enum, 历史叫 'claude' / 'codex' (factory 内部
-// 硬约定, 不改)。
-//
-// pi 与 cc/codex 的差异:
-//   - artifactKind 'tar-gz-dir': pi 是整目录分发(主二进制 + theme/ 等运行时资产,
-//     只装主二进制会在 RPC 启动期崩溃), CDN 资产是整包 tar.gz, 归档根即完整目录
-//     (与 apps/pi-bin/<platform>/ 同布局)。
-//   - optionalAsset: pi 是可选实验 agent。manifest 缺 pi 字段 / 下载失败都不阻塞
-//     启动 —— check-environment 的 pi 段静默降级，本次不注册 pi。
+// agent-binaries 的 kind 直接复用 maker-core AgentKind 字面量 ('claude-code' | 'codex'),
+// 跟 maker-core 保持同步; vendorKey 字段是给底层 createBinaryProvisioner 用的内部 enum,
+// 历史叫 'claude' / 'codex' (factory 内部硬约定, 不改)。
 
-export type AgentBinaryKind = 'claude-code' | 'codex' | 'pi';
+export type AgentBinaryKind = 'claude-code' | 'codex';
 
 interface AgentBinaryConfig {
   vendorKey: VendorKey;            // 底层 createBinaryProvisioner 接受的内部 key
@@ -70,8 +61,6 @@ interface AgentBinaryConfig {
   binaryName: string;              // 平台相关二进制名
   devBinDir: string;               // apps/<devBinDir>/<platform>/ (LFS bundle)
   vendorTag: VendorKey;            // 'binary-download-progress' IPC payload 的 vendor 字段
-  artifactKind: 'gz' | 'tar-gz-dir'; // CDN 资产形态(单文件 gz / 整目录 tar.gz)
-  optionalAsset?: boolean;         // true = manifest 缺字段不算"需要下载"(可选 vendor)
 }
 
 const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
@@ -82,7 +71,6 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     binaryName: process.platform === 'win32' ? 'claude.exe' : 'claude',
     devBinDir: 'claude-code-bin',
     vendorTag: 'claude',
-    artifactKind: 'gz',
   },
   codex: {
     vendorKey: 'codex',
@@ -91,17 +79,6 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     binaryName: process.platform === 'win32' ? 'codex.exe' : 'codex',
     devBinDir: 'codex-bin',
     vendorTag: 'codex',
-    artifactKind: 'gz',
-  },
-  pi: {
-    vendorKey: 'pi',
-    manifestField: 'pi',
-    installSubdir: 'pi',
-    binaryName: process.platform === 'win32' ? 'pi.exe' : 'pi',
-    devBinDir: 'pi-bin',
-    vendorTag: 'pi',
-    artifactKind: 'tar-gz-dir',
-    optionalAsset: true,
   },
 };
 
@@ -117,8 +94,7 @@ function getBase(kind: AgentBinaryKind): BinaryProvisioner {
       vendorKey: cfg.vendorKey,
       manifestField: cfg.manifestField,
       installSubdir: cfg.installSubdir,
-      artifact: { kind: cfg.artifactKind, binaryName: cfg.binaryName },
-      optionalAsset: cfg.optionalAsset,
+      artifact: { kind: 'gz', binaryName: cfg.binaryName },
     });
     baseProvisioners.set(kind, base);
   }
@@ -182,12 +158,8 @@ export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus
 
   // packaged Linux 同步快查只看已知私有路径；不能在 renderer-facing 路径
   // 里执行 CLI --version 或 PATH shell lookup。系统 CLI 由 async prepare 发现。
-  // pi 不走 Linux runtime fallback(那条链是 cc/codex 官方 CLI 专用),Linux 上的
-  // pi 与其它平台一致:只使用 manifest 管理的 CDN 资产。
-  if (kind !== 'pi') {
-    const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
-    if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
-  }
+  const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
+  if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
 
   // prod / dev fallback miss: 扫 userData/<installSubdir>/<version>/<binary> + .verified
   try {
@@ -217,7 +189,7 @@ export async function prepare(
   opts: PrepareOpts = {},
 ): Promise<PrepareResult> {
   const cfg = CONFIG[kind];
-  const { step, totalSteps, broadcastProgress = true, broadcastFailure = true } = opts;
+  const { step, totalSteps, broadcastProgress = true } = opts;
 
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
@@ -235,9 +207,7 @@ export async function prepare(
   // Linux release manifest 明确不发布 Claude/Codex 资产。这里直接走 runtime
   // fallback，不能先调 base.prepare()/manifest：离线首装会让 peek + prepare
   // 重复等待 CDN 超时，fallback 尚未开始 splash 就已经卡住。
-  // pi 例外:没有官方 CLI fallback 链,Linux 也走下方通用 manifest 路径
-  // (manifest 缺 pi 字段 → asset_missing 快速失败,由调用方降级)。
-  if (process.platform === 'linux' && app.isPackaged && kind !== 'pi') {
+  if (process.platform === 'linux' && app.isPackaged) {
     if (broadcastProgress) {
       broadcastBinaryDownloadProgress({
         progress: 0,
@@ -282,7 +252,7 @@ export async function prepare(
       return { ready: false, error: fallback.error ?? 'unknown', downloaded: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (broadcastProgress && broadcastFailure) {
+      if (broadcastProgress) {
         broadcastBinaryDownloadProgress({
           progress: 0,
           failed: true,
@@ -300,7 +270,7 @@ export async function prepare(
 
   // ── 不广播 IPC 路径 (lazy 调用, 当前 desktop 不走) ────────────────────────
   if (!broadcastProgress) {
-    const result = await base.prepare({ signal: opts.signal });
+    const result = await base.prepare();
     if (result.ready) {
       lastReadyPath.set(kind, result.binaryPath);
       return { ready: true, path: result.binaryPath };
@@ -329,7 +299,6 @@ export async function prepare(
   });
 
   const result = await base.prepare({
-    signal: opts.signal,
     onProgress: (p: VendorRuntimeState) => {
       if (p.status === 'downloading') didDownload = true;
       if (p.downloadProgress) {
@@ -374,16 +343,14 @@ export async function prepare(
     return { ready: true, path: result.binaryPath, downloaded: didDownload };
   }
 
-  if (broadcastFailure) {
-    broadcastBinaryDownloadProgress({
-      progress: normalizer.getCurrent(),
-      failed: true,
-      error: result.error ?? 'unknown',
-      step,
-      totalSteps,
-      vendor: cfg.vendorTag,
-    });
-  }
+  broadcastBinaryDownloadProgress({
+    progress: normalizer.getCurrent(),
+    failed: true,
+    error: result.error ?? 'unknown',
+    step,
+    totalSteps,
+    vendor: cfg.vendorTag,
+  });
   return { ready: false, error: result.error ?? 'unknown', downloaded: didDownload };
 }
 
@@ -392,12 +359,9 @@ export async function prepare(
 export async function peekNeedsDownload(kind: AgentBinaryKind): Promise<boolean> {
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
-  // Linux release 不发布 cc/codex manifest 资产。peek 只做已知私有路径的 fs 快查，
+  // Linux release 不发布 manifest agent 资产。peek 只做已知私有路径的 fs 快查，
   // PATH 与版本探测统一留给可取消的 async prepare，避免 splash 前同步阻塞。
-  // pi 各平台统一走 manifest peek(可选资产:manifest 缺字段 → false)。
-  if (process.platform === 'linux' && kind !== 'pi') {
-    return findCachedLinuxRuntimeFallbackBinary(kind) === null;
-  }
+  if (process.platform === 'linux') return findCachedLinuxRuntimeFallbackBinary(kind) === null;
   return getBase(kind).peekNeedsDownload();
 }
 
@@ -408,17 +372,12 @@ export async function getInstallState(kind: AgentBinaryKind): Promise<VendorRunt
 /**
  * splash 顺序下载切换到下一段前调用: 直接广播一个 reset payload, splash 收到
  * reset=true 立即把进度条 set 到 0% (无 transition 动画)。
- * step/totalSteps 由调用方按"本次需要下载的 vendor 序列"给出(2 段或 3 段)。
  */
-export function broadcastResetForStep(
-  kind: AgentBinaryKind,
-  step: 1 | 2 | 3,
-  totalSteps: 2 | 3,
-): void {
+export function broadcastResetForStep2(kind: AgentBinaryKind): void {
   broadcastBinaryDownloadProgress({
     progress: 0,
-    step,
-    totalSteps,
+    step: 2,
+    totalSteps: 2,
     reset: true,
     vendor: CONFIG[kind].vendorTag,
   });

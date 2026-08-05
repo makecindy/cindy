@@ -1,5 +1,5 @@
 /**
- * removeWorktreeForSession / discardPrecreatedWorktree 删除守卫回归:
+ * removeWorktreeForSession 删除守卫回归(P0 重构):
  *   - live-ref 守卫:其它未删除会话仍引用路径 → 保留
  *   - 排除自身:owning session(可能已归档,status 仍非 deleted)不算引用
  *   - dirty → stash 失败保留 / 成功后继续删
@@ -18,7 +18,6 @@ const isWorktreeDirtyMock = vi.fn();
 const autoStashMock = vi.fn();
 const restoreAutoStashMock = vi.fn();
 const clearSnapshotRefMock = vi.fn();
-const ignoredFilesMock = vi.fn();
 const changedIncludeFilesMock = vi.fn();
 const storeSetMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
@@ -39,7 +38,6 @@ vi.mock('../worktree/dirty', () => ({
   autoStashDirtyWorktree: (...args: unknown[]) => autoStashMock(...args),
   restoreAutoStashToPreservedWorktree: (...args: unknown[]) => restoreAutoStashMock(...args),
   clearSnapshotRef: (...args: unknown[]) => clearSnapshotRefMock(...args),
-  listNonReproducibleIgnoredFiles: (...args: unknown[]) => ignoredFilesMock(...args),
 }));
 
 vi.mock('../worktree/includePatternsEngine', () => ({
@@ -50,10 +48,7 @@ vi.mock('../worktree/includePatternsEngine', () => ({
 vi.mock('../worktree/worktreeStore', () => ({
   get: (sessionId: string) => storeMap.get(sessionId) ?? null,
   getAll: () => [...storeMap.values()],
-  getAllPaths: () =>
-    [...storeMap.values()].flatMap((m) =>
-      m.quarantinePath ? [m.path, m.quarantinePath] : [m.path],
-    ),
+  getAllPaths: () => [...storeMap.values()].map((m) => m.path),
   set: (...args: unknown[]) => storeSetMock(...args),
   del: vi.fn((sessionId: string) => storeMap.delete(sessionId)),
 }));
@@ -94,20 +89,11 @@ describe('removeWorktreeForSession', () => {
     storeMap.clear();
     liveSessionRows.length = 0;
     liveSessionLookupError = null;
-    gitExecMock.mockReset().mockImplementation(async (args: string[], cwd?: string) => {
-      if (args[0] === 'symbolic-ref') {
-        const meta = [...storeMap.values()].find(
-          (candidate) => candidate.path === cwd || candidate.quarantinePath === cwd,
-        );
-        return { stdout: `refs/heads/${meta?.branch ?? 'xdt/unknown'}\n`, stderr: '' };
-      }
-      return { stdout: '', stderr: '' };
-    });
+    gitExecMock.mockReset().mockResolvedValue({ stdout: '', stderr: '' });
     isWorktreeDirtyMock.mockReset().mockResolvedValue(false);
     autoStashMock.mockReset().mockResolvedValue(true);
     restoreAutoStashMock.mockReset().mockResolvedValue(true);
     clearSnapshotRefMock.mockReset().mockResolvedValue(undefined);
-    ignoredFilesMock.mockReset().mockResolvedValue([]);
     changedIncludeFilesMock.mockReset().mockResolvedValue([]);
     storeSetMock.mockReset().mockImplementation(async (sessionId: string, meta: WorktreeMeta) => {
       storeMap.set(sessionId, meta);
@@ -124,101 +110,6 @@ describe('removeWorktreeForSession', () => {
     expect(gitExecMock).not.toHaveBeenCalled();
   });
 
-  it('suggestName reserves current and legacy names from local and origin branches', async () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout:
-          args[0] === 'branch'
-            ? 'refs/heads/cindy/pensive-lederberg\nrefs/remotes/origin/xdt/pensive-lederberg-2\n'
-            : '',
-        stderr: '',
-      }));
-
-      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg-3');
-      expect(gitExecMock).toHaveBeenCalledWith(
-        ['branch', '--all', '--format=%(refname)'],
-        BASE_REPO,
-      );
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it('suggestName reserves the first name segment of a current-prefix descendant ref', async () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout: args[0] === 'branch' ? 'refs/heads/cindy/pensive-lederberg/child\n' : '',
-        stderr: '',
-      }));
-
-      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg-2');
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it('suggestName ignores remote descendant refs because they do not block local heads', async () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout: args[0] === 'branch' ? 'refs/remotes/origin/cindy/pensive-lederberg/child\n' : '',
-        stderr: '',
-      }));
-
-      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg');
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it('suggestName distinguishes local origin/* branches from origin tracking refs', async () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout:
-          args[0] === 'branch'
-            ? [
-                'refs/heads/origin/cindy',
-                'refs/remotes/origin/cindy',
-                'refs/heads/origin/cindy/pensive-lederberg',
-              ].join('\n')
-            : '',
-        stderr: '',
-      }));
-
-      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg');
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it('suggestName reserves exact origin tracking worktree branches', async () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      gitExecMock.mockImplementation(async (args: string[]) => ({
-        stdout: args[0] === 'branch' ? 'refs/remotes/origin/cindy/pensive-lederberg\n' : '',
-        stderr: '',
-      }));
-
-      await expect(manager.suggestName(BASE_REPO)).resolves.toBe('pensive-lederberg-2');
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it('suggestName reports a current-prefix namespace root before Git ref creation fails', async () => {
-    gitExecMock.mockImplementation(async (args: string[]) => ({
-      stdout: args[0] === 'branch' ? 'refs/heads/cindy\n' : '',
-      stderr: '',
-    }));
-
-    await expect(manager.suggestName(BASE_REPO)).rejects.toThrow(
-      '分支 "cindy" 占用了 "cindy/*" 命名空间',
-    );
-  });
-
   it('preserves worktree still referenced by another live session', async () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
@@ -227,72 +118,6 @@ describe('removeWorktreeForSession', () => {
     await manager.removeWorktreeForSession('s1');
 
     expect(gitExecMock).not.toHaveBeenCalled();
-    expect(storeMap.has('s1')).toBe(true);
-  });
-
-  it('preserves a clean worktree whose attached branch differs from Store metadata', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: 'refs/heads/feature/manual-switch\n', stderr: '' };
-      }
-      return { stdout: '', stderr: '' };
-    });
-
-    await manager.removeWorktreeForSession('s1');
-
-    expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
-    expect(autoStashMock).not.toHaveBeenCalled();
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', '--force', meta.path],
-      BASE_REPO,
-    );
-    expect(storeMap.has('s1')).toBe(true);
-  });
-
-  it('preserves a dirty worktree before snapshotting when its branch changed', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    isWorktreeDirtyMock.mockResolvedValue(true);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: 'refs/heads/feature/manual-switch\n', stderr: '' };
-      }
-      return { stdout: '', stderr: '' };
-    });
-
-    await manager.removeWorktreeForSession('s1');
-
-    expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
-    expect(autoStashMock).not.toHaveBeenCalled();
-    expect(storeMap.has('s1')).toBe(true);
-  });
-
-  it('preserves detached or unreadable HEAD state', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') throw new Error('detached HEAD');
-      return { stdout: '', stderr: '' };
-    });
-
-    await manager.removeWorktreeForSession('s1');
-
-    expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
-    expect(autoStashMock).not.toHaveBeenCalled();
-    expect(storeMap.has('s1')).toBe(true);
-  });
-
-  it('preserves a worktree whose registered branch is outside its managed candidates', async () => {
-    const meta = { ...makeMeta('s1'), branch: 'feature/manual-switch' };
-    storeMap.set('s1', meta);
-
-    await manager.removeWorktreeForSession('s1');
-
-    expect(gitExecMock).not.toHaveBeenCalled();
-    expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
-    expect(autoStashMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(true);
   });
 
@@ -330,10 +155,7 @@ describe('removeWorktreeForSession', () => {
 
     await manager.removeWorktreeForSession('s1');
 
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', '--force', meta.path],
-      BASE_REPO,
-    );
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(true);
   });
 
@@ -348,10 +170,7 @@ describe('removeWorktreeForSession', () => {
     expect(changedIncludeFilesMock).toHaveBeenCalledWith(BASE_REPO, meta.path);
     expect(isWorktreeDirtyMock).not.toHaveBeenCalled();
     expect(autoStashMock).not.toHaveBeenCalled();
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', '--force', meta.path],
-      BASE_REPO,
-    );
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(true);
   });
 
@@ -383,10 +202,7 @@ describe('removeWorktreeForSession', () => {
     expect(canRemove).toHaveBeenCalledTimes(2);
     expect(autoStashMock).toHaveBeenCalledWith(meta.path, 's1');
     expect(restoreAutoStashMock).toHaveBeenCalledWith(meta.path, 's1');
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', '--force', meta.path],
-      BASE_REPO,
-    );
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(true);
     expect(storeSetMock).toHaveBeenCalledWith('s1', meta);
   });
@@ -414,10 +230,9 @@ describe('removeWorktreeForSession', () => {
     const canRemove = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     let releaseReapply!: () => void;
     restoreAutoStashMock.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseReapply = () => resolve(true);
-        }),
+      () => new Promise<boolean>((resolve) => {
+        releaseReapply = () => resolve(true);
+      }),
     );
 
     const removal = manager.removeWorktreeForSession('s1', { canRemove });
@@ -443,15 +258,7 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     isWorktreeDirtyMock.mockResolvedValue(true);
     autoStashMock.mockResolvedValue(true);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
-      }
-      if (args[0] === 'worktree' && args[1] === 'remove') {
-        throw new Error('worktree locked');
-      }
-      return { stdout: '', stderr: '' };
-    });
+    gitExecMock.mockRejectedValueOnce(new Error('worktree locked'));
 
     await manager.removeWorktreeForSession('s1');
 
@@ -548,9 +355,6 @@ describe('removeWorktreeForSession', () => {
 
     let removeAttempts = 0;
     gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
-      }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         removeAttempts += 1;
         if (removeAttempts < 3) throw new Error('locked');
@@ -578,10 +382,9 @@ describe('removeWorktreeForSession', () => {
 
     let releaseStash!: () => void;
     autoStashMock.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseStash = () => resolve(true);
-        }),
+      () => new Promise<boolean>((resolve) => {
+        releaseStash = () => resolve(true);
+      }),
     );
 
     const first = manager.removeWorktreeForSession('s1');
@@ -593,394 +396,12 @@ describe('removeWorktreeForSession', () => {
     releaseStash();
     await Promise.all([first, second]);
 
-    expect(
-      gitExecMock.mock.calls.filter(
-        ([args]) => Array.isArray(args) && args[0] === 'worktree' && args[1] === 'remove',
-      ),
-    ).toHaveLength(1);
+    expect(gitExecMock).toHaveBeenCalledTimes(1);
     expect(gitExecMock).toHaveBeenCalledWith(
       ['worktree', 'remove', '--force', meta.path],
       BASE_REPO,
     );
     expect(clearSnapshotRefMock).not.toHaveBeenCalled();
     expect(storeMap.has('s1')).toBe(false);
-  });
-
-  it('discard pre-created: absent and path mismatch are non-destructive', async () => {
-    await expect(
-      manager.discardPrecreatedWorktree('missing', '/repo/.xdt-worktrees/missing'),
-    ).resolves.toEqual({ status: 'absent' });
-
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    await expect(
-      manager.discardPrecreatedWorktree('s1', path.join(BASE_REPO, 'elsewhere')),
-    ).resolves.toEqual({ status: 'path-mismatch' });
-
-    expect(gitExecMock).not.toHaveBeenCalled();
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: recovery waits for an in-flight create before deciding the record is absent', async () => {
-    let releaseGitVersion!: () => void;
-    gitExecMock.mockImplementationOnce(
-      () =>
-        new Promise<{ stdout: string; stderr: string }>((resolve) => {
-          releaseGitVersion = () =>
-            resolve({
-              stdout: 'git version 2.50.0\n',
-              stderr: '',
-            });
-        }),
-    );
-    const recoveryKey = 'recovery-key-123456';
-    const create = manager.createWorktree({
-      sessionId: 's1',
-      baseRepo: BASE_REPO,
-      name: 'recovery-race',
-      sourceBranch: 'main',
-      recoveryKey,
-    });
-    await vi.waitFor(() => {
-      expect(gitExecMock).toHaveBeenCalledWith(['--version']);
-    });
-
-    let discardSettled = false;
-    const discard = manager
-      .discardPrecreatedWorktreeByRecoveryKey('s1', recoveryKey)
-      .finally(() => {
-        discardSettled = true;
-      });
-    await Promise.resolve();
-    expect(discardSettled).toBe(false);
-
-    releaseGitVersion();
-    await expect(create).resolves.toMatchObject({ ok: false });
-    await expect(discard).resolves.toEqual({ status: 'absent' });
-  });
-
-  it('discard pre-created: a matching recovery key resolves the registered path and reuses cleanup guards', async () => {
-    const meta = {
-      ...makeMeta('s1'),
-      recoveryKey: 'recovery-key-123456',
-    };
-    storeMap.set('s1', meta);
-    const canRemove = vi.fn(async () => false);
-
-    await expect(
-      manager.discardPrecreatedWorktreeByRecoveryKey('s1', meta.recoveryKey, { canRemove }),
-    ).resolves.toEqual({ status: 'preserved' });
-
-    expect(canRemove).toHaveBeenCalledTimes(1);
-    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: a mismatched recovery key is non-destructive', async () => {
-    const meta = {
-      ...makeMeta('s1'),
-      recoveryKey: 'recovery-key-123456',
-    };
-    storeMap.set('s1', meta);
-
-    await expect(
-      manager.discardPrecreatedWorktreeByRecoveryKey('s1', 'different-key-123456'),
-    ).resolves.toEqual({ status: 'path-mismatch' });
-
-    expect(gitExecMock).not.toHaveBeenCalled();
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: dirty worktrees are preserved without auto-stashing', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    isWorktreeDirtyMock.mockResolvedValue(true);
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'preserved',
-    });
-
-    expect(autoStashMock).not.toHaveBeenCalled();
-    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: a claimed session guard preserves the worktree', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    const canRemove = vi.fn(async () => false);
-
-    await expect(
-      manager.discardPrecreatedWorktree('s1', meta.path, { canRemove }),
-    ).resolves.toEqual({ status: 'preserved' });
-
-    expect(canRemove).toHaveBeenCalledTimes(1);
-    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: preserves files written after the dirty probe', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    isWorktreeDirtyMock.mockResolvedValue(false);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
-      }
-      if (args[0] === 'worktree' && args[1] === 'remove') {
-        throw new Error('worktree contains modified or untracked files');
-      }
-      return { stdout: '', stderr: '' };
-    });
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'preserved',
-    });
-
-    expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      ['worktree', 'remove', '--force', meta.path],
-      BASE_REPO,
-    );
-    expect(gitExecMock).not.toHaveBeenCalledWith(expect.arrayContaining(['rev-list']), BASE_REPO);
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: preserves non-reproducible ignored files before removal', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    isWorktreeDirtyMock.mockResolvedValue(false);
-    ignoredFilesMock.mockResolvedValue(['.env']);
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'preserved',
-    });
-
-    expect(ignoredFilesMock).toHaveBeenCalledWith(BASE_REPO, meta.path);
-    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(storeMap.get('s1')).toBe(meta);
-  });
-
-  it('discard pre-created: ignored files mirrored exactly in base do not block removal', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    isWorktreeDirtyMock.mockResolvedValue(false);
-    ignoredFilesMock.mockResolvedValue([]);
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toMatchObject({
-      status: 'discarded',
-    });
-
-    expect(ignoredFilesMock).toHaveBeenCalledWith(BASE_REPO, meta.path);
-    expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-  });
-
-  it('quarantines the worktree before the final ignored-file scan', async () => {
-    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-'));
-    try {
-      const base = path.join(tmpRoot, 'repo');
-      const worktreePath = path.join(base, '.xdt-worktrees', 's1');
-      fsSync.mkdirSync(worktreePath, { recursive: true });
-      const meta: WorktreeMeta = {
-        ...makeMeta('s1'),
-        baseRepo: base,
-        path: worktreePath,
-      };
-      storeMap.set('s1', meta);
-      ignoredFilesMock.mockResolvedValueOnce([]).mockResolvedValueOnce(['.env']);
-
-      await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-        status: 'preserved',
-      });
-
-      const moves = gitExecMock.mock.calls.filter(
-        ([args]) => Array.isArray(args) && args[0] === 'worktree' && args[1] === 'move',
-      );
-      expect(moves).toHaveLength(2);
-      const quarantinePath = moves[0][0][3] as string;
-      expect(moves[0][0]).toEqual(['worktree', 'move', meta.path, quarantinePath]);
-      expect(moves[1][0]).toEqual(['worktree', 'move', quarantinePath, meta.path]);
-      expect(ignoredFilesMock).toHaveBeenNthCalledWith(1, base, meta.path);
-      expect(ignoredFilesMock).toHaveBeenNthCalledWith(2, base, quarantinePath);
-      expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', quarantinePath], base);
-      expect(storeMap.get('s1')).toEqual(meta);
-      expect(storeSetMock).toHaveBeenCalledWith('s1', expect.objectContaining({ quarantinePath }));
-    } finally {
-      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('resumes a persisted quarantine path after restart while accepting the original ledger path', async () => {
-    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-restart-'));
-    try {
-      const base = path.join(tmpRoot, 'repo');
-      const worktreePath = path.join(base, '.xdt-worktrees', 's1');
-      const quarantinePath = `${worktreePath}.xdt-removing-crashed`;
-      fsSync.mkdirSync(quarantinePath, { recursive: true });
-      const meta: WorktreeMeta = {
-        ...makeMeta('s1'),
-        baseRepo: base,
-        path: worktreePath,
-        quarantinePath,
-      };
-      storeMap.set('s1', meta);
-
-      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
-        status: 'discarded',
-        branchDeleted: false,
-      });
-
-      expect(ignoredFilesMock).toHaveBeenCalledWith(base, quarantinePath);
-      expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', quarantinePath], base);
-      expect(gitExecMock).not.toHaveBeenCalledWith(
-        ['worktree', 'move', worktreePath, quarantinePath],
-        base,
-      );
-      expect(storeMap.has('s1')).toBe(false);
-    } finally {
-      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('does not move a worktree when quarantine state cannot be persisted', async () => {
-    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-persist-'));
-    try {
-      const base = path.join(tmpRoot, 'repo');
-      const worktreePath = path.join(base, '.xdt-worktrees', 's1');
-      fsSync.mkdirSync(worktreePath, { recursive: true });
-      const meta: WorktreeMeta = {
-        ...makeMeta('s1'),
-        baseRepo: base,
-        path: worktreePath,
-      };
-      storeMap.set('s1', meta);
-      storeSetMock.mockRejectedValueOnce(new Error('disk full'));
-
-      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
-        status: 'preserved',
-      });
-
-      expect(gitExecMock).not.toHaveBeenCalledWith(
-        ['worktree', 'move', worktreePath, expect.any(String)],
-        base,
-      );
-      expect(storeMap.get('s1')).toBe(meta);
-    } finally {
-      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('discard pre-created: removes a clean worktree and its commit-equivalent generated branch', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    const gitOperations: string[] = [];
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      gitOperations.push(args[0] ?? '');
-      return {
-        stdout:
-          args[0] === 'symbolic-ref'
-            ? `refs/heads/${meta.branch}\n`
-            : args[0] === 'rev-parse'
-              ? 'abc123\n'
-              : args[0] === 'rev-list'
-                ? '0\n'
-                : '',
-        stderr: '',
-      };
-    });
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'discarded',
-      branchDeleted: true,
-    });
-
-    expect(gitExecMock).toHaveBeenCalledWith(
-      ['rev-list', '--count', `${meta.sourceBranch}..${meta.branch}`],
-      BASE_REPO,
-    );
-    expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(gitExecMock).toHaveBeenCalledWith(
-      ['update-ref', '-d', `refs/heads/${meta.branch}`, 'abc123'],
-      BASE_REPO,
-    );
-    expect(gitOperations).toEqual([
-      'symbolic-ref',
-      'worktree',
-      'rev-parse',
-      'rev-list',
-      'update-ref',
-    ]);
-    expect(storeMap.has('s1')).toBe(false);
-  });
-
-  it('discard pre-created: preserves a generated branch with a unique commit', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    gitExecMock.mockImplementation(async (args: string[]) => ({
-      stdout:
-        args[0] === 'symbolic-ref'
-          ? `refs/heads/${meta.branch}\n`
-          : args[0] === 'rev-parse'
-            ? 'abc123\n'
-            : args[0] === 'rev-list'
-              ? '1\n'
-              : '',
-      stderr: '',
-    }));
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'discarded',
-      branchDeleted: false,
-    });
-
-    expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      expect.arrayContaining(['update-ref', '-d']),
-      BASE_REPO,
-    );
-    expect(storeMap.has('s1')).toBe(false);
-  });
-
-  it('discard pre-created: preserves a branch whose tip changes before deletion', async () => {
-    const meta = makeMeta('s1');
-    storeMap.set('s1', meta);
-    gitExecMock.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') {
-        return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
-      }
-      if (args[0] === 'rev-parse') return { stdout: 'abc123\n', stderr: '' };
-      if (args[0] === 'rev-list') return { stdout: '0\n', stderr: '' };
-      if (args[0] === 'update-ref') throw new Error('cannot lock ref: expected abc123');
-      return { stdout: '', stderr: '' };
-    });
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'discarded',
-      branchDeleted: false,
-    });
-
-    expect(gitExecMock).toHaveBeenCalledWith(
-      ['update-ref', '-d', `refs/heads/${meta.branch}`, 'abc123'],
-      BASE_REPO,
-    );
-  });
-
-  it('discard pre-created: preserves a worktree registered to a non-managed branch', async () => {
-    const meta = {
-      ...makeMeta('s1'),
-      branch: 'main',
-    };
-    storeMap.set('s1', meta);
-
-    await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
-      status: 'preserved',
-    });
-
-    expect(gitExecMock).not.toHaveBeenCalled();
-    expect(gitExecMock).not.toHaveBeenCalledWith(
-      expect.arrayContaining(['update-ref', '-d']),
-      BASE_REPO,
-    );
-    expect(gitExecMock).not.toHaveBeenCalledWith(expect.arrayContaining(['rev-list']), BASE_REPO);
   });
 });

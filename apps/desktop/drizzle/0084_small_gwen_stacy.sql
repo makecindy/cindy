@@ -1,1 +1,0 @@
-ALTER TABLE `schedules` ADD `notify_wecom_group` integer DEFAULT false NOT NULL;

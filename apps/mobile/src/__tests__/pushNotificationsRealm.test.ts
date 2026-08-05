@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const store = vi.hoisted(() => new Map<string, string>());
 const envState = vi.hoisted(() => ({
   activeRealm: 'cn' as 'cn' | 'global',
-  buildRegion: 'cn' as 'cn' | 'global' | 'dev',
   endpointByRealm: {
     cn: 'https://relay.cn.example',
     global: 'https://relay.global.example',
@@ -41,9 +40,7 @@ vi.mock('react-native', () => ({
 }));
 
 vi.mock('@/config/env', () => ({
-  get AUTH_REGION() {
-    return envState.buildRegion;
-  },
+  AUTH_REGION: 'cn',
   BUILD_AUTH_REGION: 'cn',
   getActiveMobileSessionRealm: () => envState.activeRealm,
   loadMobileEndpointsForRealm: mocks.loadMobileEndpointsForRealm,
@@ -76,7 +73,6 @@ describe('push notification realm routing', () => {
     vi.clearAllMocks();
     store.clear();
     envState.activeRealm = 'cn';
-    envState.buildRegion = 'cn';
     mocks.getPermissionsAsync.mockResolvedValue({
       status: 'granted',
       canAskAgain: false,
@@ -113,28 +109,6 @@ describe('push notification realm routing', () => {
       'revocationToken',
     );
     expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
-  });
-
-  it('dev 构建复用 cn 推送构建线向开发环境注册', async () => {
-    envState.buildRegion = 'dev';
-    expect((await import('@/config/env')).AUTH_REGION).toBe('dev');
-    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
-
-    await expect(
-      syncPushRegistration({ enabled: true, apiFetch }),
-    ).resolves.toBe('registered');
-
-    expect(apiFetch).toHaveBeenCalledWith(
-      '/api/device-link/push-token',
-      expect.objectContaining({
-        baseUrl: 'https://relay.cn.example',
-        method: 'PUT',
-        body: expect.objectContaining({
-          token: 'apns-device-token',
-          appVariant: 'cn',
-        }),
-      }),
-    );
   });
 
   it('切换区域前用旧 token 向显式冻结的旧区域撤销', async () => {

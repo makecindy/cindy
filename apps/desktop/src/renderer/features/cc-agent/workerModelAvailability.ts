@@ -16,8 +16,6 @@ export interface SelectWorkerModelsOptions {
   providers: ProviderView[];
   providersLoading: boolean;
   providersError: string | null;
-  /** 仅结构化确认旧端没有 provider:list 时允许 capabilities-only 回退。 */
-  providersUnsupported?: boolean;
   /** Local-only provider model visibility. Device-link peers own their own visibility choices. */
   isVisible?: (providerId: string, model: CatalogModel) => boolean;
   /**
@@ -50,7 +48,6 @@ export function selectWorkerModels({
   providers,
   providersLoading,
   providersError,
-  providersUnsupported,
   isVisible,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
@@ -77,7 +74,7 @@ export function selectWorkerModels({
       : selectable;
   }
 
-  if (providersError) return providersUnsupported ? models : [];
+  if (providersError) return models;
   if (providersLoading) return [];
 
   const executableIds = new Set(

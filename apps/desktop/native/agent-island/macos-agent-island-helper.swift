@@ -1441,8 +1441,8 @@ struct AgentIslandStrings: Codable, Equatable {
 
   static let fallback = AgentIslandStrings(
     appName: "Cindy",
-    newConversationTitle: "New Session",
-    newConversationHint: "Start a new session",
+    newConversationTitle: "New Maker",
+    newConversationHint: "Start a new conversation",
     muteSound: "Mute Agent Island",
     enableSound: "Enable Agent Island sound",
     settings: "Agent Island settings",
@@ -4626,11 +4626,9 @@ final class AgentIslandController {
   private var globalMouseUpMonitor: Any?
   private var localMouseUpMonitor: Any?
   private var screenParameterObserver: NSObjectProtocol?
-  private var workspaceWakeObserver: NSObjectProtocol?
   private var activeSpaceObserver: NSObjectProtocol?
   private var activeApplicationObserver: NSObjectProtocol?
   private var screenMetricsTimer: Timer?
-  private var pendingScreenMetricsForceRefresh = false
   private var dragInteraction: PanelDragInteraction?
   private var pendingMoveInteraction: PanelDragInteraction?
   private var lastMoveTime: TimeInterval = 0
@@ -4850,16 +4848,6 @@ final class AgentIslandController {
     ) { [weak self] _ in
       self?.scheduleScreenMetricsPublish()
     }
-    workspaceWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-      forName: NSWorkspace.didWakeNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] _ in
-      // Sleep can restore the same display set without emitting the screen-parameter
-      // notification. Refreshing here makes the main process recompute every island
-      // frame against the post-wake display coordinates instead of stale ones.
-      self?.scheduleScreenMetricsPublish(forceRefresh: true)
-    }
     activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.activeSpaceDidChangeNotification,
       object: nil,
@@ -4898,9 +4886,6 @@ final class AgentIslandController {
     if let screenParameterObserver {
       NotificationCenter.default.removeObserver(screenParameterObserver)
     }
-    if let workspaceWakeObserver {
-      NSWorkspace.shared.notificationCenter.removeObserver(workspaceWakeObserver)
-    }
     if let activeSpaceObserver {
       NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
     }
@@ -4908,7 +4893,6 @@ final class AgentIslandController {
       NSWorkspace.shared.notificationCenter.removeObserver(activeApplicationObserver)
     }
     screenParameterObserver = nil
-    workspaceWakeObserver = nil
     activeSpaceObserver = nil
     activeApplicationObserver = nil
     screenMetricsTimer?.invalidate()
@@ -4952,7 +4936,7 @@ final class AgentIslandController {
     return true
   }
 
-  func publishScreenMetrics(forceRefresh: Bool = false) {
+  func publishScreenMetrics() {
     var payload: [String: Any] = [
       "type": "screen-metrics",
       "screens": AgentIslandScreenMetricsProvider.allMetrics().map { $0.dictionary },
@@ -4960,21 +4944,14 @@ final class AgentIslandController {
     if let preferredDisplayId = AgentIslandScreenMetricsProvider.preferredDisplayId() {
       payload["preferredDisplayId"] = preferredDisplayId
     }
-    if forceRefresh {
-      payload["forceRefresh"] = true
-    }
     eventSink(payload)
   }
 
-  private func scheduleScreenMetricsPublish(forceRefresh: Bool = false) {
-    pendingScreenMetricsForceRefresh = pendingScreenMetricsForceRefresh || forceRefresh
+  private func scheduleScreenMetricsPublish() {
     screenMetricsTimer?.invalidate()
     screenMetricsTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
-      guard let self else { return }
-      self.screenMetricsTimer = nil
-      let forceRefresh = self.pendingScreenMetricsForceRefresh
-      self.pendingScreenMetricsForceRefresh = false
-      self.publishScreenMetrics(forceRefresh: forceRefresh)
+      self?.screenMetricsTimer = nil
+      self?.publishScreenMetrics()
     }
     RunLoop.main.add(screenMetricsTimer!, forMode: .common)
   }

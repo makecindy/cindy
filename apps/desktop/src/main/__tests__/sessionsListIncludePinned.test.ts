@@ -11,20 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => {
   const queryResults: unknown[][] = [];
 
-  // builder 方法一律返回自身，**只有 await（then）才消费一份 queryResults**。
-  // 惰性很关键：list 走两段式后，CTE 内层的 `select(...).limit(cap)` 只是被交给
-  // `$with().as()` 当子查询，从不 await；若 `limit()` 像早先那样直接返回 Promise，
-  // 它会凭空吃掉一份 queryResults，让下面的条数断言全部错位。
   const makeSelectChain = () => {
     const chain: Record<string, unknown> = {};
-    const self = () => chain;
-    chain.from = self;
-    chain.leftJoin = self;
-    chain.innerJoin = self;
-    chain.where = self;
-    chain.groupBy = self;
-    chain.orderBy = self;
-    chain.limit = self;
+    chain.from = () => chain;
+    chain.leftJoin = () => chain;
+    chain.where = () => chain;
+    chain.groupBy = () => chain;
+    chain.orderBy = () => chain;
+    chain.limit = () => Promise.resolve(queryResults.shift() ?? []);
     chain.then = (
       resolve: (value: unknown[]) => void,
       reject: (reason?: unknown) => void,
@@ -32,21 +26,10 @@ const h = vi.hoisted(() => {
     return chain;
   };
 
-  // 一次「列表查询」= 一次 with(cte).select(...)。数它比数 select 更贴断言意图：
-  // 两段式下每条列表查询会调两次 select（CTE 内层 + 主查询）。
-  const withFn = vi.fn(() => ({ select: () => makeSelectChain() }));
-
   return {
     ipcHandle: vi.fn(),
-    logDebug: vi.fn(),
-    logInfo: vi.fn(),
     queryResults,
-    listQuery: withFn,
-    fakeDb: {
-      select: vi.fn(() => makeSelectChain()),
-      $with: () => ({ as: () => ({ id: {} }) }),
-      with: withFn,
-    },
+    fakeDb: { select: vi.fn(() => makeSelectChain()) },
   };
 });
 
@@ -55,16 +38,13 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../logger', () => ({
-  createLogger: () => ({ debug: h.logDebug, info: h.logInfo, warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
-vi.mock('../device-link/broadcast-tap', () => ({
-  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
-  tapWindowBroadcast: vi.fn(),
-}));
+vi.mock('../device-link/broadcast-tap', () => ({ tapWindowBroadcast: vi.fn() }));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => ({ handleSessionMetadataPatch: vi.fn() }),
 }));
@@ -124,8 +104,8 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
   };
 }
 
-function sessionsListHandler(readLogScope?: () => string | null) {
-  registerSessionIpc(readLogScope);
+function sessionsListHandler() {
+  registerSessionIpc();
   const call = h.ipcHandle.mock.calls.find(([channel]) => channel === 'local-db:sessions:list');
   if (!call) throw new Error('local-db:sessions:list handler not registered');
   return call[1] as (
@@ -159,7 +139,7 @@ describe('local-db:sessions:list includePinned', () => {
     const result = await handler({}, 2, 'active', { includePinned: true });
 
     expect(result.map((s) => s.id)).toEqual(['recent', 'pinned-in-window', 'old-pinned']);
-    expect(h.listQuery).toHaveBeenCalledTimes(2);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(2);
     expect(h.queryResults).toHaveLength(0);
   });
 
@@ -170,7 +150,7 @@ describe('local-db:sessions:list includePinned', () => {
     const result = await handler({}, 2, 'active');
 
     expect(result.map((s) => s.id)).toEqual(['recent']);
-    expect(h.listQuery).toHaveBeenCalledTimes(1);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
     expect(h.queryResults).toHaveLength(1);
   });
 
@@ -191,31 +171,8 @@ describe('local-db:sessions:list includePinned', () => {
       'old-active-pinned',
       'old-archived-pinned',
     ]);
-    expect(h.listQuery).toHaveBeenCalledTimes(2);
+    expect(h.fakeDb.select).toHaveBeenCalledTimes(2);
     expect(h.queryResults).toHaveLength(0);
-  });
-
-  it('logs the first list at info level for each DbClient owner', async () => {
-    let owner = 'session-list-log-owner-a';
-    const handler = sessionsListHandler(() => owner);
-    const now = vi.spyOn(performance, 'now').mockReturnValue(100);
-    h.queryResults.push(
-      [listRow('owner-a-first')],
-      [listRow('owner-a-again')],
-      [listRow('owner-b-first')],
-    );
-
-    try {
-      await handler({}, 20, 'active');
-      await handler({}, 20, 'active');
-      owner = 'session-list-log-owner-b';
-      await handler({}, 20, 'active');
-    } finally {
-      now.mockRestore();
-    }
-
-    expect(h.logInfo).toHaveBeenCalledTimes(2);
-    expect(h.logDebug).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -236,7 +193,6 @@ describe('local-db:sessions:resolve-references', () => {
       expect.objectContaining({ sessionId: 'deleted', state: 'deleted', status: 'deleted' }),
       expect.objectContaining({ sessionId: 'archived', state: 'available', status: 'archived' }),
     ]);
-    // resolve-references 不是 list 路径、不走 CTE，这里数的仍是普通 select。
     expect(h.fakeDb.select).toHaveBeenCalledTimes(1);
   });
 

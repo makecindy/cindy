@@ -16,10 +16,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
-import {
-  GoalControllerInputError,
-  GoalUpdateSupersededError,
-} from '../goal-host/controller.js';
+import { GoalControllerInputError } from '../goal-host/controller.js';
 import { getGoalController } from '../goal-host/index.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import type { GoalUpdatePatch, GoalStatusUpdate } from '../goal-host/types.js';
@@ -146,9 +143,6 @@ export function registerGoalHandlers(): void {
     } catch (err) {
       if (err instanceof GoalControllerInputError) {
         throwIpcError('INVALID_PARAMS', err.message);
-      }
-      if (err instanceof GoalUpdateSupersededError) {
-        throwIpcError('PRECONDITION_FAILED', err.message);
       }
       throw err;
     }

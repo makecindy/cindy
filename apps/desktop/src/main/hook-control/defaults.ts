@@ -35,24 +35,24 @@ import type { Effort } from '@cindy/maker-core';
 /** 依赖注入面: IM 默认值 + 各 agent 当前可用模型清单。 */
 export interface HookDefaultsDeps {
   readDefaults: () => {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex';
     agents: Record<
-      'claude-code' | 'codex' | 'pi',
+      'claude-code' | 'codex',
       { providerId: string | null; model: string; effort: string }
     >;
   };
-  getModels: (agentKind: 'claude-code' | 'codex' | 'pi') => Array<{
+  getModels: (agentKind: 'claude-code' | 'codex') => Array<{
     id: string;
     efforts: readonly string[];
     defaultEffort: string | null;
   }>;
   /** 该 agent 支持的权限档 id 清单(capabilities.permissionModes)。 */
-  getPermissionModes: (agentKind: 'claude-code' | 'codex' | 'pi') => readonly string[];
+  getPermissionModes: (agentKind: 'claude-code' | 'codex') => readonly string[];
   log: { warn(msg: string): void };
 }
 
 export interface ResolvedHookSessionConfig {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex';
   model: string;
   effort: Effort | undefined;
   permissionMode: string;
@@ -64,7 +64,7 @@ export interface ResolvedHookSessionConfig {
   providerId: string | null;
 }
 
-const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set(['claude-code', 'codex']);
 
 /**
  * 合成新 hook 会话的 agent/model/effort。
@@ -82,9 +82,9 @@ export function resolveHookSessionConfig(
   const defaults = deps.readDefaults();
 
   // 1. agent: 显式合法值 > 草稿默认
-  const agentKind: 'claude-code' | 'codex' | 'pi' =
+  const agentKind: 'claude-code' | 'codex' =
     overrides.agentKind !== null && AGENT_KINDS.has(overrides.agentKind)
-      ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi')
+      ? (overrides.agentKind as 'claude-code' | 'codex')
       : defaults.agentKind;
 
   const models = deps.getModels(agentKind);

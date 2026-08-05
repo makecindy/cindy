@@ -16,6 +16,7 @@ import {
   Ellipsis,
   ExternalLink,
   File as FileIcon,
+  FileText,
   Layers,
   ListTodo,
   LoaderCircle,
@@ -68,10 +69,10 @@ import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { StreamingStatusText } from '@/session/StreamingStatusText';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { motionDuration, motionEasing } from '@/theme/tokens';
-import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
-import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
+import { InlineQuoteChip } from '@/session/InlineQuoteChip';
+import { InlineReferenceChip } from '@/session/InlineReferenceChip';
 import {
   composerDocumentFromSerializedMessage,
   type ComposerDocument,
@@ -104,6 +105,7 @@ import {
   buildFilePayload,
   buildMediaPayload,
   buildMermaidPayload,
+  buildTextPayload,
   buildToolResultPayload,
   formatDiffPayloadView,
   payloadMediaKindLabel,
@@ -138,9 +140,7 @@ import {
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
   formatMessageTurnCost,
-  formatMessageTurnTokens,
   formatModelShortLabel,
-  mobileMessageShowsActionBar,
   writeClipboardText,
   type MobileMessageControlActionId,
   type CopyMessageStatus,
@@ -178,7 +178,6 @@ import {
 } from '@/session/sessionReferences';
 import {
   canOpenChatPathChip,
-  chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
   resolveChatAbsPath,
@@ -188,9 +187,6 @@ import {
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import {
   peekRemotePathVerdict,
-  peekRemotePathVerdictForRender,
-  remotePathVerdictKey,
-  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
@@ -283,7 +279,6 @@ import {
   buildMessageLoadEarlierAction,
   createMobileFollowEndPinState,
   evaluateMessageWindowUpdate,
-  evaluateMobileAnchorVerify,
   evaluateMobileFollowEndContentSizePin,
   mobileMessageListTopPadding,
   MOBILE_FOLLOW_END_PIN_SUPPRESS_MS,
@@ -317,10 +312,6 @@ const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
  * 更长会放大「进入会话到内容可见」的感知延迟,不取。
  */
 const MOBILE_INITIAL_ANCHOR_SETTLE_MS = 300;
-/** Maximum time a native imperative scroll may be reported as in-flight. */
-const MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS = 1000;
-/** Animated jump-to-latest commands get a little more time to settle. */
-const MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS = 1400;
 /** Cold-open history fill is useful, but bounded so a short/duplicate host page cannot drain history forever. */
 const MAX_INITIAL_HISTORY_AUTOFILL_PAGES = 3;
 const MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE = 140;
@@ -427,8 +418,6 @@ export interface MobileMessageDraft {
   orderedBody?: string;
 }
 
-export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
-
 interface MessageActions {
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
   onCopyMessageLink?: (clientId: string) => void;
@@ -454,7 +443,6 @@ interface MessageActions {
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   busyClientId?: string | null;
-  busyAction?: MobileMessageActionBusyKind | null;
   canLoadEarlier?: boolean;
   loadingEarlier?: boolean;
   screenWidth?: number;
@@ -483,7 +471,6 @@ export function MessageRenderer({
   onShareImage,
   imageAnnotation,
   busyClientId,
-  busyAction,
   canLoadEarlier,
   emptyTestID,
   bottomOverlayHeight,
@@ -561,9 +548,6 @@ export function MessageRenderer({
   const readingOlderRef = useRef(false);
   // 每次补页分配 generation：旧会话 / 旧请求的异步 settle 不得清掉新请求的抑制态。
   const readingOlderRequestGenerationRef = useRef(0);
-  const programmaticScrollGenerationRef = useRef(0);
-  const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const programmaticScrollInFlightRef = useRef(false);
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
@@ -581,9 +565,8 @@ export function MessageRenderer({
   // (弃用原因见下方 LegendList props 注释)。首批 items commit 后 rAF 命令式落底一次,
   // 目标偏差由 handleContentSize 的贴底补滚随后续测量自然校正。
   const initialAnchorDoneRef = useRef(false);
-  const initialAnchorGenerationRef = useRef(0);
-  const initialAnchorVerifyFrameRef = useRef<number | null>(null);
-  // 落底 rAF / verify loop / 揭开 timer 的句柄(生命周期 = 每个 scrollResetKey 一轮)。
+  // 落底 rAF / 揭开 timer 的句柄(生命周期 = 每个 scrollResetKey 一轮,不挂 effect
+  // cleanup——原因见冷开落底 effect 的注释;清旧在落底 effect 自身开头,卸载时兜底清)。
   const initialAnchorFrameRef = useRef<number | null>(null);
   const initialRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // settle 遮罩:落底两段式期间列表保持 opacity 0,settle 窗口后揭开(规则 7 防跳动)。
@@ -604,29 +587,22 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     readingOlderRef.current = false;
     readingOlderRequestGenerationRef.current += 1;
-    programmaticScrollGenerationRef.current += 1;
-    programmaticScrollInFlightRef.current = false;
-    if (programmaticScrollTimerRef.current !== null) {
-      clearTimeout(programmaticScrollTimerRef.current);
-      programmaticScrollTimerRef.current = null;
-    }
     previousItemKeysRef.current = [];
     scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
     followEndPinStateRef.current = createMobileFollowEndPinState();
     initialAnchorDoneRef.current = false;
-    initialAnchorGenerationRef.current += 1;
-    if (initialAnchorFrameRef.current !== null) {
-      cancelAnimationFrame(initialAnchorFrameRef.current);
-      initialAnchorFrameRef.current = null;
-    }
-    if (initialAnchorVerifyFrameRef.current !== null) {
-      cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
-      initialAnchorVerifyFrameRef.current = null;
-    }
     // settle 遮罩复位必须与列表重挂同帧(渲染期 setState,React 官方 prop-change 模式):
     // 走 effect 会晚一帧,新列表以旧 revealed=true 裸挂一帧,未锚定内容闪现。
     setListRevealed(false);
   }
+  // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
+  useEffect(() => {
+    if (!__DEV__) return;
+    devExposeList?.({
+      scrollTo: (y: number) => listRef.current?.scrollToOffset({ animated: false, offset: y }),
+      getMetrics: () => scrollMetricsRef.current,
+    });
+  }, [devExposeList]);
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [isAwayFromBottom, setIsAwayFromBottom] = useState(false);
@@ -636,55 +612,6 @@ export function MessageRenderer({
   // LightboxPage 手势 useMemo 的依赖,流式回复期间每 token 重建手势图,
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
-  const markProgrammaticScroll = useCallback((animated: boolean) => {
-    const generation = programmaticScrollGenerationRef.current + 1;
-    programmaticScrollGenerationRef.current = generation;
-    programmaticScrollInFlightRef.current = true;
-    if (programmaticScrollTimerRef.current !== null) {
-      clearTimeout(programmaticScrollTimerRef.current);
-    }
-    programmaticScrollTimerRef.current = setTimeout(() => {
-      if (programmaticScrollGenerationRef.current !== generation) return;
-      programmaticScrollTimerRef.current = null;
-      programmaticScrollInFlightRef.current = false;
-    }, animated
-      ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
-      : MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS);
-  }, []);
-
-  const clearProgrammaticScroll = useCallback(() => {
-    programmaticScrollGenerationRef.current += 1;
-    programmaticScrollInFlightRef.current = false;
-    if (programmaticScrollTimerRef.current !== null) {
-      clearTimeout(programmaticScrollTimerRef.current);
-      programmaticScrollTimerRef.current = null;
-    }
-  }, []);
-
-  const scrollToEndProgrammatically = useCallback((animated: boolean) => {
-    markProgrammaticScroll(animated);
-    void listRef.current?.scrollToEnd({ animated });
-  }, [markProgrammaticScroll]);
-
-  const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
-    markProgrammaticScroll(animated);
-    void listRef.current?.scrollToOffset({ animated, offset });
-  }, [markProgrammaticScroll]);
-
-  const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
-    markProgrammaticScroll(true);
-    void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
-  }, [markProgrammaticScroll]);
-
-  // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
-  useEffect(() => {
-    if (!__DEV__) return;
-    devExposeList?.({
-      scrollTo: (y: number) => scrollToOffsetProgrammatically(y, false),
-      getMetrics: () => scrollMetricsRef.current,
-    });
-  }, [devExposeList, scrollToOffsetProgrammatically]);
-
   const listData = useMemo(() => [...items], [items]);
   // 遮罩重武装(review P1):真冷开(无缓存)时列表以空挂载,落底 effect 的空分支已把
   // 遮罩揭开;首批消息到达(0→N)且本会话尚未落底时,必须在**渲染期**重新武装遮罩——
@@ -781,13 +708,11 @@ export function MessageRenderer({
     // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
     pendingSend,
     busyClientId,
-    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
     busyClientId,
-    busyAction,
     firstUserMessageClientId,
     isSessionStreaming,
     onCopyMessageLink,
@@ -851,8 +776,8 @@ export function MessageRenderer({
     }
     setIsAwayFromBottom(false);
     setHasNewMessages(false);
-    scrollToEndProgrammatically(true);
-  }, [scrollToEndProgrammatically]);
+    void listRef.current?.scrollToEnd({ animated: true });
+  }, []);
 
   const jumpToPreviousUserMessage = useCallback(() => {
     if (!previousUserTarget) return;
@@ -863,8 +788,12 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     nearBottomRef.current = false;
     setIsAwayFromBottom(true);
-    scrollToIndexProgrammatically(previousUserTarget.index, 0.12);
-  }, [previousUserTarget, scrollToIndexProgrammatically]);
+    void listRef.current?.scrollToIndex({
+      animated: true,
+      index: previousUserTarget.index,
+      viewPosition: 0.12,
+    });
+  }, [previousUserTarget]);
 
   // 「跳到最新」请求(会话外部触发):命令式滚到底,之后由 handleContentSize 补滚维持贴底。
   useEffect(() => {
@@ -881,8 +810,8 @@ export function MessageRenderer({
     }
     setHasNewMessages(false);
     setIsAwayFromBottom(false);
-    scrollToEndProgrammatically(true);
-  }, [followLatestRequestKey, scrollToEndProgrammatically]);
+    void listRef.current?.scrollToEnd({ animated: true });
+  }, [followLatestRequestKey]);
 
   // 自动加载更早:电平触发判定(shouldAutoLoadEarlier),在所有可能改变判定结果的时机重评估
   // (scroll 事件 / LegendList onStartReached 边沿 / eligibility 变化 effect)。
@@ -973,7 +902,6 @@ export function MessageRenderer({
       const nearBottom = resolveMobileNearBottomOnScroll({
         wasNearBottom: nearBottomRef.current,
         metrics,
-        programmaticScrollInFlight: programmaticScrollInFlightRef.current,
         scrollDelta: readingOlderRef.current ? 0 : metrics.offsetY - previousOffsetY,
         bottomOverlayHeight,
       });
@@ -990,7 +918,6 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    clearProgrammaticScroll();
     isDraggingRef.current = true;
     dragStartOffsetYRef.current = event.nativeEvent.contentOffset.y;
     userScrollForOlderRef.current = true;
@@ -1062,89 +989,47 @@ export function MessageRenderer({
         followEndPinRecoveryTimerRef.current = setTimeout(() => {
           followEndPinRecoveryTimerRef.current = null;
           if (nearBottomRef.current && !readingOlderRef.current) {
-            scrollToEndProgrammatically(false);
+            void listRef.current?.scrollToEnd({ animated: false });
           }
         }, MOBILE_FOLLOW_END_PIN_SUPPRESS_MS + 50);
       }
       if (decision.shouldScroll) {
-        scrollToEndProgrammatically(false);
+        void listRef.current?.scrollToEnd({ animated: false });
       }
     }
   }, []);
 
   // 冷开落底(替代 initialScrollAtEnd,弃用原因见 LegendList props 注释):首批 items
-  // commit 后先命令式落底,随后双帧校验 native metrics 是否真的到达 content end。
-  // LegendList 可能仍在以估高换实高或等待 mVCP/data settle,所以一次 scrollToEnd 的
-  // Promise/回调不等价于真实落底；verify 带独立 wait/retry 上限,只在跟随仍归本流程
-  // 所有且用户未开始浏览历史时补滚。settled/give-up 后才揭开列表,固定 300ms 仅作
-  // 首次校验前的最短遮罩窗口,不再是“已经落底”的假定。
+  // commit 后 rAF 一次命令式落底。此刻测量未完备、目标可能偏短,但 nearBottomRef 冷开
+  // 为 true,后续每次 contentSize 增长都由 handleContentSize 的贴底补滚继续拉到底,
+  // 最终收敛在真实底部(与迁移 LegendList 前的手搓落底同机制)。落底→补滚是两段式的,
+  // 肉眼可见「跳两下」(规则 7)——沿用老方案的 settle 遮罩:列表先以 opacity 0 挂载,
+  // 落底发起后等一个 settle 窗口(初窗测量与补滚基本结算)再揭开,揭开后不再隐藏。
+  // ⚠️ rAF / reveal timer 挂 ref 而非 effect cleanup:本 effect 依赖 listData.length,
+  // settle 窗口内消息追加会触发 cleanup——若把 timer 交给 cleanup,它会被清掉且因
+  // initialAnchorDoneRef 已置位不再重设,列表永久停在 opacity 0(即新一种白屏)。
+  // 两者的真实生命周期是「每个 scrollResetKey 一轮」,清理归会话切换 effect 与卸载。
   useEffect(() => {
     if (initialAnchorDoneRef.current) return;
     if (listData.length === 0) {
+      // 空会话没有落底问题,直接可见(空态/同步占位不该被遮罩藏住)。
       setListRevealed(true);
       return;
     }
-
     initialAnchorDoneRef.current = true;
-    const generation = initialAnchorGenerationRef.current + 1;
-    initialAnchorGenerationRef.current = generation;
+    // 上个会话可能遗留的在飞句柄在此接管清理。不能放会话切换 reset effect:它声明
+    // 在本 effect 之后,同一轮 commit 里会把这里刚排好的新句柄误清。
     if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
-    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
     if (initialRevealTimerRef.current) clearTimeout(initialRevealTimerRef.current);
-
-    const finish = () => {
-      if (initialAnchorGenerationRef.current !== generation) return;
-      if (initialAnchorVerifyFrameRef.current !== null) {
-        cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
-        initialAnchorVerifyFrameRef.current = null;
-      }
-      initialRevealTimerRef.current = null;
-      setListRevealed(true);
-    };
-
-    const startedAt = Date.now();
-    const verify = (attempts: number, waitRounds: number) => {
-      if (initialAnchorGenerationRef.current !== generation) return;
-      const preserveVisibleContentPosition = readingOlderRef.current;
-      const action = evaluateMobileAnchorVerify({
-        attempts,
-        listVisible: true,
-        metrics: scrollMetricsRef.current,
-        preserveVisibleContentPosition,
-        stickToLatest: nearBottomRef.current && !userScrollForOlderRef.current,
-        waitRounds,
-      });
-      if (action === 'settled' || action === 'give-up') {
-        const remaining = Math.max(0, MOBILE_INITIAL_ANCHOR_SETTLE_MS - (Date.now() - startedAt));
-        if (remaining === 0) finish();
-        else initialRevealTimerRef.current = setTimeout(finish, remaining);
-        return;
-      }
-      if (action === 'retry') scrollToEndProgrammatically(false);
-      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-          initialAnchorVerifyFrameRef.current = null;
-          verify(
-            attempts + (action === 'retry' ? 1 : 0),
-            waitRounds + (action === 'wait' ? 1 : 0),
-          );
-        });
-      });
-    };
-
     initialAnchorFrameRef.current = requestAnimationFrame(() => {
       initialAnchorFrameRef.current = null;
-      if (initialAnchorGenerationRef.current !== generation) return;
-      scrollToEndProgrammatically(false);
-      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
-          initialAnchorVerifyFrameRef.current = null;
-          if (initialAnchorGenerationRef.current !== generation) return;
-          verify(0, 0);
-        });
-      });
+      void listRef.current?.scrollToEnd({ animated: false });
     });
-  }, [listData.length, scrollResetKey, scrollToEndProgrammatically]);
+    initialRevealTimerRef.current = setTimeout(() => {
+      initialRevealTimerRef.current = null;
+      setListRevealed(true);
+    }, MOBILE_INITIAL_ANCHOR_SETTLE_MS);
+  }, [listData.length, scrollResetKey]);
 
   // 会话切换(scrollResetKey):重置浮标/近底等 UI 状态;LegendList 本体经 key={scrollResetKey}
   // 重挂并重新落底(上方冷开落底 effect;initialAnchorDoneRef 已在渲染期同步块复位)。
@@ -1165,13 +1050,10 @@ export function MessageRenderer({
   // 卸载时清掉在飞的定时器/rAF(闭包引用 listRef,卸载后触发是无害 no-op,
   // 但不留悬挂句柄)。
   useEffect(() => () => {
-    initialAnchorGenerationRef.current += 1;
     if (followEndPinRecoveryTimerRef.current) clearTimeout(followEndPinRecoveryTimerRef.current);
-    clearProgrammaticScroll();
     if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
-    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
     if (initialRevealTimerRef.current) clearTimeout(initialRevealTimerRef.current);
-  }, [clearProgrammaticScroll]);
+  }, []);
 
   // 顶部 chrome(如连接横幅)出现/消失 → topPadding 变 → contentContainerStyle.paddingTop 变 →
   // 所有 item 随之上下移。LegendList 的 maintainVisibleContentPosition 只跟 data / item 尺寸变化、
@@ -1186,8 +1068,8 @@ export function MessageRenderer({
     const delta = topPadding - prev;
     if (delta === 0 || (nearBottomRef.current && !readingOlderRef.current)) return;
     const { offsetY } = scrollMetricsRef.current;
-    scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
-  }, [scrollToOffsetProgrammatically, topPadding]);
+    void listRef.current?.scrollToOffset({ animated: false, offset: Math.max(0, offsetY + delta) });
+  }, [topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -1205,8 +1087,8 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     nearBottomRef.current = false;
     setIsAwayFromBottom(true);
-    scrollToIndexProgrammatically(index, 0.45);
-  }, [focusRunKey, focusedItemKey, listData, scrollToIndexProgrammatically]);
+    void listRef.current?.scrollToIndex({ animated: true, index, viewPosition: 0.45 });
+  }, [focusRunKey, focusedItemKey, listData]);
 
   // 新消息红点:滚离底时来新消息(尾部 append)→ 提示。贴底时由 handleContentSize 补滚
   // 自动跟随、不提示。wasNearBottom 只看 nearBottomRef(跟随态唯一真相):以前 || 距离兜底
@@ -1588,7 +1470,7 @@ function MessageBubble({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t, i18n: i18nInstance } = useTranslation();
+  const { t } = useTranslation();
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   // chat-text-quote:只解析持久化 quotesEncoded 明确标记的产品引用消息，避免
@@ -1676,26 +1558,19 @@ function MessageBubble({
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
   const copyText = buildMobileMessageCopyText(item.message);
   const canUseCompletedActions = !isStreamingAssistant;
-  // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
-  // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
-  // 不挂。user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
-  // 不受影响。
-  const showCompletedActionBar = mobileMessageShowsActionBar({
-    hasSystemCard: !!item.message.systemCardType,
-    isStreamingAssistant,
-    isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
-    kind: item.message.kind,
-  });
+  // 操作行只挂在每轮收尾正文(对齐桌面 #456):任务执行过程中的中间句不再逐条
+  // 带一行复制/分叉/时间,消息流更紧凑。user 消息、流式「生成中」状态与正文
+  // 的文本选择(canSelectVisibleText)不受影响。
+  const suppressAssistantActions = item.message.kind === 'assistant'
+    && !isStreamingAssistant
+    && item.message.isTurnFinalAssistant !== true;
+  const showCompletedActionBar = canUseCompletedActions && !suppressAssistantActions;
   const canCopy = showCompletedActionBar && copyText.trim().length > 0;
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
     ? formatMessageTurnCost(item.message.turnMoney)
-    : '';
-  // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
-  const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnTokens(item.message.turnTotalTokens)
     : '';
   const canFork = !!(
     showCompletedActionBar
@@ -1738,9 +1613,6 @@ function MessageBubble({
   // hook 来源消息在 RenderItemView 中会降级为左对齐 system kind，避免暴露
   // 本地 user 消息的 fork / rewind / delete 操作；它仍可能携带至多 20k 文本，
   // 因此必须继续复用长消息的有界测量与折叠保护。
-  // 引用 / 粘贴文本 / Slash 等结构化 atom 的 displayBubbleBody 已是紧凑投影，
-  // 因此可继续参与同一套长消息判定；真正收起时改用静态结构化 renderer + 整体
-  // 高度裁切，既不把完整 payload 摊开，也不会因含 chip 而永久失去长消息保护。
   const collapseMeasureEnabled = (isUser || hookSource !== undefined)
     && (item.message.kind === 'user' || hookSource !== undefined)
     && !item.message.systemCardType
@@ -1769,27 +1641,23 @@ function MessageBubble({
   }, [collapseResolved, collapseLatched, displayBubbleBody]);
   const shouldCollapseLongMessage = (collapseMeasureEnabled && collapseLatched) || collapseResolved;
   const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
-  // label 走 i18n.t,所以语言必须进依赖:否则用户在任务页挂载期间切语言,菜单会一直
-  // 停在切换前的语言,直到 capability 变化或组件重挂。
   const messageMenu = useMemo(() => buildMobileMessageMenu({
     canAddToChat,
     canCopyLink,
     canDelete,
+    canFork,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
+  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
-    canFork,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
-    // 金额与 token 回退占同一格,任一有值就保留该位置。
-    hasTurnCost: !!turnCost || !!turnTokens,
+    hasTurnCost: !!turnCost,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
+  }), [canCopy, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost]);
   const hasActions = actionBar.items.length > 0;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
-  const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
 
   useEffect(() => {
@@ -1847,6 +1715,7 @@ function MessageBubble({
   ]);
   const selectMenuAction = useCallback((id: MobileMessageMenuActionId) => {
     if (!clientId) return;
+    if (id === 'fork') return selectControlAction('fork');
     if (id === 'rewind') return selectControlAction('rewind');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
@@ -1865,23 +1734,12 @@ function MessageBubble({
   ) : null;
   const costText = turnCost ? (
     <Text
-      accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
-        ? t('message.renderer.turnCostEstimate', { cost: turnCost })
-        : t('message.renderer.turnCost', { cost: turnCost })}
+      accessibilityLabel={item.message.turnCostIsEstimate ? t('message.renderer.turnCostEstimate', { cost: turnCost }) : t('message.renderer.turnCost', { cost: turnCost })}
       key="cost"
       style={styles.messageActionMeta}
       testID="message.turnCostText"
     >
       {turnCost}
-    </Text>
-  ) : turnTokens ? (
-    <Text
-      accessibilityLabel={t('message.renderer.turnTokens', { tokens: turnTokens })}
-      key="cost"
-      style={styles.messageActionMeta}
-      testID="message.turnTokensText"
-    >
-      {turnTokens}
     </Text>
   ) : null;
   const streamingStatus = isStreamingAssistant ? (
@@ -1924,7 +1782,7 @@ function MessageBubble({
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
           <Text numberOfLines={1} style={styles.hookSourceTitle}>
-            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : hookSource.im === 'x' ? 'X' : 'Slack'}`}
+            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : 'Slack'}`}
           </Text>
           {hookSource.channelName ? (
             <Text numberOfLines={1} style={styles.hookSourceChannel}>
@@ -1940,46 +1798,26 @@ function MessageBubble({
         />
       ) : displayBubbleBody ? (
         longMessageCollapsed ? (
-          rendersSentInlineBody ? (
-            <SentInlineAtomBody
-              interactiveAtoms={false}
-              maxVisibleLines={collapsedLineCount}
-              numberOfLines={collapsedLineCount}
-              selectable={canSelectVisibleText}
-              testID="message.collapsedSentInlineAtoms"
-              textStyle={styles.messageText}
-              tokens={sentInlineTokens}
-            />
-          ) : (
-            // 普通长消息收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该
-            // 保留交互),展开后恢复 MarkdownBody。文本选择走与正文同款的
-            // MarkdownSelectableText(iOS UITextView 原生支持 numberOfLines)。
-            <MarkdownSelectableText
-              numberOfLines={collapsedLineCount}
-              selectable={canSelectVisibleText}
-              style={styles.messageText}
-              testID="message.collapsedBody"
-            >
-              {displayBubbleBody}
-            </MarkdownSelectableText>
-          )
+          // 收起态降级为纯文本(对齐桌面:被裁切的富文本节点不该保留交互),
+          // 展开后恢复 MarkdownBody 的完整渲染。文本选择不因收起而丢失:
+          // 走与正文/secondaryBody 同款的 MarkdownSelectableText(iOS 用
+          // UITextView,原生支持 numberOfLines 截断,长按有系统选择手柄)。
+          <MarkdownSelectableText
+            numberOfLines={collapsedLineCount}
+            selectable={canSelectVisibleText}
+            style={styles.messageText}
+            testID="message.collapsedBody"
+          >
+            {displayBubbleBody}
+          </MarkdownSelectableText>
         ) : rendersSentInlineBody ? (
           <SentInlineAtomBody
+            layout={contentLayout}
+            markdownImageCacheKey={item.message.key}
             onOpenPayload={actions.onOpenPayload}
-            renderText={(text, index) => (
-              <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
-                <MarkdownBody
-                  layout={contentLayout}
-                  markdownImageCacheKey={item.message.key}
-                  onOpenPayload={actions.onOpenPayload}
-                  onOpenSessionLink={actions.onOpenSessionLink}
-                  selectable={canSelectVisibleText}
-                  sessionReferences={item.message.sessionReferences}
-                  streaming={false}
-                  text={text}
-                />
-              </View>
-            )}
+            onOpenSessionLink={actions.onOpenSessionLink}
+            selectable={canSelectVisibleText}
+            sessionReferences={item.message.sessionReferences}
             tokens={sentInlineTokens}
           />
         ) : (
@@ -2098,10 +1936,7 @@ function MessageBubble({
               return (
                 <MessageMoreButton
                   buttonSize={actionBar.buttonSize}
-                  // Fork has its own visible busy state. Keep More available
-                  // only while that direct action is running; rewind/delete
-                  // still block the menu while their requests are in flight.
-                  disabled={disabled && !forkBusy}
+                  disabled={disabled || actionBusy}
                   iconSize={actionBar.iconSize}
                   key="more"
                   onPress={() => setActionSheetOpen(true)}
@@ -2112,7 +1947,6 @@ function MessageBubble({
               return (
                 <MessageControlButton
                   buttonSize={actionBar.buttonSize}
-                  busy={id === 'fork' && forkBusy}
                   copyState={copyState}
                   disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
                   id={id}
@@ -2127,7 +1961,6 @@ function MessageBubble({
         </View>
       ) : null}
       <MessageActionSheet
-        disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
         items={messageMenu}
         onAction={selectMenuAction}
         onClose={() => setActionSheetOpen(false)}
@@ -2548,7 +2381,6 @@ function agentTaskStatusLabel(status: AgentTaskStatus): string {
 const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
-  pi: 'Pi',
 };
 
 function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number }) {
@@ -2608,9 +2440,7 @@ function AgentTaskCard({
     () => buildMessageHierarchyLayout({ screenWidth, summaryCount: 0 }),
     [screenWidth],
   );
-  const hasDetails = !!(
-    model.description || model.summary || model.spawnedAgentName || model.lastToolName || model.outputFile
-  );
+  const hasDetails = !!(model.description || model.summary || model.lastToolName || model.outputFile);
   return (
     <FoldablePanel
       blockId={item.key}
@@ -2626,12 +2456,6 @@ function AgentTaskCard({
       {hasDetails ? (
         <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
           {model.description ? <Text style={styles.detailText}>{model.description}</Text> : null}
-          {/* codex spawn 启动回执:shared model 只给结构化名字,句子按 locale 组装。 */}
-          {model.spawnedAgentName ? (
-            <Text style={styles.detailText}>
-              {t('message.renderer.subagentStarted', { name: model.spawnedAgentName })}
-            </Text>
-          ) : null}
           {model.summary ? <Text style={styles.detailText}>{model.summary}</Text> : null}
           {model.lastToolName ? <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text> : null}
           {model.outputFile ? <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text> : null}
@@ -3129,8 +2953,9 @@ function CollabCardShell({
   );
 }
 
-// 模块级常量:不依赖任何 prop/state,避免 MobileAgentSwitchCard 每次重渲染重建闭包。
-const agentSwitchEngineLabel = mobileAgentLabelFromUnknown;
+// Agent 引擎显示名(codex → Codex,其余 → Claude Code)。模块级常量:不依赖任何 prop/state,
+// 提到组件外避免 MobileAgentSwitchCard 每次重渲染都重建闭包。
+const agentSwitchEngineLabel = (kind: unknown): string => (kind === 'codex' ? 'Codex' : 'Claude Code');
 
 // 交接正文是否为英文格式(与 desktop SystemCard.tsx 同款判据)。content.handoff 是持久化
 // 数据:英文化之前落库的行仍是中文正文,升级后展开老卡片看到的就是中文——标题里「原文为
@@ -3279,6 +3104,80 @@ function OrcaCollabCard({ card, screenWidth }: { card: OrcaCollabCardModel; scre
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
 // 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
+/** Sent user atoms stay compact while their full wire text remains copyable/sendable. */
+function SentInlineAtomBody({
+  layout,
+  markdownImageCacheKey,
+  onOpenPayload,
+  onOpenSessionLink,
+  selectable,
+  sessionReferences,
+  tokens,
+}: {
+  layout: MessageContentLayout;
+  markdownImageCacheKey?: string;
+  onOpenPayload?: (payload: MessagePayload) => void;
+  onOpenSessionLink?: (url: string) => void;
+  selectable: boolean;
+  sessionReferences?: readonly MobilePersistedSessionReferenceMetadata[];
+  tokens: readonly SentInlineToken[];
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.sentInlineAtomBody} testID="message.sentInlineAtoms">
+      {tokens.map((token, index) => {
+        if (token.kind === 'quote') {
+          return (
+            <InlineQuoteChip
+              key={`quote:${token.quote.sourcePath ?? 'chat'}:${index}:${token.quote.text}`}
+              quote={token.quote}
+            />
+          );
+        }
+        if (token.kind === 'pasted') {
+          return (
+            <InlineReferenceChip
+              accessibilityLabel={token.display}
+              icon={<FileText color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
+              key={`pasted:${index}`}
+              label={token.display}
+              onPress={onOpenPayload
+                ? () => onOpenPayload(buildTextPayload('Pasted text', token.text))
+                : undefined}
+              testID="message.pastedTextChip"
+            />
+          );
+        }
+        if (token.kind === 'slash') {
+          return (
+            <InlineReferenceChip
+              accessibilityLabel={token.text}
+              key={`slash:${index}`}
+              label={token.text}
+              testID="message.slashCommandChip"
+            />
+          );
+        }
+        return token.text ? (
+          <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
+            <MarkdownBody
+              layout={layout}
+              markdownImageCacheKey={markdownImageCacheKey}
+              onOpenPayload={onOpenPayload}
+              onOpenSessionLink={onOpenSessionLink}
+              selectable={selectable}
+              sessionReferences={sessionReferences}
+              streaming={false}
+              text={token.text}
+            />
+          </View>
+        ) : null;
+      })}
+    </View>
+  );
+}
+
 function MarkdownBody({
   allowIosUITextView = true,
   markdownImageCacheKey,
@@ -3667,67 +3566,32 @@ function ChatPathChipSpan({
     const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
     return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
   }, [candidate, ctx]);
-  // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
-  // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
-  // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
-  // 带着下划线可点(PR #1144 review 实捉,桌面同款)。
-  const readVerdict = useCallback(
-    () =>
-      ctx && target
-        ? peekRemotePathVerdictForRender(ctx.deviceId, ctx.workdir, target.absPath)
-        : undefined,
-    [ctx, target],
+  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(() =>
+    ctx && target ? peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath) : undefined,
   );
-  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(readVerdict);
-
-  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 递增,**驱动下面的验证副作用重跑**。
-  // 按 key 过滤:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
-  //
-  // ⚠️ 这里必须递增一个计数、不能只 setVerdict(readVerdict()):`readVerdict` 是
-  // `[ctx, target]` 的稳定 useCallback,通知**不改变验证副作用的任何依赖**,那个副作用
-  // 就不会重跑 → 再也不发 verifyRemotePathCached。TTL 到期时负缓存已被删、又没有确定态,
-  // ForRender 回 undefined,于是 chip 只完成「降级成纯文本」、没完成「重验」,挂载期间
-  // 永不自愈 —— 比重构前(一直乐观点亮)更糟。桌面同一处把 cacheGen 放进了验证副作用的
-  // 依赖,手机漏了这一环(PR #1144 review 实捉:第 10 轮重构只做对了桌面那一半)。
-  const [cacheGen, setCacheGen] = useState(0);
   useEffect(() => {
-    if (!ctx || !target) return;
-    const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
-    return subscribeRemotePathVerdictChange((key) => {
-      if (key === mine) setCacheGen((n) => n + 1);
-    });
-  }, [ctx, target]);
-
-  useEffect(() => {
-    // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
-    setVerdict(readVerdict());
-    if (!ctx || !target) return;
-    // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 的负缓存承担。
-    if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
+    if (!ctx || !target) {
+      setVerdict(undefined);
+      return;
+    }
+    const cached = peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath);
+    if (cached) {
+      setVerdict(cached);
+      return;
+    }
+    setVerdict(undefined);
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
     let cancelled = false;
-    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
-      // 不看返回值:结论已落缓存,统一重新派生。
-      if (!cancelled) setVerdict(readVerdict());
+    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then((v) => {
+      if (!cancelled) setVerdict(v);
     });
     return () => {
       cancelled = true;
     };
-    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生 + 必要时重验。
-  }, [ctx, streaming, target, readVerdict, cacheGen]);
+  }, [ctx, streaming, target]);
 
-  // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
-  //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
-  //     stat 异常)照旧乐观点亮,绝不因断链把整条消息的 chip 全灭掉;
-  //   - 歧义形状(裸名 `array.map`、分隔符无扩展 `and/or`——与 `package.json`、
-  //     `src/components` 词法同形,分不开):必须等远端明确回 file / directory 才点亮。
-  //     否则链路一抖,满屏普通行内 code 都变成可点的假链接——「可点」的视觉信号一旦
-  //     不可信,加强它只会让误判更醒目(DESIGN.md §14.5 规则 5)。
-  const verdictAllowsLit = candidate?.ambiguousShape
-    ? verdict === 'file' || verdict === 'directory'
-    : verdict !== undefined && verdict !== 'nonfile';
-  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
+  const lit = !!ctx && !!candidate && !!target && verdict !== undefined && verdict !== 'nonfile';
   if (!lit) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
@@ -3754,29 +3618,6 @@ function ChatPathChipSpan({
   );
 }
 
-/**
- * 「下划线 ⇔ 可点」的**唯一判据**(DESIGN.md §14.5 规则①要求双向成立:可点的一定有
- * 下划线,有下划线的一定可点)。onPress 缺席时不给 `markdownLink`,所以在结构上
- * 无法造出「有下划线却点不动」的元素。
- *
- * 为什么要收成一处:PR #1144 的两轮 review 各捉到一个反例(文件阅读器的会话 chip、
- * 以及同一面上本就带下划线 + pointer 的图片 chip),根因都是「加不加下划线」与
- * 「有没有 onPress」在各自的分支里独立决定 —— 判据分散必然漂移。本文件的会话 chip /
- * 图片 chip 的 onPress 也是条件式的(handler 由上层可选注入),同款隐患成立。
- *
- * 所有可点 inline 一律经此取样式,**不要在 case 分支里直接写 `styles.markdownLink`**
- * (chatPathCandidate.test.ts 有源码级守卫钉住这条)。路径 chip 不走这里:它的可点性
- * 由 ChatPathChipSpan 的 `lit` 单点裁决,同样是「一个判据」。
- */
-function clickableInlineStyle(
-  styles: ReturnType<typeof makeStyles>,
-  onPress: undefined | (() => void),
-  base: StyleProp<TextStyle>,
-  extra?: StyleProp<TextStyle>,
-): StyleProp<TextStyle> {
-  return [base, onPress ? styles.markdownLink : undefined, extra];
-}
-
 /** 本地路径链接形态的路径 chip 包装:candidate 按 url memo,保证引用稳定——
  *  renderInline 是普通函数,若在其内直接 classify 会每次 render 产新对象,
  *  击穿 ChatPathChipSpan 的 memo/effect 依赖,unknown verdict(不落缓存)的
@@ -3784,7 +3625,6 @@ function clickableInlineStyle(
 function LinkPathChipSpan({
   url,
   display,
-  bare,
   baseStyle,
   SpanText,
   styles,
@@ -3792,35 +3632,17 @@ function LinkPathChipSpan({
 }: {
   url: string;
   display: string;
-  /** 正文裸写的路径(非作者手写的 `[label](url)`),决定点亮后是否套等宽 chip。 */
-  bare?: boolean;
   baseStyle?: StyleProp<TextStyle>;
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
   streaming?: boolean;
 }) {
   const candidate = useMemo(() => classifyChatPathLinkTarget(url), [url]);
-  // 点亮后是否套等宽 chip,按 DESIGN.md §14.5 的落地推论分三档(与桌面
-  // shouldRenderCodeReferenceLabel 的分流一一对应):
-  //   - 正文裸写的路径 → **不套**。它的未点亮态是普通正文,套上会让同一句里点亮的
-  //     `src/a.ts` 与未点亮的 `src/b.ts` 在字体、底色、下划线三处齐变。
-  //   - 作者手写、label 读起来是文件引用(`[README.md](path)`)→ **套**。那是作者的
-  //     排版意图,对齐桌面 FileTargetChip。
-  //   - 作者手写、散文 label(`[看这份规则](path)`)→ 不套,对齐桌面 ResolvedLocalLink。
-  const codeStyled = useMemo(
-    () => !bare && candidate !== null && chatPathLabelReadsAsFileReference(display, candidate, url),
-    [bare, candidate, display, url],
-  );
   return (
     <ChatPathChipSpan
       candidate={candidate}
-      chipStyle={
-        codeStyled
-          ? [baseStyle, styles.markdownInlineCode, styles.markdownPathChip]
-          : [baseStyle, styles.markdownPathChip]
-      }
+      chipStyle={[baseStyle, styles.markdownInlineCode, styles.markdownPathChip]}
       display={display}
-      // 未点亮一律回落正文样式(与桌面一致:未解析的 local-candidate 渲染成纯 span)。
       plainStyle={baseStyle}
       SpanText={SpanText}
       streaming={streaming}
@@ -3933,7 +3755,6 @@ function renderInline(
         return (
           <LinkPathChipSpan
             key={spanKey(`path-link:${index}:${inline.url}`)}
-            bare={inline.bare}
             baseStyle={ctx.baseStyle}
             display={inline.text}
             SpanText={SpanText}
@@ -3943,15 +3764,13 @@ function renderInline(
           />
         );
       }
-      // onPress 与下划线取同一个值,不可能一边有一边没有。
-      const openExternalUrl = () => {
-        void Linking.openURL(inline.url).catch(() => undefined);
-      };
       return (
         <SpanText
           key={spanKey(`link:${index}:${inline.url}`)}
-          onPress={openExternalUrl}
-          style={clickableInlineStyle(styles, openExternalUrl, ctx.baseStyle)}
+          onPress={() => {
+            void Linking.openURL(inline.url).catch(() => undefined);
+          }}
+          style={[ctx.baseStyle, styles.markdownLink]}
         >
           {inline.text}
         </SpanText>
@@ -3984,17 +3803,14 @@ function renderInline(
         </SpanText>
       );
     case 'image': {
-      // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
-      // (clickableInlineStyle 保证两者同源)。
-      const openImageChip = openImage ? () => openImage(inline.url, inline.alt) : undefined;
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
-            onPress={openImageChip}
-            style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
+            onPress={openImage ? () => openImage(inline.url, inline.alt) : undefined}
+            style={[ctx.baseStyle, styles.markdownLink]}
             testID="message.markdownInlineImageChip"
           >
             {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
@@ -4061,13 +3877,10 @@ function MarkdownSessionLinkSpan({
   const detail = sessionReferenceDetails?.[
     mobileSessionReferenceMetadataKey(session.sessionId, session.messageClientId)
   ];
-  // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
-  // (clickableInlineStyle 保证两者同源)。
-  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
   return (
     <SpanText
-      onPress={openSessionLink}
-      style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
+      onPress={onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined}
+      style={[baseStyle, styles.markdownLink, styles.sessionLinkChipText]}
     >
       {`${session.messageClientId ? '❝' : '↳'} ${title}${detail ? ` · ${detail}` : ''}`}
     </SpanText>
@@ -5626,7 +5439,6 @@ function formatMediaPayloadBody(
 
 function MessageControlButton({
   buttonSize,
-  busy,
   copyState,
   disabled,
   id,
@@ -5634,7 +5446,6 @@ function MessageControlButton({
   onPress,
 }: {
   buttonSize: number;
-  busy?: boolean;
   copyState: CopyMessageStatus | 'idle' | 'copying';
   disabled?: boolean;
   id: MobileMessageControlActionId;
@@ -5659,7 +5470,7 @@ function MessageControlButton({
       ]}
       testID={messageControlActionTestID(id)}
     >
-      {messageControlActionIcon(id, copyState, iconSize, colors, busy)}
+      {messageControlActionIcon(id, copyState, iconSize, colors)}
     </Pressable>
   );
 }
@@ -5698,8 +5509,8 @@ function MessageMoreButton({
   );
 }
 
-function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'fork' {
-  return id === 'copy' || id === 'fork';
+function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' {
+  return id === 'copy';
 }
 
 function messageControlActionLabel(
@@ -5724,11 +5535,7 @@ function messageControlActionIcon(
   copyState: CopyMessageStatus | 'idle' | 'copying',
   iconSize: number,
   colors: ThemeColors,
-  busy = false,
 ): ReactNode {
-  if (id === 'fork' && busy) {
-    return <ActivityIndicator color={colors.textSecondary} size="small" />;
-  }
   if (id === 'copy') {
     return copyState === 'copying'
       ? <ActivityIndicator color={colors.textSecondary} size="small" />
@@ -5898,6 +5705,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageItem: {
     gap: 2,
     width: '100%',
+  },
+  sentInlineAtomBody: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    maxWidth: '100%',
   },
   sentInlineTextChunk: {
     flexBasis: '100%',
@@ -6106,24 +5920,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   markdownBody: { gap: 10 },
-  // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
-  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
-  //
-  // 刻意**不写 color**:必须继承所在上下文的颜色。表头(markdownTableHeaderCell 用
-  // textSecondary)、引用块等非正文色上下文里,写死 textPrimary 会让链接相对周围的
-  // 不可点文本**除下划线之外还变色**,违反「可点态只多一条横线」(PR #1144 review 实捉)。
   markdownLink: {
+    color: colors.textPrimary,
+    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   // 会话深链 chip(非 selectable 原生 Text 路径):嵌套 Text 只支持背景色不支持
   // 圆角,用 surfaceChip 底色近似 chip 观感;WebView 路径的 .xdt-session-chip
   // 才是完整圆角版本。
-  //
-  // 下划线**不再**关掉:会话 chip 是可点的,而「下划线常显 = 可点」是聊天正文的唯一
-  // 交互信号(见 docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。原先靠底色
-  // 单独表达可点,但底色同时被行内 code 等排版语义占用,读者无法据此判断可点性。
   sessionLinkChipText: {
     backgroundColor: colors.surfaceChip,
+    textDecorationLine: 'none',
   },
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
@@ -6143,17 +5950,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
   },
-  // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
-  // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
-  // `.markdown-body code` 刻意不定义 color、纯靠继承,可点与不可点的行内 code
-  // 差别只在那条横线)。
-  //
-  // 刻意**不**再写 color 与 fontWeight:本样式总是叠在 markdownInlineCode 之后,
-  // 于是可点的行内 code 与不可点的行内 code 同色同字重,只差下划线 —— 差异越单一,
-  // 「有横线 = 能点」这条规则越可信。早先这里钉 textPrimary + medium 是因为当时
-  // 下划线还不是主信号,怕可点的比不可点的更淡;现在信号收敛到下划线,压暗是行内
-  // code 的排版语义,继承它才是对的。
+  // 已验证存在的文件/目录路径 chip:靠「正文色 + medium + 下划线」区别于普通行内
+  // code(后者压暗)。color 必须显式钉回 textPrimary —— 本样式总是叠在
+  // markdownInlineCode 之后,不写就会继承那份压暗色,可点的反而比不可点的更淡。
   markdownPathChip: {
+    color: colors.textPrimary,
+    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   markdownInlineImage: {

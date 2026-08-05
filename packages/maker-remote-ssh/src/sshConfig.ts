@@ -73,10 +73,6 @@ function readAuthMarker(section: SshConfigSection): 'agent' | 'key' | null {
   return null;
 }
 
-function isHostDirective(section: SshConfigSection): boolean {
-  return section.param?.toLowerCase() === 'host';
-}
-
 /**
  * Read and parse ~/.ssh/config (or any path). Returns a list of concrete
  * hosts — wildcards and `Match` blocks are skipped. Missing file → [].
@@ -94,7 +90,7 @@ export async function readSshConfig(filePath = defaultSshConfigPath()): Promise<
   const hosts: HostConfig[] = [];
 
   for (const section of parsed) {
-    if (!isHostDirective(section)) continue;
+    if (section.param !== 'Host') continue;
     const aliases = Array.isArray(section.value) ? section.value : [section.value];
     for (const aliasRaw of aliases) {
       if (typeof aliasRaw !== 'string') continue;
@@ -146,30 +142,19 @@ export async function upsertHost(
   filePath = defaultSshConfigPath(),
 ): Promise<void> {
   const existing = await readRawConfig(filePath);
-  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
+  const parsed = SSHConfig.parse(existing) as unknown as { remove(query: { Host: string }): void };
 
-  // Remove the complete block before appending the replacement. The ssh-config
-  // library's `remove({ Host: alias })` matcher is case-sensitive on the
-  // directive name, while OpenSSH treats keywords case-insensitively.
-  removeHostSections(parsed, host.id);
+  // ssh-config's `remove({Host: alias})` is the documented way to drop a block.
+  // We always drop then re-append so values stay in a known order.
+  parsed.remove({ Host: host.id });
 
-  const append = SSHConfig.parse(formatHostBlock(host)) as SshConfigSection[];
+  const append = SSHConfig.parse(formatHostBlock(host)) as unknown as SshConfigSection[];
   for (const node of append) {
     (parsed as unknown as { push(node: unknown): void }).push(node);
   }
 
   const out = (parsed as unknown as { toString(): string }).toString();
   await writeAtomic(filePath, out);
-}
-
-/** Remove all concrete Host blocks for an alias, regardless of keyword casing. */
-function removeHostSections(parsed: SshConfigSection[], alias: string): void {
-  for (let index = parsed.length - 1; index >= 0; index -= 1) {
-    const section = parsed[index];
-    if (!isHostDirective(section)) continue;
-    const values = Array.isArray(section.value) ? section.value : [section.value];
-    if (values.includes(alias)) parsed.splice(index, 1);
-  }
 }
 
 /**
@@ -246,7 +231,7 @@ function findHostSection(
   alias: string,
 ): SshConfigSection | null {
   for (const section of parsed) {
-    if (!isHostDirective(section)) continue;
+    if (section.param !== 'Host') continue;
     const values = Array.isArray(section.value) ? section.value : [section.value];
     if (values.includes(alias)) return section;
   }
@@ -349,9 +334,9 @@ export async function removeHost(
 ): Promise<void> {
   const existing = await readRawConfig(filePath);
   if (!existing) return;
-  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
-  removeHostSections(parsed, alias);
-  await writeAtomic(filePath, (parsed as unknown as { toString(): string }).toString());
+  const parsed = SSHConfig.parse(existing) as unknown as { remove(q: { Host: string }): void; toString(): string };
+  parsed.remove({ Host: alias });
+  await writeAtomic(filePath, parsed.toString());
 }
 
 // ── internals ──────────────────────────────────────────────────────────────

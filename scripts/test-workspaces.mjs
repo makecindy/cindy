@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePnpmInvocation } from "./shared/pnpm-invocation.mjs";
 import {
 	acquireTestGateLock,
 	shouldUseTestGateLock,
@@ -429,6 +428,16 @@ function describeTierStatus(manifestWorkspaces, tier) {
 	return entries.length ? entries.join(" ") : "Tier is not declared in manifest.";
 }
 
+export function resolvePnpmInvocation(args, env = process.env) {
+	const npmExecPath = env.npmExecPath ?? env.npm_execpath;
+	const execPath = env.execPath ?? process.execPath;
+	if (npmExecPath)
+		return { command: execPath, args: [npmExecPath, ...args], shell: false };
+	const platform = env.platform ?? process.platform;
+	const isWindows = platform === "win32";
+	return { command: "pnpm", args, shell: isWindows };
+}
+
 export function classifyFailure({ stage, exitCode, output }) {
 	if (stage === "preflight") return "PREFLIGHT_FAILED";
 	if (exitCode === 0) return null;
@@ -439,30 +448,6 @@ export function classifyFailure({ stage, exitCode, output }) {
 		return "TEST_ASSERTION_FAILED";
 	if (/Test timed out/i.test(output)) return "TEST_TIMEOUT";
 	return "COMMAND_FAILED";
-}
-
-function undersizedVitestShardArgs(commandSpec, selectedFiles) {
-	if (commandSpec.type !== "packageBin" || commandSpec.bin !== "vitest")
-		return [];
-	const shardArg = (commandSpec.args ?? []).find((arg) =>
-		arg.startsWith("--shard="),
-	);
-	const match = /^--shard=(\d+)\/(\d+)$/.exec(shardArg ?? "");
-	if (!match) return [];
-	const index = Number(match[1]);
-	const count = Number(match[2]);
-	if (
-		!Number.isSafeInteger(index) ||
-		!Number.isSafeInteger(count) ||
-		index < 1 ||
-		count < 1 ||
-		index > count
-	)
-		return [];
-
-	// Vitest rejects every shard when there are fewer files than shards, before
-	// it assigns the files. Limit the compatibility flag to that known case.
-	return selectedFiles.length < count ? ["--passWithNoTests"] : [];
 }
 
 export function buildPnpmArgs(
@@ -494,7 +479,6 @@ export function buildPnpmArgs(
 			"exec",
 			commandSpec.bin,
 			...(commandSpec.args ?? []),
-			...undersizedVitestShardArgs(commandSpec, selectedFiles),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {
@@ -581,9 +565,7 @@ export function runCommand(command, args, options = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
 			cwd: options.cwd,
-			env: options.env,
 			shell: options.shell,
-			windowsVerbatimArguments: options.windowsVerbatimArguments,
 			windowsHide: true,
 		});
 		const output = createBoundedOutputBuffer(options.maxOutputChars);
@@ -823,9 +805,7 @@ export async function runPlannedTests({
 					invocation.args,
 					{
 						cwd,
-						env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 						shell: invocation.shell,
-						windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 						stdout: reporter ? null : undefined,
 						stderr: reporter ? null : undefined,
 					},
@@ -868,9 +848,7 @@ export async function runPlannedTests({
 				invocation.args,
 				{
 					cwd,
-					env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 					shell: invocation.shell,
-					windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 					stdout: reporter ? null : undefined,
 					stderr: reporter ? null : undefined,
 				},

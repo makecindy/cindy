@@ -47,7 +47,6 @@ function renderChrome(
   url = 'https://www.taptap.cn/',
   extra: {
     commentSupported?: boolean;
-    canOpenInSystemBrowser?: boolean;
     isLoading?: boolean;
     onReload?: () => void;
     onStop?: () => void;
@@ -75,7 +74,6 @@ function renderChrome(
       onOpenInSystemBrowser,
       onCopyLink,
       commentSupported: extra.commentSupported,
-      canOpenInSystemBrowser: extra.canOpenInSystemBrowser ?? true,
     }),
   );
   return { onNavigate, onOpenInSystemBrowser, onCopyLink, ref };
@@ -197,21 +195,5 @@ describe('BrowserChrome', () => {
     fireEvent.click(copyItem);
     expect(onOpenInSystemBrowser).not.toHaveBeenCalled();
     expect(onCopyLink).not.toHaveBeenCalled();
-  });
-
-  it('disables system-browser opening when the host has no safe opener for the URL', () => {
-    const { onOpenInSystemBrowser, onCopyLink } = renderChrome('file:///tmp/notes.md', {
-      canOpenInSystemBrowser: false,
-    });
-
-    const openItem = screen.getByRole('button', {
-      name: 'rightSidebar.browser.openInSystemBrowser',
-    }) as HTMLButtonElement;
-    const copyItem = screen.getByRole('button', {
-      name: 'rightSidebar.browser.copyLink',
-    }) as HTMLButtonElement;
-
-    expect(openItem.disabled).toBe(true);
-    expect(copyItem.disabled).toBe(false);
   });
 });

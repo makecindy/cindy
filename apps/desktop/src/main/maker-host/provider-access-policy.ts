@@ -5,7 +5,7 @@
  * providers and models exposed as selectable capabilities to product surfaces.
  */
 
-import { classifyModel, type Catalog, type Provider } from '@cindy/model-providers';
+import { groupOf, type Catalog, type Provider } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export interface ProviderAccessContext {
@@ -32,29 +32,9 @@ function projectVideoDefaults(
 }
 
 /**
- * Build-region projection for Cindy-managed media capabilities. Global keeps
- * the catalog source verbatim; Mainland China and dev expose only the media
- * capabilities that the regional Cindy service supports.
- *
- * Region is a build-time choice for Cindy-owned services, not a restriction on
- * providers the user connected locally. OpenAI/Codex OAuth, xAI OAuth, Gemini
- * API keys and custom providers therefore keep their image catalog in every
- * build. Video dispatch is not provider-aware yet, so non-XD video capabilities
- * stay hidden outside Global until the runtime can route them by provider.
- *
- * Embedding clears the Cindy-managed list for Mainland China builds, because
- * every model behind that endpoint is an overseas one. Clearing the list (rather
- * than leaving it and failing at dispatch) is what makes the plugin capability
- * report "unavailable" instead of offering models that are guaranteed to fail.
- *
- * Non-XD providers are left untouched *here* on purpose, but that is not the
- * same as exposing them: unlike image, embedding dispatch is not provider-aware
- * yet (one EmbeddingService holding a single XD Gateway base URL and key), so a
- * non-XD `embeddingModels` list would be dispatched with Cindy's credential
- * rather than the user's own. `deriveCindyMediaConfig` therefore drops non-XD
- * embedding lists in *every* region — see the `kind === 'embed'` guard there.
- * This projection stays region-only; the routing constraint lives with the
- * derivation so both builds get it (PR #1707 review).
+ * Build-region projection for the Cindy AI media catalog. Global keeps the
+ * catalog source verbatim; Mainland China and dev share the Mainland product
+ * semantics and expose only the media capabilities supported there.
  */
 export function projectProviderCatalogForBuildRegion(
   catalog: Catalog,
@@ -64,30 +44,7 @@ export function projectProviderCatalogForBuildRegion(
 
   let changed = false;
   const providers = catalog.providers.map((provider) => {
-    const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
-    if (!isCindyAi) {
-      const models = Object.fromEntries(
-        Object.entries(provider.models).map(([agent, list]) => [
-          agent,
-          (list ?? []).filter((model) => classifyModel(model) !== 'video'),
-        ]),
-      ) as Provider['models'];
-      const hasVideoModels = Object.values(provider.models).some(
-        (list) => list?.some((model) => classifyModel(model) === 'video') ?? false,
-      );
-      const hasVideoCatalog =
-        provider.videoModels !== undefined || provider.videoDefaults !== undefined;
-      if (!hasVideoModels && !hasVideoCatalog) return provider;
-
-      changed = true;
-      const projected: Provider = {
-        ...provider,
-        models,
-        videoModels: [],
-      };
-      delete projected.videoDefaults;
-      return projected;
-    }
+    if (provider.id !== CINDY_AI_PROVIDER_ID) return provider;
     changed = true;
 
     const videoModels = (provider.videoModels ?? []).filter((model) =>
@@ -98,10 +55,9 @@ export function projectProviderCatalogForBuildRegion(
     const models = Object.fromEntries(
       Object.entries(provider.models).map(([agent, list]) => [
         agent,
-        (list ?? []).filter((model) => {
-          const group = classifyModel(model);
-          if (group === 'image' || group === 'embedding') return false;
-          return group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id);
+        list.filter((model) => {
+          const group = groupOf(model);
+          return group !== 'image' && (group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id));
         }),
       ]),
     ) as Provider['models'];
@@ -110,11 +66,9 @@ export function projectProviderCatalogForBuildRegion(
       models,
       imageModels: [],
       videoModels,
-      embeddingModels: [],
     };
     delete projected.imageDefaults;
     delete projected.videoDefaults;
-    delete projected.embeddingDefaults;
     if (videoDefaults) projected.videoDefaults = videoDefaults;
     return projected;
   });

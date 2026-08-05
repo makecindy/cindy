@@ -28,9 +28,7 @@ import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictD
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
-import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
-import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
@@ -264,6 +262,9 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  // 给树内远端消费方(如 GlobalDropImportListener 的装入编排)的稳定 getter:
+  // 读 ref 拿最新值,prop 身份不随会话切换变化,不触发下游 effect 重挂。
+  const getRightSidebarSessionId = useCallback(() => rightSidebarSessionIdRef.current, []);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -288,21 +289,18 @@ export function MainLayout() {
   const [rightSidebarWorkdirInfo, setRightSidebarWorkdirInfo] = useState<{
     workdir: string;
     remoteHostId: string | null;
-    deviceLinkDeviceId?: string | null;
-  }>({ workdir: '', remoteHostId: null, deviceLinkDeviceId: undefined });
+  }>({ workdir: '', remoteHostId: null });
   const setRightSidebarWorkdir = useCallback(
-    (workdir: string, remoteHostId: string | null = null, deviceLinkDeviceId?: string | null) =>
+    (workdir: string, remoteHostId: string | null = null) =>
       // 同值 bailout(返回 prev 引用):恢复"字符串 state 同值不重渲染"的旧语义。
       // Outlet context 对象每次渲染都是新身份,OrcaWorkflowRoute 等消费方的
       // effect 以 outletContext 为 dep——如果同值 declare 也换新对象,会形成
       // declare → 重渲染 → 新 context → effect 重跑 → declare 的死循环
       // (真机实测 Maximum update depth exceeded)。
       setRightSidebarWorkdirInfo((prev) =>
-        prev.workdir === workdir &&
-        prev.remoteHostId === remoteHostId &&
-        prev.deviceLinkDeviceId === deviceLinkDeviceId
+        prev.workdir === workdir && prev.remoteHostId === remoteHostId
           ? prev
-          : { workdir, remoteHostId, deviceLinkDeviceId },
+          : { workdir, remoteHostId },
       ),
     [],
   );
@@ -529,49 +527,6 @@ export function MainLayout() {
     });
     return unsubscribe;
   }, [navigateToSession]);
-
-  // 插件请求新建自动化(agent 槽的 schedule 加档):main 的 scheduleSlot 已做资格审 /
-  // 净化截断 / 频率钳制 / 限速,这里只负责把用户带到自动化页并把预填内容交过去。
-  // 挂在 MainLayout 的理由同上面那条:它在 ProtectedRoute + LocalDbGate 之内,用户
-  // 必然已登录、可以安全 navigate;而插件请求可能在任何路由下到达(用户当时正在
-  // 插件面板里),SchedulerPage 那时还没挂载,接不到这条推送。
-  //
-  // main 侧**只投一个主壳窗**(见 cindy-brain 的 isMainShellWindowUrl):独立的插件
-  // 面板窗 / 右侧栏窗与 MainLayout 平级、没有本订阅,所以别在那两个轻壳里再加一份
-  // 处理——它们收不到,加了也是死代码。同一窗口内仍需去重(下游 SchedulerPage 的
-  // handledScheduleCreateRequestRef):navigate 带的 state 可能被 effect 重复消费。
-  //
-  // ⚠️ 这里**只导航**。任务落库只发生在用户于面板上点保存之后 —— 插件全程没有
-  // 直接建任务的通道(scheduleSlot 的 deps 里压根没有 schedule storage)。
-  useEffect(() => {
-    const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
-      if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
-      if (
-        typeof requestId !== 'string' || !requestId ||
-        typeof ghostId !== 'string' || !ghostId ||
-        typeof ghostName !== 'string' || !ghostName ||
-        typeof name !== 'string' || !name ||
-        typeof prompt !== 'string' || !prompt
-      ) {
-        return;
-      }
-      navigate('/cc-agent/scheduled', {
-        state: pluginScheduleNavigationState({
-          kind: 'plugin-schedule-draft',
-          requestId,
-          ghostId,
-          ghostName,
-          name,
-          prompt,
-          ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
-            ? { intervalMs }
-            : {}),
-        }),
-      });
-    });
-    return unsubscribe;
-  }, [navigate]);
 
   // cindy://(+ 历史 xdt-maker://)深度链接 + --open-folder 右键菜单订阅 —— main 端解析后推 payload,
   // 这里按 type 分发。
@@ -850,7 +805,6 @@ export function MainLayout() {
       sessionId: rightSidebarSessionId,
       workdir: rightSidebarWorkdirInfo.workdir || null,
       remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
-      deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
       available: rightSidebarAvailable,
     });
   }, [rightSidebarSessionId, rightSidebarWorkdirInfo, rightSidebarAvailable]);
@@ -1283,10 +1237,6 @@ export function MainLayout() {
                     重跑导致的"刷新一帧"闪烁。
                     ContentHeader 在 FadeSwitcher 之外 —— header chrome 不参与路由切换
                     动画，只有注入的中部内容随路由变化。 */}
-                  {/* 持久凭证库故障全局警示条(#1687):ContentHeader 之下、路由内容之上,
-                      shrink-0 在 main 的 flex 列里独占一行把内容推下(不遮盖)。放在
-                      FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
-                  <CredentialStoreBanner />
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
                     <Outlet
                       context={{
@@ -1330,7 +1280,6 @@ export function MainLayout() {
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}
-                  deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
                   onDetach={isSecondaryWindow() ? undefined : handleDetachRightSidebar}
                   // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
                   // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。
@@ -1444,7 +1393,10 @@ export function MainLayout() {
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
-      <GlobalDropImportListener onOpenShareImport={openShareImport} />
+      <GlobalDropImportListener
+        onOpenShareImport={openShareImport}
+        getRightSidebarSessionId={getRightSidebarSessionId}
+      />
       {shareImportRequest && (
         <SessionShareImportWizard
           key={shareImportRequest.id}

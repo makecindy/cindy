@@ -15,8 +15,6 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DL_HISTORY_MESSAGES_CHANNEL,
-  DL_TELEGRAM_STATUS_CHANNEL,
-  DL_TELEGRAM_SET_ONLINE_CHANNEL,
 } from '../allowlist.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
@@ -33,22 +31,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
-      'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
       'maker:message:delete',
-    ]) {
-      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
-    }
-  });
-
-  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
-    for (const ch of [
-      'git-context:get-for-session',
-      'git-context:pr-refs:list',
-      'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
@@ -82,7 +69,6 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
-    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:orca-workflows:list-workers-by-leads')).toBe(false);
   });
 
   it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {
@@ -180,25 +166,21 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('desktop-cmd:run')).toBe(true);
   });
 
-  it('放行远程 worktree(git 探测 / 分支 / 建议名 / 删除预检 + create / 窄补偿回收)', () => {
+  it('放行远程 worktree(git 探测 / 分支 / 建议名 / 删除预检只读 + create)', () => {
     for (const ch of [
       'worktree:detect-cwd',
       'worktree:list-branches',
       'worktree:suggest-name',
       'worktree:create',
-      'worktree:discard-precreated',
       'worktree:removal-preview',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
-    // 通用删除与 reveal 不放行：discard-precreated 只接受 sessionId + 已登记的
-    // 精确 path，或 create 前已持久化且与被控端元数据匹配的 recoveryKey，并由
-    // 被控端复核 ownership/dirty/live refs；其余删除仍只在被控端状态变更流程
-    // 内部触发。reveal 是本机 shell 副作用(shell.showItemInFolder)。
+    // 实际删除与 reveal 不放行:删除只在被控端状态变更流程内部触发,
+    // reveal 是本机 shell 副作用(shell.showItemInFolder)。
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:reveal')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:get-for-session')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:list-all')).toBe(false);
-    expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:remove')).toBe(false);
   });
 
   it('放行订阅控制帧(push 驱动:subscribe / unsubscribe)', () => {
@@ -227,26 +209,6 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行手机语音词典学习 evidence 回写帧(词典仍写在被控桌面)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('device-link:voice:dictionary-learning')).toBe(true);
     expect(DL_VOICE_DICTIONARY_LEARNING_CHANNEL).toBe('device-link:voice:dictionary-learning');
-  });
-
-  it('放行个人 Telegram bot 的跨设备上下线(窄口径例外),但本地那条 IPC 仍绝不放行', () => {
-    // 放行的是两条 device-link 专用通道:被控端 dispatch 拦截执行, 只切轮询。
-    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_TELEGRAM_STATUS_CHANNEL)).toBe(true);
-    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_TELEGRAM_SET_ONLINE_CHANNEL)).toBe(true);
-    // 本地 IM IPC 一律不得入表:它们在 im/host.ts 统一挂了
-    // assertTrustedAppRendererEvent(只认真实 sender), 是有意拦住 IM 凭证/配置面的
-    // 闸门。未来若有人图省事把 telegramBot:* 加进来, 这条直接红 —— 尤其
-    // disconnect / set-config 会清凭证或换 token, 远程绝不该碰。
-    for (const ch of [
-      'telegramBot:set-online',
-      'telegramBot:disconnect',
-      'telegramBot:set-config',
-      'telegramBot:get-status',
-      'discordBot:set-config',
-      'feishuBot:set-config',
-    ]) {
-      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(false);
-    }
   });
 
   it('绝不放行:本机副作用 / 全局设置写 / 账号密钥 / 裸写库 / 窗口 UI', () => {
@@ -291,7 +253,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       { re: /updater|release-notes|session-import|migration/, why: 'updater / 导入 / 迁移' },
     ];
     // 显式豁免:
-    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个任务的
+    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个会话的
     //    目标状态机),与 compat-mode:set / memory:set 这类全局设置写不同类,同类的
     //    maker:set-permission-mode 本就放行;仅命名撞上 `:set$` 模式。
     //  - `maker:api-key:present` 是 presence-only 探测:只回 { present: boolean },
@@ -361,10 +323,6 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:create 隧道超时必须大于默认 30s(git worktree add + 选择性 checkout 预算)', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create']).toBeGreaterThan(30_000);
-  });
-
-  it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
-    expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
   });
 });
 

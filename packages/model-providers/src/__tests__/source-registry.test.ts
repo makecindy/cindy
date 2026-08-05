@@ -7,7 +7,6 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {
@@ -30,7 +29,7 @@ import {
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
-import type { Catalog, CatalogModel, Provider } from '../types.js';
+import type { Catalog, CatalogModel } from '../types.js';
 
 const MINIMAL: Catalog = {
   version: 'test',
@@ -60,9 +59,7 @@ function runtimeCatalog(): Catalog {
   const clone = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
   for (const p of clone.providers) {
     if (p.id === 'anthropic') {
-      const models = [model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000 })];
-      p.models['claude-code'] = models;
-      p.models.codex = models;
+      p.models['claude-code'] = [model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000 })];
     }
     if (p.id === 'openai') {
       p.models.codex = [model('gpt-5.5', { name: 'GPT-5.5' })];
@@ -109,60 +106,13 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((p) => p.id === 'anthropic')!.models['claude-code']!.length).toBe(1);
   });
 
-  it('keeps a newer bundled modelRegistry when the primary full snapshot is stale', () => {
-    const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
-    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
-    if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
-    if (!bundledXai) throw new Error('missing bundled xAI provider');
-    const staleRegistry = {
-      ...bundledRegistry,
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      models: [bundledRegistry.models[0]!],
-    };
-    const staleXai = { ...bundledXai, name: 'STALE-XAI' };
-
-    const merged = mergeWithBundled({
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, staleXai],
-      modelRegistry: staleRegistry,
-    });
-
-    expect(merged.modelRegistry).toBe(bundledRegistry);
-    expect(merged.modelRegistry?.models.length).toBeGreaterThan(staleRegistry.models.length);
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(bundledXai);
-  });
-
-  it('uses a newer primary modelRegistry as one complete snapshot, including retirements', () => {
-    const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
-    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
-    if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
-    if (!bundledXai) throw new Error('missing bundled xAI provider');
-    const newerRegistry = {
-      ...bundledRegistry,
-      updatedAt: '2099-01-01T00:00:00.000Z',
-      models: [{ ...bundledRegistry.models[0]!, status: 'retired' as const }],
-    };
-    const newerXai = { ...bundledXai, name: 'NEWER-XAI' };
-
-    const merged = mergeWithBundled({
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, newerXai],
-      modelRegistry: newerRegistry,
-    });
-
-    expect(merged.modelRegistry).toBe(newerRegistry);
-    expect(merged.modelRegistry?.models).toHaveLength(1);
-    expect(merged.modelRegistry?.models[0]?.status).toBe('retired');
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(newerXai);
-  });
-
   it('orders result by bundled provider order (v2 远端只带 xai 时不得窜位)', () => {
     const v2Remote: Catalog = {
       version: '2',
       providers: [JSON.parse(JSON.stringify(BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')))],
     };
     const merged = mergeWithBundled(v2Remote);
-    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
+    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd']);
     // 远端独有的新供应商追加在 bundled 之后。
     const withExtra: Catalog = {
       version: '2',
@@ -172,7 +122,7 @@ describe('mergeWithBundled', () => {
       ],
     };
     expect(mergeWithBundled(withExtra).providers.map((p) => p.id)).toEqual([
-      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'newvendor',
+      'anthropic', 'openai', 'xai', 'xd', 'newvendor',
     ]);
   });
 
@@ -191,147 +141,6 @@ describe('mergeWithBundled', () => {
       providers: MINIMAL.providers.map((p) => ({ ...p, access: { kind: 'api' } })),
     };
     expect(mergeWithBundled(primary).providers.find((p) => p.id === 'anthropic')?.access).toEqual({ kind: 'api' });
-  });
-
-  it('同 updatedAt 异 Registry 内容在首次启动合并时保留 bundled 不可变快照', () => {
-    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
-    const mutatedRegistry = structuredClone(bundledRegistry);
-    mutatedRegistry.models[0] = { ...mutatedRegistry.models[0]!, name: 'Mutated in place' };
-    const primary: Catalog = { ...MINIMAL, modelRegistry: mutatedRegistry };
-
-    const merged = mergeWithBundled(primary);
-    expect(modelRegistryCanonicalJson(merged.modelRegistry!)).toBe(
-      modelRegistryCanonicalJson(bundledRegistry),
-    );
-  });
-
-  it('首次启动合并把等价时区表示视为同一 Registry revision', () => {
-    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
-    const shifted = new Date(Date.parse(bundledRegistry.updatedAt) + 8 * 60 * 60 * 1_000)
-      .toISOString()
-      .replace('Z', '+08:00');
-    const remoteXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
-    );
-    remoteXai.name = 'REMOTE-XAI';
-    const primary: Catalog = {
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, remoteXai],
-      modelRegistry: { ...bundledRegistry, updatedAt: shifted },
-    };
-
-    const merged = mergeWithBundled(primary);
-    expect(merged.modelRegistry?.updatedAt).toBe(shifted);
-    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('REMOTE-XAI');
-  });
-
-  it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXai] });
-    expect(inherited.providers.find((p) => p.id === 'xai')?.imageModels)
-      .toEqual(bundledXai.imageModels);
-
-    const explicitlyDisabled = mergeWithBundled({
-      version: '2',
-      providers: [{ ...oldRemoteXai, imageModels: [] }],
-    });
-    expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
-  });
-
-  it('旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义', () => {
-    // 与 xai 图像清单同一个道理(PR #1707 review):向量清单是客户端新增的 bundled
-    // 元数据,远端 / 本地目录里同 id 的 xd 可能还是升级前的结构。primary 整体优先
-    // 会让旧结构把新字段整段遮掉 → 目录派生空清单 → 设置页"无可用模型"、所有
-    // embed_text 直接 NO_CANDIDATE,能力等于没上线。
-    const bundledXd = BUNDLED_CATALOG.providers.find((p) => p.id === 'xd')!;
-    const oldRemoteXd = JSON.parse(JSON.stringify(bundledXd)) as Provider;
-    delete oldRemoteXd.embeddingModels;
-    delete oldRemoteXd.embeddingDefaults;
-    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXd] });
-    const inheritedXd = inherited.providers.find((p) => p.id === 'xd');
-    expect(inheritedXd?.embeddingModels).toEqual(bundledXd.embeddingModels);
-    expect(inheritedXd?.embeddingDefaults).toEqual(bundledXd.embeddingDefaults);
-
-    // 显式 `[]` = "这个供应商不提供向量",不能被 bundled 顶回来。
-    const explicitlyDisabled = mergeWithBundled({
-      version: '2',
-      providers: [{ ...oldRemoteXd, embeddingModels: [] }],
-    });
-    expect(
-      explicitlyDisabled.providers.find((p) => p.id === 'xd')?.embeddingModels,
-    ).toEqual([]);
-  });
-
-  it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-
-    const apiKeyXai: Provider = {
-      ...oldRemoteXai,
-      auth: { method: 'apiKey' },
-    };
-    const alternateRouteXai: Provider = {
-      ...oldRemoteXai,
-      routing: {
-        ...oldRemoteXai.routing,
-        codex: {
-          ...oldRemoteXai.routing.codex!,
-          upstream: 'https://oauth-proxy.example.test',
-        },
-      },
-    };
-
-    expect(
-      mergeWithBundled({ version: '2', providers: [apiKeyXai] }).providers.find(
-        (p) => p.id === 'xai',
-      )?.imageModels,
-    ).toBeUndefined();
-    expect(
-      mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
-        (p) => p.id === 'xai',
-      )?.imageModels,
-    ).toBeUndefined();
-  });
-
-  it('旧 xAI 条目仅在 access 缺省或仍为同一订阅时继承 bundled 图像能力', () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-
-    for (const access of [
-      { kind: 'api' as const },
-      { kind: 'managed' as const },
-      { kind: 'subscription' as const, product: 'Another subscription' },
-    ]) {
-      expect(
-        mergeWithBundled({
-          version: '2',
-          providers: [{ ...oldRemoteXai, access }],
-        }).providers.find((p) => p.id === 'xai')?.imageModels,
-      ).toBeUndefined();
-    }
-
-    expect(
-      mergeWithBundled({
-        version: '2',
-        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
-      }).providers.find((p) => p.id === 'xai')?.imageModels,
-    ).toEqual(bundledXai.imageModels);
-  });
-
-  it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {
-    const bundledOpenai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')!;
-    const remoteOpenai = JSON.parse(JSON.stringify(bundledOpenai)) as Provider;
-    delete remoteOpenai.imageModels;
-
-    expect(
-      mergeWithBundled({ version: '2', providers: [remoteOpenai] }).providers.find(
-        (p) => p.id === 'openai',
-      )?.imageModels,
-    ).toBeUndefined();
   });
 
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {
@@ -388,174 +197,6 @@ describe('loadCatalog', () => {
     expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
   });
 
-  it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
-    const url = 'https://catalog.example.test/providers.json';
-    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
-    const remote = await loadCatalogWithSource(
-      { url },
-      {
-        fetchText: vi.fn(async () => JSON.stringify(MINIMAL)),
-        writeCache,
-      },
-    );
-    expect(remote.source).toBe('remote');
-    expect(writeCache).toHaveBeenCalledWith(url, JSON.stringify(MINIMAL));
-
-    const cached = await loadCatalogWithSource(
-      { url },
-      {
-        fetchText: vi.fn(async () => {
-          throw new Error('offline');
-        }),
-        readCache: vi.fn(async (scope) =>
-          scope === url ? JSON.stringify(MINIMAL) : null,
-        ),
-      },
-    );
-    expect(cached).toMatchObject({ source: 'cache', catalog: { version: 'test' } });
-  });
-
-  it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
-    const url = 'https://catalog.example.test/providers.json';
-    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
-    const xai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
-    if (!xai) throw new Error('missing bundled xAI provider');
-    const older: Catalog = {
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, { ...xai, name: 'STALE-XAI' }],
-      modelRegistry: {
-        ...registry,
-        updatedAt: '2026-07-30T00:00:00.000Z',
-        models: registry.models.map((entry: { id: string }) => (
-          entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'STALE' } : entry
-        )),
-      },
-    };
-    const newer: Catalog = {
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, { ...xai, name: 'NEWER-LKG-XAI' }],
-      modelRegistry: {
-        ...registry,
-        updatedAt: '2026-08-02T00:00:00.000Z',
-        models: registry.models.map((entry: { id: string }) => (
-          entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'NEWER-LKG' } : entry
-        )),
-      },
-    };
-    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
-
-    const loaded = await loadCatalogWithSource(
-      { url },
-      {
-        fetchText: vi.fn(async () => JSON.stringify(older)),
-        readCache: vi.fn(async () => JSON.stringify(newer)),
-        writeCache,
-      },
-    );
-
-    expect(loaded.source).toBe('remote');
-    expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-02T00:00:00.000Z');
-    expect(
-      loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
-    ).toBe('NEWER-LKG');
-    expect(loaded.catalog.providers.find((provider) => provider.id === 'xai')?.name)
-      .toBe('NEWER-LKG-XAI');
-    const persisted = JSON.parse(writeCache.mock.calls[0]![1]);
-    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-02T00:00:00.000Z');
-    expect(persisted.providers.find((provider: Provider) => provider.id === 'xai')?.name)
-      .toBe('NEWER-LKG-XAI');
-  });
-
-  it('rejects a remote registry that republishes the same updatedAt with different content (keeps LKG)', async () => {
-    const url = 'https://catalog.example.test/providers.json';
-    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
-    const updatedAt = '2026-08-01T00:00:00.000Z';
-    const cached: Catalog = {
-      ...MINIMAL,
-      modelRegistry: { ...registry, updatedAt },
-    };
-    // 同 updatedAt、内容被悄悄改写 = 非法重发(纠错必须 forward-fix 抬 updatedAt)。
-    const mutatedRemote: Catalog = {
-      ...MINIMAL,
-      modelRegistry: {
-        ...registry,
-        updatedAt,
-        models: registry.models.slice(1),
-      },
-    };
-    const warns: string[] = [];
-
-    const loaded = await loadCatalogWithSource(
-      { url },
-      {
-        fetchText: vi.fn(async () => JSON.stringify(mutatedRemote)),
-        readCache: vi.fn(async () => JSON.stringify(cached)),
-        writeCache: vi.fn(async () => undefined),
-        log: (level, msg) => {
-          if (level === 'warn') warns.push(msg);
-        },
-      },
-    );
-
-    expect(loaded.source).toBe('remote');
-    expect(loaded.catalog.modelRegistry?.models).toHaveLength(registry.models.length);
-    expect(warns.some((msg) => msg.includes('republished the same updatedAt'))).toBe(true);
-  });
-
-  it('adopts the newer snapshot returned by a serialized LKG commit', async () => {
-    const url = 'https://catalog.example.test/providers.json';
-    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
-    const newer: Catalog = {
-      ...MINIMAL,
-      modelRegistry: {
-        ...registry,
-        updatedAt: '2026-08-01T00:00:00.000Z',
-      },
-    };
-    const older: Catalog = {
-      ...MINIMAL,
-      modelRegistry: {
-        ...registry,
-        updatedAt: '2026-07-30T00:00:00.000Z',
-      },
-    };
-
-    const loaded = await loadCatalogWithSource(
-      { url },
-      {
-        fetchText: vi.fn(async () => JSON.stringify(older)),
-        writeCache: vi.fn(async () => JSON.stringify(newer)),
-      },
-    );
-
-    expect(loaded.source).toBe('remote');
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
-  });
-
-  it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {
-    const url = 'https://catalog.example.test/providers.json';
-    const fetchText = vi.fn();
-    const cached = await loadCatalogWithSource(
-      { url, remoteBudgetMs: 0 },
-      {
-        fetchText,
-        readCache: vi.fn(async () => JSON.stringify(MINIMAL)),
-      },
-    );
-    expect(fetchText).not.toHaveBeenCalled();
-    expect(cached.source).toBe('cache');
-
-    const invalid = await loadCatalogWithSource(
-      { url, remoteBudgetMs: 0 },
-      {
-        fetchText,
-        readCache: vi.fn(async () => '{"version":"bad","providers":[]}'),
-      },
-    );
-    expect(invalid).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
-  });
-
   it('dev: reads local path, skips network', async () => {
     const fetchText = vi.fn();
     const io: CatalogIO = { readFile: vi.fn(async () => JSON.stringify(MINIMAL)), fetchText };
@@ -566,49 +207,8 @@ describe('loadCatalog', () => {
   });
 
   it('falls back from public API to legacy OSS before bundled', async () => {
-    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
     const fetchText = vi.fn()
       .mockRejectedValueOnce(new Error('api unavailable'))
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          ...MINIMAL,
-          cindyModelMeta: { version: 1, models: { retired: { contextWindow: 1 } } },
-        }),
-      );
-    const cat = await loadCatalog(
-      {
-        baseUrl: 'https://model-access.example.com',
-        fallbackBaseUrl: 'https://cdn.example.com/cindy',
-        now: () => 0,
-      },
-      { fetchText, writeCache },
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      1,
-      'https://model-access.example.com/api/model-catalog/catalog',
-      15_000,
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      2,
-      'https://cdn.example.com/cindy/cfg/providers.json',
-      expect.any(Number),
-    );
-    expect(cat.version).toBe('test');
-    expect(cat).not.toHaveProperty('cindyModelMeta');
-    expect(writeCache).toHaveBeenCalledWith(
-      'https://cdn.example.com/cindy/cfg/providers.json',
-      expect.any(String),
-    );
-    expect(JSON.parse(writeCache.mock.calls[0]![1])).not.toHaveProperty('cindyModelMeta');
-  });
-  it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
-    const fetchText = vi.fn()
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          ...MINIMAL,
-          cindyModelMeta: { version: 1, models: {} },
-        }),
-      )
       .mockResolvedValueOnce(JSON.stringify(MINIMAL));
     const cat = await loadCatalog(
       {
@@ -630,29 +230,29 @@ describe('loadCatalog', () => {
     );
     expect(cat.version).toBe('test');
   });
-
-  it('loads a legacy OSS LKG after removing its retired metadata block', async () => {
-    const legacyUrl = 'https://cdn.example.com/cindy/cfg/providers.json';
-    const fetchText = vi.fn().mockRejectedValue(new Error('offline'));
-    const readCache = vi.fn(async (scope: string) =>
-      scope === legacyUrl
-        ? JSON.stringify({
-            ...MINIMAL,
-            cindyModelMeta: { version: 1, models: {} },
-          })
-        : null,
-    );
-    const result = await loadCatalogWithSource(
+  it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
+    const fetchText = vi.fn()
+      .mockResolvedValueOnce('{"version":"broken","providers":[]}')
+      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
+    const cat = await loadCatalog(
       {
         baseUrl: 'https://model-access.example.com',
         fallbackBaseUrl: 'https://cdn.example.com/cindy',
         now: () => 0,
       },
-      { fetchText, readCache },
+      { fetchText },
     );
-    expect(result.source).toBe('cache');
-    expect(result.catalog.version).toBe('test');
-    expect(result.catalog).not.toHaveProperty('cindyModelMeta');
+    expect(fetchText).toHaveBeenNthCalledWith(
+      1,
+      'https://model-access.example.com/api/model-catalog/catalog',
+      15_000,
+    );
+    expect(fetchText).toHaveBeenNthCalledWith(
+      2,
+      'https://cdn.example.com/cindy/cfg/providers.json',
+      expect.any(Number),
+    );
+    expect(cat.version).toBe('test');
   });
 
   it('shares one remote budget across the public API and legacy OSS fallback', async () => {
@@ -724,49 +324,6 @@ describe('loadCatalog', () => {
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
   });
 
-  it('redacts credentials, query, and hash from remote URL diagnostics', async () => {
-    const remoteUrl = 'https://catalog-user:catalog-pass@override.example.com/providers.json?token=secret-token#private';
-    const log = vi.fn<NonNullable<CatalogIO['log']>>();
-    const fetchText = vi.fn(async (url: string) => {
-      throw new Error(`request failed for ${url}`);
-    });
-
-    await loadCatalog(
-      { url: remoteUrl, now: () => 0 },
-      { fetchText, log },
-    );
-
-    expect(fetchText).toHaveBeenCalledWith(remoteUrl, 15_000);
-    const diagnostics = JSON.stringify(log.mock.calls);
-    expect(diagnostics).toContain('https://override.example.com/providers.json');
-    expect(diagnostics).not.toContain('catalog-user');
-    expect(diagnostics).not.toContain('catalog-pass');
-    expect(diagnostics).not.toContain('secret-token');
-    expect(diagnostics).not.toContain('#private');
-  });
-
-  it('keeps special legacy JSON keys inert and lets strict parsing reject them', async () => {
-    const legacyPayload = JSON.stringify(MINIMAL).replace(
-      '{',
-      '{"__proto__":{"polluted":true},"cindyModelMeta":{"version":1},',
-    );
-    const fetchText = vi.fn()
-      .mockRejectedValueOnce(new Error('api unavailable'))
-      .mockResolvedValueOnce(legacyPayload);
-
-    const result = await loadCatalogWithSource(
-      {
-        baseUrl: 'https://model-access.example.com',
-        fallbackBaseUrl: 'https://cdn.example.com/cindy',
-        now: () => 0,
-      },
-      { fetchText },
-    );
-
-    expect(result).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
-    expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
-  });
-
   it('falls back to bundled when fetch fails', async () => {
     const io: CatalogIO = {
       fetchText: vi.fn(async () => {
@@ -775,7 +332,7 @@ describe('loadCatalog', () => {
     };
     const cat = await loadCatalog({ url: 'https://x/y.json' }, io);
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
-    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'gemini', 'openai', 'xai', 'xd']);
+    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
   });
 
   it('disableFetch → bundled (no network)', async () => {
@@ -791,7 +348,7 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
 
   it('providersForAgent ignores connection', () => {
     expect(providersForAgent(views, 'claude-code').map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
-    expect(providersForAgent(views, 'codex').map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+    expect(providersForAgent(views, 'codex').map((p) => p.id).sort()).toEqual(['openai', 'xai', 'xd']);
   });
 
   it('connectedProvidersForAgent honors connection', () => {
@@ -931,13 +488,8 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
           name: 'Custom',
           source: 'user',
           agents: ['claude-code'],
-          auth: { method: 'apiKey' },
-          routing: {
-            'claude-code': {
-              upstream: 'https://custom.test',
-              authStrategy: 'api-key-header',
-            },
-          },
+          auth: { method: 'api-key' },
+          routing: { 'claude-code': { upstream: 'https://custom.test', authStrategy: 'api-key' } },
           models: {
             'claude-code': [model('flux-image-x', { group: 'custom:custom-p' })],
           },
@@ -965,19 +517,6 @@ describe('resolveRoute(运行时注入 fixture)', () => {
     expect(r?.routing.authStrategy).toBe('oauth-passthrough');
   });
 
-  it('anthropic claude (codex) → Anthropic Messages bridge + host-owned OAuth', () => {
-    const r = resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'codex');
-    expect(r?.routing).toMatchObject({
-      upstream: 'https://api.anthropic.com',
-      wireProtocol: 'anthropic-messages',
-      authStrategy: 'provider-oauth-header',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-      },
-    });
-  });
-
   it('xd claude (claude-code) → gateway, gateway-key, 不删 anthropic-beta(fast 经网关透传)', () => {
     const r = resolveRoute(views, 'xd', 'claude-opus-4-8', 'claude-code');
     expect(r?.routing.upstream).toBe(xdRouting?.['claude-code']?.upstream);
@@ -1001,6 +540,7 @@ describe('resolveRoute(运行时注入 fixture)', () => {
 
   it('rejects unsupported (provider, model, agent) combos', () => {
     expect(resolveRoute(views, 'anthropic', 'gpt-5.5', 'claude-code')).toBeNull();
+    expect(resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'openai', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'nope', 'claude-opus-4-8', 'claude-code')).toBeNull();
   });

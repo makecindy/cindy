@@ -53,7 +53,6 @@ export function useShowConnectionBanner(
     // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
     hasError: Boolean(resolveEffectiveConnectionError(error, deviceUnresponsive)),
     hasIssue: issue !== null,
-    hasUnstableIssue: issue?.kind === 'unstable',
     deviceUnresponsive,
   });
 }
@@ -83,9 +82,9 @@ export function ConnectionBanner({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
+  // 链路已 online 说明 issue 已过期(client 侧 online 会清除,这里兜底不展示)。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
-  const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;
+  const activeIssue = status !== 'online' ? issue : null;
   // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
   // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
   const showUnresponsive = !activeIssue && deviceUnresponsive;
@@ -100,16 +99,12 @@ export function ConnectionBanner({
       : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
   const title = activeIssue
-    ? activeIssue.kind === 'unstable'
-      ? t('deviceLink.unstableTitle')
-      : connectionIssueTitle(activeIssue.kind)
+    ? connectionIssueTitle(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveTitle')
       : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
   const copy = activeIssue
-    ? activeIssue.kind === 'unstable'
-      ? t('deviceLink.unstableHint')
-      : connectionIssueHint(activeIssue.kind)
+    ? connectionIssueHint(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveHint')
       : friendlyError ?? relayStatusHint(status, lastSyncedAt);

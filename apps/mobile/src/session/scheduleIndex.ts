@@ -74,14 +74,13 @@ interface ScheduleIndexThrottleEntry {
   failedAt: number | null;
   /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
   failedUnresponsive: boolean;
-  /** 失败原因是本机链路问题(NOT_CONNECTED / LINK_NOT_OPEN / BACKPRESSURE);重连全局失效。 */
+  /** 失败原因是本机链路问题(NOT_CONNECTED / LINK_NOT_OPEN);重连全局失效。 */
   failedTransient: boolean;
   /** 失败原因是目标设备离线(DEVICE_OFFLINE);仅该设备 presence 恢复时失效。 */
   failedOffline: boolean;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
-const scheduleIndexInvalidationVersions = new Map<string, number>();
 
 /**
  * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
@@ -95,17 +94,13 @@ function hasRemoteErrorMarker(error: unknown, marker: string): boolean {
 }
 
 /**
- * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN / BACKPRESSURE):重连即恢复,重连钩子全局失效。
+ * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复,重连钩子全局失效。
  * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉;也不含
  * DEVICE_OFFLINE——那是逐设备状态,归 isDeviceOfflineError(review:全局失效
  * 会让 B 设备的任何 rehydrate 反复清掉仍离线的 A 设备的负缓存,止损失效)。
  */
 function isLocalLinkDownError(error: unknown): boolean {
-  return (
-    hasRemoteErrorMarker(error, 'NOT_CONNECTED')
-    || hasRemoteErrorMarker(error, 'LINK_NOT_OPEN')
-    || hasRemoteErrorMarker(error, 'BACKPRESSURE')
-  );
+  return hasRemoteErrorMarker(error, 'NOT_CONNECTED') || hasRemoteErrorMarker(error, 'LINK_NOT_OPEN');
 }
 
 /**
@@ -206,29 +201,9 @@ export function invalidateOfflineScheduleIndexFailureFor(deviceId: string): void
   }
 }
 
-export function invalidateScheduleIndexForDevice(deviceId: string): void {
-  if (!deviceId) return;
-  scheduleIndexThrottleEntries.delete(deviceId);
-  scheduleIndexInvalidationVersions.set(
-    deviceId,
-    (scheduleIndexInvalidationVersions.get(deviceId) ?? 0) + 1,
-  );
-}
-
-/**
- * Offline invalidation generation for consumers that need to reject a stale
- * completion from a request which was already in flight when the device went
- * offline. The generation is monotonic per device and intentionally separate
- * from the TTL cache entry.
- */
-export function getScheduleIndexInvalidationVersion(deviceId: string): number {
-  return scheduleIndexInvalidationVersions.get(deviceId) ?? 0;
-}
-
-/** Test-only: clear cache and invalidation generations. */
+/** 测试用:清空节流登记表。 */
 export function resetScheduleIndexThrottleForTesting(): void {
   scheduleIndexThrottleEntries.clear();
-  scheduleIndexInvalidationVersions.clear();
 }
 
 export function loadDeviceSessionScheduleIndex(
@@ -238,20 +213,6 @@ export function loadDeviceSessionScheduleIndex(
   return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
     isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
   });
-}
-
-export function invalidateRunningSessionScheduleEntries(
-  current: Map<string, RemoteSessionScheduleInfo>,
-  sessionIds: Iterable<string>,
-): Map<string, RemoteSessionScheduleInfo> {
-  let next: Map<string, RemoteSessionScheduleInfo> | null = null;
-  for (const sessionId of sessionIds) {
-    const info = current.get(sessionId);
-    if (!info?.running) continue;
-    next ??= new Map(current);
-    next.set(sessionId, { ...info, running: false });
-  }
-  return next ?? current;
 }
 
 export function replaceSessionScheduleIndexEntries(

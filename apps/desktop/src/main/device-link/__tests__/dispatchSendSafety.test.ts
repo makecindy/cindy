@@ -9,14 +9,7 @@
  * 只 mock electron(app)+ logger;subscriptions 用真实模块(注册控制端订阅)。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  DeviceLinkError,
-  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-  DL_SUBSCRIBE_CHANNEL,
-  MAX_FRAME_BYTES,
-  PROTOCOL_VERSION,
-  type InvokeResultPayload,
-} from '@cindy/device-link';
+import { DeviceLinkError, MAX_FRAME_BYTES, PROTOCOL_VERSION, type InvokeResultPayload } from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: {
@@ -30,34 +23,17 @@ vi.mock('electron', () => ({
   // (经 scheduler-host 传递性 import 被拉进来),补桩避免 collect 阶段报 mock 未定义
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
-const deviceLinkSettings = vi.hoisted(() => ({
-  value: {
-    remoteControlEnabled: true,
-    revokedControllers: [] as string[],
-  },
-}));
-
-vi.mock('../settings-store', () => ({
-  readDeviceLinkSettings: () => deviceLinkSettings.value,
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 import { __testing } from '../dispatch';
 import * as subscriptions from '../subscriptions';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
-function mkClient(
-  over: Partial<{
-    getStatus: ReturnType<typeof vi.fn>;
-    sendInvokeResult: ReturnType<typeof vi.fn>;
-    sendPush: ReturnType<typeof vi.fn>;
-  }> = {},
-) {
+function mkClient(over: Partial<{ sendInvokeResult: ReturnType<typeof vi.fn>; sendPush: ReturnType<typeof vi.fn> }> = {}) {
   return {
-    getStatus: over.getStatus ?? vi.fn(() => 'online'),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
-    sendLinkAccept: vi.fn(),
-    closeLink: vi.fn(),
-    onFrame: vi.fn(),
     sendPush: over.sendPush ?? vi.fn(),
   };
 }
@@ -65,15 +41,9 @@ function mkClient(
 const tooLarge = () => new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds 2097152 bytes');
 const encodedByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 const invokeResultFrameBytes = (dst: string, requestId: string, payload: InvokeResultPayload) =>
-  encodedByteLength(
-    JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload }),
-  );
+  encodedByteLength(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload }));
 
 beforeEach(() => {
-  deviceLinkSettings.value = {
-    remoteControlEnabled: true,
-    revokedControllers: [],
-  };
   __testing.reset();
 });
 
@@ -86,28 +56,20 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const bigContent = 'x'.repeat(32 * 1024);
     const big: InvokeResultPayload = {
       ok: true,
-      result: [
-        {
-          agentMeta: null,
-          clientId: 'c1',
-          content: bigContent,
-          createdAt: '2026-06-23T00:00:00.000Z',
-          id: 'm1',
-          role: 'tool_result',
-          sessionId: 's1',
-          toolUseId: 'tu1',
-        },
-      ],
+      result: [{
+        agentMeta: null,
+        clientId: 'c1',
+        content: bigContent,
+        createdAt: '2026-06-23T00:00:00.000Z',
+        id: 'm1',
+        role: 'tool_result',
+        sessionId: 's1',
+        toolUseId: 'tu1',
+      }],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        big,
-        'local-db:messages:list',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -135,35 +97,24 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const client = mkClient({ sendInvokeResult });
     const big: InvokeResultPayload = {
       ok: true,
-      result: [
-        {
-          agentMeta: null,
-          clientId: 'c1',
-          content: { blocks: ['x'.repeat(32 * 1024)] },
-          createdAt: '2026-06-23T00:00:00.000Z',
-          id: 'm1',
-          role: 'tool_result',
-          sessionId: 's1',
-          toolUseId: 'tu1',
-        },
-      ],
+      result: [{
+        agentMeta: null,
+        clientId: 'c1',
+        content: { blocks: ['x'.repeat(32 * 1024)] },
+        createdAt: '2026-06-23T00:00:00.000Z',
+        id: 'm1',
+        role: 'tool_result',
+        sessionId: 's1',
+        toolUseId: 'tu1',
+      }],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        big,
-        'local-db:messages:list',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
-    const compact = sendInvokeResult.mock.calls[1][2] as {
-      ok: true;
-      result: Array<{ content: unknown }>;
-    };
+    const compact = sendInvokeResult.mock.calls[1][2] as { ok: true; result: Array<{ content: unknown }> };
     expect(compact.result[0].content).toBe('[remote content truncated: payload too large]');
   });
 
@@ -175,42 +126,31 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const bigCommand = 'x'.repeat(160 * 1024);
     const big: InvokeResultPayload = {
       ok: true,
-      result: [
-        {
-          agentMeta: null,
-          clientId: 'c1',
-          content: {
-            toolUseId: 'toolu-1',
-            toolName: 'Bash',
-            input: {
-              command: bigCommand,
-              timeout: 1,
-            },
-          },
-          createdAt: '2026-06-23T00:00:00.000Z',
-          id: 'm1',
-          role: 'tool_use',
-          sessionId: 's1',
+      result: [{
+        agentMeta: null,
+        clientId: 'c1',
+        content: {
           toolUseId: 'toolu-1',
+          toolName: 'Bash',
+          input: {
+            command: bigCommand,
+            timeout: 1,
+          },
         },
-      ],
+        createdAt: '2026-06-23T00:00:00.000Z',
+        id: 'm1',
+        role: 'tool_use',
+        sessionId: 's1',
+        toolUseId: 'toolu-1',
+      }],
     };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        big,
-        'local-db:messages:list',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
-    const compact = sendInvokeResult.mock.calls[1][2] as {
-      ok: true;
-      result: Array<{ content: unknown }>;
-    };
+    const compact = sendInvokeResult.mock.calls[1][2] as { ok: true; result: Array<{ content: unknown }> };
     expect(compact.ok).toBe(true);
     const content = compact.result[0].content as {
       toolUseId?: string;
@@ -241,13 +181,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const big: InvokeResultPayload = { ok: true, result: messages };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        big,
-        'local-db:messages:list',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -269,10 +203,9 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       agentMeta: { debugBlob: 'm'.repeat(480 * 1024) },
       clientId: `newest-first-${index}`,
-      content:
-        index === 0
-          ? { toolUseId: 'toolu-0', toolName: 'Bash', input: { command: 'echo ok', timeout: 1 } }
-          : 'x',
+      content: index === 0
+        ? { toolUseId: 'toolu-0', toolName: 'Bash', input: { command: 'echo ok', timeout: 1 } }
+        : 'x',
       createdAt: new Date(Date.UTC(2026, 5, 23, 0, 0, 6 - index)).toISOString(),
       id: `m${index}`,
       role: index === 0 ? 'tool_use' : 'assistant',
@@ -281,13 +214,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const big: InvokeResultPayload = { ok: true, result: messages };
 
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        big,
-        'local-db:messages:list',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', big, 'local-db:messages:list'),
     ).not.toThrow();
 
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
@@ -386,9 +313,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     expect(invokeResultFrameBytes('ctrl-1', 'req-1', compact)).toBeLessThan(MAX_FRAME_BYTES);
     expect(compact.ok).toBe(true);
     if (compact.ok) {
-      const clientIds = (compact.result as Array<{ clientId: string }>).map(
-        (message) => message.clientId,
-      );
+      const clientIds = (compact.result as Array<{ clientId: string }>).map((message) => message.clientId);
       expect(clientIds).toContain('anchor-client');
     }
   });
@@ -408,10 +333,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     const second = sendInvokeResult.mock.calls[1];
     expect(second[0]).toBe('ctrl-1');
     expect(second[1]).toBe('req-1');
-    expect(second[2]).toEqual({
-      ok: false,
-      error: { code: 'PAYLOAD_TOO_LARGE', message: expect.any(String) },
-    });
+    expect(second[2]).toEqual({ ok: false, error: { code: 'PAYLOAD_TOO_LARGE', message: expect.any(String) } });
   });
 
   it('紧凑错误结果也发不出去 → 仍不抛(只 log,彻底放弃)', () => {
@@ -420,13 +342,7 @@ describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
     });
     const client = mkClient({ sendInvokeResult });
     expect(() =>
-      __testing.sendInvokeResultSafe(
-        client as never,
-        'ctrl-1',
-        'req-1',
-        { ok: true, result: {} },
-        'x',
-      ),
+      __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'req-1', { ok: true, result: {} }, 'x'),
     ).not.toThrow();
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
   });
@@ -487,103 +403,20 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(compact.__deviceLinkTruncated).toBe(true);
   });
 
-  it('离线队列只记住原 topic 订阅者并按目标 topic 入队', () => {
-    const sendPush = vi.fn();
+  it('多控制端:一个抛错不影响其它控制端收到转发', () => {
+    const sendPush = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw tooLarge();
+      })
+      .mockImplementation(() => {});
     const client = mkClient({ sendPush });
     __testing.setActiveClient(client as never);
-    subscriptions.subscribe('ctrl-sessions', ['sessions']);
-    subscriptions.subscribe('ctrl-s1', ['session:s1']);
-    subscriptions.clearController('ctrl-sessions');
-    subscriptions.clearController('ctrl-s1');
-    subscriptions.subscribe('live-s1', ['session:s1']);
-    __testing.setActiveClient(null);
-    subscriptions.clearController('live-s1');
-    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('ctrl-1', ['session:s1']);
+    subscriptions.subscribe('ctrl-2', ['session:s1']);
 
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
-    expect(sendPush).not.toHaveBeenCalled();
-    expect(__testing.queuedPushesFor('ctrl-sessions')).toEqual([]);
-    expect(__testing.queuedPushesFor('ctrl-s1')).toEqual([
-      {
-        channel: 'local-db:messages:created',
-        topic: 'session:s1',
-        payload: { sessionId: 's1', id: 'm1' },
-      },
-    ]);
-  });
-
-
-  it('revoked link-open purges remembered routing and closes without accepting', () => {
-    const client = mkClient();
-    __testing.setActiveClient(client as never);
-    subscriptions.subscribe('ctrl-revoked', ['session:s1']);
-    subscriptions.clearController('ctrl-revoked');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
-    deviceLinkSettings.value.revokedControllers = ['ctrl-revoked'];
-
-    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
-
-    // 'inbound':撤权关的是对方对本机的控制方向,不得封死本机仍存续的主动控制。
-    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked', 'inbound');
-    expect(client.sendLinkAccept).not.toHaveBeenCalled();
-    expect(__testing.queuedPushesFor('ctrl-revoked')).toEqual([]);
-    expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
-  });
-
-  it('legacy link-open restores wildcard behavior and replays wildcard backlog', () => {
-    const client = mkClient();
-    __testing.setActiveClient(client as never);
-    subscriptions.subscribe('ctrl-legacy', ['*']);
-    subscriptions.clearController('ctrl-legacy');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
-
-    __testing.handleLinkOpen(client as never, 'ctrl-legacy', 'open-1', undefined);
-
-    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
-    expect(client.sendPush).toHaveBeenCalledWith(
-      'ctrl-legacy',
-      'local-db:messages:created',
-      { sessionId: 's1', id: 'm1' },
-    );
-    expect(subscriptions.__testing.topicsOf('ctrl-legacy')).toEqual(['*']);
-  });
-
-  it('remembered modern link-open waits for an explicit subscribe frame', () => {
-    const client = mkClient();
-    __testing.setActiveClient(client as never);
-    subscriptions.subscribe(
-      'ctrl-modern',
-      ['session:s1'],
-      'Desktop',
-      [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
-    );
-    subscriptions.clearController('ctrl-modern');
-    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
-
-    __testing.handleLinkOpen(client as never, 'ctrl-modern', 'open-1', {
-      controllerName: 'Mobile',
-      protocolVersion: 1,
-      appVersion: '1.0.0',
-      capabilities: [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
-    });
-
-    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
-    expect(client.sendPush).not.toHaveBeenCalled();
-    expect(subscriptions.__testing.topicsOf('ctrl-modern')).toEqual([]);
-    expect(subscriptions.controllerSupports(
-      'ctrl-modern',
-      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-    )).toBe(true);
-
-    const result = __testing.handleSubscriptionFrame('ctrl-modern', {
-      channel: DL_SUBSCRIBE_CHANNEL,
-      args: [{ topics: ['session:s1'] }],
-    });
-    expect(result).toEqual({ ok: true, result: { ok: true } });
-    expect(client.sendPush).toHaveBeenCalledWith(
-      'ctrl-modern',
-      'local-db:messages:created',
-      { sessionId: 's1', id: 'm1' },
-    );
+    expect(() => __testing.forwardPush('maker:event', { sessionId: 's1' })).not.toThrow();
+    // 两个控制端都尝试过(第一个抛错被接住,第二个正常)。
+    expect(sendPush).toHaveBeenCalledTimes(2);
   });
 });

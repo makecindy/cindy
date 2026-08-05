@@ -6,7 +6,7 @@
  * 控制端启动时路由可能**先于** remote-projects bootstrap 恢复到某远程会话:此刻
  * getSessionDeviceId 仍是 undefined → ensureInitialMessages 误命中控制端本机空库
  * (被控端 row 不在本地)→ 拿到空历史且 historyLoaded=true 卡死,即使随后 mapping
- * 注入也不再重试。修复:makerChatStore 记录每个任务「按哪个 origin 加载」,
+ * 注入也不再重试。修复:makerChatStore 记录每个会话「按哪个 origin 加载」,
  * remoteProjectsStore 注入 / 变更来源后 reconcileOpenSessionOrigins 检测漂移并经隧道重载。
  *
  * 本测试直接调用导出的 reconcileOpenSessionOrigins(生产由 initGlobalListeners 的
@@ -34,7 +34,6 @@ vi.mock('@/lib/sessionService', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
-import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 
 const DEVICE_ID = 'dev-A';
@@ -56,7 +55,6 @@ function dbMessage(sessionId: string, id: string, content: string): Message {
 
 /** 被控端经隧道返回的真历史(deviceLink.invoke 的 local-db:messages:list 应命中)。 */
 let remoteHistory: Message[] = [];
-let remoteProjectionOwner: string | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
   if (channel === 'local-db:messages:list') return remoteHistory;
   if (channel === 'local-db:sessions:get') {
@@ -66,7 +64,6 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]
     return {
       sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false,
       queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false,
-      ...(remoteProjectionOwner ? { continuationTurnClientId: remoteProjectionOwner } : {}),
       error: null, recovery: null, errorRetryText: null,
     };
   }
@@ -102,7 +99,6 @@ function seedRemote(sessionId: string): void {
 beforeEach(() => {
   stubElectronApi();
   remoteHistory = [];
-  remoteProjectionOwner = null;
   invoke.mockClear();
 });
 
@@ -176,135 +172,5 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     makerChatStore.reconcileOpenSessionOrigins();
     await flush();
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(1);
-  });
-
-  it('来源漂移后丢弃旧 sessions:get 响应，避免本机 metadata 覆盖远程状态', async () => {
-    const s = sid();
-    let resolveStaleMetadata!: (session: unknown) => void;
-    vi.mocked(sessionService.get).mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveStaleMetadata = resolve;
-      }) as never,
-    );
-
-    // 首拉先按本机来源完成，metadata 请求故意留在途。
-    makerChatStore.ensureInitialMessages(s);
-    await flush();
-    expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
-
-    // 来源解析后触发新一轮远程首拉，旧 metadata Promise 必须失效。
-    remoteHistory = [dbMessage(s, 'r1', 'remote')];
-    seedRemote(s);
-    makerChatStore.reconcileOpenSessionOrigins();
-    await flush();
-
-    resolveStaleMetadata({
-      agentKind: 'codex',
-      remoteHostId: null,
-      sdkSessionId: 'stale-local-session',
-      fastMode: false,
-      contextTokens: 0,
-      contextWindow: 0,
-      totalCostUsd: 0,
-    });
-    await flush();
-
-    expect(makerChatStore.getSnapshot(s).agentKind).toBe('claude-code');
-    expect(makerChatStore.getSnapshot(s).sdkSessionId).toBeNull();
-  });
-
-  it('purge 后丢弃此前发起的旧投影查询', async () => {
-    const s = sid();
-    let resolveLocalProjection!: (projection: unknown) => void;
-    const localProjection = new Promise((resolve) => {
-      resolveLocalProjection = resolve;
-    });
-    vi.stubGlobal('window', {
-      electronAPI: {
-        maker: {
-          input: {
-            getProjection: vi.fn().mockReturnValueOnce(localProjection),
-          },
-        },
-        deviceLink: { invoke },
-      },
-    });
-
-    makerChatStore.ensureInitialMessages(s);
-    makerChatStore.purgeSession(s);
-    resolveLocalProjection({
-      sessionId: s,
-      pendingQueue: [],
-      steeringQueueClientIds: [],
-      queuePaused: false,
-      queueExpanded: false,
-      queueInteractionLocks: [],
-      queueEditLocks: [],
-      queueAbortPending: false,
-      continuationTurnClientId: 'stale-owner',
-      error: null,
-      recovery: null,
-      errorRetryText: null,
-    });
-    await flush();
-
-    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBeNull();
-  });
-
-  it('来源漂移时丢弃旧投影查询，避免旧本机 null 覆盖远程续跑 owner', async () => {
-    const s = sid();
-    let resolveLocalProjection!: (projection: unknown) => void;
-    const localProjection = new Promise((resolve) => {
-      resolveLocalProjection = resolve;
-    });
-    const localGetProjection = vi
-      .fn()
-      .mockReturnValueOnce(localProjection)
-      .mockResolvedValue({
-        sessionId: s,
-        pendingQueue: [],
-        steeringQueueClientIds: [],
-        queuePaused: false,
-        queueExpanded: false,
-        queueInteractionLocks: [],
-        queueEditLocks: [],
-        queueAbortPending: false,
-        continuationTurnClientId: null,
-        error: null,
-        recovery: null,
-        errorRetryText: null,
-      });
-    vi.stubGlobal('window', {
-      electronAPI: {
-        maker: { input: { getProjection: localGetProjection } },
-        deviceLink: { invoke },
-      },
-    });
-
-    makerChatStore.ensureInitialMessages(s);
-    seedRemote(s);
-    remoteProjectionOwner = 'continue-owner';
-    makerChatStore.reconcileOpenSessionOrigins();
-    await flush();
-
-    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('continue-owner');
-
-    resolveLocalProjection({
-      sessionId: s,
-      pendingQueue: [],
-      steeringQueueClientIds: [],
-      queuePaused: false,
-      queueExpanded: false,
-      queueInteractionLocks: [],
-      queueEditLocks: [],
-      queueAbortPending: false,
-      continuationTurnClientId: null,
-      error: null,
-      recovery: null,
-      errorRetryText: null,
-    });
-    await flush();
-
-    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('continue-owner');
   });
 });

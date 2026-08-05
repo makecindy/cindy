@@ -83,7 +83,6 @@ interface MacAgentIslandNativeHostOptions {
   onScreenMetrics: (metrics: {
     screens: AgentIslandNativeScreenMetrics[];
     preferredDisplayId: number | null;
-    forceRefresh: boolean;
   }) => void;
 }
 
@@ -91,7 +90,6 @@ type NativePayload = {
   type?: unknown;
   message?: unknown;
   event?: unknown;
-  forceRefresh?: unknown;
   hit?: unknown;
   mode?: unknown;
   fromMode?: unknown;
@@ -574,7 +572,6 @@ export class MacAgentIslandNativeHost {
         preferredDisplayId: typeof payload.preferredDisplayId === 'number'
           ? payload.preferredDisplayId
           : null,
-        forceRefresh: payload.forceRefresh === true,
       });
     }
   }

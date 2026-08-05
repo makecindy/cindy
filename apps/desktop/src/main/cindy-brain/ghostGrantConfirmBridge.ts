@@ -1,12 +1,11 @@
 /**
  * GhostGrantConfirmBridge —— ghost_call 过户 workdir 外文件的「用户确认」桥。
  *
- * 背景:意识触碰用户文件的通道(attachments / dir / save_dir)把可达面钳制在
- * 「进过聊天流的图」与「会话 workdir 内」;普通权限档遇到 workdir 外路径时
- * 由本桥**弹确认卡**——把「拖图进聊天」这个授权动作换成「点一下允许」,
- * 决定权在用户的点击上,被注入的模型只能发起请求、点不了按钮。
- * 当前本地活跃会话为 Full Access 时,mcp-integrations/ghost.ts 会在进入本桥前
- * 按实时 Session 状态自动放行；workspace / fs_write 等其它 lane 不受该旁路影响。
+ * 背景:意识触碰用户文件的通道(attachments / dir / save_dir)原本把可达面
+ * 钳制在「进过聊天流的图」与「会话 workdir 内」;两层策略升级后(2026-07-14
+ * 与 Lizi 定案):workdir 内自动放行,workdir 外改为**弹确认卡**——把「拖图
+ * 进聊天」这个授权动作换成「点一下允许」,决定权在用户的点击上,被注入的
+ * 模型只能发起请求、点不了按钮。
  *
  * 实现完全对齐 IssueConfirmBridge 的成熟模式:main 侧发起,broadcast 一个
  * kind='ghost_grant_confirm' 的 interaction 到 renderer(复用
@@ -22,7 +21,6 @@
 import { randomUUID } from 'node:crypto';
 
 import { MAKER_PUSH } from '../maker-ipc/channels';
-import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
 /**
  * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
@@ -69,24 +67,19 @@ export type GhostGrantConfirmDecision =
     }
   | { confirmed: false; reason: 'cancelled' | 'timeout' | 'session_closed' | 'session_aborted' };
 
-/** Renderer 可重放的文件授权确认请求；主进程持有它直到确认流程 settle。 */
-export interface GhostGrantConfirmInteractionSnapshot extends GhostGrantConfirmPayload {
-  kind: 'ghost_grant_confirm';
-  requestId: string;
-}
-
 export interface GhostGrantConfirmBridgeDeps {
   broadcast: (channel: string, payload: unknown) => void;
-  /** 确认超时,默认 9 分钟,须早于外层 MCP 的 10 分钟 deadline。测试注小值。 */
+  /** 确认超时,默认 10 分钟(对齐 permission prompt / issue 确认卡)。测试注小值。 */
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
   /** 同 IssueConfirmBridgeDeps.onDesktopOnlyConfirmPending(#926):IM 侧「去桌面确认」提示。 */
   onDesktopOnlyConfirmPending?: (sessionId: string) => void;
 }
 
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
 interface PendingGrantEntry {
   sessionId: string;
-  request: GhostGrantConfirmInteractionSnapshot;
   resolve: (decision: GhostGrantConfirmDecision) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -97,25 +90,17 @@ export class GhostGrantConfirmBridge {
   constructor(private readonly deps: GhostGrantConfirmBridgeDeps) {}
 
   /** 向 renderer 派发确认卡片,挂起直到用户响应/超时/会话清理。 */
-  request(
-    sessionId: string,
-    payload: GhostGrantConfirmPayload,
-  ): Promise<GhostGrantConfirmDecision> {
+  request(sessionId: string, payload: GhostGrantConfirmPayload): Promise<GhostGrantConfirmDecision> {
     const requestId = randomUUID();
-    const request: GhostGrantConfirmInteractionSnapshot = {
-      kind: 'ghost_grant_confirm',
-      requestId,
-      ...payload,
-    };
     return new Promise<GhostGrantConfirmDecision>((resolve) => {
-      const timeoutMs = this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS;
+      const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const timeoutId = setTimeout(() => {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
-      this.pending.set(requestId, { sessionId, request, resolve, timeoutId });
+      this.pending.set(requestId, { sessionId, resolve, timeoutId });
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
-        request,
+        request: { kind: 'ghost_grant_confirm', requestId, ...payload },
       });
       try {
         this.deps.onDesktopOnlyConfirmPending?.(sessionId);
@@ -128,16 +113,6 @@ export class GhostGrantConfirmBridge {
         });
       }
     });
-  }
-
-  /** 打开、重连或刷新会话时供 renderer 补回错过的确认卡。 */
-  pendingSnapshots(sessionId?: string): Array<{
-    sessionId: string;
-    request: GhostGrantConfirmInteractionSnapshot;
-  }> {
-    return Array.from(this.pending.values())
-      .filter((entry) => sessionId === undefined || entry.sessionId === sessionId)
-      .map((entry) => ({ sessionId: entry.sessionId, request: entry.request }));
   }
 
   /**
@@ -218,9 +193,7 @@ let bridgeSingleton: GhostGrantConfirmBridge | null = null;
  * getGhostGrantConfirmBridge 消费;未初始化(极早期/单测环境)时返回 null,
  * 调用方按「确认通道未就绪」拒绝,不抛。
  */
-export function initGhostGrantConfirmBridge(
-  deps: GhostGrantConfirmBridgeDeps,
-): GhostGrantConfirmBridge {
+export function initGhostGrantConfirmBridge(deps: GhostGrantConfirmBridgeDeps): GhostGrantConfirmBridge {
   bridgeSingleton = new GhostGrantConfirmBridge(deps);
   return bridgeSingleton;
 }

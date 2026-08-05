@@ -17,7 +17,6 @@ import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
-import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
   collectContentHitsUntilUniqueSessions,
   fuzzyTitleMatch,
@@ -229,7 +228,7 @@ function normalizeStatusFilter(
 }
 
 function normalizeAgentFilter(value: ConversationSearchFilters['agentKind']): ConversationSearchAgentFilter {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : 'all';
+  return value === 'cc' || value === 'codex' ? value : 'all';
 }
 
 function normalizeLastActivity(
@@ -333,7 +332,7 @@ function sessionSummaryFromRow(
     title: row.title,
     workingDir: row.workingDir,
     workspaceKind: row.workspaceKind,
-    agentKind: normalizeDbAgentKind(row.agentKind),
+    agentKind: row.agentKind === 'codex' ? 'codex' : 'cc',
     status: row.status,
     source: row.source,
     orcaRole: row.orcaRole,

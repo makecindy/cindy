@@ -20,7 +20,7 @@ import {
   getModel,
   groupModelsForDisplay,
   groupOf,
-  isModelSelectableForNewRoute,
+  isAgentSelectableModel,
   isChatEligible,
   type AgentKind,
   type DisplayModel,
@@ -113,7 +113,7 @@ function isModelChatEligibleOnProvider(
   // 启发式时不能被误杀(2026-07 review 第 25 轮)。
   return (
     model !== undefined &&
-    isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })
+    isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
   );
 }
 

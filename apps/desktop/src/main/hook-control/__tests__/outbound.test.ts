@@ -33,44 +33,8 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[Telegram 回复格式]');
   });
 
-  it('X 渠道使用中性回复说明, 明确付费账号不受 280 字符限制', () => {
-    const x = buildHookPromptNote('x');
-    expect(x).toContain('本会话来自 X。');
-    expect(x).toContain('[X 回复说明]');
-    expect(x).not.toContain('回答方式与普通任务及其他渠道保持一致');
-    expect(x).toContain('当前账号为付费账号');
-    expect(x).toContain('不受 280 个字符限制');
-    expect(x).toContain('无需针对当前渠道调整回答篇幅');
-    expect(x).not.toContain('不要主动压缩或删减必要内容');
-    expect(x).toContain('按桌面版规则拼出正式正文');
-    expect(x).toContain('以一条回复发回 X');
-    expect(x).toContain('正文可以使用标题、列表、表格');
-    expect(x).toContain('发布时会转换为纯文本');
-    expect(x).toContain('上述附件引用除外');
-    expect(x).toContain('在 X 中除上述附件引用外,尽量避免输出其他 URL 链接');
-    expect(x).toContain('不要解释或复述这些格式要求');
-    expect(x).toContain('作为 X 附件发回');
-    expect(x).not.toContain('X (Twitter)');
-    expect(x).not.toContain('公开回帖');
-    expect(x).not.toContain('最后一条助手消息');
-    expect(x).not.toContain('[Telegram 回复格式]');
-    expect(x).not.toContain('本会话来自 Slack');
-    expect(buildHookPromptNote('slack')).not.toContain('[X 回复说明]');
-  });
-
-  it('X 提示词保留渠道名和正式正文拼接机制', () => {
-    const x = buildHookPromptNote('x');
-    // 机制侧: session-runner 的 turnTextsFor 对所有 IM 取 observer.finalText() 当
-    // 公开正文; X 的单条限制只在发送层生效。提示词只陈述这条必要机制。
-    expect(x).toContain('本会话来自 X。');
-    expect(x).toContain('按桌面版规则拼出正式正文');
-    expect(x).toContain('以一条回复发回 X');
-    expect(x).not.toContain('只有你的最后一条消息会被发出');
-    expect(x).not.toContain('最后一条助手消息');
-  });
-
   it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
-    for (const im of ['telegram', 'slack', 'x'] as const) {
+    for (const im of ['telegram', 'slack'] as const) {
       const note = buildHookPromptNote(im);
       // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
       expect(note).toContain('不是用户发来的消息');
@@ -166,32 +130,6 @@ describe('collectOutboundAttachments', () => {
     expect(r.text).toContain('🖼️ _a_');
     expect(r.text).toContain('b');
     expect(r.text).toContain('Attachment delivery incomplete: 2 items');
-  });
-
-  it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {
-    // X 只发一条公开回帖, 而图常贴在被折叠的工作过程里。两者绑在一起的话那些
-    // 图会静默丢失(PR #1272 review 指出) —— 所以扫描范围与正文范围分开。
-    const turnText = '先看图 ![图](xdt-image://chart.png)\n\n结论: 趋势向上。';
-    const publicText = '结论: 趋势向上。';
-    const r = await collectOutboundAttachments(publicText, [], {
-      ...deps({ '/cache/chart.png': Buffer.from('png') }),
-      refScanText: turnText,
-    });
-    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
-    // 正文不该被扩回整轮 —— 扩大的只是"哪些引用要收"。
-    expect(r.text).toBe(publicText);
-    expect(r.text).not.toContain('先看图');
-    expect(r.skipped).toBe(0);
-  });
-
-  it('refScanText 省略时按 finalText 扫描(既有行为不变)', async () => {
-    const r = await collectOutboundAttachments(
-      '成果 ![图](xdt-image://chart.png)',
-      [],
-      deps({ '/cache/chart.png': Buffer.from('png') }),
-    );
-    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
-    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
   });
 
   it('同一路径重复引用只收一份', async () => {

@@ -8,7 +8,7 @@ import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { IMHost, IMSecretReadResult } from '@cindy/im';
+import type { IMHost } from '@cindy/im';
 
 import {
   dataOwnerStorageKey,
@@ -143,23 +143,6 @@ function prepareSecretPath(name: string): string | null {
   return scoped;
 }
 
-/** Read a secret without collapsing a missing file and an I/O/decryption failure. */
-function readSecretResult(name: string): IMSecretReadResult {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) return { kind: 'error' };
-    const target = prepareSecretPath(name);
-    if (!target) return { kind: 'error' };
-    const encrypted = fs.readFileSync(target, 'utf-8');
-    return {
-      kind: 'value',
-      value: safeStorage.decryptString(Buffer.from(encrypted, 'base64')),
-    };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
-    return { kind: 'error' };
-  }
-}
-
 /** @cindy/im secret adapter whose logical keys follow the active data owner. */
 export const ownerScopedImSecrets: ImSecrets = {
   isAvailable: () => safeStorage.isEncryptionAvailable() && scopedSecretPath('probe') !== null,
@@ -176,10 +159,15 @@ export const ownerScopedImSecrets: ImSecrets = {
     }
   },
   read(name) {
-    const result = readSecretResult(name);
-    return result.kind === 'value' ? result.value : null;
+    try {
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      const target = prepareSecretPath(name);
+      if (!target || !fs.existsSync(target)) return null;
+      return safeStorage.decryptString(Buffer.from(fs.readFileSync(target, 'utf-8'), 'base64'));
+    } catch {
+      return null;
+    }
   },
-  readResult: readSecretResult,
   remove(name) {
     try {
       const target = prepareSecretPath(name);

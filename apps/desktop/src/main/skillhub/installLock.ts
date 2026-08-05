@@ -18,11 +18,7 @@
  */
 
 /** 锁持有方标识 —— 对端获取失败时据此生成可理解的错误文案。 */
-export type SkillInstallLockOwner =
-  | 'market-install'
-  | 'market-uninstall'
-  | 'learn-apply'
-  | 'local-import';
+export type SkillInstallLockOwner = 'market-install' | 'market-uninstall' | 'learn-apply';
 
 interface LockHolder {
   owner: SkillInstallLockOwner;

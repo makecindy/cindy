@@ -79,8 +79,8 @@ const chatInputSource = readTextLf(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
 );
-const extraDirsButtonSource = readTextLf(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ExtraDirsButton.tsx'),
+const collaborationModeToggleSource = readTextLf(
+  resolve(__dirname, '..', 'components', 'new-chat', 'CollaborationModeToggle.tsx'),
   'utf8',
 );
 const sessionStatusIconSource = readTextLf(
@@ -158,29 +158,44 @@ describe('OrcaWorkflowRoute source invariants', () => {
   it('uses the right-sidebar UsersRound mark for every collaboration entry point', () => {
     expect(rightSidebarTabBarSource).toContain("'orca-workers': UsersRound");
     expect(orcaWorkersPluginSource).toContain('<UsersRound size={13} />');
-    expect(extraDirsButtonSource).toContain('<UsersRound');
-    expect(extraDirsButtonSource).not.toContain('<Puzzle');
+    expect(collaborationModeToggleSource.match(/<UsersRound/g)).toHaveLength(3);
+    expect(collaborationModeToggleSource).not.toContain('<Puzzle');
     expect(sessionStatusIconSource).toContain('<UsersRound');
     expect(sessionStatusIconSource).not.toContain('<Puzzle');
     expect(sessionStatusIconSource).toContain("'text-[var(--cmd-palette-item-meta)]'");
   });
 
-  it('keeps policy reasons scoped to the disabled collaboration menu item', () => {
-    expect(extraDirsButtonSource).toContain(
-      'const collaborationPolicyDisabled = collaboration?.disabled === true;',
+  it('keeps policy reasons scoped to disabled collaboration controls', () => {
+    expect(collaborationModeToggleSource).toContain(
+      'const effectiveDisabledReason = disabled ? disabledReason : undefined;',
     );
-    expect(extraDirsButtonSource).toContain(
-      'text={collaborationPolicyDisabled ? collaboration.disabledReason : null}',
+    expect(collaborationModeToggleSource).toContain(
+      "text={effectiveDisabledReason ?? t('newChat.collaboration.stopHint')}",
     );
-    expect(extraDirsButtonSource).toContain(
-      'collaborationPolicyDisabled && !collaborationRetryable ? true : undefined',
+    expect(collaborationModeToggleSource.match(/disabledWrapperProps\(/g)).toHaveLength(3);
+    expect(collaborationModeToggleSource.match(/aria-hidden=\{disabled \|\| undefined\}/g)).toHaveLength(3);
+    expect(collaborationModeToggleSource).toContain(
+      "'aria-disabled': onDisabledActivate ? undefined : true",
     );
-    expect(extraDirsButtonSource).toContain('collaboration.onDisabledActivate?.();');
+    expect(collaborationModeToggleSource).toContain(
+      'onKeyDown: blockDisabledKeyboardActivation',
+    );
+    expect(collaborationModeToggleSource).toContain(
+      "if (event.key !== 'Enter' && event.key !== ' ') return;",
+    );
+    expect(collaborationModeToggleSource).toContain('onClick: onDisabledActivate');
+    expect(collaborationModeToggleSource).toContain('if (!event.repeat) onDisabledActivate?.();');
   });
 
   it('keeps the active collaboration tooltip free of policy-disabled reasons', () => {
-    expect(sessionViewSource).toMatch(
-      /disabledReason:\s*!collabEnabled\s*\?\s*collabPolicy\.loading[\s\S]*?:\s*undefined\s*:\s*undefined,/,
+    expect(sessionViewSource).toContain(
+      "disabledReason:\n" +
+        "                            !collabEnabled\n" +
+        "                              ? collabPolicy.loading",
+    );
+    expect(sessionViewSource).toContain(
+      "                                  : undefined\n" +
+        "                              : undefined,",
     );
   });
 
@@ -188,19 +203,18 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('onDisabledActivate: collabPolicy.unavailable');
     expect(sessionViewSource).toContain('void collabPolicy.refresh().then((policy) => {');
     expect(sessionViewSource).toContain('if (policy.enabled && !policy.unavailable) {');
-    expect(chatInputSource).toContain('collaboration={collaboration}');
-    expect(extraDirsButtonSource).toContain('!!collaboration?.onDisabledActivate');
+    expect(chatInputSource).toContain(
+      '!disabled && collaboration.disabled\n' +
+        '                        ? collaboration.disabledReason',
+    );
   });
 
   it('does not subscribe to project policy updates from the legacy Orca route', () => {
-    // eligible 的判据本体收敛进了 resolveCollabEntryPolicy(issue #1170:草稿与会话视图
-    // 曾各写一份,同一个 device-link 项目两边给出相反答案)。这里守的仍是原来那件事 ——
-    // legacy /orca 路由(orcaMode)必须先被 `!orcaMode &&` 短路掉,否则它也会去跑项目
-    // 策略查询并订阅刷新。
     expect(sessionViewSource).toContain(
-      'const collabPolicyEligible = !orcaMode && collabEntry.eligible;',
+      'const collabPolicyEligible =\n' +
+        '    !orcaMode &&\n' +
+        "    session?.orcaRole !== 'worker'",
     );
-    expect(sessionViewSource).toContain('resolveCollabEntryPolicy({');
   });
 
   it('keeps /orca as a legacy compatibility redirect to the plain lead route', () => {
@@ -247,19 +261,15 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(chatInputSource).toContain(
       "autofocus: !disableAutofocus && !disabled ? 'end' : false",
     );
-    // The composer is also temporarily read-only during the bounded effort-runtime
-    // preflight, so a pending send cannot clear text entered after its snapshot.
-    expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked)');
+    expect(chatInputSource).toContain('editor?.setEditable(!disabled)');
   });
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
     const requestEnable = sessionViewSource.indexOf('const requestEnableCollab = useCallback');
-    // device-link:enableOrca 按 sessionId 来源路由(本机走本地 maker,远程走隧道),
-    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor*(collabSessionId).enableOrca。
-    // 归属用**粘滞**版(makerApiForSticky):瞬断窗口内退回本机会在控制端建出 team,
-    // 与按粘滞 remoteDeviceId 渲染的入口自相矛盾(见 orcaRemoteRoutingInvariants 的对称守卫)。
+    // device-link:enableOrca 现在按 sessionId 来源路由(本机走本地 maker,远程走隧道),
+    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor(collabSessionId).enableOrca。
     const enableCall = sessionViewSource.indexOf(
-      'await makerApiForSticky(collabSessionId).enableOrca',
+      'await makerApiFor(collabSessionId).enableOrca',
       requestEnable,
     );
     const openTab = sessionViewSource.indexOf(
@@ -282,8 +292,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('label: createWorkerLabel(form.role, [])');
     expect(sessionViewSource).toContain('model: form.model');
     expect(sessionViewSource).toContain('delegateTask: form.initialTask || undefined');
-    expect(chatInputSource).toContain('collaboration={collaboration}');
-    expect(extraDirsButtonSource).toContain('collaboration.onOpenDetails();');
+    expect(chatInputSource).toContain('onOpenDetails={collaboration.onOpenDetails}');
   });
 
   it('maps manual collaboration start failures through i18n instead of raw IPC messages', () => {
@@ -314,9 +323,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('routeWorkerHint.hasWorkerParam || !!orcaWorkersReveal || hasWorkerSearchJump');
     expect(sessionViewSource).toContain('const shouldRevealWorkersTab = hasExplicitOrcaWorkersReveal || shouldPassiveRevealWorkersTab;');
     expect(sessionViewSource).toContain('orcaWorkersReveal?.focusWorkerSessionId ??');
-    expect(sessionViewSource).toMatch(
-      /hasWorkerSearchJump\s*\?\s*\(?searchJump\?\.sessionId\s*\?\?\s*null\)?\s*:\s*null/,
-    );
+    expect(sessionViewSource).toContain('hasWorkerSearchJump ? searchJump?.sessionId ?? null : null');
     expect(sessionViewSource).toContain('orcaWorkersReveal: undefined');
     expect(sessionViewSource).toContain("routeResult === 'stale-context' && shouldRevealWorkersTab");
     expect(sessionViewSource).toContain("routeResult !== 'attached' && routeResult !== 'routed'");
@@ -420,9 +427,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('passes Orca lead vendor options when sending from the plain lead route', () => {
     expect(sessionViewSource).toContain('const orcaLeadVendorOptions =');
-    expect(sessionViewSource).toMatch(
-      /sessionId\s*&&\s*session\s*!==\s*null\s*&&\s*isOrcaLeadSession\(session\)/,
-    );
+    expect(sessionViewSource).toContain('sessionId && isOrcaLeadSession(session)');
     expect(sessionViewSource).not.toContain('isOrcaMode && sessionId && isOrcaLeadSession(session)');
     expect(sessionViewSource).toContain("vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: sessionId }");
   });

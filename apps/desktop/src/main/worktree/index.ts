@@ -2,8 +2,8 @@
  * worktree-parallel-sessions: 模块 barrel + IPC 注册。
  *
  * 在 main `index.ts` 的 IPC 注册阶段调用 `registerWorktreeIpc(ipcMain)`,
- * 常规 worktree:* channel 在此注册；通用删除路径**故意不暴露**。
- * 两步远程创建的窄补偿口由 maker-ipc 单独注册，并自行承担身份与 ownership 校验。
+ * 所有 7 个 worktree:* channel 在此一处注册, 删除路径**故意不暴露**——
+ * removeWorktreeForSession 只在 cc-agent:close-session 内部调用。
  */
 
 import path from 'node:path';
@@ -27,7 +27,6 @@ import type {
 export * as WorktreeManager from './WorktreeManager';
 export * as WorktreePool from './WorktreePool';
 export * as worktreeStore from './worktreeStore';
-export { resolveFreshSourceBranch, type FreshSourceResolution } from './freshBase';
 export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,

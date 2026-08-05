@@ -3,32 +3,10 @@ import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
-import { useOwnedCodexLogin, verifyCodexAuthRecovery } from './useCodexAuth';
-import type { CodexLoginResult } from './codexAuthLogin';
+import { useOwnedCodexLogin } from './useCodexAuth';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
 
 export const isCodexSessionExpiredError = isCodexOAuthReconnectRequired;
-
-type CodexCredentialScope = NonNullable<CodexLoginResult['credentialScope']>;
-
-function reconnectCopyForScope(scope: CodexCredentialScope): {
-  description: string;
-  confirmText: string;
-} {
-  if (scope === 'system-shared') {
-    return {
-      description: 'chatgptAuthRecovery.systemSharedInvalidated',
-      confirmText: 'chatgptAuthRecovery.openApp',
-    };
-  }
-  return {
-    description:
-      scope === 'instance-isolated'
-        ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
-        : 'chatgptAuthRecovery.unknownInvalidated',
-    confirmText: 'chatgptAuthRecovery.relogin',
-  };
-}
 
 export function useCodexSessionExpiredPrompt(options?: {
   onAuthenticated?: (recoveredError: string) => void;
@@ -70,40 +48,12 @@ export function useCodexSessionExpiredPrompt(options?: {
       };
 
       void (async () => {
-        let credentialScope: CodexCredentialScope = 'unknown';
-        try {
-          const state = (await window.electronAPI.maker.auth.getState('codex')) as CodexLoginResult;
-          if (!mountedRef.current) return;
-          if (state.authenticated) {
-            const verification = await verifyCodexAuthRecovery(state);
-            if (!mountedRef.current) return;
-            if (verification.status === 'verified') {
-              onAuthenticatedRef.current?.(error);
-              toast.success(t('logic.toasts.codexConnected'));
-              closePrompt();
-              return;
-            }
-            if (verification.status === 'stale') {
-              closePrompt();
-              return;
-            }
-            if (verification.status === 'invalid') {
-              credentialScope = verification.state.credentialScope ?? 'unknown';
-            }
-          }
-          if (credentialScope === 'unknown') {
-            credentialScope = state.credentialScope ?? 'unknown';
-          }
-        } catch {
-          // 无法读取来源时按 unknown 引导，避免误称沿用了系统登录。
-        }
-        const copy = reconnectCopyForScope(credentialScope);
         if (options?.confirmBeforeLogin !== false) {
           const shouldReconnect = await confirm({
-            title: t('chatgptAuthRecovery.title'),
-            description: t(copy.description),
-            confirmText: t(copy.confirmText),
-            cancelText: t('chatgptAuthRecovery.later'),
+            title: t('chat.errorBanner.codexSessionExpiredDialog.title'),
+            description: t('chat.errorBanner.codexSessionExpiredDialog.description'),
+            confirmText: t('chat.errorBanner.codexSessionExpiredDialog.confirm'),
+            cancelText: t('chat.errorBanner.codexSessionExpiredDialog.cancel'),
             autoFocusConfirm: true,
           });
           if (!mountedRef.current) return;
@@ -113,36 +63,12 @@ export function useCodexSessionExpiredPrompt(options?: {
           }
         }
 
-        if (credentialScope === 'system-shared') {
-          try {
-            const result = await window.electronAPI.openChatGPTApp();
-            if (mountedRef.current && !result.success) {
-              toast.error(t('chatgptAuthRecovery.openAppFailed'));
-            }
-          } catch {
-            if (mountedRef.current) {
-              toast.error(t('chatgptAuthRecovery.openAppFailed'));
-            }
-          } finally {
-            if (mountedRef.current) closePrompt();
-          }
-          return;
-        }
-
         try {
           const result = await triggerOwnedLogin();
           if (!mountedRef.current) return;
           if (result.authenticated) {
-            const verification = await verifyCodexAuthRecovery(result);
-            if (!mountedRef.current) return;
-            if (verification.status === 'verified') {
-              onAuthenticatedRef.current?.(error);
-              toast.success(t('logic.toasts.codexConnected'));
-            } else if (verification.status === 'failed') {
-              toast.error(t('chatgptAuthRecovery.verificationFailed'));
-            } else if (verification.status === 'invalid') {
-              toast.error(t('settings.connections.codex.toast.loginFailed'));
-            }
+            onAuthenticatedRef.current?.(error);
+            toast.success(t('logic.toasts.codexConnected'));
           } else if (result.errorReason !== 'login_cancelled') {
             toast.error(t('settings.connections.codex.toast.loginFailed'));
           }

@@ -127,16 +127,6 @@ export const MAKER_INVOKE = {
    * 入参 = { agent:'claude-code'|'codex', providerId, modelId, effort?, fast?, active? }。
    */
   APPLY_NEW_MAKER_DRAFT_PREF: 'maker:apply-new-maker-draft-pref',
-  /**
-   * device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端)。worktree 勾选记忆
-   * 是 vendor 无关的 newMakerDraft 根字段,校验形状与模型 pref 完全不同(无 modelId/providerId),
-   * 硬塞进 APPLY_NEW_MAKER_DRAFT_PREF 会破坏其形状校验语义,故独立窄 channel。
-   * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
-   * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
-   * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
-   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
-   */
-  APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -185,14 +175,6 @@ export const MAKER_INVOKE = {
   SET_FAST_MODE: 'maker:set-fast-mode',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
-  /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
-  EXPORT_SESSION_HTML: 'maker:export-session-html',
-  /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
-  COMPACT_SESSION: 'maker:compact-session',
-  /** 读取当前 live agent 的同会话原生分支树(pi get_tree)。 */
-  GET_SESSION_TREE: 'maker:get-session-tree',
-  /** 切换同会话原生分支并原子重建 Cindy 可见消息时间线。 */
-  NAVIGATE_SESSION_TREE: 'maker:navigate-session-tree',
   /**
    * 旧控制端的会话模型预设写穿兼容 channel。新控制端统一经 APPLY_NEW_MAKER_DRAFT_PREF 写被控端
    * providerModelMemory 全局预设;旧控制端仍发此 invoke 时,被控端 renderer 也会将其收敛到同一
@@ -215,17 +197,6 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
-  /**
-   * Owner-scoped provider display-order override.
-   * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
-   * Settings mutation: local trusted renderer only; deliberately excluded from the
-   * device-link allowlist.
-   */
-  PROVIDER_ORDER_SET: 'maker:provider:order:set',
-  /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
-  MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
-  MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
-  MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
@@ -245,21 +216,6 @@ export const MAKER_INVOKE = {
    * Phase 2 会加一个 submit-to-GitHub 动作(同 PAT 配置 + 去重相同 open issue)。
    */
   HELP_FEEDBACK_CREATE: 'maker:help:feedback:create',
-  /**
-   * /issues 页面的「我的 Issue」列表。三路合并去重,主次不要记反:
-   * 平台通道(按 Cindy 登录态取「我提交过的 issue」,唯一给实时状态且跨设备的来源)
-   * + 本机提交账本(平台未就绪时的兜底)
-   * + 用户自己的 GitHub 身份(**可选增强**,没有时列表照常工作)。
-   *
-   * 查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
-   * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
-   */
-  MY_ISSUES_LIST: 'maker:issues:list-mine',
-  /**
-   * /issues 的**首屏快照**(上次查询成功时落盘的列表镜像)。进页面先渲染它,
-   * 避免空等远端;fresh 一到即整体接管。非权威、可重建,详见 myIssuesSnapshotStore。
-   */
-  MY_ISSUES_SNAPSHOT: 'maker:issues:snapshot-mine',
   WRITE_PLAN_FILE: 'maker:write-plan-file',
   // Rewind / Fork (Stage 2 C2) — 取代老 cc-agent:rewind:* + local-db:sessions:fork
   REWIND_PREVIEW: 'maker:rewind:preview',
@@ -289,10 +245,8 @@ export const MAKER_INVOKE = {
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
-  // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
+  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
   USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
-  // 非 XD Provider 的 Catalog 参考价与用户覆盖；只用于 BYOK / 订阅估值。
-  USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
@@ -374,9 +328,6 @@ export const MAKER_INVOKE = {
    */
   CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
   CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
-  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
-  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
-  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
   CONTACTS_LIST: 'maker:contacts:list',
   CONTACTS_GET: 'maker:contacts:get',
   CONTACTS_CREATE: 'maker:contacts:create',
@@ -596,8 +547,6 @@ export const MAKER_INVOKE = {
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
-  // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
-  AT_CONTEXT_LIST: 'maker:at-context:list',
   // cua-driver installer for direct computer control.
   COMPUTER_INSTALL_DRIVER: 'maker:computer:install-driver',
   // Quiet cua-driver update check (Settings-open triggered only, never polls).
@@ -627,7 +576,7 @@ export const MAKER_INVOKE = {
    *  - GET_STATE: renderer 启动期拉 { detached, lastOpen, open }
    *  - OPEN / CLOSE: 幂等开(已开则 focus)/ 关子窗口,写 lastOpen
    *  - SET_DETACHED(boolean): 落盘偏好;true 附带开窗,false 附带关窗;返回新 state
-   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
+   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, available }
    *  - READY: 子窗口根组件挂载握手(resolve main 侧 ensureOpen 等待)
    *  - SEND_COMMAND: 主窗把命令(如 open-terminal 快捷键)转发给子窗口,必要时先开窗
    */
@@ -705,7 +654,7 @@ export const MAKER_SEND = {
    */
   SYNC_SESSION_MODEL_PREF: 'maker:sync-session-model-pref',
   /**
-   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
+   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, available }
    * 变化时无条件推(main 只在 detached 时消费,开偏好瞬间就有 context 可转发)。
    * main 校验 sender 必须是主窗,其它窗口的推送丢弃。fire-and-forget。
    */
@@ -804,12 +753,6 @@ export const MAKER_PUSH = {
    * 控制端进程因从不收到此 channel,带着同名监听也不会误触发。payload = APPLY_NEW_MAKER_DRAFT_PREF 入参。
    */
   DRAFT_PREF_APPLY: 'maker:draft-pref:apply',
-  /**
-   * 被控端本地 main → 自身 renderer:把控制端写穿的「新建会话默认启用 worktree」交给 renderer
-   * 写真实草稿(patchDraft)。仅本地窗口消费(**不**在 PUSH_FORWARD_ALLOWLIST,不转发回控制端)。
-   * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
-   */
-  WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

@@ -14,22 +14,21 @@
  * 上探测式灰态)。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Info, Plus, Search } from 'lucide-react';
+import { Check, Info, Plus, Search, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
-import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { SettingsTextInput } from './SettingsTextInput';
 
 import {
   isLoopbackProviderUrl,
@@ -62,17 +61,13 @@ interface AddProviderWizardProps {
 }
 
 type Selection =
-  | { kind: 'oauth'; provider: ProviderView }
-  | { kind: 'preset'; preset: ProviderPreset }
-  /** 内置 API-key 供应商(如 Gemini 图像来源,2026-07):保存 key 即连接,无自定义供应商落库。 */
-  | { kind: 'builtinApiKey'; provider: ProviderView };
+  { kind: 'oauth'; provider: ProviderView } | { kind: 'preset'; preset: ProviderPreset };
 
 type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
-  pi: 'Pi',
 };
 
 function presetRuntimeBaseUrl(
@@ -109,16 +104,9 @@ function isValidEditablePresetBaseUrl(value: string): boolean {
  * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch);同时内置少量
  * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
  * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
- * 每个 runtime 都独立声明 wire protocol：Anthropic API 同时提供 Claude Code 的
- * Messages 与 Codex 桥接所需的 Messages 端点；openai/xai 仅声明 Codex(两家无
- * Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
+ * cc runtime 需 Anthropic 兼容端点、codex 需 OpenAI 兼容端点,故 openai/xai
+ * 仅声明 codex(两家无 Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
  */
-const ANTHROPIC_API_MODELS = [
-  { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
-];
-
 const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     id: 'anthropic-api',
@@ -130,15 +118,11 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
         // contextWindow 必须与目录(providers.json)一致:保存时它是窗口的唯一来源
         // (拉取的模型列表不带窗口),缺省会落 200k 默认 → toSdkModelString 剥掉
         // 1M 模型的 [1m] 路由,用户拿到 1/5 窗口。
-        models: ANTHROPIC_API_MODELS,
-      },
-      // Codex 通过 Responses → Anthropic Messages 本地桥接访问同一官方 API。
-      // 这不是 Claude.ai OAuth 路由：API key 由该 runtime 独立存储，出站只使用
-      // x-api-key，Codex 自带的 OpenAI Authorization 永不透传到 Anthropic。
-      codex: {
-        wireProtocol: 'anthropic-messages',
-        baseUrl: 'https://api.anthropic.com',
-        models: ANTHROPIC_API_MODELS,
+        models: [
+          { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
+          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+        ],
       },
     },
   },
@@ -178,14 +162,49 @@ function cardIcon(sel: { providerId?: string; name: string }): React.ReactNode {
   if (sel.providerId && hasProviderLogo(sel.providerId)) {
     return <ProviderLogoMark providerId={sel.providerId} size={15} />;
   }
-  return <span className="text-12 font-medium leading-none">{providerMonogram(sel.name)}</span>;
+  return <span className="text-12 font-semibold leading-none">{providerMonogram(sel.name)}</span>;
 }
 
-/**
- * 目录单行(2026-07 定稿:第 1 步由三列卡片宫格改为单列列表)——名称在左、
- * 鉴权方式靠右;行宽给足后不再需要截断测量 + Tip 组合。
- */
-function ProviderRow({
+/** 单行供应商名；只有实际发生截断时才在 hover 后展示完整名称。 */
+function ProviderCardName({ name }: { name: string }) {
+  const nameRef = useRef<HTMLSpanElement>(null);
+  const [truncated, setTruncated] = useState(false);
+
+  useLayoutEffect(() => {
+    const element = nameRef.current;
+    if (!element) return;
+    const measure = () => setTruncated(element.scrollWidth > element.clientWidth + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    // Tip 启停会改变子树并重挂 span，truncated 变化时必须把 observer 绑定到新节点。
+    return () => observer.disconnect();
+  }, [name, truncated]);
+
+  const text = (
+    <span
+      ref={nameRef}
+      className="min-w-0 truncate text-13 font-medium"
+      style={{ color: 'var(--settings-section-title)' }}
+    >
+      {name}
+    </span>
+  );
+
+  return truncated ? (
+    <Tip text={name} delay={250} contentClassName="z-[10001] max-w-[320px] [word-break:normal]">
+      {text}
+    </Tip>
+  ) : (
+    text
+  );
+}
+
+function ProviderCard({
   icon,
   name,
   meta,
@@ -200,27 +219,26 @@ function ProviderRow({
     <button
       type="button"
       onClick={onClick}
-      title={name}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
+      style={{
+        borderColor: 'var(--border-default)',
+        backgroundColor: 'var(--surface-elevated)',
+      }}
     >
-      <span
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-        style={{
-          backgroundColor: 'var(--settings-integration-avatar-bg)',
-          border: '1px solid var(--settings-integration-avatar-border)',
-          color: 'var(--settings-integration-avatar-icon)',
-        }}
-      >
-        {icon}
+      <span className="flex items-center gap-2">
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+          style={{
+            backgroundColor: 'var(--settings-integration-avatar-bg)',
+            border: '1px solid var(--settings-integration-avatar-border)',
+            color: 'var(--settings-integration-avatar-icon)',
+          }}
+        >
+          {icon}
+        </span>
+        <ProviderCardName name={name} />
       </span>
-      <span
-        className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{ color: 'var(--settings-section-title)' }}
-      >
-        {name}
-      </span>
-      {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
-      <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
+      <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
         {meta}
       </span>
     </button>
@@ -239,8 +257,8 @@ function InfoLine({ text }: { text: string }) {
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
     <span
-      className="block px-2 pb-1.5 pt-3 text-11 font-medium uppercase"
-      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+      className="pb-1.5 pt-3 text-11 font-semibold uppercase"
+      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
     >
       {children}
     </span>
@@ -262,12 +280,9 @@ export function AddProviderWizard({
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
-  const [sel, setSel] = useState<Selection | null>(() => {
-    if (!entryProvider) return null;
-    return entryProvider.auth?.method === 'apiKey'
-      ? { kind: 'builtinApiKey', provider: entryProvider }
-      : { kind: 'oauth', provider: entryProvider };
-  });
+  const [sel, setSel] = useState<Selection | null>(() =>
+    entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
+  );
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -301,18 +316,7 @@ export function AddProviderWizard({
    * 每个 runtime(双 runtime 预设两端模型集可以不同,cc-only 模型不能写进 codex,反之亦然)。
    */
   const [picks, setPicks] = useState<
-    Map<
-      string,
-      {
-        name: string;
-        checked: boolean;
-        recommended: boolean;
-        agents: AgentKind[];
-        /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
-         *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,预设值优先、本值兜底。 */
-        contextWindows?: Partial<Record<AgentKind, number>>;
-      }
-    >
+    Map<string, { name: string; checked: boolean; recommended: boolean; agents: AgentKind[] }>
   >(new Map());
 
   useEffect(() => {
@@ -341,19 +345,6 @@ export function AddProviderWizard({
       ),
     [providers],
   );
-  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目,今天只有 gemini 图像来源):
-  // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
-  const builtinApiKeyChoices = useMemo(
-    () =>
-      providers.filter(
-        (p) =>
-          p.source === 'builtin' &&
-          p.auth.method === 'apiKey' &&
-          !p.connected &&
-          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
-      ),
-    [providers],
-  );
   const sortedPresets = useMemo(
     () => sortPresetsForLocale(presets, i18n.language),
     [presets, i18n.language],
@@ -378,13 +369,6 @@ export function AddProviderWizard({
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'oauth', provider });
-    setStep(2);
-  }, []);
-  const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
-    fetchSeqRef.current += 1;
-    setManualModelIds({});
-    setSel({ kind: 'builtinApiKey', provider });
-    setApiKey('');
     setStep(2);
   }, []);
   const pickPreset = useCallback(
@@ -503,23 +487,6 @@ export function AddProviderWizard({
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
 
-  // 遮罩关闭的防误触:从输入框按下、拖到弹窗外松开时,浏览器把合成 click 派发到
-  // 按下点与松开点的最近公共祖先(= 遮罩),target === currentTarget 成立但用户
-  // 并无关闭意图。记录按下是否始于遮罩,按下与松开都在遮罩上才关闭
-  // (PR #1102 review 第七轮)。
-  const overlayMouseDownOnSelfRef = useRef(false);
-
-  // Esc 关闭(DESIGN.md §4:弹窗关闭 = 取消按钮 / Esc / 点遮罩;本弹窗未用 Radix,需自行监听)。
-  // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
-  // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) handleClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleClose]);
-
   // OpenAI 走 useCodexAuth:hook 状态翻 connected 时视为完成(triggerLogin 也会返回,
   // oneshot ref 保证只收口一次)。只收口本向导内发起的登录(openaiLoginStartedRef),
   // 不把「本机已有凭证」误当成完成 —— 见 openaiLoginStartedRef 的注释。
@@ -549,13 +516,7 @@ export function AddProviderWizard({
     // 预设推荐模型先入清单(预勾);归属 = 预设里列出该模型的全部 runtime。
     const initial = new Map<
       string,
-      {
-        name: string;
-        checked: boolean;
-        recommended: boolean;
-        agents: AgentKind[];
-        contextWindows?: Partial<Record<AgentKind, number>>;
-      }
+      { name: string; checked: boolean; recommended: boolean; agents: AgentKind[] }
     >();
     for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
@@ -602,13 +563,7 @@ export function AddProviderWizard({
     const results = await Promise.all(
       agents.map(async (agent) => {
         const rt = preset.runtimes[agent];
-        if (!rt) {
-          return {
-            agent,
-            ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
-          };
-        }
+        if (!rt) return { agent, ok: false, models: [] as { id: string; name: string }[] };
         try {
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
@@ -616,16 +571,11 @@ export function AddProviderWizard({
             authMethod: preset.authMethod ?? 'apiKey',
             modelsUrl: rt.modelsUrl ?? null,
             apiKey: apiKey.trim() || null,
-            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             ...(rt.headers ? { headers: rt.headers } : {}),
           });
           return { agent, ok: !!(r.ok && r.models), models: r.models ?? [] };
         } catch {
-          return {
-            agent,
-            ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
-          };
+          return { agent, ok: false, models: [] as { id: string; name: string }[] };
         }
       }),
     );
@@ -639,34 +589,11 @@ export function AddProviderWizard({
         for (const m of models) {
           const existing = next.get(m.id);
           if (existing) {
-            const mergedAgents =
-              !preservePresetOwnership && !existing.agents.includes(agent)
-                ? [...existing.agents, agent]
-                : existing.agents;
-            // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
-            // 不能共享一个值;预设推荐模型的窗口在完成创建时以预设为准,这里补的是
-            // 「预设没写窗口」的兜底)。
-            const backfillWindow =
-              existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
-            if (mergedAgents !== existing.agents || backfillWindow) {
-              next.set(m.id, {
-                ...existing,
-                agents: mergedAgents,
-                ...(backfillWindow
-                  ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
-                  : {}),
-              });
+            if (!preservePresetOwnership && !existing.agents.includes(agent)) {
+              next.set(m.id, { ...existing, agents: [...existing.agents, agent] });
             }
           } else if (!preservePresetOwnership) {
-            next.set(m.id, {
-              name: m.name,
-              checked: false,
-              recommended: false,
-              agents: [agent],
-              ...(m.contextWindow !== undefined
-                ? { contextWindows: { [agent]: m.contextWindow } }
-                : {}),
-            });
+            next.set(m.id, { name: m.name, checked: false, recommended: false, agents: [agent] });
           }
         }
       }
@@ -718,41 +645,12 @@ export function AddProviderWizard({
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
-  /**
-   * 内置 API-key 供应商(如 Gemini):保存 = 把 key 写进该供应商在册的 safeStorage 键
-   * (providerSecrets SSoT),连接态(provider-service 的 builtinApiKeyConnected)与
-   * 图像通道 ready 都以「key 已存」为准 —— 无自定义供应商落库、无模型拉取步。
-   */
-  const handleSaveBuiltinApiKey = useCallback(async () => {
-    if (!sel || sel.kind !== 'builtinApiKey') return;
-    const id = sel.provider.id;
-    if (!(PROVIDER_SECRET_IDS as readonly string[]).includes(id)) {
-      // 目录出现了未在 providerSecrets 登记的内置 API-key 供应商 = 数据/代码脱节,
-      // 明确报错让问题在配置期暴露,不静默写错键。
-      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
-      return;
-    }
-    const key = apiKey.trim();
-    if (!key) return;
-    setSaving(true);
-    try {
-      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
-      await window.electronAPI.builtinApiKeyStore(id, key);
-      toast.success(t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }));
-      onDone(id);
-    } catch {
-      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
-    } finally {
-      setSaving(false);
-    }
-  }, [sel, apiKey, onDone, t]);
-
   const handleFinish = useCallback(async () => {
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindows: v.contextWindows }));
+      .map(([id, v]) => ({ id, name: v.name, agents: v.agents }));
     if (selected.length === 0) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
@@ -775,19 +673,11 @@ export function AddProviderWizard({
           .filter((m) => m.agents.includes(agent))
           .map((m) => {
             const presetModel = rt.models.find((candidate) => candidate.id === m.id);
-            // 预设策展值优先;拉取新增模型没有预设条目,落**该 runtime 端点**上报的
-            // 发现值(按 agent 分槽,双端窗口可不同),不再无窗口入库退回 200K 默认。
-            const contextWindow = presetModel?.contextWindow ?? m.contextWindows?.[agent];
             return {
               id: m.id,
               name: m.name,
-              ...(contextWindow !== undefined ? { contextWindow } : {}),
-              ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
-              ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
-                ? {
-                    reasoning: true,
-                    reasoningEfforts: [...presetModel.reasoningEfforts],
-                  }
+              ...(presetModel?.contextWindow !== undefined
+                ? { contextWindow: presetModel.contextWindow }
                 : {}),
             };
           });
@@ -831,11 +721,8 @@ export function AddProviderWizard({
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
 
-  // ── 步骤指示 ─────────────────────────────────────────────────────────
-  // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
-  // 没有第 3 步的两步流程(OAuth 授权即完成、内置 API Key 保存即连接)才收成
-  // 两步。未选择时就显示两步会让「选择模型」凭空消失/出现(2026-07-30 用户反馈)。
-  const totalSteps = sel == null || sel.kind === 'preset' ? 3 : 2;
+  // ── 步骤指示(OAuth 路径只有 2 步)─────────────────────────────────────
+  const totalSteps = sel?.kind === 'preset' ? 3 : 2;
   const stepLabels = [
     t('settings.providers.wizard.stepPick'),
     t('settings.providers.wizard.stepConnect'),
@@ -896,40 +783,41 @@ export function AddProviderWizard({
     (!presetNeedsApiKey || apiKey.trim().length > 0);
 
   return (
-    // DESIGN.md §4 Dialog:关闭 = 底部「取消」/ Esc / 点遮罩,不设右上角 ×(与 ConfirmDialog 同构)。
-    <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onMouseDown={(e) => {
-        overlayMouseDownOnSelfRef.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && overlayMouseDownOnSelfRef.current) handleClose();
-        overlayMouseDownOnSelfRef.current = false;
-      }}
-    >
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]">
       <div
-        className="flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border"
+        className="flex max-h-[85vh] w-[600px] flex-col overflow-hidden rounded-xl border"
         style={{
           backgroundColor: 'var(--surface-elevated)',
           borderColor: 'var(--border-default)',
         }}
       >
-        {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
-        <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
-          <h3
-            className="min-w-0 truncate text-16 font-medium"
-            style={{ color: 'var(--settings-section-title)' }}
-          >
-            {sel
-              ? t('settings.providers.wizard.titleWith', {
-                  name:
-                    sel.kind === 'preset'
-                      ? presetDisplayName(sel.preset, i18n.language)
-                      : sel.provider.name,
-                })
-              : t('settings.providers.wizard.title')}
-          </h3>
-          <div className="flex shrink-0 items-center gap-4">
+        {/* 头部:标题 + 步骤指示 */}
+        <div className="flex flex-col gap-3 px-6 pb-4 pt-5">
+          <div className="flex items-center justify-between">
+            <h3
+              className="text-16 font-semibold"
+              style={{ color: 'var(--settings-section-title)' }}
+            >
+              {sel
+                ? t('settings.providers.wizard.titleWith', {
+                    name:
+                      sel.kind === 'oauth'
+                        ? sel.provider.name
+                        : presetDisplayName(sel.preset, i18n.language),
+                  })
+                : t('settings.providers.wizard.title')}
+            </h3>
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label={t('settings.providers.wizard.closeAria')}
+              className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex items-center gap-4">
             {stepLabels.map((label, i) => {
               const n = i + 1;
               const isCur = n === step || (n === totalSteps && step > totalSteps);
@@ -969,52 +857,37 @@ export function AddProviderWizard({
           </div>
         </div>
 
-        {/* 主体。第 1 步是「固定搜索 + 限高滚动目录 + 钉底自定义入口」的三段结构
-            (滚动区上下以 1px Board 细线与固定区分隔,自定义端点不随目录滚动);
-            第 2/3 步保持整体滚动的表单区。 */}
+        {/* 主体 */}
         <div
-          className={cn(
-            'min-h-[320px] flex-1',
-            step === 1 ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto border-y px-4 py-4',
-          )}
+          className="min-h-[320px] flex-1 overflow-y-auto border-t px-6 py-4"
           style={{ borderColor: 'var(--border-default)' }}
         >
           {step === 1 && (
-            <>
-              <div className="px-4 pb-3">
-                <div
-                  className="flex h-9 items-center gap-2 rounded-full border px-3.5"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--surface-elevated)',
-                  }}
-                >
-                  <Search
-                    size={14}
-                    className="shrink-0"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
-                    className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-                    style={{ color: 'var(--settings-section-title)' }}
-                  />
-                </div>
+            <div className="flex flex-col">
+              <div
+                className="flex h-9 items-center gap-2 rounded-full border px-3.5"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--surface-elevated)',
+                }}
+              >
+                <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={t('settings.providers.wizard.searchPlaceholder')}
+                  className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
+                  style={{ color: 'var(--settings-section-title)' }}
+                />
               </div>
 
-              {/* 目录:单列列表(2026-07 定稿,替代三列卡片宫格),唯一的滚动区。 */}
-              <div
-                className="min-h-0 flex-1 overflow-y-auto border-y px-2 pb-2"
-                style={{ borderColor: 'var(--border-default)' }}
-              >
-                {filteredOauth.length > 0 && (
-                  <>
-                    <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
+              {filteredOauth.length > 0 && (
+                <>
+                  <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
+                  <div className="grid grid-cols-3 gap-2">
                     {filteredOauth.map((p) => (
-                      <ProviderRow
+                      <ProviderCard
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
                         name={p.name}
@@ -1026,25 +899,16 @@ export function AddProviderWizard({
                         onClick={() => pickOauth(p)}
                       />
                     ))}
-                  </>
-                )}
+                  </div>
+                </>
+              )}
 
-                {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
-                  <>
-                    <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
-                    {builtinApiKeyChoices
-                      .filter((p) => !q || p.name.toLowerCase().includes(q))
-                      .map((p) => (
-                        <ProviderRow
-                          key={p.id}
-                          icon={cardIcon({ providerId: p.id, name: p.name })}
-                          name={p.name}
-                          meta={t('settings.providers.wizard.metaApiKey')}
-                          onClick={() => pickBuiltinApiKey(p)}
-                        />
-                      ))}
+              {filteredPresets.length > 0 && (
+                <>
+                  <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
+                  <div className="grid grid-cols-3 gap-2">
                     {filteredPresets.map((p) => (
-                      <ProviderRow
+                      <ProviderCard
                         key={p.id}
                         icon={cardIcon({
                           providerId: p.id,
@@ -1059,45 +923,43 @@ export function AddProviderWizard({
                         onClick={() => pickPreset(p)}
                       />
                     ))}
-                  </>
-                )}
-              </div>
+                  </div>
+                </>
+              )}
 
-              {/* 自定义端点:钉在滚动区外,目录再长也始终可见。 */}
-              <div className="flex flex-col gap-2 px-4 pb-1 pt-3">
-                <button
-                  type="button"
-                  onClick={onOpenCustomForm}
-                  className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
-                  style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
+              <GroupLabel>{t('settings.providers.wizard.groupCustom')}</GroupLabel>
+              <button
+                type="button"
+                onClick={onOpenCustomForm}
+                className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
+              >
+                <span
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                  style={{
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-section-desc)',
+                  }}
                 >
+                  <Plus size={13} />
+                </span>
+                <span className="flex min-w-0 flex-col">
                   <span
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
-                    style={{
-                      border: '1px solid var(--settings-integration-avatar-border)',
-                      color: 'var(--settings-section-desc)',
-                    }}
+                    className="text-13 font-medium"
+                    style={{ color: 'var(--settings-section-title)' }}
                   >
-                    <Plus size={13} />
+                    {t('settings.providers.wizard.customTitle')}
                   </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span
-                      className="text-13 font-medium"
-                      style={{ color: 'var(--settings-section-title)' }}
-                    >
-                      {t('settings.providers.wizard.customTitle')}
-                    </span>
-                    <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-                      {t('settings.providers.wizard.customMeta')}
-                    </span>
+                  <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
+                    {t('settings.providers.wizard.customMeta')}
                   </span>
-                </button>
+                </span>
+              </button>
 
-                <p className="text-11 leading-snug" style={{ color: 'var(--text-tertiary)' }}>
-                  {t('settings.providers.wizard.pickHint')}
-                </p>
-              </div>
-            </>
+              <p className="pt-4 text-11 leading-snug" style={{ color: 'var(--text-tertiary)' }}>
+                {t('settings.providers.wizard.pickHint')}
+              </p>
+            </div>
           )}
 
           {step === 2 && sel?.kind === 'oauth' && (
@@ -1135,7 +997,7 @@ export function AddProviderWizard({
                   <button
                     type="button"
                     onClick={cancelAuthorize}
-                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                     style={{
                       backgroundColor: 'var(--settings-btn-secondary-bg)',
                       borderColor: 'var(--settings-btn-secondary-border)',
@@ -1150,7 +1012,7 @@ export function AddProviderWizard({
                     <button
                       type="button"
                       onClick={() => void handleAuthorize('browser')}
-                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                      className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                       style={{
                         backgroundColor: 'var(--settings-btn-secondary-bg)',
                         borderColor: 'var(--settings-btn-secondary-border)',
@@ -1169,7 +1031,7 @@ export function AddProviderWizard({
                       <button
                         type="button"
                         onClick={() => void handleAuthorize('device-code')}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                        className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                         style={{
                           backgroundColor: 'transparent',
                           borderColor: 'var(--settings-btn-secondary-border)',
@@ -1190,7 +1052,7 @@ export function AddProviderWizard({
                     type="button"
                     onClick={() => pickPreset(OFFICIAL_API_PRESETS[sel.provider.id])}
                     disabled={loggingIn}
-                    className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                    className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
                     style={{
                       backgroundColor: 'transparent',
                       borderColor: 'var(--settings-btn-secondary-border)',
@@ -1206,41 +1068,6 @@ export function AddProviderWizard({
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
-            </div>
-          )}
-
-          {step === 2 && sel?.kind === 'builtinApiKey' && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <span
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-                  style={{
-                    backgroundColor: 'var(--settings-integration-avatar-bg)',
-                    border: '1px solid var(--settings-integration-avatar-border)',
-                    color: 'var(--settings-integration-avatar-icon)',
-                  }}
-                >
-                  {cardIcon({ providerId: sel.provider.id, name: sel.provider.name })}
-                </span>
-                <div className="flex min-w-0 flex-col">
-                  <span
-                    className="text-14 font-semibold"
-                    style={{ color: 'var(--settings-section-title)' }}
-                  >
-                    {sel.provider.name}
-                  </span>
-                  <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
-                    {t('settings.providers.wizard.builtinApiKey.subtitle')}
-                  </span>
-                </div>
-              </div>
-              <InfoLine text={t('settings.providers.wizard.builtinApiKey.note')} />
-              <div className="flex flex-col gap-1.5">
-                <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
-                  {t('settings.providers.custom.fields.apiKey')}
-                </label>
-                <SettingsTextInput value={apiKey} onChange={setApiKey} size="md" mono secret />
-              </div>
             </div>
           )}
 
@@ -1267,13 +1094,18 @@ export function AddProviderWizard({
                   <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
-                  <SettingsTextInput
+                  <input
+                    type="password"
                     value={apiKey}
-                    onChange={setApiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
                     placeholder="sk-…"
-                    size="md"
-                    mono
-                    secret
+                    autoComplete="off"
+                    className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                    style={{
+                      borderColor: 'var(--border-default)',
+                      backgroundColor: 'var(--surface-elevated)',
+                      color: 'var(--settings-section-title)',
+                    }}
                   />
                 </div>
               ) : (
@@ -1503,8 +1335,10 @@ export function AddProviderWizard({
         </div>
 
         {/* 底部 */}
-        {/* 底部操作行:不再加分割线 —— 弹窗内只保留滚动区上下两条细线(原型定稿)。 */}
-        <div className="flex items-center justify-between px-4 pb-4 pt-2">
+        <div
+          className="flex items-center justify-between border-t px-6 py-3.5"
+          style={{ borderColor: 'var(--border-default)' }}
+        >
           <button
             type="button"
             onClick={() => {
@@ -1530,7 +1364,7 @@ export function AddProviderWizard({
             <button
               type="button"
               onClick={handleClose}
-              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+              className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
               style={{
                 borderColor: 'var(--settings-btn-secondary-border)',
                 color: 'var(--settings-btn-secondary-text)',
@@ -1538,30 +1372,13 @@ export function AddProviderWizard({
             >
               {t('settings.providers.wizard.cancel')}
             </button>
-            {sel?.kind === 'builtinApiKey' && step === 2 && (
-              <button
-                type="button"
-                onClick={() => void handleSaveBuiltinApiKey()}
-                disabled={saving || apiKey.trim().length === 0}
-                className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
-                  saving || apiKey.trim().length === 0
-                    ? 'cursor-not-allowed opacity-50'
-                    : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
-              >
-                {saving && <Spinner size={13} />}
-                {t('settings.providers.wizard.finish')}
-              </button>
-            )}
             {sel?.kind === 'preset' && step === 2 && (
               <button
                 type="button"
                 onClick={() => void startFetch()}
                 disabled={!presetCanContinue}
                 className={cn(
-                  'flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity',
+                  'flex h-9 items-center justify-center rounded-full px-5 text-13 font-medium transition-opacity',
                   !presetCanContinue ? 'cursor-not-allowed opacity-50' : 'hover:opacity-90',
                 )}
                 style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
@@ -1575,7 +1392,7 @@ export function AddProviderWizard({
                 onClick={() => void handleFinish()}
                 disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
                 className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-6 text-13 font-medium transition-opacity',
+                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
                   saving || fetchState.status === 'fetching' || checkedCount === 0
                     ? 'cursor-not-allowed opacity-50'
                     : 'hover:opacity-90',

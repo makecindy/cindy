@@ -58,10 +58,10 @@ describe('systemCard', () => {
       { kind: 'agent-builtin', name: 'doctor', description: 'remote doctor' },
     ]).map((command) => [command.name, command.description])).toEqual([
       ['help', '显示手机端和远程 agent 命令'],
-      ['context', '查看当前任务上下文用量'],
-      ['cost', '查看当前任务消耗'],
+      ['context', '查看当前会话上下文用量'],
+      ['cost', '查看当前会话消耗'],
       ['pwd', '显示当前远程工作目录'],
-      ['status', '显示当前任务状态'],
+      ['status', '显示当前会话状态'],
       ['doctor', 'remote doctor'],
     ]);
   });
@@ -138,32 +138,6 @@ describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
     expect(formatMobileSystemCard('goal-resumed', undefined).title).toBe(
       i18n.t('message.systemCard.goalResumed'),
     );
-  });
-});
-
-describe('formatMobileSystemCard — 中断自动重连状态', () => {
-  const info = { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 };
-  it('shows live progress, reason, current attempt, and session total', () => {
-    expect(formatMobileSystemCard('auto-resume', { ...info, live: true })).toMatchObject({
-      title: 'Reconnecting 2/5…',
-      subtitle: 'Attempt 2/5 · 3 reconnects in this session',
-      body: 'socket hang up',
-    });
-  });
-  it('uses persisted outcome while keeping silent-stop records on their original copy', () => {
-    expect(['succeeded', 'failed', undefined].map((outcome) =>
-      formatMobileSystemCard('auto-resume', outcome ? { ...info, outcome } : {}).title,
-    )).toEqual(['Reconnected', 'Reconnect failed', 'Connection interrupted — resumed automatically']);
-  });
-});
-
-describe('formatMobileSystemCard — Agent 切换', () => {
-  it('keeps Pi distinct from Claude Code in persisted switch cards', () => {
-    expect(formatMobileSystemCard('agent-switch', {
-      fromAgentKind: 'pi',
-      toAgentKind: 'codex',
-      toModel: 'gpt-5.6',
-    }).title).toContain('Pi');
   });
 });
 

@@ -106,8 +106,6 @@ export interface MobileOutboxDisplayItem {
   clientId: string;
   text: string;
   quotesEncoded: boolean;
-  pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
-  slashCommandRanges?: Array<{ start: number; end: number }>;
   attachmentCount: number;
   uploadedCount: number;
   /** 图片槽缩略格(按槽序);非图片附件走 fileCount 计数行。 */
@@ -373,8 +371,6 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     clientId: item.clientId,
     text: item.text,
     quotesEncoded: item.quotesEncoded,
-    pastedTextRanges: item.pastedTextRanges,
-    slashCommandRanges: item.slashCommandRanges,
     attachmentCount,
     uploadedCount,
     thumbnails,

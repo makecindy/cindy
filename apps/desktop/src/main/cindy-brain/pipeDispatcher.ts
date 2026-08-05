@@ -23,7 +23,6 @@ import { randomUUID } from 'node:crypto';
 import type {
   GhostPipeToolCall,
   GhostToolCallResult,
-  GhostToolDecl,
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
@@ -55,10 +54,6 @@ interface PendingCall {
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 派发时刻(续命天花板从这里起算)。 */
   startedAt: number;
-  /** 本次调用的基础超时档；默认沿用全局档，宿主 UI 查询可显式收短。 */
-  baseTimeoutMs: number;
-  /** 显式短超时是绝对窗口，不接受 hold / tool-progress 续命。 */
-  timeoutExtensionsAllowed: boolean;
   /** 当前生效的超时时刻(hold / 心跳只延不缩,release 才收)。 */
   deadlineAt: number;
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
@@ -78,32 +73,6 @@ const DEFAULT_TIMEOUT_MS = 330_000;
 
 /** 代办收工(release)后留给意识做后处理与交卷的余量窗口。 */
 const HOLD_SETTLE_GRACE_MS = 60_000;
-
-/**
- * TOOL_NOT_FOUND 自愈文案。只报"没有什么"会让 agent 拿同一错误形态反复重试,
- * 甚至误判"插件没有写能力"(2026-07-30 实测:二级分派型插件 cindy-github 的
- * 操作名被两个模型先后当作顶层 tool 直调,均在此卡死)。
- * 分派型插件(暴露了 call_tool)把 agent 想调的名字直接回填进正确调用形态;
- * 普通插件列出实际可用的顶层工具名。
- * 消费方:本派发器 + ghost_call 主路径预检(mcp-integrations/ghost.ts)+
- * setup 恢复校验(maker-ipc/register.ts validateTarget)——所有 TOOL_NOT_FOUND
- * 返回点必须共用本函数,新增返回点不得自写文案。导出供单测直测(规则 14)。
- */
-export function toolNotFoundMessage(
-  ghostId: string,
-  tool: string,
-  declaredTools: GhostToolDecl[] | undefined,
-): string {
-  const names = (declaredTools ?? []).map((t) => t.name);
-  if (names.includes('call_tool')) {
-    return (
-      `插件 ${ghostId} 没有名为 ${tool} 的顶层工具——它采用二级分派:具体操作经 call_tool 下发,` +
-      `正确形态 ghost_call({ghost_id:"${ghostId}",tool:"call_tool",args:{name:"${tool}",args:{...}}});` +
-      `操作名与参数先调 list_tools 查询。不要据此判定插件缺少该能力。`
-    );
-  }
-  return `插件 ${ghostId} 没有工具 ${tool};可用工具: ${names.length > 0 ? names.join(', ') : '(未声明任何工具)'}`;
-}
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
@@ -128,8 +97,6 @@ export class GhostPipeDispatcher {
      * callId,故由它铸好传入;缺省自铸,老调用方零改动)。
      */
     callId?: string;
-    /** 仅供可信宿主内部调用方收短等待时间；插件不能控制该值。 */
-    timeoutMs?: number;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
 
@@ -143,7 +110,7 @@ export class GhostPipeDispatcher {
     }
     const declared = ghost.manifest.tools?.some((t) => t.name === tool);
     if (!declared) {
-      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
+      return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `插件 ${ghostId} 没有工具 ${tool}` };
     }
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
@@ -163,16 +130,13 @@ export class GhostPipeDispatcher {
 
     return new Promise<GhostToolCallResult>((resolve) => {
       const startedAt = Date.now();
-      const baseTimeoutMs = this.baseTimeoutMs(request.timeoutMs);
       const entry: PendingCall = {
         ghostId,
         tool,
         resolve,
         timer: undefined,
         startedAt,
-        baseTimeoutMs,
-        timeoutExtensionsAllowed: request.timeoutMs === undefined,
-        deadlineAt: startedAt + baseTimeoutMs,
+        deadlineAt: startedAt + this.baseTimeoutMs(),
         holds: 0,
       };
       this.pending.set(callId, entry);
@@ -186,11 +150,8 @@ export class GhostPipeDispatcher {
   }
 
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */
-  private baseTimeoutMs(override?: number): number {
-    const requested = Number.isFinite(override)
-      ? Math.max(1, Math.floor(override as number))
-      : this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    return Math.min(requested, GHOST_PIPE_CALL_MAX_TOTAL_MS);
+  private baseTimeoutMs(): number {
+    return Math.min(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS, GHOST_PIPE_CALL_MAX_TOTAL_MS);
   }
 
   /** 按 entry.deadlineAt 重挂超时闹钟(旧闹钟一并清掉)。 */
@@ -244,7 +205,6 @@ export class GhostPipeDispatcher {
   holdCall(ghostId: string, callId: string, budgetMs: number): void {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId) return;
-    if (!entry.timeoutExtensionsAllowed) return;
     entry.holds += 1;
     this.extendDeadline(callId, entry, Date.now() + budgetMs + HOLD_SETTLE_GRACE_MS);
   }
@@ -259,7 +219,7 @@ export class GhostPipeDispatcher {
     if (!entry || entry.ghostId !== ghostId) return;
     entry.holds = Math.max(0, entry.holds - 1);
     if (entry.holds > 0) return;
-    const target = Math.max(entry.startedAt + entry.baseTimeoutMs, Date.now() + HOLD_SETTLE_GRACE_MS);
+    const target = Math.max(entry.startedAt + this.baseTimeoutMs(), Date.now() + HOLD_SETTLE_GRACE_MS);
     if (target < entry.deadlineAt) {
       entry.deadlineAt = target;
       this.armTimer(callId, entry);
@@ -283,9 +243,7 @@ export class GhostPipeDispatcher {
     if (entry.ghostId !== senderGhostId) {
       return { accepted: false, reason: '不是你的卷子' };
     }
-    if (entry.timeoutExtensionsAllowed) {
-      this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
-    }
+    this.extendDeadline(p.callId, entry, Date.now() + this.baseTimeoutMs());
     return { accepted: true };
   }
 
@@ -352,14 +310,6 @@ export class GhostPipeDispatcher {
     if (!entry) return;
     this.pending.delete(callId);
     (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
-    this.deps.log?.info('ghost tool call completed', {
-      ghostId: entry.ghostId,
-      tool: entry.tool,
-      callId,
-      ok: result.ok,
-      ...(result.ok ? {} : { errorCode: result.errorCode }),
-      totalMs: Date.now() - entry.startedAt,
-    });
     entry.resolve(result);
   }
 }

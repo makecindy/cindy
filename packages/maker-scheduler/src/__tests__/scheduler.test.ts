@@ -806,49 +806,32 @@ describe('Scheduler', () => {
     expect(after?.intervalMs).toBeUndefined();
   });
 
-  // ── intervalMs 真 partial 契约：没带 key 就不动，显式带 key(undefined)才清空 ──
-  // 历史演进（两个方向都栽过，改这里前先读完）：
-  //   1. 最早：cronExpr-only patch 保留旧 intervalMs → interval 永远获胜，改 cron
-  //      形同虚设（当时 MCP schema 不暴露 intervalMs，调用方无法表达清空）。
-  //   2. 于是加了隐式清空：cronExpr 在场且没带 intervalMs key → 清。intervalMs 对
-  //      调用方开放后，它反过来成为静默事故源：只更新 prompt + cronExpr（cadence
-  //      展示对齐的常见形态）就把 interval 任务打回 cron 槽位语义（2026-07-29 #211
-  //      心跳实测），所有调用方被迫背「三件套一起带」。
-  //   3. 现在：真 partial。清空唯一表达 = 显式带 key 且值 undefined（JSON 边界为
-  //      null，由 MCP 工具层翻译）。GUI 表单恒带 key，行为不变。
-  // 仍然**不做**"按形态推导 interval"：cron 就是 cron，与 create() 对称。
+  // ── update(cronExpr) 不带 intervalMs 时一律清空、按字面壁钟语义执行 ──
+  // MCP 工具的 schema 不暴露 intervalMs，patch 只有 cronExpr。修复前旧 intervalMs
+  // 原样保留并继续获胜 → 改 cron 形同虚设（PR 跟进任务退避阶梯被永久冻结在 10min）。
+  // 注意**不做**"按形态推导 interval"：cron 就是 cron，interval 语义只属于显式
+  // 传 intervalMs 的调用方（与 create() 对称，避免壁钟意图被静默转 interval）。
 
-  it('update(cronExpr only) keeps interval authority and re-arms from now', async () => {
+  it('update(cronExpr only) clears stale intervalMs when new cron is wall-clock', async () => {
     const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
-    // 模拟 MCP patch：只带 cronExpr（cadence 展示对齐），没有 intervalMs key
-    await h.scheduler.update(sch.id, { cronExpr: '*/30 * * * *' });
-    const after = await h.storage.get(sch.id);
-    // interval 语义保持权威，不被隐式清空
-    expect(after?.intervalMs).toBe(10 * 60_000);
-    // 触发字段变了 → 按 interval 冷启动重排：now + 10min = 00:11:00（不是 */30 壁钟槽位）
-    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 11, 0));
-  });
-
-  it('update(prompt only) leaves intervalMs and nextFireAt completely untouched', async () => {
-    // 2026-07-29 #211 事故形态的回归：改 prompt 绝不能动 interval 语义
-    const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
-    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
-    await h.scheduler.update(sch.id, { prompt: 'new prompt' });
-    const after = await h.storage.get(sch.id);
-    expect(after?.intervalMs).toBe(10 * 60_000);
-    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 10, 30));
-  });
-
-  it('update with explicit intervalMs:undefined key alone clears and falls back to cron slots', async () => {
-    const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
-    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
-    // 显式清空不需要同时改 cronExpr
-    await h.scheduler.update(sch.id, { intervalMs: undefined });
+    // 模拟 MCP patch：只带 cronExpr，没有 intervalMs key
+    await h.scheduler.update(sch.id, { cronExpr: '0 9 * * *' });
     const after = await h.storage.get(sch.id);
     expect(after?.intervalMs).toBeUndefined();
-    // 回到现有 cron 的壁钟槽位：下一个 */10 = 00:10:00
-    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 10, 0));
+    // 按新 cron 的壁钟槽位排，而不是 now + 旧10min = 00:11:00
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 9, 0, 0));
+  });
+
+  it('update(cronExpr only) clears intervalMs even when new cron is interval-shaped', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, cronExpr: '*/10 * * * *', intervalMs: 10 * 60_000 });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 0));
+    await h.scheduler.update(sch.id, { cronExpr: '*/30 * * * *' });
+    const after = await h.storage.get(sch.id);
+    // 不按形态推导：interval 形态的 cron 同样回到纯壁钟语义
+    expect(after?.intervalMs).toBeUndefined();
+    // 下一个 */30 壁钟槽位 = 00:30:00（不是 now+30min=00:31:00，更不是 now+旧10min）
+    expect(after?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 30, 0));
   });
 
   it('update with explicit intervalMs key still wins over cron-derived value', async () => {
@@ -3869,200 +3852,5 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-// ── #1016:attempt 生命周期状态机(转移统一入口 + 单一出口清单) ──────────────
-describe('Scheduler: attempt 生命周期状态机(#1016)', () => {
-  function spyLogger(): { logger: Logger; warns: unknown[][] } {
-    const warns: unknown[][] = [];
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn((...args: unknown[]) => warns.push(args)),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as unknown as Logger;
-    return { logger, warns };
-  }
-
-  it('完整生命周期(含排队往返)合法收口:零非法转移、出口零残留告警', async () => {
-    const { logger, warns } = spyLogger();
-    let ctxRef: FireContext | undefined;
-    let release: (() => void) | undefined;
-    const h = makeHarness({
-      logger,
-      runnerImpl: (_s, ctx) =>
-        new Promise<FireResult>((resolve) => {
-          ctxRef = ctx;
-          ctx.onQueueWaitStart?.();
-          release = () => {
-            // 排队 → 回收槽位 → 正常完成:覆盖 running→queued→running→finalizing 全链。
-            expect(ctx.endQueueWait?.(true)).toBe(true);
-            resolve({ sessionId: 'sess-full-lifecycle' });
-          };
-        }),
-    });
-    const sch = await h.scheduler.create({ ...baseInput, manual: true });
-    const p = h.scheduler.runNow(sch.id);
-    await vi.waitFor(() => expect(ctxRef).toBeDefined());
-    expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('queued');
-    release?.();
-    await p;
-    const snap = h.scheduler.getRuntimeSnapshot();
-    expect(snap.inFlight).toBe(0);
-    expect(snap.slotsInUse).toBe(0);
-    // 单一出口清单未发现任何残留登记(残留 = 某条路径漏了收口,响亮告警)。
-    expect(
-      warns.some((args) => String(args[0]).includes('unreaped registrations')),
-    ).toBe(false);
-    await h.scheduler.stop();
-  });
-
-  it('排队中 runner 直接抛错(不经过 endQueueWait)→ queued→finalizing 合法收口为 failed', async () => {
-    const { logger, warns } = spyLogger();
-    let reject: ((err: Error) => void) | undefined;
-    const h = makeHarness({
-      logger,
-      runnerImpl: (_s, ctx) =>
-        new Promise<FireResult>((_resolve, rej) => {
-          ctx.onQueueWaitStart?.();
-          reject = rej;
-        }),
-    });
-    const sch = await h.scheduler.create({ ...baseInput, manual: true });
-    const p = h.scheduler.runNow(sch.id);
-    await vi.waitFor(() => expect(reject).toBeDefined());
-    reject?.(new Error('queued turn interrupted'));
-    await p;
-    const runs = await h.storage.listRuns(sch.id);
-    expect(runs[0]?.status).toBe('failed');
-    expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0);
-    expect(
-      warns.some((args) => String(args[0]).includes('unreaped registrations')),
-    ).toBe(false);
-    await h.scheduler.stop();
-  });
-
-  it('强制收口后 runner 迟到调用 onQueueWaitStart → no-op,不抛非法转移(#1016 review)', async () => {
-    vi.useFakeTimers();
-    try {
-      let ctxRef: FireContext | undefined;
-      const h = makeHarness({
-        runStallMs: 60_000,
-        runStallAbortGraceMs: 30_000,
-        runnerImpl: (_s, ctx) =>
-          new Promise<FireResult>(() => {
-            ctxRef = ctx;
-          }),
-      });
-      await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
-      h.clock.advance(3_600_000);
-      void h.scheduler.tick();
-      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
-      h.clock.advance(60_001);
-      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
-      h.clock.advance(30_001);
-      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
-      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0));
-      // 强制收口已完成,runner 的 continuation 迟到调排队回调:必须是安静的 no-op。
-      expect(() => ctxRef?.onQueueWaitStart?.()).not.toThrow();
-      expect(() => ctxRef?.endQueueWait?.(true)).not.toThrow();
-      await h.scheduler.stop();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('强制收口后迟到的 onTurnActive/onSessionBound 不留悬挂登记(#1016 review)', async () => {
-    vi.useFakeTimers();
-    try {
-      let ctxRef: FireContext | undefined;
-      const h = makeHarness({
-        runStallMs: 60_000,
-        runStallAbortGraceMs: 30_000,
-        runnerImpl: (_s, ctx) =>
-          new Promise<FireResult>(() => {
-            ctxRef = ctx;
-          }),
-      });
-      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
-      h.clock.advance(3_600_000);
-      void h.scheduler.tick();
-      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
-      h.clock.advance(60_001);
-      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
-      h.clock.advance(30_001);
-      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
-      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0));
-      // attempt 已删并 reap:迟到的 turn-active / session-bound 上报必须整体 no-op,
-      // 不写 session 映射 / 绑定映射(悬挂登记会让下一次 begin 的不变量断言抛错)。
-      expect(() => ctxRef?.onTurnActive?.('sess-late-turn')).not.toThrow();
-      await ctxRef?.onSessionBound?.('sess-late-bind');
-      expect(h.scheduler.resolveInflightRunForSession('sess-late-turn')).toBeUndefined();
-      // 下一轮 fire 的 beginInflightAttempt 会跑 assertAttemptRegistryInvariants
-      // (含 bound-session / silenced 覆盖)——迟到写入若真落了账,这里会响亮抛错。
-      h.clock.advance(3_600_000);
-      void h.scheduler.tick();
-      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
-      expect(sch.id).toBeTruthy();
-      await h.scheduler.stop();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('stop() 清 silencedRuns:静默 run 执行中停机后再 runNow 不被不变量断言误杀(#1016 review)', async () => {
-    const h = makeHarness({
-      runnerImpl: () => new Promise<FireResult>(() => {}),
-    });
-    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: true });
-    const first = h.scheduler.runNow(sch.id);
-    first.catch(() => {});
-    await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(1));
-    const [running] = await h.scheduler.listRuns(sch.id);
-    expect(h.scheduler.isRunSilenced(running.id)).toBe(true);
-    await h.scheduler.stop();
-    // stop 清空 attempts 的同时必须一并清 silencedRuns:留着的话,同实例后续第一次
-    // beginInflightAttempt 的不变量断言会把它当悬挂登记抛错(codex review P1)。
-    expect(h.scheduler.isRunSilenced(running.id)).toBe(false);
-    const second = h.scheduler.runNow(sch.id);
-    second.catch(() => {});
-    await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(1));
-    await h.scheduler.stop();
-  });
-
-  it('stop() 打在前置 await 期间:恢复的 continuation 不登记悬挂 controller(#1016 review)', async () => {
-    // stop() 清 attempt 时 continuation 还没有 controller,无从 abort;恢复后若照常
-    // registerInflight,controller/索引就成了没有 attempt 的悬挂登记,此后同实例每次
-    // begin 都被不变量断言拦下(codex review P1)。守卫应放弃本轮并(runNow 契约)抛错。
-    const storage = new InMemoryStorage();
-    let releaseInsert: (() => void) | null = null;
-    let gated = true;
-    const realInsertRun = storage.insertRun.bind(storage);
-    storage.insertRun = (run: ScheduleRun) => {
-      if (!gated) return realInsertRun(run);
-      return new Promise<ScheduleRun>((resolve) => {
-        releaseInsert = () => resolve(realInsertRun(run));
-      });
-    };
-    const h = makeHarness({
-      storage,
-      runnerImpl: async () => ({ sessionId: 'sess-after-stop' }),
-    });
-    const sch = await h.scheduler.create({ ...baseInput });
-    const first = h.scheduler.runNow(sch.id);
-    const firstOutcome = first.then(
-      () => 'resolved',
-      (e) => String(e),
-    );
-    await vi.waitFor(() => expect(releaseInsert).not.toBeNull());
-    await h.scheduler.stop();
-    gated = false;
-    releaseInsert!();
-    expect(await firstOutcome).toMatch(/stopped while starting runNow/);
-    // 无悬挂登记:同实例再 runNow,begin 的不变量断言不抛,run 正常收尾。
-    const second = await h.scheduler.runNow(sch.id);
-    expect(second.runId).toBeTruthy();
-    await h.scheduler.stop();
   });
 });

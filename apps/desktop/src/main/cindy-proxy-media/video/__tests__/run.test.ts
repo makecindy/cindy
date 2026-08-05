@@ -20,10 +20,7 @@ function makeProvider(opts: {
   submitted: VideoGenerationRequest[];
   /** succeeded 时上游上报的 meta(留空 = 上游什么都没报)。 */
   meta?: VideoResultMeta;
-  maxImagesByRefMode?: Partial<Record<'first_and_last_frame' | 'reference_image', number>>;
-  /** 缺省 = 有音频开关(不表态的 fixture 走"支持"这条,音频用例才好写)。 */
-  supportsAudio?: boolean;
-  audioDefault?: boolean;
+  maxImages?: 0 | 1 | 2;
 }): VideoProvider {
   return {
     id: 'fake',
@@ -33,12 +30,7 @@ function makeProvider(opts: {
       supportedResolutions: ['480p', '720p', '1080p'],
       supportedRatios: ['16:9', '9:16'],
       supportedFps: [24],
-      maxImagesByRefMode: opts.maxImagesByRefMode ?? {
-        first_and_last_frame: 2,
-        reference_image: 9,
-      },
-      supportsAudio: opts.supportsAudio ?? true,
-      ...(opts.audioDefault !== undefined ? { audioDefault: opts.audioDefault } : {}),
+      maxImages: opts.maxImages ?? 2,
       expectedSecondsByAlias: { 'fake-fast': 1 },
       defaults: { duration: 4, resolution: '720p', ratio: '16:9', fps: 24 },
     },
@@ -135,76 +127,9 @@ describe('submitAndAwaitVideo · 画面参数', () => {
     });
   });
 
-  it('音频三态:不传时请求体里连键都没有(与本字段出现之前同形)', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(makeProvider({ submitted, audioDefault: true }));
-    await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p' });
-    // 关键:不是 audio:false,也不是 audio:undefined —— 是这个键压根不存在。
-    // 请求体里一旦出现它,就等于替调用方对音轨表了态。
-    expect('audio' in submitted[0]).toBe(false);
-  });
-
-  it('音频三态:显式表态原样进请求体', async () => {
-    for (const audio of [true, false]) {
-      const submitted: VideoGenerationRequest[] = [];
-      const registry = makeRegistry(makeProvider({ submitted }));
-      await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', audio });
-      expect(submitted[0].audio, `audio=${audio}`).toBe(audio);
-    }
-  });
-
-  it('回执:不传音频时报该型号登记的上游默认,登记缺席就不报', async () => {
-    // 登记了上游默认(如 Seedance 的 generate_audio 默认 true):
-    // 不传也如实告诉调用方这片是有声的。
-    const withDefault = makeRegistry(
-      makeProvider({ submitted: [], audioDefault: true }),
-    );
-    const r1 = await submitAndAwaitVideo(withDefault, { alias: 'fake-fast', prompt: 'p' });
-    expect(r1.effectiveParams.audio).toBe(true);
-
-    // 没登记 = 说不上来:回执不带这个键,别把"不知道"写成 false。
-    const noDefault = makeRegistry(makeProvider({ submitted: [] }));
-    const r2 = await submitAndAwaitVideo(noDefault, { alias: 'fake-fast', prompt: 'p' });
-    expect('audio' in r2.effectiveParams).toBe(false);
-
-    // 显式表态盖过型号默认。
-    const r3 = await submitAndAwaitVideo(withDefault, {
-      alias: 'fake-fast',
-      prompt: 'p',
-      audio: false,
-    });
-    expect(r3.effectiveParams.audio).toBe(false);
-  });
-
-  it('回执:上游报了音轨状态就采信上游(盖过提交值与型号默认)', async () => {
-    const registry = makeRegistry(
-      makeProvider({ submitted: [], audioDefault: true, meta: { audio: false } }),
-    );
-    const r = await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', audio: true });
-    expect(r.effectiveParams.audio).toBe(false);
-  });
-
-  it('型号没有音频开关:显式传即抛错且不提交;不传照旧放行', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(makeProvider({ submitted, supportsAudio: false }));
-    await expect(
-      submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', audio: true }),
-    ).rejects.toThrow(/has no audio toggle/);
-    await expect(
-      submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', audio: false }),
-    ).rejects.toThrow(/has no audio toggle/);
-    expect(submitted).toHaveLength(0);
-
-    const r = await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p' });
-    expect(submitted).toHaveLength(1);
-    expect('audio' in submitted[0]).toBe(false);
-    // 没有音频能力的型号不报音轨状态(报了就是编)。
-    expect('audio' in r.effectiveParams).toBe(false);
-  });
-
   it('参考图超出型号上限 → 抛错且不提交', async () => {
     const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(makeProvider({ submitted, maxImagesByRefMode: { first_and_last_frame: 1 } }));
+    const registry = makeRegistry(makeProvider({ submitted, maxImages: 1 }));
     await expect(
       submitAndAwaitVideo(registry, {
         alias: 'fake-fast',
@@ -213,66 +138,6 @@ describe('submitAndAwaitVideo · 画面参数', () => {
       }),
     ).rejects.toThrow(/at most 1 reference image/);
     expect(submitted).toHaveLength(0);
-  });
-
-  it('张数上限按 refMode 分别算:首尾帧 2 张拒,同一型号参考图 2 张放行', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(
-      makeProvider({
-        submitted,
-        maxImagesByRefMode: { first_and_last_frame: 1, reference_image: 9 },
-      }),
-    );
-    const twoImages = ['data:image/png;base64,a', 'data:image/png;base64,b'];
-    await expect(
-      submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', imageDataUris: twoImages }),
-    ).rejects.toThrow(/at most 1 reference image/);
-    expect(submitted).toHaveLength(0);
-
-    await submitAndAwaitVideo(registry, {
-      alias: 'fake-fast',
-      prompt: 'p',
-      imageDataUris: twoImages,
-      refMode: 'reference_image',
-    });
-    expect(submitted).toHaveLength(1);
-    expect(submitted[0].refMode).toBe('reference_image');
-  });
-
-  it('型号不支持该 refMode → 抛错且不提交(不降级成另一种用法)', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(
-      makeProvider({ submitted, maxImagesByRefMode: { first_and_last_frame: 2 } }),
-    );
-    await expect(
-      submitAndAwaitVideo(registry, {
-        alias: 'fake-fast',
-        prompt: 'p',
-        imageDataUris: ['data:image/png;base64,a'],
-        refMode: 'reference_image',
-      }),
-    ).rejects.toThrow(/does not support refMode 'reference_image'/);
-    expect(submitted).toHaveLength(0);
-  });
-
-  it('不传 refMode → 落首尾帧(存量调用方行为不变)', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(makeProvider({ submitted }));
-    await submitAndAwaitVideo(registry, {
-      alias: 'fake-fast',
-      prompt: 'p',
-      imageDataUris: ['data:image/png;base64,a'],
-    });
-    expect(submitted[0].refMode).toBe('first_and_last_frame');
-  });
-
-  it('文生视频不查 refMode 支持性(无图 = 与参考图用法无关)', async () => {
-    const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(
-      makeProvider({ submitted, maxImagesByRefMode: { reference_image: 9 } }),
-    );
-    await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p' });
-    expect(submitted).toHaveLength(1);
   });
 
   it('参考图为空时不塞 images 键(与老载荷同形)', async () => {

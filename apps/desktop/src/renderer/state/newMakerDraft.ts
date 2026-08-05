@@ -21,7 +21,6 @@
 import { useSyncExternalStore } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
@@ -59,8 +58,9 @@ export interface VendorPrefs {
  * 现在并入 draft store: 协同 + workdir 都从 newMakerDraft 这一个 store 读写,
  * 行为统一,重启也能恢复上次选择。
  *
- * 协同与工作区形态正交:项目和对话草稿都能开启;只有真正开始一次新草稿时才把
- * enabled 复位为 false,避免把上一次发送的协同选择静默带到下一次。
+ * 互斥约束(由 NewMakerDraftRoute 强制,不在 store 层校验):
+ *   - workingDir == null 时 collab 入口被隐藏,enabled 应保持 false
+ *   - collab.enabled = true 时 picker 隐藏"对话"入口,workingDir 不会变 null
  */
 /**
  * 「开启协同」弹窗(CreateWorkerPopover)收集的 Worker 详细配置。
@@ -80,7 +80,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -101,21 +101,6 @@ export interface NewMakerDraft {
   deviceLinkDeviceName: string | null;
   /** 协同模式开关 + Worker 类型(草稿期持久化,Send 时由 enableOrca 消费)。 */
   collab: CollabDraft;
-  /**
-   * 「新建会话默认启用 worktree」勾选记忆。vendor 无关的根级布尔(同 collab 先例),
-   * 语义是「这台工作端上新建会话时 worktree 开关的默认状态」——桌面本机草稿与手机 /
-   * 桌面控制端远程草稿读写同一份(读经 maker:get-new-maker-defaults 镜像,写经
-   * maker:apply-new-maker-worktree-pref 写穿)。
-   * 只在用户**显式**切换开关时写入;资格探测失败(非 git 仓库 / 已在 worktree 内等)
-   * 触发的自动关闭只改 UI 态、不写这里,避免环境因素抹掉用户偏好。
-   * 有效值由系统默认 + worktreePreferenceCustomized override 合成。
-   */
-  worktreeEnabled: boolean;
-  /**
-   * worktreeEnabled 是否来自用户显式选择。false 时持久化快照里的布尔只是一份
-   * 旧系统默认缓存，加载时必须按当前系统默认重新合成，不能把默认永久固化。
-   */
-  worktreePreferenceCustomized: boolean;
   /**
    * New Maker 的 Fast Mode 记忆,按模型分开。
    * 缺省 false;实际是否可用还要由 UI 结合 capabilities 判定。
@@ -157,18 +142,6 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
-  if (vendor === 'pi') {
-    return {
-      // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
-      // 目录未含该 id 时由 ChatInput 的 vendor 回退逻辑纠正。
-      model: 'claude-sonnet-5',
-      effort: 'high',
-      // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
-      permissionMode: 'auto',
-      planMode: false,
-      providerId: null,
-    };
-  }
   if (vendor === 'codex') {
     return {
       model: getDefaultModelForVendor('codex').id,
@@ -193,8 +166,6 @@ function defaultCollab(): CollabDraft {
   return { enabled: false, worker: 'codex' };
 }
 
-const DEFAULT_WORKTREE_ENABLED = false;
-
 function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
@@ -203,14 +174,11 @@ function makeDefault(): NewMakerDraft {
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
     collab: defaultCollab(),
-    worktreeEnabled: DEFAULT_WORKTREE_ENABLED,
-    worktreePreferenceCustomized: false,
     fastModeByModel: {},
     effortByModel: {},
     extraDirs: [],
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
-      pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -241,12 +209,10 @@ function sanitize(raw: unknown): NewMakerDraft {
   const def = makeDefault();
   if (!raw || typeof raw !== 'object') return def;
   const r = raw as Partial<NewMakerDraft>;
-  // 引擎白名单按 SELECTABLE_VENDORS(选择器同一张表的来源)校验 —— 新增引擎时这里零改动。
-  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' ? … : 'cc'`),
-  // 每上线一个引擎都得手工补一次;漏补则用户选中新引擎、重启后被静默重置回 Claude。
-  // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
-  // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
-  const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
+  // F-COLLAB (2026-05): 'orca' vendor 已被 ChatInput 底部的 toggle 取代,
+  // sanitize 时把历史 localStorage 残留的 'orca' 自动迁移到 'cc',避免空白入口。
+  const vendor: MakerVendor =
+    r.vendor === 'codex' ? 'codex' : 'cc';
   const workingDir = normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
@@ -281,14 +247,17 @@ function sanitize(raw: unknown): NewMakerDraft {
   // NewMakerDraftRoute mount 时也会清空(同一决定的双保险)。
   const extraDirs: string[] = [];
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
+  // 防御性互斥: workingDir==null 时 enabled 应该为 false (隐藏入口的兜底,
+  // 防止历史脏数据让用户看到协同 ON 但 workdir 为空的不可达状态)。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
+    collabRaw?.worker === 'cc' ? 'cc' : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
   // 本地项目(remoteHostId==null)不受影响。
-  const collabEnabled = collabRaw?.enabled === true;
+  const collabEnabled =
+    collabRaw?.enabled === true && workingDir != null;
   // workerConfig 防御性解析:model 缺失/为空则整块丢弃(不存半截配置),createSession 回退默认。
   const workerConfig: CollabWorkerConfig | undefined = (() => {
     const wc = collabRaw?.workerConfig;
@@ -340,23 +309,9 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  for (const v of ['cc', 'orca', 'codex'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
-  // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
-  // 可安全迁移为 override；旧 false 无法区分“默认快照”与“明确关闭”，按未自定义处理。
-  const worktreePreferenceCustomized =
-    (
-      r.worktreePreferenceCustomized === true
-      && typeof r.worktreeEnabled === 'boolean'
-    )
-    || (
-      r.worktreePreferenceCustomized === undefined
-      && r.worktreeEnabled === true
-    );
-  const worktreeEnabled = worktreePreferenceCustomized
-    ? r.worktreeEnabled === true
-    : DEFAULT_WORKTREE_ENABLED;
   return {
     vendor,
     workingDir,
@@ -365,17 +320,11 @@ function sanitize(raw: unknown): NewMakerDraft {
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
     collab,
-    // worktree 勾选记忆:系统默认 + 显式 override 合成。注意历史残留的
-    // wtEnabled/wtName/wtSourceBranch/wtBaseRepo 根字段(2026-07 前的短暂持久化实验)
-    // 仍被忽略丢弃——本字段是新契约,不做旧值迁移(不猜测用户意图)。
-    worktreeEnabled,
-    worktreePreferenceCustomized,
     fastModeByModel,
     effortByModel,
     extraDirs,
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
-      pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
@@ -398,97 +347,12 @@ function loadFromStorage(): NewMakerDraft {
 // 之前的 100ms debounce 在 release 的"热更新→relaunch"路径上会丢失最近一次
 // 改动 (lifecycle 走 app.exit() 强退, 来不及 fire 这个 setTimeout), 直接同步
 // 落盘最稳。
-type StoredDraftRecord = Record<string, unknown>;
-
-function parseStoredDraftRecord(raw: string | null): StoredDraftRecord | undefined {
-  if (raw == null) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    return parsed as StoredDraftRecord;
-  } catch {
-    return undefined;
-  }
-}
-
-interface StoredWorktreePreference {
-  worktreeEnabled: boolean;
-  worktreePreferenceCustomized: boolean;
-}
-
-function parseStoredWorktreePreference(
-  raw: string | null,
-): StoredWorktreePreference | undefined {
-  const parsed = parseStoredDraftRecord(raw);
-  if (
-    !parsed
-    || (
-      !('worktreeEnabled' in parsed)
-      && !('worktreePreferenceCustomized' in parsed)
-    )
-  ) {
-    return undefined;
-  }
-  const sanitized = sanitize(parsed);
-  return {
-    worktreeEnabled: sanitized.worktreeEnabled,
-    worktreePreferenceCustomized: sanitized.worktreePreferenceCustomized,
-  };
-}
-
-function readStoredDraftRecord(): StoredDraftRecord | undefined {
-  if (typeof window === 'undefined') return undefined;
-  try {
-    return parseStoredDraftRecord(window.localStorage.getItem(storageKey()));
-  } catch {
-    return undefined;
-  }
-}
-
-function readStoredWorktreePreference(): StoredWorktreePreference | undefined {
-  if (typeof window === 'undefined') return undefined;
-  try {
-    return parseStoredWorktreePreference(window.localStorage.getItem(storageKey()));
-  } catch {
-    return undefined;
-  }
-}
-
-type PreferenceSyncFallback = 'full-draft' | 'worktree-only' | null;
-let preferenceSyncFallback: PreferenceSyncFallback = null;
-
-/**
- * Persist a complete draft snapshot without letting another renderer's stale in-memory copy
- * overwrite the workstation-wide worktree preference.
- *
- * Electron windows do not share this module instance. A storage event normally refreshes the
- * other windows below, but that event is asynchronous; rebasing this one shared field at write
- * time also closes the race where a secondary/sidebar window mutates another draft field before
- * it has received the event.
- */
-function scheduleWrite(
-  options: { preserveStoredWorktreePreference?: boolean } = {},
-): void {
+function scheduleWrite(snapshot: NewMakerDraft) {
   if (typeof window === 'undefined') return;
-  const storedWorktreePreference = options.preserveStoredWorktreePreference !== false
-    ? readStoredWorktreePreference()
-    : undefined;
-  if (
-    storedWorktreePreference !== undefined &&
-    (
-      storedWorktreePreference.worktreeEnabled !== currentDraft.worktreeEnabled
-      || storedWorktreePreference.worktreePreferenceCustomized
-        !== currentDraft.worktreePreferenceCustomized
-    )
-  ) {
-    currentDraft = { ...currentDraft, ...storedWorktreePreference };
-  }
   try {
-    window.localStorage.setItem(storageKey(), JSON.stringify(currentDraft));
-    preferenceSyncFallback = null;
+    window.localStorage.setItem(storageKey(), JSON.stringify(snapshot));
   } catch {
     // localStorage 满 / 私密窗口禁写——忽略,不影响内存状态。
-    preferenceSyncFallback = 'full-draft';
   }
 }
 
@@ -499,70 +363,8 @@ function emit() {
   for (const l of listeners) l();
 }
 
-const removeStorageListener = (() => {
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return null;
-  const onStorage = (event: StorageEvent) => {
-    if (event.key !== storageKey()) return;
-    if (event.storageArea && event.storageArea !== window.localStorage) return;
-    // A queued storage event can arrive after this window has already written a newer value.
-    // Re-read the shared storage truth first so the event payload itself cannot roll state back.
-    const livePreference = readStoredWorktreePreference();
-    const nextPreference =
-      livePreference ??
-      (
-        event.newValue == null
-          ? {
-              worktreeEnabled: DEFAULT_WORKTREE_ENABLED,
-              worktreePreferenceCustomized: false,
-            }
-          : parseStoredWorktreePreference(event.newValue)
-      );
-    if (
-      nextPreference === undefined
-      || (
-        nextPreference.worktreeEnabled === currentDraft.worktreeEnabled
-        && nextPreference.worktreePreferenceCustomized
-          === currentDraft.worktreePreferenceCustomized
-      )
-    ) return;
-    // Only this workstation-wide preference is cross-window shared. Keep transient per-window
-    // draft targets (deviceLinkDeviceId/extraDirs, etc.) untouched.
-    currentDraft = { ...currentDraft, ...nextPreference };
-    emit();
-  };
-  window.addEventListener('storage', onStorage);
-  return () => window.removeEventListener('storage', onStorage);
-})();
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    removeStorageListener?.();
-  });
-}
-
 export function getDraft(): NewMakerDraft {
   return currentDraft;
-}
-
-/**
- * App 向 main 镜像偏好时读取的共享快照。
- *
- * 每个 Electron 窗口都有独立 currentDraft；跨窗口事件触发 emit 后，直接读本窗口内存会把
- * 旧 model / workingDir 等字段覆盖进 main 缓存。localStorage 是这些持久偏好的跨窗口真相，
- * 因此同步时优先读并 sanitize 它；完整草稿落盘失败才回退整份内存，单字段 worktree 写失败
- * 只覆盖该布尔，避免失败路径重新带回其它旧字段。
- */
-export function getDraftForPreferenceSync(): NewMakerDraft {
-  const stored = readStoredDraftRecord();
-  if (!stored || preferenceSyncFallback === 'full-draft') return currentDraft;
-  const persistedDraft = sanitize(stored);
-  return preferenceSyncFallback === 'worktree-only'
-    ? {
-        ...persistedDraft,
-        worktreeEnabled: currentDraft.worktreeEnabled,
-        worktreePreferenceCustomized: currentDraft.worktreePreferenceCustomized,
-      }
-    : persistedDraft;
 }
 
 /** Switch the persistent draft namespace together with the active data owner. */
@@ -571,51 +373,6 @@ export function setNewMakerDraftOwner(ownerId: string | null): void {
   if (activeDataOwnerId === normalized) return;
   activeDataOwnerId = normalized;
   currentDraft = loadFromStorage();
-  preferenceSyncFallback = null;
-  emit();
-}
-
-/**
- * 按字段更新工作端级 worktree 偏好。
- *
- * main 会把远程写穿广播给所有 renderer。这里必须从共享 localStorage 的最新对象合并目标
- * 字段，而不能让每个窗口用各自完整 currentDraft 回写；否则最后响应的旧窗口会回滚其它偏好。
- * 当前窗口内存也只更新该字段，保留 device-link / extraDirs 等窗口内临时草稿。
- */
-export function setWorktreePreference(enabled: boolean): void {
-  const worktreeEnabled = enabled === true;
-  const worktreePreferenceCustomized = true;
-  if (typeof window !== 'undefined') {
-    const stored = readStoredDraftRecord();
-    const base = stored ?? currentDraft;
-    if (
-      stored?.worktreeEnabled !== worktreeEnabled
-      || stored?.worktreePreferenceCustomized !== worktreePreferenceCustomized
-    ) {
-      try {
-        window.localStorage.setItem(
-          storageKey(),
-          JSON.stringify({
-            ...base,
-            worktreeEnabled,
-            worktreePreferenceCustomized,
-          }),
-        );
-        preferenceSyncFallback = null;
-      } catch {
-        // 单字段落盘失败时仅让 main 从本窗口内存取 worktree 布尔；其它偏好继续使用共享
-        // 持久快照，避免旧窗口借失败兜底重新带回整份旧草稿。
-        preferenceSyncFallback = 'worktree-only';
-      }
-    } else {
-      preferenceSyncFallback = null;
-    }
-  }
-  currentDraft = {
-    ...currentDraft,
-    worktreeEnabled,
-    worktreePreferenceCustomized,
-  };
   emit();
 }
 
@@ -632,6 +389,13 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
+  // 互斥兜底: 任何把 workingDir 改成 null 的路径,都把 collab 关掉。
+  // UI 已经在 collab.enabled 时隐藏"对话"入口,正常路径走不到这里;
+  // 这条只是防御性,避免外部调用者(将来的代码 / 测试)把 workingDir 清成 null
+  // 后留下 collab.enabled=true 的不可达状态。
+  if ('workingDir' in patch && next.workingDir == null && next.collab.enabled) {
+    next.collab = { ...next.collab, enabled: false };
+  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -650,49 +414,15 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.deviceLinkDeviceId = null;
     next.deviceLinkDeviceName = null;
   }
-  // 换目标设备(含本机 ↔ 被控设备、被控设备 A ↔ B)→ 丢掉 Worker 富配置,只留
-  // enabled + worker。model / providerId / effort / fast 都是**设备作用域**的:被控端
-  // 装的模型目录、连的供应商都是它自己那一套,原样透传过去会撞被控端 main 的精确
-  // preflight(INVALID_PARAMS / PROVIDER_ROUTE_UNAVAILABLE),协同静默降级成单会话 ——
-  // 正是 issue #1170 抱怨的「入口能点但走不完」。清掉后由被控端按自己的默认值起
-  // Worker,与草稿里模型 pill 换设备重新校准的既有行为一致。
-  //
-  // 放在 store 层而不是 applyDraftTarget:换设备有四条路径(设备 pill、设备域浏览器、
-  // 工作区 picker、所选设备失效后的自动回落),挂在这里全部自动覆盖,新增第五条也不用
-  // 再对齐一格(与 NewMakerDraftRoute.applyDraftTarget 的「按什么变了而不是走了哪条
-  // 路径」同一思路)。
-  if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
-    next.collab = { ...next.collab, workerConfig: undefined };
+  // device-link 草稿同样禁用协同(同 remoteHostId:worker 创建拿不到 deviceId)。
+  if (next.deviceLinkDeviceId != null && next.collab.enabled) {
+    next.collab = { ...next.collab, enabled: false };
   }
-  // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
-  // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
+  // remote 项目 draft 的协同 codex / cc 均已接通(worker 创建已继承
+  // remoteHostId,远端 MCP 注入两端落地),不再按 vendor 强制关闭。
   currentDraft = next;
-  scheduleWrite({
-    preserveStoredWorktreePreference:
-      !('worktreeEnabled' in patch)
-      && !('worktreePreferenceCustomized' in patch),
-  });
+  scheduleWrite(currentDraft);
   emit();
-}
-
-/**
- * 把草稿的「这次要跑在哪」复位成干净的本机对话态。
- *
- * workingDir=null 经 patchDraft 级联清掉 remoteHostId / deviceLink*;extraDirs 与
- * collab.enabled 是本次草稿的一次性选择,这里显式清掉。vendor / lastByVendor /
- * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
- *
- * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
- * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
- * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
- * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
- */
-export function resetDraftWorkspaceTargets(): void {
-  patchDraft({
-    workingDir: null,
-    extraDirs: [],
-    collab: { ...currentDraft.collab, enabled: false },
-  });
 }
 
 /** 单字段写入 collab(便捷 setter,语义比 patchDraft({ collab: ... }) 更直接)。 */
@@ -717,7 +447,7 @@ export function switchVendor(next: MakerVendor, currentPrefs: VendorPrefs): void
       [prev]: currentPrefs,
     },
   };
-  scheduleWrite();
+  scheduleWrite(currentDraft);
   emit();
 }
 
@@ -757,7 +487,7 @@ function patchVendorPrefsInternal(
       [vendor]: { ...currentDraft.lastByVendor[vendor], ...patch },
     },
   };
-  scheduleWrite();
+  scheduleWrite(currentDraft);
   emit();
 }
 
@@ -798,7 +528,7 @@ export function setEffortForModel(modelId: string, effort: Effort): void {
       [modelId]: effort,
     },
   };
-  scheduleWrite();
+  scheduleWrite(currentDraft);
   emit();
 }
 
@@ -816,15 +546,13 @@ export function setFastModeForModel(modelId: string, enabled: boolean): void {
       [modelId]: enabled,
     },
   };
-  scheduleWrite();
+  scheduleWrite(currentDraft);
   emit();
 }
 
 export function clearDraft(): void {
   currentDraft = makeDefault();
-  scheduleWrite({
-    preserveStoredWorktreePreference: false,
-  });
+  scheduleWrite(currentDraft);
   emit();
 }
 

@@ -1,3 +1,5 @@
+import type { RichChannelIM } from '@cindy/im';
+
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { resolveWechatWorkingDir } from './channelSettings';
 import { ui } from './uiText';
@@ -13,7 +15,10 @@ export function buildWechatAdapter(
 ): ImChannelAdapter {
   return {
     channel: 'wechat',
-    im: wechatIm,
+    // The shared adapter type still includes rich-card methods. WechatIM makes
+    // those methods fail closed, while this output discriminator guarantees
+    // normal turn output only invokes commitFinal.
+    im: wechatIm as RichChannelIM,
     output: {
       kind: 'chunked-text',
       im: wechatIm,

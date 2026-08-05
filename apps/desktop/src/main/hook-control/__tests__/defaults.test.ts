@@ -20,7 +20,6 @@ function deps(over?: Partial<HookDefaultsDeps>): HookDefaultsDeps {
       agents: {
         'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
         codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'high' },
-        pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
       },
     }),
     getModels: (agentKind) =>
@@ -77,24 +76,6 @@ describe('resolveHookSessionConfig', () => {
     });
   });
 
-  it('accepts Pi as an explicit hook agent override', () => {
-    const r = resolveHookSessionConfig(
-      deps({
-        getModels: (agentKind) => agentKind === 'pi'
-          ? [{ id: 'claude-sonnet-5', efforts: ['high'], defaultEffort: 'high' }]
-          : [],
-      }),
-      over({ agentKind: 'pi', model: 'claude-sonnet-5', effort: 'high', permissionMode: 'auto' }),
-    );
-    expect(r).toEqual({
-      agentKind: 'pi',
-      model: 'claude-sonnet-5',
-      effort: 'high',
-      permissionMode: 'auto',
-      providerId: null,
-    });
-  });
-
   it('override 模型不在实时目录: 记录告警并降级到可用桌面默认', () => {
     const warns: string[] = [];
     const r = resolveHookSessionConfig(
@@ -115,7 +96,6 @@ describe('resolveHookSessionConfig', () => {
           agents: {
             'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'ultra-draft' },
             codex: { providerId: null, model: 'gpt-5.5', effort: 'high' },
-            pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
           },
         }),
       }),
@@ -137,7 +117,6 @@ describe('resolveHookSessionConfig', () => {
           agents: {
             'claude-code': { providerId: null, model: 'gone-model', effort: 'high' },
             codex: { providerId: null, model: 'gpt-5.5', effort: 'high' },
-            pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
           },
         }),
       }),
@@ -202,7 +181,6 @@ describe('resolveHookSessionConfig', () => {
           agents: {
             'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
             codex: { providerId: '  ', model: 'gpt-5.5', effort: 'high' },
-            pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
           },
         }),
       }),

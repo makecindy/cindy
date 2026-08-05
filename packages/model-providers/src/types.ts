@@ -17,29 +17,18 @@
  * 本包零运行时依赖：`AgentKind` / `Effort` 在此就地定义（与 maker-core 的同名
  * 联合保持一致），不 import maker-core，保证可作为独立能力复用。
  */
-import type { ModelRegistry } from '@cindy/model-access-protocol';
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex';
 
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-
-/** Pi 原生支持的 reasoning/thinking 档位（Pi 不支持 Cindy 的 ultra 档）。 */
-export const PI_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   | 'anthropic-messages'
   | 'openai-responses'
   | 'openai-chat';
-
-/** Codex 通过本地 bridge 兼容的两种非原生 Responses wire protocol。 */
-export type CodexCompatibilityWireProtocol = Extract<
-  ProviderWireProtocol,
-  'anthropic-messages' | 'openai-chat'
->;
 
 /** 供应商来源：内置 vs 用户自定义（自定义本轮不实现，类型先留位）。 */
 export type ProviderSource = 'builtin' | 'user';
@@ -67,8 +56,7 @@ export type ProviderAccess =
  * 是否透传 chatgpt-account-id）由该 runtime 的代理实现，本字段只表达意图：
  *   - oauth-passthrough : 直连供应商自家上游，透传二进制已带的 OAuth bearer。
  *   - provider-oauth-header : 直连供应商自家上游，但用 host 保存的该供应商 OAuth token
- *     覆盖 Authorization；用于子进程 OAuth 不属于目标供应商的场景
- *     （如 Codex → xAI / Claude.ai subscription）。
+ *     覆盖 Authorization；用于子进程 OAuth 不属于目标供应商的场景（如 Codex → xAI）。
  *   - api-key-header    : 直连供应商自家上游，用该供应商自己的 API key 覆盖鉴权头。
  *   - gateway-key       : 走 XD 共享网关，把鉴权头换成网关 key。
  *   - oauth-token       : 直连供应商自家上游，用 host 侧通用 OAuth Runner 持有的
@@ -148,8 +136,7 @@ export type OAuthProviderDescriptor =
 export interface RoutingDescriptor {
   /**
    * 上游 wire protocol。缺省按 agent 保持历史语义：Claude Code = anthropic-messages，
-   * Codex = openai-responses。Codex 的 openai-chat / anthropic-messages 会分别进入
-   * 对应的本地 Responses bridge。
+   * Codex = openai-responses。只有显式 openai-chat 才进入本地 Responses→Chat bridge。
    */
   wireProtocol?: ProviderWireProtocol;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -247,34 +234,6 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
-  /**
-   * `contextWindow` 是否为**显式声明**的真实上限,而非派生时补的兜底值。
-   *
-   * 目录条目的窗口可能来自产品目录写定 / 上游明示 / 用户填写(都算显式),也可能是
-   * 上游不给元数据时补的常量(codex `model/list` 一律 272K、自定义 provider 未填时的
-   * 200K、Anthropic 未知模型启发式)。两者数值上无法区分,但只有前者能用来收敛
-   * 运行期上报的窗口 —— 拿兜底值当上限会把真实窗口压小。
-   *
-   * 缺省(undefined)一律按未核实处理。
-   *
-   * **这份 provenance 只活在 host 侧的目录里,刻意不进跨端 `ModelDescriptor`**
-   * (host 的 `toDescriptor` 不透传它)。原因:`availableModels` 是跨 provider union +
-   * 首见去重的扁平表,同一 model id 由多个 provider 提供时归属已丢,按 id 回查会命中
-   * 另一条路由的元数据 —— 拿错路由的上限去收敛比不收敛更糟。收敛统一走
-   * maker-core 的 `AgentDeps.resolveVerifiedContextWindow`,由 host 按
-   * (providerId, modelId) 解析。
-   */
-  contextWindowVerified?: boolean;
-  /**
-   * 该窗口值是否来自用户/预设**显式配置**（仅 buildUserProvider 生成；内置目录不设）。
-   * 编辑表单回转配置时据此区分「显式填了 200K」与「缺省物化成的 200K」——不能靠与
-   * 当前默认值等值判断：显式覆盖必须在未来默认升级后原样保留（PR review P1）。
-   * 故意不纳入 modelSignature 一致性校验（固定 key 序里没有它）。与
-   * `contextWindowVerified` 是两份独立的 provenance:后者只活在 host 目录里、供
-   * `resolveVerifiedContextWindow` 收敛运行期窗口用,不进跨端 `ModelDescriptor`；
-   * 这个字段专供 desktop 自定义 Provider 编辑表单的回转判定用。
-   */
-  contextWindowExplicit?: boolean;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];
@@ -302,16 +261,6 @@ export interface CatalogModel {
    */
   supportsFastMode?: boolean;
   /**
-   * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
-   *
-   * 通常 wire protocol 由 Provider.routing.codex 决定；只有同一 Provider 内不同模型
-   * 需要走不同 Codex wire 时才写本字段。典型是 XD：服务端原生声明 Codex 的模型走
-   * Responses，只声明 Claude Code 的模型投影进 Codex 后走 Anthropic Messages bridge。
-   *
-   * 这是按 agent 嵌套的目录元数据，不代表模型能力；缺省时回落 Provider 级路由。
-   */
-  codexCompatibilityWireProtocol?: CodexCompatibilityWireProtocol;
-  /**
    * 展示图标 id —— 模型行 / composer 药丸上显示什么图标,**以 AI Gateway / 目录设定为准**
    * (XD 模型经 model-access-server GET /models 下发,其它供应商可由 OSS 目录配置)。
    * 已知取值见 sections.ts `resolveModelIconKind`('claude' | 'codex' | 'cindy' 及别名);
@@ -329,13 +278,7 @@ export interface CatalogModel {
     temperature?: boolean;
   };
   releaseDate?: string;
-  /**
-   * 生命周期状态。'retired' 是**客户端本地**取值:wire(服务端 Catalog/CatalogModel)
-   * 永远不下发它——registry 的 retired 条目由服务端投影时剔除、由客户端在合并期把
-   * 「discovery 仍能发现但远端已判死」的条目标记为 'retired',供 modelList 准入过滤
-   * (新选择禁止,keepSelected 运行会话豁免;完整 local addition 可显式复活)。
-   */
-  status?: 'active' | 'alpha' | 'deprecated' | 'retired';
+  status?: 'active' | 'alpha' | 'deprecated';
   /**
    * 该模型在「设置 → 模型供应商」展开列表里**默认是否开启显示**（缺省 ⇒ true，即默认开）。
    *
@@ -349,12 +292,6 @@ export interface CatalogModel {
    * 新增模型缺省 = 默认开,符合「未自定义用户随版本吃到新默认」(CLAUDE.md 规则 20)。
    */
   defaultEnabled?: boolean;
-  /**
-   * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
-   * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
-   * `modelSignature` 的同 id 跨供应商一致性校验。
-   */
-  supportsImageInput?: boolean;
   /**
    * **视图层字段**:该 (供应商, 模型) 已被用户「停用」(准入关,与 `defaultEnabled` 的
    * 「显示」轴正交)。由 `buildRegistry` 按 host 注入的 ModelDisableOverrides 填充,
@@ -428,28 +365,6 @@ export interface Provider {
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
    */
   videoDefaults?: { standard: string; draft?: string; best?: string };
-  /**
-   * 该供应商提供的**文本向量(embedding)模型**清单(与 imageModels 同地位:
-   * 不挂 agent,由主机 embedding 通道直调)。消费方为意识 cindy 槽的向量代办
-   * (白名单 + 详情页下拉)。可选,additions-only。
-   *
-   * 与聊天模型清单里被 `classifyModel` 归到 `'embedding'` 的条目**不是同一回事**:
-   * 那些是网关多返回的、不能当 agent 用的条目(设置页折叠在「向量」分组里供
-   * 用户停用);本字段是"哪些型号可以被当作向量能力的后端派单",要显式声明。
-   * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
-   */
-  embeddingModels?: { id: string; name: string; disabled?: boolean }[];
-  /**
-   * 向量能力的默认选型(与 embeddingModels 配套;值必须是 embeddingModels 里的
-   * id;语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
-   *
-   * 注意向量与图像/视频的一处本质差异:**换模型 = 换向量空间**。跟随默认的
-   * 消费方在这里被热更换掉型号后,它此前存下的向量与新向量不可比 —— 所以
-   * 改这个值不像改 imageDefaults 那样无痛,消费方必须自己记住"这批向量是哪个
-   * 模型算的"并在不一致时重嵌(主机侧 chat-history-embedder 就是钉死常量而
-   * 不跟随默认的)。
-   */
-  embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
 /**
@@ -464,15 +379,6 @@ export interface ProviderRuntimeModelConfig {
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
-  /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
-  supportsImageInput?: boolean;
-  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
-  reasoning?: boolean;
-  /**
-   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
-   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
-   */
-  reasoningEfforts?: PiReasoningEffort[];
 }
 
 /**
@@ -551,11 +457,17 @@ export interface Catalog {
    */
   presets?: ProviderPreset[];
   /**
-   * Cindy 公共模型注册表：统一承载 canonical id、runtime 路由别名、能力元数据与
-   * 厂商公开参考价。它不决定某个账号实际可用哪些模型，也不覆盖 Cindy AI Gateway
-   * 的实时售卖价；动态发现与 `/api/model-access/models` 仍分别是两类事实的权威。
+   * model-access-server 的网关模型元数据远程覆盖表（`{ version: 1, models: {...} }`
+   * 信封，schema 归服务端所有故此处不建型）。消费方：
+   *   - 服务端热加载（XD 网关模型元数据权威）；
+   *   - 客户端 **anthropic 动态发现的元数据基线**（active-catalog 合并时用
+   *     name/group/sortOrder/description/defaultEnabled 覆盖发现条目；动态通道未下发
+   *     capability 时，efforts/defaultEffort 作为能力基线；上游显式能力始终优先；
+   *     version !== 1 整段忽略）；
+   *   - dev 模式下本地覆盖服务端下发的 XD 模型元数据以便自测
+   *     （apps/desktop model-access devMetaOverlay，packaged 不走该覆盖）。
    */
-  modelRegistry?: ModelRegistry;
+  cindyModelMeta?: unknown;
 }
 
 /**
@@ -573,10 +485,7 @@ export interface CustomProviderRuntimeConfig {
   requestPath?: string;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
-  /**
-   * 可选自定义请求头。运行时配置会从 main-only safeStorage 临时 hydrate；值不写
-   * custom_providers SQLite，也不通过非可信 / 远程 provider:list 返回。
-   */
+  /** 可选自定义请求头（非密钥鉴权头可放这里；API key 走 safeStorage，不放这里）。 */
   headers?: Record<string, string>;
   /**
    * 可选的「列模型」端点（「获取模型列表」按钮用；缺省由 baseUrl 推导 `…/v1/models`）。
@@ -586,8 +495,7 @@ export interface CustomProviderRuntimeConfig {
 }
 
 /**
- * 用户自定义供应商配置。runtime headers 仅在可信 main 运行期 hydrate，持久化时值在
- * safeStorage；其余字段写 localDb。
+ * 用户自定义供应商的**持久化配置**（不含密钥）。
  *
  * 由 host 持久化（desktop: localDb `custom_providers` 表，按账号隔离），加载时经
  * `buildUserProvider`（见 user-provider.ts）展开成标准 `Provider`，与内置厂商同形状、
@@ -596,9 +504,9 @@ export interface CustomProviderRuntimeConfig {
  * **per-runtime 独立配置**：`runtimes` 按 agent 索引，每个 runtime 各有独立的 baseUrl /
  * 模型 / headers；用户在表单 Tab 里只配需要的那个，也可两个都配（该来源同时供两端）。至少一个。
  *
- * API key 与 headers 值都不进 SQLite：按 runtime 分别存 safeStorage。host 路由 resolve
- * 时按 (id, agent) hydrate；只有可信本机设置页可拿到 headers 以便编辑，远程和不可信
- * renderer 投影一律剥离。
+ * API key **不在本结构里**：按 runtime 单独存 safeStorage（`provider_key_<id>_<agent>`，机制同
+ * 内置 XD 网关 key），host 路由 resolve 时按 (id, agent) 读出注入鉴权头，绝不进 catalog /
+ * 绝不回传 renderer 明文。
  */
 export interface CustomProviderConfig {
   /** 供应商 id，小写 slug（/^[a-z0-9_-]+$/），同账号内唯一，不撞内置 `anthropic|openai|xd`。 */

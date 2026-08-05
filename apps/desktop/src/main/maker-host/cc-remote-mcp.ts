@@ -4,8 +4,7 @@
  * 与 codex 远端的路径差异:cc 的 MCP 配置是 per-query SDK 参数
  * (startParams.mcpServers, 经 cc-mgr 透传到 daemon 端 SDK),没有常驻
  * daemon 的 config.toml / env 问题。但身份通道与 codex 对齐:持久 bearer
- * token (safeStorage, 跨 app 重启稳定) 鉴权 + URL query
- * `?session=<id>&instance=<opaque>`
+ * token (safeStorage, 跨 app 重启稳定) 鉴权 + URL query `?session=<id>`
  * 路由 session ctx。持久 token 解决 detach/reattach 与 app 重启后旧 query
  * 重建时的 token 失效问题;ctx 注册表是内存态,query 重建时重新注册,
  * query close 时注销。
@@ -24,7 +23,6 @@ import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
 import {
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
-  withMcpRouteIdentity,
 } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
@@ -104,8 +102,6 @@ export async function buildCcRemoteHttpMcpServers(
   args: {
     host: RemoteHost;
     sessionId: string;
-    /** 当前 Maker Session 实例代号；作为 opaque bridge route identity 下发。 */
-    sessionInstanceId?: string;
     workingDir: string;
     /** session 自己的 vendorOptions (maker-core startSession 透传); 优先于 DB 合成。 */
     vendorOptions?: Record<string, unknown>;
@@ -176,7 +172,6 @@ export async function buildCcRemoteHttpMcpServers(
   const ctx = {
     agentKind: 'claude-code' as const,
     sessionId: args.sessionId,
-    ...(args.sessionInstanceId ? { sessionInstanceId: args.sessionInstanceId } : {}),
     workingDir: args.workingDir,
     // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。
     remoteHostId: args.host.id,
@@ -191,10 +186,7 @@ export async function buildCcRemoteHttpMcpServers(
         name,
         {
           type: 'http' as const,
-          url: withMcpRouteIdentity(`http://127.0.0.1:${remotePort}/mcp/${name}`, {
-            sessionId: args.sessionId,
-            sessionInstanceId: args.sessionInstanceId,
-          }),
+          url: `http://127.0.0.1:${remotePort}/mcp/${name}?session=${encodeURIComponent(args.sessionId)}`,
           headers: { Authorization: `Bearer ${bridgeToken}` },
         },
       ]),
@@ -207,7 +199,6 @@ export async function buildCcRemoteHttpMcpServers(
         bridgeInstanceId: started.bridge.instanceId,
         remotePort,
         serverNames: names,
-        sessionInstanceId: args.sessionInstanceId,
       }),
     };
   } catch (err) {

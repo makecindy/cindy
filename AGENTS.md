@@ -55,10 +55,6 @@
   的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
   `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见
   `docs/dev-rules/engineering-conventions.md` §5.1。
-- 文案里出现**任务 / 对话 / 消息**这几个词时，必须先读
-  `docs/product-rules/task-and-conversation-naming.md`：`session` 面向用户叫「任务」，
-  「对话」只用于任务内的交流过程与内容，单条往来叫「消息」；**「任务」与 `task` 同句出现
-  时必须消解歧义**。这三个词的边界拿不准会直接做出用户能看见的不一致。
 - 所有新增或修改的 UI 必须同时**实现** Light 与 Dark 两种模式（颜色一律走语义 token，
   禁止只适配一种模式的硬编码或条件补丁）；只实现一种模式视为未完成。**两种模式的实机
   目检不是硬性门槛**——能目检更好，做不到时如实写明哪种模式未验证，不得把「复用了 themed
@@ -69,20 +65,9 @@
 - 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、
   model 映射、usage 计量，或任何进入模型 system 段的提示词前，必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
-- 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
-  `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
-  必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。
 - 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
   或身份卡、管子协议、打包与编写手册前，必须先读
-  `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
-  插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
-  向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
-  要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
-  自动迁移也做不到时，必须有明确提示 + 一次性批量恢复入口，且不丢用户已存的凭证与偏好。
-  漏迁移 = P0，规则正文见该文件第 5 节。**改到插件基座**（运行时／沙箱、批准状态记录、
-  能力 slot、打包与内容判据、manifest 契约、装入与权限确认 UI、已装列表投影）的 PR 一律
-  走白名单确认门，需放行人明确 Approve 才能合并，不看 diff 大小、不因「是 bugfix／纯技术
-  改动」豁免。
+  `docs/dev-rules/plugin-security-and-authoring.md`。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／
@@ -95,10 +80,8 @@
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
-- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
-  或修改 device-link 的重试／超时／断链恢复逻辑前，必须先读
-  `docs/dev-rules/remote-and-mobile-adaptation.md`；其中恢复路径改动必须回答该文件的
-  「故障半径三问」。
+- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，或新增 IPC channel／推送事件
+  前，必须先读 `docs/dev-rules/remote-and-mobile-adaptation.md`。
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
 

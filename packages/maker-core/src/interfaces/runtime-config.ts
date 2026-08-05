@@ -62,10 +62,8 @@ export interface AgentRuntimeConfig {
    * - undefined / blank: do not override the agent's native selection logic
    * - non-blank: the agent implementation injects the vendor-supported deterministic override
    *
-   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field:
-   * the desktop host injects its subagent default via spawn-time `-c agents.default_subagent_model`
-   * overrides instead (see apps/desktop/src/main/maker-host/codex-subagent-config.ts) — the bundled
-   * codex binary treats it as a fallback that explicit spawn params may still override.
+   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume it yet because
+   * its full-history fork path rejects model overrides in the currently bundled binary.
    *
    * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
    * 也压过每次 Task/Agent 调用传入的 `model` 参数,而平台不提供更低优先级的槽位。
@@ -100,22 +98,13 @@ export interface AgentRuntimeConfig {
   autoCompactThresholdPct?: number;
 
   /**
-   * Host-managed executable directories to prepend to agent subprocess PATH.
+   * Host-managed executable directories to prepend to the agent subprocess PATH.
    *
-   * Only agents whose executable lookup is safe for PATH-based discovery should consume this.
-   * PI intentionally does not: Windows may resolve an executable from cwd before PATH.
+   * Used for bundled tools that should win over user/system installations, e.g.
+   * desktop-packaged ripgrep. Agent implementations decide which subprocesses
+   * consume it; paths should already be absolute and host-validated.
    */
   pathPrepends?: string[];
-
-  /**
-   * Host-validated executable paths that an agent may stage into its private runtime.
-   *
-   * These are explicit paths rather than PATH entries: read-only tools can otherwise
-   * execute a same-named program from an untrusted working directory on Windows.
-   */
-  managedExecutablePaths?: Readonly<{
-    ripgrep?: string;
-  }>;
 
   /**
    * 宿主产品级 system prompt 注入（host 层）。

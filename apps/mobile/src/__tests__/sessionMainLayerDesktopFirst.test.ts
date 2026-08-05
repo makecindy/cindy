@@ -11,7 +11,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     expect(emptySource).toContain('message.renderer.emptyMessages');
     expect(emptySource).not.toContain('这台电脑暂无活动消息');
-    expect(emptySource).not.toContain('先在桌面端创建或继续一个任务');
+    expect(emptySource).not.toContain('先在桌面端创建或继续一个会话');
     expect(emptySource).not.toContain('emptyText');
   });
 
@@ -75,9 +75,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
   });
 
   it('lets Lead sessions compose messages while gating write-orchestration on the write read-only reason', () => {
-    // Windows checkout 使用 CRLF；源码契约中的多行 LF 片段必须先统一行尾再比较。
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
-      .replace(/\r\n/g, '\n');
+    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
     // composer 能力(buildSessionOperationLayout)与 header 徽标走 composer-only reason(Lead=可发消息)。
     expect(source).toContain('const composerReadOnlyReason = useMemo(');

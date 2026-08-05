@@ -20,7 +20,6 @@ import {
   convertVsCodeTheme,
   detectImportSource,
   themeFamilyId,
-  UnsupportedThemePaletteError,
 } from '../../shared/theme-import';
 import type {
   ConvertedTheme,
@@ -262,13 +261,6 @@ export async function importExternalTheme(
   } catch (error) {
     // Re-throw IPC errors from throwIpcError() (already typed and safe for renderer).
     if (error instanceof Error && 'code' in error) throw error;
-    if (error instanceof UnsupportedThemePaletteError) {
-      log.warn(`Unsupported theme palette: ${error.message}`);
-      throwIpcError(
-        'THEME_CONTRAST_UNSUPPORTED',
-        'theme colors cannot produce a visible unchecked Switch state',
-      );
-    }
     const message = normalizeError(error);
     log.warn(`Theme import failed: ${message}`);
     throwIpcError('THEME_IMPORT_INTERNAL', 'unexpected error during theme import');

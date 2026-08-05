@@ -7,16 +7,23 @@
  *
  * 「提供商 ID」内部句柄由显示名自动 slug 派生 + 去重,对用户隐藏(密钥名/文件名不能含 . 或 /)。
  * 配置经 maker IPC 入 localDb；密钥按 runtime 经 safeStorage 存(见 lib/customProviders)。
- * 编辑态回填已存密钥(默认遮罩,eye 可显形核对)、留空 = 不改；id 不可改。颜色全走主题 token。
- *
- * 本弹窗的输入统一传 `surface="ivory"`：面板是白色(`--surface-elevated`),ivory 底给出 fill
- * 抬升,这是收敛进 SettingsTextInput 之前就有的底色,原样保留。共享组件的默认底色是
- * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
+ * 编辑态密钥遮罩、留空 = 不改；id 不可改。颜色全走主题 token。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Plug,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -24,39 +31,24 @@ import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
-import { PiMark } from '@/components/icons/PiMark';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
   readCustomProviderKey,
   replaceCustomProviderModelId,
-  setCustomProviderModelReasoning,
-  setCustomProviderModelReasoningEffort,
-  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
-  connectionTestCanUseSaved,
-  modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
-  type SavedProviderProbeBaseline,
 } from '@/lib/providerModelFetch';
-import {
-  CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
-  customProviderCodexWireProtocolOption,
-} from '@/lib/customProviderWireProtocols';
 
-import {
-  isProviderRequestPath,
-  PI_REASONING_EFFORTS,
-  sortPresetsForLocale,
-} from '@cindy/model-providers';
+import { isProviderRequestPath, sortPresetsForLocale } from '@cindy/model-providers';
 import type {
   AgentKind,
   CustomProviderConfig,
@@ -64,19 +56,12 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
-import { SettingsTextInput } from './SettingsTextInput';
 
-/**
- * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
- * 走 pi 原生 provider 直连(不过 anthropic-compat 代理),故 pi tab 额外提供显式 api 选择器。
- */
-type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+const AGENTS: AgentKind[] = ['claude-code', 'codex'];
 
-const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
+const VISIBLE_AGENTS: AgentKind[] = AGENTS;
 
-const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
-
-const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
+const TAB_META: Record<AgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
   {
     'claude-code': {
       Mark: ClaudeMark,
@@ -88,22 +73,7 @@ const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: str
       labelKey: 'settings.providers.custom.protocol.codex',
       helpKey: 'settings.providers.custom.protocol.codexDesc',
     },
-    pi: {
-      Mark: PiMark,
-      labelKey: 'settings.providers.custom.protocol.pi',
-      helpKey: 'settings.providers.custom.protocol.piDesc',
-    },
   };
-
-/** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
-const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
-
-/** 某 agent runtime 的默认 wire protocol。 */
-function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
-  if (agent === 'claude-code') return 'anthropic-messages';
-  if (agent === 'pi') return PI_DEFAULT_WIRE;
-  return 'openai-responses';
-}
 
 interface CustomProviderDialogProps {
   initial?: CustomProviderConfig;
@@ -138,23 +108,22 @@ interface TestState {
 }
 const IDLE_TEST: TestState = { status: 'idle' };
 
-function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
+function emptyRuntime(agent: AgentKind): RuntimeFields {
   return {
     baseUrl: '',
     requestPath: '',
     apiKey: '',
-    wireProtocol: defaultWireFor(agent),
+    wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
   };
 }
 
-function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, RuntimeFields> {
-  const out: Record<DialogAgentKind, RuntimeFields> = {
+function initRuntimes(initial?: CustomProviderConfig): Record<AgentKind, RuntimeFields> {
+  const out: Record<AgentKind, RuntimeFields> = {
     'claude-code': emptyRuntime('claude-code'),
     codex: emptyRuntime('codex'),
-    pi: emptyRuntime('pi'),
   };
   if (initial) {
     for (const a of AGENTS) {
@@ -164,7 +133,8 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
         baseUrl: rc.baseUrl,
         requestPath: rc.requestPath ?? '',
         apiKey: '',
-        wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
+        wireProtocol:
+          rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
         models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -185,13 +155,37 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
-function isCommittableWindowText(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === '') return true;
-  if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
-  const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
-  return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  trailing,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={cn(
+          'h-[40px] w-full rounded-[10px] pl-[12px] text-14 outline-none transition-colors',
+          trailing ? 'pr-9' : 'pr-[12px]',
+          'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+          'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
+        )}
+        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+      />
+      {trailing}
+    </div>
+  );
 }
 
 /**
@@ -299,14 +293,14 @@ export function CustomProviderDialog({
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
   const [name, setName] = useState(initial?.name ?? '');
-  const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
-  const [activeTab, setActiveTab] = useState<DialogAgentKind>(
+  const [rt, setRt] = useState<Record<AgentKind, RuntimeFields>>(() => initRuntimes(initial));
+  const [activeTab, setActiveTab] = useState<AgentKind>(
     () => (initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code',
   );
-  const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
+  const [showKey, setShowKey] = useState(false);
+  const [hasKey, setHasKey] = useState<Record<AgentKind, boolean>>({
     'claude-code': false,
     codex: false,
-    pi: false,
   });
   const [saving, setSaving] = useState(false);
   // 鉴权形态：API key（默认）/ OAuth / 无鉴权（本机或受信自托管代理）。
@@ -336,29 +330,22 @@ export function CustomProviderDialog({
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
-  // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
-  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦只清可提交
-  // 草稿。key = `agent:行号`;删行时只重映射该 runtime 的行号,别行草稿保留。
-  const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
   // per-runtime 测试连接状态。
-  const [test, setTest] = useState<Record<DialogAgentKind, TestState>>({
+  const [test, setTest] = useState<Record<AgentKind, TestState>>({
     'claude-code': IDLE_TEST,
     codex: IDLE_TEST,
-    pi: IDLE_TEST,
   });
   // per-runtime「获取模型列表」进行中标记（按钮瞬态 spinner）。
-  const [fetchingModels, setFetchingModels] = useState<Record<DialogAgentKind, boolean>>({
+  const [fetchingModels, setFetchingModels] = useState<Record<AgentKind, boolean>>({
     'claude-code': false,
     codex: false,
-    pi: false,
   });
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [picker, setPicker] = useState<{
-    agent: DialogAgentKind;
+    agent: AgentKind;
     models: ModelRow[];
     selected: Set<string>;
     query: string;
@@ -370,7 +357,7 @@ export function CustomProviderDialog({
   const rtRef = useRef(rt);
   /** 唯一的 rt 写入口：状态更新的同时同步镜像进 rtRef（updater 幂等，StrictMode 双调无害）。 */
   const setRtSynced = useCallback(
-    (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
+    (fn: (prev: Record<AgentKind, RuntimeFields>) => Record<AgentKind, RuntimeFields>) => {
       setRt((prev) => {
         const next = fn(prev);
         rtRef.current = next;
@@ -378,44 +365,6 @@ export function CustomProviderDialog({
       });
     },
     [],
-  );
-
-  // 编辑态回填的已存明文 key(按 agent);测试连接据此判定凭证材料是否被改动。
-  const loadedKeyRef = useRef<Record<DialogAgentKind, string>>({
-    'claude-code': '',
-    codex: '',
-    pi: '',
-  });
-
-  // 已存供应商在编辑态的基线快照:端点/协议/鉴权模式取自已存配置,apiKey 取回填值,
-  // headers 取已存非密文头(自定义鉴权头是 main-only 密文,不回读进表单)。测试连接 /
-  // 获取模型列表据此判定能否复用不回读的密文头(经 saved 探测 / savedProviderId 让 main
-  // 并入),而非把密钥回读到 renderer。非编辑态或该 runtime 未配置时返回 null。
-  const savedBaselineFor = useCallback(
-    (agent: DialogAgentKind): SavedProviderProbeBaseline | null => {
-      if (!editing || !initial) return null;
-      const rc = initial.runtimes[agent];
-      if (!rc) return null;
-      const savedAuthMode: CustomProviderAuthMode =
-        initial.auth?.method === 'oauth'
-          ? 'oauth'
-          : initial.auth?.method === 'none'
-            ? 'none'
-            : 'apiKey';
-      return {
-        baseUrl: rc.baseUrl,
-        requestPath: rc.requestPath ?? '',
-        modelsUrl: rc.modelsUrl ?? '',
-        wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
-        authMode: savedAuthMode,
-        apiKey: loadedKeyRef.current[agent] ?? '',
-        headers:
-          rc.headers && Object.keys(rc.headers).length > 0
-            ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
-            : [],
-      };
-    },
-    [editing, initial],
   );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
@@ -455,7 +404,8 @@ export function CustomProviderDialog({
             baseUrl: rc.baseUrl,
             requestPath: rc.requestPath ?? '',
             apiKey: prev[a].apiKey, // 已填的 key 保留
-            wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
+            wireProtocol:
+              rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
             models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
             headers:
               rc.headers && Object.keys(rc.headers).length > 0
@@ -466,12 +416,7 @@ export function CustomProviderDialog({
         }
         return next;
       });
-      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
-      // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
-      // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
-      // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
-      // 卡死报错却找不到对应输入框(review P1)。
-      setWindowDrafts({});
+      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
       const first = AGENTS.find((a) => p.runtimes[a]);
       if (first) setActiveTab(first);
     },
@@ -480,13 +425,12 @@ export function CustomProviderDialog({
 
   // 编辑态：回填各已配置 runtime 的已存明文密钥（用户本机自己的 key）——
   // 让密钥框「能看」(eye 显形 / 可核对)，而非空白遮罩；据此点亮「已保存」徽标。
-  // 鉴权请求头是 main-only 密文,不回读进表单;未显式改动时由 main 侧 update 保留旧值。
   useEffect(() => {
     if (!editing || !initial) return;
     let cancelled = false;
     void (async () => {
-      const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
-      const fetched: Partial<Record<DialogAgentKind, string>> = {};
+      const nextHas: Record<AgentKind, boolean> = { 'claude-code': false, codex: false };
+      const fetched: Partial<Record<AgentKind, string>> = {};
       for (const a of AGENTS) {
         if (!initial.runtimes[a]) continue;
         const k = await readCustomProviderKey(initial.id, a);
@@ -497,9 +441,6 @@ export function CustomProviderDialog({
       }
       if (cancelled) return;
       setHasKey(nextHas);
-      // 记下回填的已存明文 key 作为基线:测试连接判定「凭证材料是否被改动」时用来决定
-      // 走受控 saved 探测还是 adhoc(headers 是 main-only 密文,基线取自 initial 的非密文头)。
-      for (const a of AGENTS) loadedKeyRef.current[a] = fetched[a] ?? '';
       setRtSynced((prev) => {
         const next = { ...prev };
         for (const a of AGENTS) {
@@ -514,7 +455,7 @@ export function CustomProviderDialog({
   }, [editing, initial]);
 
   const patch = useCallback(
-    (agent: DialogAgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
+    (agent: AgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
       setRtSynced((prev) => ({ ...prev, [agent]: fn(prev[agent]) }));
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
@@ -522,13 +463,13 @@ export function CustomProviderDialog({
   );
 
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
-  const changeWireProtocol = useCallback(
-    (agent: DialogAgentKind, wireProtocol: ProviderWireProtocol) => {
+  const changeCodexWireProtocol = useCallback(
+    (wireProtocol: 'openai-responses' | 'openai-chat') => {
       setRtSynced((prev) => ({
         ...prev,
-        [agent]: { ...prev[agent], wireProtocol },
+        codex: { ...prev.codex, wireProtocol },
       }));
-      setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
+      setTest((prev) => ({ ...prev, codex: IDLE_TEST }));
     },
     [setRtSynced],
   );
@@ -556,32 +497,21 @@ export function CustomProviderDialog({
     }
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
     const requestSig = providerConnectionTestRequestSignature(rf, authMode);
-    // 编辑态且端点/协议/鉴权模式与凭证材料相对已存配置都未改动时,走受控 saved 探测:
-    // 它整体按已存 spec 发起,能带上不回读进表单的 main-only 密文鉴权头(否则纯密文头
-    // 供应商会因缺头而失败)。任一改动则回落 adhoc,测用户新填的值。
-    const savedBaseline = savedBaselineFor(agent);
-    const useSaved = Boolean(
-      initial?.id && savedBaseline && connectionTestCanUseSaved(rf, savedBaseline, authMode),
-    );
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
-      const result = await window.electronAPI.maker.testProviderConnection(
-        useSaved
-          ? { kind: 'saved', providerId: initial!.id, agent }
-          : {
-              kind: 'adhoc',
-              spec: {
-                agent,
-                baseUrl,
-                modelId: firstModel,
-                authMethod: authMode,
-                wireProtocol: rf.wireProtocol,
-                ...(rf.requestPath.trim() ? { requestPath: rf.requestPath.trim() } : {}),
-                apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
-                ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
-              },
-            },
-      );
+      const result = await window.electronAPI.maker.testProviderConnection({
+        kind: 'adhoc',
+        spec: {
+          agent,
+          baseUrl,
+          modelId: firstModel,
+          authMethod: authMode,
+          wireProtocol: rf.wireProtocol,
+          ...(rf.requestPath.trim() ? { requestPath: rf.requestPath.trim() } : {}),
+          apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+          ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
+        },
+      });
       if (
         providerConnectionTestRequestSignature(rtRef.current[agent], authModeRef.current) !==
         requestSig
@@ -603,17 +533,17 @@ export function CustomProviderDialog({
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, t]);
 
-  // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
-  // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
-  const anyFetching = fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi;
+  // 拉取单飞：任一 runtime 在途时两个 Tab 的拉取按钮都禁用——两个并发请求会竞争同一个
+  // 勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
+  const anyFetching = fetchingModels['claude-code'] || fetchingModels.codex;
 
   /** 获取模型列表：用当前 Tab 表单值 GET 列模型端点（key 仅内存透传），成功后开勾选弹层。 */
   const handleFetchModels = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
-    if (fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi) return; // 单飞（按钮已禁用，兜底）
+    if (fetchingModels['claude-code'] || fetchingModels.codex) return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
@@ -632,24 +562,15 @@ export function CustomProviderDialog({
     // 请求参数签名：响应回来时若该 runtime 的端点/凭证/请求头已被改动，响应按过期丢弃——
     // 不能把旧端点的模型清单当成新端点的填进表单（成功和失败 toast 都不展示）。
     const requestSig = providerModelFetchRequestSignature(rf, authMode);
-    // 编辑态且请求目标端点(baseUrl/modelsUrl)与鉴权模式相对已存配置未改动时,带上
-    // savedProviderId,让 main 侧并入不回读进 renderer 的 main-only 密文鉴权头(表单显式
-    // 填的头/key 仍由 main 以 renderer 值优先);端点一改就不带,避免把已存凭证外泄给新主机。
-    const savedBaseline = savedBaselineFor(agent);
-    const reuseSaved = Boolean(
-      initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
-    );
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
     try {
       const result = await window.electronAPI.maker.fetchProviderModels({
         agent,
         baseUrl,
         authMethod: authMode,
-        ...(rf.wireProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         modelsUrl: rf.modelsUrl.trim() || null,
         apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
         ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
-        ...(reuseSaved ? { savedProviderId: initial!.id } : {}),
       });
       if (
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
@@ -663,10 +584,6 @@ export function CustomProviderDialog({
             name: m.name.trim(),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-            ...(m.reasoning === true && m.reasoningEfforts?.length
-              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-              : {}),
           }))
           .filter((m) => m.id.length > 0);
         const currentById = new Map(current.map((m) => [m.id, m]));
@@ -678,19 +595,11 @@ export function CustomProviderDialog({
             .map((m) => ({ ...m, name: m.name || m.id })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
-            // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」
-            // (cur 存在但无值时不得被发现值回填,review P1);只有表单没见过的
-            // 新模型才带上端点声明的发现值(否则保存后回落 200K,review P1)。
-            const contextWindow = cur ? cur.contextWindow : m.contextWindow;
             return {
               id: m.id,
               name: cur?.name || m.name,
-              ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(cur?.contextWindow !== undefined ? { contextWindow: cur.contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
-              ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
-              ...(cur?.reasoning === true && cur.reasoningEfforts?.length
-                ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
-                : {}),
             };
           }),
         ];
@@ -711,7 +620,7 @@ export function CustomProviderDialog({
     } finally {
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, fetchingModels, t]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，
@@ -725,89 +634,35 @@ export function CustomProviderDialog({
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
     if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
-    // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
-    // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
-    // 草稿重映射——不能指望 patch() 调用后立即读 rtRef 拿到刚提交的值:rtRef 只
-    // 在 setRtSynced 传给 setRt 的函数式 updater**内部**才写,而 React 不保证这个
-    // updater 会在 setRt() 调用后的下一行同步跑完;picker 移除/重排行、且 setRt
-    // 已有排队工作时,这次读到的可能仍是 previousModels,导致草稿按旧下标错配到
-    // 一个已经不存在的行上(review P1)。
-    const previousModels = rtRef.current[picker.agent].models;
-    const latestById = new Map<string, ModelRow>();
-    for (const pm of previousModels) {
-      const id = pm.id.trim();
-      if (id && !latestById.has(id)) latestById.set(id, pm);
-    }
-    const merged: ModelRow[] = chosen.map((m) => {
-      const latest = latestById.get(m.id);
-      const contextWindow = latest?.contextWindow ?? m.contextWindow;
-      const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
-      const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
-      const reasoning = latest ? latest.reasoning : m.reasoning;
-      const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
-      return {
-        id: m.id,
-        name: latest?.name.trim() ? latest.name.trim() : m.name,
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
-        ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
-        ...(reasoning === true && reasoningEfforts?.length
-          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
-          : {}),
-      };
-    });
-    for (const m of previousModels) {
-      const id = m.id.trim();
-      if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
-        merged.push({
-          id,
-          name: m.name.trim() || id,
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-            : {}),
-        });
+    patch(picker.agent, (x) => {
+      const latestById = new Map<string, ModelRow>();
+      for (const m of x.models) {
+        const id = m.id.trim();
+        if (id && !latestById.has(id)) latestById.set(id, m);
       }
-    }
-    patch(picker.agent, (x) => ({ ...x, models: merged }));
-    const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
-    const newIndexById = new Map<string, number>();
-    merged.forEach((m, i) => {
-      if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
-    });
-    // 合并逻辑(上面的 latestById / 第二个 for 循环)对重复 id 都是「先遇到的旧行
-    // 赢」——按 previousModels 的原始顺序扫到的第一条。存活进 merged 的就是那
-    // 一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把已被丢弃的
-    // 重复行的草稿错配到存活行上(review P1 ×2)。
-    const survivingOldIndexById = new Map<string, number>();
-    previousModels.forEach((m, i) => {
-      const id = m.id.trim();
-      if (id && !survivingOldIndexById.has(id)) survivingOldIndexById.set(id, i);
-    });
-    setWindowDrafts((drafts) => {
-      const next: Record<string, string> = {};
-      for (const [key, text] of Object.entries(drafts)) {
-        const sep = key.lastIndexOf(':');
-        const agent = key.slice(0, sep);
-        if (agent !== picker.agent) {
-          next[key] = text;
-          continue;
+      const merged: ModelRow[] = chosen.map((m) => {
+        const latest = latestById.get(m.id);
+        const contextWindow = latest?.contextWindow ?? m.contextWindow;
+        const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
+        return {
+          id: m.id,
+          name: latest?.name.trim() ? latest.name.trim() : m.name,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
+        };
+      });
+      for (const m of x.models) {
+        const id = m.id.trim();
+        if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
+          merged.push({
+            id,
+            name: m.name.trim() || id,
+            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          });
         }
-        // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
-        // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
-        const oldIdx = Number(key.slice(sep + 1));
-        const id = oldIndexToId.get(oldIdx);
-        // 空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃;非空 id 只有
-        // 「合并时实际存活的那条旧行」的草稿才允许迁移——同 id 的其它旧行本就
-        // 在合并时被丢弃,它们的草稿也该丢弃,不能顶替到存活行上。
-        if (!id || survivingOldIndexById.get(id) !== oldIdx) continue;
-        const newIdx = newIndexById.get(id);
-        if (newIdx === undefined) continue;
-        next[`${agent}:${newIdx}`] = text;
       }
-      return next;
+      return { ...x, models: merged };
     });
     setPicker(null);
   }, [picker, patch]);
@@ -817,28 +672,6 @@ export function CustomProviderDialog({
     const trimmedName = name.trim();
     if (!trimmedName) {
       toast.error(t('settings.providers.custom.errors.nameRequired'));
-      return;
-    }
-    // 上下文窗口草稿必须已可提交:输入框还挂着 `1,` / `-5` 这类未完成/非法文本时
-    // 点保存,已提交值(或隐式 200K 默认)与用户可见文本不一致——静默存旧值等于
-    // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
-    for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
-      if (isCommittableWindowText(draftText)) continue;
-      const sep = draftKey.lastIndexOf(':');
-      const draftAgent = draftKey.slice(0, sep) as AgentKind;
-      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
-      // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
-      // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
-      // (review P1)。
-      const rf = rt[draftAgent];
-      if (!rf.baseUrl.trim()) continue;
-      const row = rf.models[Number(draftKey.slice(sep + 1))];
-      if (!row || !row.id.trim() || !row.name.trim()) continue;
-      setActiveTab(draftAgent);
-      // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
-      // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
-      if (authMode === 'oauth' && !showAdvanced) setShowAdvanced(true);
-      toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
       return;
     }
     const runtimes: CustomProviderConfig['runtimes'] = {};
@@ -869,10 +702,6 @@ export function CustomProviderDialog({
           name: m.name.trim(),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
-            : {}),
         }))
         .filter((m) => m.id && m.name);
       const requestPath = rf.requestPath.trim();
@@ -893,7 +722,7 @@ export function CustomProviderDialog({
         if (n) headers[n] = h.value.trim();
       }
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
-      const defaultProtocol = defaultWireFor(a);
+      const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
@@ -1017,8 +846,6 @@ export function CustomProviderDialog({
     initial,
     existingIds,
     onSaved,
-    windowDrafts,
-    showAdvanced,
     t,
   ]);
 
@@ -1079,8 +906,7 @@ export function CustomProviderDialog({
           {/* 显示名称（共享） */}
           <div className="flex flex-col gap-[7px]">
             <FieldLabel>{t('settings.providers.custom.fields.name')}</FieldLabel>
-            <SettingsTextInput
-              surface="ivory"
+            <TextInput
               value={name}
               onChange={setName}
               placeholder={t('settings.providers.custom.fields.namePlaceholder')}
@@ -1097,7 +923,7 @@ export function CustomProviderDialog({
                   type="button"
                   onClick={() => {
                     setAuthMode(m);
-                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
+                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
                   }}
                   className={cn(
                     'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
@@ -1160,8 +986,7 @@ export function CustomProviderDialog({
                     <FieldLabel>
                       {t(`settings.providers.custom.authMode.fields.${field}`)}
                     </FieldLabel>
-                    <SettingsTextInput
-                      surface="ivory"
+                    <TextInput
                       value={oauthFields[field]}
                       onChange={(v) => setOauthFields((prev) => ({ ...prev, [field]: v }))}
                       placeholder={ph}
@@ -1236,49 +1061,37 @@ export function CustomProviderDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {(activeTab === 'codex' || activeTab === 'pi') && (
+            {activeTab === 'codex' && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
+                <div className="flex gap-1.5">
+                  {(['openai-responses', 'openai-chat'] as const).map((protocol) => (
                     <button
-                      key={option.value}
+                      key={protocol}
                       type="button"
-                      onClick={() => changeWireProtocol(activeTab, option.value)}
+                      onClick={() => changeCodexWireProtocol(protocol)}
                       className={cn(
                         'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                        f.wireProtocol === option.value
+                        f.wireProtocol === protocol
                           ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
                           : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
                       )}
                       style={
-                        f.wireProtocol === option.value
+                        f.wireProtocol === protocol
                           ? { backgroundColor: 'var(--surface-elevated)' }
                           : undefined
                       }
                     >
-                      {t(activeTab === 'pi'
-                        ? `settings.providers.custom.wireProtocol.pi${
-                            option.value === 'anthropic-messages'
-                              ? 'Anthropic'
-                              : option.value === 'openai-responses'
-                                ? 'Responses'
-                                : 'Chat'
-                          }`
-                        : option.labelKey)}
+                      {t(
+                        `settings.providers.custom.wireProtocol.${protocol === 'openai-responses' ? 'responses' : 'chat'}`,
+                      )}
                     </button>
                   ))}
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(activeTab === 'pi'
-                    ? `settings.providers.custom.wireProtocol.pi${
-                        f.wireProtocol === 'anthropic-messages'
-                          ? 'AnthropicHelp'
-                          : f.wireProtocol === 'openai-chat'
-                            ? 'ChatHelp'
-                            : 'ResponsesHelp'
-                      }`
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
+                  {t(
+                    `settings.providers.custom.wireProtocol.${f.wireProtocol === 'openai-chat' ? 'chatHelp' : 'responsesHelp'}`,
+                  )}
                 </span>
               </div>
             )}
@@ -1286,8 +1099,7 @@ export function CustomProviderDialog({
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
-              <SettingsTextInput
-                surface="ivory"
+              <TextInput
                 value={f.baseUrl}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
                 placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
@@ -1297,14 +1109,15 @@ export function CustomProviderDialog({
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
-              <SettingsTextInput
-                surface="ivory"
+              <TextInput
                 value={f.requestPath}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
                 placeholder={
-                  activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
+                  activeTab === 'claude-code'
                     ? '/v1/messages'
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
+                    : f.wireProtocol === 'openai-chat'
+                      ? '/chat/completions'
+                      : '/responses'
                 }
               />
               <span className="text-12 leading-snug text-[var(--text-tertiary)]">
@@ -1331,13 +1144,23 @@ export function CustomProviderDialog({
                     </span>
                   )}
                 </div>
-                <SettingsTextInput
-                  surface="ivory"
+                <TextInput
                   value={f.apiKey}
                   onChange={(v) => patch(activeTab, (x) => ({ ...x, apiKey: v }))}
                   placeholder={keyPlaceholder}
-                  mono
-                  secret
+                  type={showKey ? 'text' : 'password'}
+                  trailing={
+                    <button
+                      type="button"
+                      onClick={() => setShowKey((v) => !v)}
+                      className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
+                      aria-label={
+                        showKey ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')
+                      }
+                    >
+                      {showKey ? <Eye size={16} /> : <EyeOff size={16} />}
+                    </button>
+                  }
                 />
                 <span className="text-12 text-[var(--text-tertiary)]">
                   {t('settings.providers.custom.fields.apiKeyHelp')}
@@ -1372,10 +1195,9 @@ export function CustomProviderDialog({
                 <div className="flex flex-col gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.models')}</FieldLabel>
                   {f.models.map((m, i) => (
-                    <div key={i} className="flex flex-wrap items-center gap-2">
+                    <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
+                        <TextInput
                           value={m.id}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1389,8 +1211,7 @@ export function CustomProviderDialog({
                         />
                       </div>
                       <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
+                        <TextInput
                           value={m.name}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1401,195 +1222,24 @@ export function CustomProviderDialog({
                           placeholder={t('settings.providers.custom.fields.modelNamePlaceholder')}
                         />
                       </div>
-                      <div
-                        className="w-28 shrink-0"
-                        title={t('settings.providers.custom.fields.modelContextWindowTitle')}
-                      >
-                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。整体校验:
-                            只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
-                            拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
-                            262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={
-                            windowDrafts[`${activeTab}:${i}`]
-                            ?? (m.contextWindow != null ? String(m.contextWindow) : '')
-                          }
-                          onBlur={() =>
-                            setWindowDrafts((drafts) => {
-                              const draftText = drafts[`${activeTab}:${i}`];
-                              // 只清可提交草稿(显示回落到已提交规范值);不可提交
-                              // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
-                              // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
-                              if (draftText === undefined || !isCommittableWindowText(draftText)) {
-                                return drafts;
-                              }
-                              const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
-                              return rest;
-                            })
-                          }
-                          onChange={(v) => {
-                            setWindowDrafts((drafts) => ({ ...drafts, [`${activeTab}:${i}`]: v }));
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              models: x.models.map((y, j) => {
-                                if (j !== i) return y;
-                                const trimmed = v.trim();
-                                if (trimmed === '') {
-                                  const { contextWindow: _drop, ...rest } = y;
-                                  return rest;
-                                }
-                                // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
-                                // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
-                                // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
-                                if (!isCommittableWindowText(trimmed)) return y;
-                                return {
-                                  ...y,
-                                  contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
-                                };
-                              }),
-                            }));
-                          }}
-                          placeholder={t(
-                            'settings.providers.custom.fields.modelContextWindowPlaceholder',
-                          )}
-                        />
-                      </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
-                          // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
-                          // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
-                          // (review P1)。
-                          setWindowDrafts((drafts) => {
-                            const next: Record<string, string> = {};
-                            for (const [key, text] of Object.entries(drafts)) {
-                              const sep = key.lastIndexOf(':');
-                              const agent = key.slice(0, sep);
-                              const idx = Number(key.slice(sep + 1));
-                              if (agent !== activeTab) {
-                                next[key] = text;
-                              } else if (idx < i) {
-                                next[key] = text;
-                              } else if (idx > i) {
-                                next[`${agent}:${idx - 1}`] = text;
-                              }
-                            }
-                            return next;
-                          });
+                        onClick={() =>
                           patch(activeTab, (x) => ({
                             ...x,
                             models: x.models.filter((_, j) => j !== i),
-                          }));
-                        }}
+                          }))
+                        }
                         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
                         aria-label={t('settings.providers.custom.fields.removeRow')}
                       >
                         <Trash2 size={16} />
                       </button>
-                      {activeTab === 'pi' && (
-                        <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
-                          <label className="flex cursor-pointer items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={m.supportsImageInput === true}
-                              onChange={(event) => {
-                                const supportsImageInput = event.currentTarget.checked;
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelSupportsImageInput(
-                                    x.models,
-                                    i,
-                                    supportsImageInput,
-                                  ),
-                                }));
-                              }}
-                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                            />
-                            <span className="flex flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelSupportsImageInput')}
-                              </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
-                              </span>
-                            </span>
-                          </label>
-                          <label className="flex cursor-pointer items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={m.reasoning === true}
-                              onChange={(event) => {
-                                const reasoning = event.currentTarget.checked;
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelReasoning(x.models, i, reasoning),
-                                }));
-                              }}
-                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                            />
-                            <span className="flex flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelSupportsReasoning')}
-                              </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.fields.modelSupportsReasoningHelp')}
-                              </span>
-                            </span>
-                          </label>
-                          {m.reasoning === true && (
-                            <div className="ml-6 flex flex-col gap-1.5">
-                              <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelReasoningEfforts')}
-                              </span>
-                              <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-                                {PI_REASONING_EFFORTS.map((effort) => {
-                                  const selected = m.reasoningEfforts?.includes(effort) === true;
-                                  const lastSelected = selected && m.reasoningEfforts?.length === 1;
-                                  return (
-                                    <label
-                                      key={effort}
-                                      className={cn(
-                                        'flex items-center gap-1.5 text-11',
-                                        lastSelected
-                                          ? 'cursor-not-allowed opacity-50'
-                                          : 'cursor-pointer',
-                                      )}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={selected}
-                                        disabled={lastSelected}
-                                        onChange={(event) => {
-                                          const enabled = event.currentTarget.checked;
-                                          patch(activeTab, (x) => ({
-                                            ...x,
-                                            models: setCustomProviderModelReasoningEffort(
-                                              x.models,
-                                              i,
-                                              effort,
-                                              enabled,
-                                            ),
-                                          }));
-                                        }}
-                                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)] disabled:cursor-not-allowed"
-                                      />
-                                      {t(`effortLevels.${effort}`)}
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   ))}
                   <button
                     type="button"
                     onClick={() =>
-                      // 追加在末尾不移动既有行号,别行草稿无需动(review P1)。
                       patch(activeTab, (x) => ({
                         ...x,
                         models: [...x.models, { id: '', name: '' }],
@@ -1608,8 +1258,7 @@ export function CustomProviderDialog({
                   {f.headers.map((h, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
+                        <TextInput
                           value={h.name}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1621,8 +1270,7 @@ export function CustomProviderDialog({
                         />
                       </div>
                       <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
+                        <TextInput
                           value={h.value}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1773,9 +1421,9 @@ function ModelPickerOverlay({
   onConfirm,
   onClose,
 }: {
-  picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
+  picker: { agent: AgentKind; models: ModelRow[]; selected: Set<string>; query: string };
   onChange: (next: {
-    agent: DialogAgentKind;
+    agent: AgentKind;
     models: ModelRow[];
     selected: Set<string>;
     query: string;

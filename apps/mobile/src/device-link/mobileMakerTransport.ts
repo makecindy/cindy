@@ -58,7 +58,7 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex';
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -90,7 +90,7 @@ export interface CreateSessionResult {
   usedProjectContext?: boolean;
 }
 
-export type MobileAgentKind = 'claude-code' | 'codex' | 'pi';
+export type MobileAgentKind = 'claude-code' | 'codex';
 
 export type MobileSlashCommand =
   | { kind: 'agent-builtin'; name: string; description: string }
@@ -151,8 +151,6 @@ export interface MessageListOptions {
   limit?: number;
   before?: string;
   beforeTs?: number;
-  /** 只拉该 host 行之后的新消息；旧被控端会忽略未知可选字段并退化为最新页。 */
-  after?: string;
 }
 
 export interface MessageAroundOptions {
@@ -306,64 +304,9 @@ export interface MobileNewMakerDraftPref {
   fast?: boolean;
 }
 
-/**
- * 工作端 maker:get-new-maker-defaults 回包的手机端消费子集。完整形状是被控端
- * RemoteNewMakerDefaults(model/effort 等手机另有 capabilities / 会话推断读源,暂不消费);
- * 手机当前只取 vendor 无关的 worktreeEnabled 播种新建页 worktree 开关。
- * 旧被控端不回该字段 → undefined → 调用方按未勾选兜底。
- */
-export interface MobileNewMakerDefaults {
-  worktreeEnabled?: boolean;
-  [key: string]: unknown;
-}
-
-/** 工作端 worktree:detect-cwd 资格探测回包(形状对齐被控端 DetectCwdResp)。 */
-export interface MobileWorktreeDetectCwdResult {
-  isGitRepo: boolean;
-  isInsideWorktree: boolean;
-  gitInstalled: boolean;
-  currentBranch?: string;
-  /** git rev-parse --show-toplevel 结果(被控端绝对路径);worktree:create 的 baseRepo 用它。 */
-  repoRoot?: string;
-  /**
-   * 新版 Desktop 才会返回 true。旧端可能接受 worktree:create 的未知 recoveryKey
-   * 字段却不把它写入元数据，因此省略必须在副作用前视为不支持。
-   */
-  supportsRecoveryKeyDiscard?: boolean;
-}
-
-/** 工作端 worktree:create 元信息(形状对齐被控端 WorktreeMeta)。 */
-export interface MobileWorktreeMeta {
-  sessionId: string;
-  name: string;
-  path: string;
-  baseRepo: string;
-  branch: string;
-  sourceBranch: string;
-  createdAt: string;
-  recoveryKey?: string;
-}
-
-/** 工作端 worktree:create 回包(error.message 为被控端生成的可展示文案)。 */
-export type MobileWorktreeCreateResult =
-  | { ok: true; meta: MobileWorktreeMeta }
-  | { ok: false; error: { kind: string; message: string; hint?: string; rawStderr?: string } };
-
 export interface MobileMakerTransport {
   createSession(opts: CreateSessionOptions): Promise<CreateSessionResult>;
   getCapabilities(agentKind: MobileAgentKind): Promise<unknown>;
-  /**
-   * 被控端 runtime 已注册的 agent 集合(maker:list-available-agents,在 REMOTE_INVOKE_ALLOWLIST 内)。
-   * 新建会话入口据此过滤:Pi 二进制缺失时被控端 agent map 无 pi,但模型目录仍投影 Pi,不过滤
-   * 会让用户建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
-   */
-  listAvailableAgents(): Promise<MobileAgentKind[]>;
-  getSessionTree(sessionId: string): Promise<unknown | null>;
-  navigateSessionTree(
-    sessionId: string,
-    entryId: string,
-    options?: { summarize?: boolean; customInstructions?: string },
-  ): Promise<{ tree: unknown; draftText?: string; cancelled?: boolean } | null>;
   /**
    * 列被控端的供应商(来源)结构,用于 provider-aware 模型下拉(隧道 maker:provider:list)。
    * modelVisibilityOverrides = 被控端「模型显示/隐藏」override 快照(旧被控端不回传)。
@@ -441,35 +384,6 @@ export interface MobileMakerTransport {
   setSessionModelPref(pref: MobileSessionModelPref): Promise<void>;
   /** 草稿「模型 effort/fast」写穿(active 恒 false;老被控端 → 调用方吞掉降级)。 */
   applyNewMakerDraftPref(pref: MobileNewMakerDraftPref): Promise<void>;
-  /** 工作端 New Maker 草稿默认值镜像(只读;手机当前只消费 worktreeEnabled)。 */
-  getNewMakerDefaults(agentKind: MobileAgentKind): Promise<MobileNewMakerDefaults>;
-  /** 「新建会话默认启用 worktree」写穿工作端(老被控端 → 调用方吞掉降级)。 */
-  applyNewMakerWorktreePref(worktreeEnabled: boolean): Promise<void>;
-  /**
-   * worktree 两步建会话的工作端通道(git/fs 全在被控端执行):detect-cwd 做资格探测,
-   * suggest-name 生成名字,create 以预生成 sessionId 建 worktree 拿路径(第二步再以该
-   * 路径调 createSession)。老被控端 CHANNEL_NOT_ALLOWED → 调用方按「不可用」降级。
-   */
-  worktree: {
-    detectCwd(cwd: string): Promise<MobileWorktreeDetectCwdResult>;
-    suggestName(baseRepo: string): Promise<{ name: string }>;
-    create(req: {
-      sessionId: string;
-      baseRepo: string;
-      name: string;
-      sourceBranch: string;
-      recoveryKey: string;
-    }): Promise<MobileWorktreeCreateResult>;
-    /**
-     * 两步创建的第二步确定失败、用户放弃返回编辑时，补偿回收尚未被 session 认领的
-     * 精确 worktree。create 回包前恢复时可改用预先持久化的 recoveryKey；被控端会再次
-     * 校验登记匹配、dirty 与 live ownership。
-     */
-    discardPrecreated(input:
-      | { sessionId: string; path: string; recoveryKey?: never }
-      | { sessionId: string; recoveryKey: string; path?: never }
-    ): Promise<{ discarded: true; branchDeleted?: boolean }>;
-  };
   listAgentCommands(agentKind: MobileAgentKind): Promise<MobileAgentCommandListResult>;
   /** 被控端 desktop 自有 slash 命令清单(palette 展示;移动端只放行可执行子集)。 */
   listDesktopCommands(): Promise<MobileDesktopCommandListResult>;
@@ -609,12 +523,6 @@ export function createMobileMakerTransport({
   return {
     createSession: (opts) => call('maker:create-session', [opts]),
     getCapabilities: (agentKind) => call('maker:get-capabilities', [agentKind]),
-    listAvailableAgents: () => call('maker:list-available-agents', []),
-    // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
-    // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
-    getSessionTree: (sessionId) => call('maker:get-session-tree', [sessionId]),
-    navigateSessionTree: (sessionId, entryId, options) =>
-      call('maker:navigate-session-tree', [sessionId, entryId, options]),
     listProviders: () => call('maker:provider:list', [{
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),
@@ -665,15 +573,6 @@ export function createMobileMakerTransport({
     getApiKeyPresent: () => call('maker:api-key:present'),
     setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
     applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),
-    getNewMakerDefaults: (agentKind) => call('maker:get-new-maker-defaults', [agentKind]),
-    applyNewMakerWorktreePref: (worktreeEnabled) =>
-      call('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled }]),
-    worktree: {
-      detectCwd: (cwd) => call('worktree:detect-cwd', [{ cwd }]),
-      suggestName: (baseRepo) => call('worktree:suggest-name', [{ baseRepo }]),
-      create: (req) => call('worktree:create', [req]),
-      discardPrecreated: (input) => call('worktree:discard-precreated', [input]),
-    },
     listAgentCommands: (agentKind) => call('maker:list-agent-commands', [agentKind]),
     listDesktopCommands: () => call('maker:list-desktop-commands', []),
     learnStart: (req) => call('learn:start', [req]),

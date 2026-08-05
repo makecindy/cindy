@@ -23,7 +23,6 @@ import {
   pollAppRegistration,
   requestAppRegistration,
   type AppRegistrationPollResult,
-  type LarkBrand,
 } from './appRegistration.js';
 import type { FeishuPublicState } from './internal-types.js';
 
@@ -74,23 +73,20 @@ export function registerFeishuIpc(): void {
   host.ipc.handle('feishuBot:get-state', async () => getPublicState());
 
   host.ipc.handle('feishuBot:save', async (payload) => {
-    const p = payload as { appId?: unknown; appSecret?: unknown; service?: unknown } | undefined;
+    const p = payload as { appId?: unknown; appSecret?: unknown } | undefined;
     if (
       !p ||
       typeof p.appId !== 'string' ||
       typeof p.appSecret !== 'string' ||
-      (p.service !== 'feishu' && p.service !== 'lark') ||
       p.appId.length === 0 ||
       p.appSecret.length === 0
     ) {
-      throw new Error('[INVALID_PAYLOAD] appId, appSecret and service required');
+      throw new Error('[INVALID_PAYLOAD] appId and appSecret required');
     }
     const appId = p.appId.trim();
     const appSecret = p.appSecret.trim();
     const accountScope = captureAccountScope();
-    return runInAccountScope(accountScope, () =>
-      saveAndConnect(appId, appSecret, p.service as LarkBrand),
-    );
+    return runInAccountScope(accountScope, () => saveAndConnect(appId, appSecret));
   });
 
   host.ipc.handle('feishuBot:clear', async () => {
@@ -106,12 +102,7 @@ export function registerFeishuIpc(): void {
     return { ok: true };
   });
 
-  host.ipc.handle('feishuBot:registration-begin', async (payload) => {
-    const p = payload as { service?: unknown } | undefined;
-    if (p?.service !== 'feishu' && p?.service !== 'lark') {
-      return { ok: false, error: '[INVALID_PAYLOAD] service required' };
-    }
-    const service = p.service;
+  host.ipc.handle('feishuBot:registration-begin', async () => {
     registrationRunId++;
     const runId = registrationRunId;
     const accountScope = captureAccountScope();
@@ -119,7 +110,7 @@ export function registerFeishuIpc(): void {
       return { ok: false, error: '[IM_NOT_READY] IM account is not active' };
     }
     try {
-      const begin = await requestAppRegistration(host.httpPostForm, service);
+      const begin = await requestAppRegistration(host.httpPostForm, 'feishu');
       if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) {
         return {
           ok: false,
@@ -174,7 +165,6 @@ export function getPublicState(): FeishuPublicState {
     hasSecret: creds != null,
     ownerOpenId: storage.readOwnerOpenId(),
     lifecycleAnnouncement: storage.readLifecycleAnnouncement(),
-    service: creds?.service ?? 'feishu',
   };
 }
 
@@ -186,12 +176,10 @@ interface SaveAndConnectOptions {
 export async function saveAndConnect(
   appId: string,
   appSecret: string,
-  service: LarkBrand = 'feishu',
   options: SaveAndConnectOptions = {},
 ): Promise<{ verdict: 'connected' | 'conflict' | 'error' | 'pending' }> {
   const saved = storage.readCredentials();
-  const credentialsUnchanged =
-    saved?.appId === appId && saved.appSecret === appSecret && saved.service === service;
+  const credentialsUnchanged = saved?.appId === appId && saved.appSecret === appSecret;
   if (credentialsUnchanged && options.replacementOwnerOpenId) {
     persistReplacementOwner(options.replacementOwnerOpenId);
   }
@@ -202,32 +190,31 @@ export async function saveAndConnect(
       return { verdict: 'connected' };
     }
     if (status === 'testing' || status === 'reconnecting') {
-      getLog().info(`[feishu/ipc] saveAndConnect skipped: same credentials already ${status}`);
+      getLog().info(
+        `[feishu/ipc] saveAndConnect skipped: same credentials already ${status}`,
+      );
       return { verdict: 'pending' };
     }
     return reconnectSavedCredentials();
   }
 
-  const ok = storage.writeCredentials({ appId, appSecret, service });
+  const ok = storage.writeCredentials({ appId, appSecret });
   if (!ok) return { verdict: 'error' };
   await wsClient.stop({
     reason: 'credentials-replaced',
-    clearOwnerBeforeIdle: saved?.appId !== appId || saved.service !== service,
+    clearOwnerBeforeIdle: saved?.appId !== appId,
   });
   if (options.replacementOwnerOpenId) {
     persistReplacementOwner(options.replacementOwnerOpenId);
   }
-  const verdict = await wsClient.start(
-    { appId, appSecret, service },
-    { reason: 'credentials-replaced' },
-  );
+  const verdict = await wsClient.start({ appId, appSecret }, { reason: 'credentials-replaced' });
   return { verdict };
 }
 
 function persistReplacementOwner(ownerOpenId: string): void {
   const ownerWritten = storage.writeOwnerOpenId(ownerOpenId);
   if (!ownerWritten) {
-    throw new Error('[OWNER_PERSIST_FAILED] Failed to persist IM bot owner');
+    throw new Error('[OWNER_PERSIST_FAILED] Failed to persist Feishu owner');
   }
   ownerGuard.loadFromDisk();
 }
@@ -238,7 +225,7 @@ export async function reconnectSavedCredentials(): Promise<{
 }> {
   const creds = storage.readCredentials();
   if (!creds) {
-    throw new Error('[NO_CREDENTIALS] IM bot credentials are not configured');
+    throw new Error('[NO_CREDENTIALS] Feishu bot credentials are not configured');
   }
   await wsClient.stop({ announceOffline: false, reason: 'manual-reconnect' });
   const verdict = await wsClient.start(creds, {
@@ -259,28 +246,18 @@ async function pollRegistrationInBackground(
   const log = getLog();
   const deadline = Date.now() + expiresIn * 1000;
   let currentInterval = Math.max(interval, 1);
-  let pollBrand: LarkBrand = 'feishu';
-  let pollWithoutDelay = false;
 
   while (
     Date.now() < deadline &&
     runId === registrationRunId &&
     isAccountScopeCurrent(accountScope)
   ) {
-    if (!pollWithoutDelay) {
-      await delay(currentInterval * 1000);
-      if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
-    }
-    pollWithoutDelay = false;
+    await delay(currentInterval * 1000);
+    if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
 
     let result: AppRegistrationPollResult;
     try {
-      result = await pollAppRegistration(
-        host.httpPostForm,
-        pollBrand,
-        deviceCode,
-        currentInterval,
-      );
+      result = await pollAppRegistration(host.httpPostForm, 'feishu', deviceCode, currentInterval);
     } catch (err) {
       if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
       const error = err instanceof Error ? err.message : String(err);
@@ -291,14 +268,6 @@ async function pollRegistrationInBackground(
       return;
     }
     if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
-
-    const discoveredBrand =
-      result.status === 'success' ? result.result.tenantBrand : result.tenantBrand;
-    if (pollBrand === 'feishu' && discoveredBrand === 'lark') {
-      pollBrand = 'lark';
-      pollWithoutDelay = true;
-      continue;
-    }
 
     if (result.status === 'pending') {
       host.ipc.broadcast('feishuBot:registration-status', {
@@ -316,25 +285,31 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'success') {
-      const success = result.result;
+      let success = result.result;
+      if (success.tenantBrand === 'lark' && !success.clientSecret) {
+        const larkResult = await pollAppRegistration(
+          host.httpPostForm,
+          'lark',
+          deviceCode,
+          currentInterval,
+        );
+        if (larkResult.status === 'success') success = larkResult.result;
+      }
+
       if (!success.clientId || !success.clientSecret) {
         host.ipc.broadcast('feishuBot:registration-status', {
-          status: 'pending',
+          status: 'error',
+          error: 'app registration succeeded but missing client_id or client_secret',
         });
-        continue;
+        return;
       }
 
       let verdict: 'connected' | 'conflict' | 'error' | 'pending';
       try {
         ({ verdict } = await runInAccountScope(accountScope, async () => {
-          return saveAndConnect(
-            success.clientId,
-            success.clientSecret,
-            success.tenantBrand ?? pollBrand,
-            {
-              replacementOwnerOpenId: success.ownerOpenId,
-            },
-          );
+          return saveAndConnect(success.clientId, success.clientSecret, {
+            replacementOwnerOpenId: success.ownerOpenId,
+          });
         }));
       } catch (err) {
         if (!isAccountScopeCurrent(accountScope)) return;

@@ -6,7 +6,6 @@
  */
 
 import { i18n } from '@/i18n';
-import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import { toast } from './toast';
 
@@ -38,8 +37,7 @@ export function handleAutoPermissionFallback(): void {
 /** 同时订阅本机与被控端 push；返回统一 unsubscribe。 */
 export function installAutoPermissionFallbackToastListener(): () => void {
   const offLocal = window.electronAPI.maker.onAutoPermissionFallback(handleAutoPermissionFallback);
-  const offRemote = window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
-    if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+  const offRemote = window.electronAPI.deviceLink?.onRemotePush?.((push) => {
     if (
       push.channel === 'maker:auto-permission:fallback' &&
       isAutoPermissionFallbackPayload(push.payload)

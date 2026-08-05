@@ -17,22 +17,12 @@ export interface WorktreeMeta {
   path: string;
   /** 创建 worktree 时所在的 git repo 根目录（cwd）。 */
   baseRepo: string;
-  /** 托管分支名；新建为 `cindy/<name>`，历史记录也可能为 `xdt/<name>`。回收目录时分支保留。 */
+  /** 新建的本地分支名,固定为 `xdt/<name>`。删除 worktree 时**不**带 -D, 分支保留。 */
   branch: string;
   /** 用户在 worktree 创建表单选择的源分支（git worktree add -b <branch> <path> <sourceBranch>）。 */
   sourceBranch: string;
   /** ISO 8601 创建时间。 */
   createdAt: string;
-  /**
-   * 手机端在远程落盘前持久化的随机恢复关联键。只用于证明一次预创建恢复请求
-   * 对应本记录；不授予通用删除能力。
-   */
-  recoveryKey?: string;
-  /**
-   * 隔离回收期间的实际 worktree 路径。保留原 path 作为外部账本的稳定定位，
-   * 进程崩溃后可从该字段继续回收 quarantine 目录。
-   */
-  quarantinePath?: string;
   /** true = scheduler 创建的临时 worktree，session 关闭时可池化复用而非销毁。 */
   ephemeral?: boolean;
 }
@@ -63,14 +53,13 @@ export interface CreateWorktreeReq {
   baseRepo: string;
   name: string;
   sourceBranch: string;
-  /** 远程两步创建的恢复关联键；本机普通创建不传。 */
-  recoveryKey?: string;
   /** 标记为 ephemeral worktree（scheduler 用），session 关闭时可池化复用。 */
   ephemeral?: boolean;
 }
 
 export type CreateWorktreeResp =
-  { ok: true; meta: WorktreeMeta } | { ok: false; error: WorktreeError };
+  | { ok: true; meta: WorktreeMeta }
+  | { ok: false; error: WorktreeError };
 
 export interface DetectCwdReq {
   cwd: string;
@@ -83,11 +72,6 @@ export interface DetectCwdResp {
   currentBranch?: string;
   /** git rev-parse --show-toplevel 的结果，绝对路径。 */
   repoRoot?: string;
-  /**
-   * 当前被控端是否会把 recoveryKey 持久化到 worktree 元数据，并支持按键回收。
-   * 旧 Desktop 会省略该字段；控制端必须在创建副作用前把省略视为不支持。
-   */
-  supportsRecoveryKeyDiscard?: boolean;
 }
 
 export interface ListBranchesReq {

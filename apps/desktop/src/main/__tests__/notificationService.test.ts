@@ -104,9 +104,7 @@ vi.mock('../device-link', () => ({
 
 // mobile 正文素材:最近一条 assistant 内容(真实实现走 localDb)。默认空 = 无摘要,
 // 既有用例的调用断言不带 detail;内容用例单独 mockResolvedValueOnce。
-const latestMessageText = vi.fn<
-  (sessionId: string, role: string) => Promise<string>
->(async () => '');
+const latestMessageText = vi.fn(async (_sessionId: string, _role: string) => '');
 vi.mock('../localDb/latestMessageText', () => ({
   latestMessageText: (sessionId: string, role: string) => latestMessageText(sessionId, role),
 }));
@@ -397,7 +395,7 @@ describe('notificationService — channels 分发', () => {
     // 文案断言 — 锁住对外可见的飞书消息格式,后续如要改文案需主动调整测试。
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledWith(
       'ou_owner',
-      'Cindy · 任务「Hello」需要你回复',
+      'Cindy · 会话「Hello」需要你回复',
     );
   });
 
@@ -417,7 +415,7 @@ describe('notificationService — channels 分发', () => {
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledWith(
       'ou_owner',
-      'Cindy · 任务「Hello」已完成 ✓',
+      'Cindy · 会话「Hello」已完成 ✓',
     );
   });
 
@@ -441,7 +439,7 @@ describe('notificationService — channels 分发', () => {
     );
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledWith(
       'ou_owner',
-      'Cindy · 任务「Broken model」执行失败',
+      'Cindy · 会话「Broken model」执行失败',
     );
   });
 

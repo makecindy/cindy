@@ -16,11 +16,10 @@
  */
 
 import { getHost, getLog } from './moduleScope.js';
-import type { BotCredentials, FeishuService } from './internal-types.js';
+import type { BotCredentials } from './internal-types.js';
 
 const KEY_APP_ID = 'feishu_bot_app_id';
 const KEY_APP_SECRET = 'feishu_bot_app_secret';
-const KEY_SERVICE = 'feishu_bot_service';
 const KEY_OWNER_OPEN_ID = 'feishu_bot_owner_open_id';
 const KEY_LIFECYCLE_ANNOUNCEMENT = 'feishu_bot_lifecycle_announcement';
 
@@ -35,11 +34,7 @@ export function readCredentials(): BotCredentials | null {
   const appId = secrets.read(KEY_APP_ID);
   const appSecret = secrets.read(KEY_APP_SECRET);
   if (!appId || !appSecret) return null;
-  return {
-    appId,
-    appSecret,
-    service: normalizeService(secrets.read(KEY_SERVICE)),
-  };
+  return { appId, appSecret };
 }
 
 export function writeCredentials(creds: BotCredentials): boolean {
@@ -49,23 +44,15 @@ export function writeCredentials(creds: BotCredentials): boolean {
     log.warn('[feishu/storage] secrets unavailable; refuse to write');
     return false;
   }
-  const previous = {
-    appId: secrets.read(KEY_APP_ID),
-    appSecret: secrets.read(KEY_APP_SECRET),
-    service: secrets.read(KEY_SERVICE),
-  };
-  if (
-    !secrets.write(KEY_SERVICE, creds.service) ||
-    !secrets.write(KEY_APP_ID, creds.appId) ||
-    !secrets.write(KEY_APP_SECRET, creds.appSecret)
-  ) {
-    restoreSecret(KEY_SERVICE, previous.service);
-    restoreSecret(KEY_APP_ID, previous.appId);
-    restoreSecret(KEY_APP_SECRET, previous.appSecret);
+  const ok1 = secrets.write(KEY_APP_ID, creds.appId);
+  if (!ok1) return false;
+  const ok2 = secrets.write(KEY_APP_SECRET, creds.appSecret);
+  if (!ok2) {
+    secrets.remove(KEY_APP_ID);
     return false;
   }
   log.info(
-    `[feishu/storage] wrote credentials service=${creds.service} appId=${maskTail(creds.appId)} appSecret=${maskTail(creds.appSecret)}`,
+    `[feishu/storage] wrote credentials appId=${maskTail(creds.appId)} appSecret=${maskTail(creds.appSecret)}`,
   );
   return true;
 }
@@ -74,7 +61,6 @@ export function clearAll(): void {
   const secrets = getHost().secrets;
   secrets.remove(KEY_APP_ID);
   secrets.remove(KEY_APP_SECRET);
-  secrets.remove(KEY_SERVICE);
   secrets.remove(KEY_OWNER_OPEN_ID);
 }
 
@@ -117,15 +103,3 @@ export function writeLifecycleAnnouncement(enabled: boolean): void {
   secrets.write(KEY_LIFECYCLE_ANNOUNCEMENT, String(enabled));
 }
 
-function normalizeService(value: string | null): FeishuService {
-  return value === 'lark' ? 'lark' : 'feishu';
-}
-
-function restoreSecret(key: string, value: string | null): void {
-  const secrets = getHost().secrets;
-  if (value === null) {
-    secrets.remove(key);
-    return;
-  }
-  secrets.write(key, value);
-}

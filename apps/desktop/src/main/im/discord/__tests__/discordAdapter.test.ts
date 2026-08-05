@@ -45,7 +45,6 @@ describe('discord ImChannelAdapter characterization', () => {
   it('channel / source are discord and the adapter is not thread scoped', () => {
     expect(adapter.channel).toBe('discord');
     expect(adapter.sessions.source).toBe('discord');
-    expect(adapter.sessions.workspaceKind).toBe('dialogue');
     expect(adapter.threadScoped).toBeUndefined();
   });
 

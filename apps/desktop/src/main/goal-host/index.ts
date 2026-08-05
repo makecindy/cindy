@@ -14,7 +14,6 @@ import { createLogger } from '../logger.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
-  stopActiveGoalTurnForClear,
 } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
@@ -52,7 +51,6 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       }),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     isSessionInTurn,
-    stopActiveGoalTurn: stopActiveGoalTurnForClear,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     emitStatus: deps.broadcastStatus,

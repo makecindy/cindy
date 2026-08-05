@@ -1,5 +1,5 @@
 export type ScheduleKind = 'cron';
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
@@ -116,7 +116,6 @@ export type JobType = 'prompt' | 'issue-triage';
 export interface ScheduleNotifyConfig {
   desktop: boolean;
   feishu: boolean;
-  wecomGroup?: boolean;
 }
 
 /**
@@ -304,7 +303,7 @@ export interface ScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
   >;
 }
 

@@ -15,10 +15,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
-import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -101,11 +99,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startPlanSession(
-  planMode: boolean,
-  depOverrides: Partial<AgentDeps> = {},
-  permissionMode: PermissionMode = 'acceptEdits',
-) {
+async function startPlanSession(planMode: boolean, depOverrides: Partial<AgentDeps> = {}) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -118,7 +112,7 @@ async function startPlanSession(
     sessionId: 'session-plan',
     model: 'claude-opus-4-6',
     workingDir,
-    permissionMode,
+    permissionMode: 'acceptEdits',
     planMode,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
@@ -444,9 +438,8 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
 
     await handle.setPlanMode?.(false);
-    // 退出计划模式落到最新的底层档。Cindy 档 'auto'(Auto-review)映射到 SDK 'default'
-    // —— 不再透传 'auto' 给 CC(canUseTool 才会触发,由 Cindy 策略审查),见 toSdkPermissionMode。
-    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    // 退出计划模式落到最新的底层档。
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('auto');
     await handle.close();
   });
 
@@ -473,122 +466,6 @@ describe('ClaudeCodeAgent plan mode', () => {
     const ev = await nextEvent(iterator);
     expect(ev).toMatchObject({ type: 'plan_mode_changed', data: { enabled: false } });
     await handle.close();
-  });
-
-  it('reviews post-approval actions against the approved plan', async () => {
-    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const { handle, queryOptions } = await startPlanSession(
-      true,
-      { reviewAutoPermissionAction },
-      'auto',
-    );
-    handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
-      if (req.kind === 'plan_review') return { kind: 'plan_review', behavior: 'allow' };
-      return { kind: 'permission', behavior: 'allow' };
-    });
-    const canUseTool = queryOptions.canUseTool;
-    if (!canUseTool) throw new Error('expected canUseTool');
-
-    await handle.send({
-      type: 'user',
-      content: 'Refactor the parser without changing public behavior',
-    });
-    await canUseTool(
-      'ExitPlanMode',
-      { plan: '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests' },
-      { toolUseID: 'approve-plan' },
-    );
-    await canUseTool(
-      'Bash',
-      { command: 'npx tsc --noEmit' },
-      { toolUseID: 'focused-typecheck' },
-    );
-
-    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
-      userIntent:
-        'Refactor the parser without changing public behavior\n\n'
-        + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
-    }));
-    await handle.close();
-  });
-
-  it('merges user plan edits and feedback into capability routing', async () => {
-    const capabilityRouting = {
-      overrides: [
-        {
-          capabilityId: 'feishu',
-          source: {
-            kind: 'harness-plugin',
-            harness: 'claude-code',
-            surface: 'mcp',
-            id: 'plugin:feishu-delegate:feishu-delegate',
-          },
-          invocation: 'explicit-only',
-          explicitSelectors: ['$feishu-delegate:message-feishu-coworkers'],
-          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
-        },
-      ],
-    } as const satisfies CapabilityRoutingPolicy;
-    const cases: Array<{
-      decision: InteractionDecision;
-      expectedBehavior: 'allow' | 'deny';
-    }> = [
-      {
-        decision: {
-          kind: 'plan_review',
-          behavior: 'allow',
-          editedPlan:
-            '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
-        },
-        expectedBehavior: 'allow',
-      },
-      {
-        decision: {
-          kind: 'plan_review',
-          behavior: 'deny',
-          reason:
-            '请改用 $feishu-delegate:message-feishu-coworkers 并补充范围',
-        },
-        expectedBehavior: 'allow',
-      },
-      {
-        decision: {
-          kind: 'plan_review',
-          behavior: 'deny',
-          reason: 'system dismissed $feishu-delegate:message-feishu-coworkers',
-          dismissed: true,
-        },
-        expectedBehavior: 'deny',
-      },
-    ];
-
-    for (const [index, testCase] of cases.entries()) {
-      const { handle, queryOptions } = await startPlanSession(true, {
-        capabilityRouting,
-        getMcpToolApprovalPolicy: () => 'auto-approve',
-      });
-      handle.setInteractionResolver(async (req): Promise<InteractionDecision> =>
-        req.kind === 'plan_review'
-          ? testCase.decision
-          : { kind: 'permission', behavior: 'allow' },
-      );
-      await handle.send({ type: 'user', content: '制定一个查询消息的计划' });
-      const canUseTool = queryOptions.canUseTool;
-      if (!canUseTool) throw new Error('expected canUseTool');
-      await canUseTool(
-        'ExitPlanMode',
-        { plan: '1. 查询消息' },
-        { toolUseID: `plan-${index}` },
-      );
-      await expect(
-        canUseTool(
-          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
-          {},
-          { toolUseID: `mcp-${index}` },
-        ),
-      ).resolves.toMatchObject({ behavior: testCase.expectedBehavior });
-      await handle.close();
-    }
   });
 
   it('defers the SDK switch when armed mid-turn, and pushes plan at the next send boundary', async () => {

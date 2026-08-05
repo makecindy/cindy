@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { GhostPipeDispatcher, toolNotFoundMessage, type PipeDispatcherDeps } from '../pipeDispatcher';
+import { GhostPipeDispatcher, type PipeDispatcherDeps } from '../pipeDispatcher';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost';
 import type { GhostRuntimeState } from '../runtime/GhostRuntime';
 
@@ -35,10 +35,6 @@ interface Harness {
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
     sendToGhost: ReturnType<typeof vi.fn>;
-    log: {
-      info: ReturnType<typeof vi.fn>;
-      warn: ReturnType<typeof vi.fn>;
-    };
   };
   sent: GhostPipeToolCall[];
 }
@@ -57,10 +53,6 @@ function makeHarness(opts: {
       sent.push(payload);
       return true;
     }),
-    log: {
-      info: vi.fn(),
-      warn: vi.fn(),
-    },
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
@@ -90,62 +82,11 @@ describe('资格审(结构化错误分类)', () => {
     expect(r).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
   });
 
-  it('TOOL_NOT_FOUND 自愈文案:普通插件列出可用工具', async () => {
-    const h = makeHarness();
-    const r = await h.dispatcher.callGhostTool({ ...CALL, tool: 'nope' });
-    if (r.ok) throw new Error('应失败');
-    expect(r.message).toContain('gen_image');
-  });
-
-  it('TOOL_NOT_FOUND 自愈文案:二级分派插件回填 call_tool 正确形态', async () => {
-    const base = fakeGhost();
-    const dispatchGhost = fakeGhost({
-      manifest: {
-        ...base.manifest,
-        tools: [
-          { name: 'list_tools', description: '列操作' },
-          { name: 'call_tool', description: '分派' },
-        ],
-      },
-    });
-    const h = makeHarness({ ghost: dispatchGhost });
-    const r = await h.dispatcher.callGhostTool({ ...CALL, tool: 'create_pull_request_review' });
-    if (r.ok) throw new Error('应失败');
-    expect(r.errorCode).toBe('TOOL_NOT_FOUND');
-    expect(r.message).toContain('call_tool');
-    expect(r.message).toContain('create_pull_request_review');
-  });
-
   it('熔断中 → GHOST_CRASHED,不尝试拉起', async () => {
     const h = makeHarness({ state: 'fused' });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
     expect(h.deps.spawn).not.toHaveBeenCalled();
-  });
-});
-
-describe('toolNotFoundMessage(纯函数直测)', () => {
-  it('分派型插件:回填 agent 想调的名字并给出 call_tool 形态', () => {
-    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', [
-      { name: 'list_tools', description: '' },
-      { name: 'call_tool', description: '' },
-    ]);
-    expect(msg).toContain('cindy-github');
-    expect(msg).toContain('create_pull_request');
-    expect(msg).toContain('tool:"call_tool"');
-    expect(msg).toContain('name:"create_pull_request"');
-    expect(msg).toContain('list_tools');
-  });
-
-  it('普通插件:列出可用工具名', () => {
-    const msg = toolNotFoundMessage('art', 'nope', [{ name: 'gen_image', description: '' }]);
-    expect(msg).toContain('gen_image');
-    expect(msg).not.toContain('call_tool');
-  });
-
-  it('tools 缺省/空:不崩,提示未声明任何工具', () => {
-    expect(toolNotFoundMessage('art', 'nope', undefined)).toContain('(未声明任何工具)');
-    expect(toolNotFoundMessage('art', 'nope', [])).toContain('(未声明任何工具)');
   });
 });
 
@@ -195,37 +136,6 @@ describe('配对交卷', () => {
     expect(outcome.accepted).toBe(true);
     await expect(p).resolves.toEqual({ ok: true, result: { url: 'cindy-media://blobs/x.png' } });
     expect(h.dispatcher.pendingCount()).toBe(0);
-  });
-
-  it('完成日志只含元数据，不记录参数或返回内容', async () => {
-    const h = makeHarness();
-    const secretArg = 'must-not-log-argument';
-    const secretResult = 'must-not-log-result';
-    const p = h.dispatcher.callGhostTool({
-      ...CALL,
-      args: { prompt: secretArg },
-      callId: 'observable-call',
-    });
-    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
-    h.dispatcher.handleToolResult('art', {
-      type: 'tool-result',
-      callId: 'observable-call',
-      ok: true,
-      result: { value: secretResult },
-    });
-    await expect(p).resolves.toMatchObject({ ok: true });
-
-    expect(h.deps.log.info).toHaveBeenCalledTimes(1);
-    expect(h.deps.log.info).toHaveBeenCalledWith('ghost tool call completed', {
-      ghostId: 'art',
-      tool: 'gen_image',
-      callId: 'observable-call',
-      ok: true,
-      totalMs: expect.any(Number),
-    });
-    const logs = JSON.stringify(h.deps.log.info.mock.calls);
-    expect(logs).not.toContain(secretArg);
-    expect(logs).not.toContain(secretResult);
   });
 
   it('意识侧报错 → INTERNAL 透传 message', async () => {
@@ -314,24 +224,6 @@ describe('超时与收卷', () => {
       result: 'too late',
     });
     expect(late.accepted).toBe(false);
-  });
-
-  it('可信宿主可为 UI 查询单独收短超时，不改变普通调用默认档', async () => {
-    const h = makeHarness({ timeoutMs: 1000 });
-    const short = h.dispatcher.callGhostTool({ ...CALL, timeoutMs: 50 });
-    const normal = h.dispatcher.callGhostTool(CALL);
-    expect(h.sent).toHaveLength(2);
-
-    vi.advanceTimersByTime(40);
-    expect(h.dispatcher.handleToolProgress('art', {
-      callId: h.sent[0].callId,
-    }).accepted).toBe(true);
-    vi.advanceTimersByTime(10);
-    await expect(short).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
-    expect(h.dispatcher.pendingCount()).toBe(1);
-
-    vi.advanceTimersByTime(950);
-    await expect(normal).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
   });
 
   it('崩溃收卷 → GHOST_CRASHED;熄灯收卷 → GHOST_ASLEEP;只收本意识的', async () => {

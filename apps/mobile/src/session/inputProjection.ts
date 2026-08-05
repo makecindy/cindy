@@ -63,7 +63,6 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     error: readString(record?.error),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
-    autoResumePending: readRecord(record?.autoResumePending),
     credentialSwitchWait: readCredentialSwitchWait(record?.credentialSwitchWait),
   };
 }
@@ -102,9 +101,7 @@ export function buildQueuedTextMessage(
   const workingDir = session.workingDir || '';
   const effort = session.effort || '';
   const permissionMode = permissionModeOrAsk(session.permissionMode);
-  const agentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
-    ? session.agentKind
-    : 'claude-code';
+  const agentKind = session.agentKind === 'codex' ? 'codex' : 'claude-code';
   const persistedContent = stringifyUserContent(
     trimmed,
     persistedImageRefs,

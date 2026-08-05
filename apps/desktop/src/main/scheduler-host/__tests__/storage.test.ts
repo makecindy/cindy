@@ -207,20 +207,10 @@ describe('schedulePatchToRow — patch 清空语义', () => {
     expect(out.lastFiredAt).toBeNull();
   });
 
-  it('notify 对象只更新调用方实际提供的渠道', () => {
+  it('notify 嵌套对象整体替换 → 拆两列', () => {
     const out = schedulePatchToRow({ notify: { desktop: false, feishu: true } });
     expect(out.notifyDesktop).toBe(false);
     expect(out.notifyFeishu).toBe(true);
-    expect('notifyWecomGroup' in out).toBe(false);
-  });
-
-  it('notify 显式清空时关闭全部渠道', () => {
-    const out = schedulePatchToRow({
-      notify: undefined,
-    });
-    expect(out.notifyDesktop).toBe(false);
-    expect(out.notifyFeishu).toBe(false);
-    expect(out.notifyWecomGroup).toBe(false);
   });
 
   it('workspaceKind patch 写 workspace_kind 列', () => {

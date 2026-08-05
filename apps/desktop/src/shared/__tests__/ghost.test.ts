@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
-  GHOST_CINDY_EMBED_MAX_TEXTS,
-  GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -12,12 +10,10 @@ import {
   ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
-  ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
-  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -124,38 +120,6 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
-  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
-    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
-      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
-      delete raw.panel;
-      const result = validateGhostManifest(raw);
-      if (!result.ok) throw new Error(result.reason);
-      return result.manifest;
-    };
-    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
-    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const expandedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'Generate images' },
-      { name: 'edit_image', description: 'Edit images' },
-    ]);
-    const changedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'A third, unreviewed description' },
-    ]);
-
-    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:edit_image',
-    ]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:gen_image',
-    ]);
-  });
-
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);
@@ -745,83 +709,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent.schedule 加档:单列一档权限,可与 background / errand 并存(2026-08-04)', () => {
-    const sched = validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'agent'],
-      agent: { schedule: true },
-    });
-    expect(sched.ok).toBe(true);
-    if (!sched.ok) return;
-    expect(sched.manifest.agent).toEqual({ schedule: true });
-    expect(ghostPermissionItems(sched.manifest)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'agent:schedule',
-          kind: 'agent',
-          labelKey: 'agentSchedule',
-          detailKey: 'agentScheduleDetail',
-        }),
-      ]),
-    );
-
-    const all = validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'agent'],
-      agent: { background: true, errand: true, schedule: true },
-    });
-    expect(all.ok).toBe(true);
-    if (!all.ok) return;
-    expect(all.manifest.agent).toEqual({ background: true, errand: true, schedule: true });
-
-    // 扩权复核必须看得见它:只加 schedule 的更新,added 恰好是这一项。
-    const userActionOnly = validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'agent'],
-    });
-    expect(userActionOnly.ok).toBe(true);
-    if (!userActionOnly.ok) return;
-    const diff = diffGhostPermissionItems(userActionOnly.manifest, sched.manifest);
-    expect(diff.added.map((item) => item.key)).toEqual(['agent:schedule']);
-    expect(diff.removed).toHaveLength(0);
-
-    // schedule: false 且其余非 true = 详单没意义,拒(应省略字段)。
-    expect(
-      validateGhostManifest({
-        ...goodChipManifest(),
-        slots: ['panel', 'agent'],
-        agent: { schedule: false },
-      }).ok,
-    ).toBe(false);
-    // schedule 非布尔 → 拒。
-    expect(
-      validateGhostManifest({
-        ...goodChipManifest(),
-        slots: ['panel', 'agent'],
-        agent: { schedule: 'yes' },
-      }).ok,
-    ).toBe(false);
-  });
-
-  it('存量兼容红线:不声明 agent.schedule 的清单,权限项与内容键逐字不变', () => {
-    // 这条钉的是仓规红线(plugin-security-and-authoring.md §5):用户升级客户端后
-    // 什么都不做,已装插件必须照旧可用 —— 不能因为新增了 schedule 加档,就让任何
-    // 老清单多出/少掉一项权限或内容键(那会触发扩权复核、要求用户重新确认)。
-    for (const agentNeeds of [undefined, { background: true }, { errand: true }]) {
-      const result = validateGhostManifest({
-        ...goodChipManifest(),
-        slots: ['panel', 'agent'],
-        ...(agentNeeds ? { agent: agentNeeds } : {}),
-      });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      const keys = ghostPermissionItems(result.manifest).map((item) => item.key);
-      expect(keys).not.toContain('agent:schedule');
-      expect(ghostContentKeys(result.manifest)).not.toContain('slotSchedule');
-    }
-  });
-
-  it('agent 详单必须与槽成对，且只接受 background / errand / schedule 三项加档', () => {
+  it('agent 详单必须与槽成对，且目前只接受 background: true', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -847,56 +735,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         ...goodChipManifest(),
         slots: ['panel', 'agent'],
         agent: { background: true, command: 'hidden' },
-      }).ok,
-    ).toBe(false);
-  });
-
-  it('agent.errand 派活加档:单列高风险权限,可与 background 并存(2026-07-31)', () => {
-    const errand = validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'agent'],
-      agent: { errand: true },
-    });
-    expect(errand.ok).toBe(true);
-    if (!errand.ok) return;
-    expect(errand.manifest.agent).toEqual({ errand: true });
-    expect(ghostPermissionItems(errand.manifest)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'agent:errand',
-          kind: 'agent',
-          labelKey: 'agentErrand',
-          detailKey: 'agentErrandDetail',
-        }),
-      ]),
-    );
-
-    const both = validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'agent'],
-      agent: { background: true, errand: true },
-    });
-    expect(both.ok).toBe(true);
-    if (!both.ok) return;
-    expect(both.manifest.agent).toEqual({ background: true, errand: true });
-    expect(ghostPermissionItems(both.manifest).map((item) => item.key)).toEqual(
-      expect.arrayContaining(['agent:user-action', 'agent:background', 'agent:errand']),
-    );
-
-    // errand: false 与 background 双双非 true = 详单没意义,拒(应省略字段)。
-    expect(
-      validateGhostManifest({
-        ...goodChipManifest(),
-        slots: ['panel', 'agent'],
-        agent: { errand: false },
-      }).ok,
-    ).toBe(false);
-    // errand 非布尔 → 拒。
-    expect(
-      validateGhostManifest({
-        ...goodChipManifest(),
-        slots: ['panel', 'agent'],
-        agent: { errand: 'yes' },
       }).ok,
     ).toBe(false);
   });
@@ -1121,81 +959,6 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
     ).toBe(false);
-  });
-
-  it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
-    const base = {
-      ...goodChipManifest(),
-      slots: ['panel', 'tool'],
-      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
-    };
-    const valid = validateGhostManifest({
-      ...base,
-      atResourceProvider: { tool: 'search_issues' },
-    });
-    expect(valid.ok).toBe(true);
-
-    const missing = validateGhostManifest({
-      ...base,
-      atResourceProvider: { tool: 'missing' },
-    });
-    const extraField = validateGhostManifest({
-      ...base,
-      atResourceProvider: { tool: 'search_issues', label: 'Issues' },
-    });
-    expect(missing.ok).toBe(true);
-    expect(extraField.ok).toBe(true);
-  });
-
-  it('忽略旧 manifest 中无效的同名未知字段', () => {
-    const base = {
-      ...goodChipManifest(),
-      slots: ['panel', 'tool'],
-      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
-    };
-    for (const legacyValue of [
-      null,
-      true,
-      'legacy',
-      [],
-      {},
-      { label: 'Issues' },
-    ]) {
-      const result = validateGhostManifest({
-        ...base,
-        atResourceProvider: legacyValue,
-      });
-      expect(result.ok, JSON.stringify(legacyValue)).toBe(true);
-    }
-  });
-
-  it('@ 资源入口复用 tool 槽，不新增硬白名单 slot', () => {
-    expect(GHOST_SLOTS).not.toContain('at-resource');
-    expect(validateGhostManifest({
-      ...goodChipManifest(),
-      slots: ['panel', 'tool', 'at-resource'],
-      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
-      atResourceProvider: { tool: 'search_issues' },
-    }).ok).toBe(false);
-  });
-
-  it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
-    const raw = {
-      ...goodChipManifest(),
-      slots: ['panel', 'tool'],
-      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
-    };
-    const before = validateGhostManifest(raw);
-    const after = validateGhostManifest({
-      ...raw,
-      atResourceProvider: { tool: 'search_issues' },
-    });
-    expect(before.ok && after.ok).toBe(true);
-    if (!before.ok || !after.ok) return;
-    expect(ghostPermissionBaselineKey(after.manifest)).toBe(
-      ghostPermissionBaselineKey(before.manifest),
-    );
-    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {
@@ -1452,77 +1215,6 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       media: ['deposit'],
     });
   });
-
-  // 2026-07-31 快问快答:text 类目独立落位(同 #784 的落位纪律),权限清单
-  // 单独成行(cindy:text.oneshot,带固定说明)。
-  it('text 类目落进 cindy.text,并生成 cindy:text.oneshot 权限行', () => {
-    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
-    expect(v.ok, JSON.stringify(v)).toBe(true);
-    if (!v.ok) return;
-    expect(v.manifest.cindy).toEqual({ text: ['oneshot'] });
-    expect(v.manifest.cindy?.image).toBeUndefined();
-    expect(v.manifest.cindy?.video).toBeUndefined();
-    expect(ghostPermissionItems(v.manifest)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'cindy:text.oneshot',
-          kind: 'cindy',
-          labelKey: 'cindyTextOneshot',
-          detailKey: 'cindyTextOneshotDetail',
-        }),
-      ]),
-    );
-  });
-
-  // 2026-08-04 文本转向量:embed 类目独立落位(同 #784 的落位纪律),权限清单
-  // 单独成行,说明里插值单次条数上限(常量单源,四份 locale 自动跟随)。
-  it('embed 类目落进 cindy.embed,并生成带条数上限的 cindy:embed.text 权限行', () => {
-    const v = validateGhostManifest(chipWithModel({ embed: ['text'] }));
-    expect(v.ok, JSON.stringify(v)).toBe(true);
-    if (!v.ok) return;
-    expect(v.manifest.cindy).toEqual({ embed: ['text'] });
-    expect(v.manifest.cindy?.text).toBeUndefined();
-    expect(v.manifest.cindy?.image).toBeUndefined();
-    expect(ghostPermissionItems(v.manifest)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'cindy:embed.text',
-          kind: 'cindy',
-          labelKey: 'cindyEmbedText',
-          detailKey: 'cindyEmbedTextDetail',
-          detailArgs: { max: String(GHOST_CINDY_EMBED_MAX_TEXTS) },
-        }),
-      ]),
-    );
-  });
-
-  it('embed 类目未知动作 / 空数组 → 拒', () => {
-    expect(validateGhostManifest(chipWithModel({ embed: ['image'] })).ok).toBe(false);
-    expect(validateGhostManifest(chipWithModel({ embed: ['vector'] })).ok).toBe(false);
-    expect(validateGhostManifest(chipWithModel({ embed: [] })).ok).toBe(false);
-  });
-
-  it('text 类目未知动作 / 空数组 → 拒;五类目可同时声明', () => {
-    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
-    expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
-    const v = validateGhostManifest(
-      chipWithModel({
-        image: ['generate'],
-        video: ['edit'],
-        media: ['deposit'],
-        text: ['oneshot'],
-        embed: ['text'],
-      }),
-    );
-    expect(v.ok, JSON.stringify(v)).toBe(true);
-    expect(v.ok && v.manifest.cindy).toEqual({
-      image: ['generate'],
-      video: ['edit'],
-      media: ['deposit'],
-      text: ['oneshot'],
-      embed: ['text'],
-    });
-  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {
@@ -1561,9 +1253,9 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
   });
 
   it('topics 合法值放行并归一化进清单', () => {
-    const r = validateGhostManifest(withSub({ topics: ['turn', 'session', 'activity'] }));
+    const r = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session', 'activity'] });
+    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session'] });
   });
 
   it('hooks 必须搭配 launch:"resident",否则拒装', () => {
@@ -1608,57 +1300,6 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     const bare = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'subscribe'] });
     if (bare.ok) {
       expect(ghostPermissionItems(bare.manifest).some((i) => i.kind === 'subscribe')).toBe(false);
-    }
-  });
-
-  it('activity 单列一项权限,从 turn 加订阅 activity 计入扩张;turn/session 清单逐字不变', () => {
-    const turnOnly = validateGhostManifest(withSub({ topics: ['turn'] }));
-    const withActivity = validateGhostManifest(withSub({ topics: ['turn', 'activity'] }));
-    const turnAndSession = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
-    expect(turnOnly.ok && withActivity.ok && turnAndSession.ok).toBe(true);
-    if (!turnOnly.ok || !withActivity.ok || !turnAndSession.ok) return;
-
-    // activity 是独立一项(带自己的 label/detail),不并进固定的 subscribe:topics。
-    expect(ghostPermissionItems(withActivity.manifest).map((i) => i.key)).toContain(
-      'subscribe:topics:activity',
-    );
-    expect(
-      ghostPermissionItems(withActivity.manifest).find((i) => i.key === 'subscribe:topics:activity'),
-    ).toMatchObject({ labelKey: 'subscribeActivity', detailKey: 'subscribeActivityDetail' });
-
-    // 存量插件更新时新增 activity 必须被权限扩张检测抓到(plugin-market 要求复核)。
-    const added = diffGhostPermissionItems(turnOnly.manifest, withActivity.manifest).added;
-    expect(added.map((i) => i.key)).toEqual(['subscribe:topics:activity']);
-
-    // 只动 turn / session 的存量插件权限清单不 churn(批准状态不受影响)。
-    expect(diffGhostPermissionItems(turnOnly.manifest, turnAndSession.manifest).added).toEqual([]);
-    expect(ghostPermissionItems(turnAndSession.manifest).filter((i) => i.kind === 'subscribe')).toEqual(
-      ghostPermissionItems(turnOnly.manifest).filter((i) => i.kind === 'subscribe'),
-    );
-
-    // 取消订阅 activity 应报为 removed。
-    expect(
-      diffGhostPermissionItems(withActivity.manifest, turnOnly.manifest).removed.map((i) => i.key),
-    ).toEqual(['subscribe:topics:activity']);
-  });
-
-  it('纯 activity 订阅不显示 turn/session 那行:确认框不凭空多报能力', () => {
-    const activityOnly = validateGhostManifest(withSub({ topics: ['activity'] }));
-    expect(activityOnly.ok).toBe(true);
-    if (!activityOnly.ok) return;
-    const keys = ghostPermissionItems(activityOnly.manifest)
-      .filter((i) => i.kind === 'subscribe')
-      .map((i) => i.key);
-    // 网关不会给它投 turn / session,所以固定的 subscribe:topics 一行不该出现。
-    expect(keys).toEqual(['subscribe:topics:activity']);
-  });
-
-  it('订阅 session 或 turn 任一都产出旧 subscribe:topics(存量批准状态不 churn)', () => {
-    for (const topics of [['turn'], ['session'], ['turn', 'session'], ['session', 'activity']]) {
-      const v = validateGhostManifest(withSub({ topics }));
-      expect(v.ok).toBe(true);
-      if (!v.ok) return;
-      expect(ghostPermissionItems(v.manifest).map((i) => i.key)).toContain('subscribe:topics');
     }
   });
 
@@ -2447,87 +2088,6 @@ describe('ghost · network 详单校验', () => {
     expect(ghostContentKeys(r.manifest)).toContain('slotNotify');
     const item = ghostPermissionItems(r.manifest).find((i) => i.key === 'notify');
     expect(item).toMatchObject({ kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
-    // 没声明 notify.badge 的老包不该凭空多出未读角标权限。
-    expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
-  });
-
-  it('badge 槽出**独立**权限条目 —— 老包加这一档必须触发扩权重新确认', () => {
-    const before = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify'] });
-    const after = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify', 'badge'] });
-    expect(before.ok && after.ok).toBe(true);
-    if (!before.ok || !after.ok) return;
-    expect(ghostPermissionItems(after.manifest).find((i) => i.key === 'badge')).toMatchObject({
-      kind: 'notify',
-      labelKey: 'badge',
-      detailKey: 'badgeDetail',
-    });
-    // 关键回归:并进既有 notify key 会让 added 为空,扩权确认框永远不弹
-    // (与 subscribe 的 activity topic 同一先例)。
-    const diff = diffGhostPermissionItems(before.manifest, after.manifest);
-    expect(diff.added.map((i) => i.key)).toEqual(['badge']);
-    expect(diff.removed).toHaveLength(0);
-  });
-
-  it('badge 与 notify 槽并列:不要 toast 也能要绿点(最小必要权限)', () => {
-    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const keys = ghostPermissionItems(r.manifest).map((i) => i.key);
-    expect(keys).toContain('badge');
-    expect(keys).not.toContain('notify');
-  });
-
-  it('存量兼容(红线):老包里任何形态的 notify 顶层字段都照旧被忽略,不影响装入', () => {
-    // `notify` 顶层字段从头到尾就没被登记过,校验器「宽进严出」直接忽略。
-    // 现在角标改由 `badge` **卡槽**声明,这个字段更是彻底不参与解释——
-    // 老包里写成什么形态都装得进来,也不会因此白拿角标能力。
-    for (const shape of [true, 'badge', ['badge'], { badge: true }, { sound: true }, {}]) {
-      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
-      expect(r.ok, `notify: ${JSON.stringify(shape)} 不该被判 invalid`).toBe(true);
-      // **关键**:哪怕老包恰好写成 { badge: true } 且有 panel,也不得凭空获得能力
-      // ——它没有经过任何安装/更新确认(codex review P1)。
-      if (r.ok) expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
-    }
-  });
-
-  it('badge 槽是**可证明**的新声明:老包不可能带它(未知槽名一律拒装)', () => {
-    // slots 是硬白名单,当年装老包的客户端遇到未登记的 'badge' 会直接拒绝整份清单。
-    // 所以「清单里有 badge 槽」⇒「这份清单是本能力上线之后写的」,严格校验才安全。
-    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'not-a-real-slot'] });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('未知卡槽');
-  });
-
-  it('来源投影丢掉 badge 槽时,包里的 badge 必须被识别成「未审权限」', () => {
-    // 场景:服务端市场那份平行校验器不认识 `badge` 槽(它连 `confirm` 都还没有),
-    // 投影出的 manifest 少了这一档 → 确认框漏列;而下载的 .cindy 包里 ghost.json
-    // 原样带着。装入出口就是拿这个 diff 拦下的(codex review P1)。
-    const reviewed = validateGhostManifest({ ...goodManifest(), slots: ['panel'] });
-    const packed = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
-    expect(reviewed.ok && packed.ok).toBe(true);
-    if (!reviewed.ok || !packed.ok) return;
-    const unreviewed = diffGhostPermissionItems(reviewed.manifest, packed.manifest).added;
-    expect(unreviewed.map((i) => i.key)).toEqual(['badge']);
-    // 反向:两份一致时不得误报,否则正常安装会被闸门全拦死。
-    expect(diffGhostPermissionItems(packed.manifest, packed.manifest).added).toHaveLength(0);
-  });
-
-  it('badge 槽与 panel 严格成对:声明了槽却没有面板一律拒装', () => {
-    // 这里可以放心用严格拒绝:带 badge 槽的清单必然是本能力上线之后写的,
-    // 不存在"拒了会让存量插件消失"的问题(见上一条的可证明性)。
-    const noPanel = validateGhostManifest({
-      ...goodManifest(),
-      slots: ['tool', 'badge'],
-      panel: undefined,
-      tools: [{ name: 'ping', description: 'ping' }],
-    });
-    expect(noPanel.ok).toBe(false);
-    if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
-
-    // 有面板就通过,并落成权限项。
-    const ok = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
-    expect(ok.ok).toBe(true);
-    if (ok.ok) expect(ghostPermissionItems(ok.manifest).map((i) => i.key)).toContain('badge');
   });
 });
 

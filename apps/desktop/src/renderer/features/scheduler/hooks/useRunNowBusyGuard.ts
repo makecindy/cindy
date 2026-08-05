@@ -22,7 +22,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 export interface RunNowBusyGuard {
   /** 当前处于派发窗口内的 scheduleId 集合;驱动按钮 disabled。 */
@@ -61,8 +60,7 @@ export function useRunNowBusyGuard(): RunNowBusyGuard {
   //   提前 release。此时用户若再点击是第二次独立有意操作，不构成同一次意图双发问题。
   // 两种场景都属可接受的已知行为。
   useEffect(() => {
-    const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    const off = window.electronAPI.maker.schedule.onEvent((raw) => {
       const ev = raw as SchedulerEvent;
       if (
         ev.type === 'fired' ||

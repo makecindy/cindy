@@ -188,7 +188,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
 
   const accountTodayMoney =
     typeof claudeQuota?.todaySpend === 'number'
-      ? gatewayMoney(claudeQuota.todaySpend, claudeQuota.currency)
+      ? gatewayMoney(claudeQuota.todaySpend)
       : null;
   const hasAccountTodaySpend = accountTodayMoney !== null;
 
@@ -199,9 +199,9 @@ export function HomeUsageDashboard(): React.JSX.Element {
     isSameDisplayedTodaySpend(accountTodayMoney, layoutHistory.totals.today);
   const softDailyLimit = hasMonthly ? (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
   const softDailyLimitMoney =
-    softDailyLimit === null || claudeQuota === null
+    softDailyLimit === null
       ? null
-      : gatewayMoney(softDailyLimit, claudeQuota.currency);
+      : gatewayMoney(softDailyLimit);
   const todayValue = !hasSpendValue
     ? UNKNOWN_VALUE
     : softDailyLimitMoney
@@ -352,7 +352,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <StatCell
             value={
               hasMonthly
-                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend, claudeQuota.currency))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, claudeQuota.currency))}`
+                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))}`
                 : `${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`
             }
             label={t('usageDashboard.monthly')}

@@ -19,7 +19,6 @@ import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
-import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
   UtilityTextAttempt,
@@ -29,16 +28,6 @@ import type {
 } from '../../shared/utilityTextResult.js';
 
 const log = createLogger('utility-model:one-shot');
-
-/**
- * 实现了 `Agent.oneShot` 的 agent 集合(当前 claude-code / codex)。PiAgent 继承 BaseAgent
- * 的 not-implemented,选中它调 oneShot 会抛错;help 兜底与任务摘要兜底都据此跳过 Pi,避免
- * best-effort 结果被静默丢弃。Pi 实现 oneShot 后把它加入本集合即可。
- */
-const ONESHOT_CAPABLE_AGENTS: ReadonlySet<AgentKind> = new Set(['claude-code', 'codex']);
-export function agentSupportsOneShot(agentKind: AgentKind): boolean {
-  return ONESHOT_CAPABLE_AGENTS.has(agentKind);
-}
 
 export type UtilityTextCapability = {
   transports: readonly UtilityModelTransport[];
@@ -55,19 +44,10 @@ export type UtilityTextCandidate = {
 export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
-  /** Optional lightweight reasoning hint for short internal classifiers. */
-  reasoningEffort?: 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
   model?: string;
-  /**
-   * 钉住某一个轻量档位(UTILITY_MODEL_PROFILES 的 key,如 codex-gpt-5.4-nano)。
-   * 用于插件把 cindy.text.oneshot 的选型钉到一组供应商×模型上——与图像/视频
-   * 的"钉后端"同一口径:**钉了就只用它**,不再沿链回落,否则"我钉了 A 却悄悄
-   * 用了 B"比直接失败更伤信任。不认的值忽略(回到跟随默认)。
-   */
-  pinnedProfileId?: string;
 };
 
 /** Internal resolution result keeps skipped candidates visible to diagnostics. */
@@ -167,18 +147,8 @@ export function isProviderModelRouteDisabled(providerId: string, modelId: string
 async function resolveUtilityTextCandidates(
   maker: Maker,
   capability: UtilityTextCapability,
-  pinnedProfileId?: string,
 ): Promise<{ candidates: UtilityTextCandidate[]; attempts: UtilityTextAttempt[] }> {
-  // 钉住某一档时只拿那一个候选:钉了还沿链回落,等于用户的选择被悄悄换掉。
-  // 注意不能从链里筛——默认链只有 4 档,而可钉的档位有 9 个,链外的钉不上。
-  const pinned =
-    pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
-      ? getUtilityModelProfile(pinnedProfileId)
-      : null;
-  if (pinnedProfileId && !pinned) {
-    log.warn('utility text pinned profile unknown, falling back to chain', { pinnedProfileId });
-  }
-  const profiles = pinned ? [pinned] : getUtilityModelChainProfiles();
+  const profiles = getUtilityModelChainProfiles();
   const candidates: UtilityTextCandidate[] = [];
   const attempts: UtilityTextAttempt[] = [];
   // 停用轴同样约束 utility one-shot(帮助/摘要/hook 生成):停用的供应商或模型
@@ -298,7 +268,6 @@ async function requestDefaultUtilityText(
   const { candidates, attempts } = await resolveUtilityTextCandidates(
     maker,
     opts?.capability ?? { transports: ['codex-responses', 'litellm-chat-completions'] },
-    opts?.pinnedProfileId,
   );
   if (candidates.length === 0) {
     return { ok: false, reason: 'no_candidate', attempts };
@@ -423,7 +392,6 @@ async function requestExplicitProviderText(
       transport,
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
-      reasoningEffort: opts.reasoningEffort,
     });
   }
 
@@ -516,7 +484,6 @@ async function requestExplicitProviderText(
       prompt: text,
       maxTokens: requestOpts?.maxTokens,
       timeoutMs: requestOpts?.timeoutMs,
-      reasoningEffort: requestOpts?.reasoningEffort,
     }),
   };
   return executeCandidates([candidate], prompt, [], opts);
@@ -529,12 +496,6 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   return undefined;
 }
 
-/** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
-function supportsXaiReasoning(model: string): boolean {
-  const normalized = model.replace(/^xai\//, '');
-  return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
-}
-
 async function requestBuiltinProviderText(
   prompt: string,
   input: {
@@ -544,7 +505,6 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
-    reasoningEffort?: 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -578,7 +538,6 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -605,7 +564,6 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -641,11 +599,6 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        // ChatGPT's private Codex Responses endpoint rejects this public API
-        // parameter with HTTP 400. The Auto reviewer enforces its own compact
-        // output ceiling after the response instead.
-        supportsMaxOutputTokens: false,
       }),
     }], prompt, [], input);
   }
@@ -670,8 +623,6 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        supportsReasoning: supportsXaiReasoning(input.model),
       }),
     }], prompt, [], input);
   }
@@ -786,7 +737,6 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         prompt,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
-        reasoningEffort: opts?.reasoningEffort,
       }),
     },
   };
@@ -799,7 +749,6 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -815,7 +764,6 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
         messages: [{ role: 'user', content: input.prompt }],
       }),
     });
@@ -905,43 +853,20 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
-  /** Some coding-specialized models reject their wire's reasoning field. */
-  supportsReasoning?: boolean;
-  /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
-  retryWithMinimalBodyOnInvalidRequest?: boolean;
-  /** Some private Responses-compatible endpoints reject max_output_tokens. */
-  supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const supportsRequestedReasoning = Boolean(
-      input.wire !== 'anthropic-messages'
-      && input.reasoningEffort
-      && input.supportsReasoning !== false,
-    );
-    const hasOptionalRequestFields = input.wire === 'responses'
-      || input.maxTokens !== undefined
-      || supportsRequestedReasoning;
-    const buildBody = (minimal: boolean) => input.wire === 'responses'
+    const body = input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
-        ...(!minimal ? {
-          tools: [],
-          tool_choice: 'auto',
-          parallel_tool_calls: false,
-          store: false,
-          stream: true,
-        } : {}),
-        ...(!minimal && input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
-          ? { max_output_tokens: input.maxTokens }
-          : {}),
-        ...(!minimal && supportsRequestedReasoning
-          ? { reasoning: { effort: input.reasoningEffort } }
-          : {}),
+        tools: [],
+        tool_choice: 'auto',
+        parallel_tool_calls: false,
+        store: false,
+        stream: true,
       }
       : input.wire === 'anthropic-messages'
         ? {
@@ -951,32 +876,18 @@ async function requestProviderHttpText(input: {
         }
         : {
           model: input.model,
-          ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(!minimal && supportsRequestedReasoning
-            ? { reasoning_effort: input.reasoningEffort }
-            : {}),
+          ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
+    const response = await undiciFetch(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...(input.headers ?? {}),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(buildBody(minimal)),
+      body: JSON.stringify(body),
     });
-    let response = await send(false);
-    if (
-      !response.ok
-      && (response.status === 400 || response.status === 422)
-      && input.wire !== 'anthropic-messages'
-      && hasOptionalRequestFields
-      && input.retryWithMinimalBodyOnInvalidRequest
-    ) {
-      await response.body?.cancel().catch(() => undefined);
-      response = await send(true);
-    }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
@@ -1026,7 +937,6 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -1071,8 +981,6 @@ async function requestCustomProviderText(input: {
     prompt: input.prompt,
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
-    reasoningEffort: input.reasoningEffort,
-    retryWithMinimalBodyOnInvalidRequest: true,
   });
 }
 

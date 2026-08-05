@@ -17,8 +17,6 @@ export type ManualUpdateCheckOutcome =
   | { kind: 'up-to-date' }
   | { kind: 'ota-unavailable' }
   | { kind: 'reloading' }
-  /** 新 bundle 已下载但重启失败:它会在下次冷启动生效,只能引导用户手动重开。 */
-  | { kind: 'restart-required' }
   | { kind: 'busy' }
   | { kind: 'error'; reason: 'bundle-check' | 'ota-check'; detail?: string };
 
@@ -28,14 +26,8 @@ export interface ManualUpdateCheckDeps {
   checkBundleUpdate?: () => Promise<BundleUpdateCheckOutcome>;
   otaEnabled: boolean;
   checkOtaUpdate: () => Promise<{ isAvailable: boolean }>;
-  /** isNew 表示确实落盘了一个新 bundle(reload 失败时用它区分"已下载待重启"与"什么都没拿到")。 */
-  fetchOtaUpdate: () => Promise<{ isNew: boolean }>;
+  fetchOtaUpdate: () => Promise<unknown>;
   reload: () => Promise<void>;
-  /**
-   * expo-updates 是否处于 emergency launch(没有 launchedUpdate,reload 必被原生层拒绝)。
-   * 只有这个状态才把 reload 失败判成"已下载待重启";其余 reload 失败仍按失败报,保留详情。
-   */
-  isEmergencyLaunch: () => boolean;
   onPhase: (phase: ManualUpdateCheckPhase) => void;
 }
 
@@ -49,7 +41,6 @@ export async function runManualUpdateCheck({
   checkOtaUpdate,
   fetchOtaUpdate,
   reload,
-  isEmergencyLaunch,
   onPhase,
 }: ManualUpdateCheckDeps): Promise<ManualUpdateCheckOutcome> {
   onPhase('checking');
@@ -68,20 +59,14 @@ export async function runManualUpdateCheck({
 
   if (!otaEnabled) return { kind: 'ota-unavailable' };
 
-  let fetchedNewBundle = false;
   try {
     const ota = await checkOtaUpdate();
     if (!ota.isAvailable) return { kind: 'up-to-date' };
     onPhase('downloading');
-    const fetched = await fetchOtaUpdate();
-    fetchedNewBundle = fetched.isNew;
+    await fetchOtaUpdate();
     await reload();
     return { kind: 'reloading' };
   } catch (error) {
-    // emergency launch(没有 launchedUpdate)下 reload 必被原生层拒绝,而 bundle 已经落盘、
-    // 下次冷启动就会生效:这不是一次失败的检查,报"检查更新失败"只会让用户无从下手。
-    // 反过来,其它原因的 reload 失败不套用这条 —— 那种情况原始详情才是唯一线索,不能吞掉。
-    if (fetchedNewBundle && isEmergencyLaunch()) return { kind: 'restart-required' };
     const detail = error instanceof Error ? error.message.trim() : String(error).trim();
     return {
       kind: 'error',
@@ -112,8 +97,6 @@ export function manualUpdateCheckMessage(
         : 'settings.version.bundleUpToDateNoOta');
     case 'reloading':
       return t('settings.version.downloadedRestarting');
-    case 'restart-required':
-      return t('settings.version.downloadedRestartRequired');
     case 'error':
       if (outcome.reason === 'bundle-check') return t('settings.version.bundleCheckFailed');
       return outcome.detail

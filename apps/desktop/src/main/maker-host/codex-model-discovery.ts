@@ -3,8 +3,9 @@
  * active-catalog 再把同一份快照投影到 Codex 与 Claude bridge,避免两边名称、排序各维护一套。
  *
  * 数据源:codex app-server / CLI 维护的 `<codexHome>/models_cache.json`(与 live 端点
- * `chatgpt.com/backend-api/codex/models` 同结构)。筛选同时依赖后端可见性字段与客户端维护的
- * 内部模型 ID 集合，避免上游把内部别名标成可见时泄漏到用户模型列表。
+ * `chatgpt.com/backend-api/codex/models` 同结构)。筛选完全依赖后端自带的可见性字段:
+ *   visibility === 'list' && supported_in_api === true
+ * ——自动挡掉内部 / 隐藏模型(codex-auto-review=hide、gpt-5.3-codex-spark=api:false)。
  *
  * 只读、纯派生。读取失败返回 null(保留上次快照 / 静态兜底),合法空 cache 返回 []。
  * mapper 与 fs 读分离:`mapCodexModelsToCatalog` 是纯函数(单测覆盖),`readCodexDiscoveredModels`
@@ -19,7 +20,6 @@ import type { CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
 
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
-import { isNativeProviderAuthBound } from './nativeProviderAuthBinding.js';
 
 interface CodexModelRaw {
   slug?: unknown;
@@ -57,13 +57,6 @@ const CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
  */
 const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
 
-/** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
-const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
-
-function isInternalCodexModelId(id: string): boolean {
-  return INTERNAL_CODEX_MODEL_IDS.has(id);
-}
-
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
@@ -97,7 +90,7 @@ function sortOrderForPriority(priority: number): number {
 /**
  * codex models_cache 原始 JSON → 规范化的 Codex CatalogModel[]。纯函数。
  *
- * 只收 visibility:'list' && supported_in_api:true 且不在内部 ID 集合的模型；缺 slug 则跳过。
+ * 只收 visibility:'list' && supported_in_api:true 的模型;缺关键字段(slug / efforts)则跳过。
  * sortOrder 由 codex 的 priority 派生到 gpt 分组的一个子带内(纯展示,不影响路由 / 去重)。
  */
 export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
@@ -110,16 +103,14 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
     if (!m || typeof m !== 'object') continue;
     if (m.visibility !== 'list' || m.supported_in_api !== true) continue;
     const slug = str(m.slug);
-    if (!slug || isInternalCodexModelId(slug)) continue;
+    if (!slug) continue;
     const efforts = Array.isArray(m.supported_reasoning_levels)
       ? m.supported_reasoning_levels
           .map((e) => (e && typeof e === 'object' ? str((e as { effort?: unknown }).effort) : null))
           .filter((e): e is string => e != null && CODEX_EFFORTS.has(e))
       : [];
     const displayName = str(m.display_name) ?? slug;
-    // cache 明示了才算真实上限;缺字段时补的 272k 只够展示(见下方 app-server mapper 注释)。
-    const contextWindowVerified = typeof m.context_window === 'number';
-    const contextWindow = contextWindowVerified ? (m.context_window as number) : 272_000;
+    const contextWindow = typeof m.context_window === 'number' ? m.context_window : 272_000;
     const defaultEffort =
       str(m.default_reasoning_level) && CODEX_EFFORTS.has(m.default_reasoning_level as string)
         ? (m.default_reasoning_level as CatalogModel['defaultEffort'])
@@ -136,7 +127,6 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       sortOrder: sortOrderForPriority(priority),
       description: str(m.description) ?? undefined,
       contextWindow,
-      ...(contextWindowVerified ? { contextWindowVerified: true } : {}),
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
@@ -164,15 +154,7 @@ export function mapCodexAppServerModelsToCatalog(
   const seen = new Set<string>();
   for (const [index, raw] of models.entries()) {
     if (!raw || raw.hidden === true) continue;
-    const modelId = str(raw.model);
-    const itemId = str(raw.id);
-    if (
-      (modelId && isInternalCodexModelId(modelId)) ||
-      (itemId && isInternalCodexModelId(itemId))
-    ) {
-      continue;
-    }
-    const slug = modelId ?? itemId;
+    const slug = str(raw.model) ?? str(raw.id);
     if (!slug || seen.has(slug)) continue;
     seen.add(slug);
 
@@ -200,9 +182,6 @@ export function mapCodexAppServerModelsToCatalog(
       // app-server 已按官方 picker 顺序返回；给每项稳定的小数锚点保住该顺序。
       sortOrder: 17 + index / 1000,
       ...(str(raw.description) ? { description: raw.description } : {}),
-      // 刻意**不**设 contextWindowVerified: live 协议不给 context_window, 这 272k 是
-      // 统一兜底而非该模型的真实上限。标了它就会被拿去收敛运行期上报的窗口, 把真实
-      // 更大的窗口(例如 400k 的 gpt-5.6)压成 272k, 上下文占比与 memory flush 全偏早。
       contextWindow: 272_000,
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
@@ -223,7 +202,6 @@ function desktopCodexHome(): string {
 
 /** 仅在 Cindy 当前确有未被 disconnect marker 抑制的 OAuth token 时读取模型 cache。 */
 async function hasActiveDesktopCodexOAuth(codexHome: string): Promise<boolean> {
-  if (!isNativeProviderAuthBound('openai')) return false;
   const authPath = path.join(codexHome, 'auth.json');
   if (shouldSuppressLocalCodexAuth(codexHome, authPath)) return false;
   try {

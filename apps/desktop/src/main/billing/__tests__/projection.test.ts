@@ -326,7 +326,6 @@ describe('billing response projection', () => {
           offers: [
             {
               code: 'credit_topup_20',
-              name: '20 credits',
               interval: null,
               currency: 'cny',
               amount: '20',
@@ -387,7 +386,6 @@ describe('billing response projection', () => {
           offers: [
             {
               code: 'credit_topup_20',
-              name: '20 credits',
               interval: null,
               currency: 'cny',
               amount: '20',
@@ -422,7 +420,6 @@ describe('billing response projection', () => {
           offers: [
             {
               code: 'coming_soon',
-              name: null,
               salesState: 'COMING_SOON',
               purchasable: false,
               unavailableReason: 'OFFER_COMING_SOON',
@@ -437,7 +434,6 @@ describe('billing response projection', () => {
             },
             {
               code: 'no_available_channel',
-              name: '',
               salesState: 'AVAILABLE',
               purchasable: false,
               unavailableReason: 'NO_AVAILABLE_PAYMENT_CHANNEL',
@@ -452,7 +448,6 @@ describe('billing response projection', () => {
             },
             {
               code: 'available',
-              name: 'x'.repeat(129),
               salesState: 'AVAILABLE',
               purchasable: true,
               unavailableReason: null,
@@ -519,9 +514,6 @@ describe('billing response projection', () => {
         ],
       }),
     ]);
-    expect(projected.products[0]?.offers[0]).not.toHaveProperty('name');
-    expect(projected.products[0]?.offers[1]).not.toHaveProperty('name');
-    expect(projected.products[0]?.offers[2]).not.toHaveProperty('name');
   });
 
   it('enforces the server contract that offer codes are globally unique', () => {

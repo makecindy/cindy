@@ -21,7 +21,6 @@
 
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import type { LearnEventPayload } from '../../../shared/learnTypes';
 
@@ -82,9 +81,8 @@ export function subscribeLearnEvents(
       return window.electronAPI.learn.onEvent(cb);
     }
     return (
-      window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
+      window.electronAPI.deviceLink?.onRemotePush?.((push) => {
         if (push.deviceId !== deviceId || push.channel !== 'learn:event') return;
-        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         cb(push.payload as LearnEventPayload);
       }) ?? (() => {})
     );

@@ -76,12 +76,7 @@ export function SkillhubFeatureLayout() {
       const reg = s.registryEntry;
       if (reg !== null) {
         const needsAuthorId = reg.authorId !== serverAuthorId;
-        const needsOrigin = !(
-          reg.origin === 'published' ||
-          reg.origin === 'installed' ||
-          reg.origin === 'learned' ||
-          reg.origin === 'imported'
-        );
+        const needsOrigin = !(reg.origin === 'published' || reg.origin === 'installed' || reg.origin === 'learned');
         if (!needsAuthorId && !needsOrigin) continue;
       }
       const key = `${s.name}\u0000${s.absolutePath}\u0000${serverAuthorId}`;

@@ -507,10 +507,8 @@ export function BackgroundTasksBody({
   // 整段缺失。该函数幂等(historyLoaded / in-flight 双守卫),主窗口场景是 no-op。
   useEffect(() => {
     if (!sessionId) return;
-    const dispose = visible ? makerChatStore.enterView(sessionId) : undefined;
     makerChatStore.ensureInitialMessages(sessionId);
-    return dispose;
-  }, [sessionId, visible]);
+  }, [sessionId]);
 
   // 快照水合:挂载 / 切会话时拉一次存量后台任务(订阅前已启动 / 重载清空
   // taskUpdates 后事件流看不到的任务)。listSessionBackgroundTasksFor 按会话来源

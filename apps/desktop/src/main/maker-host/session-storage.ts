@@ -12,8 +12,6 @@
 
 import { and, eq, inArray } from 'drizzle-orm';
 
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
-
 import type {
   AgentKind,
   SessionMeta,
@@ -27,15 +25,14 @@ import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex';
 
-// 形态映射走 shared/agentKindConversion 正本(支持 pi;此前 pi 被误落成 codex)。
 function toDbKind(k: AgentKind): DbAgentKind {
-  return makerToDbAgentKind(k);
+  return k === 'claude-code' ? 'cc' : 'codex';
 }
 
 function fromDbKind(k: string): AgentKind {
-  return dbToMakerAgentKind(k);
+  return k === 'codex' ? 'codex' : 'claude-code';
 }
 
 function normalizeWorkspaceKind(value: unknown): WorkspaceKind {

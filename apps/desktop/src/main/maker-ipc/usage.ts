@@ -23,8 +23,7 @@ import {
 } from '../usage/claudeSubscriptionUsage.js';
 import { createClaudeSubscriptionUsageReader } from '../usage/claudeSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
-import { getGatewayModelPricing } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { getModelPricing } from '../usage/modelPricing.js';
 import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
@@ -101,10 +100,7 @@ function fingerprintClaudeToken(token: string): string {
 }
 
 /** 读订阅凭证 + 顺手刷新「当前凭证」内存缓存(headers listener 消费)。 */
-function readClaudeCredentialsInfo(): {
-  accessToken: string;
-  subscriptionType: string | null;
-} | null {
+function readClaudeCredentialsInfo(): { accessToken: string; subscriptionType: string | null } | null {
   const oauth = readClaudeAiOAuth();
   _claudeCredentialsKnown = true;
   if (!oauth) {
@@ -122,12 +118,11 @@ function readClaudeCredentialsInfo(): {
 
 const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
   readCredentials: readClaudeCredentialsInfo,
-  fetchSnapshot: (credentials) =>
-    fetchClaudeSubscriptionUsageSnapshot({
-      accessToken: credentials.accessToken,
-      subscriptionType: credentials.subscriptionType,
-      claudeCodeVersion: readClaudeCodeVersionBestEffort(),
-    }),
+  fetchSnapshot: (credentials) => fetchClaudeSubscriptionUsageSnapshot({
+    accessToken: credentials.accessToken,
+    subscriptionType: credentials.subscriptionType,
+    claudeCodeVersion: readClaudeCodeVersionBestEffort(),
+  }),
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
   readCachedSnapshot: readClaudeSubscriptionUsageSnapshot,
@@ -196,13 +191,17 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   const codexRateLimitResetService = createCodexRateLimitResetService({
     readRateLimits: () => maker.readAgentAccountRateLimits('codex'),
-    consumeResetCredit: (params) => maker.consumeAgentAccountRateLimitResetCredit('codex', params),
+    consumeResetCredit: (params) => (
+      maker.consumeAgentAccountRateLimitResetCredit('codex', params)
+    ),
     readAccountIdentity: async () => {
       const state = await maker.getAgentAuthState('codex');
-      const accountId =
-        state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId() : null;
-      const identity =
-        state.authSource === 'oauth' && state.identity?.includes('@') ? state.identity : null;
+      const accountId = state.authSource === 'oauth'
+        ? await desktopCodexAuthAdapter.getAccountId()
+        : null;
+      const identity = state.authSource === 'oauth' && state.identity?.includes('@')
+        ? state.identity
+        : null;
       return { email: identity, accountId };
     },
     recordRateLimitSnapshot: recordCodexAccountUsageSnapshot,
@@ -211,17 +210,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
-    // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
-    // this account-level RPC. A stale response still returns its usage payload but cannot consume a
-    // newer recovery state.
-    readCodexRateLimits: () =>
-      desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => codexRateLimitResetService.read()),
+    readCodexRateLimits: codexRateLimitResetService.read,
     consumeCodexRateLimitReset: codexRateLimitResetService.consume,
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
     readClaudeAccountUsageSnapshot,
     triggerClaudeAccountUsageRefresh,
-    readModelPricing: getGatewayModelPricing,
-    readReferenceModelPricing: getReferenceModelPricing,
+    readModelPricing: getModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
   });
@@ -240,7 +234,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     if (currentToken) {
       if (requestBearerToken !== currentToken) {
         currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;
-        if (requestBearerToken !== currentToken) return false; // 归属不符 (换号尾巴), 丢弃
+        if (requestBearerToken !== currentToken) return false;  // 归属不符 (换号尾巴), 丢弃
       }
       const fingerprint = _currentClaudeFingerprint;
       void recordClaudeSubscriptionUsageSnapshot(

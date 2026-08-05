@@ -35,7 +35,6 @@ import {
   stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   type ProxyHandle,
-  type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
 
@@ -48,13 +47,7 @@ import {
   composeResponseObservers,
   createClaudeRateLimitHeadersObserver,
 } from './claude-rate-limit-headers-observer.js';
-import {
-  noteClaudeSessionRequest,
-  recordClaudeRequestRoute,
-  recordClaudeSessionRoute,
-  type ClaudeSessionBillingRoute,
-} from './claude-session-route-registry.js';
-import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
+import { recordClaudeSessionRoute } from './claude-session-route-registry.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
@@ -85,7 +78,6 @@ import {
   createClaudeSessionActivityResponseObserver,
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
-import { authenticatePiProxySession } from './pi-proxy-session-auth.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -156,54 +148,19 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
  * chip 用全局活性状态重算会与 child 真实路由发散。export 仅供单测。
  */
 export function createModelRoutingTransform(): RoutingTransform {
-  const route: RoutingTransform = (body, ctx) => {
-    const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
-    if (
-      claimedPiSessionId
-      && !authenticatePiProxySession(
-        claimedPiSessionId,
-        headerValue(ctx.headers, 'x-cindy-pi-session-token'),
-      )
-    ) {
-      // Loopback is not an authentication boundary: another local process can
-      // forge a business session id. Reject before provider routing so it can
-      // never borrow that session's OAuth token or gateway key.
-      return {
-        localHandler: async ({ res }) => {
-          const payload = JSON.stringify({
-            type: 'error',
-            error: {
-              type: 'authentication_error',
-              code: 'invalid_pi_session_token',
-              message: 'Invalid or expired Pi proxy session token.',
-            },
-          });
-          res.writeHead(401, {
-            'content-type': 'application/json; charset=utf-8',
-            'cache-control': 'no-store',
-          });
-          res.end(payload);
-        },
-      };
-    }
-    const piSessionId = claimedPiSessionId;
-    const requestAgent = piSessionId ? 'pi' : 'claude-code';
+  return (body, ctx) => {
     // 后台活动检测(claude-session-background-activity):凡带 cc 会话标头的请求
-    // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
-    // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
+    // 都记一笔活动时刻。注意 routingTransform 只在 JSON POST 上被调用(server.ts
+    // 按 content-type 门控),GET / 非 JSON 请求不经过这里 —— 它们由响应侧的
+    // createClaudeSessionActivityResponseObserver 覆盖(观察器对所有响应生效)。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
-    const sdkSessionId = ctx.headers['x-claude-code-session-id'];
-    const ccSessionId = sdkSessionId && _resolveCcSessionId
-      ? _resolveCcSessionId(sdkSessionId)
-      : null;
-    const sessionId = piSessionId ?? ccSessionId;
-    if (sdkSessionId) {
+    const activitySdkSessionId = ctx.headers['x-claude-code-session-id'];
+    if (activitySdkSessionId) {
       recordClaudeApiActivity(
-        sdkSessionId,
-        ccSessionId,
+        activitySdkSessionId,
+        _resolveCcSessionId ? _resolveCcSessionId(activitySdkSessionId) : null,
       );
     }
-    if (ccSessionId) noteClaudeSessionRequest(ccSessionId, ctx.reqId);
     if (!isPlainObject(body)) return null;
     const wireModel = typeof body.model === 'string' ? body.model : '';
 
@@ -223,8 +180,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       // 会话态(思维深度 / Fast)在决策点解析后**闭包**进 handler —— CC 不会把 bridge 模型的
       // effort / fast 放进请求体,而引擎保持零会话概念,不走任何伪 header。
-      const effort = sessionId ? getSessionEffort(sessionId) : null;
-      const fast = sessionId ? getSessionFastMode(sessionId) : false;
+      const sdkSessionId = ctx.headers['x-claude-code-session-id'];
+      const xdtSessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
+      const effort = xdtSessionId ? getSessionEffort(xdtSessionId) : null;
+      const fast = xdtSessionId ? getSessionFastMode(xdtSessionId) : false;
       return {
         localHandler: (args) =>
           bridgeHandler.handle({ ...args, prefs: { reasoningEffort: effort ?? undefined, fast } }),
@@ -232,46 +191,26 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
-    const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
+    const sdkSessionId = ctx.headers['x-claude-code-session-id'];
+    const sessionId = sdkSessionId && _resolveCcSessionId
+      ? _resolveCcSessionId(sdkSessionId)
+      : null;
     if (sessionId) {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
-      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, wireModel);
-      const recordSelectedRoute = <T extends object | null>(route: T): T => {
-        if (
-          requestAgent === 'claude-code'
-          && route
-          && (selectedProviderId === 'xd' || selectedProviderId === 'anthropic')
-        ) {
-          recordClaudeRequestRoute(
-            ctx.reqId,
-            sessionId,
-            selectedProviderId === 'xd' ? 'gateway' : 'subscription',
-          );
-        }
-        return route;
-      };
-      if (perSession instanceof Promise) return perSession.then(recordSelectedRoute);
-      if (perSession) return recordSelectedRoute(perSession);
+      const perSession = resolveSessionRouteDecision(sessionId, 'claude-code', gatewayKey, wireModel);
+      if (perSession) return perSession;
     }
 
     // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
     // 计费路由旁路只记「未显式选供应商」的会话(registry 声明的语义,消费方也只在
     // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
     // 的 claude-* 分类器调用)不该往表里写死记录。
-    const recordDefaultRoute =
-      requestAgent === 'claude-code'
-      && sessionId !== null
-      && getSessionProvider(sessionId) == null;
-    const recordResolvedDefaultRoute = (route: ClaudeSessionBillingRoute): void => {
-      if (!recordDefaultRoute) return;
-      recordClaudeSessionRoute(sessionId, route);
-      recordClaudeRequestRoute(ctx.reqId, sessionId, route);
-    };
+    const recordDefaultRoute = sessionId !== null && getSessionProvider(sessionId) == null;
     // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
     // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
     // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
@@ -282,19 +221,13 @@ export function createModelRoutingTransform(): RoutingTransform {
       apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
     if (hasUsableApiKey) {
       // gateway-spawn:自带网关 key,passthrough。
-      if (requestAgent === 'claude-code' && sessionId && selectedProviderId === 'xd') {
-        // 显式 XD 会话在 live gateway key 被清除后,仍可能携带 spawn 时冻结的 x-api-key。
-        // resolveSessionRouteDecision 会因缺 key 返回 null,但这条 passthrough 仍实际进入 XD Gateway。
-        recordClaudeRequestRoute(ctx.reqId, sessionId, 'gateway');
-      } else {
-        recordResolvedDefaultRoute('gateway');
-      }
+      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return null;
     }
-    const decision = gatewayDefaultRouteDecision(requestAgent, gatewayKey);
+    const decision = gatewayDefaultRouteDecision('claude-code', gatewayKey);
     if (decision) {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
-      recordResolvedDefaultRoute('gateway');
+      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return decision;
     }
     if (apiKeyHeader !== null) {
@@ -306,7 +239,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
     // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
     if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
-      recordResolvedDefaultRoute('subscription');
+      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'subscription');
       return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
     }
     if (wireModel) {
@@ -314,31 +247,6 @@ export function createModelRoutingTransform(): RoutingTransform {
       log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
     }
     return null;
-  };
-  return (body, ctx) => {
-    const decision = route(body, ctx);
-    const hasInternalPiHeader =
-      headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
-      || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null;
-    if (!hasInternalPiHeader) return decision;
-    const stripInternalPiHeaders = (
-      resolved: RoutingDecision | null,
-    ): RoutingDecision | null => {
-      if (resolved?.localHandler) return resolved;
-      return {
-        ...(resolved ?? {}),
-        headerDelete: [
-          ...new Set([
-            ...(resolved?.headerDelete ?? []),
-            'x-cindy-pi-session-id',
-            'x-cindy-pi-session-token',
-          ]),
-        ],
-      };
-    };
-    return decision instanceof Promise
-      ? decision.then(stripInternalPiHeaders)
-      : stripInternalPiHeaders(decision);
   };
 }
 
@@ -367,22 +275,19 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //   - Auto 权限分类器错误检测:确定性 4xx 立即通知 coordinator 降级到 ask;
       //     瞬时 408/429/5xx 按 episode 阈值记账、持续故障才降级(见
       //     claude-auto-permission-fallback.ts);只在错误路径与「该会话有瞬时记账」的
-      //     成功路径解析 request body;不 tee/改写响应;缺会话头 / id 反解失败这两类
-      //     漏检走限流 warn + 识别记账落到同一份 log(否则自救通道静默失效无线索);
+      //     成功路径解析 request body;不 tee/改写响应;
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
         createClaudeSubagentUsageResponseObserver(),
         createClaudeFastModeResponseObserver(log),
         createClaudeRateLimitHeadersObserver(),
-        createClaudeGatewayErrorObserver(),
         // 后台活动检测:响应流按节流刷新活动时刻(覆盖长 SSE 跨过 turn 结束点仍在吐字的场景)。
         createClaudeSessionActivityResponseObserver((sdkSessionId) =>
           _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null,
         ),
-        createClaudeAutoClassifierFailureObserver(
-          (sdkSessionId) => (_resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null),
-          { logger: log },
+        createClaudeAutoClassifierFailureObserver((sdkSessionId) =>
+          _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null,
         ),
         createProviderUpstreamErrorObserver({
           agent: 'claude-code',

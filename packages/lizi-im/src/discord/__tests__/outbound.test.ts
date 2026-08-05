@@ -229,13 +229,7 @@ function makeHost(): IMHost {
       remove: () => {},
       isAvailable: () => true,
     },
-    ipc: {
-      throwIpcError: (code, message) => {
-        throw new Error(`[${code}] ${message}`);
-      },
-      handle: () => {},
-      broadcast: () => {},
-    },
+    ipc: { handle: () => {}, broadcast: () => {} },
     httpPostForm: async () => ({ status: 200, body: {} }),
     createLogger: () => ({
       info: () => {},

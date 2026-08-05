@@ -1,8 +1,6 @@
 {
   "ipcError": {
-    "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
-    "PI_IMAGE_INPUT_UNSUPPORTED": "現在の Pi モデルでは画像入力が有効になっていません。画像に対応するモデルへ切り替えてください。カスタムモデルの場合は、プロバイダー設定で「画像入力に対応」を有効にしてから、新しい Pi タスクを開始してください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回のプロバイダー切り替えは適用されませんでした（セッションは元のプロバイダーのままです）。他のタスクが終わってからもう一度お試しください。",
     "REMOTE_WORKDIR_INVALID": "リモートプロジェクトのパスが無効です。プロジェクトディレクトリを選び直してください。",
     "REMOTE_WORKDIR_NOT_FOUND": "リモートプロジェクトのディレクトリが見つかりません。選び直してください。",
@@ -11,8 +9,7 @@
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "対象のモデルまたはソースは別のリモートルートが必要です。リモートセッションを閉じて再作成してください。",
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
-    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。"
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -55,8 +52,8 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "新しいセッション",
-      "newConversationHint": "新しいセッションを開始",
+      "newConversationTitle": "新しい会話",
+      "newConversationHint": "新しい会話を開始",
       "muteSound": "Agent Island の音をミュート",
       "enableSound": "Agent Island の音を有効化",
       "settings": "Agent Island 設定",
@@ -126,10 +123,9 @@
       "personalization": "パーソナライズ",
       "chipMetrics": "使用量インジケーター",
       "memory": "メモリ",
-      "subagentModels": "サブエージェント",
+      "subagentModels": "サブエージェントモデル",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
-      "composer": "メッセージ入力",
       "linkOpen": "リンクの開き方",
       "compatMode": "ヒント",
       "voiceInput": "音声入力",
@@ -397,7 +393,6 @@
         "importPartial": "{{name}}（{{themeCount}} 種類）をインポートしました。意味を持つ色 {{skipped}} 件は規約どおり変更せず、{{unresolved}} 件は値を読み取れずスキップ、{{derived}} 件は近似色から推定しました。",
         "importFailed": "インポートに失敗しました: {{error}}",
         "importUnsupported": "このファイルは VSCode または Obsidian のテーマとして認識できません。",
-        "importContrastUnsupported": "テーマの配色ではオフ状態のスイッチを明瞭に表示できません。背景色またはサブテキストの色を調整してから、もう一度インポートしてください。",
         "importUsesInclude": "この VSCode テーマは include で配色を継承しているため、単独ではインポートできません。",
         "importNotAFile": "フォルダではなくファイルを選択してください。",
         "importTooLarge": "ファイルが大きすぎるため、テーマとしてインポートできません。",
@@ -469,26 +464,10 @@
       "sessionDoneLabel": "セッション完了時にデスクトップ通知を表示",
       "sessionDoneHint": "ウィンドウが非アクティブの場合のみ表示し、フォアグラウンドでの中断を防ぎます。",
       "sessionDoneAria": "セッション完了時のデスクトップ通知を切り替え",
-      "feishuLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
-      "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
-      "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
-      "feishuAria": "セッション完了時の Feishu 通知を切り替え",
-      "wecomGroupLabel": "WeCom グループ通知",
-      "wecomGroupHint": "自動操作の完了通知に使用します。WeCom グループボットの Webhook URL を貼り付けると、このデバイスに暗号化保存されます。",
-      "wecomGroupConfiguredHint": "設定済み（キー {{maskedKey}}）。全体スイッチをオンにした後、自動操作ごとに必要に応じて送信できます。",
-      "wecomGroupAria": "WeCom グループ通知の全体スイッチを切り替え",
-      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
-      "wecomGroupSaveAndTest": "保存してテスト",
-      "wecomGroupSaveSuccess": "Webhook を保存し、テストメッセージを送信しました",
-      "wecomGroupSaveFailed": "Webhook の保存またはテストに失敗しました",
-      "wecomGroupTest": "テスト送信",
-      "wecomGroupTestMessage": "Cindy の WeCom グループ通知テストに成功しました",
-      "wecomGroupTestSuccess": "テストメッセージを送信しました",
-      "wecomGroupTestFailed": "テストメッセージの送信に失敗しました",
-      "wecomGroupToggleFailed": "WeCom グループ通知の設定を更新できませんでした",
-      "wecomGroupClear": "削除",
-      "wecomGroupCleared": "Webhook を削除しました",
-      "wecomGroupClearFailed": "Webhook を削除できませんでした"
+      "feishuLabel": "セッション完了または返信が必要な時に Feishu メッセージを送信",
+      "feishuHint": "連携済みの Feishu ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
+      "feishuDisabledHint": "先に「Feishu ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
+      "feishuAria": "セッション完了時の Feishu 通知を切り替え"
     },
     "windowBehavior": {
       "title": "アプリの動作",
@@ -680,7 +659,7 @@
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "overview に載っていない内容でも、やりたいことを聞けば次に開く場所や進め方を案内します。",
-      "qnaPlaceholder": "例：Codex のセッションをインポートするには？",
+      "qnaPlaceholder": "例：Codex の会話をインポートするには？",
       "qnaSend": "送信",
       "qnaPending": "回答を準備しています…",
       "qnaNoAnswer": "まだ確実な回答がありません。表現を変えてもう一度聞いてみてください。",
@@ -699,7 +678,7 @@
       "openAssistant": "そのまま質問する",
       "panelTitle": "ヘルプアシスタント",
       "panelAriaLabel": "ヘルプアシスタントパネル",
-      "newSession": "新しいセッション",
+      "newSession": "新しい会話",
       "threadEmptyTitle": "気軽に質問してください",
       "threadEmptyHint": "よくある質問にすぐ回答します。追加で質問して修正もできます"
     },
@@ -1216,13 +1195,7 @@
     },
     "providers": {
       "title": "モデルプロバイダー",
-      "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
-      "order": {
-        "hint": "ドラッグして並べ替え",
-        "handle": "{{provider}}を並べ替えます。現在{{total}}件中{{position}}番目です。矢印キーで移動できます。",
-        "moved": "{{provider}}を{{total}}件中{{position}}番目に移動しました。",
-        "saveFailed": "プロバイダーの順序を保存できませんでした。もう一度お試しください。"
-      },
+      "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、会話ごとに切り替えられます。",
       "pill": {
         "connected": "接続済み",
         "suspended": "無効"
@@ -1259,9 +1232,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン単位で残高から引き落とし",
+        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン課金",
         "modelLabel": "すべてのモデル",
-        "billingLabel": "トークン単位で残高から引き落とし",
+        "billingLabel": "トークン課金",
         "disconnectConfirm": {
           "title": "Cindy AI を切断しますか?",
           "description": "切断するとローカルに保存された Cindy AI Key が削除されます。Cindy AI のモデルを引き続き使うには再接続が必要です。"
@@ -1283,14 +1256,7 @@
           "confirm": "ローテーション"
         },
         "rotateSuccess": "キーをローテーションしました",
-        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください",
-        "copyKeyAria": "Cindy AI Key をコピー",
-        "copyKeySuccess": "Cindy AI Key をコピーしました",
-        "copyKeyFailed": "コピーに失敗しました。後でもう一度お試しください",
-        "asset": {
-          "viewUsage": "使用量を見る",
-          "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。"
-        }
+        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください"
       },
       "custom": {
         "tag": "カスタム",
@@ -1320,13 +1286,6 @@
           "models": "モデル",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "表示名",
-          "modelContextWindowPlaceholder": "コンテキスト(tokens)",
-          "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
-          "modelSupportsImageInput": "画像入力に対応",
-          "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しい Pi タスクで反映されます。",
-          "modelSupportsReasoning": "推論に対応",
-          "modelSupportsReasoningHelp": "モデルが推論強度を受け付ける場合のみ有効にし、実際に対応するすべてのレベルを選択してください。保存後、次の Pi Agent セッションから反映されます。",
-          "modelReasoningEfforts": "対応する推論強度",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",
@@ -1337,30 +1296,19 @@
         "wireProtocol": {
           "responses": "OpenAI Responses（ネイティブ）",
           "chat": "Chat Completions（Cindy ブリッジ）",
-          "anthropic": "Anthropic Messages（Cindy ブリッジ）",
           "responsesHelp": "プロバイダーが Responses API をネイティブ対応しているため、Cindy はイベントストリームをそのまま転送します。",
-          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。",
-          "anthropicHelp": "Anthropic Messages API を提供するプロバイダー向けです。Cindy が Responses のメッセージ、画像、ツール、推論内容、ストリーミングイベントを変換します。",
-          "piResponses": "OpenAI Responses",
-          "piChat": "OpenAI Chat Completions",
-          "piAnthropic": "Anthropic Messages",
-          "piResponsesHelp": "Pi がプロバイダーの OpenAI Responses API に直接接続します。",
-          "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
-          "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
+          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
           "codex": "Codex",
-          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブ、または Chat Completions / Anthropic Messages を Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。",
-          "pi": "Pi",
-          "piDesc": "Pi はマルチプロトコルのハーネスです:カスタム/ローカルモデル(Ollama、vLLM、自ホストのエンドポイント)は Cindy の互換プロキシを経由せず、そのまま接続します。下で API タイプを選び、この提供元の Pi 用 base URL・キー・モデルを入力してください。空欄なら Pi は設定しません。"
+          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブの上流、または Chat Completions のみを提供するプロバイダーを Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
           "runtimeRequired": "Runtime を 1 つ以上設定してください（ベース URL とモデル）",
           "baseUrlInvalid": "ベース URL は有効な http(s) アドレスである必要があります",
-          "contextWindowInvalid": "コンテキストウィンドウは有効な正の整数である必要があります（数字グループの間に区切り記号を使用できます）",
           "requestPathInvalid": "正確なリクエストパスは 1 つの / で始め、フラグメントや .、.. のパスセグメントを含めないでください。空白や安全でない文字はパーセントエンコードしてください。",
           "modelRequired": "モデルを 1 つ以上追加してください",
           "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります"
@@ -1451,29 +1399,7 @@
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
         "accessWriteFailed": "変更を保存できませんでした。もう一度お試しください。",
         "disabledGroup": "無効",
-        "enableAllModels": "すべて有効にする",
-        "priceOverride": {
-          "menu": "API 料金見積もりを編集",
-          "title": "{{model}} の API 料金見積もり",
-          "description": "自分の API またはサブスクリプション経路の使用量見積もりにのみ使われ、プロバイダーの実際の請求は変わりません。",
-          "currency": "通貨",
-          "input": "入力",
-          "output": "出力",
-          "cacheRead": "キャッシュ読み取り",
-          "cacheWrite": "キャッシュ書き込み",
-          "unit": "100 万トークンあたりの料金。キャッシュが個別課金されない場合は空欄にしてください。",
-          "registryDate": "参考料金の更新日 {{date}}",
-          "conflict": "リモートの参考料金が更新されました。ローカル見積もりは引き続き優先されます。確認するか新しい参考料金に戻してください。",
-          "reset": "現在の参考料金に戻す",
-          "resetDone": "現在の参考料金に戻しました",
-          "save": "保存",
-          "cancel": "キャンセル",
-          "close": "閉じる",
-          "saved": "API 料金見積もりを保存しました",
-          "invalid": "0 以上の有効な入力・出力料金を入力してください",
-          "loadFailed": "料金見積もりを読み込めませんでした。もう一度お試しください。",
-          "saveFailed": "料金見積もりを保存できませんでした。もう一度お試しください。"
-        }
+        "enableAllModels": "すべて有効にする"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプション認証（OAuth）",
@@ -1578,51 +1504,16 @@
         "finish": "追加を完了",
         "cancel": "キャンセル",
         "useApiKey": "API キーで接続する",
-        "metaOAuthOrApi": "サブスク認証 · API キー",
-        "builtinApiKey": {
-          "subtitle": "自分の API key で接続",
-          "note": "このソースは画像生成モデルを提供し、チャットには参加しません。API key はこの端末のみに保存され(システムキーチェーンで暗号化)、アップロードされません。"
-        }
+        "metaOAuthOrApi": "サブスク認証 · API キー"
       },
       "xdSignin": {
         "badge": "おすすめ",
-        "desc": "公式サービス。全モデルがすぐ使え、キー管理は不要です。",
-        "grantBadge": "新規ユーザーには特典残高付き",
+        "desc": "Cindy にサインインすると公式 Cindy AI サービスが有効になります。全モデルがすぐ使え、キー管理は不要です。",
         "cta": "Cindy にサインイン"
       },
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする"
-      },
-      "builtinApiKey": {
-        "subtitle": "API key で接続",
-        "replaceKey": "key を変更",
-        "saveKey": "保存",
-        "keyPlaceholder": "API key を貼り付け",
-        "toast": {
-          "saved": "{{name}} の API key を保存しました",
-          "saveFailed": "{{name}} の API key の保存に失敗しました。もう一度お試しください",
-          "disconnected": "{{name}} を切断しました",
-          "disconnectFailed": "{{name}} の切断に失敗しました"
-        },
-        "disconnectConfirm": {
-          "title": "{{name}} を切断しますか?",
-          "description": "切断するとこの端末に保存された API key が削除され、このソースのモデルは利用できなくなります。いつでも再追加できます。",
-          "confirm": "切断",
-          "cancel": "キャンセル"
-        }
-      },
-      "imagesKey": {
-        "label": "画像生成 API key",
-        "placeholder": "OpenAI プラットフォーム API key を貼り付け",
-        "save": "保存",
-        "clear": "クリア",
-        "toast": {
-          "saved": "画像生成 API key を保存しました",
-          "saveFailed": "画像生成 API key の保存に失敗しました。もう一度お試しください",
-          "cleared": "画像生成 API key をクリアしました",
-          "clearFailed": "画像生成 API key のクリアに失敗しました"
-        }
       }
     },
     "experimental": {
@@ -1645,20 +1536,14 @@
     "gitSafety": {
       "title": "Git セーフティ",
       "autoSnapshotTitle": "Git セーフティ保存点",
-      "description": "Agent の編集後にプロジェクトの Git リポジトリへ隠し保存点を自動記録します。ブランチに commit は追加されません。有効な場合のみ Codex rewind を表示します。",
+      "description": "Agent の編集後に保存点 commit を自動作成します。有効な場合のみ Codex rewind を表示します。",
       "toggleAria": "Git セーフティ保存点を切り替え",
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
     "feishuBot": {
-      "title": "Feishu / Lark ボット",
-      "description": "Feishu または Lark ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
-      "statusAria": "Feishu / Lark ボットの状態: {{status}}",
-      "serviceLabel": "サービス",
-      "serviceAria": "IM サービスを選択",
-      "services": {
-        "feishu": "Feishu",
-        "lark": "Lark"
-      },
+      "title": "Feishu ボット",
+      "description": "Feishu ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
+      "statusAria": "Feishu ボットの状態: {{status}}",
       "status": {
         "needsConfig": "設定が必要",
         "connecting": "接続中…",
@@ -1668,17 +1553,16 @@
         "error": "接続失敗"
       },
       "connected": {
-        "heading": "{{service}} ボットは接続済み",
+        "heading": "Feishu ボットは接続済み",
         "note": "現在の QR コードスキャンユーザーにバインドされています。他の人からのプライベートメッセージは自動的に無視されます。",
-        "serviceLabel": "サービス",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "初回プライベートメッセージのバインドを待機中",
-        "reconnect": "{{service}} ボットを再接続",
+        "reconnect": "Feishu ボットを再接続",
         "clear": "連携解除"
       },
       "saved": {
-        "heading": "{{service}} ボットは連携済み",
+        "heading": "Feishu ボットは連携済み",
         "connectingNote": "ボットの認証情報は保存されています。接続しています。",
         "reconnectingNote": "ボットの認証情報は保存されています。接続を復旧しています。",
         "conflictNote": "ボットの認証情報は保存されていますが、この App ID は別のデバイスで使用中です。",
@@ -1691,11 +1575,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "シークレットを表示",
       "hideSecret": "シークレットを非表示",
-      "createLink": "{{service}} オープンプラットフォームで作成 ↗",
+      "createLink": "クリックして作成 ↗",
       "createLinkSuffix": "、作成後にここに入力します",
-      "clearAria": "IM ボットの連携を解除",
+      "clearAria": "Feishu ボットの連携を解除",
       "clearConfirm": {
-        "title": "IM ボットの連携を解除しますか？",
+        "title": "Feishu ボットの連携を解除しますか？",
         "description": "連携を解除すると WebSocket 接続が切れ、ローカルに保存された App ID / App Secret / オーナー openId が削除されます。再度使うには、再作成または再入力が必要です。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
@@ -1723,7 +1607,7 @@
       },
       "intro": "接続後、この WeChat 接続へのプライベートメッセージは、このコンピューターの Cindy に届きます。認証ページは Tencent が提供し、OpenClaw と表示される場合があります。",
       "errorNote": "接続を完了できませんでした。ネットワークを確認してもう一度スキャンしてください。失敗時に Cindy が認証情報を平文で保存することはありません。",
-      "disabledNote": "互換性ポリシーにより、このバージョンでは個人 WeChat 接続が一時停止されています。保存済みのセッションと設定は削除されません。",
+      "disabledNote": "互換性ポリシーにより、このバージョンでは個人 WeChat 接続が一時停止されています。保存済みの会話と設定は削除されません。",
       "permission": {
         "label": "権限モード",
         "hint": "/new 後の新しいコンテキストに適用されます。高リスク操作は引き続き Cindy Desktop での確認が必要です。",
@@ -1759,7 +1643,7 @@
           "connected": "WeChat のプライベートメッセージはこのコンピューターの Cindy に直接届き、Cindy サーバーを経由しません。",
           "reconnecting": "WeChat 接続を復旧しています。再スキャンは不要です。",
           "needs_reauth": "WeChat 認証が期限切れか、別の接続に置き換えられました。もう一度スキャンしてください。",
-          "disabled_by_policy": "互換性ポリシーにより接続は一時停止中です。認証情報とセッションは保持されています。",
+          "disabled_by_policy": "互換性ポリシーにより接続は一時停止中です。認証情報と会話は保持されています。",
           "error": "接続を一時的に利用できません。再スキャンするか、連携解除後にもう一度お試しください。"
         }
       },
@@ -1777,7 +1661,7 @@
       },
       "unbind": {
         "title": "個人 WeChat の連携を解除しますか？",
-        "description": "連携を解除するとメッセージ送受信を停止し、ローカルの WeChat 認証情報と未完了タスクを削除します。既存の Cindy セッション、履歴、保存済み添付ファイルは残ります。",
+        "description": "連携を解除するとメッセージ送受信を停止し、ローカルの WeChat 認証情報と未完了タスクを削除します。既存の Cindy 会話、履歴、保存済み添付ファイルは残ります。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
@@ -1832,11 +1716,6 @@
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
-      "lifecycleAnnouncement": {
-        "label": "オンライン・オフライン通知",
-        "cellLabel": "メッセージ通知",
-        "hint": "このデバイスのオンライン・オフライン時に Discord Bot から通知メッセージを送信します"
-      },
       "ownerNotice": {
         "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
         "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",
@@ -1865,48 +1744,6 @@
         }
       }
     },
-    "wecomBot": {
-      "title": "WeCom インテリジェントボット",
-      "description": "WeCom インテリジェントボットを接続し、DM とグループチャットから {{appName}} を利用します。",
-      "status": {
-        "needsConfig": "未設定",
-        "connecting": "接続中…",
-        "connected": "接続済み",
-        "conflict": "接続が置き換えられました",
-        "error": "接続失敗"
-      },
-      "fieldsRequired": "Bot ID と Secret を入力してください",
-      "botIdLabel": "Bot ID",
-      "botIdPlaceholder": "WeCom 管理画面の Bot ID",
-      "secretLabel": "Secret",
-      "secretPlaceholder": "WeCom 管理画面の Secret",
-      "showSecret": "Secret を表示",
-      "hideSecret": "Secret を隠す",
-      "setupHint": "WeCom 管理画面でインテリジェントボットを作成し、長時間接続を有効にしてから Bot ID と Secret を入力します。",
-      "ownerHint": "接続後、最初にボットへ DM を送ったメンバーがこのコンピューターの owner になります。そのメンバーだけが Agent を起動できます。",
-      "connect": "保存して接続",
-      "reconnect": "再接続",
-      "connectingAction": "接続中…",
-      "disconnect": "連携解除",
-      "configSaved": "WeCom ボット設定を保存しました",
-      "connectFailed": "WeCom ボットに接続できません。認証情報とネットワークを確認してください",
-      "reconnecting": "WeCom ボットに再接続しています",
-      "reconnectFailed": "再接続に失敗しました：{{message}}",
-      "saveFailed": "保存失敗：{{message}}",
-      "disconnected": "WeCom ボットの連携を解除しました",
-      "disconnectFailed": "連携解除に失敗しました：{{message}}",
-      "connected": {
-        "heading": "WeCom ボット接続済み",
-        "awaitingOwner": "WeCom アカウントからボットへ DM を送り、owner を設定してください。",
-        "ownerBound": "このコンピューターの owner：{{ownerUserId}}"
-      },
-      "disconnectConfirm": {
-        "title": "WeCom ボットの連携を解除しますか？",
-        "description": "保存済みの Bot ID、Secret、owner の紐付けをこのコンピューターから削除します。",
-        "confirm": "連携解除",
-        "cancel": "キャンセル"
-      }
-    },
     "telegramBot": {
       "title": "Telegram ボット",
       "description": "自分で作成した Telegram ボットを連携します。デスクトップが Telegram に直接接続し、DM でもグループでも {{appName}} を使えます。",
@@ -1916,16 +1753,11 @@
         "connecting": "接続中…",
         "connected": "接続済み",
         "conflict": "別のデバイスで使用中",
-        "offline": "オフライン",
         "error": "接続に失敗"
       },
       "connected": {
         "heading": "Telegram Bot 接続済み",
         "note": "Bot への DM やグループでのメンションは、このマシンの {{appName}} にルーティングされます。グループの直近の会話はコンテキストとして添付されます。",
-        "headingOffline": "このデバイスでオフライン中",
-        "noteOffline": "メッセージの受信を停止しています。Bot Token と連携情報はこのマシンに保持されているため、いつでもオンラインに戻せます。",
-        "headingConflict": "別のデバイスで使用中",
-        "noteConflict": "同じ Bot でメッセージを受信できるデバイスは同時に 1 台だけで、このマシンは取り合いを繰り返しています。下でそのデバイスをオフラインにすればこのマシンが引き継ぎます。譲る場合は「このデバイスをオフライン」を押してください。",
         "botLabel": "Bot アカウント",
         "ownerLabel": "自分のユーザー ID"
       },
@@ -1938,43 +1770,6 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
-      "errorCode": {
-        "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
-        "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
-        "network": "ネットワークに到達できず、Telegram に接続できません",
-        "secret-unavailable": "システムの安全なストレージが利用できず、認証情報を保存できません"
-      },
-      "goOffline": "このデバイスをオフライン",
-      "goingOfflineAction": "オフラインにしています…",
-      "goOnline": "このデバイスをオンライン",
-      "goingOnlineAction": "オンラインにしています…",
-      "remoteDevices": {
-        "title": "自分の他のデバイス",
-        "refresh": "再確認",
-        "hint": "デバイスをオフラインにすると、そのデバイスはメッセージを受信しなくなります。Token と連携情報は消えないので、そのデバイス側でいつでもオンラインに戻せます。",
-        "takeOffline": "オフラインにする",
-        "state": {
-          "checking": "確認中…",
-          "connected": "この Bot を使用中",
-          "conflict": "この Bot を取り合い中",
-          "offline": "オフライン",
-          "connecting": "接続中…",
-          "idle": "未設定",
-          "error": "接続に失敗",
-          "notConfigured": "Telegram ボットが未設定",
-          "otherBot": "別の Bot に連携中（競合なし）",
-          "offlineDevice": "デバイスがオフラインのため操作できません",
-          "unreachable": "状態を取得できません",
-          "unsupported": "このデバイスのバージョンではリモートでオフラインにできません"
-        },
-        "failure": {
-          "remoteDisabled": "そのデバイスでリモート操作が無効になっています",
-          "accessRevoked": "そのデバイスがこのデバイスからのアクセスを取り消しました",
-          "controlDisabled": "このデバイスでは、そのデバイスの操作が無効になっています",
-          "unreachable": "そのデバイスはオフラインか、到達できません",
-          "unknown": "リモート操作に失敗しました。デバイスの状態を確認して再試行してください"
-        }
-      },
       "disconnect": "連携解除",
       "disconnectingAction": "解除中…",
       "disconnectAria": "Telegram ボットの連携を解除",
@@ -2010,7 +1805,7 @@
       },
       "commandMenu": {
         "start": "ようこそと使い方を表示",
-        "new": "新しい会話を開始",
+        "new": "新しいセッションを開始",
         "help": "コマンドヘルプを表示",
         "stop": "現在のタスクを停止",
         "session": "最近のセッション一覧から続行",
@@ -2048,11 +1843,6 @@
         "dmQuoteHint": {
           "off": "DM の回答は引用なしで送ります（デフォルト）。",
           "first": "最初の返信があなたのメッセージを引用します。"
-        },
-        "error": {
-          "load": "Telegram の動作設定を読み込めませんでした。接続を確認して再試行してください。",
-          "save": "Telegram の動作設定を保存できませんでした。最後に確認された設定へ戻しました。",
-          "retry": "再読み込み"
         }
       },
       "persona": {
@@ -2076,58 +1866,10 @@
         "contactsOn": "グループで発言した人はスマート連絡先に自動登録されます（マスタースイッチはオン）。",
         "contactsOff": "スマート連絡先がオフのため、グループで発言した人は自動的に記憶されません。",
         "contactsEnable": "オンにする",
-        "error": {
-          "load": "Telegram のグループを読み込めませんでした。接続を確認して再試行してください。",
-          "save": "グループ参加モードを保存できませんでした。最後に確認されたモードへ戻しました。",
-          "retry": "再読み込み"
-        },
         "mode": {
           "mention": "@ のみ",
           "always": "アクティブ"
         }
-      }
-    },
-    "dingtalkBot": {
-      "title": "DingTalk ボット",
-      "description": "自作の DingTalk ボットを接続し、Stream モードで DM やグループから {{appName}} を利用します。",
-      "status": {
-        "needsConfig": "設定が必要",
-        "connecting": "接続中…",
-        "connected": "接続済み",
-        "error": "接続失敗"
-      },
-      "connected": {
-        "heading": "DingTalk ボットに接続済み",
-        "ownerBound": "オーナーを連携済みです。DM またはグループでメンションして開始できます。",
-        "waitingOwner": "まずボットに DM してください。最初の送信者がオーナーとして安全に連携されます。",
-        "ownerLabel": "オーナーのユーザー ID",
-        "notBound": "最初の DM を待機中"
-      },
-      "appKeyLabel": "Client ID",
-      "appKeyPlaceholder": "ボットアプリの Client ID を貼り付け",
-      "appSecretLabel": "Client Secret",
-      "appSecretPlaceholder": "ボットアプリの Client Secret を貼り付け",
-      "appSecretSavedPlaceholder": "安全に保存済み。空欄のまま再接続できます",
-      "showSecret": "Client Secret を表示",
-      "hideSecret": "Client Secret を隠す",
-      "formHint": "認証情報はローカルで暗号化されます。接続後、最初の DM でオーナーを連携します。",
-      "errorHint": "接続できません。認証情報、Stream モード、ネットワークを確認して再試行してください。",
-      "connect": "接続",
-      "reconnect": "再接続",
-      "disconnect": "連携解除",
-      "disconnectConfirm": {
-        "title": "DingTalk ボットの連携を解除しますか？",
-        "description": "接続を切断し、保存済みの Client ID、Client Secret、オーナー連携を削除します。",
-        "confirm": "連携解除",
-        "cancel": "キャンセル"
-      },
-      "guide": {
-        "title": "設定ガイド",
-        "step1": "DingTalk 開発者ポータルで社内アプリを作成し、ボット機能を追加します。",
-        "step2": "ボットの Stream モードを有効にし、アプリのバージョンを公開します。",
-        "step3": "アプリ認証情報から Client ID と Client Secret をコピーして入力します。",
-        "step4": "接続後、最初にボットへ DM してオーナーを連携します。グループではメンションしてください。",
-        "openPortal": "DingTalk 開発者ポータルを開く ↗"
       }
     },
     "logout": {
@@ -2136,7 +1878,7 @@
     },
     "memory": {
       "title": "メモリ",
-      "description": "ワークスペース単位のメモリを実現します。設定を変更したら、新しい Agent セッションを開始してから反映されます。メモリに問題があれば Reset するか OFF にしてください。",
+      "description": "ワークスペース単位のメモリを実現します。設定を変更したら、新しい Session を開始してから反映されます。メモリに問題があれば Reset するか OFF にしてください。",
       "maker": {
         "label": "Cindy",
         "description": "メモリはモデルごとではなく Agent の入口ごとに管理されます。同じ作業ディレクトリでは、Claude Code と Codex の入口から開始した Session がメモリを共有します",
@@ -2166,10 +1908,6 @@
         "codex": {
           "label": "Codex",
           "description": "Codex の入口から使用するすべてのモデルで、同じメモリを共有します"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "長いセッションの圧縮要約を Cindy メモリに保存し、今後の Pi セッションで利用します"
         }
       },
       "agent": {
@@ -2178,7 +1916,7 @@
         "toast": {
           "enabled": "{{label}} メモリを有効化しました",
           "disabled": "{{label}} メモリを無効化しました",
-          "takesEffectSuffix": " — 次回 Agent セッションから反映されます",
+          "takesEffectSuffix": " — 新しいチャットで反映されます",
           "toggleFailed": "メモリ設定の更新に失敗しました",
           "resetSuccess_one": "{{label}} メモリをリセットしました — {{count}} 件削除",
           "resetSuccess_other": "{{label}} メモリをリセットしました — {{count}} 件削除",
@@ -2194,30 +1932,12 @@
       }
     },
     "subagentModels": {
-      "title": "サブエージェント",
-      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
+      "title": "サブエージェントモデル",
+      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
-      "codexV2ModelHint": "サブエージェントの既定モデルは Codex 自身のモデルカタログ内のモデルである必要があり、カタログ外のモデル（互換ブリッジ経由のサードパーティモデルなど）は Codex に拒否されます。Sol / Terra（マルチエージェント V2）はさらに V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみを受け付けます。旧版マルチエージェント（V1）に V2 の制限はありません。",
-      "saveFailed": "サブエージェント設定の保存に失敗しました",
-      "guardrails": {
-        "title": "Codex サブエージェントガードレール",
-        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
-        "enableAria": "Codex のサブエージェントを許可",
-        "concurrencyLabel": "サブエージェントの同時実行上限",
-        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
-        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
-        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
-        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
-        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
-        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
-        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
-        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
-      },
-      "toast": {
-        "saved": "サブエージェント設定を保存しました",
-        "deferredSuffix": " — 実行中の Codex セッションには現在のタスク終了後に適用されます"
-      }
+      "codexUnavailable": "現在の Codex バージョンでは安全な上書きに未対応です",
+      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になり、現在の Codex バージョンではサブエージェントのモデル上書きに対応していません。",
+      "saveFailed": "サブエージェントモデルの保存に失敗しました"
     },
     "compaction": {
       "title": "コンテキスト圧縮",
@@ -2277,14 +1997,6 @@
         "selectAria": "デフォルトターミナルシェルを選択"
       }
     },
-    "composer": {
-      "title": "メッセージ入力",
-      "sendShortcut": {
-        "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
-      }
-    },
     "linkOpen": {
       "title": "リンクの開き方",
       "description": "メッセージ内のリンクや HTML ファイルを左クリックしたときの既定の開き先です。",
@@ -2309,13 +2021,6 @@
         "disabled": "チャット履歴の意味索引を停止しました",
         "toggleFailed": "チャット埋め込みの切り替えに失敗しました"
       }
-    },
-    "messageNavRail": {
-      "cell": {
-        "label": "質問ナビゲーションレールを表示",
-        "description": "チャット本文の左側に質問ごとの目盛りを表示します。ホバーで質問と回答の冒頭をプレビューし、クリックでそのやり取りへ戻れます。質問が十分に多く、ウィンドウ幅が十分なときのみ表示されます。"
-      },
-      "toggleAria": "質問ナビゲーションレールを切り替え"
     },
     "collaboration": {
       "loading": "コラボレーション設定を読み込み中…",
@@ -2363,7 +2068,7 @@
         "title": "自動操作ブラウザ",
         "description": "エージェント専用の独立したブラウザ。普段の Chrome とは分離されています",
         "toggleAria": "ブラウザ自動操作を切り替える",
-        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
+        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのブラウザ自動操作を切り替えられます。",
         "detected": "{{browser}} を検出しました",
         "notDetected": "ローカルブラウザが見つかりません。Chrome をインストールするとブラウザ自動操作を利用できます。",
@@ -2384,22 +2089,6 @@
         "defaultTag": "デフォルト",
         "resetToDefault": "デフォルトに戻す",
         "toggleFailed": "ブラウザ対象の切り替えに失敗しました",
-        "health": {
-          "ready": "内蔵ブラウザの制御接続は正常です。",
-          "error": "内蔵ブラウザの接続に失敗しました：{{reason}}。「内蔵ブラウザを復旧」で制御接続を再構築してください。",
-          "reasons": {
-            "disposing": "前回の終了処理が完了していません",
-            "hostUnavailable": "内蔵ブラウザー画面の準備ができていないか、接続が切れています",
-            "startFailed": "新しい制御プロセスを起動できませんでした",
-            "statusFailed": "制御プロセスの状態確認に失敗しました",
-            "recoveryFailed": "制御接続を再構築できませんでした"
-          },
-          "reconnect": "内蔵ブラウザを再接続",
-          "recover": "内蔵ブラウザを復旧",
-          "recovering": "内蔵ブラウザを復旧中…",
-          "recovered": "内蔵ブラウザを再接続しました",
-          "recoverFailed": "内蔵ブラウザの復旧に失敗しました。理由を確認して再試行してください。"
-        },
         "rsbWebview": {
           "title": "サイドバー内蔵ブラウザ",
           "description": "エージェントは右サイドバーの webview タブ内で操作します。ポップアップなし、ログイン状態は独立保持。"
@@ -2414,7 +2103,7 @@
         "description": "エージェントが ADB 経由で接続済み Android デバイスを確認し、操作できます",
         "toggleAria": "Android 自動操作を切り替える",
         "refresh": "再確認",
-        "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
+        "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
         "status": {
           "checking": "ADB の状態を確認しています…",
           "preparing": "ADB を準備しています…",
@@ -2551,7 +2240,7 @@
           "windowsHint": "Windows では追加のシステム権限は不要です。Agent が作業している間は、対象アプリを現在のアクティブなデスクトップ上で表示したままにしてください。",
           "linuxHint": "Linux では macOS の TCC 権限は使いません。現在のデスクトップセッションでウィンドウ取得と入力自動化が許可されていることを確認してください。"
         },
-        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
+        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのコンピュータ直接操作を切り替えられます。",
         "update": {
           "available": "新しいバージョン v{{version}} が利用可能です。更新後、システム権限の再許可が必要になる場合があります。",
@@ -2580,21 +2269,21 @@
     },
     "builtinTools": {
       "title": "組み込みツール",
-      "description": "新しいセッションのデフォルトを設定するか、プロジェクトごとに上書きします。プロジェクト設定が優先されます。",
+      "description": "新しい会話のデフォルトを設定するか、プロジェクトごとに上書きします。プロジェクト設定が優先されます。",
       "empty": "利用可能なツールはありません。",
       "toggleAria": "{{name}} ツールを切り替え",
       "toggleHint": "変更は新規または再起動した Agent セッションにのみ反映され、実行中のセッションには影響しません。",
       "loadFailed": "ツール一覧の読み込みに失敗しました",
       "scopePicker": {
         "ariaLabel": "組み込みツール設定の適用範囲を切り替え",
-        "userDefault": "新しいセッションのデフォルト",
+        "userDefault": "新しい会話のデフォルト",
         "userDefaultDescription": "プロジェクト上書きのない新規セッションに適用"
       },
       "source": {
         "project": "プロジェクト",
         "projectTooltip": "プロジェクト設定で上書きされています ({{dir}})",
         "user": "ユーザーデフォルト",
-        "userTooltip": "新しいセッションのデフォルトを継承",
+        "userTooltip": "新しい会話のデフォルトを継承",
         "product": "製品デフォルト",
         "productTooltip": "Cindy の製品デフォルトを継承"
       },
@@ -2680,11 +2369,6 @@
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
         "slackDisabledHint": "スイッチをオンにすると Slack 認証が始まります。連携が完了すると Slack からタスクを依頼できます。",
         "slackBoundHint": "連携が完了しました。スイッチをオフにすると連携が解除され、再びオンにするには再認証が必要です。",
-        "lifecycleAnnouncement": {
-          "label": "オンライン・オフライン通知",
-          "cellLabel": "メッセージ通知",
-          "hint": "このデバイスのオンライン・オフライン時に Slack Bot から通知メッセージを送信します"
-        },
         "toggleAria": "Slack 接続の有効状態を切り替え",
         "installApp": "Slack アプリをインストール",
         "status": {
@@ -2702,25 +2386,7 @@
           "aliasPlaceholder": "エイリアス(例: my-server)",
           "addWorkspace": "作業ディレクトリを追加",
           "removeWorkspace": "この作業ディレクトリを削除",
-          "changeDir": "クリックしてディレクトリを変更(別名と設定は保持)",
-          "defaultWorkspaceChip": "デフォルト: {{name}}",
-          "defaultWorkspaceAria": "タスク発行時に使う既定の作業ディレクトリを選択",
-          "defaultWorkspaceRadioAria": "「{{name}}」を既定の作業ディレクトリに設定",
-          "defaultWorkspaceRowHint": "選択したディレクトリが既定の作業ディレクトリです。Telegram の個別チャット・グループ・トピックのうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/workspace で個別に選んだ会話はそのまま）。選択したディレクトリの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのリポジトリ内でフルアクセスで実行されます。",
-          "legacyDefaultsTitle": "旧「新規会話の設定」がまだ有効です",
-          "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値が保存されており、個別に設定していないディレクトリのフォールバックとして今も使われます（公式 Telegram と X で共通の 1 件）。これらの値は各ディレクトリごとに設定する方式になりました。既定値に戻すと、次のすべてが削除されます:",
-          "legacyDefaultsRow": {
-            "agentKind": "既定 Agent: {{current}} → {{fallback}}",
-            "permissionMode": "権限モード: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "モデル {{current}} → {{fallback}}",
-            "effort": "思考の強度 {{current}} → {{fallback}}",
-            "source": "モデルの提供元 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "、",
-          "legacyDefaultsSourceFollowsGlobal": "グローバル設定に従う"
+          "changeDir": "クリックしてディレクトリを変更(別名と設定は保持)"
         },
         "binding": {
           "copyLink": "リンクをコピー",
@@ -2778,7 +2444,7 @@
           "disabledHint": "スイッチをオンにして、Telegram 内の案内に従ってアカウント連携を完了してください。",
           "toggleAria": "Telegram 接続を切り替える",
           "connect": "Telegram と連携",
-          "openApp": "Telegram を開く",
+          "openTelegram": "Telegram を開く",
           "cancel": "連携をキャンセル",
           "retry": "連携を再試行",
           "openBot": "Bot を開く",
@@ -2799,96 +2465,6 @@
             "failed": "連携に失敗しました",
             "revoked": "連携を解除しました",
             "superseded": "別のデバイスに連携されています"
-          },
-          "behavior": {
-            "title": "リアクションと引用",
-            "emojiLabel": "絵文字リアクション",
-            "emojiOption": {
-              "off": "オフ",
-              "minimal": "ベーシック",
-              "expressive": "生き生き"
-            },
-            "emojiHint": {
-              "off": "絵文字リアクションを付けません。",
-              "minimal": "受信時 👀、成功 👍、失敗 👎。",
-              "expressive": "成功と失敗で分けたリアクションプールからランダムに選びます。"
-            },
-            "groupQuoteLabel": "グループで質問を引用して返信",
-            "quoteOption": {
-              "off": "しない",
-              "first": "最初のみ",
-              "all": "毎回"
-            },
-            "groupQuoteHint": {
-              "off": "グループの回答を質問に紐付けません。",
-              "first": "回答の最初のメッセージが質問を引用します（推奨）。",
-              "all": "回答のすべてのメッセージが質問を引用します。"
-            },
-            "dmQuoteLabel": "DM でメッセージを引用して返信",
-            "dmQuoteHint": {
-              "off": "DM の回答は引用なしで送ります（デフォルト）。",
-              "first": "最初の返信があなたのメッセージを引用します。"
-            },
-            "error": {
-              "load": "Telegram の動作設定を読み込めませんでした。接続を確認して再試行してください。",
-              "save": "Telegram の動作設定を保存できませんでした。最後に確認された設定へ戻しました。",
-              "retry": "再読み込み"
-            }
-          },
-          "groups": {
-            "title": "グループ参加モード",
-            "hint": "公式 bot が確認したグループが表示されます。アクティブは連携済みアカウントの全発言だけに適用され、他のメンバーはローカル文脈に入りますがタスクを開始できません。",
-            "empty": "まだグループがありません。bot を追加し、連携済みアカウントからメッセージを送ってください。",
-            "contactsOn": "グループの他の発言者はスマート連絡先に自動登録されます。",
-            "contactsOff": "スマート連絡先がオフのため、他のメンバーは自動登録されません。",
-            "contactsEnable": "オンにする",
-            "error": {
-              "load": "Telegram のグループを読み込めませんでした。接続を確認して再試行してください。",
-              "save": "グループ参加モードを保存できませんでした。最後に確認されたモードへ戻しました。",
-              "retry": "再読み込み"
-            },
-            "mode": {
-              "mention": "@ のみ",
-              "always": "アクティブ"
-            }
-          }
-        },
-        "x": {
-          "description": "X (Twitter) アカウントを連携し、X で Cindy bot にメンションしてタスクを依頼できます。",
-          "disabledHint": "スイッチをオンにして、案内に従って X アカウントを認証してください。",
-          "toggleAria": "X 接続を切り替え",
-          "guide": {
-            "usageLabel": "使い方",
-            "usageBody": "X で @askmycindy をメンションしてポストすると、タスクがこの端末に届いてここで実行され、結果が返信として戻ります。",
-            "riskLabel": "返信は公開されます",
-            "riskPublicBody": "Cindy の返信は公開ポストで、誰でも閲覧できます。公開の場で答えを探したり問題を解決するのに向いていますが、プライベートな用件には向きません —— プライバシーが露出するおそれがあります。",
-            "riskWorkdirBody": "X のタスクはすべて X 連携設定で指定した既定の作業ディレクトリで実行されます。Agent はその中のファイルを読み書きでき、結論は公開で返信されます —— 非公開リポジトリを指している場合、ファイルの内容も公開される可能性があります。",
-            "withdrawLabel": "返信を取り消す",
-            "withdrawBody": "質問した本人がその返信に「/delete」と返信すると削除できます。公開された返信だけが削除され、ローカルのタスク記録は残ります。",
-            "ackTitle": "X を連携しました —— 使い方と注意点",
-            "ackConfirm": "リスクを理解しました"
-          },
-          "connect": "X を連携",
-          "openApp": "X を開いて認証",
-          "cancel": "連携をキャンセル",
-          "retry": "再連携",
-          "openBot": "X で bot を表示",
-          "unlink": "X の連携を解除",
-          "unlinkConfirmTitle": "X の連携を解除しますか?",
-          "unlinkConfirmDescription": "解除すると X からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
-          "status": {
-            "checking": "サーバーの対応状況を確認中…",
-            "unavailable": "このサーバーではまだ利用できません",
-            "disabled": "無効",
-            "none": "未連携",
-            "pending": "X を開いてアカウントを認証してください",
-            "awaiting_confirmation": "X で認証を確認してください",
-            "confirmed": "{{user}} が {{bot}} と連携済み",
-            "denied": "認証が拒否されました",
-            "expired": "認証リンクの有効期限切れ",
-            "failed": "連携に失敗しました",
-            "revoked": "連携が解除されました",
-            "superseded": "別のデバイスで連携済み"
           }
         }
       },
@@ -2908,7 +2484,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
+        "description": "リポジトリに紐づかない会話です。Slack または Telegram で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2917,7 +2493,6 @@
         "permissionLabel": "権限モード",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
-        "providerX": "X",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",
@@ -2944,8 +2519,7 @@
         "auth-failed": "ログインが無効になりました。再ログインしてください",
         "replaced": "同じデバイスの別の接続に置き換えられました",
         "too-many-connections": "このアカウントの同時接続数が上限に達しました",
-        "version-mismatch": "プロトコルバージョンが一致しません。アプリを更新してください",
-        "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください"
+        "version-mismatch": "プロトコルバージョンが一致しません。アプリを更新してください"
       },
       "refresh": "更新",
       "empty": "他のデバイスはまだありません。別のパソコンで同じアカウントで {{appName}} にログインすると、ここに表示されます。",
@@ -2986,8 +2560,7 @@
         "disconnectFailed": "リモート接続の切断に失敗しました",
         "remoteSessionEnded": "リモートデバイスがこのセッションを終了しました"
       },
-      "control": "操作",
-      "standbyHint": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。"
+      "control": "操作"
     },
     "imBot": {
       "beta": "Beta",
@@ -2996,8 +2569,9 @@
         "personal": "個人"
       },
       "tips": {
-        "cindy": "Cindy が提供・管理します。自分でボットを作成したり認証情報を用意したりする必要はなく、案内に沿って接続するだけで利用できます。",
-        "personal": "自分のアカウントまたはボットを接続し、必要な認証情報を自分で管理します。アカウント、権限、設定はチャネルごとに保存されます。"
+        "cindy": "Cindy は公式提供の共有ボットです。認証情報の申請は不要で、Slack を連携して @Cindy にメンションするだけでタスクを任せられます。",
+        "personal": "個人接続には WeChat のスキャン認証と、自分の Feishu / Discord / Telegram 認証情報を使用する接続があります。新規会話設定はチャネルごとに保存されます。",
+        "personalFeishuOnly": "個人接続には WeChat のスキャン認証と、自分の Feishu 認証情報を使用する接続があります。新規会話設定はチャネルごとに保存されます。"
       },
       "defaults": {
         "title": "新規会話設定",
@@ -3006,9 +2580,7 @@
           "slack": "Slack の新しいスレッドでは、この Agent とモデルを使用します。",
           "discord": "Discord の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
           "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
-          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
-          "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
-          "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。"
+          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。"
         },
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",
@@ -3017,8 +2589,7 @@
         "saveFailed": "新規会話設定を保存できませんでした",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex",
-          "pi": "Pi"
+          "codex": "Codex"
         }
       }
     },
@@ -3034,7 +2605,6 @@
         "systemReserved": "OS によって予約されています",
         "conflict": "「{{name}}」と競合しています",
         "voiceConflict": "音声入力のショートカットと競合しています",
-        "composerVoiceConflict": "音声入力のショートカットと競合しています。メッセージ入力の送信ショートカットまたは音声入力のショートカットを変更してください。",
         "menuAccelerator": "この組み合わせはメニューショートカットとして登録できません"
       },
       "items": {
@@ -3047,8 +2617,8 @@
           "description": "設定ページを開きます"
         },
         "new-maker": {
-          "label": "新しいセッション",
-          "description": "新しいセッションを開始します"
+          "label": "新しいチャット",
+          "description": "新しいチャットを開始します"
         },
         "close-tab-or-window": {
           "label": "タブまたはウィンドウを閉じる",
@@ -3109,42 +2679,6 @@
         "open-terminal": {
           "label": "ターミナルを開く",
           "description": "右サイドバーでターミナルを開きます（既に開いている場合はフォーカス）"
-        },
-        "switch-session-1": {
-          "label": "1番目のセッションに移動",
-          "description": "サイドバーに表示されている1番目のセッションに移動します"
-        },
-        "switch-session-2": {
-          "label": "2番目のセッションに移動",
-          "description": "サイドバーに表示されている2番目のセッションに移動します"
-        },
-        "switch-session-3": {
-          "label": "3番目のセッションに移動",
-          "description": "サイドバーに表示されている3番目のセッションに移動します"
-        },
-        "switch-session-4": {
-          "label": "4番目のセッションに移動",
-          "description": "サイドバーに表示されている4番目のセッションに移動します"
-        },
-        "switch-session-5": {
-          "label": "5番目のセッションに移動",
-          "description": "サイドバーに表示されている5番目のセッションに移動します"
-        },
-        "switch-session-6": {
-          "label": "6番目のセッションに移動",
-          "description": "サイドバーに表示されている6番目のセッションに移動します"
-        },
-        "switch-session-7": {
-          "label": "7番目のセッションに移動",
-          "description": "サイドバーに表示されている7番目のセッションに移動します"
-        },
-        "switch-session-8": {
-          "label": "8番目のセッションに移動",
-          "description": "サイドバーに表示されている8番目のセッションに移動します"
-        },
-        "switch-session-9": {
-          "label": "9番目のセッションに移動",
-          "description": "サイドバーに表示されている9番目のセッションに移動します"
         }
       },
       "none": "未設定",
@@ -3161,33 +2695,22 @@
         "clearSearch": "プラグイン検索をクリア",
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
-        "installedSection": "インストール済み",
-        "recommendedSection": "おすすめ",
-        "updatesAvailable": "{{count}} 件のプラグイン更新があります",
-        "updateAll": "すべて更新",
-        "ignoreRound": "今回は無視",
-        "updateTo": "v{{version}} に更新",
-        "updateAria": "{{name}} を v{{version}} に更新",
         "createWithCindy": "Cindy で作成",
-        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、最初に第 0 章「設計のすり合わせ」を読み、その後 section パラメータで関連する章（少なくともサンドボックスの禁止事項とパッケージ化の章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始めてください：選択肢付きの質問カードを優先し、1 枚のカードでは 1 つの重要な判断に絞り、あなたのおすすめを明示した上で、私が気づきにくい設計オプション（UI 形態：ドッキングパネル / プラグインページ内のパネル / チャットカード / UI なし、$ 呼び出しコマンド、起動モード、ネットワーク接続の要否、設定ページの要否など）を積極的に提示して選ばせてください。解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
+        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、section パラメータで関連する章（少なくともサンドボックスの禁止事項とパッケージ化の章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始め、毎回一つの重要な判断に集中しながら、解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
+        "installedTitle": "インストール済みプラグイン",
+        "installedExpand": "インストール済みプラグインをさらに {{count}} 件表示",
+        "installedCollapse": "追加のインストール済みプラグインを隠す",
+        "allTitle": "すべてのプラグイン",
         "filterAll": "すべて",
         "filtersAria": "提供元でプラグインを絞り込む",
         "origin": {
           "public": "公開",
           "organization": "チーム共有",
-          "local": "ローカル",
-          "custom": "カスタム"
+          "local": "ローカル"
         },
         "emptyFiltered": "一致するプラグインがありません",
-        "useAria": "{{name}} を使用",
-        "usePanelAction": "使う",
-        "chatAction": "会話",
-        "chatAria": "{{name}} と会話",
-        "manageAction": "管理",
-        "manageAria": "{{name}} を管理",
-        "agentInvoked": "Agent が自動で呼び出し",
-        "upToDate": "最新です",
-        "installAria": "{{name}} をインストール"
+        "useAction": "使用",
+        "useAria": "{{name}} を使用"
       },
       "market": {
         "scopeAria": "プラグインの提供元を絞り込む",
@@ -3196,12 +2719,14 @@
           "public": "公開",
           "organization": "組織",
           "personal": "個人",
-          "local": "ローカル",
-          "custom": "カスタム"
+          "local": "ローカル"
         },
         "install": "インストール",
         "details": "詳細",
         "update": "マーケットから更新",
+        "updateAvailable": "更新あり",
+        "updateAction": "更新",
+        "updateAria": "{{name}}を更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",
         "conflict": "プラグイン ID の競合",
@@ -3220,69 +2745,10 @@
         },
         "securityTitle": "インストールと権限",
         "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
-        "customSecurityDescription": "このプラグインは追加したカスタムマーケット由来で、Cindy サーバーによる整合性検証は行われていません。インストール前にメインプロセスでマニフェストを検証します。初回インストール後は自動で有効になり、プラグインページでいつでも無効化できます。",
         "noPermissions": "このプラグインは追加機能を宣言していません。",
         "installConfirmTitle": "「{{name}}」をインストールしますか？",
         "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してからインストールします。インストール完了後は自動的に有効になり、いつでも無効化や設定の変更ができます。",
-        "customInstallConfirmDescription": "カスタムマーケット由来のプラグインのため、サーバーによる整合性検証は行われません。インストール前にマニフェストを検証します。インストール後は自動で有効になり、プラグインページでいつでも無効化・設定変更ができます。",
-        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。",
-        "sources": {
-          "addMarketplace": "プラグインマーケットを追加…",
-          "dialogTitle": "プラグインマーケットを追加",
-          "dialogDescription": "GitHub リポジトリ、Git URL、またはローカルフォルダーからプラグインマーケットを追加します。",
-          "learnMore": "詳しく見る",
-          "sourceLabel": "ソース",
-          "sourcePlaceholder": "openai/plugins または git@github.com:org/repo.git",
-          "refLabel": "Git 参照",
-          "refPlaceholder": "メインブランチ",
-          "sparseLabel": "スパースパス",
-          "sparsePlaceholder": "1 行に 1 パス（例: plugins/codex）",
-          "gitUnavailable": "Git がインストールされていないか、バージョンが 2.25 未満です。Git ソースは利用できません。ローカルフォルダーのソースは引き続き利用できます。",
-          "listTitle": "追加済みのマーケット",
-          "pluginCount": "{{count}} 個のプラグイン",
-          "sourceError": "読み込み失敗",
-          "localBadge": "ローカル",
-          "defaultRef": "デフォルトブランチ",
-          "neverSynced": "未同期",
-          "refresh": "更新",
-          "remove": "削除",
-          "removeConfirmTitle": "マーケット「{{name}}」を削除しますか？",
-          "removeConfirmDescription": "削除すると、このマーケットのプラグインは表示されなくなります。インストール済みのプラグインは保持されます。",
-          "close": "閉じる",
-          "add": "マーケットを追加",
-          "errors": {
-            "invalidSource": "ソースの形式が無効です。GitHub の owner/repo、Git URL、またはローカルフォルダーのパスを指定してください。",
-            "gitUnavailable": "Git がインストールされていないか、バージョンが 2.25 未満のため、Git ソースを追加できません。",
-            "cloneAuthFailed": "このリポジトリにアクセスできません。プライベートリポジトリの場合は、先にシステムで Git 認証（credential helper または SSH key）を設定してください。",
-            "credentialsNotAllowed": "ソースの URL にユーザー名やパスワードを含めることはできません。システムの Git 認証（credential helper または SSH key）を使用してください。",
-            "cloneFailed": "リポジトリのクローンに失敗しました。ネットワークまたはプロキシ設定を確認してから再試行してください。",
-            "refNotFound": "指定された Git 参照が見つかりません。ブランチ名またはタグ名を確認してください。",
-            "manifestMissing": "このソースに対応する marketplace.json マニフェストが見つかりません。",
-            "duplicate": "このマーケットはすでに追加されています。",
-            "notFound": "このマーケットは存在しないか、すでに削除されています。"
-          },
-          "guide": {
-            "title": "カスタムプラグインマーケットガイド",
-            "intro": "プラグインマーケットとは、マニフェストファイルを持つ Git リポジトリまたはローカルフォルダーで、Cindy プラグインのセットを配布するためのものです。",
-            "structureTitle": "ディレクトリ構造",
-            "structureBody": "マーケットには 1 つのマニフェストファイルと、プラグインごとのディレクトリが必要です。各プラグインディレクトリには有効な ghost.json（プラグインの身分証）が必要です。",
-            "structureLabelManifest": "マニフェスト",
-            "structureLabelGhostCard": "プラグインカード",
-            "structureLabelEntry": "プラグインのエントリー",
-            "structureNote": "マニフェストは次のいずれかに配置できます:",
-            "manifestTitle": "マニフェスト形式",
-            "manifestBody": "name はマーケットの一意の識別子です（追加後はこの名前で管理します）。plugins 配列の source はリポジトリ内のプラグインディレクトリを相対パスで指します。{\"source\": \"local\", \"path\": \"…\"} のオブジェクト形式も利用できます。",
-            "sourceTitle": "ソース形式",
-            "sourceBody": "GitHub 省略形 owner/repo、完全な Git URL（https / ssh / git@）、ローカルフォルダーパス（~ 可）を指定できます。Git 参照にはブランチ、タグ、commit を指定でき、空ならデフォルトブランチです。スパースパスは 1 行に 1 つ指定し、リポジトリの一部のサブディレクトリだけをチェックアウトします（大きなリポジトリ向け）。",
-            "authTitle": "プライベートリポジトリ",
-            "authBody": "認証はすべてシステムの Git 設定に依存し、Cindy は Git の認証情報を一切保存しません。SSH の場合: 利用可能な key がマシンに設定されている必要があります。組織が SAML SSO を強制している場合は、GitHub の SSH key 設定で Configure SSO からその組織に key を承認してください。HTTPS の場合: Personal Access Token を使用し、システムの credential helper に保存します。",
-            "rulesTitle": "インストールルール",
-            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。cindy- などの公式予約プレフィックスを使うプラグインはカスタムマーケットからインストールできません。インストール前にプラグインが宣言する権限をすべて表示し、確認するとインストールが完了して自動的に有効になります。",
-            "copy": "ガイドをコピー",
-            "copied": "ガイドをクリップボードにコピーしました。",
-            "copyFailed": "コピーに失敗しました。もう一度お試しください。"
-          }
-        }
+        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。"
       },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
@@ -3309,7 +2775,7 @@
       "projectSwitchLockedTip": "このプラグインはグローバルで無効です。先に「グローバル」ビューで有効にしてください",
       "projectBanner": {
         "title": "プロジェクト「{{name}}」を設定中",
-        "desc": "ここのスイッチはこのプロジェクトのみに適用されます。オフにしたプラグインはこのプロジェクトでは使用できません",
+        "desc": "ここのスイッチはこのプロジェクトのみに適用されます。オフにしたプラグインは新しいセッションに現れません",
         "backToGlobal": "グローバルに戻る"
       },
       "scopePicker": {
@@ -3338,9 +2804,7 @@
         "uninstalled": "「{{name}}」をアンインストールしました",
         "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
-        "exported": "「{{name}}」の .cindy ファイルを書き出しました",
-        "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
-        "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました",
+        "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました(新しいセッションから適用)",
         "projectEnabled": "「{{name}}」はこのプロジェクトでグローバル設定に従います"
       },
       "panelError": {
@@ -3356,7 +2820,7 @@
         "meta": "バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "enableNow": "インストール後すぐに有効化",
-        "enableNowOpenPanel": "インストール後すぐに有効化してパネルを開く",
+        "enableNowOpenTab": "インストール後すぐに有効化してタブを開く",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ"
       },
@@ -3385,18 +2849,10 @@
         "cindyVideoEdit": "画像から動画(Cindy に代行依頼、参照画像は自身名義のもののみ)",
         "cindyMediaDeposit": "保有している画像・動画・音声をあなたのメディアライブラリに保存できます",
         "cindyMediaDepositDetail": "プラグイン内で貼り付け・ドロップした素材も AI で加工できるようにするための権限です。保存内容はこのプラグイン名義で記録され、最大 {{quota}} まで使用し、アンインストール時に併せて削除されます。",
-        "cindyTextOneshot": "Cindy のクイックチャンネルに質問してテキスト回答を受け取れます",
-        "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
-        "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
-        "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
         "agentBackgroundDetail": "毎回のクリックは不要ですが、以前このプラグインに関連付けたセッションでのみ使用できます。モデル料金が発生する場合があります。",
-        "agentErrand": "Cindy Agent にタスクを任せて結果を受け取れます",
-        "agentErrandDetail": "タスクはこのプラグイン専用のセッションで実行され、サイドバーから常に確認・停止できます。既定では読み取り専用で、権限の引き上げはプラグイン設定であなた自身が行う必要があります。モデル料金が発生する場合があります。",
-        "agentSchedule": "自動化の新規作成をあなたに依頼できます",
-        "agentScheduleDetail": "できるのは内容が入力済みの新規自動化パネルを開くことだけで、作成するかどうかはあなたがモデルを選んで自分で保存して決めます。作成後は Cindy があなたの設定した時間に実行します。モデル料金が発生する場合があります。",
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
@@ -3407,14 +2863,12 @@
         "tool": "ツール「{{name}}」",
         "command": "チャット指令 ${{command}}",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
-        "panelTab": "パネル「{{title}}」· プラグインページ内で開く",
+        "panelTab": "パネル「{{title}}」· 右サイドバーのタブ",
         "code": "実行コード",
         "codeDetail": "独立したサンドボックスで実行され、ファイルやネットワークにはアクセスできません。",
         "resident": "常駐実行(有効化すると起動し、呼び出されなくてもバックグラウンドプロセスを維持)",
         "residentDetail": "待機中も少量のメモリを使用します。無効化またはアンインストールすると、プロセスは直ちに終了します。",
         "subscribeTopics": "セッションの動きを傍受(ターン・セッションイベント、メッセージ内容は含まない)",
-        "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを傍受",
-        "subscribeActivityDetail": "分かるのはタイミングのみです。思考の開始と終了、そして AI があなたの承認や回答を待っている時点だけを把握します。思考の内容、承認待ちの操作、関係するコマンドやファイル、計画の本文、質問、あなたの回答は一切見えず、あなたの代わりに承認することもできません。",
         "subscribeHooks": "送信するメッセージの読み取り・ブロック・書き換えが可能",
         "subscribeHooksDetail": "送信前に各メッセージを審査します。ブロックしたり、本文を書き換えてから送信することがあります。ブロックされたメッセージは編集して再送信できます。",
         "subscribeAssistantReply": "AI の返信を読み取り・書き換え可能",
@@ -3424,10 +2878,6 @@
         "cardExternalLinkDetail": "カード内のリンクをクリックすると確認ダイアログが表示され、承認後にシステムブラウザで開きます。http/https アドレスのみ許可されます。",
         "notify": "システム通知を表示可能(画面上部のライトな通知)",
         "notifyDetail": "通知の内容はこのプラグインが提供し、通知にはその名前が表示されます。自動的に消え、操作を妨げることはありません。",
-        "badge": "プラグイン入口に未読マークを点灯できます",
-        "badgeDetail": "新しい内容があるとき、サイドバーのプラグイン入口と自身のカードに緑の点を点灯し、一行の要約を添えられます。パネルを開くと消えます。音は鳴らず、振動もせず、システムの通知センターにも入らず、システム通知とは別個の権限です。",
-        "confirm": "確認ダイアログで同意を求められます",
-        "confirmDetail": "実行前に Cindy 自身と同じ確認ダイアログを開いて尋ねることができます。文面はプラグインが提供し、ダイアログにはその名前が表示されます。確認するかキャンセルするかはあなたがクリックして決め、プラグイン自身はクリックできません。同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
         "fsWrite": "ファイルを書き込めます(作成/変更)",
         "fsWriteDetail": "専用データフォルダにはいつでも書き込めます。現在のセッションの作業ディレクトリへの書き込みはセッションの権限モードに従います(自動承認モードでは直接書き込み、逐次確認モードでは事前に承認を求めます)。それ以外のフォルダへの書き込みは毎回確認が必要です。ファイルは常にホストが代理で書き込み、プラグイン自体があなたのファイルシステムに直接アクセスすることはありません。",
         "networkHost": "ネットワークドメイン {{host}} にアクセス",
@@ -3435,8 +2885,6 @@
         "networkSecretGhostInputDetail": "この資格情報はプラグイン自身の設定画面で入力を受け付けるため、入力時にはプラグインのページを経由します。その後ホストへ一度だけ渡されて暗号化保存され、保存後はプラグインから読み出せません。注入は宣言されたドメインへのリクエスト時のみホストが行います。",
         "networkSecretIdentity": "ログインメールアドレスを認証情報「{{name}}」として使用します",
         "networkSecretIdentityDetail": "値はログイン中のアカウントのメールアドレスから取得され、リクエスト時にホストが自動的に導出・注入します。入力は不要です。プラグインは設定画面に現在の身元を表示する目的で、このメールアドレスを読み取れます。",
-        "networkSecretOrganizationIdentity": "Cindy の組織ユーザー ID を認証情報「{{name}}」として使用します",
-        "networkSecretOrganizationIdentityDetail": "Cindy は必要なときに短時間有効な ID アサーションを発行し、ホストだけが明示されたサービスホストへ送信します。プラグインのコードはトークンを読み取ったり保存したりできません。",
         "networkSecretOauth": "{{host}} で OAuth 認可を行うよう案内します({{name}})",
         "networkSecretOauthDetail": "認可フローとすべてのトークンはホストが管理し、プラグインのコードからは読み取れません。クライアント資格情報はこのプラグインの詳細ページで入力します。以下は要求される権限スコープの原文です。確認のうえ許可してください。",
         "networkConnections": "あなたが追加した{{label}}に接続可能",
@@ -3494,7 +2942,6 @@
         "openLocation": "インストール場所を開く",
         "panelDocked": "ドッキング済み · 最小幅 {{min}}px",
         "panelNotDocked": "未ドッキング(レイアウトに位置記録なし)",
-        "panelPageHosted": "プラグインページから開く · 離れると自動的に閉じます",
         "panelNone": "このプラグインにパネルはありません",
         "customSlotTitle": "プラグインのカスタム設定エリア",
         "dangerTitle": "プラグインをアンインストール",
@@ -3509,24 +2956,10 @@
             "image.generate": "画像生成",
             "image.edit": "画像編集",
             "video.generate": "動画生成",
-            "video.edit": "画像から動画",
-            "text.oneshot": "クイック回答(テキスト)",
-            "embed.text": "テキストのベクトル化"
+            "video.edit": "画像から動画"
           },
           "defaultOption": "{{model}}(既定)",
           "noModels": "利用可能なモデルなし"
-        },
-        "errandPrefs": {
-          "title": "AI 代行",
-          "desc": "このプラグインが Cindy Agent にタスクを任せるときの実行設定です。未設定の項目は新規ドラフトの選択に従います。既定では読み取り専用で、専用フォルダー内で作業します。",
-          "agent": "Agent",
-          "model": "モデル",
-          "permission": "書き込み権限",
-          "permissionDisabled": "代行セッションでは選べません",
-          "workdir": "作業フォルダー",
-          "workdirDefault": "プラグイン専用フォルダー(既定)",
-          "workdirPick": "選択…",
-          "workdirClear": "既定のフォルダーに戻す"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "権限",
@@ -3535,17 +2968,11 @@
         "descriptionExpand": "もっと見る",
         "descriptionCollapse": "折りたたむ",
         "useAction": "Plugin を使用",
-        "chatAction": "会話",
-        "enabledLabel": "有効",
-        "disabledLabel": "無効",
         "useDisabled": "使用する前に Plugin を有効にしてください",
         "moreActions": "その他の Plugin 操作",
         "updateFromFile": ".cindy ファイルから更新…",
-        "exportPackage": ".cindy ファイルを書き出す…",
-        "exportFileType": "Cindy プラグイン",
         "settingsTitle": "{{name}} の設定",
         "settingsUnavailableUntilRestore": "この設定を再び使用するには、プラグインを復元してください。",
-        "oauthScopeStale": "現在の認証には新しく追加された権限が含まれていません。再接続して権限を取得してください。",
         "configurationTitle": "設定",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
@@ -3567,7 +2994,6 @@
         "slotCard": "メッセージカード",
         "slotNetwork": "ネットワークアクセス",
         "slotNotify": "システム通知",
-        "slotBadge": "未読バッジ",
         "slotFs": "ファイル書き込み",
         "slotSkill": "エージェントスキル",
         "slotWorkspace": "ワークスペースセッション"
@@ -3583,35 +3009,9 @@
         "dialogTitle": "フォルダを選択",
         "dialogMessage": "プラグイン「{{name}}」がフォルダの選択を求めています"
       },
-      "confirm": {
-        "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
-      },
       "workspace": {
         "dialogTitle": "プロジェクトフォルダを選択",
         "dialogMessage": "プラグイン「{{name}}」がサイドバーにセッションを作成するため、プロジェクトフォルダの選択を求めています"
-      },
-      "panelHost": {
-        "close": "パネルを閉じる"
-      },
-      "updateAll": {
-        "title": "すべて更新 · {{count}} 件",
-        "description": "権限に変更がない更新は自動で完了します。権限が拡張される更新は項目ごとに確認が必要です。",
-        "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "権限に変更あり",
-        "reviewOutdated": "権限の差分が古くなりました",
-        "rereview": "再確認",
-        "reviewDiff": "確認する",
-        "collapseDiff": "閉じる",
-        "approve": "同意して更新",
-        "skip": "スキップ",
-        "statusPending": "待機中",
-        "statusInstalling": "更新中…",
-        "statusDone": "更新済み",
-        "statusSkipped": "スキップ済み",
-        "statusFailed": "更新に失敗",
-        "background": "バックグラウンドで続行",
-        "doneAction": "完了",
-        "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了"
       }
     },
     "mcp": {
@@ -3666,40 +3066,11 @@
     },
     "contacts": {
       "title": "スマート連絡先",
-      "description": "エージェントのための人物・組織データベース。プラットフォーム横断の身元照合(メール / Feishu / Slack / GitHub id → この人は誰か)、関係性の背景、日付付きイベント記録を備えています。エージェントが作業中に自動で収集し、確度の低い項目は確認待ちキューに入ります。データは既定ではこの端末だけに保存され、必要に応じてデバイス間同期を有効にできます。検索や整理はお使いのモデルを通じて処理されます。",
+      "description": "エージェントのための人物・組織データベース。プラットフォーム横断の身元照合(メール / Feishu / Slack / GitHub id → この人は誰か)、関係性の背景、日付付きイベント記録を備えています。エージェントが作業中に自動で収集し、確度の低い項目は確認待ちキューに入ります。データの保存先はこの端末のみで、検索や整理はお使いのモデルを通じて処理されます。",
       "enable": {
         "label": "スマート連絡先を有効にする",
         "description": "オンにすると、エージェントが連絡先情報を検索・自動収集できます(不確かな項目は確認待ちへ)。オフにしても、ここでの閲覧や管理には影響しません。",
         "toggleAria": "スマート連絡先を切り替え"
-      },
-      "sync": {
-        "label": "自分のデバイス間で同期",
-        "description": "参加させる各デスクトップで一度有効にします。オンラインのデバイスは自動同期し、同じローカルネットワークでは直接接続を優先します。それ以外はエンドツーエンド暗号化された中継データを使用します。比較はプログラム処理のみで、モデルや token は消費しません。",
-        "toggleAria": "連絡先のデバイス同期を切り替え",
-        "syncNow": "今すぐ同期",
-        "onlineDevices_other": "ほかのデバイス {{count}} 台がオンライン",
-        "route": {
-          "lan": "ローカルネットワーク",
-          "relay": "暗号化中継"
-        },
-        "status": {
-          "loading": "同期状態を確認中…",
-          "signInRequired": "デバイス間で同期するには Cindy アカウントにログインしてください",
-          "off": "同期はオフです",
-          "waiting": "同期を有効にしたほかのデスクトップがオンラインになるのを待っています",
-          "syncing": "安全に同期中…",
-          "ready": "準備完了。デバイスがオンラインになると自動同期します",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "システムの安全なストレージを利用できないため、デバイス秘密鍵を保護できません",
-          "peer-identity-changed": "デバイスの識別情報が変わったため、データ保護のため同期を停止しました",
-          "sync-failed": "同期に失敗しました。次にデバイスがオンラインになったとき再試行します"
-        },
-        "toast": {
-          "enabled": "デバイス同期を有効にしました",
-          "disabled": "デバイス同期を無効にしました"
-        }
       },
       "stats": "{{people}} 人 / {{orgs}} 組織 / {{groups}} グループ",
       "kind": {
@@ -3839,16 +3210,17 @@
         "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。"
       },
       "guide": {
-        "hint": "AI の案内で連絡先プロフィールの追加、保留項目の確認、重複整理を進めます。",
-        "cta": "AI で連絡先を管理",
-        "managementPrompt": "スマート連絡先を管理してください。まず現在の状態と利用可能なツールを確認し、必要な連絡先の追加、重複項目の整理、保留項目の確認を順に案内してください。書き込み、統合、削除を行う前には必ず私に確認してください。"
+        "hint": "連絡先はまだ空です。いずれかのソースから始めて、初日からあなたの人脈を把握させましょう：",
+        "cta": "AI で整理する",
+        "prompt": "スマート連絡先の整理を手伝ってください。まず現状を確認し、記録すべき人を追加して(システム連絡先や vCard からのインポート、または私への確認でも構いません)、重複があれば確認のうえ統合してください。",
+        "sources": {
+          "mail": "メールから整理",
+          "im": "IM から整理",
+          "import": "連絡先をインポート"
+        },
+        "mailPrompt": "メールからスマート連絡先を作成してください：まず接続済みのメールツールを確認し(なければ接続方法を教えてください)、直近 6 か月のやり取りをスキャンして、双方向のやり取りがある実在の連絡先を登録してください——頻度が高く身元が明確な人は確定で、不確かな人は pending で。マーケティングメール、通知ボット、一度きりの送信者はスキップ。最後に作成した項目を報告してください。",
+        "imPrompt": "チャットツールからスマート連絡先を作成してください：まず接続済みの IM(Feishu / Slack / WeChat など)を確認し(なければ接続方法を教えてください)、最近よく会話する相手を連絡先に整理してください。不確かな人は pending で、グループボットや一時的な会話はスキップ。最後に作成した項目を報告してください。"
       }
-    },
-    "remotePermission": {
-      "label": "権限モード",
-      "hint": "リモート IM では、承認が必要な操作の確認フローを維持します。",
-      "fullAccessDisabled": "安全に確認できない操作が直接実行されないよう、リモート IM では Full Access を利用できません。",
-      "permissionModeDisabled": "リモート IM は Cindy Desktop の確認ポリシーを使用するため、この権限モードは利用できません。"
     }
   },
   "remoteDevice": {
@@ -3932,21 +3304,6 @@
       "processingCopy": "待機期間が終了し、Cindy のログインアカウントを削除しています。",
       "completedCopy": "Cindy のログインアカウントを削除しました。",
       "dismissButton": "確認"
-    }
-  },
-  "credentialStore": {
-    "banner": {
-      "message": "システムの資格情報ストレージが利用できないため、ログイン状態を維持できません",
-      "viewHelp": "解決方法を見る",
-      "dismiss": "閉じる"
-    },
-    "dialog": {
-      "title": "システムの資格情報ストレージが利用できません",
-      "intro": "Cindy はシステムの資格情報ストレージからログイン資格情報を読み取れないため、ログイン状態や関連する連携が失敗し続けます。以下の手順をお試しください:",
-      "stepMacKeychain": "Cindy を終了し、「キーチェーンアクセス」を開いて「Cindy Safe Storage」を検索し、アクセス制御を確認してください。必要に応じて項目を削除します（保存済みの連携資格情報は無効になり、再接続が必要です）",
-      "stepRestart": "Cindy を再起動する",
-      "stepRelogin": "回復しない場合は、ログアウトしてから再度ログインしてください",
-      "confirm": "OK"
     }
   },
   "localDbGate": {
@@ -4126,7 +3483,6 @@
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
-    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -4171,7 +3527,6 @@
     "tooltip": {
       "todayUsedSoftLimit": "本日使用 ${{today}} / ソフト上限 ${{limit}} ({{pct}}%)",
       "sessionUsed": "このセッションで {{cost}} 使用",
-      "creditUsed": "アカウント 使用 {{used}} · 合計 {{total}}",
       "monthlyUnavailable": "⚠️ 月次クォータを一時的に取得できません",
       "dailyUnavailable": "⚠️ 本日の使用量明細を一時的に取得できません",
       "softLimitFormula": "ソフト上限の式: 月次クォータ ÷ 30 × {{factor}}",
@@ -4181,29 +3536,6 @@
       "latestTurnTitle": "直近のターン",
       "latestUserTurnTitle": "直近のユーザーターン合計"
     }
-  },
-  "quotaCard": {
-    "fiveHourLabel": "5 時間",
-    "weeklyLabel": "週間",
-    "modelWeeklyLabel": "{{model}} 週間",
-    "windowsRegionLabel": "クォータ期間の一覧",
-    "usedPercent": "使用済み {{percent}}%",
-    "resetAt": "{{at}} にリセット",
-    "noWindows": "クォータ期間のデータはありません",
-    "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
-    "limitWarning": "プランの上限に近づいています",
-    "extraUsageEnabled": "追加使用量が有効です",
-    "costLine": "このメッセージの消費: {{cost}}",
-    "valueLine": "このメッセージの token 価値: {{cost}}",
-    "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
-    "latestMessageTitle": "直近のメッセージ合計",
-    "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
-    "tokenLabel": "Token",
-    "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
-    "cacheLabel": "キャッシュ",
-    "modelLabel": "モデル",
-    "staleData": "データは {{minutes}} 分前に更新されました",
-    "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
     "costLine": "このターンの消費: {{cost}}",
@@ -4216,7 +3548,6 @@
     "costBreakdownHeader": "モデル別:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "提案: {{suggestion}}",
-    "noBilledCost": "このターンの料金は現在取得できないため、使用量のみ表示しています",
     "suggestion": {
       "lowCache": "キャッシュヒット率が低く、このターンでは多くのコンテキストが再課金されています"
     }
@@ -4256,7 +3587,7 @@
     "close": "閉じる",
     "menuItems": {
       "help": "ヘルプ",
-      "issues": "フィードバック",
+      "issues": "問題",
       "checkForUpdates": "更新を確認"
     },
     "updateCheckToast": {
@@ -4286,24 +3617,14 @@
     "maximizeAria": "パネルを最大化",
     "restoreAria": "パネルのサイズを元に戻す",
     "detachAria": "新しいウィンドウで開く",
-    "minimizeAria": "フローティングバブルに最小化",
-    "closeAria": "パネルを閉じてプラグインを無効化"
-  },
-  "ghostPanel": {
-    "disableConfirm": {
-      "title": "「{{name}}」を無効にしますか？",
-      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
-      "confirm": "無効にする"
-    }
+    "minimizeAria": "フローティングバブルに最小化"
   },
   "ghostPanelWindow": {
     "mergeBack": "メインウィンドウに戻す",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
-    "restoreAria": "{{name}} パネルを元に戻す",
-    "stackExpandAria": "{{count}} 個のプラグインパネルを最小化中。クリックで展開",
-    "stackCollapseAria": "プラグインパネルの一覧を畳む"
+    "restoreAria": "{{name}} パネルを元に戻す"
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
@@ -4321,7 +3642,8 @@
       "menu": {
         "addLabel": "タブを追加",
         "comingSoon": "近日対応",
-        "alreadyOpen": "開いています"
+        "alreadyOpen": "開いています",
+        "pluginGroup": "プラグイン"
       },
       "kinds": {
         "fileBrowser": "ファイルブラウザ",
@@ -4358,6 +3680,9 @@
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
         "terminalSub": "Terminal",
+        "pluginSub": "Plugin",
+        "pluginGroup": "プラグインパネル",
+        "pluginGroupSub": "{{count}} 個のプラグイン",
         "addMoreHint": "上部の + ボタンからほかのパネルタイプを選択できます"
       },
       "placeholderHint": "{{kind}} — コンテンツは後続フェーズで追加されます"
@@ -4739,13 +4064,14 @@
       "preparingButton": "準備中",
       "preparingTooltip": "新しいバージョンを準備中…",
       "preparingAria": "新しいバージョンを準備中、お待ちください",
-      "confirmTitle": "実行中のタスクがあります",
-      "confirmBusyHint": "再起動すると中断されます",
-      "confirmButton": "それでもアプリを再起動",
+      "confirmTitle": "再起動して更新?",
+      "confirmHint": "アプリが自動的に再起動します",
+      "confirmBusyHint": "実行中のタスクがあります。再起動すると中断されます",
+      "confirmButton": "再起動",
       "cancel": "キャンセル",
-      "confirmTooltip": "実行中のタスクがあります — 再起動すると中断されます",
+      "confirmTooltip": "再起動して更新を適用",
       "cancelTooltip": "キャンセル",
-      "confirmAria": "それでも再起動して更新を適用（実行中のタスクは中断されます）",
+      "confirmAria": "再起動して更新を適用",
       "cancelAria": "更新をキャンセル",
       "dismiss": "後で",
       "dismissAria": "更新通知を一時的に閉じる"
@@ -4857,12 +4183,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "この {{service}} Bot App は既に使用中です",
+      "title": "この Feishu Bot App は既に使用中です",
       "bodyPrefix": "現在の App",
       "bodyMain": "は別の端末で既にロングコネクションを開始しています。同僚が同じ App ID を使用している可能性があります。一つの App は一台にしか接続できないため、競合を避けるために本機では自動的に切断しました。",
       "suggestionsHeading": "対処方法は 2 つあります：",
       "suggestion1": "1. 相手と相談して時間をずらして使用し、相手側で先に資格情報をクリアしてから本機で再接続する。",
-      "suggestion2": "2. {{service}} オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
+      "suggestion2": "2. Feishu オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
       "dismiss": "閉じる",
       "createOwnApp": "自分の App を作成 ↗"
     }
@@ -4890,7 +4216,6 @@
       "send": "メッセージを送信",
       "queue": "キューに追加",
       "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
       "stop": "生成を停止"
     },
     "pluginSetup": {
@@ -4961,7 +4286,8 @@
       "inlineSecretStoreFailed": "認証情報の保存に失敗しました",
       "targetNotFound": "対象プラグインがアンインストールされたか現在利用不可です",
       "targetDisabled": "対象プラグインが無効化されています",
-      "targetDisabledInWorkdir": "ユーザーが現在のワーキングディレクトリでこのプラグインを無効にしています。リトライしないでください。"
+      "targetDisabledInWorkdir": "ユーザーが現在のワーキングディレクトリでこのプラグインを無効にしています。リトライしないでください。",
+      "targetToolNotFound": "対象プラグインはこのツールを提供していません"
     },
     "createAgent": {
       "quickStart": "クイックスタート",
@@ -4978,7 +4304,7 @@
         "search": "検索",
         "local": "ローカル",
         "projects": "プロジェクト",
-        "conversations": "セッション"
+        "conversations": "会話"
       }
     },
     "addRemoteProject": {
@@ -4993,7 +4319,6 @@
       "add": "プロジェクトを追加",
       "cancel": "キャンセル",
       "empty": "「設定 → リモート接続」で被制御デバイスに接続するか、「設定 → リモートマシン」で SSH ホストを追加してください。",
-      "emptyPiSshFiltered": "Pi はローカルでのみ動作するため、ここに SSH ホストは表示されません。「設定 → リモート接続」で被制御デバイスに接続するか、SSH ホストを使う場合は Claude または Codex に切り替えてください。",
       "loading": "読み込み中…",
       "noSubdirs": "サブフォルダはありません",
       "doubleClickHint": "ダブルクリックで入る",
@@ -5027,11 +4352,6 @@
         "generic": "サブスクリプション直結モデルは SSH リモートセッションに未対応です"
       },
       "discovering": "モデルを取得中…",
-      "remoteLoading": "リモートデバイスからモデルを読み込み中…",
-      "remoteLoadFailed": "リモートデバイスのモデルを読み込めませんでした。接続を確認して再試行してください。",
-      "remoteLoadFailedShort": "モデルの読み込みに失敗",
-      "retryRemoteModels": "モデルを再読み込み",
-      "remoteEmpty": "このデバイスには利用可能なモデルがありません",
       "effortLabel": "推論強度",
       "edit": "編集",
       "options": "オプション",
@@ -5057,7 +4377,6 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi",
           "pending": "次回：{{agent}}"
         }
       },
@@ -5084,9 +4403,9 @@
       },
       "meta": {
         "context": "コンテキスト {{value}}",
-        "codexCompatibilityMode": "Codex 互換モード",
         "price": "{{input}}/{{output}} / 100万",
-        "fastBadge": "高速"
+        "fastBadge": "高速",
+        "budgetDiscount": "特別割引"
       },
       "source": {
         "railLabel": "ソース",
@@ -5117,7 +4436,7 @@
           },
           "auto": {
             "label": "自動レビュー",
-            "description": "ワークスペース内の読み書きを許可し、昇格リクエストを自動でレビューします。高リスクな操作は拒否または確認される場合があります。中断は減りますが、誤判定の可能性があります。"
+            "description": "ワークスペース内の読み書きを許可し、昇格リクエストを自動でレビューします。中断は減りますが、誤判定の可能性があります。"
           },
           "bypassPermissions": {
             "label": "フルアクセス",
@@ -5136,20 +4455,6 @@
           "bypassPermissions": {
             "label": "フルアクセス",
             "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
-          }
-        },
-        "pi": {
-          "ask": {
-            "label": "デフォルト権限",
-            "description": "読み取り専用ツールはそのまま実行し、ファイル書き込み・コマンド実行・MCP ツールは毎回確認します。"
-          },
-          "auto": {
-            "label": "自動レビュー",
-            "description": "ワークスペース内の書き込みと安全なコマンドは自動実行し、境界外への書き込み・危険なコマンド・MCP ツールは確認します。"
-          },
-          "bypassPermissions": {
-            "label": "フルアクセス",
-            "description": "すべてのツールを確認なしで実行します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }
@@ -5173,9 +4478,7 @@
       "detecting": "環境を検出中…",
       "gitMissing": "git が検出されません。先にインストールしてください",
       "notGitRepo": "現在のディレクトリは git リポジトリではありません",
-      "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
-      "toggleAria": "worktree 分離を使用",
-      "chipTooltip": "独立した worktree でこのチャットを開始し、現在のブランチには影響しません"
+      "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です"
     },
     "branchChip": {
       "label": "ブランチ",
@@ -5183,8 +4486,7 @@
       "loadFailed": "ブランチの読み込みに失敗しました。タップして再試行",
       "currentTooltip": "現在のブランチ",
       "sourceTooltip": "worktree のソースブランチ",
-      "worktreeHint": "別のブランチを選ぶと worktree 分離で開始します",
-      "exitWorktreeHint": "現在のブランチを選ぶと worktree を解除し、そのまま開始します"
+      "worktreeHint": "別のブランチを選択すると worktree 分離で開始します"
     },
     "folderPicker": {
       "selectFolder": "フォルダを選択",
@@ -5196,8 +4498,6 @@
       "browseProjectFolder": "別のプロジェクトフォルダを選択",
       "dialogue": "対話",
       "dialogueOrSelectProject": "対話またはプロジェクトを選択",
-      "remoteProjectsLoadFailed": "{{device}} のプロジェクトを読み込めませんでした。接続を確認して再試行してください。",
-      "retryRemoteProjects": "プロジェクトを再読み込み",
       "removeFromList": "リストから削除",
       "missingDir": "フォルダが見つかりません"
     },
@@ -5248,13 +4548,9 @@
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
       "openHint": "Worker を呼んで協同する",
-      "disabledHint": "協同モードは無効です。設定で有効にしてください。",
-      "unavailableHint": "協同設定を確認できません。しばらくしてから再試行してください。",
-      "unsupportedRemoteHint": "被操作デバイスのバージョンが古いため、協同を利用できません。",
-      "remoteContinueNotice": "このメッセージは単一セッションとして送信されます。",
-      "handoffRecoveredMessage": "前回は協同の開始が中断されました。送信されなかったメッセージを入力欄に復元しました。",
-      "handoffRecoveredGoal": "前回は協同の開始が中断されました。ゴールは開始されておらず、その内容を入力欄に復元しました。",
-      "loadingHint": "協同設定を確認中です。しばらくしてから再試行してください。",
+      "disabledHint": "このプロジェクトでは協同モードが無効です。プロジェクト設定で有効にしてください。",
+      "unavailableHint": "このプロジェクトの協同設定を確認できません。しばらくしてから再試行してください。",
+      "loadingHint": "このプロジェクトの協同設定を確認中です。しばらくしてから再試行してください。",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",
       "toggleOnAria": "協同モード中、クリックで停止",
@@ -5281,8 +4577,8 @@
         "BUDGET_MODEL_REQUIRES_API_MODE": "この Codex モデルを使うには API key が必要です。設定で構成してから再試行してください。",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "この Codex モデルを使うには API key が必要です。協同は開始されず、このメッセージは単一セッションとして続行します。設定で構成してから再試行してください。",
         "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被操作デバイスにこの Codex モデル用の API key が設定されていません。被操作デバイスで設定してから再試行してください。",
-        "PRECONDITION_FAILED": "協同モードが無効か、このセッションは協同に対応していません。",
-        "PRECONDITION_FAILED_CONTINUE": "協同は開始されませんでした。単一セッションとして続行します。",
+        "PRECONDITION_FAILED": "このプロジェクトでは協同モードが無効か、このセッションは協同に対応していません。",
+        "PRECONDITION_FAILED_CONTINUE": "このプロジェクトでは協同モードが無効です。単一セッションとして続行します。",
         "PRECONDITION_FAILED_REMOTE": "制御中のセッションは協同に対応していません。"
       }
     },
@@ -5307,30 +4603,14 @@
       "permissionSwitchFailed": "権限モードの変更に失敗したため、以前の設定を維持しました",
       "fullAccessConfirmation": {
         "title": "Full access を有効にしますか？",
-        "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしで次の操作ができるようになります:",
-        "items": {
-          "files": {
-            "title": "ファイルとフォルダ",
-            "description": "ワークスペース外のファイルの読み取りと変更"
-          },
-          "commands": {
-            "title": "ターミナルコマンド",
-            "description": "ターミナルコマンドやスクリプトを直接実行"
-          },
-          "network": {
-            "title": "ネットワークアクセス",
-            "description": "ネットワークコマンドの実行とインターネットへのアクセス"
-          }
-        },
-        "note": "組み込みの高リスク操作では引き続き確認が必要です。",
+        "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy はワークスペース外のファイル変更やネットワークコマンドを確認なしで実行できます。組み込みの高リスク操作では引き続き確認が必要です。",
         "confirm": "Full access を有効にする",
-        "cancel": "キャンセル"
+        "cancel": "現在の権限を維持"
       },
       "attachmentRejection": {
         "dismiss": "閉じる"
       },
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
-      "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "modelSwitchContextGuard": {
         "title": "切替先モデルのコンテキストウィンドウが小さいです",
@@ -5352,27 +4632,11 @@
         }
       }
     },
-    "agentSelect": {
-      "label": "エンジン",
-      "trigger": {
-        "aria": "エンジンを選択：{{agent}}"
-      }
-    },
     "atMention": {
-      "add": "追加",
-      "plugins": "プラグイン",
-      "filesAndFolders": "ファイルとフォルダ",
-      "browserTab": "ブラウザタブ",
-      "desktopWindow": "アプリウィンドウ",
-      "task": "タスク",
-      "pluginResources": "プラグインリソース",
-      "pluginResource": "プラグインリソース",
-      "backToAll": "すべての @ コンテンツに戻る",
-      "scanFailed": "@ コンテンツの読み込みに失敗しました",
+      "scanFailed": "作業ディレクトリのスキャンに失敗しました",
       "retry": "再試行",
       "searching": "検索中…",
-      "noMatch": "一致する項目がありません",
-      "typeToSearchFiles": "キーワードを入力してファイルとセッションを検索",
+      "noMatch": "一致するファイルがありません",
       "keepTyping": "入力を続けて絞り込み…"
     },
     "planReview": {
@@ -5426,7 +4690,7 @@
         "title": "Cindy AI",
         "desc": "公式サービス · 全モデル · Claude Code / Codex 対応",
         "loginTitle": "Cindy にサインイン",
-        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます。新規ユーザーには特典残高が付きます"
+        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
       },
       "othersToggle": "その他のプロバイダー({{count}})",
       "presetSub": "API キーを入力して接続",
@@ -5447,12 +4711,6 @@
       "openProviders": "モデルプロバイダーを開く",
       "acknowledge": "了解",
       "separator": "、"
-    },
-    "promotionalGrant": {
-      "title": "Cindy AI の利用を開始しました",
-      "desc": "特典残高 {{amount}} を付与しました。有効期限は {{date}} です。使い切った後や期限切れの後も、いつでもチャージできます。",
-      "openBilling": "使用量を見る",
-      "acknowledge": "了解"
     }
   },
   "voiceInputOverlay": {
@@ -5506,20 +4764,6 @@
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
     "transcriptKeptOverlay": "{{message}}（ここまで認識したテキストは保持しており、コピーして続けられます）"
   },
-  "chatgptAuthRecovery": {
-    "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。ChatGPT App を開いて再度ログインしてから、再試行してください。",
-    "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
-    "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
-    "recovered": "ChatGPT ログインが復旧しました。再試行してください。",
-    "openApp": "ChatGPT App を開く",
-    "relogin": "ChatGPT に再ログイン",
-    "checking": "確認中…",
-    "recheck": "再確認",
-    "later": "後で",
-    "openAppFailed": "ChatGPT App を開けませんでした。手動で開いて再度ログインしてください。",
-    "verificationFailed": "ChatGPT ログインが復旧したか確認できませんでした。再確認してください。"
-  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "スキップ済み"
@@ -5551,13 +4795,11 @@
     },
     "agentTask": {
       "emptyTitle": "サブエージェントタスク",
-      "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi",
         "workflow": "Workflow",
         "shell": "バックグラウンドコマンド"
       },
@@ -5577,11 +4819,8 @@
       "lastTool": "直近のツール: {{tool}}",
       "outputFile": "出力: {{path}}"
     },
-    "planPill": {
-      "step": "ステップ {{current}} / {{total}}"
-    },
     "forkOrigin": {
-      "label": "元のセッションから作成"
+      "label": "元の会話から作成"
     },
     "imageMissing": {
       "title": "画像が失われました"
@@ -5591,25 +4830,17 @@
       "label_one": "{{count}} 件の新着",
       "label_other": "{{count}} 件の新着"
     },
-    "messageNavRail": {
-      "aria": "質問ナビゲーション",
-      "jumpAria": "{{index}} 番目の質問へ移動：{{preview}}",
-      "attachmentOnly_one": "添付ファイル {{count}} 件",
-      "attachmentOnly_other": "添付ファイル {{count}} 件",
-      "hiddenEarlier_one": "これより前に {{count}} 件の質問",
-      "hiddenEarlier_other": "これより前に {{count}} 件の質問"
-    },
     "messageActionBar": {
       "copy": "メッセージをコピー",
       "linkCopied": "リンクをコピーしました",
       "moreActions": "その他のメッセージ操作",
-      "copyLink": "現在のメッセージリンクをコピー",
+      "copyLink": "現在の会話リンクをコピー",
       "copyLinkFailed": "リンクをコピーできませんでした",
       "rewind": "ここまで戻る",
-      "fork": "新しいセッションで続ける",
-      "forkConfirmTitle": "ここから新しいセッションを始めますか？",
-      "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しいセッションを作成します。元のセッションは変更されず、以後のメッセージは互いに影響しません。",
-      "forkConfirm": "新しいセッションを始める",
+      "fork": "新しい会話で続ける",
+      "forkConfirmTitle": "ここから新しい会話を始めますか？",
+      "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しい会話を作成します。元の会話は変更されず、以後のメッセージは互いに影響しません。",
+      "forkConfirm": "新しい会話を始める",
       "forkCancel": "キャンセル",
       "delete": "このメッセージを削除",
       "deleteConfirmTitle": "このメッセージを削除しますか？",
@@ -5622,7 +4853,6 @@
       "turnCost": "このターンの消費",
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
-      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "このユーザーターンの合計: {{cost}}",
       "userTurnCostDetailsTitle": "最終 SDK セグメント"
     },
@@ -5630,24 +4860,18 @@
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
       "retry": "再試行",
-      "continueAfterReset": "リセット後に続行",
-      "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
-      "gatewayQuotaExhausted": "Cindy AI の残高が不足しています。チャージすると続行できます。",
-      "viewBalance": "残高を見る",
-      "viewBalanceTitle": "「使用量と請求」を開いて残高を確認・チャージ",
-      "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
-      "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
-      "codexResumeNotReady": "Codex は現在このタスクを再開できません。しばらくしてからもう一度お試しください。",
-      "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
-      "claudeSubscriptionOpusPlanMismatch": "接続中の Claude Pro プランでは Opus を利用できません。プランに含まれるモデルに切り替えてください。最近プランを変更した場合は、設定で Anthropic を再接続してから再試行してください。",
-      "switchClaudeSubscription": "Claude.ai に切り替えて再試行",
-      "switchClaudeSubscriptionTitle": "このセッションを Claude.ai サブスクリプションに切り替えて再試行",
-      "switchingClaudeSubscription": "Claude.ai に切り替え中…",
-      "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
+      "credentialSwitchBusy": "他の Codex タスクが実行中のため、この会話で選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
+      "codexThreadStale": "Codex の認証モードが切り替わりました。この会話は続行できません。新しい会話を開始してください。",
       "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
-      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
+      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しい会話を開始してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
+      "codexSessionExpiredDialog": {
+        "title": "OpenAI 接続の更新が必要です",
+        "description": "{{appName}} は現在 ChatGPT アカウントを使用できません。再接続すると、Codex と Claude の OpenAI 機能が復旧します。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
+        "confirm": "ChatGPT に再接続",
+        "cancel": "後で"
+      },
       "codexAuthSynced": "認証情報が同期されました。「再試行」をクリックして再送信してください。",
       "syncAuth": "認証情報を同期",
       "syncAuthSyncing": "同期中…",
@@ -5666,7 +4890,6 @@
       "networkAutoRetrying": "ネットワークエラー:自動的に再試行しています…",
       "networkReconnecting": "接続が中断されました。再接続中（{{attempt}}/{{maxAttempts}}）…",
       "overloadRetrying": "モデルサービスが混雑しています:自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
-      "rateLimitRetrying": "リクエストがレート制限されました。自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください",
       "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください",
       "networkShowRaw": "元のエラーを表示",
@@ -5986,7 +5209,7 @@
         "detail": {
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
-          "sessionTotal": "このセッションでの再接続 {{count}} 回"
+          "sessionTotal": "この会話での再接続 {{count}} 回"
         }
       },
       "autoResumeSeparator": {
@@ -6017,11 +5240,6 @@
       "openInBrowser": "ブラウザで開く",
       "fileCopied": "ファイルをコピーしました",
       "pathCopied": "パスをコピーしました",
-      "BROWSER_FILE_INVALID_TARGET": "ローカルページのパスが無効です",
-      "BROWSER_FILE_PATH_NOT_ALLOWED": "このパスにはアクセスできません",
-      "BROWSER_FILE_UNSUPPORTED_TYPE": "このファイル形式はブラウザで開けません",
-      "BROWSER_FILE_NOT_FOUND": "ローカルページが見つかりません",
-      "BROWSER_FILE_OPEN_FAILED": "ブラウザで開けませんでした",
       "openInBrowserFailed": "ブラウザで開けませんでした",
       "openLinkFailed": "リンクを開けませんでした",
       "anchorNotFound": "対応する見出しが見つかりません",
@@ -6054,7 +5272,6 @@
     },
     "userMessage": {
       "attachmentPrefix": "添付：",
-      "attachmentAttachedAria": "{{name}}を添付済み",
       "saveAttachmentAs": "添付ファイル {{name}} を別名で保存",
       "attachmentSaved": "添付ファイル {{name}} を保存しました",
       "attachmentSavedUnsupported": "添付ファイル {{name}} を保存しましたが、現在のプラットフォームではこのファイル形式を直接使用できない可能性があります",
@@ -6073,7 +5290,7 @@
         "messageCount_other": "{{count}} 件のメッセージ",
         "truncated": "一部省略"
       },
-      "forkBusy": "現在の応答が終了してから、ここから新しいセッションを始めてください",
+      "forkBusy": "現在の応答が終了してから、ここから新しい会話を始めてください",
       "editStopTimeout": "タスクの停止待ちがタイムアウトしました。もう一度お試しください",
       "editQueueNotEmpty": "このセッションには送信待ちのメッセージがあります。先に送信または削除してから編集してください",
       "editNotLast": "セッションに新しいメッセージがあるため、これは最新ではなくなり編集して再送信できません",
@@ -6082,11 +5299,11 @@
       "editSend": "送信",
       "editRollbackHint": "送信すると前のターンで変更された {{count}} 個のファイルが元に戻ります",
       "forkErrors": {
-        "unsupportedHistory": "この位置に対応する過去のエージェントセッションを利用できないため、ここから新しいセッションを始められません",
-        "noPriorAssistant": "AI の返信より後のメッセージから新しいセッションを始めてください",
-        "sourceNeverRan": "元のセッションがまだ実行されていないため、新しいセッションを始められません",
-        "codexStateUnavailable": "Codex セッションの状態を利用できないため、新しいセッションを始められません。{{detail}}",
-        "generic": "新しいセッションを始められませんでした。再試行してください"
+        "unsupportedHistory": "この位置に対応する過去のエージェントセッションを利用できないため、ここから新しい会話を始められません",
+        "noPriorAssistant": "AI の返信より後のメッセージから新しい会話を始めてください",
+        "sourceNeverRan": "元の会話がまだ実行されていないため、新しい会話を始められません",
+        "codexStateUnavailable": "Codex 会話の状態を利用できないため、新しい会話を始められません。{{detail}}",
+        "generic": "新しい会話を始められませんでした。再試行してください"
       }
     },
     "threadContext": {
@@ -6140,7 +5357,6 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが一時的に利用できないため、レビューが必要な操作は拒否されます。ご自身で承認する場合は、このセッションをデフォルト権限に切り替えてください。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
@@ -6225,7 +5441,6 @@
       "searchingWeb": "ウェブを検索中…",
       "generatingImage": "画像を生成中…",
       "compacting": "コンテキストを圧縮中…",
-      "spawningAgent": "サブエージェントを起動中…",
       "done": "完了",
       "waiting": "少々お待ちください…",
       "working": "作業中…",
@@ -6237,7 +5452,6 @@
     "remoteSession": {
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
-      "degraded": "被制御デバイスとの接続が不安定です。自動的に再試行中…",
       "actionsUnavailable": "被制御デバイスを利用できません。再接続してからこのセッションを変更してください。",
       "resync": "再同期",
       "loading": "リモートデバイスからセッションを読み込み中…",
@@ -6247,8 +5461,7 @@
         "auth-failed": "ログインの有効期限が切れました。再ログインするとリモート接続が復旧します",
         "replaced": "同じデバイスの別の接続に置き換えられました。再接続しています…",
         "too-many-connections": "このアカウントの同時オンライン台数が多すぎるため、サーバーに接続を拒否されました",
-        "version-mismatch": "サーバーとプロトコルバージョンが一致しません。アプリを更新してから再試行してください",
-        "unstable": "このパソコンの接続が切断と再接続を繰り返しているため、リモート操作がタイムアウトし続ける可能性があります。ネットワークを確認するか、Cindy を再起動して再試行してください"
+        "version-mismatch": "サーバーとプロトコルバージョンが一致しません。アプリを更新してから再試行してください"
       }
     },
     "common": {
@@ -6349,15 +5562,12 @@
     },
     "draft": {
       "createSessionFailed": "セッションの作成に失敗しました。再試行してください",
-      "piRemoteUnsupported": "Pi はローカルでのみ動作し、SSH リモートホストは利用できません。このホストを使うには Claude または Codex に切り替えてください。",
-      "remoteWorktreeCleanupPending": "前回のリモート worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
       "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
       "remoteNativeOauthUnavailable": "Claude.ai サブスクリプションが未接続です。先に接続するか、ゲートウェイモデルを選択してください",
       "deviceStillLoading": "リモートデバイスの読み込み中です。しばらくお待ちください",
-      "remoteDefaultsLoadFailed": "リモートデバイスの設定を読み込めませんでした。接続を確認してください。Cindy が再試行しています。",
-      "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートが見つかりません",
-      "worktreeRepoHint": "作業ディレクトリを選び直し、右下のフォルダー表示が更新されてから再試行してください",
+      "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートがありません",
+      "worktreeRepoHint": "作業ディレクトリを再選択し、右下のフォルダ表示が更新されてから再試行してください",
       "sessionInactive": "セッションはすでにアクティブではありません",
       "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
       "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）"
@@ -6371,13 +5581,6 @@
         "allMachines": "すべて",
         "localMachine": "このデバイス",
         "connecting": "接続中…",
-        "tasksLoading": "{{device}} のセッションを読み込み中…",
-        "tasksLoadFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中…",
-        "tasksPartiallyFailed": "現在 {{device}} のセッションを読み込めません。自動的に再試行中のため、読み込み済みの内容のみ表示しています",
-        "devicesLoading": "リモートデバイスを読み込み中…",
-        "devicesLoadFailed": "リモートデバイスの一覧を読み込めませんでした。接続を確認して再試行してください。",
-        "devicesPartiallyFailed": "リモートデバイスの一覧を更新できませんでした。読み込み済みの内容のみ表示しています。",
-        "retryDevices": "デバイスを再読み込み",
         "remoteSettings": "リモート接続設定",
         "multiSelect": "複数選択",
         "deselect": "選択を解除",
@@ -6401,11 +5604,11 @@
       },
       "showAllSessions": "すべて表示 {{count}} 件",
       "dialogues": "会話",
-      "newDialogue": "新規セッション",
+      "newDialogue": "新規会話",
       "dialoguesToggleExpand": "会話を展開",
       "dialoguesToggleCollapse": "会話を折りたたむ",
       "loadingDialogues": "読み込み中…",
-      "noDialogues": "セッションはありません",
+      "noDialogues": "会話はありません",
       "dialogueSettings": "会話を整理",
       "dialogueSettingsAria": "会話を整理（並び替え：{{sortBy}}）",
       "dialogueSortHeading": "並び替え",
@@ -6419,8 +5622,8 @@
       "createProjectFailed": "プロジェクトの作成に失敗しました",
       "projectsSectionToggleExpand": "プロジェクトを展開",
       "projectsSectionToggleCollapse": "プロジェクトを折りたたむ",
-      "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
-      "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
+      "projectsToggleExpand": "すべてのプロジェクト会話を展開",
+      "projectsToggleCollapse": "すべてのプロジェクト会話を折りたたむ",
       "filterAria": "サイドバー整理（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
       "organizeSidebar": "サイドバー整理",
       "filterAllText": "すべて",
@@ -6605,51 +5808,12 @@
         "moveToProjectRemoteUnsupported": "リモートセッションの移動はまだサポートされていません",
         "openInNewWindow": "新しいウィンドウで開く",
         "exportShare": "セッションをエクスポート…",
-        "exportHtml": "HTML にエクスポート…",
-        "exportHtmlSuccess": "セッションを HTML にエクスポートしました",
-        "exportHtmlFailed": "HTML エクスポートに失敗しました",
-        "compact": "コンテキストを圧縮",
-        "compacting": "圧縮中…",
-        "compactSuccess": "コンテキストを圧縮しました",
-        "compactSuccessWithTokens": "コンテキストを圧縮しました:{{before}}k → {{after}}k tokens",
-        "compactFailed": "圧縮に失敗しました",
-        "compactNothing": "圧縮できる内容がまだありません",
-        "sessionBranches": "セッション分岐",
-        "copySessionLink": "セッションリンクをコピー"
-      },
-      "sessionBranches": {
-        "title": "セッション分岐",
-        "close": "セッション分岐を閉じる",
-        "description": "Cindy のセッション分岐と Pi のセッション内分岐を同じツリーに表示します。",
-        "current": "現在",
-        "empty": "切り替え可能な Pi 分岐はまだありません。",
-        "emptyEntry": "表示できる内容がありません",
-        "loadFailed": "セッション分岐を読み込めませんでした",
-        "switchFailed": "分岐の切り替えに失敗しました",
-        "switched": "セッション分岐を切り替えました",
-        "switchedWithDraft": "分岐を切り替え、元のプロンプトを入力欄に戻しました",
-        "runningBlocked": "現在のターンが終了してから分岐を切り替えてください。",
-        "remoteBlocked": "分岐を切り替える前に、操作対象のデスクトップを再接続または更新してください。",
-        "filesWarning": "切り替わるのは会話コンテキストだけで、作業ファイルは巻き戻りません。",
-        "summarize": "離れる分岐を要約する（モデルを使用）",
-        "summaryFocus": "任意：要約の重点（例：エラー処理の結論を残す）",
-        "role": {
-          "user": "ユーザー",
-          "assistant": "Agent",
-          "tool": "ツール",
-          "summary": "分岐要約",
-          "system": "状態"
-        }
+        "copySessionLink": "チャットリンクをコピー"
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
-        "removeFromSidebar": "サイドバーからプロジェクトを削除",
-        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
-        "removeFromSidebarConfirmAction": "プロジェクトを削除",
-        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
         "syncCodex": "このプロジェクトの Codex セッションを同期",
         "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
         "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",
@@ -6674,7 +5838,7 @@
         "projects": "プロジェクト",
         "dialogues": "チャット"
       },
-      "railNavCount": "{{count}} 件のセッション"
+      "railNavCount": "{{count}} 件の会話"
     },
     "rename": {
       "aiRename": "AIで名前を再生成",
@@ -6879,11 +6043,11 @@
       "open": "検索",
       "placeholder": "タイトルまたは内容を検索…",
       "clear": "検索をクリア",
-      "empty": "キーワードを入力してセッションのタイトルと内容を検索",
+      "empty": "キーワードを入力して会話のタイトルと内容を検索",
       "searching": "検索中…",
       "failed": "検索に失敗しました",
-      "noResults": "一致するセッションがありません",
-      "jumpFailed": "セッションを開きましたが、一致したメッセージへ移動できませんでした",
+      "noResults": "一致する会話がありません",
+      "jumpFailed": "会話を開きましたが、一致したメッセージへ移動できませんでした",
       "moreHits": "ほか {{count}} 件の関連",
       "kind": {
         "title": "タイトル",
@@ -6931,10 +6095,6 @@
     "empty": {
       "promptHeading": "自動化がまだありません",
       "promptDescription": "cron 自動化を作成して、Claude Code または Codex にプロンプトをスケジュール実行させましょう。"
-    },
-    "usageLimitRecovery": {
-      "name": "利用上限リセット後にタスクを続行",
-      "prompt": "中断したところから現在のタスクを続行してください。"
     },
     "template": {
       "useTemplate": "初心者ヘルプ",
@@ -7106,7 +6266,6 @@
         "titleProjectCreate": "新しいプロジェクト自動化",
         "titleProjectEdit": "プロジェクト自動化を編集",
         "subtitle": "Claude または Codex でプロンプトをスケジュール実行します。",
-        "subtitleFromGhost": "「{{name}}」が自動化の作成を求めています。モデルを選んで保存すると有効になります。",
         "save": "保存",
         "create": "作成",
         "saveAria": "自動化を保存",
@@ -7162,8 +6321,6 @@
         "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
         "silentRunInfoAria": "サイレント実行のルールを表示",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
-        "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
-        "configWecomGroup": "WeCom グループ通知を設定",
         "configFeishu": "Feishu Bot を設定"
       },
       "runSession": {
@@ -7249,7 +6406,6 @@
     },
     "chips": {
       "selectProject": "プロジェクトを選択",
-      "chooseTime": "時刻を選択",
       "recent": "最近",
       "browseFolder": "別のフォルダを選択",
       "advanced": "詳細設定",
@@ -7327,34 +6483,33 @@
       "actionFailed": "操作に失敗しました: {{error}}",
       "renameFailed": "名前の変更に失敗しました: {{error}}",
       "deleteFailed": "削除に失敗しました: {{error}}",
-      "restartFailed": "再開に失敗しました: {{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」が自動化の作成を求めましたが、編集中のフォームが開いています。入力内容はそのまま保持しました。保存または閉じたあと、もう一度実行してください。"
+      "restartFailed": "再開に失敗しました: {{error}}"
     },
     "deleteDialog": {
       "title": "自動化「{{name}}」を削除しますか？",
       "titleFallback": "自動化を削除しますか？",
-      "description": "今後のトリガーは停止されます。この自動化がすでに生成したセッションの扱いを選択してください。",
-      "sessionCountPending": "生成済みのセッションを確認しています…",
-      "sessionCount": "生成済みのセッション {{count}} 件",
+      "description": "今後のトリガーは停止されます。この自動化がすでに生成した会話の扱いを選択してください。",
+      "sessionCountPending": "生成済みの会話を確認しています…",
+      "sessionCount": "生成済みの会話 {{count}} 件",
       "inflightCount": "現在 {{count}} 件の実行中タスクがあり、削除すると停止されます",
-      "optionAria": "生成済みセッションの扱いを選択",
+      "optionAria": "生成済み会話の扱いを選択",
       "option": {
         "keep": {
-          "title": "セッションを保持",
-          "description": "自動化タスクのみ削除し、セッションはサイドバーに残します。"
+          "title": "会話を保持",
+          "description": "自動化タスクのみ削除し、会話はサイドバーに残します。"
         },
         "archive": {
-          "title": "セッションをアーカイブ",
-          "description": "自動化タスクを削除し、生成されたセッションをアーカイブへ移動します。"
+          "title": "会話をアーカイブ",
+          "description": "自動化タスクを削除し、生成された会話をアーカイブへ移動します。"
         },
         "delete": {
-          "title": "セッションを削除",
-          "description": "自動化タスクと生成されたセッションを削除します。この操作は元に戻せません。"
+          "title": "会話を削除",
+          "description": "自動化タスクと生成された会話を削除します。この操作は元に戻せません。"
         }
       },
       "confirm": "自動化を削除",
-      "confirmDeleteSessions": "自動化とセッションを削除",
-      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件のセッションを処理できませんでした"
+      "confirmDeleteSessions": "自動化と会話を削除",
+      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件の会話を処理できませんでした"
     },
     "confirm": {
       "delete": {
@@ -7449,26 +6604,6 @@
       "emptyNoFilter": "Issue がまだありません。上のボタンから最初の 1 件を作成してください",
       "emptyFilter": "一致する Issue がありません",
       "clearFilters": "フィルターをクリア"
-    },
-    "mine": {
-      "refresh": "更新",
-      "emptyTitle": "送信した Issue はまだありません",
-      "emptyTitleUnverified": "現在 Issue を取得できません",
-      "startIssueChat": "/issue で新しいセッションを開始",
-      "statusUnknown": "ステータス不明",
-      "sourceCindy": "Cindy から送信",
-      "sourceGithub": "GitHub アカウント",
-      "commentCount_other": "コメント {{count}} 件",
-      "openOnGithub": "GitHub で開く",
-      "viewerGithub": "GitHub アカウント @{{login}}",
-      "platformUnavailableHint": "この端末に記録された送信分のみを表示しています。他の端末から送信した Issue と GitHub 上の最新ステータスは、まだアプリ内で表示できません。",
-      "platformUnavailablePartialHint": "他の端末から送信した Issue はまだアプリ内で表示できないため、一覧が不完全な場合があります。",
-      "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
-      "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しているため、一覧が不完全な場合があります。",
-      "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
-      "enhancementFailedHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。Cindy GitHub プラグインのアクセストークンの権限が不足している可能性があります。プラグインページで確認してください。",
-      "enhancementFailedGenericHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。ネットワークまたは GitHub のレート制限が原因の可能性があります。しばらくしてから再読み込みしてください。",
-      "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
     "redirect": {
       "title": "左から Issue を選択してください",
@@ -7683,6 +6818,7 @@
       "cancel": "キャンセル"
     },
     "redirect": {
+      "title": "Issue は GitHub に移行しました",
       "descriptionBefore": "チャットで ",
       "descriptionAfter": " と入力すると、AI が詳細を確認したうえで問題や提案を提出します。",
       "cta": "GitHub Issues を見る"
@@ -7690,9 +6826,9 @@
   },
   "renameSessions": {
     "confirm": {
-      "title": "セッションタイトルの一括変更を確認",
-      "description": "実際に書き込まれるタイトルを確認してください。承認すると {{count}} 件のセッションタイトルを更新します。",
-      "count": "{{count}} 件のセッション",
+      "title": "会話タイトルの一括変更を確認",
+      "description": "実際に書き込まれるタイトルを確認してください。承認すると {{count}} 件の会話タイトルを更新します。",
+      "count": "{{count}} 件の会話",
       "from": "変更前:",
       "to": "変更後:",
       "untitled": "無題",
@@ -7734,13 +6870,7 @@
       "installed": "インストール済み",
       "globalScope": "グローバル",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "ローカル",
-      "import": "スキルをインポート",
-      "importAria": "ローカルの zip または SKILL.md からスキルをインポート",
-      "importPickerTitle": "インポート先を選択",
-      "importPickerSubtitle": "{{name}} · {{description}}",
-      "importSuccess": "{{name}} をインポートしました{{suffix}}",
-      "importFailed": "スキルのインポートに失敗しました"
+      "sourceLocal": "ローカル"
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",
@@ -8277,16 +7407,16 @@
     "toasts": {
       "googleConnected": "Google に接続しました",
       "codexConnected": "ChatGPT アカウントに接続しました",
-      "feishuBotConnected": "IM ボットに接続しました",
-      "feishuBotReconnected": "IM ボットを再接続しました",
-      "feishuBotReconnectFailed": "再接続に失敗しました。IM ボットの設定を確認して再試行してください",
+      "feishuBotConnected": "Feishu ボットに接続しました",
+      "feishuBotReconnected": "Feishu ボットを再接続しました",
+      "feishuBotReconnectFailed": "再接続に失敗しました。Feishu の設定を確認して再試行してください",
       "feishuBotConflict": "この App は既に使用されています。同僚が同じ App ID を使用している可能性があります",
       "feishuBotConnectFailed": "接続に失敗しました。App ID / Secret を確認してください",
       "feishuBotSaveFailed": "保存に失敗しました：{{message}}",
-      "feishuBotCleared": "IM ボットの認証情報を削除しました",
+      "feishuBotCleared": "Feishu ボットの認証情報を削除しました",
       "feishuBotClearFailed": "削除に失敗しました：{{message}}",
-      "feishuBotCreatedConnected": "IM ボットを作成し接続しました",
-      "feishuBotCreatedCheck": "IM ボットを作成しました。接続状態をご確認ください",
+      "feishuBotCreatedConnected": "Feishu ボットを作成し接続しました",
+      "feishuBotCreatedCheck": "Feishu ボットを作成しました。接続状態をご確認ください",
       "discordBotConnected": "Discord ボット設定を保存しました",
       "discordBotConnectFailed": "Discord ボットの接続に失敗しました。Token と権限を確認してください",
       "discordBotSaveFailed": "保存に失敗しました：{{message}}",
@@ -8303,26 +7433,13 @@
       "migrationPartial": "移行完了：成功 {{success}} / スキップ {{skipped}} / 失敗 {{failed}}（合計 {{total}}）",
       "migrationFailed": "移行に失敗しました。後でもう一度お試しください",
       "fetchUpdateNoticeFailed": "更新通知の取得に失敗しました",
-      "corruptionRestored": "{{time}} のスナップショットからデータベースを復元しました。期間中の対話履歴が失われた可能性があります",
+      "corruptionRestored": "{{time}} のスナップショットからデータベースを復元しました。期間中のチャットが失われた可能性があります",
       "schemaDriftWarning": "ローカルデータベースのバージョン記録に不整合があります。最新版に更新し、更新後もこの警告が繰り返し表示される場合はサポートに連絡してください。アプリがローカルデータを自動的に削除することはありません。",
       "telegramBotConnected": "Telegram ボット設定を保存しました",
       "telegramBotConnectFailed": "Telegram ボットの接続に失敗しました。Token とネットワークを確認してください",
       "telegramBotSaveFailed": "保存に失敗しました：{{message}}",
       "telegramBotDisconnected": "Telegram ボットの連携を解除しました",
-      "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}",
-      "telegramBotWentOffline": "オフラインにしました（連携情報は保持されます）",
-      "telegramBotWentOnline": "オンラインにしました",
-      "telegramBotToggleOnlineFailed": "切り替えに失敗しました：{{message}}",
-      "telegramRemoteWentOffline": "そのデバイスをオフラインにしました",
-      "telegramRemoteUnsupported": "そのデバイスの Cindy はリモートオフラインに未対応です。先に更新してください",
-      "telegramRemoteFailed": "リモートでオフラインにできませんでした：{{message}}",
-      "dingtalkBotConnected": "DingTalk ボットに接続しました",
-      "dingtalkBotConnectFailed": "DingTalk ボットに接続できません。認証情報、Stream モード、ネットワークを確認してください",
-      "dingtalkBotAuthFailed": "DingTalk が認証情報を拒否しました。Client ID と Client Secret が同じアプリのものか確認してください",
-      "dingtalkBotNetworkFailed": "DingTalk オープンプラットフォームに接続できません。ネットワークまたはプロキシを確認して再試行してください",
-      "dingtalkBotStreamFailed": "認証情報は有効ですが、Stream 接続を確立できません。ボットを有効化し、Stream モードを選択してアプリのバージョンを公開してください",
-      "dingtalkBotDisconnected": "DingTalk ボットの連携を解除しました",
-      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました"
+      "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}"
     },
     "errors": {
       "openFileFailed": "システムでファイルを開けません",
@@ -8338,8 +7455,6 @@
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
-      "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
-      "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
       "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"
     },
     "validation": {
@@ -8349,8 +7464,7 @@
       "discordOwnerUserIdFormat": "Discord ユーザー ID は 17-20 桁の数字である必要があります",
       "telegramFieldsRequired": "Bot Token と Telegram ユーザー ID の両方を入力してください",
       "telegramTokenFormat": "Token の形式が不正です。BotFather が生成する「数字:シークレット」の形にしてください",
-      "telegramOwnerUserIdFormat": "Telegram ユーザー ID は数字である必要があります",
-      "dingtalkFieldsRequired": "Client ID と Client Secret の両方を入力してください"
+      "telegramOwnerUserIdFormat": "Telegram ユーザー ID は数字である必要があります"
     },
     "confirm": {
       "logoutTitle": "ログアウト",
@@ -8374,11 +7488,8 @@
       "codexVoiceAuthDescription": "音声入力は、接続済みの ChatGPT アカウントで GPT リアルタイム音声認識を使用します。アカウントが未接続か、接続の更新が必要です。モデルプロバイダーを開いて ChatGPT に接続しますか？",
       "codexBinaryMissingTitle": "Codex コンポーネントの準備ができていません",
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
-      "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
-      "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Pi の接続状態を確認してください。",
       "goToSettings": "設定を開く",
       "remoteCodexBinaryMissingTitle": "リモートデバイスの Codex コンポーネントが未準備です",
-      "remotePiBinaryMissingTitle": "リモートデバイスの Pi コンポーネントが未準備です",
       "remoteAuthDescription": "操作対象のデバイス「{{device}}」で設定を完了してから、ここでセッションを開始できます。そのデバイスで設定してから再試行してください。",
       "remoteCodexNoSourceTitle": "リモートデバイスに利用可能な Codex ソースがありません",
       "remoteCodexNoSourceDescription": "デバイス「{{device}}」には Codex で利用可能なモデルソースが接続されていないため、ここからセッションを開始できません。そのデバイスで {{appName}} を開き、「設定 → プロバイダー」で OpenAI にログインするか他のソースを接続してから再試行してください。",
@@ -8460,7 +7571,6 @@
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
     "tooltipCount": "参照ディレクトリ {{count}} 件",
-    "addFiles": "ファイル、画像、動画を追加…",
     "pluginsTitle": "インストール済みプラグイン",
     "pluginDisabled": "無効",
     "pluginNoCommand": "ここでは使用できません",
@@ -8532,7 +7642,7 @@
     },
     "toast": {
       "usage": "使い方:/goal <目標の条件>",
-      "noSession": "目標を設定するには、先にセッションを開くか開始してください",
+      "noSession": "目標を設定するには、先に会話を開くか開始してください",
       "failed": "目標の設定に失敗しました",
       "set": "目標を設定しました。自動で進めます",
       "cleared": "目標をクリアしました"
@@ -8555,7 +7665,7 @@
       "failed": "学習に失敗しました",
       "cancel": "キャンセル",
       "review": "提案を確認",
-      "fromConversation": "現在のセッションから蒸留",
+      "fromConversation": "現在の会話から蒸留",
       "openSession": "学習セッションを開く",
       "continueHint": "このセッションで会話を続ければ提案を修正できます。満足したら「提案を確認」から適用してください"
     },
@@ -8720,7 +7830,7 @@
       "remaining": "残り",
       "progressLabel": "{{label}}の使用量",
       "noPlanCredits": "有効なサブスクリプションがないため、プラン残高はありません。",
-      "historyUnavailable": "使用履歴が完全ではないため、残りの残高のみ表示しています。",
+      "historyUnavailable": "使用履歴が完全ではないため、残高のみ表示しています。",
       "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
       "promotionalDetails": {
         "title": "特典残高明細",
@@ -8738,20 +7848,6 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
-    },
-    "orders": {
-      "title": "注文履歴",
-      "description": "Cindy 内で開始した残高チャージとサブスクリプションの注文のみを表示します。支払い待ちの注文は、期限を過ぎると自動的にキャンセルされます。",
-      "count": "{{count}}件",
-      "incomplete": "注文履歴が多いため、最新の{{count}}件のみ表示しています。",
-      "orderId": "NO. {{id}}",
-      "states": {
-        "completed": "完了",
-        "awaitingPayment": "支払い待ち",
-        "canceled": "キャンセル済み",
-        "expired": "期限切れ",
-        "failed": "支払い失敗"
       }
     },
     "dialogs": {
@@ -8776,7 +7872,7 @@
     },
     "catalog": {
       "errorTitle": "プランを取得できません",
-      "errorDescription": "接続を確認して、もう一度お試しください。",
+      "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
       "emptyTitle": "近日公開予定です。お楽しみに。",
       "currentPlan": "現在のプラン",
       "unavailableReasons": {
@@ -8840,7 +7936,7 @@
       "openPayment": "支払いページを開く",
       "refreshingAction": "支払い情報を取得中…",
       "paymentCompleted": "支払いが完了しました。",
-      "requestFailed": "リクエストに失敗しました。しばらくしてからもう一度お試しください。",
+      "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
       "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",
       "actionExpiredBody": "コードの有効期限が切れました。閉じてから再度選択し、新しい支払いを作成してください。",
       "canceledBody": "この支払いはキャンセルされました。",
@@ -8848,17 +7944,16 @@
     },
     "planChange": {
       "targetTitle": "サブスクリプションプランの変更",
-      "back": "戻る",
       "upgradeBadge": "アップグレード",
       "sameLevelBadge": "同じレベル",
       "downgradeBadge": "ダウングレード",
       "emptyTitle": "切り替え可能なプランがありません",
-      "emptyDescription": "現在、切り替え可能な他のプランはありません。",
+      "emptyDescription": "現在の支払い方法で切り替え可能なプランがまだ設定されていません。",
       "quotingTitle": "プラン変更を準備中",
-      "quotingBody": "金額と適用時期を確認しています…",
+      "quotingBody": "サーバーから金額と適用時期を取得しています…",
       "quoteTitle": "プラン変更の確認",
       "confirmingTitle": "変更を送信中",
-      "confirmingBody": "プラン変更を送信しています…",
+      "confirmingBody": "プラン変更をサーバーに送信しています…",
       "pendingProviderTitle": "プラン変更を処理中",
       "pendingProviderBody": "決済プロバイダーが変更を処理しています。Cindy が結果を確認し続けます…",
       "awaitingTitle": "差額のお支払い",
@@ -8875,7 +7970,7 @@
       "requestFailed": "プラン変更リクエストを完了できませんでした。サブスクリプションの状態を更新して、もう一度お試しください。",
       "quoteRejected": "現在のサブスクリプションではこのプランに変更できません。別のプランを選択してください。",
       "chooseAnotherPlan": "別のプランを選択",
-      "resyncHint": "結果をまだ確認できません。最新の状態をもう一度確認しています…",
+      "resyncHint": "確認結果を検証できませんでした。サーバーから最新の状態を同期しています…",
       "upgradeDueNow": "今期の差額 {{amount}} をお支払いください",
       "upgradeNoAmount": "確認後、アップグレードは即時適用されます。",
       "upgradeHint": "お支払い完了後にアップグレードが即時適用され、以降は新プランの価格で更新されます。",

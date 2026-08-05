@@ -42,10 +42,8 @@ import {
   makeTurnEnd,
   makeTurnProgress,
   makeTurnReopen,
-  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
-  type HookTurnEndMessage,
   type InteractionButton,
   type InteractionDecisionPayload,
   type TaskAckPayload,
@@ -53,7 +51,6 @@ import {
   type TaskDispatchPayload,
   type TaskRejectReason,
   type TaskSource,
-  type TurnDeliveryPayload,
 } from '@cindy/slack-hook-protocol';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
@@ -99,7 +96,7 @@ export interface HookContinuationWatchRequest {
   workingDir: string;
   /** 原任务的来源标注(决定 Telegram / Slack 的进度渲染差异)。 */
   source?: TaskSource;
-  /** 原任务的渠道形态; 与 run() 同判据地决定群轮次是否取 turn lease。 */
+  /** 原任务的渠道形态; 与 run() 同判据地决定进度只发正文还是带过程区。 */
   laneKind?: 'dm' | 'group';
   /**
    * "这个目录此刻还在本连接的工作目录映射内吗" —— 与 run() 的同名回调同语义, 用来
@@ -135,8 +132,8 @@ export interface HookRunRequest {
   sessionId: string;
   /**
    * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
-   * runner 据此决定群轮次是否取 turn lease(见 deriveLaneKind 的注释)。
-   * 缺省按 'dm' 保守处理。
+   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
+   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
    */
   laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
@@ -336,8 +333,6 @@ export interface HookDispatcher {
    * 正在执行的任务)后按 interactionId 配对 resolve; 未知 / 迟到的静默忽略。
    */
   handleInteractionDecision(connectionId: string, payload: InteractionDecisionPayload): void;
-  /** X server 对普通 turn.end 的持久接管 / 渠道发布状态回执。 */
-  handleTurnDelivery(connectionId: string, payload: TurnDeliveryPayload): void;
   /** Re-open ingress after the next account DB is ready. */
   activateAccount(): void;
   /** Close ingress, abort old-account turns and await their final async boundary. */
@@ -354,10 +349,6 @@ export interface HookDispatcher {
 const MAX_QUEUE_PER_SESSION = 20;
 /** 单连接离线 turn.end 缓存上限(FIFO 丢最老)。 */
 const MAX_PENDING_TURN_ENDS = 100;
-/** ACK 能力启用后，普通 turn.end 在未获 server 接管确认前的首轮等待。 */
-const TURN_DELIVERY_ACK_TIMEOUT_MS = 10_000;
-/** 重发退避封顶；完整正文仍保留到 ACK、账号切换或容量淘汰。 */
-const TURN_DELIVERY_ACK_MAX_DELAY_MS = 60_000;
 
 /**
  * 失败任务的续跑记账保留时长。
@@ -381,16 +372,16 @@ const MAX_PENDING_REOPENS = 200;
  * 对话选择重新指定原对话才接得回来 —— 两步缺一不可。
  */
 const NOTICE_SESSION_RECREATED =
-  'ℹ️ 原任务已不在可用的工作目录里，这条消息起换用了新任务，原任务的上下文不会带过来。' +
-  '想接回原任务：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
-  '再在这里选择任务重新指定它。';
+  'ℹ️ 原对话已不在可用的工作目录里，这条消息起换用了新对话，原对话的上下文不会带过来。' +
+  '想接回原对话：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
+  '再在这里用对话选择重新指定它。';
 /**
  * 查不到原对话时的说明。措辞刻意留了余地: inspect 返回 null 是多义的 ——
  * 会话真的没了是 null, meta / DB 读取瞬时失败也被吞成 null(session-runner
  * 两路都 catch)。一口咬定"已被归档或删除"会在读库抖动时误导用户
  * (PR #733 review 指出)。
  */
-const NOTICE_SESSION_GONE = 'ℹ️ 原任务现在读不到（可能已被归档或删除），这条消息起换用了新任务。';
+const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归档或删除），这条消息起换用了新对话。';
 
 /** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
 const TITLE_SNIPPET_MAX = 24;
@@ -458,13 +449,6 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
  * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
  * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
  * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
- *
- * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
- * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
- * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
- * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
- * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
- * 老 server 不下发时回退 prompt, 行为与此前一致。
  */
 export function buildHookSessionTitle(
   providerName: string,
@@ -517,12 +501,8 @@ interface PendingTask {
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
- *
- * **唯一用途**: 官方 Telegram 群轮次在 send 时取 session turn lease, 把
- * 「前台 done → 后台任务续跑」这段空窗也算作本轮独占, 否则 Desktop 轮次会被
- * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
- * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
- * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
+ * execute() 与续跑观察共用: 两边都要用它算 answerOnlyProgress, 判据分叉就会让
+ * 续跑轮的进度渲染跟正常任务不一致(Telegram DM 冒出过程区 / 群里少了过程区)。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
   return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
@@ -606,17 +586,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 每连接当前发送函数(transport 重建后由 onConnected / handleDispatch 刷新)。 */
   const sendFns = new Map<string, (m: HookMessage) => boolean>();
   /** 离线积压的 turn.end, 按连接缓存。 */
-  const pendingTurnEnds = new Map<string, HookTurnEndMessage[]>();
-  /** 双向 ACK 已协商时，等待 server durable accepted 的完整 turn.end 副本。 */
-  const pendingDeliveryTurnEnds = new Map<
-    string,
-    {
-      connectionId: string;
-      message: HookTurnEndMessage;
-      attempts: number;
-      timer: ReturnType<typeof setTimeout> | null;
-    }
-  >();
+  const pendingTurnEnds = new Map<string, HookMessage[]>();
   /** 正在执行 turn 的 session(本模块发起的)。 */
   const running = new Set<string>();
   /**
@@ -793,77 +763,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return `${connectionId} ${requestId}`;
   }
 
-  function supportsDeliveryAck(connectionId: string): boolean {
-    return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_TURN_DELIVERY) === true;
-  }
-
-  function clearPendingDelivery(key: string): void {
-    const pending = pendingDeliveryTurnEnds.get(key);
-    if (pending?.timer) clearTimeout(pending.timer);
-    pendingDeliveryTurnEnds.delete(key);
-  }
-
-  function enforcePendingDeliveryLimit(connectionId: string): void {
-    const keys = [...pendingDeliveryTurnEnds]
-      .filter(([, pending]) => pending.connectionId === connectionId)
-      .map(([key]) => key);
-    while (keys.length > MAX_PENDING_TURN_ENDS) {
-      const oldest = keys.shift();
-      if (oldest !== undefined) {
-        const evictedRequestId = pendingDeliveryTurnEnds.get(oldest)?.message.payload.requestId;
-        clearPendingDelivery(oldest);
-        log.warn(
-          `turn.end ACK buffer full; oldest result evicted: connectionId=${connectionId} requestId=${evictedRequestId ?? 'unknown'}`,
-        );
-      }
-    }
-  }
-
-  function sendPendingDelivery(
-    key: string,
-    pending: NonNullable<ReturnType<typeof pendingDeliveryTurnEnds.get>>,
-    sendOverride?: (m: HookMessage) => boolean,
-  ): void {
-    if (pendingDeliveryTurnEnds.get(key) !== pending) return;
-    if (pending.timer) clearTimeout(pending.timer);
-    pending.timer = null;
-    const send = sendOverride ?? sendFns.get(pending.connectionId);
-    if (!send || !send(pending.message)) return;
-    pending.attempts += 1;
-    const delay = Math.min(
-      TURN_DELIVERY_ACK_TIMEOUT_MS * 2 ** Math.min(3, Math.max(0, pending.attempts - 1)),
-      TURN_DELIVERY_ACK_MAX_DELAY_MS,
-    );
-    const timer = setTimeout(() => {
-      if (pendingDeliveryTurnEnds.get(key) !== pending) return;
-      pending.timer = null;
-      log.warn(
-        `turn.end ACK timed out; replaying unchanged result: ${pending.message.payload.requestId}`,
-      );
-      sendPendingDelivery(key, pending);
-    }, delay);
-    timer.unref?.();
-    pending.timer = timer;
-  }
-
-  function trackPendingDelivery(connectionId: string, msg: HookTurnEndMessage): void {
-    const key = ackKey(connectionId, msg.payload.requestId);
-    const existing = pendingDeliveryTurnEnds.get(key);
-    if (existing !== undefined) {
-      sendPendingDelivery(key, existing);
-      return;
-    }
-    const pending = { connectionId, message: msg, attempts: 0, timer: null };
-    pendingDeliveryTurnEnds.set(key, pending);
-    enforcePendingDeliveryLimit(connectionId);
-    if (pendingDeliveryTurnEnds.get(key) === pending) sendPendingDelivery(key, pending);
-  }
-
-  function sendOrBuffer(connectionId: string, msg: HookTurnEndMessage): void {
-    if (supportsDeliveryAck(connectionId)) {
-      trackPendingDelivery(connectionId, msg);
-      return;
-    }
+  function sendOrBuffer(connectionId: string, msg: HookMessage): void {
     const send = sendFns.get(connectionId);
     if (send && send(msg)) return;
     const buf = pendingTurnEnds.get(connectionId) ?? [];
@@ -1239,7 +1139,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         status: 'error',
         finalText: '',
         errorMessage:
-          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+          '这个对话所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
         durationMs: 0,
       };
     } else {
@@ -1401,7 +1301,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let recreatedNotice: string | null = null;
 
     const laneKind = deriveLaneKind(payload.externalKey);
-
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -1615,11 +1514,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
     const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
-    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
-    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
-    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
-    const sourceUserText = payload.source?.userText ?? '';
-    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
     return {
       run: {
         sessionId,
@@ -1634,12 +1528,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
-          titleText,
+          payload.prompt,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
-              ? payload.source.channelName
-              : null),
+            (payload.source?.im === 'telegram' ? payload.source.channelName : null),
         ),
         prompt: payload.prompt,
         attachments: payload.attachments,
@@ -1820,7 +1712,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
-      for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
       // 能力快照按连接存, 而连接身份含账号指纹 —— 换账号后旧条目永远不会再被
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
@@ -1956,26 +1847,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         `interaction.decision ${payload.interactionId} button=${payload.buttonId} resolved=${resolved}`,
       );
     },
-    handleTurnDelivery(connectionId, payload) {
-      if (!accountActive) return;
-      const key = ackKey(connectionId, payload.requestId);
-      clearPendingDelivery(key);
-      if (payload.state === 'retrying') {
-        log.warn(
-          `turn.end accepted; X publish retrying: requestId=${payload.requestId} attempt=${payload.attempt} retryAt=${payload.retryAt ?? 'unknown'} code=${payload.error?.code ?? 'unknown'}`,
-        );
-        return;
-      }
-      if (payload.state === 'failed') {
-        log.warn(
-          `turn.end delivery failed: requestId=${payload.requestId} attempt=${payload.attempt} code=${payload.error?.code ?? 'unknown'}`,
-        );
-        return;
-      }
-      log.info(
-        `turn.end delivery ${payload.state}: requestId=${payload.requestId} attempt=${payload.attempt}`,
-      );
-    },
     cancel(connectionId, requestId) {
       if (!accountActive) return;
       // 1) 排队中的: 从队列摘除, 立即回 cancelled(任务从未开始)
@@ -2024,11 +1895,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     onDisconnected(connectionId) {
       sendFns.delete(connectionId);
-      for (const pending of pendingDeliveryTurnEnds.values()) {
-        if (pending.connectionId !== connectionId || pending.timer === null) continue;
-        clearTimeout(pending.timer);
-        pending.timer = null;
-      }
       // 断连是续跑回流的终局(协议阶段 18): server 此刻会收口那条消息并解绑这一轮
       // 的 requestId。观察器若活到重连后, 它的 progress / turn.end 会带着那个已被
       // 解绑的 id 发到新 socket(dispatchId 在重连间稳定, 所以真的发得出去), 被当
@@ -2057,8 +1923,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       pendingReopens.clear();
       serverFeatures.clear();
       sendFns.clear();
-      pendingTurnEnds.clear();
-      for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
     },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;
@@ -2066,26 +1930,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 老实例不宣告 turn.reopen 时必须立刻停用回流, 不能拿上一次的快照发帧。
       serverFeatures.set(connectionId, features ? [...features] : []);
       sendFns.set(connectionId, send);
-      const deliveryAck = supportsDeliveryAck(connectionId);
-      for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
-        if (pending.connectionId !== connectionId) continue;
-        if (deliveryAck) {
-          sendPendingDelivery(key, pending, send);
-        } else if (send(pending.message)) {
-          // 滚动发布回落到老 server：按历史 fire-and-forget 语义收口。
-          clearPendingDelivery(key);
-        }
-      }
       const buf = pendingTurnEnds.get(connectionId);
       if (!buf?.length) return;
-      // 按序补发；新 server 先转入 ACK 缓冲，老 server 沿用 fire-and-forget。
+      // 按序补发; 发送失败(又断了)停下, 剩余留在缓存
       while (buf.length > 0) {
-        const message = buf[0];
-        if (deliveryAck) {
-          trackPendingDelivery(connectionId, message);
-        } else if (!send(message)) {
-          break;
-        }
+        if (!send(buf[0])) break;
         buf.shift();
       }
       if (buf.length === 0) pendingTurnEnds.delete(connectionId);

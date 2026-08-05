@@ -29,7 +29,7 @@
  * 影响)。window 级 dragover 必须 preventDefault,否则 drop 事件不触发且
  * Electron 会尝试导航到文件 URL。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -49,10 +49,17 @@ type DragHint = 'cindy' | 'share';
 
 export interface GlobalDropImportListenerProps {
   onOpenShareImport: (filePath: string) => void;
+  /**
+   * 当前右侧栏会话 id 的 getter(MainLayout 的 rightSidebarSessionIdRef 读值,
+   * prop 身份稳定)。装入 tab 型插件勾选「立即开启」时用来自动打开页签;
+   * 无会话视图返回 null = 跳过自动打开。
+   */
+  getRightSidebarSessionId?: () => string | null;
 }
 
 export function GlobalDropImportListener({
   onOpenShareImport,
+  getRightSidebarSessionId,
 }: GlobalDropImportListenerProps) {
   const [dragHint, setDragHint] = useState<DragHint | null>(null);
   const dragDepthRef = useRef(0);
@@ -62,12 +69,6 @@ export function GlobalDropImportListener({
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
-  // 装入 tab 型插件勾选「立即开启并打开面板」的兑现:面板收束后页签面板
-  // 只住在插件页,从任意视图导航过去并经 ?panel= 深链打开。
-  const openPluginPanel = useCallback(
-    (ghostId: string) => navigate(`/plugins?panel=${encodeURIComponent(ghostId)}`),
-    [navigate],
-  );
 
   // 双击 .cindy 的转交消费:挂载时取一次(冷启动双击,main 已缓存)+ 订阅
   // 信号(已运行时双击)。取到路径即走与按钮/拖入完全相同的确认装入编排。
@@ -79,7 +80,7 @@ export function GlobalDropImportListener({
           t,
           confirm,
           confirmWithCheckbox,
-          openPluginPanel,
+          getSidebarSessionId: getRightSidebarSessionId,
         });
       }
     };
@@ -87,7 +88,7 @@ export function GlobalDropImportListener({
     return window.electronAPI.ghosts.onInstallRequested(() => {
       void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     });
-  }, [confirm, confirmWithCheckbox, openPluginPanel, t]);
+  }, [confirm, confirmWithCheckbox, getRightSidebarSessionId, t]);
 
   useEffect(() => {
     // 悬停识别:单文件且 MIME 命中才给遮罩。
@@ -151,7 +152,7 @@ export function GlobalDropImportListener({
           t,
           confirm,
           confirmWithCheckbox,
-          openPluginPanel,
+          getSidebarSessionId: getRightSidebarSessionId,
         });
         return;
       }
@@ -210,7 +211,7 @@ export function GlobalDropImportListener({
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [confirm, confirmWithCheckbox, navigate, onOpenShareImport, openPluginPanel, t]);
+  }, [confirm, confirmWithCheckbox, getRightSidebarSessionId, navigate, onOpenShareImport, t]);
 
   return (
     <>

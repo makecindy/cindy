@@ -45,13 +45,6 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
-function atResourceManifest(id = 'hello'): Record<string, unknown> {
-  return {
-    ...goodManifest(id),
-    atResourceProvider: { tool: 'do_thing' },
-  };
-}
-
 /** 带显式指令的芯片型清单(command 查重用例)。 */
 function chipManifestWithCommand(id: string, command: string): Record<string, unknown> {
   return {
@@ -235,23 +228,6 @@ describe('GhostManager · install', () => {
     expect(manager.list().map((c) => c.manifest.id)).toEqual(['hello']);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
-  });
-
-  it('@ 资源入口必须命中主机安装 receipt，旧安装元数据不会在升级后自动扩权', async () => {
-    const cindy = await makeCindy('at-resource.cindy', atResourceManifest());
-    const installed = await manager.install(cindy);
-
-    const metadataPath = path.join(rootDir, 'hello', '.cindy-trust.json');
-    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, 'utf8')) as Record<string, unknown>;
-
-    delete metadata.approvedAtResourceProvider;
-    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
-    expect(manager.list()[0].manifest.tools).toEqual([
-      { name: 'do_thing', description: '做点事' },
-    ]);
-
-    metadata.approvedAtResourceProvider = { tool: 'other_tool' };
-    await fs.promises.writeFile(metadataPath, `${JSON.stringify(metadata)}\n`);
   });
 
   it('initiallyEnabled=false:装入即沉睡(.disabled 与目录同帧就位,首个广播就是沉睡态)', async () => {
@@ -528,37 +504,6 @@ describe('GhostManager · inspect(只验不装)', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
-  it('本地化展示清单与包内 canonical 清单分离', async () => {
-    hostLocale = 'zh-CN';
-    const base = {
-      ...goodManifest(),
-      name: 'Base name',
-      locales: {
-        en: 'locales/en.json',
-        'zh-CN': 'locales/zh-CN.json',
-      },
-    };
-    const cindy = await makeCindy('canonical.cindy', base, {
-      'locales/en.json': JSON.stringify({ name: 'English name' }),
-      'locales/zh-CN.json': JSON.stringify({
-        name: '中文名称',
-        tools: { do_thing: { description: '中文工具说明' } },
-      }),
-    });
-
-    const inspected = await manager.inspect(cindy);
-    expect(inspected).toMatchObject({
-      manifest: {
-        name: '中文名称',
-        tools: [{ name: 'do_thing', description: '中文工具说明' }],
-      },
-      canonicalManifest: {
-        name: 'Base name',
-        tools: [{ name: 'do_thing', description: '做点事' }],
-      },
-    });
-  });
-
   it('确认后源文件被替换时，整包指纹不一致会拒绝安装', async () => {
     const cindy = await makeCindy('swap.cindy', goodManifest(), { 'payload.txt': 'before' });
     const inspected = await manager.inspect(cindy);
@@ -616,28 +561,6 @@ describe('GhostManager · author / icon(身份卡展示字段)', () => {
     });
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
-
-  it.runIf(process.platform !== 'win32')(
-    '已装目录 icon 被换成指向目录外的符号链接 → list 降级为无图标,不外泄目标字节',
-    async () => {
-      const cindy = await makeCindy('icon3.cindy', iconManifest(), { 'assets/icon.png': 'PNGDATA' });
-      await manager.install(cindy);
-      // 装完后把 icon 换成指向插件目录外一个私密文件的符号链接:statSync 会
-      // 跟随链接对目标判 isFile/大小 → 通过,再 readFileSync 目标字节 → 经
-      // iconDataUrl 送进 Renderer。限量闸拒链接,list 只降级为无图标。
-      const secret = path.join(workDir, 'ssh-key');
-      await fs.promises.writeFile(secret, 'PRIVATE-KEY-BYTES');
-      const iconAbs = path.join(rootDir, 'hello', 'assets', 'icon.png');
-      await fs.promises.rm(iconAbs);
-      await fs.promises.symlink(secret, iconAbs);
-      const listed = manager.list();
-      expect(listed).toHaveLength(1);
-      expect(listed[0].iconDataUrl).toBeUndefined();
-      expect(JSON.stringify(listed[0])).not.toContain(
-        Buffer.from('PRIVATE-KEY-BYTES').toString('base64'),
-      );
-    },
-  );
 
   it('已装意识的 icon 文件事后丢失 → list 降级为无图标,不影响意识本体', async () => {
     const cindy = await makeCindy('icon2.cindy', iconManifest(), { 'assets/icon.png': 'PNGDATA' });

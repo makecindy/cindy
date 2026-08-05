@@ -8,7 +8,6 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
-import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import type {
   sessions,
@@ -115,7 +114,6 @@ export function extractMessagePreview(
   // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
   // 实现细节。返回 null 与"无预览"同渲染语义。
   if (isSyntheticTriggerText(text)) return null;
-  if (role === 'assistant') text = stripInternalWebCitations(text);
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (!collapsed) return null;
   return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
@@ -202,9 +200,6 @@ export function messageToCamel(row: MessageRow): Message {
     // 容错：极端情况下 content 可能不是合法 JSON（例如旧手工写入），保留原字符串
     content = row.content;
   }
-  if (row.role === 'assistant' && typeof content === 'string') {
-    content = stripInternalWebCitations(content);
-  }
   // agent_meta 列存的是 JSON.stringify 后的字符串，老消息为 NULL。
   // 解析失败时返回 null 而非抛——容错保证历史消息能正常加载。
   let agentMeta: AgentMeta | null = null;
@@ -223,7 +218,7 @@ export function messageToCamel(row: MessageRow): Message {
     content,
     toolUseId: row.toolUseId,
     agentMeta,
-    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
+    agentKind: (row.agentKind as 'cc' | 'codex' | null) ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -378,7 +373,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | null;
     createdAt?: number;
   },
   now: number,
@@ -448,8 +443,8 @@ function normalizeWorkspaceKind(raw: unknown): WorkspaceKind {
 // 与 IPC 边界由 mapper 转 ISO 的旧约定刻意不一致；scheduler 引擎内部就是 ms 算的）。
 //
 // 关键约束（Phase 2 plan 硬规则）：
-//   1. `Schedule.notify` 在内存里是嵌套对象 `{ desktop, feishu, wecomGroup? }`，
-//      DB 端拆成三列；mapper 出口合成回对象，入口拆成对应列。
+//   1. `Schedule.notify` 在内存里是嵌套对象 `{ desktop, feishu }`，DB 端拆成
+//      `notify_desktop` / `notify_feishu` 两列；mapper 出口合成回对象，入口拆成两列。
 //   2. patch mapper（`schedulePatchToRow`）必须区分：
 //        - key 不存在 → SQL 不更新该列
 //        - key 存在但值是 undefined → 显式写 NULL
@@ -560,7 +555,6 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     notify: {
       desktop: !!row.notifyDesktop,
       feishu: !!row.notifyFeishu,
-      ...(row.notifyWecomGroup ? { wecomGroup: true } : {}),
     },
     status: row.status as ScheduleStatus,
     createdAt: row.createdAt,
@@ -605,7 +599,6 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
-    notifyWecomGroup: s.notify.wecomGroup === true,
     status: s.status,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
@@ -661,17 +654,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
     out.preRunHookTimeoutMs = patch.preRunHook?.timeoutMs ?? null;
   }
   if (hasKey(patch, 'notify')) {
-    const n = patch.notify;
-    if (n == null) {
-      out.notifyDesktop = false;
-      out.notifyFeishu = false;
-      out.notifyWecomGroup = false;
-    } else {
-      // 兼容不知道新通知渠道的旧客户端：对象内只更新实际出现的 key。
-      if (hasKey(n, 'desktop')) out.notifyDesktop = !!n.desktop;
-      if (hasKey(n, 'feishu')) out.notifyFeishu = !!n.feishu;
-      if (hasKey(n, 'wecomGroup')) out.notifyWecomGroup = !!n.wecomGroup;
-    }
+    // 嵌套对象整体替换：必须两列同时写
+    const n = patch.notify ?? { desktop: false, feishu: false };
+    out.notifyDesktop = !!n.desktop;
+    out.notifyFeishu = !!n.feishu;
   }
   if (hasKey(patch, 'status')) out.status = patch.status as ScheduleStatus;
   if (hasKey(patch, 'createdAt')) out.createdAt = patch.createdAt as number;

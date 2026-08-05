@@ -7,13 +7,6 @@
  * { turnCostUsd, turnCostIsEstimate } patch 进 messages.agent_meta(免 migration,
  * 历史会话重开也能显示),落库成功后广播给所有窗口刷新 MessageActionBar。
  *
- * 算不出金额的轮次走 recordTurnUsageOnMessage:只落 turnUsageDetails,让 UI 退回
- * 显示本轮 token。没有报价的成因很多(网关目录整体不下发价格、模型不在价表、
- * 订阅轮估值也 miss),但对用户来说"这一格空着"都是同一种坏体验 —— 钱算不出来
- * 不代表用量算不出来,token 明细在这些路径上本就已经算好,只是此前被丢掉了。
- * 该路径不碰任何账本字段(daily_spend / sessions.total_cost_usd / turnCost),
- * 没有钱就不记账。
- *
  * 写库经 messagePersistBroadcaster 的 enqueueDurableWrite 串行 FIFO:该消息的
  * createMessage 在 done 同步路径已入队,patch 后入队 → 顺序天然正确(Codex 异步
  * 折算晚到也成立)。先落库后广播,保证多窗口 / 后开窗口(走历史加载读 agent_meta)
@@ -23,7 +16,6 @@
 import { BrowserWindow } from 'electron';
 import type { SendOrigin } from '@cindy/maker-core';
 
-import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
 import type { TurnUsageDetails } from '../shared/turnUsageDetails.js';
 import {
   patchMessageAgentMetaWithResult,
@@ -32,7 +24,7 @@ import {
 } from './localDb/ipc/messages.js';
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
-import * as broadcastTap from './device-link/broadcast-tap.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
   applyScheduleRunCostMetaChange,
   recordScheduleRunCostDirect,
@@ -44,15 +36,25 @@ import {
 } from '../shared/regionalMoney.js';
 
 const log = createLogger('turnCostBroadcaster');
-type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的 per-turn 费用。 */
 export const MESSAGE_TURN_COST_CHANGED = 'usage:message-turn-cost';
 
-// payload 契约的正本在 shared(跨进程协议不放 main —— 否则 renderer 的类型图会反向
-// 依赖 main 实现模块,把 Electron / DB / 调度器副作用拖进 renderer 工具链)。这里再导出
-// 一次,既有 import 路径不变。
-export type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
+export interface MessageTurnCostPayload {
+  sessionId: string;
+  /** 该轮最后一条 assistant 的 messages.client_id。 */
+  clientId: string;
+  turnMoney: RegionalMoney;
+  turnCostUsd?: number;
+  turnCostIsEstimate: boolean;
+  /** User-visible cumulative cost from the latest real user prompt through this message. */
+  userTurnMoney: RegionalMoney;
+  userTurnCostUsd?: number;
+  /** True when any segment in userTurnCostUsd is a subscription-value estimate. */
+  userTurnCostIsEstimate: boolean;
+  /** 本轮 token/cache 明细;旧消息或取不到 usage 时缺省。 */
+  turnUsageDetails?: TurnUsageDetails;
+}
 
 /** 测试注入用依赖(patch / broadcast 可替换,免 Electron / sqlite)。 */
 export interface TurnCostDeps {
@@ -72,40 +74,6 @@ export interface TurnCostDeps {
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
-  /** Optional owner-aware broadcast used by production; test doubles may omit it. */
-  broadcastWithOwnerScope?(
-    payload: MessageTurnCostPayload,
-    ownerScope: OwnerScope,
-  ): void;
-}
-
-function captureOwnerScope(): OwnerScope {
-  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
-}
-
-function isOwnerScopeCurrent(scope: OwnerScope): boolean {
-  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
-}
-
-function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
-  if (ownerScope === null) {
-    broadcastTap.tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
-  } else {
-    broadcastTap.tapWindowBroadcast(
-      MESSAGE_TURN_COST_CHANGED,
-      payload,
-      ownerScope.ownerStamp,
-    );
-  }
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      if (ownerScope === null) {
-        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
-      } else {
-        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload, ownerScope.ownerStamp);
-      }
-    }
-  }
 }
 
 const defaultDeps: TurnCostDeps = {
@@ -114,10 +82,12 @@ const defaultDeps: TurnCostDeps = {
   readPriorUserRoundCost,
   enqueue: enqueueDurableWrite,
   broadcast(payload) {
-    broadcastTurnCostPayload(payload, null);
-  },
-  broadcastWithOwnerScope(payload, ownerScope) {
-    broadcastTurnCostPayload(payload, ownerScope);
+    tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
+      }
+    }
   },
 };
 
@@ -142,7 +112,6 @@ export async function recordTurnCostOnMessage(
   if (!sessionId || !clientId) return false;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return false;
-  const ownerScope = captureOwnerScope();
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
@@ -189,28 +158,22 @@ export async function recordTurnCostOnMessage(
       return result;
     });
     if (!patched) return false;
-    // The patch and scheduler ledger side effect are already durable.  An
-    // owner switch only suppresses the stale renderer/device-link broadcast;
-    // report success so scheduler fallback cannot charge the same segment
-    // again.
-    if (!isOwnerScopeCurrent(ownerScope)) return true;
-    const payload: MessageTurnCostPayload = {
-      sessionId,
-      clientId,
-      turnMoney: normalized,
-      ...(normalized.currency === 'USD' ? { turnCostUsd: normalized.amount } : {}),
-      turnCostIsEstimate: normalized.kind === 'value-estimate',
-      userTurnMoney,
-      ...(userTurnMoney.currency === 'USD' ? { userTurnCostUsd: userTurnMoney.amount } : {}),
-      userTurnCostIsEstimate,
-      ...(turnUsageDetails ? { turnUsageDetails } : {}),
-    };
     try {
-      if (deps.broadcastWithOwnerScope) {
-        deps.broadcastWithOwnerScope(payload, ownerScope);
-      } else {
-        deps.broadcast(payload);
-      }
+      deps.broadcast({
+        sessionId,
+        clientId,
+        turnMoney: normalized,
+        ...(normalized.currency === 'USD'
+          ? { turnCostUsd: normalized.amount }
+          : {}),
+        turnCostIsEstimate: normalized.kind === 'value-estimate',
+        userTurnMoney,
+        ...(userTurnMoney.currency === 'USD'
+          ? { userTurnCostUsd: userTurnMoney.amount }
+          : {}),
+        userTurnCostIsEstimate,
+        ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      });
     } catch (err) {
       // The message cost is already durable; a broadcast failure must not
       // make scheduler fallback record the same segment a second time.
@@ -219,106 +182,6 @@ export async function recordTurnCostOnMessage(
     return true;
   } catch (err) {
     log.warn('recordTurnCostOnMessage failed:', err instanceof Error ? err.message : String(err));
-    return false;
-  }
-}
-
-/**
- * 无金额路径:落库 + 广播,外加读一次本用户轮的既有累计(见
- * recordTurnUsageOnMessage 对 userTurnMoney 的处理)。不动 scheduler 账本。
- */
-export type TurnUsageDeps = Pick<
-  TurnCostDeps,
-  | 'patchAgentMeta'
-  | 'enqueue'
-  | 'broadcast'
-  | 'broadcastWithOwnerScope'
-  | 'readPriorUserRoundCost'
->;
-
-/**
- * 算不出金额时,把本轮 token 明细挂到该轮最后一条 assistant 上。
- *
- * 与 recordTurnCostOnMessage 的区别是**不为当前 segment 记账**:不写 turnCost /
- * turnCostUsd,也不调 applyScheduleRunCostChange —— 账本只接受真实计费,这里提供的是
- * 用量事实。
- *
- * 但「本用户轮此前已经产生的费用」必须继续显示。一次用户请求可能含多个 SDK segment
- * (自动续跑):前面的 segment 有真实费用、最后一个 segment 缺报价走本函数时,若只写
- * turnUsageDetails,收尾那条消息的操作栏会退回显示 token,把这一轮已经花掉的钱藏起来
- * —— 而 readPriorUserRoundCost 的契约本来就是「让收尾消息承载整轮总额」。所以这里读一次
- * 往轮累计,有则连同 userTurnCost 一起投影到消息与 payload(仍不含当前无价 segment)。
- *
- * turnUsageDetails 为空(整轮 0 token)时直接跳过:没有可展示的事实,不写空对象。
- */
-export async function recordTurnUsageOnMessage(
-  args: {
-    sessionId: string;
-    clientId: string;
-    turnUsageDetails?: TurnUsageDetails | null;
-  },
-  deps: TurnUsageDeps = defaultDeps,
-): Promise<boolean> {
-  const { sessionId, clientId, turnUsageDetails } = args;
-  if (!sessionId || !clientId || !turnUsageDetails) return false;
-  const ownerScope = captureOwnerScope();
-  try {
-    const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
-      // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
-      // 每个 segment 已落库的费用。
-      const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      const userTurnMoney =
-        prior.money && prior.money.amount > 0 ? prior.money : null;
-      const patch: Record<string, unknown> = { turnUsageDetails };
-      if (userTurnMoney) {
-        patch.userTurnCost = userTurnMoney;
-        patch.userTurnCostIsEstimate = prior.hasEstimatedValue;
-        if (userTurnMoney.currency === 'USD') {
-          patch.userTurnCostUsd = userTurnMoney.amount;
-        }
-      }
-      const patched = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!patched) return null;
-      return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
-    });
-    if (!outcome) return false;
-    // Usage metadata is durable even when the captured owner became stale;
-    // skip only the old-owner broadcast and keep the successful result.
-    if (!isOwnerScopeCurrent(ownerScope)) return true;
-    try {
-      const { userTurnMoney, userTurnCostIsEstimate } = outcome;
-      const payload: MessageTurnCostPayload = {
-        sessionId,
-        clientId,
-        turnUsageDetails,
-        ...(userTurnMoney
-          ? {
-              userTurnMoney,
-              ...(userTurnMoney.currency === 'USD'
-                ? { userTurnCostUsd: userTurnMoney.amount }
-                : {}),
-              userTurnCostIsEstimate,
-            }
-          : {}),
-      };
-      if (deps.broadcastWithOwnerScope) {
-        deps.broadcastWithOwnerScope(payload, ownerScope);
-      } else {
-        deps.broadcast(payload);
-      }
-    } catch (err) {
-      // 明细已落库,后开窗口走历史加载仍能读到;广播失败不影响持久事实。
-      log.warn(
-        'recordTurnUsageOnMessage broadcast failed:',
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    return true;
-  } catch (err) {
-    log.warn(
-      'recordTurnUsageOnMessage failed:',
-      err instanceof Error ? err.message : String(err),
-    );
     return false;
   }
 }
@@ -389,20 +252,5 @@ export function codexUsageToTokens(usage: {
     outputTokens: usage.completionTokens || 0,
     cacheReadTokens: usage.cachedTokens || 0,
     cacheCreateTokens: 0,
-  };
-}
-
-/** Pi done.data.usage → unified turn token fields. */
-export function piUsageToTokens(usage: {
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheCreationTokens?: number;
-}): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number } {
-  return {
-    inputTokens: Number(usage.inputTokens) || 0,
-    outputTokens: Number(usage.outputTokens) || 0,
-    cacheReadTokens: Number(usage.cacheReadTokens) || 0,
-    cacheCreateTokens: Number(usage.cacheCreationTokens) || 0,
   };
 }

@@ -94,7 +94,6 @@ import {
   zoomAtPoint,
 } from './lightboxGestures';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
-import { containImageSize } from './imageDisplaySize';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -226,9 +225,7 @@ function isDirectCacheable(src: string): boolean {
   if (/^https?:\/\//.test(src)) return true;
   if (DIRECT_CACHEABLE_DATA_RE.test(src)) return true;
   const localFilePath = xdtFileUrlToPath(src);
-  return (
-    localFilePath !== null && DIRECT_CACHEABLE_EXTS.has(extractExt(localFilePath).toLowerCase())
-  );
+  return localFilePath !== null && DIRECT_CACHEABLE_EXTS.has(extractExt(localFilePath).toLowerCase());
 }
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
@@ -285,8 +282,11 @@ const counterStyle: React.CSSProperties = {
  * 对应,activeIndex 才准。
  */
 function collectGallery(): { items: GalleryImage[]; activeIndex: number } {
-  const root: ParentNode = document.querySelector('[data-scroll-container]') ?? document;
-  const els = Array.from(root.querySelectorAll<HTMLElement>('[data-gallery-src]'));
+  const root: ParentNode =
+    document.querySelector('[data-scroll-container]') ?? document;
+  const els = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-gallery-src]'),
+  );
   const items: GalleryImage[] = [];
   let activeIndex = -1;
   els.forEach((el, i) => {
@@ -298,9 +298,11 @@ function collectGallery(): { items: GalleryImage[]; activeIndex: number } {
 
 /** 清掉所有遗留的 `data-gallery-active` 临时标记(lightbox 读取起始下标后调用)。 */
 function clearGalleryActiveMarks(): void {
-  document.querySelectorAll<HTMLElement>('[data-gallery-active]').forEach((el) => {
-    delete el.dataset.galleryActive;
-  });
+  document
+    .querySelectorAll<HTMLElement>('[data-gallery-active]')
+    .forEach((el) => {
+      delete el.dataset.galleryActive;
+    });
 }
 
 /**
@@ -419,42 +421,19 @@ export function ImageLightbox({
   );
   // 已保存的笔迹起步(托盘编辑或历史图再编辑)——"撤销之前的编辑"就是从
   // 这里往回 pop。
-  const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [...baselineStrokesRef.current]);
+  const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [
+    ...baselineStrokesRef.current,
+  ]);
   const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
-  const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
-    null,
-  );
-  const [viewportSize, setViewportSize] = useState(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  }));
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
   strokesRef.current = strokes;
-
-  useEffect(() => {
-    const updateViewportSize = () => {
-      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
-    };
-    window.addEventListener('resize', updateViewportSize);
-    return () => window.removeEventListener('resize', updateViewportSize);
-  }, []);
-
-  // index 变化后的 effect 会在 commit 后清空状态；渲染阶段先按 src 校验，
-  // 避免新图首帧沿用上一张图的宽高比（标注坐标也必须遵守同一约束）。
-  const currentNaturalSize = naturalSize?.src === currentSrc ? naturalSize : null;
-  const fittedImageSize = currentNaturalSize
-    ? containImageSize(
-        { width: currentNaturalSize.w, height: currentNaturalSize.h },
-        viewportSize.width - 80,
-        viewportSize.height - 80,
-      )
-    : null;
 
   const undoLastStroke = useCallback(() => {
     setStrokes((s) => s.slice(0, -1));
@@ -785,7 +764,9 @@ export function ImageLightbox({
 
   // 打开期间锁住聊天滚动容器。
   useEffect(() => {
-    const container = document.querySelector('[data-scroll-container]') as HTMLElement | null;
+    const container = document.querySelector(
+      '[data-scroll-container]',
+    ) as HTMLElement | null;
     if (container) container.style.overflowY = 'hidden';
     return () => {
       if (container) container.style.overflowY = '';
@@ -815,13 +796,7 @@ export function ImageLightbox({
   })();
   const canRevealRemote = Boolean(chatSessionId && remoteWorkdirRelPath);
   const hasAnyAction =
-    canCopy ||
-    canReveal ||
-    canRevealRemote ||
-    canOpenWith ||
-    canSaveAs ||
-    canSendToChat ||
-    canOpenInBrowser;
+    canCopy || canReveal || canRevealRemote || canOpenWith || canSaveAs || canSendToChat || canOpenInBrowser;
 
   // 画笔入口:发送场景要求能发送到对话(标注的出口是发送);编辑场景(托盘)
   // 出口是保存,不要求会话。源条件 = 字节可达(五种来源全覆盖:http/remote
@@ -1035,16 +1010,12 @@ export function ImageLightbox({
         }
       }
       const existing = getDraft(chatSessionId);
-      saveDraft(
-        chatSessionId,
-        {
-          text: existing?.text ?? null,
-          attachments: [...(existing?.attachments ?? []), attached],
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-        },
-        { preserveRemoteOptimisticRecovery: true },
-      );
+      saveDraft(chatSessionId, {
+        text: existing?.text ?? null,
+        attachments: [...(existing?.attachments ?? []), attached],
+        quotes: existing?.quotes ?? [],
+        browserComments: existing?.browserComments ?? [],
+      });
       toast.success(t('chat.media.sentToChat'));
       handleClose();
     } catch (err) {
@@ -1130,10 +1101,6 @@ export function ImageLightbox({
           draggable={false}
           style={{
             display: 'block',
-            // viewBox-only SVG 在 shrink-to-fit 容器中仅靠 max-* 会塌成 0×0；
-            // onLoad 后写入 contain 结果，同时让标注层与真实图片盒严格同尺寸。
-            width: fittedImageSize?.width,
-            height: fittedImageSize?.height,
             maxWidth: 'calc(100vw - 80px)',
             maxHeight: 'calc(100vh - 80px)',
             objectFit: 'contain',
@@ -1141,7 +1108,6 @@ export function ImageLightbox({
           }}
           onLoad={(e) => {
             setNaturalSize({
-              src: currentSrc,
               w: e.currentTarget.naturalWidth,
               h: e.currentTarget.naturalHeight,
             });
@@ -1164,9 +1130,9 @@ export function ImageLightbox({
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
             与烧录坐标一致(所见即所得)。pointerEvents 关闭,事件由容器接管。 */}
-        {currentNaturalSize && (strokes.length > 0 || draftStroke) ? (
+        {naturalSize && (strokes.length > 0 || draftStroke) ? (
           <svg
-            viewBox={`0 0 ${currentNaturalSize.w} ${currentNaturalSize.h}`}
+            viewBox={`0 0 ${naturalSize.w} ${naturalSize.h}`}
             preserveAspectRatio="none"
             style={{
               position: 'absolute',
@@ -1178,9 +1144,9 @@ export function ImageLightbox({
             aria-hidden
           >
             {[...strokes, ...(draftStroke ? [draftStroke] : [])].map((stroke, i) => {
-              const d = strokeToSvgPath(stroke, currentNaturalSize.w, currentNaturalSize.h);
+              const d = strokeToSvgPath(stroke, naturalSize.w, naturalSize.h);
               if (!d) return null;
-              const w = annotationStrokeWidth(currentNaturalSize.w, currentNaturalSize.h);
+              const w = annotationStrokeWidth(naturalSize.w, naturalSize.h);
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: 笔迹列表只增/尾删,index 稳定。
                 <g key={i}>
@@ -1306,10 +1272,7 @@ export function ImageLightbox({
           )}
           onClick={(e) => e.stopPropagation()}
         >
-          <LightboxToolbarButton
-            onClick={discardAnnotation}
-            label={t('chat.media.annotateDiscard')}
-          >
+          <LightboxToolbarButton onClick={discardAnnotation} label={t('chat.media.annotateDiscard')}>
             <X className="h-4 w-4" />
           </LightboxToolbarButton>
           <LightboxToolbarButton onClick={undoLastStroke} label={t('chat.media.annotateUndo')}>
@@ -1350,10 +1313,7 @@ export function ImageLightbox({
             </LightboxToolbarButton>
           ) : null}
           {canOpenInBrowser ? (
-            <LightboxToolbarButton
-              onClick={handleOpenInBrowser}
-              label={t('chat.media.openInBrowser')}
-            >
+            <LightboxToolbarButton onClick={handleOpenInBrowser} label={t('chat.media.openInBrowser')}>
               <Globe className="h-4 w-4" />
             </LightboxToolbarButton>
           ) : null}

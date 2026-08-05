@@ -10,7 +10,8 @@ const chatInputSource = readFileSync(
 /**
  * ChatInput 列表接续接线契约:
  * - Shift/Alt+Enter 优先处理结构化列表，再兼容旧纯文本列表;
- * - 普通 Enter 不由列表接续拦截,发送或原生换行由共享快捷键 resolver 决定;
+ * - 普通 Enter 一律保持"发送"语义,绝不被列表接续拦截(2026-07 产品定案:
+ *   Enter=发送的肌肉记忆优先);
  * - 守住 IME composition 边界。
  * 结构化与旧纯文本接续行为由各自的编辑器测试覆盖。
  */
@@ -26,7 +27,7 @@ describe('ChatInput list continuation wiring contract', () => {
     const block = extractBetween(
       chatInputSource,
       '// Shift/Alt+Enter — split or exit a structured item.',
-      '// Resolve the configurable send shortcut after structured list handling.',
+      '// Plain Enter keeps the existing queue semantics.',
     );
     expect(block).toContain('(event.shiftKey || event.altKey) &&');
     expect(block).toContain('!event.metaKey');
@@ -35,7 +36,6 @@ describe('ChatInput list continuation wiring contract', () => {
     expect(block).toContain(
       'if (handleStructuredListBreak(view) || applyListContinuation(view)) {',
     );
-    expect(block).not.toContain('resolveComposerEnterIntent');
     // 非列表行必须放行给 ComposerHardBreak 默认换行
     expect(block).toContain('return false;');
   });
@@ -65,15 +65,14 @@ describe('ChatInput list continuation wiring contract', () => {
     );
   });
 
-  it('keeps plain Enter outside list continuation — the resolver owns its semantics', () => {
+  it('never intercepts plain Enter — send semantics stay untouched', () => {
     const plainEnterBlock = extractBetween(
       chatInputSource,
-      '// Resolve the configurable send shortcut after structured list handling.',
-      "if (enterIntent === 'queue' || enterIntent === 'steer') {",
+      '// Plain Enter keeps the existing queue semantics.',
+      "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
     );
     expect(plainEnterBlock).not.toContain('handleStructuredListBreak');
     expect(plainEnterBlock).not.toContain('applyListContinuation');
-    expect(plainEnterBlock).toContain('resolveComposerEnterIntent(');
   });
 
   it('keeps tabular-nums on the editor so multi-line list prefixes align', () => {

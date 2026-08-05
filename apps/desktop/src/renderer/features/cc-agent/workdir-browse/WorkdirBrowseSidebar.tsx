@@ -37,7 +37,6 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { useFileTree, type DirEntry } from './hooks/useFileTree';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
@@ -503,21 +502,10 @@ export function WorkdirBrowseSidebar({
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
       const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await window.electronAPI.openFileInBrowser(abs);
-      } catch (error) {
-        log.warn('open in browser failed', {
-          relPath: entry.relPath,
-          errorCode: extractIpcError(error)?.code ?? 'unknown',
-        });
-        toast.error(
-          t(
-            mapIpcErrorToI18nKey(error, {
-              namespace: 'chat.markdownRenderer',
-              fallback: 'chat.markdownRenderer.openInBrowserFailed',
-            }),
-          ),
-        );
+      const res = await window.electronAPI.openFileInBrowser(abs);
+      if (!res.success) {
+        log.warn('open in browser failed', { relPath: entry.relPath, error: res.error });
+        toast.error(res.error ?? t('chat.markdownRenderer.openInBrowserFailed'));
       }
     },
     [workdir, t],

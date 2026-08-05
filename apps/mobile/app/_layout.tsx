@@ -7,9 +7,8 @@ import {
   useSegments,
 } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useRef, type ReactElement } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, type ReactElement } from 'react';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import {
   fontWeight,
@@ -21,17 +20,12 @@ import {
 } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
-import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import { loginText } from '@/auth/loginMessages';
-import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   MobileLoginHandoffProvider,
   useLoginHandoff,
 } from '@/auth/MobileLoginHandoffContext';
-import {
-  DeviceLinkProvider,
-  useDeviceLink,
-} from '@/device-link/DeviceLinkContext';
+import { DeviceLinkProvider } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -47,28 +41,12 @@ import {
 import { registerDevCacheMenu } from '@/debug/devCacheMenu';
 import { startJsStallWatchdog } from '@/debug/jsStallWatchdog';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
-import {
-  openBundleInstall,
-  useBundleUpdatePrompt,
-} from '@/update/useBundleUpdatePrompt';
-import {
-  useForcedUpdate,
-  type ForcedUpdateTarget,
-} from '@/update/forcedUpdateStore';
-import { useForcedUpdateRecheck } from '@/update/useForcedUpdateRecheck';
+import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useResumeUpdateCheck } from '@/update/useResumeUpdateCheck';
-import {
-  markStartupOtaLaunchSuccess,
-  useStartupOtaGate,
-} from '@/update/useStartupOtaGate';
+import { useStartupOtaGate } from '@/update/useStartupOtaGate';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
-import { getNewSessionCreationTask } from '@/session/newSessionCreation';
-import {
-  isPrecreatedWorktreeRegistrationInFlight,
-  recoverPendingPrecreatedWorktrees,
-} from '@/session/precreatedWorktreeRecovery';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -76,17 +54,6 @@ function NavigationGate() {
   const segments = useSegments();
   const { mode, colors } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
-  // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
-  // UIViewControllerBasedStatusBarAppearance=YES):iOS 27 起 UIKit 不再接受
-  // RN StatusBar 依赖的废弃全局 API(setStatusBarStyle),expo-status-bar 组件
-  // 在 iOS 上已失效且会触发 RCTLogError,iOS 侧不得再挂载。Android 老链路正常,
-  // 继续用组件式 StatusBar(含 Stack 未挂载的启动闸门期),不走 RNS 双轨。
-  // splash 覆盖层是登录品牌舞台(首启亮色门可能强制 light):覆盖期间随舞台
-  // 有效主题,释放后随系统主题;首启门 pending 时舞台不渲染品牌,跟系统即可。
-  const firstLaunchGate = useLoginFirstLaunchLight();
-  const stageTheme =
-    resolveStartupSplashHandoff(firstLaunchGate, mode).targetTheme ?? mode;
-  const statusBarTheme = splashActive ? stageTheme : mode;
   const navigationTheme = useMemo(
     () =>
       createNavigationTheme(
@@ -101,12 +68,6 @@ function NavigationGate() {
   useEffect(() => {
     if (auth.initialized) releaseSplash();
   }, [auth.initialized, releaseSplash]);
-
-  // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
-  // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
-  useEffect(() => {
-    if (auth.initialized) markStartupOtaLaunchSuccess();
-  }, [auth.initialized]);
 
   useEffect(() => {
     if (!auth.initialized) return;
@@ -135,19 +96,12 @@ function NavigationGate() {
 
   return (
     <NavigationThemeProvider value={navigationTheme}>
-      {/* Android 专用:splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
-      {Platform.OS === 'android' ? (
-        <StatusBar
-          style={splashActive || mode === 'dark' ? 'light' : 'dark'}
-        />
-      ) : null}
+      {/* splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
+      <StatusBar style={splashActive || mode === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.surface },
-          ...(Platform.OS === 'ios'
-            ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
-            : null),
           // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
           // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
           // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;
@@ -189,119 +143,6 @@ function AuthHandoffBridge() {
   return null;
 }
 
-/**
- * 预创建 worktree 恢复桥：
- * 手机在 worktree:create 前已持久化 recoveryKey reservation；进程可能在 create
- * 或 create-session 回包前被系统杀掉，这时页面 task 已不存在，不能等用户再次
- * 进入新建页才补偿。根部在同账号链路上线 / 回前台时读取小型恢复账本；当前
- * 进程仍有创建 task 的记录先跳过，避免与正常管线竞争，冷启动后再由被控端的
- * 登记匹配与 ownership guard 做最后裁决。
- */
-function PrecreatedWorktreeRecoveryBridge() {
-  const auth = useAuth();
-  const {
-    status: deviceLinkStatus,
-    connectionEpoch,
-    openLink,
-    invoke,
-  } = useDeviceLink();
-  const inFlightRef = useRef<{
-    accountId: string;
-    promise: Promise<void>;
-  } | null>(null);
-  const accountId = auth.user?.id?.trim() ?? '';
-  const ownerGenerationRef = useRef({ accountId: '', generation: 0 });
-  if (ownerGenerationRef.current.accountId !== accountId) {
-    ownerGenerationRef.current = {
-      accountId,
-      generation: ownerGenerationRef.current.generation + 1,
-    };
-  }
-  const ownerGeneration = ownerGenerationRef.current.generation;
-
-  const runRecovery = useCallback(async () => {
-    if (
-      !auth.initialized
-      || !auth.isAuthenticated
-      || !accountId
-      || deviceLinkStatus !== 'online'
-    ) {
-      return;
-    }
-    // 连接重建与账号切换可能在同一时间触发多个恢复请求。相同账号复用
-    // 当前运行；切换账号则等待旧账本完成后再处理新账号，不能因为一次
-    // 竞态把新账号的恢复永久跳过。
-    while (inFlightRef.current) {
-      const previous = inFlightRef.current;
-      await previous.promise;
-      if (previous.accountId === accountId) return;
-      if (inFlightRef.current === previous) {
-        inFlightRef.current = null;
-      }
-    }
-    const run = recoverPendingPrecreatedWorktrees(accountId, {
-      openLink,
-      discardPrecreated: (deviceId, input) => invoke(
-        deviceId,
-        'worktree:discard-precreated',
-        [input],
-      ),
-      isSessionClaimed: async (deviceId, sessionId) => {
-        try {
-          const session = await invoke(deviceId, 'local-db:sessions:get', [sessionId]);
-          return !!session;
-        } catch (error) {
-          const code = typeof error === 'object' && error && 'code' in error
-            ? String((error as { code?: unknown }).code ?? '')
-            : '';
-          const message = error instanceof Error ? error.message : String(error);
-          if (`${code} ${message}`.toUpperCase().includes('NOT_FOUND')) return false;
-          throw error;
-        }
-      },
-      shouldDefer: (record) => (
-        getNewSessionCreationTask(record.sessionId) !== null
-        || isPrecreatedWorktreeRegistrationInFlight(record.sessionId)
-      ),
-      // Account selection updates user/token while the AuthProvider stays mounted.
-      // Fence this run against that owner generation so stable Device Link callbacks
-      // cannot retarget an old account's recovery to the new client.
-      isCurrent: () => (
-        ownerGenerationRef.current.accountId === accountId
-        && ownerGenerationRef.current.generation === ownerGeneration
-      ),
-    });
-    const tracked = {
-      accountId,
-      promise: run.then(() => undefined, () => undefined),
-    };
-    inFlightRef.current = tracked;
-    await tracked.promise;
-    if (inFlightRef.current === tracked) {
-      inFlightRef.current = null;
-    }
-  }, [
-    accountId,
-    auth.initialized,
-    auth.isAuthenticated,
-    connectionEpoch,
-    deviceLinkStatus,
-    invoke,
-    openLink,
-    ownerGeneration,
-  ]);
-
-  useEffect(() => {
-    void runRecovery();
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') void runRecovery();
-    });
-    return () => subscription.remove();
-  }, [runRecovery]);
-
-  return null;
-}
-
 function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
@@ -329,7 +170,6 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
-        <PrecreatedWorktreeRecoveryBridge />
         <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>
@@ -365,9 +205,6 @@ function RootLayout() {
   // 回写 env live binding。拉不到 / 清单非法 → 错误屏等用户重试,无缓存与超时兜底;
   // __DEV__ 直接放行。ready 前 RootAfterEndpoints(含 OTA 门与业务树)不挂载。
   const endpointGate = useStartupEndpointGate();
-  // 强更阻断态(自建线整包更新命中 minVersion 门槛):模块级 store,启动检查 / 设置页手动
-  // 检查 / resume 静默检查三条路径中任一命中即置位。置位后整棵业务树不挂载。
-  const forcedUpdate = useForcedUpdate();
   // 所有 hook 已在上方调用,下面条件返回不违反 hooks 规则。
   // GestureHandlerRootView 必须在根部常驻(RNGH 官方要求;缺失时 Android 手势整体不响应)。
   // 各分支都包同一层,避免闸门状态切换时 root 重挂。
@@ -383,19 +220,9 @@ function RootLayout() {
             '{reason}',
             endpointGate.reason ?? 'unknown',
           )}
-          actionLabel={loginText('retry')}
-          onAction={endpointGate.retry}
+          retryLabel={loginText('retry')}
+          onRetry={endpointGate.retry}
         />
-      </MobileLoginHandoffStage>
-    );
-  } else if (forcedUpdate) {
-    // 强更闸门:与端点错误屏同一套阻断体系(白底品牌宿主 + 唯一出口),没有"稍后 / 跳过"
-    // ——点「去更新」跳出去安装,回到 App 仍是这一屏,直到装上不低于门槛的版本。
-    // 业务树整体不挂载,含 AuthProvider / DeviceLinkProvider / 预创建 worktree 恢复桥:
-    // 强更期间不该发起任何 Device Link 调用;恢复账本是持久化的,阻断解除后下次启动照常补偿。
-    body = (
-      <MobileLoginHandoffStage>
-        <ForcedUpdateGateContent target={forcedUpdate} />
       </MobileLoginHandoffStage>
     );
   } else if (endpointGate.status === 'pending') {
@@ -413,11 +240,8 @@ function RootLayout() {
             {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
             <MobileLoginHandoffProvider>
               <EndpointHandoffBridge status={endpointGate.status} />
-              {/* 启动闸门全程共用这一个 splash 实例;需要用户交互的闸门屏
-                  (端点错误 / 强更阻断)才隐藏它 */}
-              <StartupSplashOverlay
-                hidden={endpointGate.status === 'error' || forcedUpdate !== null}
-              >
+              {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
+              <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
                 {body}
               </StartupSplashOverlay>
             </MobileLoginHandoffProvider>
@@ -429,22 +253,21 @@ function RootLayout() {
 }
 
 /**
- * 启动闸门阻断内容层(StartupBlockedScreen 的白底体系消费变体,PR4a):
+ * 端点闸门阻断内容层(StartupBlockedScreen 的白底体系消费变体,PR4a):
  * 品牌视觉由 MobileLoginHandoffStage 宿主拥有,本层背景透明、内容沉到下半屏
- * (避开品牌三要素),仅承载标题/说明/唯一动作。端点闸门与强更闸门共用本层
- * ——阻断语义一致:没有"跳过 / 稍后再说",只有一个出口。端点错误屏的文案 key 化
- * 契约不变(endpointGateTitle / endpointGateSubtitle{reason} / retry)。
+ * (避开品牌三要素),仅承载标题/原因/重试。文案 key 化契约不变
+ * (endpointGateTitle / endpointGateSubtitle{reason} / retry)。
  */
 function StartupGateBlockedContent({
   title,
   subtitle,
-  actionLabel,
-  onAction,
+  retryLabel,
+  onRetry,
 }: {
   title: string;
   subtitle?: string;
-  actionLabel: string;
-  onAction: () => void;
+  retryLabel: string;
+  onRetry: () => void;
 }) {
   const gateStyles = useThemedStyles(makeGateStyles);
   return (
@@ -453,42 +276,15 @@ function StartupGateBlockedContent({
       {subtitle ? <Text style={gateStyles.subtitle}>{subtitle}</Text> : null}
       <Pressable
         accessibilityRole="button"
-        onPress={onAction}
+        onPress={onRetry}
         style={({ pressed }) => [
           gateStyles.retryButton,
           pressed && gateStyles.retryButtonPressed,
         ]}
       >
-        <Text style={gateStyles.retryLabel}>{actionLabel}</Text>
+        <Text style={gateStyles.retryLabel}>{retryLabel}</Text>
       </Pressable>
     </View>
-  );
-}
-
-/**
- * 强更闸门内容层:命中 minVersion 门槛时的阻断屏,唯一出口是「去更新」
- * (iOS 跳 itms-services / App Store,Android 跳应用商店或 APK 直下)。
- * 复用既有 update.* 文案(forcedTitle / bundleAvailableBody / releaseNotes / goUpdate),
- * 不新增术语;t() 在此消费,保证语言切换即时生效。
- */
-function ForcedUpdateGateContent({ target }: { target: ForcedUpdateTarget }) {
-  const { t } = useTranslation();
-  // 阻断期间业务树不挂载 → useResumeUpdateCheck 也停了,本进程不会再拉 /latest。
-  // 所以阻断屏自带一次"回前台重新核对":服务端撤回误下发的门槛后,用户切出去再回来
-  // 即自动解除,不必杀进程冷启动。拉取失败一律维持阻断(不能靠断网绕过)。
-  useForcedUpdateRecheck();
-  const notes = target.releaseNotes?.trim();
-  const subtitle = [
-    t('update.bundleAvailableBody'),
-    notes ? t('update.releaseNotes', { notes }) : '',
-  ].join('');
-  return (
-    <StartupGateBlockedContent
-      title={t('update.forcedTitle')}
-      subtitle={subtitle}
-      actionLabel={t('update.goUpdate')}
-      onAction={() => openBundleInstall(target)}
-    />
   );
 }
 

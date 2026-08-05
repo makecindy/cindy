@@ -32,7 +32,6 @@ import { ClipboardCopy, Copy, FileCode, FolderOpen, FolderTree, Globe, PanelRigh
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -139,18 +138,8 @@ export function useFileChipContextMenu({
   async function handleOpenInBrowser(): Promise<void> {
     setMenuPos(null);
     const abs = await getAbsPath();
-    try {
-      await window.electronAPI.openFileInBrowser(abs);
-    } catch (error) {
-      toast.error(
-        t(
-          mapIpcErrorToI18nKey(error, {
-            namespace: 'chat.markdownRenderer',
-            fallback: 'chat.markdownRenderer.openInBrowserFailed',
-          }),
-        ),
-      );
-    }
+    const res = await window.electronAPI.openFileInBrowser(abs);
+    if (!res.success) toast.error(res.error ?? t('chat.markdownRenderer.openInBrowserFailed'));
   }
 
   async function handleOpenInSidebar(): Promise<void> {

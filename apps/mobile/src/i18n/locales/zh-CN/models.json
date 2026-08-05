@@ -8,6 +8,7 @@
     "emptyDefault": "暂无可用模型",
     "loadingDefault": "正在加载模型…",
     "subscriptionBadge": "订阅",
+    "discountBadge": "特别折扣",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
     "crossAgentEmptyHint": "请先在被控设备连接 {{agent}} 的模型来源",
@@ -29,7 +30,7 @@
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",
     "confirmTitle": "切换到 {{agent}}？",
-    "confirmMessage": "下一条消息发送时，{{appName}} 会把当前任务交接给 {{agent}}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。",
+    "confirmMessage": "下一条消息发送时，{{appName}} 会把当前对话交接给 {{agent}}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。",
     "cancel": "取消",
     "confirm": "继续选择"
   }

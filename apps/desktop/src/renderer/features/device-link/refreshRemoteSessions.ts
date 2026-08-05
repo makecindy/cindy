@@ -19,29 +19,10 @@ import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
-import type { RemoteSessionListSessionLike } from '@cindy/maker-shared/session-list';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
-import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
-
-/**
- * 把 store 当前的全部设备分片摊成可缓存的快照(字段瘦身与 live 态剔除在 main 侧
- * 白名单里做,见 mirrorCacheStore.coerceCachedSession)。
- *
- * 用 `getAllDeviceIds()` 而不是 `getDeviceIds()`:后者只返回 **connected** 分片,于是
- * 「A 设备离线、B 设备刚完成 refresh」时这次整份回写会把 A 从缓存里抹掉,下次冷启动就
- * 再也恢复不出那台离线设备和它的会话 —— 而离线可见恰恰是这份缓存存在的理由
- * (review: codex P1)。断连分片是**有意保留**的,快照必须带上它们。
- */
-export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
-  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => ({
-    deviceId,
-    deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
-    sessions: [...remoteProjectsStore.getDeviceSessions(deviceId)],
-  }));
-}
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;
@@ -51,19 +32,6 @@ const MISSING_STATUS_PROBE_LIMIT = 8;
 
 /** 默认重试次数(含首次):退避 250→500→1000→2000→3000ms,总窗口 ~6.75s,覆盖被控端冷启动迁移。 */
 const DEFAULT_MAX_ATTEMPTS = 6;
-
-/**
- * 超时类失败(DEVICE_LINK_TIMEOUT)的独立预算(含首次):超时不是快速失败——每次都
- * 吃满隧道超时(sessions:list 现为 12s)。按 DEFAULT_MAX_ATTEMPTS 重试的话,一轮对账
- * 最坏连打 6 个满超时请求(2026-08 弱网实测:30s 超时时代一轮 ~187s,单日 2253 次超时
- * 堆成请求风暴)。超时说明链路不通,原地重试大概率还是超时:只再试 1 次,其余交给
- * 下一轮 reconciler / push / 熔断探测兜底。DbClient not ready 等毫秒级快速失败仍走
- * 完整预算(它们才是这条重试链的原始动机:覆盖被控端冷启动迁移窗口)。
- */
-const MAX_TIMEOUT_ATTEMPTS = 2;
-
-/** 超时标记(renderer 看到的是 main IPC 层映射后的码,见 TRANSIENT_MARKERS 注释)。 */
-const TIMEOUT_MARKER = 'DEVICE_LINK_TIMEOUT';
 
 /** 永久错误标记:命中即立即放弃(被控开关关 / channel 不在白名单)—— 重试也不会变。 */
 const PERMANENT_MARKERS = ['REMOTE_DISABLED', 'CHANNEL_NOT_ALLOWED'] as const;
@@ -94,89 +62,6 @@ const TRANSIENT_MARKERS = [
 export function isTransientRemoteError(message: string): boolean {
   if (PERMANENT_MARKERS.some((m) => message.includes(m))) return false;
   return TRANSIENT_MARKERS.some((m) => message.includes(m));
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasOptionalNullableString(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || isNullableString(record[key]);
-}
-
-function hasOptionalBoolean(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || typeof record[key] === 'boolean';
-}
-
-function hasOptionalFiniteNumber(record: Record<string, unknown>, key: string): boolean {
-  const value = record[key];
-  return (
-    value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value))
-  );
-}
-
-function isRemoteSessionListSession(value: unknown): value is RemoteSessionListSessionLike {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const session = value as Record<string, unknown>;
-  const count = session._count;
-  return (
-    typeof session.id === 'string' &&
-    session.id.length > 0 &&
-    typeof session.title === 'string' &&
-    isNullableString(session.workingDir) &&
-    typeof session.model === 'string' &&
-    session.status === 'active' &&
-    typeof session.agentKind === 'string' &&
-    typeof session.createdAt === 'string' &&
-    typeof session.updatedAt === 'string' &&
-    (session.userId === undefined || typeof session.userId === 'string') &&
-    hasOptionalNullableString(session, 'workspaceKind') &&
-    hasOptionalNullableString(session, 'effort') &&
-    hasOptionalNullableString(session, 'permissionMode') &&
-    hasOptionalNullableString(session, 'sdkSessionId') &&
-    hasOptionalNullableString(session, 'clearedAt') &&
-    hasOptionalNullableString(session, 'pinnedAt') &&
-    hasOptionalNullableString(session, 'userSendAt') &&
-    hasOptionalNullableString(session, 'source') &&
-    hasOptionalNullableString(session, 'orcaRole') &&
-    hasOptionalNullableString(session, 'providerId') &&
-    hasOptionalNullableString(session, 'parentSessionId') &&
-    hasOptionalNullableString(session, 'forkedAtMessageId') &&
-    hasOptionalNullableString(session, 'worktreePath') &&
-    hasOptionalNullableString(session, 'remoteHostId') &&
-    hasOptionalNullableString(session, 'preview') &&
-    hasOptionalNullableString(session, 'summary') &&
-    hasOptionalBoolean(session, 'fastMode') &&
-    hasOptionalBoolean(session, 'planModeEnabled') &&
-    hasOptionalBoolean(session, 'usedProjectContext') &&
-    hasOptionalFiniteNumber(session, 'totalTokenUsage') &&
-    hasOptionalFiniteNumber(session, 'totalCostUsd') &&
-    hasOptionalFiniteNumber(session, 'contextTokens') &&
-    hasOptionalFiniteNumber(session, 'contextWindow') &&
-    hasOptionalFiniteNumber(session, 'activeTurnStartedAt') &&
-    hasOptionalFiniteNumber(session, 'lastTurnEndedAt') &&
-    (session.extraDirs === undefined ||
-      (Array.isArray(session.extraDirs) &&
-        session.extraDirs.every((dir) => typeof dir === 'string'))) &&
-    (count === undefined ||
-      count === null ||
-      (isRecord(count) &&
-        (count.messages === undefined ||
-          (typeof count.messages === 'number' && Number.isFinite(count.messages)))))
-  );
-}
-
-function parseRemoteSessionList(value: unknown): Session[] {
-  if (!Array.isArray(value) || !value.every(isRemoteSessionListSession)) {
-    throw new Error('Invalid remote sessions response');
-  }
-  // local-db:sessions:list 是跨版本的列表投影；旧端允许缺少新版 Session 的附加字段。
-  // 上面的 guard 锁住列表渲染与分组所需的最低形状，store 继续沿用既有 Session 镜像类型。
-  return value as unknown as Session[];
 }
 
 /** 退避:250ms 起指数增长,封顶 3000ms。 */
@@ -370,40 +255,41 @@ async function runRefreshRemoteDeviceSessions(
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const deviceName = name ?? remoteProjectsStore.getDeviceName(deviceId) ?? deviceId;
   const epoch = remoteProjectsStore.nextSnapshotEpoch(deviceId);
-  let timeoutAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'superseded';
     try {
-      const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
+      const list = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
         LIST_LIMIT,
         'active',
         { includePinned: true },
       ]);
       // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'superseded';
-      const sessions = parseRemoteSessionList(value);
-      if ((opts.snapshotMode ?? 'merge') === 'merge') {
-        const incomingIds = new Set(sessions.map((session) => session.id));
-        const missingSessionIds = remoteProjectsStore
-          .getDeviceSessions(deviceId)
-          .filter((session) => !incomingIds.has(session.id))
-          .map((session) => session.id);
-        // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
-        // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
-        if (sessions.length < LIST_LIMIT) {
-          missingStatusProbeQueues.delete(deviceId);
-          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
-          for (const sessionId of missingSessionIds) {
-            removeRemoteSessionActivityEntry(sessionId);
+      if (Array.isArray(list)) {
+        if ((opts.snapshotMode ?? 'merge') === 'merge') {
+          const sessions = list as Session[];
+          const incomingIds = new Set(sessions.map((session) => session.id));
+          const missingSessionIds = remoteProjectsStore
+            .getDeviceSessions(deviceId)
+            .filter((session) => !incomingIds.has(session.id))
+            .map((session) => session.id);
+          // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
+          // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
+          if (sessions.length < LIST_LIMIT) {
+            missingStatusProbeQueues.delete(deviceId);
+            remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
+            for (const sessionId of missingSessionIds) {
+              removeRemoteSessionActivityEntry(sessionId);
+            }
+          } else {
+            remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions);
+            await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
           }
         } else {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions);
-          await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
+          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
         }
-      } else {
-        remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
       }
       return 'ok'; // 成功
     } catch (err) {
@@ -414,12 +300,7 @@ async function runRefreshRemoteDeviceSessions(
         log.debug(`refreshRemoteDeviceSessions access revoked for ${deviceId.slice(0, 8)}`);
         return 'revoked';
       }
-      // 超时单独记账:它每次都吃满隧道超时,不能像快速失败那样按完整预算原地重试。
-      if (message.includes(TIMEOUT_MARKER)) timeoutAttempts++;
-      const canRetry =
-        attempt < maxAttempts - 1 &&
-        timeoutAttempts < MAX_TIMEOUT_ATTEMPTS &&
-        isTransientRemoteError(message);
+      const canRetry = attempt < maxAttempts - 1 && isTransientRemoteError(message);
       if (!canRetry) {
         // 永久错误 / 重试耗尽:放弃(push / 下一次 reconnect 仍会兜底补上,只是慢一拍)。
         log.debug(`refreshRemoteDeviceSessions gave up for ${deviceId.slice(0, 8)}`, err);

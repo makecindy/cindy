@@ -73,7 +73,7 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
 - **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Never visible in normal interaction flow.
-- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration toggle ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
@@ -201,8 +201,6 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
 - **Buttons**: pill (9999px); primary = solid CTA (`--confirm-btn-primary-*`), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
 - **Focus on open**: lands on the dialog's **primary input or primary button**, never defaults to Cancel (see §14.2 + ConfirmDialog's `autoFocusConfirm` / `onOpenAutoFocus`).
-- **Closing affordance** (made explicit 2026-07-30, scope clarified 2026-07-31): **dismissible** dialogs (wizards, catalogs, forms — anything a user may abandon freely) close via the footer Cancel button, Esc, and a scrim click, and carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation, not a convenience. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) intentionally do **not** close on scrim click (a deliberate mis-tap guard) — that behavior stays. Known legacy debt: CustomProviderDialog still ships a top-right × predating this rule — migrate it the next time that dialog is touched; do not copy the pattern into new dialogs.
-- **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned text button** (`--text-secondary`, 13px/500) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
 
 ### Tabs
 
@@ -416,7 +414,6 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--warning-bg-soft` | rgba(234,107,23,0.12) | rgba(234,107,23,0.18) | Warning alpha surface (alpha recomputed against `#EA6B17`, 2026-07-17) |
 | `--warning-fg` | `#F3A115` | `#F3A115` | Warning text/icons, including the update-restart busy-turn interruption hint |
 | `--focus-ring` / `--focus-ring-soft` | `#417CDD` / @50% | same | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant |
-| `--text-selection-bg` | `var(--focus-ring-soft)` | same | Selected text background; remains visible when focus moves into an embedded webview |
 | `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` | rgba | rgba (deeper) | Shadows, theme-invariant |
 | `--overlay-modal` / `--overlay-lightbox` | rgba | rgba (deeper) | Modal / lightbox backdrop |
 | `--perm-auto-selected-text` | `#417CDD` | `#417CDD` | Auto Approval accent, finalized 2026-07-17 (same value both modes; replaces #000050/#00D9C5) |
@@ -473,7 +470,7 @@ This section is the authoritative token-usage text; i18n rules for UI copy live 
 
 Settings → Appearance can import a VSCode color theme (`*.json` / jsonc) or an Obsidian `theme.css` and convert it into a local theme. Implementation: `apps/desktop/src/shared/theme-import/` (pure conversion) + `apps/desktop/src/main/local-themes/importer.ts` (dialog / read / write). Rules that govern it:
 
-- **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a byte-identical key set of 108 tokens derived from 13 palette roles plus the optional light-only `inputBg` role (CREATE AGENT card/input background, e.g. Solarized base2; absent ⇒ collapses to `surface`). Within the template, when a light palette supplies an `inputBg` distinct from `surface` (e.g. Solarized base2 cards), CREATE AGENT `*-hover` and the resting `quick-card-icon-bg` lift to `surface` (icon drops back to `chip` on hover); otherwise `*-hover`=`hover` and `quick-card-icon-bg` is `border` in dark / `chip` in light — keeping default/hover/icon visually distinct in every theme. `control-bg-pressed` is `chip` in dark and `hover` in light. `send-btn-bg`/`send-btn-icon` use the inverse-neutral pair (`textPrimary`/`surface`), not the accent, because the shared send tokens also render 10–12px text that must clear 4.5:1. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits those 108 base ids plus the imported-theme-only `switch-track-off` / `switch-thumb-off` safety pair. Because external muted/comment colors are unconstrained, the track keeps the source `textSecondary` only when it clears the 3.2:1 derivation target (above the 3:1 non-text floor) against the relevant surfaces and thumb; otherwise the converter takes the smaller passing correction along the source-to-black/source-to-white paths, or rejects the palette with the dedicated contrast error rather than reporting it as an unrecognized file or internal error. Existing local snapshots created before this pair existed are backfilled with the same 3.2:1 target at renderer load time only when both tokens are absent and the complete legacy semantic palette is parseable; if no track can satisfy the target, the runtime restores the pre-upgrade `border-default` track and `surface` thumb instead of falling through to unchecked aliases. Disk JSON and explicit user overrides are never changed. Optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) are added when the source theme provides heading or bold colors.
+- **One template, taken from the hand-ported community themes.** The seven ported themes under `apps/desktop/src/renderer/themes/builtin/` (one-dark-pro, github-dark, eclipse, material-ocean-hc, monokai-pro, atom-one-light, solarized-light) share a byte-identical key set of 108 tokens derived from 13 palette roles plus the optional light-only `inputBg` role (CREATE AGENT card/input background, e.g. Solarized base2; absent ⇒ collapses to `surface`). Within the template, when a light palette supplies an `inputBg` distinct from `surface` (e.g. Solarized base2 cards), CREATE AGENT `*-hover` and the resting `quick-card-icon-bg` lift to `surface` (icon drops back to `chip` on hover); otherwise `*-hover`=`hover` and `quick-card-icon-bg` is `border` in dark / `chip` in light — keeping default/hover/icon visually distinct in every theme. `control-bg-pressed` is `chip` in dark and `hover` in light. `send-btn-bg`/`send-btn-icon` use the inverse-neutral pair (`textPrimary`/`surface`), not the accent, because the shared send tokens also render 10–12px text that must clear 4.5:1. `apps/desktop/src/shared/theme-import/palette.ts` is that derivation, code-ified; `one-dark-pro.ts`'s header comment is the source-of-truth for which VSCode key feeds which role. The template is **allow-list only** — it emits exactly those 108 base ids, plus optional Markdown tokens (`md-h1-fg`…`md-h6-fg` / `md-strong-fg`) when the source theme provides heading or bold colors.
 - **Exemption families are never imported.** `--login-*`, brand red, `--destructive`, `--error-*`, `--warning-accent`, `--status-bar-accent`, `--focus-ring*`, `--diff-*`, shadows and overlays stay at their spec values under every imported theme (see the exemption table above and §16). `apps/desktop/src/shared/theme-import/protected-tokens.ts` enforces it as a second gate; the import report tells the user how many tokens were held back.
 - **`-hsl` tokens are computed, not copied.** Both forms of a color must denote the same color, so the converter derives every HSL triplet from its hex via `toHslTriplet()`. (Note: a few hand-written builtin themes carry approximate HSL values — `github-dark`'s `SURFACE_BG_HSL` was copied off one-dark-pro. Those are left as-is; new imports are exact.)
 - **Markdown text colors go through `--md-h1-fg`…`--md-h6-fg` / `--md-strong-fg`, and default to `inherit`.** Before these tokens existed, Markdown headings and bold text inherited their color from the container (`baseComponents` sets size/weight only). Defaulting to `var(--text-primary)` would have repainted headings inside blockquotes, tool cards and secondary-text regions, so the defaults are `inherit` — every built-in theme renders exactly as before. Imported themes fill them from Obsidian `--hN-color` / `--bold-color` or VSCode `markup.heading` / `markup.bold`. Guard: `themes/__tests__/markdownColorTokens.test.ts`.
@@ -529,7 +526,6 @@ Known but deliberately-deferred cleanups (e.g. hardcoded hex in `MakerExperiment
 ### 14.1 Text Selectability (user-select)
 
 - **Content is selectable**: message body text, code blocks, document previews — anything the user reads sentence-by-sentence or may want to copy. Selectable by default; leave it alone.
-- **Selections survive focus changes**: moving focus into an embedded webview (plugin panel, built-in browser, etc.) must not clear the host selection or let Chromium repaint it as an unreadable inactive color. Global and editor selections use `--text-selection-bg`, which remains visible in both Light and Dark modes.
 - **Chrome is not selectable**: buttons, menu items, labels/chips, status bars, badges, toolbars, sidebar rows — interface-skeleton text gets `select-none`. They are controls, not content; being selectable only gets in the way (typical offender: the goal-status chip label).
 - Litmus test: would the user ever think "let me copy this"? Yes → selectable; no (it's just a control) → `select-none`.
 
@@ -621,319 +617,6 @@ default into components.
   - **Scope boundary**: this seal only. The closing-ring language must not leak into other spinners or progress indicators. Implementation: `apps/desktop/src/renderer/components/chat/GhostSummonCard.tsx` + `.summon-seal-*` in `globals.css`.
 - **Retired: mobile-download QR brand edge** — a rotating app-icon edge on the `MobileDownloadDialog` QR card was briefly registered here as a fourth (persistent) motion class on 2026-07-25 and **removed the same day** at the user's request: read as a strange ring turning behind the code. There is **no sanctioned persistent decorative motion** — the red lines above hold without exception. The card is now a bare QR (no edge, no border, no shadow, no tilt); its only motion is the linked ↔ onboarding size tween. Do not re-add. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 
-### 14.5 聊天正文的可点性信号(Clickability in message bodies)
-
-> 拍板 2026-07-30。起因:用户问「哪些是链接可以点、哪些不是，现在是不是看得不够清楚？」
-> 排查结论是**两个独立缺陷叠在一起**,且方向相反——加强可点信号会放大误判,所以两者必须
-> 一起修。本节是聊天正文(消息气泡 + 文件阅读器)可点性的权威口径。
-
-**缺陷一:装饰被两种正交语义共用。** 「等宽 + 底色」既表示「这是代码/路径」(排版语义),
-又被指望表示「这个能点」(交互语义),读者无法从外观反推可点性。实测数值:改前桌面可点的
-`FileTargetChip` 用实色底(1.26:1),不可点的 markdown 行内 code 用半透明底(light
-1.11~1.13:1 / **dark 1.26~1.28:1**)——深色模式下两者几乎相同,只能靠 hover 与指针形状
-区分,等于「必须拿鼠标扫一遍才知道哪个能点」;移动端无 hover 无指针,该信号直接不存在。
-
-**缺陷二:普通行内 code 会被误判成可点。** 行内 code 的候选判定曾挂一条宽松兜底
-(桌面 `classifyMarkdownHref` / 移动 `looksLikeLocalHref`:含分隔符**或**有个点后缀即算
-本地路径)。那是**显式 markdown 链接**的口径——作者写了 `[x](y)` 就是主动声明;反引号只
-表示「这是代码」,不表示「这是路径」。实测 29 个真实行内 code 样本有 **21 个**成为路径候选
-(`and/or`、`text/plain`、`A/B`、`n/a`、`1.2`、`array.map`、`console.log` …)。
-
-#### 规则
-
-1. **下划线常显 = 可点,且是唯一的交互信号。** markdown 里粗体占了字重、斜体占了倾斜、
-   行内 code 占了等宽+底色,**下划线是唯一没被排版语义占用的通道**,故专留给交互语义。
-   反过来:**没有下划线的一律不可点**。底色/等宽从此只表示排版含义,不再兼职表达可点
-   (所以可点的路径 chip 与不可点的行内 code **共用同一个底色 token** —— 它们本来就是
-   同一种排版物,差别只在那条下划线)。hover 变色与 `cursor:pointer` 降为**辅助**反馈,
-   不再是主信号:静止状态下就必须能判断。
-
-   **「唯一」是字面意思:可点态相对不可点态,只能多一条下划线,不得另外改文字颜色、
-   字重或字体。** 差异越单一,「有横线 = 能点」越可信;叠三个信号反而让读者无法归纳出
-   规则。参照 GitHub(2026-07-31 核对其 `github-markdown.css`):`.markdown-body code`
-   **刻意不定义 `color`**、纯靠继承,`.markdown-body a` 也只有 `text-decoration`、
-   没有 `font-weight`;可点与不可点的行内 code 差别就是那条横线。
-   落地推论两条:
-   - 移动端 `markdownPathChip` **只写 `textDecorationLine: 'underline'`**。它总是叠在
-     `markdownInlineCode` 之后,于是自然继承行内 code 的压暗档 —— 压暗是「这是代码」的
-     排版语义,继承它才对。(2026-07-30 首版曾在此钉 `textPrimary + medium`,那是下划线
-     还不是主信号时的补偿,信号收敛后即为冗余,已移除。)
-   - **正文裸写的路径点亮后保持正文字体,只加下划线 —— 两端同口径**(2026-07-31 实机
-     走查后拍板)。它的未点亮态是普通正文,若点亮就套等宽,同一句里点亮的 `src/a.ts`
-     与未点亮的 `src/b.ts` 会在**字体、底色、下划线三处齐变**,跳变无法向用户解释。
-     两端都必须**按来源 + label 形态分三档**(判定口径同源:桌面
-     `shouldRenderCodeReferenceLabel`、移动 `chatPathLabelReadsAsFileReference`):
-
-     | 来源 | label | 点亮后 |
-     |---|---|---|
-     | 正文裸写的路径 | (无独立 label) | 正文字体 + 下划线,**不套等宽** |
-     | 作者手写 `[README.md](path)` | 读起来是文件引用 | 等宽 chip + 下划线 |
-     | 作者手写 `[看这份规则](path)` | 散文 | 正文字体 + 下划线 |
-
-     - 桌面端:`remarkLocalPathLinks` 给切出的 link 节点打 `data-bare-path` 标记
-       (走 mdast `data.hProperties`),`MarkdownTargetLink` 见到它就跳过
-       `shouldRenderCodeReferenceLabel`、直接走 `ResolvedLocalLink`。
-     - 移动端:`matchBareFilePathLink` 在 link inline 上带 `bare: true`,
-       `LinkPathChipSpan` 据此决定 chipStyle 是否含 `markdownInlineCode`;非 bare 时
-       再过一遍 label 形态判定。**不得无条件去掉 `markdownInlineCode`** —— 那会把
-       作者手写的文件名链接一起降级(2026-07-31 PR #1144 review 实捉)。
-     - 作者手写的文件名链接保留 chip 是刻意的:那是作者的排版意图,与桌面一致。
-2. **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担(斜杠路径
-   vs `https://` 前缀)。
-3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,
-   solarized 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 `linkColor` 也映射到
-   它),而移动端根本没有链接色概念。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
-   token,统一为**正文色 + 常显下划线**。token 本身保留(其它界面仍在用),只是不进
-   markdown 正文与用户消息气泡。
-4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
-   或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
-   限(前者作者已声明,后者词法本就要求带分隔符)。
-5. **无法判定时的点亮门槛按形态分级。** 适用于任何存在「无法判定」中间态的链路:移动端
-   全部会话、以及桌面的**远程会话**(两者的 `fs:stat` 都会回 `unknown`)。桌面**本机**
-   会话不适用 —— 那边走真实存在性检查,解析不到一律纯文本,没有中间态。
-
-   判据是「形状是否明确是路径」,精确定义为 **绝对路径 ∨ 尾斜杠目录 ∨(分隔符 **且** 带
-   扩展名)**。其中「绝对路径」= POSIX `/…` ∨ Windows 盘符 ∨ `file://`,**不要求扩展名**,
-   由判据自己正面识别(`ABSOLUTE_PATH_SHAPE_RE`),后两档才落到 `looksLikeFilePath`:
-
-   > ⚠️ **不要把整个判据写成 `!looksLikeFilePath(href)`。** 那个谓词有两条排除项是为
-   > 别的用途写的 —— `URL_SCHEME_RE` 是为「别把 `https://` 当本地路径」、POSIX 分支要求
-   > 扩展名是为「别让无扩展名引用触发 TextLightbox」。照抄就会连带继承这些与歧义判定
-   > 无关的排除,把**最明确的形态判成最可疑的**:`file:///Users/me/a.md` 与 `/etc/hosts`、
-   > `/usr/bin/node` 都曾因此被判歧义、断链时退化成纯文本。两者是同一根因的两个分支
-   > (前者检查点自查发现,后者 PR #1144 review 实捉)。**复用谓词前先看它的排除项是为
-   > 什么写的。**
-   >
-   > 已知取舍:以 `/` 开头、不以 `/` 结尾的正则字面量(`/\d+/g`)与 POSIX 绝对路径形状
-   > 无法区分,会跟着进乐观点亮档。刻意接受 —— 只影响断链这一个降级态(链路正常时
-   > stat 回 `nonfile` → 纯文本),而代价的另一边是开发对话里最常见的那批绝对路径在断链
-   > 时全部不点亮,那个错更醒目也更常见;要为它收紧就得在词法层区分正则与路径,又回到
-   > 规则 4 「靠形状排除必然连真的一起砍」的老问题。两端都有用例把它钉成**显式已知项**。
-
-   | 形状 | 例 | `unknown`(链路断)时 |
-   |---|---|---|
-   | 绝对路径(**含无扩展名**) | `/abs/a.png`、`/etc/hosts`、`C:\Windows\System32`、`file:///a.md` | **乐观点亮**(不因断链把整条消息的 chip 全灭) |
-   | 尾斜杠目录 / 分隔符+扩展名 | `src/x/`、`src/App.tsx` | 同上 |
-   | 无分隔符裸名 | `package.json`、`array.map` | 必须远端明确回 `file` / `directory` |
-   | 有分隔符但无扩展名 | `src/components`、`and/or` | 同上 |
-
-   > ⚠️ **「带分隔符」本身不足以乐观点亮**,必须**同时带扩展名**。`src/components` 与
-   > `and/or` / `n/a` / `read/write` / `text/plain` 词法**完全同形**,词法层分不开;只按
-   > 「带分隔符」放行,链路一抖它们就会一起变成可点假链接,正是本规则要防的缺陷。代价是
-   > 离线时 `src/components` 这类无扩展名目录引用不点亮 —— 这是刻意取舍:宁可少点亮一个
-   > 真目录,不可多点亮一片假链接。**「可点」的视觉信号一旦不可信,加强它只会让误判更醒目。**
-   > (本条曾只写「带分隔符」,措辞不精确,导致 review 出现一条要求放宽、一条要求收紧的
-   > 矛盾反馈;2026-07-31 已按实现精确化。)
-
-#### 正文裸路径的边界规格(两端同形)
-
-正文裸路径走的是「在散文里用**正向正则**定位」,而不是「按空白切 token 再剥边」——
-后者在中文里不成立(`改了src/App.tsx,然后呢` 整句是一个 token)。代价是必须自己保证
-**命中独占它所在的路径 token**:不许从中段起,也不许把紧跟的字符截断。
-
-PR #1144 的第 8、11、12、14 轮 review 各捉到这条规格的一个缺口(扩展名长度 / 右边界
-字符 / 空格中段 / `( ) # %` 等未支持字符 + 行号后缀)。**逐个补字符类注定一轮补一个**,
-故收敛成一条判据(两端 `startsMidPathToken` + `endsMidPathToken`,逐字同形):
-
-| 侧 | 判据 |
-|---|---|
-| 左 | 命中点前是同一 run 内的字符时,只有**白名单**字符可以紧邻路径:开括号 / 引号 / 冒号 / 列表分隔符 / `>`。其余一律拒绝 |
-| 左 | 命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝(只跨空格/制表符,不跨换行) |
-| 右 | 命中之后紧跟 token 字符 → 拒绝;`.` 与 `:` 本身放过(句末标点),但**跳过整串 `.`/`:` 之后仍跟 token 字符**时同样拒绝 |
-
-关键收益:`( ) # % [ ] =` 之类**不需要枚举** —— 白名单之外一律拒绝,以后出现别的未支持
-字符自动覆盖,不必再来一轮。
-
-> ⚠️ 左侧必须用**白名单**,不能用黑名单。第 14 轮曾用「run 前缀已含分隔符」的黑名单,它
-> 隐含假设「未支持字符出现在首个分隔符之后」,于是 `foo(bar)/src/index.ts`(括号在第一个
-> `/` 之前)绕过去、还切出个绝对路径 `/src/index.ts`。白名单让未知字符**默认拒绝**,与本节
-> 「宁可少点亮」同向。`>` 在表里是因为字面 HTML 的元素内容按既有口径仍识别
-> (`<div>src/App.tsx</div>`);`=` 刻意不在表里 —— `--config=src/a.json` 因此不点亮,换取
-> `docs/a=b/c.md` 不切出错误前缀 `b/c.md`。
->
-> ⚠️ 右侧的标点检查必须**跳过整串**,不能只看紧邻一个字符。这一处被连续挖了三轮
-> (`src/a.ts:12345678` → `:12.5` → `:12..5`),每轮多一层嵌套:只看一个字符时
-> `:12..5`、`:12::foo`、`:12:.:foo` 都会因为第二个标点不是 token 字符而绕过去。跳整串是
-> 为了把「再多一个标点」这条路一次封掉;句末连写的省略号(`src/a.ts...`)仍保住 —— 跳完
-> 之后没有 token 字符。
-
-两处刻意的例外,改动它们会让真实用法退化,均有用例钉住:
-- **`.` 与 `:` 不进右边界字符类**:句末英文句点(`见 src/a.ts.`)与句末冒号
-  (`见 src/a.ts:`)是最常见的紧随字符;把 `.` 加进去会让整条失配(SEG 含 `.`,回溯救
-  不回来)。
-- **「不以扩展名收尾」不能省**:少了它,`src/a.ts src/b.ts`(空格相邻的两条真路径)
-  第二条会被当成「被空格截断的后半段」连坐掉。
-
-已知误伤(显式取舍):散文里紧挨着一个「含分隔符、无扩展名」的片段时会被连坐,如
-`见 /etc src/a.ts`。少点亮一条、文本仍可读,方向与本节规则 5 的「宁可少点亮一个真目录,
-不可多点亮一片假链接」一致。
-
-#### 落点
-
-| 端 | 位置 |
-|---|---|
-| 桌面 | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts` |
-| 移动 | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts` |
-| 文件阅读器 | `session/selectableMarkdownHtml.ts`。**该面只有 http(s) 真的可点**,故规则在这里的落地是反过来的:只有 `a` 带下划线,`.xdt-image-chip` / `.xdt-session-chip` 一律不带下划线也不带 `cursor: pointer`,非 http(s) 目标(本地路径 / 会话深链 / mailto)不出 `<a>` |
-
-> **文件阅读器为什么反过来**:`MarkdownFileReader.interceptNavigation` 只把 http(s) 交给
-> `Linking.openURL`、其余导航一律 `return false`,且该 WebView **没有任何 postMessage
-> bridge**,所以 chip 类元素的点击也无处可去。给点不动的元素加下划线,等于在刚建立的
-> 「有下划线 = 可点」信号上立刻造反例 —— 反而比不加更糟。要让该面的路径 / 会话引用真
-> 可点,得先给它接上导航与 bridge,那是另一个功能。(2026-07-31 PR #1144 review 实捉:
-> 初版给会话 chip 加了下划线,且图片 chip 本就带着下划线与 pointer。)
-
-#### 不变量清单与对称路径(收敛检查点,2026-07-31)
-
-PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点不动」。根因不是某一处写错,
-而是**「加不加下划线」与「有没有点击行为」在各分支独立决定** —— 判据分散必然漂移。故把
-不变量写死，并要求判据单点化:
-
-> **下划线 ⇔ 可点,双向成立。** 可点的一定有下划线;有下划线的一定可点。
-
-对称路径必须逐条成立(任何新增可点 inline 都要回到这张表核一遍):
-
-> ⚠️ 这张表必须**从代码 grep 出来**,不能凭记忆填。2026-07-31 第一版检查点的桌面几行就是
-> 凭记忆写的,漏掉了「远程会话 unknown 乐观点亮」与「引用 chip 无下划线」两条,下一轮
-> review 又各捉到一个。
-
-| 面 | 元素 | 可点? | 下划线 |
-|---|---|---|---|
-| 桌面聊天正文 | 外链 / anchor / 本地图片 URL | ✅ | ✅ `MARKDOWN_LINK_CLASS` |
-| 桌面聊天正文 | 已解析本地文件(chip / 散文 label) | ✅ | ✅ |
-| 桌面聊天正文 | 未解析路径、行内 code | ❌ | ❌ |
-| 桌面聊天正文 | **远程**会话里 stat 回 `unknown` 的引用 | 仅非歧义形状 | 由 `isAmbiguousPathShape` 门槛裁决 |
-| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick / onContextMenu | **与 `interactive` 同源** |
-| 桌面用户气泡 | URL / 图片路径 | ✅ | ✅（改前只有 hover 下划线） |
-| 手机聊天正文 | 外链 / 图片 chip / 会话 chip | 取决于 handler 是否注入 | **与 handler 同源**(`clickableInlineStyle`) |
-| 手机聊天正文 | 路径 chip | 取决于远端 verdict | 由 `ChatPathChipSpan.lit` 单点裁决 |
-| 手机文件阅读器 | http(s) | ✅ | ✅ |
-| 手机文件阅读器 | 会话 chip / 图片 chip / 本地路径 / mailto | ❌（无 bridge、只放行 http(s)） | ❌ |
-
-**颜色也归这条不变量管**:可点态只多一条下划线,所以链接**不得写死颜色**,必须继承所在
-上下文 —— 表头(`markdownTableHeaderCell` 用 `textSecondary`)、引用块等非正文色上下文里
-写死正文色,会让链接相对周围文本除下划线之外还变色。移动端 `markdownLink` 与阅读器的
-`a` 都已去掉显式 `color`。
-
-**判据单点化**:移动端所有可点 inline 一律经 `clickableInlineStyle(styles, onPress, …)`
-取样式 —— 它按 `onPress` 是否存在决定给不给 `markdownLink`,于是结构上无法造出
-「有下划线却点不动」。**不要在 case 分支里直接写 `styles.markdownLink`**;路径 chip 不走
-这里,它的可点性由 `ChatPathChipSpan` 的 `lit` 单点裁决(同样是一个判据)。源码级守卫见
-`chatPathCandidate.test.ts` →「markdownLink 只能经 clickableInlineStyle 取用」。
-
-#### 第二次检查点(2026-07-31,第 5 轮):`unknown` 的生命周期与门槛的来源无关性
-
-第 5 轮 review 又出现同族缺陷,故按止损规则再做一次检查点。这轮的三条都不是「某处写错」,
-而是上一条不变量**没写完整**:它只约束了「谁该有下划线」,没约束「凭什么判定可点」的两个
-前提。补两条:
-
-> **不变量 A:`unknown` 不是结论,只是「这一次没问到」。** 它不得与 `file` / `directory` /
-> `nonfile` 同层缓存,必须能自愈重验;「已缓存」的判据只能是「有确定结论」。
-
-`unknown` 一旦被当成终态缓存,叠上规则 5 的歧义门槛就会**永久**把真实路径钉死在纯文本上:
-peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端一律「确定态无 TTL 缓存 + `unknown`
-落 30s 负缓存且不进 peek」:
-
-| 端 | 确定态 | `unknown` |
-|---|---|---|
-| 桌面 `lib/remoteFileOpen.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
-| 移动 `session/remotePathVerdict.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
-
-代价是断链期间乐观点亮的引用每次重挂会先画一帧纯文本。刻意取舍:让「peek 有值」严格等价于
-「有确定结论」,「把 unknown 当结论」在结构上不可表达,比省一帧重绘值钱。
-(桌面侧曾把 `unknown` 写进 `verdictCache`,PR #1144 review 实捉。)
-
-> **「自愈」必须真的会发生 —— TTL 到期本身不是事件。** 没有任何 React 依赖会因 TTL 过期而
-> 变,所以只靠「重挂时重验」等于把恢复条件寄托在用户行为上:一条渲染完就一直挂着不动的
-> 消息(桌面长视图、移动端短转录都不会被回收)在链路恢复后会**永远**停在纯文本。故由 verdict
-> 缓存模块把到期翻译成一次通知:**一个**模块级定时器对齐「最早的负缓存到期时刻」(不是每个
-> 引用挂一个表 —— 一条消息几十个引用就是几十个定时器),没有 unknown 待期时**零定时器、不
-> 轮询**;到期清掉过期条目后发**一次**通知(不是每 key 一次),消费方重跑验证,已有确定结论的
-> 在 peek 处早退,于是实际重发 stat 的只有仍是 unknown 的那批,节奏就是 TTL 本身。
-> 两端出口同名:`subscribeRemotePathVerdictStale`。
->
-> 消费方接线有一处易错:**`staleGen` 递增不得清掉已有结论** —— 它只表示「该重验了」,不表示
-> 「旧结论失效了」。跟着清会让已乐观点亮的引用每 30s 闪一下(点亮 → 纯文本 → 点亮)。故清
-> 旧结论的 effect 只依赖 target / workdir / streaming,验证的 effect 才额外依赖 `staleGen`。
-> (第 5 轮把缓存改对了,却漏了「谁来触发重验」这一半,第 8 轮 review 实捉。)
->
-> **重验结论必须无条件覆盖旧结论,不许按 verdict 早返回。** 有了 TTL 到期重验之后,凭空多出
-> 一条状态迁移:「先按 `unknown` 乐观点亮 → 链路恢复后确认 `nonfile`」。`if (verdict ===
-> 'nonfile') return;` 这种早返回写法漏掉它,不存在的路径会一直带着下划线可点。桌面已把判据
-> 抽成纯函数 `decideRemoteLit(verdict, href, originalHref)` —— **每个 verdict 都有返回值,
-> 没有「什么都不做」这个分支**,调用方拿结果无条件 `setAsyncResolved`,于是「忘了撤销」在结构
-> 上不可表达;sync / async 两条分支共用它,判据也随之单点化。
->
-> ⚠️ 这条在两端的**代码量不同,不能互相推断**:移动端 `ChatPathChipSpan` 存的是 **verdict
-> 本身**,新结论直接覆盖;桌面存的是**由 verdict 派生出的 resolved target**,派生值必须显式
-> 撤销。「移动端是对的」不能作为「桌面也对」的依据。(第 9 轮 review 实捉。)
-
-> **不变量 C(第 10 轮止损重构):点亮态是 verdict 缓存的纯派生,渲染层不得自己存结论。**
->
-> 第 8、9、10 三轮 review 各捉到一条缺口,根因是同一个:**组件自己存了一份结论,而真值在一个
-> 可变的模块缓存里,组件只在自己的依赖变化时去看一眼**。于是每出现一条新的状态迁移就漏一条:
->
-> | 轮次 | 漏掉的那条边 |
-> |---|---|
-> | 8 | TTL 到期没有通道通知(长挂载视图永远停在纯文本) |
-> | 9 | 派生值没跟着新结论被覆盖(确认 `nonfile` 后仍点亮) |
-> | 10 | **另一个挂载点**写入的确定态传不过来(同一路径出现在多处时) |
->
-> 逐条补边补不完 —— 每补一条,下一条新迁移又会漏。故按硬止损线做结构收敛:
->
-> - **缓存按 key 通知任何变化**(确定态落库 **+** unknown 负缓存到期),出口两端同名
->   `subscribeRemotePathVerdictChange(listener: (key) => void)`。按 key 而非全量广播:一屏几十个
->   引用各自订阅,广播会让首屏 N 次 stat 引发 N×N 次重渲染。
-> - **渲染读 `peekRemotePathVerdictForRender`**(确定态优先,否则 TTL 未过期的负缓存回
->   `'unknown'`)。这个出口存在的唯一理由就是让「断链期间的乐观点亮」也成为缓存的派生 ——
->   普通 `peek` 刻意不返回 `unknown`(不变量 A),那份状态以前只能存在组件里,而那就是第二个
->   真值来源的由来。判定「要不要重验」仍用普通 `peek`,两个出口分工写在各自 JSDoc 里。
-> - **消费方单一 state + 一个纯派生函数**,所有触发点(挂载 / 依赖变化 / 缓存通知 / 验证完成)
->   都调它并无条件覆盖。桌面的 `syncResolved(useMemo) ?? asyncResolved(useState)` 双源已删除,
->   源码级守卫钉住它不许回来;验证回调**不看返回值**,只重新派生。
->
-> 收益是任何一条新迁移都只有一个地方需要改对。代价是渲染态多依赖一次订阅,可接受。
->
-> ⚠️ **通知必须驱动「重验」,不只是「重绘」。** 订阅回调里只 `setState(重新派生)` 是不够的:
-> 派生函数通常是 `[ctx, target]` 的稳定 `useCallback`,通知**不改变验证副作用的任何依赖**,
-> 那个副作用就不会重跑 → 再也不发 stat。TTL 到期时负缓存已被删、又没有确定态,ForRender
-> 回 `undefined`,于是引用只完成**降级成纯文本**、没完成**重验**,挂载期间永不自愈 ——
-> 比重构前(一直乐观点亮)更糟。故订阅回调递增一个 `cacheGen`,并把它放进验证副作用的依赖
-> 数组;两端都要有。(第 10 轮重构只做对了桌面那一半,第 11 轮 review 实捉;这类 bug 的形状
-> 是「依赖数组漏了触发源」,没有类型保护,故两端各有源码级守卫。)
-
-> **不变量 B:点亮门槛(规则 5)对所有候选来源同口径。** 与候选门槛(规则 4)的来源豁免
-> **无关** —— 两者是两道独立的门,显式 markdown 链接只豁免前者。
-
-作者写下 `[配置](package.json)` 只声明了「我想让它可点」,并不能让远端在链路断时知道它是否
-存在;点亮了却点不开正是规则 1 要防的反例。判据在两端各只有一份、且**逐字同形**:桌面
-`markdownTarget.isAmbiguousPathShape`、移动 `chatPathCandidate.isAmbiguousChatPathShape`;
-所有入口都调它,**不得按来源硬写 `true` / `false`**(移动端曾对链接入口恒 `false`,与桌面
-不对称,review 实捉)。
-
-| 候选来源 | 桌面入口 | 移动入口 | 走门槛? |
-|---|---|---|---|
-| 行内 code | `classifyInlineCodeTarget` | `classifyInlineCodePathCandidate` | ✅ |
-| 显式 markdown 链接 | `classifyMarkdownLinkTarget` | `classifyChatPathLinkTarget` | ✅ |
-| 正文裸写路径 | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上 | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
-| 尾斜杠目录 | 回看 `originalHref` → 非歧义 | 同左 | ✅ |
-| `file://` 绝对路径 | 单列为非歧义 | 同左 | ✅ |
-
-> `file://` 必须在判据里**单列**:`looksLikeFilePath` 会被 `URL_SCHEME_RE` 挡掉而回 `false`
-> (那条排除是为「别把 `https://` 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的。
-> 这条是检查点自查 grep 出来的,不是 reviewer 提的 —— 也说明「表要从代码 grep」这条有用。
-
-**给守卫测试的一条元规则**:守卫要钉**不变量**,不能钉**调用点个数**。本轮就有一条第 3 轮写的
-守卫要求歧义判据「至少出现 2 处(sync + async 各一)」,而收敛后它只该有 1 处 —— 那条守卫在
-反向阻止判据单点化。计数式断言只在「必须存在」时用,不要用它表达「必须重复」。
-
-契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛 + 门槛
-来源无关性)、`apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器点不动的元素
-一律无下划线无 pointer)、`apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`
-(行内 code 不收宽松兜底)、`apps/desktop/src/renderer/__tests__/remotePathVerdictCache.test.ts`
-(不变量 A,含三种错误修法各自的反例)、
-`apps/desktop/src/renderer/__tests__/chatClickabilitySignal.test.ts`(源码级守卫)。
-
 ## 15. CINDY Skin Family(品牌化可选 family)
 
 > This section records the CINDY skin family; it does **not** rewrite the §1–7 default-skin rules. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the theme files (`cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.
@@ -1006,12 +689,6 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Payload / rollout**: this surface accepts only the server-issued Alipay short link. Desktop rollout is gated on the server being fully deployed and all pre-deployment QR actions having exceeded their 5-minute TTL; do not add a legacy long-Scheme or lower-error-correction fallback.
 - **Constraints**: the white QR background is a scanner-contrast requirement, not a general brand panel. Do not add a border, edge, shadow, motion or other decoration to the code.
 - **Scope boundary**: this approval covers the current Alipay QR payment paths only. `BillingPaymentAction` currently does not carry a provider; any future non-Alipay `QR_CODE` channel must first add provider-aware rendering rather than inheriting this mark by default.
-
-**Sanctioned brand surface — Computer Use cursor (approved 2026-08-04).**
-
-- **Where**: the optional agent cursor configured by `apps/desktop/src/main/mcp-integrations/computer.ts` while Cindy Computer Use actions are running. Its arrow color and bloom use Brand red `#DF0C27`; the driver-required gradient transitions from Brand red to Deep brand red `#A61629`.
-- **Why the values are concrete**: the cursor is rendered by the out-of-process `cua-driver`, which cannot consume renderer CSS variables or the active theme registry. The fixed two-color brand palette is therefore identical in Light, Dark, and imported themes.
-- **Scope boundary**: this approval identifies Cindy's automated pointer only. It does not authorize brand red for ordinary controls, focus/caret states, buttons, or other working UI. Cursor styling remains optional; a driver capability/policy rejection degrades without blocking Computer Use and is remembered for the current MCP session.
 
 ### 15.8 status-badge-fg
 
@@ -1112,7 +789,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 ### 15.14 Running / Collaboration Orange (finalized 2026-07-20)
 
 - **Running breathing icons are always Thinking Orange** (`--warning-accent` `#EA6B17`, all themes): VendorIcon, SessionStatusIcon (Puzzle/RadioTower), AutomationSessionGroupItem (Clock); the selected state stays orange — priority: running > selected inverse foreground > rest. Mobile `statusAccent` mirrors value and priority (glyphColor same).
-- **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row background remains the standard `--model-item-hover`, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
+- **Collaboration toggle ON state is orange**: CollaborationModeToggle's active text + Puzzle icon use `warning-accent` (an explicit carve-out from the 2026-07-17 "composer pills go neutral" rule — ON state only; the OFF entry state stays neutral).
 - **SVG persistent-animation red line**: breathing-type persistent animation sits on an HTML wrapper (span); SVG stays static.
 
 ### 15.15 Create-Page Content Position + Titlebar Hover Discipline (finalized 2026-07-21)

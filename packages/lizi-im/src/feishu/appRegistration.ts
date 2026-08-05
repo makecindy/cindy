@@ -17,23 +17,15 @@ export interface AppRegistrationSuccessResult {
   tenantBrand: LarkBrand | null;
 }
 
-interface AppRegistrationBrandDiscovery {
-  /** Brand reported before credentials are complete (including pending responses). */
-  tenantBrand?: LarkBrand;
-}
-
 export type AppRegistrationPollResult =
-  | ({ status: 'pending' } & AppRegistrationBrandDiscovery)
-  | ({ status: 'slow_down'; interval: number } & AppRegistrationBrandDiscovery)
+  | { status: 'pending' }
+  | { status: 'slow_down'; interval: number }
   | { status: 'success'; result: AppRegistrationSuccessResult }
-  | ({ status: 'expired'; message: string } & AppRegistrationBrandDiscovery)
-  | ({ status: 'denied'; message: string } & AppRegistrationBrandDiscovery)
-  | ({ status: 'error'; message: string } & AppRegistrationBrandDiscovery);
+  | { status: 'expired'; message: string }
+  | { status: 'denied'; message: string }
+  | { status: 'error'; message: string };
 
-type HttpPostForm = (
-  url: string,
-  form: URLSearchParams,
-) => Promise<{ status: number; body: unknown }>;
+type HttpPostForm = (url: string, form: URLSearchParams) => Promise<{ status: number; body: unknown }>;
 
 const log = makeScopedLogger('appRegistration');
 
@@ -55,11 +47,7 @@ function registrationEndpoint(brand: LarkBrand): string {
   return `${accountsBase(brand)}/oauth/v1/app/registration`;
 }
 
-export function buildVerificationUrl(
-  brand: LarkBrand,
-  userCode: string,
-  appVersion?: string,
-): string {
+export function buildVerificationUrl(brand: LarkBrand, userCode: string, appVersion?: string): string {
   const url = new URL('/page/cli', openBase(brand));
   url.searchParams.set('user_code', userCode);
   if (appVersion) {
@@ -86,16 +74,11 @@ export async function requestAppRegistration(
   // 对照实现: lark-cli 同样不在此处订阅, 在 consume preflight 时报错让用户去 console
   // (https://github.com/larksuite/cli/blob/main/internal/auth/app_registration.go).
 
-  // Device-code registration always bootstraps on Feishu. `brand` only picks
-  // the user-facing verification host; polling discovers the issuing tenant
-  // and switches to Lark when required.
   const res = await httpPostForm(registrationEndpoint('feishu'), form);
   const data = asRecord(res.body);
   const apiError = getString(data, 'error');
   if (res.status >= 400 || apiError) {
-    throw new Error(
-      getString(data, 'error_description') || apiError || 'app registration begin failed',
-    );
+    throw new Error(getString(data, 'error_description') || apiError || 'app registration begin failed');
   }
 
   const deviceCode = getString(data, 'device_code');
@@ -128,11 +111,10 @@ export async function pollAppRegistration(
   const res = await httpPostForm(registrationEndpoint(brand), form);
   const data = asRecord(res.body);
   const err = getString(data, 'error');
-  const userInfo = asRecord(data.user_info);
-  const tenantBrand = normalizeBrand(getString(userInfo, 'tenant_brand'));
-  const brandDiscovery = tenantBrand ? { tenantBrand } : {};
 
   if (!err && getString(data, 'client_id')) {
+    const userInfo = asRecord(data.user_info);
+    const tenantBrand = normalizeBrand(getString(userInfo, 'tenant_brand'));
     return {
       status: 'success',
       result: {
@@ -144,33 +126,27 @@ export async function pollAppRegistration(
     };
   }
 
-  if (!err && res.status < 400) {
-    return { status: 'pending', ...brandDiscovery };
-  }
-
   switch (err) {
     case 'authorization_pending':
-      return { status: 'pending', ...brandDiscovery };
+      return { status: 'pending' };
     case 'slow_down':
-      return { status: 'slow_down', interval: Math.min(interval + 5, 60), ...brandDiscovery };
+      return { status: 'slow_down', interval: Math.min(interval + 5, 60) };
     case 'access_denied':
       return {
         status: 'denied',
         message: getString(data, 'error_description') || 'Authorization denied by user',
-        ...brandDiscovery,
       };
     case 'expired_token':
     case 'invalid_grant':
       return {
         status: 'expired',
         message: getString(data, 'error_description') || 'Device code expired, please try again',
-        ...brandDiscovery,
       };
   }
 
   const msg = getString(data, 'error_description') || err || `HTTP ${res.status}`;
   log.warn(`[feishu/appRegistration] poll failed brand=${brand}: ${msg}`);
-  return { status: 'error', message: msg, ...brandDiscovery };
+  return { status: 'error', message: msg };
 }
 
 function normalizeBrand(value: string): LarkBrand | null {

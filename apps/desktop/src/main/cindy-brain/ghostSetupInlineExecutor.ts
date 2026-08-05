@@ -74,8 +74,7 @@ export function executeGhostSetupInlineSubmission(
     (secret) =>
       secret.key === secretKey &&
       secret.source !== 'oauth' &&
-      secret.source !== 'login-email' &&
-      secret.source !== 'oidc-token',
+      secret.source !== 'login-email',
   );
   const nodeDecl = manifest.node?.secretBindings?.find((secret) => secret.key === secretKey);
   const decl = networkDecl ?? nodeDecl;

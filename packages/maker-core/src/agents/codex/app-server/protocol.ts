@@ -139,18 +139,6 @@ export interface CodexModelListParams {
   includeHidden?: boolean | null;
 }
 
-/** Minimal subset of `mcpServerStatus/list` used for post-start capability gates. */
-export interface CodexMcpServerStatus {
-  name: string;
-  tools: Record<string, unknown>;
-  [k: string]: unknown;
-}
-
-export interface CodexMcpServerStatusListResponse {
-  data: CodexMcpServerStatus[];
-  nextCursor: string | null;
-}
-
 export interface CodexModelListResponse {
   data: CodexModelListItem[];
   nextCursor: string | null;
@@ -787,14 +775,7 @@ export interface DynamicToolCallResponse {
  */
 export interface ThreadStartedNotification {
   method: 'thread/started';
-  params: {
-    thread: {
-      id: string;
-      parentThreadId?: string | null;
-      [k: string]: unknown;
-    };
-    [k: string]: unknown;
-  };
+  params: { thread: { id: string; [k: string]: unknown }; [k: string]: unknown };
 }
 
 export interface TurnStartedNotification {
@@ -1176,7 +1157,6 @@ export type ServerNotification =
 export const Method = {
   Initialize: 'initialize',
   ModelList: 'model/list',
-  McpServerStatusList: 'mcpServerStatus/list',
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',

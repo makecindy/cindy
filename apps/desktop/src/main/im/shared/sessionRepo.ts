@@ -17,7 +17,6 @@ import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { createLogger, maskPath } from '../../logger';
 import { setSessionProvider } from '../../maker-host/session-provider-store';
@@ -32,12 +31,12 @@ import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 const log = createLogger('im:repo');
 
 export function toCoreAgentKind(kind: string): AgentKind {
-  return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
+  return kind === 'codex' ? 'codex' : 'claude-code';
 }
 
 /** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
 function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+  return kind === 'codex' ? 'codex' : 'cc';
 }
 
 export interface ImSessionRow {

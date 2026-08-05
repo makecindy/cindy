@@ -2,7 +2,7 @@ import type { LiziMcpSessionContext } from '@cindy/mcps';
 
 export interface CodexMcpThreadContextStore {
   registerThreadContext(threadId: string, ctx: LiziMcpSessionContext): void;
-  unregisterThreadContext(threadId: string, expectedSessionInstanceId?: string): void;
+  unregisterThreadContext(threadId: string): void;
   getContextForThreadId(threadId: string | undefined): LiziMcpSessionContext | undefined;
   registeredThreadCount(): number;
 }
@@ -15,13 +15,7 @@ export function createCodexMcpThreadContextStore(): CodexMcpThreadContextStore {
       contextsByThread.set(threadId, ctx);
     },
 
-    unregisterThreadContext(threadId, expectedSessionInstanceId) {
-      if (
-        expectedSessionInstanceId !== undefined &&
-        contextsByThread.get(threadId)?.sessionInstanceId !== expectedSessionInstanceId
-      ) {
-        return;
-      }
+    unregisterThreadContext(threadId) {
       contextsByThread.delete(threadId);
     },
 

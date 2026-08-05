@@ -22,7 +22,6 @@ import type {
   BrowserControlResult,
   BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
-import type { BrowserBackendKind } from '../../../shared/browserBackend.js';
 
 /**
  * Discriminator for the active control target.
@@ -30,7 +29,7 @@ import type { BrowserBackendKind } from '../../../shared/browserBackend.js';
  *  - `'rsb-webview'`: the sidebar's embedded `<webview>` tabs. Reserved — the
  *    backend itself lands in Phase 3.
  */
-export type BackendKind = BrowserBackendKind;
+export type BackendKind = 'external' | 'rsb-webview';
 
 /**
  * A swappable browser control target.
@@ -45,12 +44,6 @@ export type BackendKind = BrowserBackendKind;
 export interface BrowserBackend {
   readonly kind: BackendKind;
   call(request: BrowserControlRequest): Promise<BrowserControlResult>;
-  /**
-   * Optional control-path handshake. Passive probes keep `ensureHost` false;
-   * an explicit recovery may enable it to verify the configured host/READY
-   * startup path. Status alone only describes local registry state.
-   */
-  probeControl?(options?: { ensureHost?: boolean }): Promise<void>;
   dispose(): Promise<void>;
 }
 

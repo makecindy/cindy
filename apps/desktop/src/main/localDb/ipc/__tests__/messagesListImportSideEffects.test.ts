@@ -1,11 +1,10 @@
 /**
  * messagesListImportSideEffects.test.ts — #318 A3。
  * ------------------------------------------------------------------------------------
- * 验证 `local-db:messages:list` 只为带来源前缀的任务运行对应「外部 CLI 历史导入」副作用:
- *   - 普通任务(无 codex-/claude- 前缀) → 两个 importer 都不调用;
- *   - Codex 任务 → 只调用 Codex importer;
- *   - Claude 任务 → 只调用 Claude importer;
- *   - device-link 分页仍跳过 importer;
+ * 验证 `local-db:messages:list` 在 device-link 远程读路径上跳过「外部 CLI 历史导入」副作用,
+ * 而本机(非 device-link)路径仍按原有语义串行触发两个 importer:
+ *   - device-link 路径(isDeviceLinkInvoke()=true)→ 两个 importer 都不调用;
+ *   - 本机路径 → codex / claude importer 均按顺序调用一次;
  *   - importer reject → 被吞并(warn),不冒泡。
  * 既覆盖可注入纯函数 `runMessagesListImportSideEffects`,也通过真实 handler + 真实
  * `runDeviceLinkInvokeContext`(AsyncLocalStorage)做一次集成断言。
@@ -56,7 +55,7 @@ import { importExternalClaudeCodeMessagesForSession } from '../../../maker-host/
 const codexMock = vi.mocked(importExternalCodexMessagesForSession);
 const claudeMock = vi.mocked(importExternalClaudeCodeMessagesForSession);
 
-function createDb(sessionId = 's1'): Database.Database {
+function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
     CREATE TABLE sessions (
@@ -76,7 +75,7 @@ function createDb(sessionId = 's1'): Database.Database {
       rewind_at INTEGER
     );
   `);
-  sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run(sessionId);
+  sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
   return sqlite;
 }
@@ -100,40 +99,30 @@ describe('runMessagesListImportSideEffects (injectable)', () => {
     expect(importClaude).not.toHaveBeenCalled();
   });
 
-  it('Codex 首页请求(deviceLinkFirstPage)→ 只跑 Codex importer', async () => {
-    // 被控端可能从未本机打开该会话,rollout 从未导入 —— 首页请求必须补导入。
+  it('device-link 首页请求(deviceLinkFirstPage)→ 照跑 importer', async () => {
+    // 被控端可能从未本机打开该会话,rollout 从未导入 —— 首页请求必须补导入,
+    // 否则崩溃前 CLI 已写的产出不进 DB,中断行滞留尾部(review P2)。
     const importCodex = vi.fn(async () => undefined);
     const importClaude = vi.fn(async () => undefined);
 
     await runMessagesListImportSideEffects(
-      'codex-s1',
+      's1',
       { isDeviceLink: () => true, importCodex, importClaude },
       { deviceLinkFirstPage: true },
     );
 
-    expect(importCodex).toHaveBeenCalledTimes(1);
-    expect(importCodex).toHaveBeenCalledWith('codex-s1');
-    expect(importClaude).not.toHaveBeenCalled();
+    expect(importCodex).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(importClaude).toHaveBeenCalledExactlyOnceWith('s1');
   });
 
-  it('Claude 首页请求 → 只跑 Claude importer', async () => {
-    const importCodex = vi.fn(async () => undefined);
-    const importClaude = vi.fn(async () => undefined);
-
-    await runMessagesListImportSideEffects('claude-s1', {
-      isDeviceLink: () => false,
-      importCodex,
-      importClaude,
+  it('本机路径 → 按顺序调用 codex 再 claude importer', async () => {
+    const order: string[] = [];
+    const importCodex = vi.fn(async () => {
+      order.push('codex');
     });
-
-    expect(importCodex).not.toHaveBeenCalled();
-    expect(importClaude).toHaveBeenCalledTimes(1);
-    expect(importClaude).toHaveBeenCalledWith('claude-s1');
-  });
-
-  it('普通任务 → 两个 importer 都跳过', async () => {
-    const importCodex = vi.fn(async () => undefined);
-    const importClaude = vi.fn(async () => undefined);
+    const importClaude = vi.fn(async () => {
+      order.push('claude');
+    });
 
     await runMessagesListImportSideEffects('s1', {
       isDeviceLink: () => false,
@@ -141,26 +130,30 @@ describe('runMessagesListImportSideEffects (injectable)', () => {
       importClaude,
     });
 
-    expect(importCodex).not.toHaveBeenCalled();
-    expect(importClaude).not.toHaveBeenCalled();
+    expect(importCodex).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(importClaude).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(order).toEqual(['codex', 'claude']);
   });
 
-  it('对应 importer reject 被吞并,不冒泡', async () => {
+  it('本机路径 → importer reject 被吞并,不冒泡', async () => {
     const importCodex = vi.fn(async () => {
       throw new Error('boom-codex');
     });
-    const importClaude = vi.fn(async () => undefined);
+    const importClaude = vi.fn(async () => {
+      throw new Error('boom-claude');
+    });
 
     await expect(
-      runMessagesListImportSideEffects('codex-s1', {
+      runMessagesListImportSideEffects('s1', {
         isDeviceLink: () => false,
         importCodex,
         importClaude,
       }),
     ).resolves.toBeUndefined();
 
+    // codex reject 不应阻断 claude importer 触发(沿用原串行 + 各自 .catch 语义)。
     expect(importCodex).toHaveBeenCalledTimes(1);
-    expect(importClaude).not.toHaveBeenCalled();
+    expect(importClaude).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -170,37 +163,36 @@ describe('local-db:messages:list × import side-effects (integration)', () => {
     h.handlers.clear();
   });
 
-  it('普通任务 invoke → 跳过真实 importer', async () => {
-    createDb('s1');
+  it('本机 invoke → 触发真实 importer(默认依赖)', async () => {
+    createDb();
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
     expect(listHandler).toBeTypeOf('function');
 
     await listHandler?.({}, 's1', { limit: 10 });
 
-    expect(codexMock).not.toHaveBeenCalled();
-    expect(claudeMock).not.toHaveBeenCalled();
+    expect(codexMock).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(claudeMock).toHaveBeenCalledExactlyOnceWith('s1');
   });
 
-  it('device-link Codex 首页 invoke → 只跑真实 Codex importer', async () => {
-    createDb('codex-s1');
+  it('device-link 首页 invoke → 照跑真实 importer(补被控端从未本机打开的导入)', async () => {
+    createDb();
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
     expect(listHandler).toBeTypeOf('function');
 
     const rows = await runDeviceLinkInvokeContext(
       { controllerDeviceId: 'ctrl-1', channel: 'local-db:messages:list' },
-      () => listHandler?.({}, 'codex-s1', { limit: 10 }),
+      () => listHandler?.({}, 's1', { limit: 10 }),
     );
 
-    expect(codexMock).toHaveBeenCalledTimes(1);
-    expect(codexMock).toHaveBeenCalledWith('codex-s1');
-    expect(claudeMock).not.toHaveBeenCalled();
+    expect(codexMock).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(claudeMock).toHaveBeenCalledExactlyOnceWith('s1');
     expect(Array.isArray(rows)).toBe(true);
   });
 
   it('device-link 分页 invoke(带 beforeTs)→ 跳过真实 importer(#318 性能语义)', async () => {
-    createDb('s1');
+    createDb();
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
     expect(listHandler).toBeTypeOf('function');

@@ -210,7 +210,7 @@ export function clearChatgptBridgeCredentialCache(): void {
   _authCache = null;
 }
 
-export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
+const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
   getCurrentAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
   invalidate: async (reason) => {
     clearChatgptBridgeCredentialCache();

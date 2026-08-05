@@ -22,12 +22,7 @@ import { Switch } from '@/components/ui/switch';
 import type { DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
-import {
-  canBeControlledPlatform,
-  controlToggleState,
-  inboundToggleState,
-  resolveActiveConnectionIssue,
-} from './myDevicesModel';
+import { canBeControlledPlatform, controlToggleState, inboundToggleState } from './myDevicesModel';
 
 function platformLabel(platform: string | null): string {
   switch (platform) {
@@ -152,13 +147,13 @@ export function MyDevicesPanel({
   const revokedControllers = new Set(s.revokedControllers);
   const controlling = new Set(s.controlledBy.map((c) => c.deviceId));
 
-  // 连接问题(鉴权失效/被顶号/超限/版本不符/反复掉线)时不再显示笼统的 connecting 黄点。
-  const activeConnectionIssue = resolveActiveConnectionIssue(s.linkStatus, s.connectionIssue);
-  const linkStatusColor = activeConnectionIssue
-    ? 'var(--remote-status-disconnected)'
-    : s.linkStatus === 'online'
+  // 连接问题(鉴权失效/被顶号/超限/版本不符)时不再显示笼统的 connecting 黄点,
+  // 直接给断开色 + 下方原因行,让「一直连不上」可解释、可行动。
+  const activeConnectionIssue = s.linkStatus !== 'online' ? s.connectionIssue : null;
+  const linkStatusColor =
+    s.linkStatus === 'online'
       ? 'var(--remote-status-ready)'
-      : s.linkStatus === 'connecting'
+      : s.linkStatus === 'connecting' && !activeConnectionIssue
         ? 'var(--remote-status-progress)'
         : 'var(--remote-status-disconnected)';
 
@@ -269,11 +264,6 @@ export function MyDevicesPanel({
               {activeConnectionIssue ? (
                 <span className="text-11 text-[var(--error-fg)]">
                   {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
-                </span>
-              ) : null}
-              {s.standby ? (
-                <span className="text-11 text-[var(--text-tertiary)]">
-                  {t('settings.devices.standbyHint')}
                 </span>
               ) : null}
             </div>

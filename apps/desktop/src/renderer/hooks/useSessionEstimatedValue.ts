@@ -10,7 +10,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
@@ -39,12 +38,7 @@ interface EstimatedValueTurnCostPayload {
   clientId: string;
   turnMoney?: unknown;
   turnCostUsd?: number;
-  /**
-   * 无报价轮(main 的 recordTurnUsageOnMessage)只推 turnUsageDetails,整组金额字段
-   * 缺省 —— 与 MessageTurnCostPayload 保持一致的可选性。下面的
-   * `turnCostIsEstimate !== true` 早退本就把这类轮次挡在估值汇总之外。
-   */
-  turnCostIsEstimate?: boolean;
+  turnCostIsEstimate: boolean;
   turnUsageDetails?: unknown;
 }
 
@@ -302,13 +296,10 @@ export function useSessionEstimatedValue(
       };
     }
 
-    const unsubscribeTurnCost = window.electronAPI.onUsageMessageTurnCost?.(
-      (payload, ownerStamp) => {
-        if (!isDataOwnerPushCurrent(ownerStamp)) return;
-        if (payload.sessionId !== sessionId) return;
-        mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
-      },
-    );
+    const unsubscribeTurnCost = window.electronAPI.onUsageMessageTurnCost?.((payload) => {
+      if (payload.sessionId !== sessionId) return;
+      mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
+    });
     // 按会话来源路由:device-link 远程会话查被控端(本地库无该会话的行,查本机恒 0)。
     void estimatedSessionValueFor(sessionId)
       .then((snapshot) => {

@@ -9,7 +9,6 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -262,15 +261,13 @@ describe('normalizeTaskSource', () => {
     fr.finish();
   });
 
-  // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
-  // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
   it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
 
     const keys = [
-      'telegram:group:bot:-900:9:g0',
+      'telegram:group:bot:-900:42:9:g0',
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
@@ -421,42 +418,6 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
-  it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
-    // server 会把 thread 上下文拼进 prompt(Slack 的 injectThreadContext 一直
-    // 如此, X 也已接上)。按 prompt 前 24 字取标题的话, 整条 thread 派出来的
-    // 会话标题全是 `[Team-slack] <thread_context> [@alice…`, 既看不出任务是
-    // 什么, 同一 thread 里还条条雷同。
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
-    const c = collector();
-
-    d.handleDispatch(
-      'conn-1',
-      dispatch({
-        prompt:
-          '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
-        source: { im: 'x', userText: '你来解释下这个问题' },
-      }),
-      c.send,
-    );
-    await tick();
-
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 你来解释下这个问题' });
-    // prompt 本身照旧整份交给 agent —— 上下文不能因为标题的取舍被砍掉
-    expect(fr.calls[0]?.prompt).toContain('<thread_context>');
-  });
-
-  it('source.userText 缺失或为空时回退 prompt(老 server / 纯 @ 无正文)', async () => {
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
-    const c = collector();
-
-    d.handleDispatch('conn-1', dispatch({ source: { im: 'x', userText: '   ' } }), c.send);
-    await tick();
-
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 干活' });
-  });
-
   it('同 key 第二次 dispatch 复用同一 session(铁律)', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
@@ -510,7 +471,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新对话的回答' });
     await tick();
     const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
+    expect(finalText).toContain('原对话已不在可用的工作目录里');
     expect(finalText).toContain('把它所在的目录加进来');
     expect(finalText).toContain('新对话的回答');
   });
@@ -857,7 +818,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新会话的回答' });
     await tick();
     const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
+    expect(finalText).toContain('原对话已不在可用的工作目录里');
     expect(finalText).toContain('新会话的回答');
   });
 
@@ -906,7 +867,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新的回答' });
     await tick();
     // 措辞留余地: inspect 的 null 也可能是读库瞬时失败, 不能一口咬定会话没了
-    expect(c.last('turn.end')!.payload.finalText).toContain('原任务现在读不到');
+    expect(c.last('turn.end')!.payload.finalText).toContain('原对话现在读不到');
   });
 
   it('切账号期间异步定位失败也不回写旧代 rejected ack', async () => {
@@ -1238,101 +1199,6 @@ describe('dispatcher 核心语义', () => {
     const c2 = collector();
     d.onConnected('conn-1', c2.send);
     expect(c2.last('turn.end')?.payload).toMatchObject({ finalText: '离线结果' });
-  });
-
-  it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {
-    vi.useFakeTimers();
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
-    const c = collector();
-    try {
-      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      d.handleDispatch('conn-1', dispatch(), c.send);
-      await tick();
-      fr.finish({ finalText: '等待接管' });
-      await tick();
-      expect(c.ofType('turn.end')).toHaveLength(1);
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(c.ofType('turn.end')).toHaveLength(2);
-      expect(c.ofType('turn.end')[1]).toEqual(c.ofType('turn.end')[0]);
-
-      d.handleTurnDelivery('conn-1', {
-        requestId: 'req-1',
-        state: 'accepted',
-        attempt: 0,
-        retryAt: null,
-        error: null,
-      });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(c.ofType('turn.end')).toHaveLength(2);
-    } finally {
-      d.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it('ACK server 断线期间完成的 turn.end 在重连后进入 ACK 缓冲，retrying 也视为已接管', async () => {
-    vi.useFakeTimers();
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
-    const first = collector();
-    const second = collector();
-    try {
-      d.onConnected('conn-1', first.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      d.handleDispatch('conn-1', dispatch(), first.send);
-      await tick();
-      d.onDisconnected('conn-1');
-      fr.finish({ finalText: '离线完成' });
-      await tick();
-      expect(first.ofType('turn.end')).toHaveLength(0);
-
-      d.onConnected('conn-1', second.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      expect(second.ofType('turn.end')).toHaveLength(1);
-      d.handleTurnDelivery('conn-1', {
-        requestId: 'req-1',
-        state: 'retrying',
-        attempt: 1,
-        retryAt: Date.now() + 60_000,
-        error: { code: 'X_UNAVAILABLE', message: 'retrying', retryable: true },
-      });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(second.ofType('turn.end')).toHaveLength(1);
-    } finally {
-      d.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it.each(['delivered', 'failed'] as const)('终态 %s 也会释放待重放正文', async (state) => {
-    vi.useFakeTimers();
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
-    const c = collector();
-    try {
-      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      d.handleDispatch('conn-1', dispatch(), c.send);
-      await tick();
-      fr.finish({ finalText: '终态确认' });
-      await tick();
-      expect(c.ofType('turn.end')).toHaveLength(1);
-
-      d.handleTurnDelivery('conn-1', {
-        requestId: 'req-1',
-        state,
-        attempt: 1,
-        retryAt: null,
-        error:
-          state === 'failed'
-            ? { code: 'X_REQUEST_REJECTED', message: 'rejected', retryable: false }
-            : null,
-      });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(c.ofType('turn.end')).toHaveLength(1);
-    } finally {
-      d.dispose();
-      vi.useRealTimers();
-    }
   });
 });
 
@@ -2138,7 +2004,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
         undispatchListeners.add(listener);
         return () => undispatchListeners.delete(listener);
       }) as NonNullable<HookDispatcherDeps['subscribeUiTurnUndispatched']>,
-      /** 模拟"桌面端在这个任务里做了与续跑无关的事"。 */
+      /** 模拟"桌面端在这个会话里做了与续跑无关的事"。 */
       intervene: (sessionId: string) => {
         for (const l of [...interveners]) l(sessionId);
       },
@@ -2273,7 +2139,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
 
   it('同 session 又来了新的 hook 任务 -> 撤销在观察的续跑并作废记账', async () => {
     const { cr, sig, c, d, sessionId } = await failOneTask();
-    // 让后续 dispatch 沿 binding 落回同一个任务(否则 inspect 查不到会重建)。
+    // 让后续 dispatch 沿 binding 落回同一个会话(否则 inspect 查不到会重建)。
     cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
     sig.retry(sessionId);
     await tick();
@@ -2492,7 +2358,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     expect(cr.watches).toHaveLength(0);
     expect(c.ofType('turn.reopen')).toHaveLength(0);
 
-    // 而且它同时作废了意图与记账: 与 enqueue 侧同一条规则 —— 这个任务被无关内容推进过,
+    // 而且它同时作废了意图与记账: 与 enqueue 侧同一条规则 —— 这个会话被无关内容推进过,
     // 就不再把任何结果接回那条旧消息。哪怕目标那条随后真的 dispatch 也不接。
     // 取舍是明确的: 这里判错的代价是"渠道消息停在失败上"(本能力之前的状态), 反过来
     // 放行则是"把无关输出写进用户那条消息", 后者是真的错。
@@ -2801,7 +2667,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     await tick();
 
     // 同一 externalKey 的新 hook 任务跑起来, 并同样以失败收口 -> 记账换成它的 requestId。
-    // (让 inspect 看见这个 session, 第二条派发才会落到同一个任务上。)
+    // (让 inspect 看见这个 session, 第二条派发才会落到同一个会话上。)
     cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-take-over', prompt: '新任务' }), c.send);
     await tick();

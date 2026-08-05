@@ -18,15 +18,7 @@
  */
 
 /** 供应商密钥的稳定标识。新增供应商时在此扩展。 */
-export type ProviderSecretId =
-  | 'xd'
-  | 'mivo'
-  | 'brave'
-  | 'tavily'
-  | 'xai'
-  | 'voice-asr'
-  | 'gemini'
-  | 'openai-images';
+export type ProviderSecretId = 'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr';
 
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
@@ -45,12 +37,6 @@ const STORAGE_KEYS: Record<ProviderSecretId, string> = {
   // Voice input's user-configured realtime ASR credential is intentionally
   // isolated from chat/model gateway keys.
   'voice-asr': 'voice_input_asr_api_key',
-  // Google Gemini API key(图像通道,2026-07 图像多来源)。按新供应商约定命名。
-  gemini: 'provider_key_gemini',
-  // OpenAI 平台 API key(仅图像通道,2026-07 图像多来源)。与 ChatGPT 订阅 OAuth
-  // (codex-home/auth.json)是两套凭证:订阅 token 调不了平台 images API(实测
-  // 401/403 缺 scope),聊天照旧走订阅,图像走这把平台 key。
-  'openai-images': 'provider_key_openai_images',
   // 未来新增示例(届时在 ProviderSecretId 与此处同步添加):
   //   anthropic: 'provider_key_anthropic',
   //   openai:    'provider_key_openai',
@@ -76,24 +62,15 @@ export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
 
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
-  STORAGE_KEYS['gemini'].toLowerCase(),
-  STORAGE_KEYS['openai-images'].toLowerCase(),
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
-
-/** Custom-provider runtime header blobs are main-only credential material. */
-export const CUSTOM_PROVIDER_HEADER_SECRET_PREFIX = 'provider_headers_';
 
 /**
  * Whether the generic Renderer safeStorage bridge may access this logical
  * key. Main-only credentials use dedicated IPC that never returns plaintext.
  */
 export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean {
-  const normalized = storageKey.toLowerCase();
-  return (
-    !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(normalized)
-    && !normalized.startsWith(CUSTOM_PROVIDER_HEADER_SECRET_PREFIX)
-  );
+  return !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(storageKey.toLowerCase());
 }
 
 /**
@@ -122,16 +99,6 @@ export function customProviderSecretStorageKey(providerId: string, agent: string
   assertSafeKeyPart(providerId, 'providerId');
   assertSafeKeyPart(agent, 'agent');
   return `provider_key_${providerId}_${agent}`;
-}
-
-/**
- * Main-only encrypted blob containing all custom headers for one provider runtime.
- * Header values are never persisted in the custom_providers SQLite row.
- */
-export function customProviderHeaderStorageKey(providerId: string, agent: string): string {
-  assertSafeKeyPart(providerId, 'providerId');
-  assertSafeKeyPart(agent, 'agent');
-  return `${CUSTOM_PROVIDER_HEADER_SECRET_PREFIX}${providerId}_${agent}`;
 }
 
 /**

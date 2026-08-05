@@ -12,6 +12,7 @@ import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
   type BrowserControlRuntime,
+  type BrowserRuntimeConfig,
 } from '@cindy/browser-control-runtime';
 
 import { createLogger } from '../logger.js';
@@ -20,13 +21,16 @@ import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recip
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import {
-  BrowserBackendController,
-  BrowserBackendHealthService,
+  BackendRouter,
   ExternalChromeBackend,
   RsbWebviewBackend,
   type BackendKind,
+  type BrowserBackend,
 } from './browser-backend/index.js';
-import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
+import {
+  getRsbBrowserBridge,
+  dispatchTabOp as _dispatchTabOp,
+} from '../rsb-browser-bridge/index.js';
 import {
   readBrowserBackendSettings,
   writeBrowserBackendKind,
@@ -37,17 +41,99 @@ import {
   getActiveRsbSessionId,
   setActiveRsbSessionId,
 } from '../rsb-browser-bridge/active-session.js';
-import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
-import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
+import {
+  requireEnum,
+  requireObject,
+  optionalNullableString,
+} from '../utils/ipcValidate.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
 const logger = createLogger('mcp/cindy_browser');
 
+/**
+ * Managed profile identity. The profile key doubles as (a) the Chrome profile
+ * display name rendered in the launched browser's top-right profile button and (b)
+ * the user-data-dir folder name — so it's branded "Cindy" to make the automation
+ * browser obviously distinct from the user's everyday Chrome at a glance. The runtime
+ * seeds the name + color into the profile's Local State / Preferences before launch
+ * (decoration re-checks the desired name every launch, so a profile dir carried over
+ * with an old display name self-heals to "Cindy" on first run).
+ * (Same Chrome binary as the user's, so the dock/taskbar icon is unchanged.)
+ *
+ * ⚠️ 磁盘标识符:这是 2026-07 品牌翻转时钉死的目录名,之后【不要】再跟随
+ * @cindy/maker-shared/branding 的 BRAND_NAME 变化——改了会指向新的空 profile
+ * 目录,丢失既有登录态/Cookie。老 profile 的接续路径:
+ *  - 老 userData(xdt-maker)里的 `browser-runtime/browser/XDMaker` 由 mToc 首登
+ *    迁移(legacyUserDataMigration.ts)复制为新 userData 的 `browser/Cindy`;
+ *  - 新 userData 里若已有旧名目录(翻转前的 dev 实例),下方 module-eval 的
+ *    就地改名自愈处理。两处的 'XDMaker'/'Cindy' 字面量与本常量保持一致。
+ */
+const MANAGED_PROFILE = 'Cindy';
 /** 翻转前(≤2026-07-17)创建的受管 profile 目录名,仅用于就地改名自愈。 */
 const LEGACY_MANAGED_PROFILE = 'XDMaker';
+/**
+ * Fixed brand tint for the managed profile. This intentionally stays on the vivid
+ * teal variant instead of the Default Light auto-approval text color. NOTE:
+ * Chrome treats this as a *seed* and generates a tonal toolbar theme from it (Material
+ * You), so it is NOT painted literally — but a SATURATED hue like this renders as a
+ * clean teal, unlike a neutral/near-black seed which Chrome muddies into a grey-blue.
+ * (The darker #000050 variant is near-neutral and would muddy, so we use #00D9C5.)
+ */
+const DEFAULT_PROFILE_COLOR = '#00D9C5';
+/**
+ * Vendored "managed launch" driver enum value (required by the runtime to mark a
+ * profile as launch-and-own vs attach-to-existing). It DOES surface in the
+ * `profiles`/`status`/`doctor` diagnostic output, so the runtime scrubs the
+ * vendored brand from those success bodies at its boundary (see runtime.ts
+ * DIAGNOSTIC_ACTIONS) — the agent never sees the raw "openclaw" string.
+ */
+const MANAGED_DRIVER = 'openclaw' as const;
+/**
+ * Managed Chrome CDP port. The runtime only auto-assigns a port to its built-in
+ * default profile (keyed by the vendored default name); a custom-named managed
+ * profile MUST define its own `cdpPort` or the runtime rejects it with "must define
+ * cdpPort or cdpUrl". 18800 is the vendored default CDP port-range start.
+ */
+const MANAGED_CDP_PORT = 18800;
+
+/**
+ * Default ("managed") config: a single playwright-launched Chrome profile, headed,
+ * with a STABLE persistent user-data-dir (logins survive across sessions). This is
+ * the product default — a "dedicated persistent login automation browser".
+ * (`browser-backend-settings-store` resolves `'external'` as the system default,
+ * so this config is what a user who never touched the toggle gets.)
+ *
+ * SECURITY POSTURE (intentional, owner-decided 2026-06):
+ *  - No `ssrfPolicy` is set → the strict browser-side DNS-rebinding gate +
+ *    redirect-chain inspection stay OFF, so the agent CAN navigate to
+ *    localhost / private-network hosts. This is deliberate: Cindy is an internal
+ *    tool and users need the agent to drive local dev servers / internal sites.
+ *    (Private-IP *literals* are still classified by the vendored resolver; what's
+ *    intentionally allowed is hostname→private navigation.) Do not arm
+ *    `dangerouslyAllowPrivateNetwork:false` here without re-confirming that call.
+ *  - Page-context `evaluate` (and recipe `evaluate` steps) run author/agent JS in
+ *    Chromium, whose network stack is NOT subject to the Node SSRF guard — a
+ *    same-origin `fetch` there can reach any host the browser can. This residual
+ *    surface is accepted as inherent to browser automation (it's the same
+ *    capability the `act:evaluate` tool already exposes), not a regression.
+ */
+function buildManagedConfig(): BrowserRuntimeConfig {
+  return {
+    browser: {
+      enabled: true,
+      defaultProfile: MANAGED_PROFILE,
+      headless: false, // headed so the user can see + log into sites
+      profiles: {
+        [MANAGED_PROFILE]: {
+          driver: MANAGED_DRIVER,
+          color: DEFAULT_PROFILE_COLOR,
+          cdpPort: MANAGED_CDP_PORT,
+        },
+      },
+    },
+  };
+}
 
 /**
  * 就地改名自愈:同一 userData 下存在翻转前的 `browser/XDMaker` 而无 `browser/Cindy`
@@ -77,12 +163,12 @@ healLegacyManagedProfileDir();
 //
 // `vendoredRuntime` is the raw upstream object behind a thin usage-tracking
 // wrapper (see `trackBrowserRuntimeUsage`): every consumer in this module —
-// the `ExternalChromeBackend` (behind the lifecycle controller, which is what
+// the `ExternalChromeBackend` (behind the `BackendRouter`, which is what
 // @cindy/mcps via `getBrowserMcpDeps` and host helpers below receive), the
 // availability probe and the login helper — calls through the wrapper, so
 // `disposeBrowserRuntime` can tell whether the runtime saw ANY traffic this
 // session. We never hand the raw object out; swapping the active backend in
-// Backend switching and recovery stay behind the process-wide controller.
+// Phase 5 is a single `router.setBackend()` call away.
 const vendoredRuntime = trackBrowserRuntimeUsage(
   createBrowserControlRuntime({
     config: buildManagedConfig(),
@@ -109,41 +195,35 @@ export function setBrowserSessionUploadRootResolver(
 }
 
 /**
- * Create an RSB-webview backend instance (Phase 3+). The instance is terminal
- * after `dispose()`, so every activation/recovery must call this factory rather
- * than reusing a process-wide singleton.
- *
- * Lazily constructed because the
+ * RSB-webview backend instance (Phase 3+). Lazily constructed because the
  * TabRegistry singleton must be available — which it is right after this
  * module evaluates, since `getRsbBrowserBridge()` is self-instantiating.
  */
-function createRsbBackend(): RsbWebviewBackend {
-  return new RsbWebviewBackend({
-    registry: getRsbBrowserBridge(),
-    getActiveSessionId: () => getActiveRsbSessionId(),
-    artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
-    resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
-    bridge: {
-      // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
-      // window is available the dispatch lands cleanly, before that the request
-      // rejects with `host renderer not available`.
-      getHostWebContents: () => {
-        // bootstrap-electron owns mainWindowRef; we read it through the public
-        // helper to avoid a circular import.
-        const win = readMainWindowForBackend();
-        return win;
-      },
-      // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
-      // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
-      ensureHost: () => ensureHostForBackend(),
-      // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
-      // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
-      isDetached: () => isDetachedForBackend(),
-      logger,
+const rsbBackend = new RsbWebviewBackend({
+  registry: getRsbBrowserBridge(),
+  getActiveSessionId: () => getActiveRsbSessionId(),
+  artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
+  resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
+  bridge: {
+    // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
+    // window is available the dispatch lands cleanly, before that the request
+    // rejects with `host renderer not available`.
+    getHostWebContents: () => {
+      // bootstrap-electron owns mainWindowRef; we read it through the public
+      // helper to avoid a circular import.
+      const win = readMainWindowForBackend();
+      return win;
     },
+    // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
+    // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
+    ensureHost: () => ensureHostForBackend(),
+    // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
+    // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
+    isDetached: () => isDetachedForBackend(),
     logger,
-  });
-}
+  },
+  logger,
+});
 
 /**
  * Initial backend selection — driven by the persisted settings file. On first
@@ -152,27 +232,26 @@ function createRsbBackend(): RsbWebviewBackend {
  * who explicitly picked a backend keep their choice — see the DEFAULT HISTORY
  * note in that store for the override semantics behind the two flips.
  */
+function backendForKind(kind: BackendKind): BrowserBackend {
+  switch (kind) {
+    case 'external':
+      return externalBackend;
+    case 'rsb-webview':
+      return rsbBackend;
+  }
+}
+
 const initialKind = readBrowserBackendSettings().kind;
 
 /**
- * Process-wide lifecycle controller. Phase 5 wires it to the persisted backend kind. All
+ * Process-wide router. Phase 5 wires it to the persisted backend kind. All
  * downstream consumers (MCP deps, login helper, availability probe, quit
- * disposer) go through the controller so switching and same-kind recovery are
- * serialized.
+ * disposer) go through the router so the swap is a single `setBackend` call.
  *
- * The controller implements `BrowserControlRuntime` (its `.call` matches the
+ * The router implements `BrowserControlRuntime` (its `.call` matches the
  * contract verbatim) so @cindy/mcps consumes it as the runtime with no adapter.
  */
-const backendController = new BrowserBackendController({
-  initialKind,
-  externalBackend,
-  createRsbBackend,
-  logger,
-});
-const browserBackendHealthService = new BrowserBackendHealthService(
-  backendController,
-  logger,
-);
+const router = new BackendRouter(backendForKind(initialKind), logger);
 
 /**
  * Main-window webContents accessor — populated by bootstrap-electron via
@@ -230,15 +309,18 @@ export function setIsDetachedForBackend(impl: () => boolean): void {
 /**
  * Switch the active backend. Called from the Phase 5 toggle IPC handler.
  * Persists the new kind to disk and disposes the outgoing backend (per
- * lifecycle controller contract).
+ * `BackendRouter.setBackend` contract).
  */
 export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<void> {
-  // The controller performs the same-kind check inside its serialized queue.
-  // Doing it here would race two Settings actions: a request for the current
-  // kind could return early while an earlier queued request is about to switch
-  // away from it.
-  const changed = await backendController.setKind(kind);
-  if (!changed) return;
+  if (router.getCurrentBackendKind() === kind) {
+    // Same-kind path: skip both the swap AND the settings write. The renderer
+    // UI already guards against same-kind clicks; if this path runs it's a
+    // programmatic caller and there's no semantic to upgrade. Writing the
+    // settings file on every click would churn fs.writeFile without changing
+    // anything observable.
+    return;
+  }
+  await router.setBackend(backendForKind(kind));
   writeBrowserBackendKind(kind);
 }
 
@@ -263,12 +345,12 @@ export function getBrowserMcpDeps(): {
     getUserRecipes: () => loadUserBrowserRecipes(),
     // Self-grow: persist an agent/user-authored recipe into L2 (validated by the MCP).
     saveUserRecipe: (input) => writeUserRecipe(input),
-    // Controller implements `BrowserControlRuntime` — the MCP tool layer never sees
+    // Router implements `BrowserControlRuntime` — the MCP tool layer never sees
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
-    getRuntime: () => backendController,
-    supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
-    supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
+    getRuntime: () => router,
+    supportsResourceDownloads: () => router.kind === 'rsb-webview',
+    supportsSemanticQueries: () => router.kind === 'rsb-webview',
     logger,
   };
 }
@@ -277,10 +359,10 @@ export function getBrowserMcpDeps(): {
  * Probe whether a local browser is available (drives the Settings UI's
  * "未检测到本机浏览器 / 下载 Chrome" cell).
  *
- * **Always** goes to the vendored runtime, NOT the active controller — this probe asks
+ * **Always** goes to the vendored runtime, NOT the router — this probe asks
  * "did the user install Chrome on their machine?", which is purely a property
  * of the EXTERNAL backend. The RSB-webview backend uses Electron's bundled
- * Chromium and is always available; routing through the active controller would make the
+ * Chromium and is always available; routing through router would make the
  * Settings card lie ("未检测到 Chrome") whenever the user has the internal
  * backend selected, even on a machine with Chrome installed.
  */
@@ -294,22 +376,7 @@ export async function getBrowserAvailability(): Promise<BrowserAvailability> {
  * (persisted override) merged over the system default, not a fixed value.
  */
 export function getActiveBrowserBackendKind(): BackendKind {
-  return backendController.getCurrentBackendKind();
-}
-
-/**
- * Rebuild the active embedded control backend and verify the replacement before
- * reporting success. The controller swaps first, so every existing MCP runtime
- * reference immediately delegates to the fresh instance; no Agent-side cache
- * needs to be invalidated separately.
- */
-export function recoverActiveBrowserBackend() {
-  return browserBackendHealthService.recover();
-}
-
-/** Probe once, then automatically replace a failed embedded backend. */
-export function getBrowserBackendHealth() {
-  return browserBackendHealthService.getHealth();
+  return router.getCurrentBackendKind();
 }
 
 /**
@@ -317,8 +384,6 @@ export function getBrowserBackendHealth() {
  *   - `browser-backend:get-state` → current kind + override state
  *   - `browser-backend:set-kind`  → swap active backend + persist
  *   - `browser-backend:reset`     → clear user override, follow current default
- *   - `browser-backend:get-health` → probe + one automatic embedded recovery
- *   - `browser-backend:recover`    → force a fresh embedded backend + verify
  *   - `rsb-browser-bridge:set-active-session` → renderer pushes the focused
  *      sessionId; RsbWebviewBackend reads via getActiveRsbSessionId() at
  *      action time (Phase 3 dependency).
@@ -330,33 +395,29 @@ export function registerBrowserBackendIpc(): void {
   if (backendIpcRegistered) return;
   backendIpcRegistered = true;
 
-  const handlers = createBrowserBackendIpcHandlers({
-    assertTrusted: assertTrustedAppRendererEvent,
-    getState: () => {
-      const state = readBrowserBackendSettingsState();
-      return {
-        active: backendController.getCurrentBackendKind(),
-        systemDefault: state.defaults.kind,
-        isOverride: state.isCustomized,
-      };
-    },
-    setKind: async (kind) => {
-      await setActiveBrowserBackendKind(kind);
-      return backendController.getCurrentBackendKind();
-    },
-    reset: async () => {
-      const next = resetBrowserBackendSettings();
-      await setActiveBrowserBackendKind(next.kind);
-      return backendController.getCurrentBackendKind();
-    },
-    getHealth: getBrowserBackendHealth,
-    recover: recoverActiveBrowserBackend,
+  ipcMain.handle('browser-backend:get-state', () => {
+    const state = readBrowserBackendSettingsState();
+    return {
+      active: router.getCurrentBackendKind(),
+      systemDefault: state.defaults.kind,
+      isOverride: state.isCustomized,
+    };
   });
-  ipcMain.handle('browser-backend:get-state', handlers.getState);
-  ipcMain.handle('browser-backend:set-kind', handlers.setKind);
-  ipcMain.handle('browser-backend:reset', handlers.reset);
-  ipcMain.handle('browser-backend:get-health', handlers.getHealth);
-  ipcMain.handle('browser-backend:recover', handlers.recover);
+
+  ipcMain.handle('browser-backend:set-kind', async (_e, payload: unknown) => {
+    const obj = requireObject(payload, 'set-kind payload');
+    // requireEnum throws throwIpcError('INVALID_PARAMS') for unknown kinds —
+    // rule 13: handlers must use throwIpcError, never bare `throw new Error`.
+    const kind = requireEnum(obj.kind, ['external', 'rsb-webview'] as const, 'kind');
+    await setActiveBrowserBackendKind(kind);
+    return { ok: true, active: router.getCurrentBackendKind() };
+  });
+
+  ipcMain.handle('browser-backend:reset', async () => {
+    const next = resetBrowserBackendSettings();
+    await setActiveBrowserBackendKind(next.kind);
+    return { ok: true, active: router.getCurrentBackendKind() };
+  });
 
   ipcMain.handle('rsb-browser-bridge:set-active-session', (_e, payload: unknown) => {
     const obj = requireObject(payload, 'set-active-session payload');
@@ -385,11 +446,11 @@ export async function openBrowserForLogin(): Promise<void> {
   // doing so raced with Chrome's own initial tab on a cold start and produced a
   // duplicate tab on the first open.
   //
-  // **Always** goes to the vendored runtime, NOT the active controller — "打开 Agent 专用浏
+  // **Always** goes to the vendored runtime, NOT the router — "打开 Agent 专用浏
   // 览器" is the external Chrome workflow: user clicks it to log into sites in
   // the dedicated `Cindy` profile. If the user picked the rsb-webview backend
   // they don't need this button at all (logins go through the sidebar webview);
-  // routing through the active controller would either no-op (rsb backend's `start` is a
+  // routing through router would either no-op (rsb backend's `start` is a
   // no-op) or open the wrong thing.
   const started = await vendoredRuntime.call({ action: 'start' });
   if (!started.ok) {
@@ -428,10 +489,10 @@ export async function openBrowserForLogin(): Promise<void> {
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
 export function disposeBrowserRuntime(): Promise<void> {
-  // Always stop the vendored Chrome directly, NOT through the active controller.
-  // The controller may currently point at RsbWebviewBackend, whose dispose only
-  // releases control listeners and does not own the external Chrome process. If
-  // we only dispose through the active backend, a user who switched to external Chrome and back
+  // Always stop the vendored Chrome directly, NOT through the router. The
+  // router may currently point at RsbWebviewBackend (whose `dispose` is a
+  // no-op by design — webview lifecycle is owned by the RSB UI). If we only
+  // dispose-via-router, a user who ever switched to external Chrome and back
   // leaves a headed Chrome process surviving app quit (the vendored runtime
   // doesn't know about the swap and Phase 5 swap-time dispose already ran;
   // a stale-lock recovery on next launch is the symptom).

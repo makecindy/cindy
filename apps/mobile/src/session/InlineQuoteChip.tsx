@@ -9,13 +9,7 @@ export function compactQuoteLabel(text: string): string {
 }
 
 /** One quote per chip, shared geometry with message-anchor references. */
-export function InlineQuoteChip({
-  interactive = true,
-  quote,
-}: {
-  interactive?: boolean;
-  quote: ChatQuote;
-}) {
+export function InlineQuoteChip({ quote }: { quote: ChatQuote }) {
   const { colors } = useTheme();
   const source = quoteSourceDisplayLabel(quote);
   const label = compactQuoteLabel(quote.text);
@@ -24,9 +18,7 @@ export function InlineQuoteChip({
       accessibilityLabel={quote.text}
       icon={<MessageSquareQuote color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
       label={label}
-      onPress={interactive
-        ? () => Alert.alert('引用', [`“${quote.text}”`, source].filter(Boolean).join('\n\n'))
-        : undefined}
+      onPress={() => Alert.alert('引用', [`“${quote.text}”`, source].filter(Boolean).join('\n\n'))}
       testID="message.quoteChip"
     />
   );

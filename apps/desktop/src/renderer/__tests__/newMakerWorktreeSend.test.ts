@@ -15,15 +15,12 @@ const sessionViewSource = readFileSync(
 
 describe('NewMakerDraftRoute worktree send flow', () => {
   it('enters a real session before creating the worktree in the background', () => {
-    // 2026-07-29 状态契约:生效条件 = 勾选 && baseRepo 就绪(不合格静默普通启动)。
-    const worktreeBranch = source.indexOf(
-      'if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {',
-    );
+    const worktreeBranch = source.indexOf('if (!isRemoteProjectDraft && wt.enabled) {');
     const createSession = source.indexOf('const newSession = await createSession', worktreeBranch);
     const touchUserSend = source.indexOf('sessionService.touchUserSend', createSession);
     // worktree 创建期的视觉反馈走 worktreeCreationStore(由 CCAgentSessionView 底部
     // workingDir chip 行订阅渲染),不再插 chat-stream SystemCard。
-    const statusCard = source.indexOf('worktreeCreationStore.set(newSession.id', touchUserSend);
+    const statusCard = source.indexOf("worktreeCreationStore.set(newSession.id", touchUserSend);
     const navigate = source.indexOf('navigate(`/cc-agent/$' + '{newSession.id}`', statusCard);
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate', navigate);
 
@@ -53,110 +50,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(source).not.toContain('patchDraft({ workingDir: newDir })');
   });
 
-  it('uses the current checkout as the safe source when branch discovery is not ready', () => {
-    expect(source.match(/sourceBranch: wt\.sourceBranch\.trim\(\) \|\| 'HEAD'/g)).toHaveLength(2);
-    expect(source).not.toContain("sourceBranch: wt.sourceBranch.trim() || 'main'");
-  });
-
-  it('uses the shared Cindy branch helper and adopts the authoritative created branch', () => {
-    const previewBranch = source.indexOf('let branchName = getBranchName(name);');
-    const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate', previewBranch);
-    const authoritativeBranch = source.indexOf('branchName = resp.meta.branch;', worktreeCreate);
-    const creatingStateRefresh = source.indexOf("status: 'creating'", authoritativeBranch);
-
-    expect(source).not.toContain('`xdt/${name}`');
-    expect(previewBranch).toBeGreaterThan(-1);
-    expect(authoritativeBranch).toBeGreaterThan(worktreeCreate);
-    expect(creatingStateRefresh).toBeGreaterThan(authoritativeBranch);
-  });
-
-  it('treats remote session creation as committed before the shared non-blocking handoff', () => {
-    const remoteSessionId = source.search(/const remoteSessionId\s*=\s*presetSessionId/);
-    const commitPoint = source.indexOf('remoteSessionId 到手就是**提交点**', remoteSessionId);
-    const handoff = source.indexOf('commitRemoteSessionHandoff({', commitPoint);
-    const pendingHandoff = source.indexOf('setPending(remoteSessionId', handoff);
-
-    expect(remoteSessionId).toBeGreaterThan(-1);
-    expect(commitPoint).toBeGreaterThan(remoteSessionId);
-    expect(handoff).toBeGreaterThan(commitPoint);
-    expect(pendingHandoff).toBeGreaterThan(handoff);
-    expect(source).not.toContain("'local-db:sessions:list'");
-  });
-
-  it('settles an older remote cleanup obligation before creating another worktree', () => {
-    const remoteBranch = source.indexOf('if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {');
-    const recovery = source.indexOf(
-      'await recoverPendingRemotePrecreatedWorktrees({',
-      remoteBranch,
-    );
-    const retainedGuard = source.indexOf('!recovery.storageReadable', recovery);
-    const reservationGuard = source.indexOf(
-      'const reservationRecorded = await registerPendingRemotePrecreatedWorktree(',
-      retainedGuard,
-    );
-    const worktreeCreate = source.indexOf("'worktree:create'", retainedGuard);
-    const ledgerRegistration = source.indexOf(
-      'createRemoteSessionWithPrecreatedWorktree({',
-      worktreeCreate,
-    );
-
-    expect(recovery).toBeGreaterThan(remoteBranch);
-    expect(source.slice(recovery, worktreeCreate)).toContain(
-      '!recovery.storageReadable || recovery.retained > 0',
-    );
-    expect(retainedGuard).toBeGreaterThan(recovery);
-    expect(reservationGuard).toBeGreaterThan(retainedGuard);
-    expect(worktreeCreate).toBeGreaterThan(reservationGuard);
-    expect(worktreeCreate).toBeGreaterThan(retainedGuard);
-    expect(source.slice(worktreeCreate, worktreeCreate + 420)).toContain('recoveryKey,');
-    expect(ledgerRegistration).toBeGreaterThan(worktreeCreate);
-    expect(source.slice(ledgerRegistration, ledgerRegistration + 220)).toContain('deviceId,');
-  });
-
-  it('fences every remote create side effect by the data-owner generation', () => {
-    const ownerCapture = source.indexOf('const dataOwnerAtSend = getDataOwnerGeneration();');
-    const currentCheck = source.indexOf('const isCurrentDataOwner = () =>', ownerCapture);
-    const invokeWrapper = source.indexOf('const invokeRemote = async', currentCheck);
-    const recoveryFence = source.indexOf('isCurrent: isCurrentDataOwner,', invokeWrapper);
-    const helperFence = source.indexOf('isCurrent: isCurrentDataOwner,', recoveryFence + 1);
-    const handoffFence = source.indexOf('if (!isCurrentDataOwner()) {', helperFence);
-    const handoff = source.indexOf('commitRemoteSessionHandoff({', handoffFence);
-    const silentCatch = source.indexOf(
-      'if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;',
-      handoff,
-    );
-
-    expect(ownerCapture).toBeGreaterThan(-1);
-    expect(currentCheck).toBeGreaterThan(ownerCapture);
-    expect(invokeWrapper).toBeGreaterThan(currentCheck);
-    expect(recoveryFence).toBeGreaterThan(invokeWrapper);
-    expect(helperFence).toBeGreaterThan(recoveryFence);
-    expect(handoffFence).toBeGreaterThan(helperFence);
-    expect(handoff).toBeGreaterThan(handoffFence);
-    expect(silentCatch).toBeGreaterThan(handoff);
-  });
-
-  it('retries remote draft defaults after the relay or selected workstation reconnects', () => {
-    const epochHook = source.indexOf('useDeviceLinkReconnectEpoch(');
-    const defaultsFetch = source.indexOf("'maker:get-new-maker-defaults'", epochHook);
-    const effectDependencies = source.indexOf('remoteDraftRefreshEpoch,', defaultsFetch);
-    const transientPreserve = source.indexOf(
-      'value: unsupported ? null : previous.value',
-      defaultsFetch,
-    );
-
-    expect(epochHook).toBeGreaterThan(-1);
-    expect(defaultsFetch).toBeGreaterThan(epochHook);
-    expect(effectDependencies).toBeGreaterThan(defaultsFetch);
-    expect(transientPreserve).toBeGreaterThan(defaultsFetch);
-  });
-
   it('does not auto-send if the prepared session is no longer active', () => {
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate');
-    const latestSession = source.indexOf(
-      'const latestSession = await sessionService.get(newSession.id)',
-      worktreeCreate,
-    );
+    const latestSession = source.indexOf('const latestSession = await sessionService.get(newSession.id)', worktreeCreate);
     const inactiveGuard = source.indexOf("latestSession?.status !== 'active'", latestSession);
     const restoreDraft = source.indexOf('restoreFirstMessageDraft();', inactiveGuard);
     const sendMessage = source.indexOf('makerChatStore.sendMessage(', restoreDraft);
@@ -181,25 +77,11 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       'const worktreePreparing = smoothedWorktreeCreating',
       rawDerive,
     );
-    // sendGuard 现在读合并后的 sessionHandoffPreparing —— 「会话正在准备」多了一档
-    // (device-link 远程交接,见 remoteHandoffPreparing),两档必须共用同一个
-    // 下游判据,否则又是「同一语义两处判定」。worktree 这一档仍是它的组成项。
-    const preparingMerge = sessionViewSource.indexOf(
-      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
-      worktreePreparing,
-    );
-    const sendGuard = sessionViewSource.indexOf(
-      'if (sessionHandoffPreparing) return false',
-      preparingMerge,
-    );
-    const overlayLock = sessionViewSource.indexOf(
-      'worktreePreparing && smoothedBranchName',
-      sendGuard,
-    );
+    const sendGuard = sessionViewSource.indexOf('if (worktreePreparing) return false', worktreePreparing);
+    const overlayLock = sessionViewSource.indexOf('worktreePreparing && smoothedBranchName', sendGuard);
 
     expect(hookSubscription).toBeGreaterThan(-1);
     expect(rawDerive).toBeGreaterThan(hookSubscription);
-    expect(preparingMerge).toBeGreaterThan(worktreePreparing);
     expect(worktreePreparing).toBeGreaterThan(rawDerive);
     expect(sendGuard).toBeGreaterThan(worktreePreparing);
     expect(overlayLock).toBeGreaterThan(sendGuard);

@@ -548,7 +548,7 @@ export function buildScheduleDoneCard(
         ? [
             {
               id: 'schedule:open-session',
-              label: '查看任务',
+              label: '查看会话',
               type: 'primary',
               payload: {
                 requestId: `schedule-open:${run.id}`,

@@ -88,12 +88,10 @@ function debuggerFor(wc: WebContents): ElectronDebugger {
  */
 export class RsbWebviewDialogs {
   private readonly states = new Map<WebContents, DialogState>();
-  private disposed = false;
 
   constructor(private readonly logger: DialogLogger) {}
 
   async observe(wc: WebContents): Promise<void> {
-    if (this.disposed) throw new Error('page dialog monitor is disposed');
     let state = this.states.get(wc);
     if (!state) {
       state = this.createState(wc);
@@ -105,7 +103,6 @@ export class RsbWebviewDialogs {
       state.ownedAttachment = true;
     }
     await state.debugger.sendCommand('Page.enable');
-    this.assertActive(wc, state);
     state.enabled = true;
   }
 
@@ -131,7 +128,6 @@ export class RsbWebviewDialogs {
     if (!state?.enabled) {
       throw new Error('page dialog monitor is not active');
     }
-    this.assertActive(wc, state);
     if (state.pending) {
       return {
         opened: Promise.resolve({ ...state.pending }),
@@ -175,11 +171,9 @@ export class RsbWebviewDialogs {
     await this.observe(wc);
     const state = this.states.get(wc);
     if (!state) throw new Error('page dialog monitor unavailable');
-    this.assertActive(wc, state);
     const deadline = Date.now() + boundedWait(options.timeoutMs);
     let dialog: BrowserPageDialog | undefined;
     for (;;) {
-      this.assertActive(wc, state);
       const current = state.pending;
       if (current && (!options.dialogId || current.id === options.dialogId)) {
         dialog = current;
@@ -205,21 +199,17 @@ export class RsbWebviewDialogs {
       }
       if (Date.now() >= deadline) throw new Error('no page dialog is pending');
       await new Promise((resolve) => setTimeout(resolve, 50));
-      this.assertActive(wc, state);
     }
 
     const accepted = options.accept === true;
-    this.assertActive(wc, state);
     state.handledIds.set(dialog.id, 'agent');
     try {
-      this.assertActive(wc, state);
       await state.debugger.sendCommand('Page.handleJavaScriptDialog', {
         accept: accepted,
         ...(accepted && typeof options.promptText === 'string'
           ? { promptText: options.promptText }
           : {}),
       });
-      this.assertActive(wc, state);
     } catch (err) {
       state.handledIds.delete(dialog.id);
       throw err;
@@ -242,7 +232,6 @@ export class RsbWebviewDialogs {
     if (!state?.enabled) {
       throw new Error('page dialog monitor is not active');
     }
-    this.assertActive(wc, state);
     if (state.prepared) {
       clearTimeout(state.prepared.timer);
       state.prepared.reject(new Error('page dialog response was replaced'));
@@ -287,7 +276,6 @@ export class RsbWebviewDialogs {
   }
 
   dispose(): void {
-    this.disposed = true;
     for (const wc of [...this.states.keys()]) this.release(wc);
   }
 
@@ -305,7 +293,6 @@ export class RsbWebviewDialogs {
     };
     state.messageHandler = (...args: unknown[]) => {
       try {
-        if (this.disposed || this.states.get(wc) !== state) return;
         const method = text(args[1]);
         const params =
           args[2] && typeof args[2] === 'object' ? (args[2] as Record<string, unknown>) : {};
@@ -330,7 +317,6 @@ export class RsbWebviewDialogs {
             state.prepared = undefined;
             clearTimeout(prepared.timer);
             state.handledIds.set(dialog.id, 'armed');
-            this.assertActive(wc, state);
             void state.debugger
               .sendCommand('Page.handleJavaScriptDialog', {
                 accept: prepared.accept,
@@ -369,12 +355,6 @@ export class RsbWebviewDialogs {
       }
     ).once?.('destroyed', state.destroyedHandler);
     return state;
-  }
-
-  private assertActive(wc: WebContents, state: DialogState): void {
-    if (this.disposed || this.states.get(wc) !== state) {
-      throw new Error('page dialog monitor is disposed');
-    }
   }
 
   private release(wc: WebContents): void {

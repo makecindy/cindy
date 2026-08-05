@@ -2,7 +2,7 @@
  * cindy_feishuBotMcpServer.ts
  * ---------------------------------------------------------------------------
  * In-process MCP server for the feishu bot channel. Attached to every session
- * (no source gate) so users can say "跑完通过飞书或 Lark 通知我" from a desktop chat
+ * (no source gate) so users can say "跑完通过飞书通知我" from a desktop chat
  * and have the agent push results into the bot DM.
  *
  * 架构对齐 art MCP server:
@@ -22,7 +22,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
 
-import { FeishuBotToolRegistry, type FeishuBotToolResult } from './cindy_feishuBotToolRegistry';
+import {
+  FeishuBotToolRegistry,
+  type FeishuBotToolResult,
+} from './cindy_feishuBotToolRegistry';
 import type { FeishuBotMcpHostDeps } from './types.js';
 
 import descListTools from './prompts/cindy_feishu_bot/tools/list_tools.md?raw';
@@ -47,23 +50,14 @@ type FeishuBotToolDescriptions = { [K in keyof typeof D]: string };
  * (organic SlackIM 渠道及其 lizi_slack_bot 已于 2026-07-17 随老 relay 退役。)
  */
 export const SLACK_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 Slack 会话:文字回复直接输出即可(会自动回贴到当前 Slack thread,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Slack 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
+  '\n\n⚠️ 当前是 Slack 会话:文字回复直接输出即可(会自动回贴到当前 Slack thread,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Slack 附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
 export const TELEGRAM_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 Telegram 会话:文字回复直接输出即可(会自动回贴到当前 Telegram 对话或回复链,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Telegram 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
-
-export const X_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 X 会话:当前账号为付费账号,不受 280 个字符限制,无需针对当前渠道调整回答篇幅;文字回复直接输出即可(系统会自动发回当前 X 会话,无需工具);正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制。在 X 中除附件引用外,尽量避免输出其他 URL 链接,也不要解释或复述这些格式要求;把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
-
-export const WECOM_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是企业微信会话:文字回复直接输出即可(会自动回复到当前企业微信会话,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为企业微信附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
+  '\n\n⚠️ 当前是 Telegram 会话:文字回复直接输出即可(会自动回贴到当前 Telegram 对话或回复链,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Telegram 附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
 const NOTE_BY_SOURCE: Record<string, string> = {
   'slack-hook': SLACK_HOOK_SESSION_CHANNEL_NOTE,
   telegram: TELEGRAM_HOOK_SESSION_CHANNEL_NOTE,
-  // 键与 hook-control/session-runner.ts 的 vendorOptions.source 是一对隐式契约
-  wecom: WECOM_SESSION_CHANNEL_NOTE,
-  x: X_HOOK_SESSION_CHANNEL_NOTE,
 };
 
 /** 按会话来源产出工具描述——无对应 note 的来源原样返回 D,保证字节级不变。 */
@@ -149,7 +143,9 @@ function registerSendFileToUser(
       absPath: z
         .string()
         .min(1)
-        .describe('本地绝对路径(必填)。Windows 反斜杠或正斜杠都行;Unix 必须 / 开头'),
+        .describe(
+          '本地绝对路径(必填)。Windows 反斜杠或正斜杠都行;Unix 必须 / 开头',
+        ),
       displayName: z
         .string()
         .optional()
@@ -162,13 +158,18 @@ function registerSendFileToUser(
           {
             ok: false,
             errorCode: 'NO_CHAT_CONTEXT',
-            error: `既没有当前飞书 / Lark session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在已配置的 IM 服务里私聊机器人一次完成绑定,再重试。`,
+            error:
+              `既没有当前飞书 session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在飞书里私聊自己配置的那个机器人一次完成绑定,再重试。`,
           },
           true,
         );
       }
 
-      const result = await deps.sendFile(chatId, absPath, displayName);
+      const result = await deps.sendFile(
+        chatId,
+        absPath,
+        displayName,
+      );
 
       if (!result.ok) {
         const codeMap: Record<string, string> = {
@@ -219,7 +220,7 @@ function registerSendMessageToUser(
         .min(1)
         .max(FEISHU_MESSAGE_MAX_CHARS)
         .describe(
-          `markdown 正文(必填,${FEISHU_MESSAGE_MAX_CHARS} 字符上限)。飞书 / Lark lark_md 支持 **bold** / _italic_ / \`code\` / 链接 / 列表 / > 引用 / # 标题。`,
+          `markdown 正文(必填,${FEISHU_MESSAGE_MAX_CHARS} 字符上限)。飞书 lark_md 支持 **bold** / _italic_ / \`code\` / 链接 / 列表 / > 引用 / # 标题。`,
         ),
     },
     handler: async ({ text }) => {
@@ -229,7 +230,8 @@ function registerSendMessageToUser(
           {
             ok: false,
             errorCode: 'NO_CHAT_CONTEXT',
-            error: `既没有当前飞书 / Lark session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在已配置的 IM 服务里私聊机器人一次完成绑定,再重试。`,
+            error:
+              `既没有当前飞书 session 的 chatId,bot 也没有绑定过 owner(用户从未私聊过 bot)。请让用户先在飞书里私聊自己配置的那个机器人一次完成绑定,再重试。`,
           },
           true,
         );
@@ -288,7 +290,10 @@ function registerListToolsEntry(
     'list_tools',
     d.list_tools,
     {
-      category: z.enum(CATEGORY_ENUM).optional().describe('工具类目。不传时返回所有类目概览。'),
+      category: z
+        .enum(CATEGORY_ENUM)
+        .optional()
+        .describe('工具类目。不传时返回所有类目概览。'),
     },
     async ({ category }) => {
       if (category) {
@@ -311,7 +316,9 @@ function registerListToolsEntry(
                   description: t.description,
                   ...(t.rules && t.rules.length > 0 ? { rules: t.rules } : {}),
                 })),
-                ...(Object.keys(bundledRules).length > 0 ? { rules: bundledRules } : {}),
+                ...(Object.keys(bundledRules).length > 0
+                  ? { rules: bundledRules }
+                  : {}),
                 hint: '调用具体工具用 call_tool({name, args})。每个 tool 的 rules 数组列出它必须遵守的共享规则键,完整规则在顶层 rules 字段。',
               }),
             },
@@ -350,7 +357,9 @@ function registerCallToolEntry(
     'call_tool',
     d.call_tool,
     {
-      name: z.string().describe('工具名,从 list_tools 获取(如 send_file_to_user)'),
+      name: z
+        .string()
+        .describe('工具名,从 list_tools 获取(如 send_file_to_user)'),
       args: jsonObjectArg('工具参数(JSON 对象)。不确定 schema 时可先传 {} 触发错误反馈。'),
     },
     async ({ name, args }) => registry.call(name, args),

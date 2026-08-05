@@ -1,6 +1,5 @@
 import { BrowserWindow } from 'electron';
 
-import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 
 export interface OrcaWorkerBroadcastWindow {
@@ -26,6 +25,5 @@ export function broadcastOrcaWorkerChangedToWindows(
 }
 
 export function broadcastOrcaWorkerChanged(leadSessionId: string): void {
-  invalidateWorkersByLeadSingleFlight(leadSessionId);
   broadcastOrcaWorkerChangedToWindows(BrowserWindow.getAllWindows(), leadSessionId);
 }

@@ -20,9 +20,7 @@ import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
-import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
-import { closeNativePopupForTab } from './lib/nativePopupTabs';
 import type { TabKindId, TabState } from './types';
 
 const log = createLogger('rightSidebar.store');
@@ -488,18 +486,13 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
  * 不需要对称的"回滚回调":IPC 失败回滚时 store 自己走 `forgetClosedTab(id)` 把
  * 挂在这个 tabId 上的旁路记录(含 popup 标记)清掉 —— 与关闭路径同一个收尾函数。
  * 否则 DB / IPC 异常期间反复触发 popup,标记集合会随进程生命周期无界增长。
- *
- * `opts.activate === false`:追加 tab 但**不抢激活位**(cache 与 DB 的 active 都
- * 保持原样)。钉住面板的跨会话自动补挂用 —— 用户切到某会话时补挂的页签不该
- * 把他正看着的 tab 顶掉。默认 true 维持既有语义(用户手动加 tab = 看它)。
  */
 export async function addTab(
   sessionId: string,
   kind: TabKindId,
   initialState: unknown = null,
-  opts?: { onOptimisticAdd?: (tabId: string) => void; activate?: boolean },
+  opts?: { onOptimisticAdd?: (tabId: string) => void },
 ): Promise<TabState> {
-  const activate = opts?.activate !== false;
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
     throw new Error(`session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`);
@@ -510,10 +503,7 @@ export async function addTab(
   const id = makeTabId();
   const position = prev.tabs.length;
   const newTab: TabState = { id, kind, state: initialState };
-  setBucket(sessionId, {
-    tabs: [...prev.tabs, newTab],
-    activeTabId: activate ? id : prev.activeTabId,
-  });
+  setBucket(sessionId, { tabs: [...prev.tabs, newTab], activeTabId: id });
   try {
     opts?.onOptimisticAdd?.(id);
   } catch {
@@ -530,7 +520,7 @@ export async function addTab(
       const create = (async () => {
         await ipc.upsert({ id, sessionId, kind, position, state: initialState });
         rowCommitted = true;
-        if (activate) await ipc.setActive({ sessionId, id });
+        await ipc.setActive({ sessionId, id });
       })();
       const persisted = create.then(
         () => true,
@@ -552,7 +542,7 @@ export async function addTab(
     setBucket(sessionId, { tabs: prev.tabs, activeTabId: prev.activeTabId });
     // 这个 tab 从未存在过 —— `onOptimisticAdd` 里登记的旁路记录(popup 标记等)
     // 必须跟着回滚,否则没有任何 closeTab 成功分支会来清它。
-    forgetClosedTab(sessionId, id, kind);
+    forgetClosedTab(sessionId, id);
     // rowCommitted=true 说明 upsert 已成功、SQLite 有这一行,但 addTab 整体失败
     // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 走共享
     // 的孤儿行清理(与 closeTab 创建失败分支同款 cleanupOrphanTabRow):
@@ -615,21 +605,17 @@ export function hasTabCloseInterceptor(tabId: string): boolean {
 }
 
 /**
- * tab 已确定从 store 消失后的收尾:释放 browser pool entry,并清掉挂在 tabId
- * 上的所有旁路记录。Shell / session 临时卸载只把 wrapper 停回 parking,不能在
- * 那里释放 opener,否则 outlivesOpener:false 的原生 popup 会一起被 Chromium 关闭。
+ * tab 已确定从 store 消失后的收尾:清掉挂在 tabId 上的所有旁路记录。
  *
  * 只在"真的没了"的分支调 —— close IPC 失败会回滚 cache(tab 还在),那时这些记录
  * 必须留着。popup 来源标记同理:所有关闭入口(用户手关 / closeAllTabs / agent
  * close tab-op / guest 自关)都汇聚到 closeTab,标记不会随某条路径泄漏。
  */
-function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): void {
+function forgetClosedTab(sessionId: string, tabId: string): void {
   const key = tabStateWriteKey(sessionId, tabId);
   patchRevisions.delete(key);
   persistedStateBaselines.delete(key);
-  if (kind === 'web-browser') browserWebviewPool.release(tabId);
   unmarkPopupSpawnedTab(tabId);
-  closeNativePopupForTab(tabId);
 }
 
 /**
@@ -680,13 +666,12 @@ export async function closeTab(
     }
   }
 
-  const mutation = enqueueCloseMutation(sessionId, async () => {
+  return enqueueCloseMutation(sessionId, async () => {
     // 队列内重取快照:排在前面的关闭可能已经动过这个 bucket(甚至已经关掉了本
     // tab)。用旧快照算 nextTabs / 回滚基线正是并发出错的根源。
     const prev = getBucket(sessionId);
     const idx = prev.tabs.findIndex((t) => t.id === tabId);
     if (idx < 0) return;
-    const closingKind = prev.tabs[idx].kind;
     const nextTabs = prev.tabs.filter((t) => t.id !== tabId);
     let nextActiveId = prev.activeTabId;
     if (tabId === prev.activeTabId) {
@@ -713,7 +698,7 @@ export async function closeTab(
       //    不存在"复活失败 tab"的问题)——调用方至少拿到真实结果与日志留痕。
       await settleTabStateWrites(sessionId, tabId);
       await cleanupOrphanTabRow(sessionId, tabId, 'closeTab');
-      forgetClosedTab(sessionId, tabId, closingKind);
+      forgetClosedTab(sessionId, tabId);
       return;
     }
     try {
@@ -781,12 +766,12 @@ export async function closeTab(
           }
         }
       }
-      forgetClosedTab(sessionId, tabId, closingKind);
+      forgetClosedTab(sessionId, tabId);
     } catch (err) {
       // NOT_FOUND:行已被并发的 addTab rollback cleanup 或另一个 closeTab 删掉,
       // cache 的乐观删除与 DB 已一致,不需要重新插回——回滚反而造成 cache/DB 分叉。
       if (isTabRowMissingError(err)) {
-        forgetClosedTab(sessionId, tabId, closingKind);
+        forgetClosedTab(sessionId, tabId);
         return;
       }
       log.error('closeTab IPC failed; rolling back cache', { sessionId, tabId, err });
@@ -815,7 +800,6 @@ export async function closeTab(
       throw err;
     }
   });
-  return mutation;
 }
 
 /** 关闭某个 session bucket 的全部 tab,逐个走 closeTab 以触发 plugin cleanup。 */

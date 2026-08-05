@@ -11,9 +11,9 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeMarkdownImageSrc } from '@/lib/localPathResolver';
-import remarkPreserveRawLocalDestinations, {
+import remarkPreserveLocalImagePaths, {
   RAW_LOCAL_IMAGE_SRC_PROP,
-} from '../components/chat/remarkPreserveRawLocalDestinations';
+} from '../components/chat/remarkPreserveLocalImagePaths';
 
 function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | undefined {
   let normalized: string | undefined;
@@ -30,7 +30,7 @@ function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | un
           return null;
         },
       },
-      remarkPlugins: [remarkPreserveRawLocalDestinations],
+      remarkPlugins: [remarkPreserveLocalImagePaths],
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),

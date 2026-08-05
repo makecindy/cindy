@@ -52,14 +52,7 @@ import type {
 import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import {
-  projectKeyComparisonKey,
-  type ProjectNode as ProjectNodeData,
-} from '../lib/projectGrouping';
-import {
-  buildProjectKeyComparisonSet,
-  isProjectHidden,
-} from '../lib/sidebarProjectVisibility';
+import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
@@ -76,31 +69,6 @@ type Option<T extends string> = {
   value: T;
   labelKey: string;
 };
-
-export function reconcileProjectSelectionWithVisibleProjects(
-  selection: readonly string[],
-  visibleProjects: readonly Pick<ProjectNodeData, 'projectKey'>[],
-  localPlatform: string,
-): string[] {
-  const currentProjectKeyByComparison = new Map<string, string>();
-  for (const project of visibleProjects) {
-    const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
-    if (comparisonKey != null) currentProjectKeyByComparison.set(comparisonKey, project.projectKey);
-  }
-
-  const next: string[] = [];
-  const seen = new Set<string>();
-  for (const selectedProjectKey of selection) {
-    const comparisonKey = projectKeyComparisonKey(selectedProjectKey, localPlatform);
-    const currentProjectKey = comparisonKey == null
-      ? null
-      : currentProjectKeyByComparison.get(comparisonKey) ?? null;
-    if (currentProjectKey == null || seen.has(currentProjectKey)) continue;
-    seen.add(currentProjectKey);
-    next.push(currentProjectKey);
-  }
-  return next;
-}
 
 /**
  * 排序三选项。与其它筛选选项同款:纯文字 + 选中勾,不配图标——它们只出现在筛选菜单的
@@ -159,8 +127,6 @@ export interface UseConversationSearchParams {
   enabled: boolean;
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
-  /** Bounds explicit project-scoped searches; global search remains unbounded. */
-  allowedSessionIds?: readonly string[];
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -183,13 +149,11 @@ export function useConversationSearch({
   enabled,
   navigate,
   allKnownProjects,
-  allowedSessionIds,
   projectFilterRequest,
   onProgrammaticOpen,
   onResultChosen,
 }: UseConversationSearchParams) {
   const { t } = useTranslation();
-  const localPlatform = window.electronAPI.platform;
   // 「尚未起名」会话的显示文案。main 拿它算标题匹配与命中下标、结果行拿它渲染
   // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
@@ -216,39 +180,23 @@ export function useConversationSearch({
   const requestId = projectFilterRequest?.requestId ?? 0;
 
   const trimmed = query.trim();
-  const allowedSessionIdSet = useMemo(
-    () => (allowedSessionIds == null ? null : new Set(allowedSessionIds)),
-    [allowedSessionIds],
-  );
   const selectedProjectSessionIds = useMemo(() => {
     if (projectSelection === 'all') return null;
-    const selected = buildProjectKeyComparisonSet(projectSelection, localPlatform);
-    let indexedSessionIds = allKnownProjects
-      .filter((project) => {
-        const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
-        return comparisonKey != null && selected.has(comparisonKey);
-      })
+    const selected = new Set(projectSelection);
+    const indexedSessionIds = allKnownProjects
+      .filter((project) => selected.has(project.projectKey))
       .flatMap((project) => project.sessions.map((session) => session.id));
-    const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey, localPlatform);
     if (
       indexedSessionIds.length === 0 &&
-      lockedProjectComparisonKey &&
+      lockedProjectKey &&
       selected.size === 1 &&
-      selected.has(lockedProjectComparisonKey) &&
+      selected.has(lockedProjectKey) &&
       lockedProjectSessionIds.length > 0
     ) {
-      indexedSessionIds = lockedProjectSessionIds;
+      return lockedProjectSessionIds;
     }
-    if (allowedSessionIdSet == null) return indexedSessionIds;
-    return indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
-  }, [
-    allKnownProjects,
-    allowedSessionIdSet,
-    lockedProjectKey,
-    lockedProjectSessionIds,
-    localPlatform,
-    projectSelection,
-  ]);
+    return indexedSessionIds;
+  }, [allKnownProjects, lockedProjectKey, lockedProjectSessionIds, projectSelection]);
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (statusFilter !== 'all') count += 1;
@@ -495,8 +443,6 @@ export function SearchResultsBody({
 export interface ConversationSearchBoxProps {
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
-  allowedSessionIds: readonly string[];
-  hiddenProjectKeys: ReadonlySet<string>;
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -517,8 +463,6 @@ export interface ConversationSearchBoxProps {
 export function ConversationSearchBox({
   navigate,
   allKnownProjects,
-  allowedSessionIds,
-  hiddenProjectKeys,
   projectFilterRequest,
   triggerClassName,
   onOpenChange,
@@ -546,48 +490,12 @@ export function ConversationSearchBox({
   const search = useConversationSearch({
     enabled: open,
     navigate,
-    allowedSessionIds,
     allKnownProjects,
     projectFilterRequest,
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
   searchResetRef.current = search.reset;
-  useEffect(() => {
-    const lockedProjectKey = search.lockedProjectKey;
-    if (lockedProjectKey) {
-      if (
-        isProjectHidden(
-          lockedProjectKey,
-          hiddenProjectKeys,
-          window.electronAPI.platform,
-        )
-      ) {
-        search.reset();
-        search.clearLock();
-      }
-      return;
-    }
-    if (search.projectSelection === 'all') return;
-    const next = reconcileProjectSelectionWithVisibleProjects(
-      search.projectSelection,
-      allKnownProjects,
-      window.electronAPI.platform,
-    );
-    if (
-      next.length === search.projectSelection.length &&
-      next.every((projectKey, index) => projectKey === search.projectSelection[index])
-    ) return;
-    search.setProjectSelection(next.length > 0 ? next : 'all');
-  }, [
-    allKnownProjects,
-    hiddenProjectKeys,
-    search.clearLock,
-    search.lockedProjectKey,
-    search.projectSelection,
-    search.reset,
-    search.setProjectSelection,
-  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -733,18 +641,12 @@ export function SearchFilterMenu({
   onOpenChange?: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const localPlatform = window.electronAPI.platform;
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
   const agentValue = optionLabel(AGENT_OPTIONS, agentKind, t);
   const lastActivityValue = optionLabel(LAST_ACTIVITY_OPTIONS, lastActivity, t);
   const sortValue = optionLabel(SORT_OPTIONS, sortBy, t);
-  const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey, localPlatform);
-  const lockedProject = lockedProjectComparisonKey
-    ? allKnownProjects.find(
-        (project) =>
-          projectKeyComparisonKey(project.projectKey, localPlatform) ===
-          lockedProjectComparisonKey,
-      ) ?? null
+  const lockedProject = lockedProjectKey
+    ? allKnownProjects.find((project) => project.projectKey === lockedProjectKey) ?? null
     : null;
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
@@ -755,8 +657,7 @@ export function SearchFilterMenu({
       : projects === 'all'
       ? t('ccAgent.search.filter.allProjects')
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
-  const selectedProjects =
-    projects === 'all' ? null : buildProjectKeyComparisonSet(projects, localPlatform);
+  const selectedProjects = projects === 'all' ? null : new Set(projects);
   const projectsLocked = lockedProjectKey !== null;
 
   return (
@@ -865,8 +766,7 @@ export function SearchFilterMenu({
           )}
           <div className="max-h-[280px] overflow-y-auto">
             {allKnownProjects.map((project) => {
-              const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
-              const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
+              const selected = selectedProjects?.has(project.projectKey) ?? false;
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
               return (
                 <DropdownMenuItem
@@ -874,9 +774,7 @@ export function SearchFilterMenu({
                   onSelect={(event) => {
                     event.preventDefault();
                     if (projectsLocked) return;
-                    onProjectsChange(
-                      nextProjectSelection(projects, project.projectKey, localPlatform),
-                    );
+                    onProjectsChange(nextProjectSelection(projects, project.projectKey));
                   }}
                   disabled={projectsLocked}
                   className={MENU_ITEM_CLASS}
@@ -984,18 +882,10 @@ function optionLabel<T extends string>(
   return t(options.find((option) => option.value === value)?.labelKey ?? '');
 }
 
-function nextProjectSelection(
-  prev: ProjectSelection,
-  projectKey: string,
-  localPlatform: string,
-): ProjectSelection {
+function nextProjectSelection(prev: ProjectSelection, projectKey: string): ProjectSelection {
   if (prev === 'all') return [projectKey];
-  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
-  if (comparisonKey == null) return prev;
-  if (prev.some((key) => projectKeyComparisonKey(key, localPlatform) === comparisonKey)) {
-    const next = prev.filter(
-      (key) => projectKeyComparisonKey(key, localPlatform) !== comparisonKey,
-    );
+  if (prev.includes(projectKey)) {
+    const next = prev.filter((key) => key !== projectKey);
     return next.length > 0 ? next : 'all';
   }
   return [...prev, projectKey];

@@ -10,7 +10,6 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };');
     expect(source).toContain('buildMessageActionBarPresentation');
     expect(sharedSource).toContain("input.canCopy ? 'copy' : null");
-    expect(sharedSource).toContain("input.canFork ? 'fork' : null");
     expect(sharedSource).toContain("input.hasMoreActions ? 'more' : null");
     expect(sharedSource).toContain("input.hasTime ? 'time' : null");
     expect(sharedSource).toContain("input.hasTurnCost ? 'cost' : null");
@@ -21,11 +20,7 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('hitSlop={MESSAGE_CONTROL_HIT_SLOP}');
     expect(source).toContain('buttonSize={actionBar.buttonSize}');
     expect(source).toContain('iconSize={actionBar.iconSize}');
-    expect(source).toContain("return id === 'copy' || id === 'fork';");
-    expect(source).toContain('disabled={disabled && !forkBusy}');
-    expect(source).toContain("busy={id === 'fork' && forkBusy}");
-    expect(source).toContain("if (id === 'fork' && busy)");
-    expect(source).toContain("disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}");
+    expect(source).toContain("return id === 'copy';");
     expect(source).toContain('testID="message.moreButton"');
     expect(source).toContain('{ height: buttonSize, width: buttonSize }');
     expect(source).toContain('height: 24');
@@ -50,23 +45,6 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain(
       '<MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />',
     );
-  });
-
-  it('never hangs the action bar on a system boundary card', () => {
-    // 系统卡(agent-switch / auto-resume / goal / slash 命令卡)不是发言:桌面
-    // MessageStream 对 systemCardType 提前 return SystemCard,卡片下方没有任何操作
-    // 行。手机版曾漏掉这条,跨 Agent 切换的分隔线药丸下多出一行「··· 刚刚」。
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-
-    expect(source).toContain('const showCompletedActionBar = mobileMessageShowsActionBar({');
-    expect(source).toContain('hasSystemCard: !!item.message.systemCardType,');
-    expect(source).toContain('isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,');
-    // 时间、花费与 More 都必须由该判据统一 gate,不得绕过它单独计算。
-    expect(source).toContain(
-      "const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';",
-    );
-    expect(source).toContain('const turnCost = showCompletedActionBar && ');
-    expect(source).not.toContain('const suppressAssistantActions');
   });
 
   it('only exposes the More menu on a completed turn boundary', () => {

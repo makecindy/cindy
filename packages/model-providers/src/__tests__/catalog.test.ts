@@ -27,33 +27,12 @@ import type { AgentKind, Catalog, CatalogModel } from '../types.js';
 const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xai 静态清单(唯一活在目录文件里的模型清单)。 */
-const EXPECTED_XAI_IDS = [
-  'xai/grok-4.5',
-  'xai/grok-4.3',
-  'xai/grok-build-0.1',
-  'xai/grok-4.20-multi-agent-0309',
-  'xai/grok-4.20-0309-reasoning',
-  'xai/grok-4.20-0309-non-reasoning',
-  'xai/grok-4.20',
-  'xai/grok-code-fast',
-];
+const EXPECTED_XAI_IDS = ['xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast'];
 
 function provider(id: string) {
   const p = BUNDLED_CATALOG.providers.find((x) => x.id === id);
   if (!p) throw new Error(`missing provider ${id}`);
   return p;
-}
-
-function registryEntryForRoute(providerId: string, modelId: string) {
-  const registry = BUNDLED_CATALOG.modelRegistry;
-  if (!registry) throw new Error('missing bundled modelRegistry');
-  const entry = registry.models.find((candidate) =>
-    candidate.routes.some(
-      (route) => route.providerId === providerId && route.modelId === modelId,
-    ),
-  );
-  if (!entry) throw new Error(`missing registry route ${providerId}/${modelId}`);
-  return entry;
 }
 
 /** 造一个最小 CatalogModel(注入 fixture 用)。 */
@@ -73,12 +52,10 @@ function runtimeCatalog(): Catalog {
   const clone = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
   for (const p of clone.providers) {
     if (p.id === 'anthropic') {
-      const anthropic = [
+      p.models['claude-code'] = [
         model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000, supportsFastMode: true }),
         model('claude-sonnet-4-6', { name: 'Sonnet 4.6', contextWindow: 1_000_000 }),
       ];
-      p.models['claude-code'] = anthropic;
-      p.models.codex = anthropic;
     }
     if (p.id === 'openai') {
       p.models.codex = [model('gpt-5.5', { name: 'GPT-5.5', supportsFastMode: true })];
@@ -102,7 +79,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
   it('has exactly the built-in providers in stable order', () => {
     // 顺序契约:决定选择器分段顺序与 deriveAvailableModels first-wins 优先级。
-    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
+    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd']);
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === 'builtin')).toBe(true);
   });
 
@@ -119,13 +96,6 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     const xai = provider('xai');
     expect((xai.models['claude-code'] ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
-  });
-
-  it('xai ships both Grok Imagine subscription image models', () => {
-    expect(provider('xai').imageModels).toEqual([
-      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
-      { id: 'xai/grok-imagine-image-quality', name: 'Grok Imagine Image (Quality)' },
-    ]);
   });
 
   it('provides routing + a models[agent] array for every agent the provider declares', () => {
@@ -217,6 +187,11 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
   });
 
   it('ships Codex support metadata for the current XD gateway model set', () => {
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      version?: unknown;
+      models?: Record<string, unknown>;
+    };
+    expect(metadata.version).toBe(1);
     const expected = {
       'qwen/qwen3.7-max': 'Qwen 3.7 Max',
       'moonshotai/kimi-k3': 'Kimi K3',
@@ -227,15 +202,13 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       'qwen/qwen3.8-max-preview': 'Qwen 3.8 Max Preview',
     };
     for (const [id, name] of Object.entries(expected)) {
-      const entry = registryEntryForRoute('xd', id);
-      const route = entry.routes.find(
-        (candidate) => candidate.providerId === 'xd' && candidate.modelId === id,
-      );
-      expect(entry, id).toMatchObject({ name });
-      expect(route?.agents, id).toEqual(['claude-code', 'codex']);
+      expect(metadata.models?.[id], id).toMatchObject({
+        agents: ['claude-code', 'codex'],
+        name,
+      });
     }
 
-    expect(registryEntryForRoute('xd', 'bytedance-seed/seed-2.1-pro')).toMatchObject({
+    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
       defaultEffort: 'minimal',
       supportsFastMode: false,
@@ -246,17 +219,17 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         },
       },
     });
-    expect(registryEntryForRoute('xd', 'moonshotai/kimi-k3')).toMatchObject({
+    expect(metadata.models?.['moonshotai/kimi-k3']).toMatchObject({
       efforts: ['low', 'high', 'max'],
       defaultEffort: 'max',
       supportsFastMode: false,
     });
-    expect(registryEntryForRoute('xd', 'qwen/qwen3.8-max-preview')).toMatchObject({
+    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
       efforts: ['low', 'high', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: false,
     });
-    expect(registryEntryForRoute('xd', 'z-ai/glm-5.2')).toMatchObject({
+    expect(metadata.models?.['z-ai/glm-5.2']).toMatchObject({
       efforts: ['minimal', 'high', 'max'],
       defaultEffort: 'max',
       supportsFastMode: false,
@@ -268,7 +241,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       },
     });
     for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
-      expect(registryEntryForRoute('xd', id), id).toMatchObject({
+      expect(metadata.models?.[id], id).toMatchObject({
         efforts: ['high', 'max'],
         defaultEffort: 'high',
         supportsFastMode: false,
@@ -279,20 +252,15 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       'moonshotai/kimi-k3',
       'qwen/qwen3.8-max-preview',
     ]) {
-      expect(registryEntryForRoute('xd', id), id).not.toHaveProperty('description');
+      expect(metadata.models?.[id], id).not.toHaveProperty('description');
     }
   });
 
   it('enables DeepSeek V4 Flash by default', () => {
-    expect(
-      registryEntryForRoute('xd', 'deepseek/deepseek-v4-flash').defaultEnabled,
-    ).toBeUndefined();
-  });
-
-  it('rejects legacy or ad-hoc top-level metadata blocks', () => {
-    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Record<string, unknown>;
-    bad.cindyModelMeta = { version: 1, models: {} };
-    expect(() => parseCatalog(bad)).toThrow(/catalog\.cindyModelMeta is not allowed/);
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      models?: Record<string, { defaultEnabled?: boolean }>;
+    };
+    expect(metadata.models?.['deepseek/deepseek-v4-flash']?.defaultEnabled).toBeUndefined();
   });
 
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {
@@ -394,12 +362,11 @@ describe('routing wireProtocol per-agent 契约', () => {
     expect(() => parseCatalog(bad)).toThrow(/openai-chat/);
   });
 
-  it('parseCatalog 允许 codex 使用 anthropic-messages(由本地 Responses→Anthropic bridge 接管)', () => {
+  it('parseCatalog 拒绝 codex 使用 anthropic-messages(codex host 只实现 Responses 与本地 Chat 桥)', () => {
     const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = bad.providers.find((p) => p.id === 'xai')!;
     xai.routing.codex = { ...xai.routing.codex!, wireProtocol: 'anthropic-messages' };
-    expect(parseCatalog(bad).providers.find((p) => p.id === 'xai')?.routing.codex?.wireProtocol)
-      .toBe('anthropic-messages');
+    expect(() => parseCatalog(bad)).toThrow(/anthropic-messages/);
   });
 });
 
@@ -478,41 +445,6 @@ describe('vendor grouping metadata (xai 静态清单)', () => {
         expect(typeof m.sortOrder, `${m.id} sortOrder`).toBe('number');
       }
     }
-  });
-
-  // 静态目录里的窗口是产品侧逐条写定的真实上限 —— 必须标记为已核实,否则运行期收敛不掉
-  // 上游报的虚高窗口(例:256K 的 xai/grok-code-fast 被报成基础模型的更大值)。
-  it('静态清单的 contextWindow 标记为已核实(可用于收敛上报值)', () => {
-    const xai = provider('xai');
-    for (const agent of xai.agents) {
-      for (const m of xai.models[agent] ?? []) {
-        expect(m.contextWindow, `${m.id} contextWindow`).toBeGreaterThan(0);
-        expect(m.contextWindowVerified, `${m.id} contextWindowVerified`).toBe(true);
-      }
-    }
-  });
-
-  // 远端下发目录与 bundled 同格式,同样要在解析时标记;条目自己表过态时尊重原值。
-  it('parseCatalog 给远端下发的静态条目补标记,但不覆盖显式表态', () => {
-    const parsed = parseCatalog({
-      version: '2',
-      providers: [
-        {
-          ...provider('xai'),
-          models: {
-            codex: [
-              { id: 'remote/known', name: 'Known', contextWindow: 262_144, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 1 },
-              { id: 'remote/opted-out', name: 'Opted Out', contextWindow: 272_000, contextWindowVerified: false, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 2 },
-            ],
-          },
-          agents: ['codex'],
-          titleModel: 'remote/known',
-        },
-      ],
-    });
-    const models = parsed.providers[0].models.codex ?? [];
-    expect(models.find((m) => m.id === 'remote/known')?.contextWindowVerified).toBe(true);
-    expect(models.find((m) => m.id === 'remote/opted-out')?.contextWindowVerified).toBe(false);
   });
 });
 
@@ -608,82 +540,5 @@ describe('buildRegistry 的清单发现失败投影', () => {
     expect(views.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
     const bare = buildRegistry(BUNDLED_CATALOG, { anthropic: true });
     expect(bare.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
-  });
-});
-
-describe('媒体清单跨供应商契约(2026-07 图像多来源)', () => {
-  // deriveCindyMediaConfig(desktop 侧)按目录序 first-wins 选默认与归属:
-  // BUILTIN 顺序里 openai/xai 排在 xd 前面,任何非 xd 供应商声明 imageDefaults
-  // 都会把 xd 的出厂默认顶掉;同 id 撞车会把 xd 条目的归属抢走(派发错通道)。
-  // 这两条是数据契约,在目录层锁死,不等运行时踩雷。
-  it('声明 imageDefaults / videoDefaults 的内置供应商只能是 xd(防 first-wins 顶默认)', () => {
-    for (const p of BUNDLED_CATALOG.providers) {
-      if (p.id === 'xd') continue;
-      expect(p.imageDefaults, `${p.id} 不得声明 imageDefaults`).toBeUndefined();
-      expect(p.videoDefaults, `${p.id} 不得声明 videoDefaults`).toBeUndefined();
-    }
-  });
-
-  it('embeddingModels / embeddingDefaults 与 image/video 同一套入口校验', () => {
-    // 不校验的话坏数据能通过 parseCatalog,随后在 deriveCindyMediaConfig 的
-    // for...of 里抛错、被上层降级成空清单 —— 表现是所有插件向量请求变
-    // NO_CANDIDATE,而真正的原因在目录里,排查时毫无线索(PR #1707 review)。
-    const withXd = (mutate: (xd: Record<string, unknown>) => void): Catalog => {
-      const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-      mutate(bad.providers.find((p) => p.id === 'xd')! as unknown as Record<string, unknown>);
-      return bad;
-    };
-
-    // 写成对象而不是数组(远端手写目录最常见的形态错误)。
-    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = { a: 1 }; })))
-      .toThrow(/embeddingModels/);
-    // 条目缺 id / name。
-    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = [{ name: 'x' }]; })))
-      .toThrow(/embeddingModels/);
-    expect(() => parseCatalog(withXd((xd) => { xd.embeddingModels = [{ id: 'a', name: '' }]; })))
-      .toThrow(/embeddingModels/);
-    // id 重复(first-wins 去重会静默吃掉后一条)。
-    expect(() =>
-      parseCatalog(
-        withXd((xd) => {
-          xd.embeddingModels = [{ id: 'a', name: 'A' }, { id: 'a', name: 'A2' }];
-          xd.embeddingDefaults = { standard: 'a' };
-        }),
-      ),
-    ).toThrow(/duplicate/);
-    // 默认指向清单外型号(型号下架、默认没跟着改)。
-    expect(() =>
-      parseCatalog(
-        withXd((xd) => {
-          xd.embeddingModels = [{ id: 'a', name: 'A' }];
-          xd.embeddingDefaults = { standard: 'not-in-list' };
-        }),
-      ),
-    ).toThrow(/embeddingDefaults/);
-  });
-
-  it('只声明向量清单的供应商可以没有 agents(媒体-only 同理)', () => {
-    const cat = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    const xd = cat.providers.find((p) => p.id === 'xd')!;
-    xd.agents = [];
-    xd.models = {};
-    xd.routing = {};
-    delete xd.imageModels;
-    delete xd.imageDefaults;
-    delete xd.videoModels;
-    delete xd.videoDefaults;
-    expect(() => parseCatalog(cat)).not.toThrow();
-  });
-
-  it('非 xd 内置供应商的媒体模型 id 必须带 "<providerId>/" 前缀(防 first-wins 归属漂移)', () => {
-    for (const p of BUNDLED_CATALOG.providers) {
-      if (p.id === 'xd') continue;
-      for (const m of [...(p.imageModels ?? []), ...(p.videoModels ?? [])]) {
-        expect(
-          m.id.startsWith(`${p.id}/`),
-          `${p.id} 的媒体模型 ${m.id} 必须带 "${p.id}/" 前缀`,
-        ).toBe(true);
-      }
-    }
   });
 });

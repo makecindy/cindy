@@ -1,6 +1,6 @@
 import type { TurnUsageDetails } from './turnUsageDetails';
 
-/** Historical price shape used only to repair already-persisted Codex estimates. */
+/** Price shape used only for Codex OAuth subscription value estimates. */
 export interface CodexSubscriptionValuePrice {
   inputUsdPerMtok: number;
   outputUsdPerMtok: number;
@@ -9,11 +9,10 @@ export interface CodexSubscriptionValuePrice {
 }
 
 /**
- * Historical rates that earlier app versions could have used when persisting
- * the stale cache-as-input estimate. Live estimates no longer read this table:
- * they use the versioned model registry and local visual overrides.
+ * Codex OAuth subscription sessions do not have a real API bill. This table is
+ * the reference "session value" display price, not `sessions.total_cost_usd`.
  */
-const PERSISTED_CODEX_ESTIMATE_PRICING: Record<string, CodexSubscriptionValuePrice> = {
+export const CODEX_SUBSCRIPTION_VALUE_PRICING: Record<string, CodexSubscriptionValuePrice> = {
   // GPT-5.6 (2026-07-09 GA): cache read = 10% input; 自 5.6 起 cache write 按官方
   // 1.25x uncached input 计费 (此前 GPT 系列自动缓存写入不加价, 故老条目不挂该档)。
   'gpt-5.6-sol': { inputUsdPerMtok: 5, cacheReadUsdPerMtok: 0.5, cacheCreateUsdPerMtok: 6.25, outputUsdPerMtok: 30 },
@@ -48,7 +47,7 @@ export function estimateCodexSubscriptionValueFromTurnUsage(
   const model = detailsModel !== 'unknown'
     ? detailsModel
     : normalizeCodexSubscriptionValueModelId(modelOverride);
-  const price = PERSISTED_CODEX_ESTIMATE_PRICING[model];
+  const price = CODEX_SUBSCRIPTION_VALUE_PRICING[model];
   if (!price) return null;
   const inputTokens = Math.max(0, details.inputTokens || 0);
   const outputTokens = Math.max(0, details.outputTokens || 0);
@@ -82,7 +81,7 @@ export function resolveStaleCodexSubscriptionValueEstimate(
   const model = detailsModel !== 'unknown'
     ? detailsModel
     : normalizeCodexSubscriptionValueModelId(modelOverride);
-  const price = PERSISTED_CODEX_ESTIMATE_PRICING[model];
+  const price = CODEX_SUBSCRIPTION_VALUE_PRICING[model];
   if (!price) return null;
 
   const inputTokens = Math.max(0, details.inputTokens || 0);
