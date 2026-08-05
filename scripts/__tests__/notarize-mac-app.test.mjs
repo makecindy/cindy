@@ -149,7 +149,8 @@ test("macOS WebAuthn provisioning profile is validated before it is embedded", (
             };
           }
           assert.equal(command, "/usr/bin/plutil");
-          assert.deepEqual(args.slice(0, 4), ["-extract", args[1], args[2], "-o"]);
+          assert.equal(args[0], "-extract");
+          assert.equal(args[3], "-o");
           assert.equal(args[4], "-");
           assert.equal(args[5], "--");
           assert.match(
