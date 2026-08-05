@@ -442,7 +442,7 @@ describe('cindy_contacts tools', () => {
     expect(writeCalls.map((batch) => batch.length)).toEqual([TEST_SYSTEM_WRITE_BATCH_SIZE, 1]);
   });
 
-  it('系统回写: 非法 systemWriteBatchSize(0/超限 201)回退默认 200, 小批量单批不分批', async () => {
+  it('系统回写: 非法 systemWriteBatchSize(0/负数/非整数/超限)回退默认 200, 小批量单批不分批', async () => {
     // 回归: 注入值只接受 1..200 正整数, 0/负数/非整数/超限一律回退默认 200
     // (防 for 步进失序或死循环, 防单批 slice 超 host 硬限制被拒)
     const store = manager.getStore();
@@ -455,7 +455,7 @@ describe('cindy_contacts tools', () => {
     }
     store.addToGroup(g.id, ids);
 
-    for (const bad of [0, 201] as const) {
+    for (const bad of [0, -1, 1.5, Number.NaN, 201] as const) {
       writeCalls.length = 0; // 每次迭代独立统计
       const badDeps: ContactsMcpDeps = {
         getManager: () => manager,
