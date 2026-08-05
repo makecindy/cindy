@@ -217,7 +217,7 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain(
       "sourceBranch || branches.current || currentBranch || 'HEAD'",
     );
-    expect(worktreeChipsSource).toContain('branchInteractive\n          ? t(\'newChat.branchChip.sourceTooltip\')');
+    expect(worktreeChipsSource).toContain('checked\n          ? t(\'newChat.branchChip.sourceTooltip\')');
     expect(worktreeChipsSource).toContain('group-hover:opacity-0');
     expect(worktreeChipsSource).not.toContain('function BranchChip');
     expect(worktreeChipsSource).not.toContain('function WorktreeChip(');

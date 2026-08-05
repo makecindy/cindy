@@ -439,7 +439,7 @@ function BranchWorktreeChip({
   const branchTipped = (
     <Tip
       text={
-        branchInteractive
+        checked
           ? t('newChat.branchChip.sourceTooltip')
           : t('newChat.branchChip.currentTooltip')
       }
