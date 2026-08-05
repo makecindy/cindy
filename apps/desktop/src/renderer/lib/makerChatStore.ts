@@ -7958,16 +7958,25 @@ function beginInputProjectionOperation(
   };
 }
 
+function isInputProjectionOperationAuthorityCurrent(
+  sessionId: string,
+  operation: InputProjectionOperation,
+): boolean {
+  return (
+    isDataOwnerGenerationCurrent(operation.dataOwner) &&
+    (operation.pinnedDeviceId
+      ? getStickySessionDeviceId(sessionId) === operation.pinnedDeviceId
+      : isCurrentInputProjectionOrigin(sessionId, operation.origin))
+  );
+}
+
 function applyInputProjectionOperationResponse(
   sessionId: string,
   operation: InputProjectionOperation,
   projection: AgentInputProjection,
 ): boolean {
   if (
-    !isDataOwnerGenerationCurrent(operation.dataOwner) ||
-    (operation.pinnedDeviceId
-      ? getStickySessionDeviceId(sessionId) !== operation.pinnedDeviceId
-      : !isCurrentInputProjectionOrigin(sessionId, operation.origin)) ||
+    !isInputProjectionOperationAuthorityCurrent(sessionId, operation) ||
     (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) !== operation.epoch
   ) {
     return false;
@@ -11400,13 +11409,19 @@ async function steerMessageCore(
         const latest = await operation.api.input.getProjection(sessionId);
         // authority 代际变化时旧 projection 不能覆盖当前镜像，但其中与本次
         // clientId 精确匹配的队列行仍证明 main 已接管输入，不能因此诱导重复发送。
+        // 但 owner / origin 变化是内容归属边界：旧 owner 或旧设备的队列行不能确认
+        // 当前 composer，只放宽 Stop 等终态推进的 authority epoch。
         const latestHasQueuedItem = latest.pendingQueue.some((q) => q.clientId === queued.clientId);
+        const operationAuthorityCurrent = isInputProjectionOperationAuthorityCurrent(
+          sessionId,
+          operation,
+        );
         const projectionApplied = applyInputProjectionOperationResponse(
           sessionId,
           operation,
           latest,
         );
-        if (latestHasQueuedItem) {
+        if (operationAuthorityCurrent && latestHasQueuedItem) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
           // (review P1)。是否真该改名仍由 main 权威判定。
