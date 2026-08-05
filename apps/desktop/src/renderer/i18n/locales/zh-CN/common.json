@@ -2412,6 +2412,7 @@
         "toggleHint": "这个全局开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "status": {
           "checking": "正在检查 ADB 状态…",
+          "disabled": "Android 自动化未启用。启用后将检测 ADB 与设备。",
           "preparing": "正在准备 ADB…",
           "ready": "ADB 已就绪。可用设备：{{count}}。默认设备：{{device}}",
           "adbDetail": "{{version}}，路径 {{path}}",

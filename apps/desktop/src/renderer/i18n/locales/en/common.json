@@ -2413,6 +2413,7 @@
         "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "status": {
           "checking": "Checking ADB status…",
+          "disabled": "Android automation is off. Turn it on to detect ADB and devices.",
           "preparing": "Preparing ADB…",
           "ready": "ADB ready. Ready devices: {{count}}. Default: {{device}}",
           "adbDetail": "{{version}} at {{path}}",
