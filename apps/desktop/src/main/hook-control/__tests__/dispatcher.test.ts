@@ -1312,6 +1312,58 @@ describe('dispatcher 核心语义', () => {
     expect(terminalLedger.records[0]?.delivery).toBe('sent');
   });
 
+  it('durable replay 的 markSent 失败时, 回退写入 sent 并保留 completedAt', async () => {
+    const fr = fakeRunner();
+    const stored = memoryTerminalLedger();
+    const terminalLedger: HookRequestLedger = {
+      get: stored.get,
+      listPending: stored.listPending,
+      set: stored.set,
+      markSent: () => false,
+    };
+    const completedAt = 123_456;
+    stored.set({
+      connectionId: 'conn-1',
+      requestId: 'pending-replay-fallback',
+      ack: {
+        requestId: 'pending-replay-fallback',
+        result: 'accepted',
+        reason: null,
+        sessionId: 'session-pending-replay-fallback',
+        queuePosition: null,
+      },
+      turnEnd: {
+        requestId: 'pending-replay-fallback',
+        externalKey: 'team-slack:C1:pending-fallback',
+        sessionId: 'session-pending-replay-fallback',
+        status: 'ok',
+        finalText: '回退结果',
+        errorMessage: null,
+        usage: { durationMs: 1 },
+      },
+      delivery: 'pending',
+      completedAt,
+    });
+
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'pending-replay-fallback' }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls).toHaveLength(0);
+    expect(c.sent.map((message) => message.type)).toEqual(['task.ack', 'turn.end']);
+    expect(stored.records).toHaveLength(1);
+    expect(stored.records[0]).toMatchObject({
+      requestId: 'pending-replay-fallback',
+      delivery: 'sent',
+      completedAt,
+    });
+  });
+
   it('重建 dispatcher 时请求尚未终结 -> 没有 durable terminal, 仍允许恢复执行', async () => {
     const terminalLedger = memoryTerminalLedger();
     const firstRunner = fakeRunner();

@@ -785,10 +785,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return `${connectionId} ${requestId}`;
   }
 
-  function persistTerminal(record: Omit<HookTerminalRecord, 'completedAt'>): boolean {
+  function persistTerminalRecord(record: HookTerminalRecord): boolean {
     if (!terminalLedger) return false;
     try {
-      if (!terminalLedger.set({ ...record, completedAt: Date.now() })) {
+      if (!terminalLedger.set(record)) {
         log.warn('hook terminal request was not persisted; using in-memory dedupe only');
         return false;
       }
@@ -799,6 +799,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       log.warn('hook terminal request persistence threw; using in-memory dedupe only');
       return false;
     }
+  }
+
+  function persistTerminal(record: Omit<HookTerminalRecord, 'completedAt'>): boolean {
+    return persistTerminalRecord({ ...record, completedAt: Date.now() });
   }
 
   function markTerminalSent(connectionId: string, requestId: string): boolean {
@@ -1669,8 +1673,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         terminalReplay.turnEnd &&
         send(makeTurnEnd(terminalReplay.turnEnd))
       ) {
-        if (terminalReplay.delivery === 'pending') {
-          markTerminalSent(connectionId, payload.requestId);
+        if (
+          terminalReplay.delivery === 'pending' &&
+          !markTerminalSent(connectionId, payload.requestId)
+        ) {
+          persistTerminalRecord({ ...terminalReplay, delivery: 'sent' });
         }
       }
       return;
@@ -2069,7 +2076,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           buf.shift();
           flushedRequestIds.add(pending.terminal.requestId);
           if (!markTerminalSent(connectionId, pending.terminal.requestId)) {
-            persistTerminal({ ...pending.terminal, delivery: 'sent' });
+            persistTerminalRecord({
+              ...pending.terminal,
+              delivery: 'sent',
+              completedAt: Date.now(),
+            });
           }
         }
         pendingTurnEnds.delete(connectionId);
@@ -2087,7 +2098,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (flushedRequestIds.has(pending.requestId)) continue;
         if (!pending.turnEnd || !send(makeTurnEnd(pending.turnEnd))) return;
         if (!markTerminalSent(connectionId, pending.requestId)) {
-          persistTerminal({ ...pending, delivery: 'sent' });
+          persistTerminalRecord({ ...pending, delivery: 'sent' });
         }
       }
     },
