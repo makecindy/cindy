@@ -20,6 +20,11 @@ export interface OverrideSettingsFile<T> {
   writePatch(patch: Partial<T>, options?: { preserveDefaults?: boolean }): void;
   /** 跨进程锁内强制现读盘上 overrides，再合并 patch 并原子替换文件。 */
   writePatchAtomic(patch: Partial<T>, options?: { preserveDefaults?: boolean }): Promise<void>;
+  /** 在同一把跨进程锁内基于最新磁盘快照计算并写入 patch。 */
+  updateAtomic(
+    updater: (current: OverrideSettingsState<T>) => Partial<T>,
+    options?: { preserveDefaults?: boolean },
+  ): Promise<T>;
   reset(): T;
   /** 跨进程锁内删除 override 文件。 */
   resetAtomic(): Promise<T>;
@@ -187,6 +192,33 @@ export function createOverrideSettingsFile<T>(options: {
     );
   }
 
+  async function updateAtomic(
+    updater: (current: OverrideSettingsState<T>) => Partial<T>,
+    writeOptions?: { preserveDefaults?: boolean },
+  ): Promise<T> {
+    const file = options.filePath();
+    const scopeKey = options.scopeKey?.();
+    fs.mkdirSync(pathDirname(file), { recursive: true });
+    return withCrossProcessLock(
+      `${file}.lock`,
+      { label: `${options.label}-settings`, waitMs: 12_000 },
+      async (status) => {
+        if (!status.held) {
+          throw new Error(`${options.label} settings are busy in another process`);
+        }
+        if (options.filePath() !== file || options.scopeKey?.() !== scopeKey) {
+          throw new Error(
+            `${options.label} settings scope changed while waiting for the write lock`,
+          );
+        }
+        invalidate();
+        const current = readState();
+        writePatch(updater(current), writeOptions);
+        return readState().value;
+      },
+    );
+  }
+
   function writeOverrides(overrides: Record<string, unknown>): void {
     if (Object.keys(overrides).length === 0) {
       reset();
@@ -261,6 +293,7 @@ export function createOverrideSettingsFile<T>(options: {
     readState,
     writePatch,
     writePatchAtomic,
+    updateAtomic,
     reset,
     resetAtomic,
     invalidateIfChanged,

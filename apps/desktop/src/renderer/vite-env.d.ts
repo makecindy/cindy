@@ -1063,6 +1063,17 @@ interface ElectronAPI {
   pageZoomIn: () => Promise<{ ok: true; zoomLevel: number }>;
   pageZoomOut: () => Promise<{ ok: true; zoomLevel: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomLevel: number }>;
+  appearanceSettings: {
+    getSync: () => import('../shared/appearanceSettings').AppearanceSettings | null;
+    get: () => Promise<unknown>;
+    setPatch: (
+      patch: Partial<import('../shared/appearanceSettings').AppearanceSettings>,
+    ) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    reset: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    onChanged: (
+      callback: (settings: import('../shared/appearanceSettings').AppearanceSettings) => void,
+    ) => () => void;
+  };
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
@@ -1449,11 +1460,7 @@ interface ElectronAPI {
       id?: string,
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
     /** dev-only：经正式插件派发/权限链调用一个已声明工具。 */
-    devCall: (
-      id: string,
-      tool: string,
-      args: Record<string, unknown>,
-    ) => Promise<unknown>;
+    devCall: (id: string, tool: string, args: Record<string, unknown>) => Promise<unknown>;
   };
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
@@ -1634,9 +1641,7 @@ interface ElectronAPI {
     onGlobalOverlayCommand: (
       callback: (command: { type: 'start' | 'submit' | 'cancel' }) => void,
     ) => () => void;
-    adviseDictionaryLearning: (
-      payload: VoiceInputDictionaryAdviceInput,
-    ) => Promise<
+    adviseDictionaryLearning: (payload: VoiceInputDictionaryAdviceInput) => Promise<
       | {
           ok: true;
           actions: VoiceInputDictionaryLearningAction[];
@@ -3802,11 +3807,14 @@ interface ElectronAPI {
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
   onUsageSessionSpendChanged: (
-    cb: (data: {
-      sessionId: string;
-      totalMoney: import('../shared/regionalMoney').RegionalMoney;
-      totalCostUsd?: number;
-    }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+    cb: (
+      data: {
+        sessionId: string;
+        totalMoney: import('../shared/regionalMoney').RegionalMoney;
+        totalCostUsd?: number;
+      },
+      ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => void,
   ) => () => void;
   onUsageSessionTokensChanged: (
     cb: (
@@ -3829,11 +3837,14 @@ interface ElectronAPI {
   // per-message 维度: turn 结束检测到模型被上游降级 / 替换时 main 推标记
   // (挂在该轮最后一条 assistant 上,AssistantMessage 渲染降级提示行)。
   onUsageMessageModelMismatch: (
-    cb: (data: {
-      sessionId: string;
-      clientId: string;
-      modelMismatch: import('../shared/modelMismatch').ModelMismatchInfo;
-    }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+    cb: (
+      data: {
+        sessionId: string;
+        clientId: string;
+        modelMismatch: import('../shared/modelMismatch').ModelMismatchInfo;
+      },
+      ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => void,
   ) => () => void;
 
   // ── 首登轻量数据迁移(mToc) — 老 userData → Cindy 一次性复制迁移弹窗 ──
@@ -4072,7 +4083,9 @@ interface ElectronAPI {
       getByLeadSession: (leadSessionId: string) => Promise<OrcaTeamRecord | null>;
       getByWorkerSession: (workerSessionId: string) => Promise<OrcaTeamRecord | null>;
       listWorkersByLead: (leadSessionId: string) => Promise<OrcaWorkerRecord[]>;
-      listWorkersByLeads?: (leadSessionIds: string[]) => Promise<Record<string, OrcaWorkerRecord[]>>;
+      listWorkersByLeads?: (
+        leadSessionIds: string[],
+      ) => Promise<Record<string, OrcaWorkerRecord[]>>;
       updateWorkerStatus: (
         workerId: string,
         status: 'idle' | 'running' | 'done' | 'error',
@@ -4139,10 +4152,13 @@ interface ElectronAPI {
         clientId: string,
       ) => Promise<import('@/lib/ccAgent.types').Message>;
       onCreated: (
-        callback: (payload: {
-          sessionId: string;
-          message: import('@/lib/ccAgent.types').Message;
-        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+        callback: (
+          payload: {
+            sessionId: string;
+            message: import('@/lib/ccAgent.types').Message;
+          },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
       ) => () => void;
       onDeleted: (
         callback: (
@@ -4165,10 +4181,13 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
       onPatched: (
-        callback: (payload: {
-          sessionId: string;
-          patch: Partial<import('@/lib/ccAgent.types').Session>;
-        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
+        callback: (
+          payload: {
+            sessionId: string;
+            patch: Partial<import('@/lib/ccAgent.types').Session>;
+          },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
       ) => () => void;
     };
     /** V0.4 (C10): one-shot toast trigger when ensureReady ran two-level fallback. */
@@ -4874,9 +4893,7 @@ interface ElectronAPI {
     }) => Promise<void>;
 
     /** 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。 */
-    getPendingInteractions: (
-      sessionId: string,
-    ) => Promise<
+    getPendingInteractions: (sessionId: string) => Promise<
       Array<{
         request: { kind: string; requestId: string; [k: string]: unknown };
         persistId?: string;
@@ -5060,9 +5077,7 @@ interface ElectronAPI {
       defaultEnabled?: boolean;
     }>;
     /** Takes effect immediately for proxy recovery. */
-    silentEncryptedRetrySet: (
-      enabled: boolean,
-    ) => Promise<{
+    silentEncryptedRetrySet: (enabled: boolean) => Promise<{
       enabled: boolean;
       isCustomized: boolean;
       defaultEnabled: boolean;
@@ -5112,9 +5127,7 @@ interface ElectronAPI {
       defaultAutoSnapshotEnabled: boolean;
     }>;
     /** 立即生效; Codex rewind 入口跟随此开关显示 */
-    gitSafetySet: (
-      enabled: boolean,
-    ) => Promise<{
+    gitSafetySet: (enabled: boolean) => Promise<{
       autoSnapshotEnabled: boolean;
       isCustomized: boolean;
       defaultAutoSnapshotEnabled: boolean;
@@ -5435,9 +5448,7 @@ interface ElectronAPI {
         workingDir: string,
         agentKind: 'claude-code' | 'codex' | 'pi',
       ) => Promise<{ items: CrossAgentMigrationItem[] }>;
-      convert: (
-        items: CrossAgentMigrationItem[],
-      ) => Promise<{
+      convert: (items: CrossAgentMigrationItem[]) => Promise<{
         total: number;
         successCount: number;
         skippedCount: number;

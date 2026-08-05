@@ -21,26 +21,7 @@ function resetRootStyles() {
   document.documentElement.style.removeProperty('--app-code-font-size');
   document.documentElement.style.removeProperty('--app-ui-font-size');
   for (const tokenSize of [
-    9,
-    10,
-    11,
-    12,
-    13,
-    14,
-    15,
-    16,
-    17,
-    18,
-    19,
-    20,
-    21,
-    22,
-    23,
-    24,
-    25,
-    26,
-    27,
-    28,
+    9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
   ]) {
     document.documentElement.style.removeProperty(`--text-${tokenSize}`);
   }
@@ -61,17 +42,17 @@ describe('font settings', () => {
     });
   });
 
-  it('falls back when stored font sizes are invalid', () => {
+  it('ignores legacy renderer storage after the clean cut-over', () => {
     localStorage.setItem('font.uiFamily', '  "Segoe UI"  ');
     localStorage.setItem('font.codeFamily', '  Consolas  ');
     localStorage.setItem('font.uiSize', 'not-a-number');
     localStorage.setItem('font.codeSize', '99');
 
     expect(getInitialFontSettings()).toEqual({
-      uiFamily: '"Segoe UI"',
-      codeFamily: 'Consolas',
+      uiFamily: '',
+      codeFamily: '',
       uiSize: DEFAULT_UI_FONT_SIZE,
-      codeSize: 24,
+      codeSize: DEFAULT_CODE_FONT_SIZE,
     });
   });
 
@@ -116,26 +97,7 @@ describe('font settings', () => {
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe(`${DEFAULT_UI_FONT_SIZE}px`);
     for (const tokenSize of [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27,
-      28,
+      9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
     ]) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(`${tokenSize}px`);
     }
@@ -154,26 +116,7 @@ describe('font settings', () => {
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe('18px');
     for (const tokenSize of [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27,
-      28,
+      9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
     ]) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(
         `${Math.round((tokenSize * 18) / DEFAULT_UI_FONT_SIZE)}px`,
@@ -207,7 +150,7 @@ describe('font settings', () => {
       result.current.setUiSize(18);
     });
     expect(result.current.uiSize).toBe(18);
-    expect(localStorage.getItem('font.uiSize')).toBe('18');
+    expect(localStorage.getItem('font.uiSize')).toBeNull();
 
     act(() => {
       result.current.resetUiSize();

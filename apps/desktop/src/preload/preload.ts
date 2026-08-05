@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import type { AppearanceSettings } from '../shared/appearanceSettings';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
@@ -601,6 +602,7 @@ const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:respo
 const fanOutMakerDraftPrefApply = createIpcFanOut('maker:draft-pref:apply');
 const fanOutMakerWorktreePrefApply = createIpcFanOut('maker:worktree-pref:apply');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
+const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
 
 // 跨 Agent 迁移项的 wire 形态（同 main/cross-agent-convert/types.ts 的 MigrationItem，
 // 但 preload 是单独编译单元，不便 import；renderer 真正消费在 vite-env.d.ts 重新声明）。
@@ -769,6 +771,10 @@ const clientEndpointsInfo = ipcRenderer.sendSync('client-endpoints:get-sync') as
   websiteUrl: string;
 };
 
+const appearanceSettingsInfo = ipcRenderer.sendSync(
+  'appearance-settings:get-sync',
+) as AppearanceSettings | null;
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
@@ -802,6 +808,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomOut: (): Promise<{ ok: true; zoomLevel: number }> => ipcRenderer.invoke('page-zoom:out'),
   pageZoomReset: (): Promise<{ ok: true; zoomLevel: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
+  appearanceSettings: {
+    getSync: (): AppearanceSettings | null => appearanceSettingsInfo,
+    get: (): Promise<unknown> => ipcRenderer.invoke('appearance-settings:get'),
+    setPatch: (patch: Partial<AppearanceSettings>): Promise<AppearanceSettings> =>
+      ipcRenderer.invoke('appearance-settings:set-patch', patch),
+    reset: (): Promise<AppearanceSettings> => ipcRenderer.invoke('appearance-settings:reset'),
+    onChanged: fanOutAppearanceSettingsChanged,
+  },
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void): (() => void) =>
     fanOutApplicationMenuCommand((payload) => {
       if (isApplicationMenuCommand(payload)) {
@@ -950,8 +964,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearUnread: (id: string, seenAt?: number): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('ghosts:clear-unread', id, seenAt),
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
-    setupStatus: (id: string): Promise<unknown> =>
-      ipcRenderer.invoke('ghosts:setup-status', id),
+    setupStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('ghosts:setup-status', id),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },
