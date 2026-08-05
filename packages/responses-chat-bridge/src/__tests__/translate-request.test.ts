@@ -404,6 +404,32 @@ describe('translateResponsesRequest', () => {
     }))).toThrow('input[0].content.image_url');
   });
 
+  it('keeps agent messages after the preceding tool result', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{}' },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          content: [{ type: 'output_text', text: 'Findings' }],
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'done' },
+      { role: 'assistant', content: '[collab researcher]\nFindings' },
+    ]);
+  });
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [
