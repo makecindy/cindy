@@ -4133,10 +4133,11 @@ describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白
     expect(body?.error?.code).toBe('external_token_required');
   });
 
-  it('内部 codex 子进程(带 Authorization bearer)即使无会话也不被有界拒绝命中', async () => {
+  it('内部 codex 子进程(带 thread-id 身份头)即使会话未解析也不被有界拒绝命中', async () => {
     const host = await freshCodexProxyHost();
     externalAuthMock.codexEnabled = true;
-    // 非 cindy-local、不命中本族 token 的 bearer —— 模拟内部子进程 spawn 凭证。
+    // 内部子进程的真凭 = 带 spawn bearer + thread-id 身份头(注册时序窗口内 session 尚未绑上)。
+    // 关键:内部身份靠 thread-id 头证明,而非「带了个 bearer」。
     host.setCodexProxyAuthInjection('env-key');
 
     const decision = await Promise.resolve(
@@ -4146,13 +4147,58 @@ describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白
           reqId: 1,
           method: 'POST',
           url: '/responses',
-          headers: { authorization: 'Bearer sk-internal-spawn' },
+          headers: { authorization: 'Bearer sk-internal-spawn', 'thread-id': 'thread-internal' },
         } as never,
       ),
     );
 
     // 未落到 401 有界拒绝:env-key + 非 codex/ 模型 → decideCodexRoute 返回 null(默认上游 passthrough)。
     expect(decision).toBeNull();
+  });
+
+  it('伪造 Bearer + codex/* 模型 + oauth-bearer + 无会话 + 无 thread-id → 401(假 bearer 不得白嫖网关 key #1666)', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    // oauth-bearer 态 + codex/* 模型 = 会经 decideCodexRoute 注入 Cindy 网关 key 的泄漏路径。
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Bearer anything-forged' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
+  it('伪造非 Bearer 方案(Basic xxx)+ 无会话 → 仍 401(bearerToken 不回落原值 #1666)', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Basic dXNlcjpwYXNz' },
+        } as never,
+      ),
+    );
+
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
   });
 
   it('对外关闭时不启用闸:匿名无会话请求按内部默认路由,字节级不变', async () => {

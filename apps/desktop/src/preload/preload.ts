@@ -58,7 +58,7 @@ import type {
   LocalProxyCodexConfigPreviewResult,
   LocalProxyConfigPreviewResult,
   LocalProxyConfigWriteResult,
-  LocalProxyEnvExampleResult,
+  LocalProxyCopyResult,
   LocalProxyMutationResult,
   LocalProxyServiceState,
 } from '../shared/localProxyService';
@@ -883,7 +883,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // 对外模型代理(给用户自己的 Claude Code CLI 用):设置页 → 模型供应商 → 模型代理子区块。
-  // 明文 token 只经 getEnvExample / writeExternalConfig 返回(用户主动触发);getState 只给掩码。
+  // 明文 token 绝不回传 renderer:复制走 copy* 通道(main 侧 clipboard.writeText,只回 {success});
+  // getState 与两个 preview 通道只给掩码。
   localProxyService: {
     getState: (): Promise<LocalProxyServiceState> =>
       ipcRenderer.invoke('local-proxy:get-state'),
@@ -895,8 +896,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('local-proxy:regenerate-token'),
     setPort: (port: number): Promise<LocalProxyMutationResult> =>
       ipcRenderer.invoke('local-proxy:set-port', port),
-    getEnvExample: (): Promise<LocalProxyEnvExampleResult> =>
-      ipcRenderer.invoke('local-proxy:get-env-example'),
+    copyToken: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-token'),
+    copyEnv: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-env'),
     previewExternalConfig: (): Promise<LocalProxyConfigPreviewResult> =>
       ipcRenderer.invoke('local-proxy:preview-external-config'),
     writeExternalConfig: (): Promise<LocalProxyConfigWriteResult> =>
@@ -910,8 +913,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('local-proxy:set-codex-default-provider', providerId),
     setCodexPort: (port: number): Promise<LocalProxyMutationResult> =>
       ipcRenderer.invoke('local-proxy:set-codex-port', port),
-    getCodexEnvExample: (): Promise<LocalProxyEnvExampleResult> =>
-      ipcRenderer.invoke('local-proxy:get-codex-env-example'),
+    copyCodexToken: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-token'),
+    copyCodexEnv: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-env'),
+    copyCodexTokenExport: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-token-export'),
     previewCodexConfig: (): Promise<LocalProxyCodexConfigPreviewResult> =>
       ipcRenderer.invoke('local-proxy:preview-codex-config'),
     writeCodexConfig: (): Promise<LocalProxyConfigWriteResult> =>

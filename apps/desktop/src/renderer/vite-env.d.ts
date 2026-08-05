@@ -1104,7 +1104,8 @@ interface ElectronAPI {
 
   /**
    * 对外模型代理(给用户自己的 Claude Code CLI 用):设置页 → 模型供应商 → 模型代理子区块。
-   * 明文 token 只经 getEnvExample / writeExternalConfig 返回(用户主动触发);getState 只给掩码。
+   * 明文 token 绝不回传 renderer:复制走 copy* 通道(main 侧 clipboard.writeText,只回 {success});
+   * getState 与两个 preview 通道只给掩码。
    */
   localProxyService: {
     getState: () => Promise<import('../shared/localProxyService').LocalProxyServiceState>;
@@ -1120,9 +1121,8 @@ interface ElectronAPI {
     setPort: (
       port: number,
     ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
-    getEnvExample: () => Promise<
-      import('../shared/localProxyService').LocalProxyEnvExampleResult
-    >;
+    copyToken: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyEnv: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
     previewExternalConfig: () => Promise<
       import('../shared/localProxyService').LocalProxyConfigPreviewResult
     >;
@@ -1142,8 +1142,10 @@ interface ElectronAPI {
     setCodexPort: (
       port: number,
     ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
-    getCodexEnvExample: () => Promise<
-      import('../shared/localProxyService').LocalProxyEnvExampleResult
+    copyCodexToken: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyCodexEnv: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyCodexTokenExport: () => Promise<
+      import('../shared/localProxyService').LocalProxyCopyResult
     >;
     previewCodexConfig: () => Promise<
       import('../shared/localProxyService').LocalProxyCodexConfigPreviewResult

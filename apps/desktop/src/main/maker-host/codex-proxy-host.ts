@@ -2163,7 +2163,12 @@ function requestPathname(url: string): string {
   return (q === -1 ? url : url.slice(0, q)).toLowerCase();
 }
 
-/** 从 `Authorization` 头取 Bearer token(大小写不敏感,去 "Bearer " 前缀);缺失 → ''。 */
+/**
+ * 从 `Authorization` 头取 Bearer token(大小写不敏感,去 "Bearer " 前缀);缺失 → ''。
+ * ⚠ 非 Bearer 方案(如 `Basic xxx`)一律视为「未提供 token」返回 '' —— 绝不回落原值:否则
+ *   `!externalToken` 有界拒绝判定会被一个随手伪造的 `Authorization: Basic xxx` 骗过(原值非空
+ *   → 判为「带了 token」→ 跳过 external_token_required 闸)(#1666 review)。
+ */
 function bearerToken(headers: Readonly<Record<string, string>>): string {
   const raw = headerValue(headers, 'authorization');
   if (!raw) return '';
@@ -2518,16 +2523,27 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
-    // 有界拒绝(P1):对外访问开启时,这个 codex loopback 端口被公布给外部 CLI。走到这里的请求
-    // 上面既没命中本族对外 token、又不带 `cindy-local-` 前缀(否则已 401)、又解析不出会话、又完全
-    // 不带 Authorization bearer —— 它不是 Cindy 自家 codex 子进程(任何 spawn 模式下子进程都揣着
-    // env_key / OAuth bearer,GET /models 轮询也带),而是本机某个直接打对外端口、连 token 都省了的
-    // 匿名客户端。放行会让带 model 的请求经下方 decideCodexRoute 白嫖 Cindy 的网关 key。故 401。
-    // ⚠ 有界修复:存心伪造一个假 Authorization bearer 的本机进程仍能溜过(loopback 非鉴权边界,且伪造
-    //   bearer 与内部子进程的真实凭证 bearer 无法区分);彻底隔离需把对外监听与内部子进程代理拆到不同
-    //   端口。未开启对外访问时不启用此闸,内部流量字节级不变。
-    // 置于 collab-spawn 分支之前:合法 collab spawn 必带 thread-id,不会走到这个匿名闸。
-    if (isCodexExternalAccessEnabled() && !sessionId && !externalToken) {
+    // 内部身份信号:任何 Cindy 自家 codex 子进程的请求都带 thread-id / x-client-request-id 头
+    //(缺失才是 'unknown'),即便 threadToSession 还没在注册时序窗口内把它绑上 session 也带着它。
+    // 这与 anthropic 侧靠 x-claude-code-session-id 区分内外同构 —— 光「带了个 bearer」不算内部身份。
+    const hasInternalCodexIdentity = threadId !== 'unknown';
+    // 有界拒绝(P1):对外访问开启时,这个 codex loopback 端口被公布给外部 CLI。走到这里的请求上面
+    // 既没命中本族对外 token、又不带 `cindy-local-` 前缀(否则已 401)、又解析不出会话、又不带内部
+    // thread-id 身份头 —— 它不是 Cindy 自家 codex 子进程,而是本机某个直接打对外端口的客户端。
+    //   · 带 model:放行会经下方 decideCodexRoute(oauth-bearer + codex/* + gatewayKey)白嫖 Cindy 的
+    //     网关 key —— 这是 #1666 review 指出的真实泄漏点,故一律 401。⚠ 关键修复:不再把「带了个
+    //     bearer」当内部豁免;伪造一个非本族 `Bearer anything` 既不能冒充内部,也不能让对外 token 变可选。
+    //   · 无 model:控制面请求(如 codex models-manager 的 `GET /models` 轮询)。带 bearer 的它经 ③ 段
+    //     只 override 上游、透传其自带 bearer(不注入 Cindy 网关 key/凭证),不泄漏,故仅在「连 bearer
+    //     都没有」的纯匿名态才拦,避免误伤无 thread-id 头的内部轮询。
+    // ⚠ 残留:存心伪造一个假 thread-id 身份头的本机进程仍能溜过(loopback 非鉴权边界,与 anthropic 侧
+    //   伪造会话头同权衡);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外时不启用此闸。
+    if (
+      isCodexExternalAccessEnabled()
+      && !sessionId
+      && !hasInternalCodexIdentity
+      && (Boolean(model) || !externalToken)
+    ) {
       return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
     }
     if (!sessionId && isCollabSpawnRequest(ctx.headers)) {

@@ -109,14 +109,10 @@ export function ModelProxySubsection() {
     }
   }, [applyState, confirm, t]);
 
+  // 复制在 main 侧完成(clipboard.writeText),明文不进 renderer;这里只据 {success} 提示。
   const handleCopyToken = useCallback(async () => {
-    const res = await window.electronAPI.localProxyService.getEnvExample();
-    if (!res.success) {
-      toast.error(t('settings.localProxy.toast.notReady'));
-      return;
-    }
-    const ok = await copyToClipboard(res.env.apiKey);
-    if (ok) toast.success(t('settings.localProxy.toast.tokenCopied'));
+    const res = await window.electronAPI.localProxyService.copyToken();
+    if (res.success) toast.success(t('settings.localProxy.toast.tokenCopied'));
     else toast.error(t('settings.localProxy.toast.copyFailed'));
   }, [t]);
 
@@ -163,13 +159,8 @@ export function ModelProxySubsection() {
   }, [state, t]);
 
   const handleCopyEnv = useCallback(async () => {
-    const res = await window.electronAPI.localProxyService.getEnvExample();
-    if (!res.success) {
-      toast.error(t('settings.localProxy.toast.notReady'));
-      return;
-    }
-    const ok = await copyToClipboard(res.env.lines.join('\n'));
-    if (ok) toast.success(t('settings.localProxy.toast.envCopied'));
+    const res = await window.electronAPI.localProxyService.copyEnv();
+    if (res.success) toast.success(t('settings.localProxy.toast.envCopied'));
     else toast.error(t('settings.localProxy.toast.copyFailed'));
   }, [t]);
 
@@ -257,13 +248,15 @@ export function ModelProxySubsection() {
   }, [applyState, confirm, t]);
 
   const handleCopyCodexToken = useCallback(async () => {
-    const res = await window.electronAPI.localProxyService.getCodexEnvExample();
-    if (!res.success) {
-      toast.error(t('settings.localProxy.toast.codexNotReady'));
-      return;
-    }
-    const ok = await copyToClipboard(res.env.apiKey);
-    if (ok) toast.success(t('settings.localProxy.toast.tokenCopied'));
+    const res = await window.electronAPI.localProxyService.copyCodexToken();
+    if (res.success) toast.success(t('settings.localProxy.toast.tokenCopied'));
+    else toast.error(t('settings.localProxy.toast.copyFailed'));
+  }, [t]);
+
+  // 写 config.toml 弹窗里 `export CINDY_LOCAL_TOKEN=…` 行掩码展示,复制其明文走 main 剪贴板。
+  const handleCopyCodexTokenExport = useCallback(async () => {
+    const res = await window.electronAPI.localProxyService.copyCodexTokenExport();
+    if (res.success) toast.success(t('settings.localProxy.toast.tokenCopied'));
     else toast.error(t('settings.localProxy.toast.copyFailed'));
   }, [t]);
 
@@ -309,13 +302,8 @@ export function ModelProxySubsection() {
   }, [state, t]);
 
   const handleCopyCodexEnv = useCallback(async () => {
-    const res = await window.electronAPI.localProxyService.getCodexEnvExample();
-    if (!res.success) {
-      toast.error(t('settings.localProxy.toast.codexNotReady'));
-      return;
-    }
-    const ok = await copyToClipboard(res.env.lines.join('\n'));
-    if (ok) toast.success(t('settings.localProxy.toast.codexEnvCopied'));
+    const res = await window.electronAPI.localProxyService.copyCodexEnv();
+    if (res.success) toast.success(t('settings.localProxy.toast.codexEnvCopied'));
     else toast.error(t('settings.localProxy.toast.copyFailed'));
   }, [t]);
 
@@ -352,20 +340,32 @@ export function ModelProxySubsection() {
               })}
             </p>
           )}
-          {/* token 不入文件:提示用户需自行在外部 shell 设 CINDY_LOCAL_TOKEN(codex 从 env_key 读)。 */}
+          {/* token 不入文件:提示用户需自行在外部 shell 设 CINDY_LOCAL_TOKEN(codex 从 env_key 读)。
+              这里展示的是掩码行,复制按钮走 main 剪贴板通道拿真实明文。 */}
           <p className="text-11 leading-[1.5]" style={HINT_STYLE}>
             {t('settings.localProxy.openai.writeConfig.tokenExportHint')}
           </p>
-          <pre
-            className="overflow-x-auto rounded-lg border p-2.5 font-mono text-11 leading-[1.5]"
-            style={{
-              backgroundColor: 'var(--surface-elevated)',
-              borderColor: 'var(--settings-theme-card-border)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            {tokenExportLine}
-          </pre>
+          <div className="flex items-center gap-2">
+            <pre
+              className="min-w-0 flex-1 overflow-x-auto rounded-lg border p-2.5 font-mono text-11 leading-[1.5]"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                borderColor: 'var(--settings-theme-card-border)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {tokenExportLine}
+            </pre>
+            <button
+              type="button"
+              onClick={() => void handleCopyCodexTokenExport()}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-12"
+              style={PILL_STYLE}
+            >
+              <Copy size={13} />
+              {t('settings.localProxy.copy')}
+            </button>
+          </div>
         </div>
       ),
     });
@@ -378,7 +378,7 @@ export function ModelProxySubsection() {
     } finally {
       setBusy(false);
     }
-  }, [confirm, t]);
+  }, [confirm, handleCopyCodexTokenExport, t]);
 
   if (!state) return null;
 

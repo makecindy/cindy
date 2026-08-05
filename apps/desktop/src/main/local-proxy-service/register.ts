@@ -3,22 +3,29 @@
  *
  * 安全约束(勿改):
  *   - 所有**写**通道(set-enabled / set-default-provider / regenerate-token / set-port /
- *     write-external-config)都过 `assertTrustedAppRendererEvent` —— 只允许 Cindy 自有顶层
- *     页面发起,插件面板 / webview 无法触达。
- *   - token 明文只在 `get-env-example` / `write-external-config` 这两个「用户主动触发」的
- *     出口返回;`get-state` 只给掩码。
+ *     write-external-config / copy-*)都过 `assertTrustedAppRendererEvent` —— 只允许 Cindy 自有
+ *     顶层页面发起,插件面板 / webview 无法触达。
+ *   - **token 明文绝不回传 renderer**:复制到剪贴板由 `copy-*` 通道在**主进程**里
+ *     `clipboard.writeText` 完成,只回 `{success}`;写用户配置的明文也只在 main 落文件。
+ *     `get-state` 与两个 preview 通道给 renderer 的一律是掩码。`assertTrustedAppRendererEvent`
+ *     只验来源帧、不验用户手势,所以哪怕来源可信也不把明文交给可能被注入的渲染进程。
  */
 
-import { ipcMain } from 'electron';
+import { clipboard, ipcMain } from 'electron';
 
 import type {
   LocalProxyCodexConfigPreviewResult,
   LocalProxyConfigPreviewResult,
   LocalProxyConfigWriteResult,
-  LocalProxyEnvExampleResult,
+  LocalProxyCopyResult,
   LocalProxyMutationResult,
   LocalProxyServiceState,
 } from '../../shared/localProxyService.js';
+import {
+  MASK_FALLBACK,
+  maskAnthropicPreview,
+  maskCodexPreview,
+} from './preview-masking.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   getLocalProxyUrl,
@@ -84,6 +91,16 @@ function buildState(): LocalProxyServiceState {
     codexProviders: listExternalRoutableProviders('codex'),
     codexDefaultProviderId: settings.codexDefaultProviderId,
   };
+}
+
+/** 主进程侧把明文写进系统剪贴板;明文不出 main。 */
+function copyToClipboardInMain(text: string): LocalProxyCopyResult {
+  try {
+    clipboard.writeText(text);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export function registerLocalProxyServiceIpc(): void {
@@ -164,8 +181,8 @@ export function registerLocalProxyServiceIpc(): void {
     },
   );
 
-  // 重新生成对外 token(旧 token 立即失效)。只回掩码后的最新 state;明文要复制的话走
-  // get-env-example。
+  // 重新生成对外 token(旧 token 立即失效)。只回掩码后的最新 state;要复制明文走
+  // copy-token / copy-env(main 侧落剪贴板)。
   ipcMain.handle(
     'local-proxy:regenerate-token',
     async (event): Promise<LocalProxyMutationResult> => {
@@ -205,31 +222,34 @@ export function registerLocalProxyServiceIpc(): void {
     },
   );
 
-  // 明文 env 出口(复制到剪贴板 / 展示用)。用户主动触发,过来源闸。
+  // 复制 A 族对外 token 明文到系统剪贴板 —— 明文只在 main 落剪贴板,不回传 renderer。
   ipcMain.handle(
-    'local-proxy:get-env-example',
-    async (event): Promise<LocalProxyEnvExampleResult> => {
+    'local-proxy:copy-token',
+    async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
-      const url = getLocalProxyUrl();
-      if (!url) {
-        return { success: false, error: 'proxy not ready' };
-      }
-      const token = getOrCreateExternalToken();
-      return {
-        success: true,
-        env: {
-          baseUrl: url,
-          apiKey: token,
-          // 带 export 前缀:粘进 shell 后是两条独立、可直接运行的语句(子进程 claude 才能继承
-          // 这两个变量;裸 `KEY=value` 只是当前 shell 的局部变量,不会传给子进程)。渲染层用
-          // 换行连接。
-          lines: [`export ANTHROPIC_BASE_URL=${url}`, `export ANTHROPIC_API_KEY=${token}`],
-        },
-      };
+      if (!getLocalProxyUrl()) return { success: false, error: 'proxy not ready' };
+      return copyToClipboardInMain(getOrCreateExternalToken());
     },
   );
 
-  // 写用户 ~/.claude 配置前的预览(展示改动 + 冲突项,由 UI 二次确认)。
+  // 复制 A 族完整 env(两条 `export` 行)到系统剪贴板。带 export 前缀:粘进 shell 后是两条独立、
+  // 可直接运行的语句(子进程 claude 才能继承这两个变量;裸 `KEY=value` 只是当前 shell 局部变量,
+  // 不会传给子进程)。明文只在 main 落剪贴板,不回传 renderer。
+  ipcMain.handle(
+    'local-proxy:copy-env',
+    async (event): Promise<LocalProxyCopyResult> => {
+      assertTrustedAppRendererEvent(event);
+      const url = getLocalProxyUrl();
+      if (!url) return { success: false, error: 'proxy not ready' };
+      const token = getOrCreateExternalToken();
+      return copyToClipboardInMain(
+        `export ANTHROPIC_BASE_URL=${url}\nexport ANTHROPIC_API_KEY=${token}`,
+      );
+    },
+  );
+
+  // 写用户 ~/.claude 配置前的预览(展示改动 + 冲突项,由 UI 二次确认)。token 段掩码后再回
+  // renderer;真实明文只在 write-external-config 落文件。
   ipcMain.handle(
     'local-proxy:preview-external-config',
     async (event): Promise<LocalProxyConfigPreviewResult> => {
@@ -240,7 +260,8 @@ export function registerLocalProxyServiceIpc(): void {
       }
       const token = getOrCreateExternalToken();
       try {
-        return { success: true, preview: previewExternalConfig(url, token) };
+        const masked = getExternalTokenMasked() ?? MASK_FALLBACK;
+        return { success: true, preview: maskAnthropicPreview(previewExternalConfig(url, token), token, masked) };
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -303,28 +324,43 @@ export function registerLocalProxyServiceIpc(): void {
     },
   );
 
-  // codex 明文 env 出口(OPENAI_BASE_URL/OPENAI_API_KEY)。用户主动触发,过来源闸。
+  // 复制 B 族(Codex)对外 token 明文到系统剪贴板。明文只在 main 落剪贴板,不回传 renderer。
   ipcMain.handle(
-    'local-proxy:get-codex-env-example',
-    async (event): Promise<LocalProxyEnvExampleResult> => {
+    'local-proxy:copy-codex-token',
+    async (event): Promise<LocalProxyCopyResult> => {
+      assertTrustedAppRendererEvent(event);
+      if (!getCodexProxyUrl()) return { success: false, error: 'codex proxy not ready' };
+      return copyToClipboardInMain(getOrCreateCodexExternalToken());
+    },
+  );
+
+  // 复制 B 族完整 env(OPENAI_BASE_URL/OPENAI_API_KEY 两条 export 行)到系统剪贴板。
+  ipcMain.handle(
+    'local-proxy:copy-codex-env',
+    async (event): Promise<LocalProxyCopyResult> => {
       assertTrustedAppRendererEvent(event);
       const url = getCodexProxyUrl();
-      if (!url) {
-        return { success: false, error: 'codex proxy not ready' };
-      }
+      if (!url) return { success: false, error: 'codex proxy not ready' };
       const token = getOrCreateCodexExternalToken();
-      return {
-        success: true,
-        env: {
-          baseUrl: url,
-          apiKey: token,
-          lines: [`export OPENAI_BASE_URL=${url}`, `export OPENAI_API_KEY=${token}`],
-        },
-      };
+      return copyToClipboardInMain(
+        `export OPENAI_BASE_URL=${url}\nexport OPENAI_API_KEY=${token}`,
+      );
+    },
+  );
+
+  // 复制 codex 需自设的 `export CINDY_LOCAL_TOKEN=<token>` 行到系统剪贴板(写 config.toml 弹窗里
+  // 那行掩码展示,真实明文经此通道复制)。明文只在 main 落剪贴板,不回传 renderer。
+  ipcMain.handle(
+    'local-proxy:copy-codex-token-export',
+    async (event): Promise<LocalProxyCopyResult> => {
+      assertTrustedAppRendererEvent(event);
+      if (!getCodexProxyUrl()) return { success: false, error: 'codex proxy not ready' };
+      return copyToClipboardInMain(`export CINDY_LOCAL_TOKEN=${getOrCreateCodexExternalToken()}`);
     },
   );
 
   // 写用户 ~/.codex/config.toml 前的预览(展示 merge 后 TOML + 冲突 + 需自设的 token env 行)。
+  // token export 行掩码后再回 renderer;真实明文走 copy-codex-token-export。
   ipcMain.handle(
     'local-proxy:preview-codex-config',
     async (event): Promise<LocalProxyCodexConfigPreviewResult> => {
@@ -335,7 +371,8 @@ export function registerLocalProxyServiceIpc(): void {
       }
       const token = getOrCreateCodexExternalToken();
       try {
-        return { success: true, preview: previewCodexConfig(url, token) };
+        const masked = getCodexExternalTokenMasked() ?? MASK_FALLBACK;
+        return { success: true, preview: maskCodexPreview(previewCodexConfig(url, token), token, masked) };
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
