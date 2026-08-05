@@ -29,8 +29,18 @@ import {
   type Provider,
 } from '@cindy/model-providers';
 
+import { applyProviderOrder } from '../../shared/providerOrder.js';
+
 /** oneshot 可路由的 agent(Pi 的 oneShot 未实现,不进钉档清单)。 */
 const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code'] as const;
+
+/**
+ * 执行侧(requestBuiltinProviderText)硬编码认的四家内置供应商。清单侧必须
+ * 按同一集合过滤——否则将来新增第五个聊天型内置供应商(如 gemini 配上
+ * agent)时,清单会列出执行侧 fallthrough agent_unavailable 的模型,"可见但
+ * 不可执行"。两边任一处变动都要同步另一处。
+ */
+const ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS = new Set(['xd', 'anthropic', 'openai', 'xai']);
 
 /** 一次快问快答的路由:用户钉档或插件声明解析出的终态。 */
 export type OneshotRoute =
@@ -65,15 +75,21 @@ export function decodeCatalogPin(
 
 /**
  * 该 (provider, agent) 组合对 oneshot 是否结构可路由——镜像
- * requestUtilityText 显式路径的静态闸:内置供应商(xd/anthropic/openai/xai)
- * 只要求 routing 条目在(凭证与端点执行期现查,可后补);自定义供应商要求
- * routing 未禁用 + 鉴权策略受支持 + 有上游地址。
+ * requestUtilityText 显式路径的静态闸:内置供应商只收执行侧硬编码认的
+ * 四家(见 ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS);自定义供应商要求 routing
+ * 未禁用 + 鉴权策略受支持 + 有上游地址 + 声明的 wire 与执行侧该 agent 的
+ * 实际出线一致(claude-code 恒发 anthropic-messages;codex 发不出
+ * anthropic-messages,会被静默当 responses——配置错线的组合钉上恒失败,
+ * 不进清单)。
  */
 function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean {
   if (!provider.agents.includes(agentKind)) return false;
   const routing = provider.routing[agentKind];
   if (!routing || routing.disabled) return false;
-  if (provider.source === 'builtin') return true;
+  if (provider.source === 'builtin') return ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS.has(provider.id);
+  if (agentKind === 'claude-code') {
+    if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;
+  } else if (routing.wireProtocol === 'anthropic-messages') return false;
   return (
     (routing.authStrategy === 'api-key-header'
       || routing.authStrategy === 'oauth-token'
@@ -121,19 +137,69 @@ export interface TextOneshotPinOption {
 }
 
 /**
- * 目录全量文本模型钉档清单:遍历 供应商 × 可路由 agent × 聊天模型,滤掉停用
- * 轴(供应商级与逐模型)与不可路由组合。目录序即展示序(内置在前、自定义在后)。
+ * 快问快答的系统默认链家在 XD 网关:用户没有显式供应商排序时,钉档清单让
+ * xd 在首(其余按目录序);有显式排序(设置页拖拽的那一份)则全听用户的——
+ * 与设置页 / 新建对话选择器同一份顺序,三个入口不打架。
+ */
+function orderedProviders(catalog: Catalog, providerOrder: readonly string[] | undefined): Provider[] {
+  return applyProviderOrder(
+    catalog.providers,
+    providerOrder && providerOrder.length > 0 ? providerOrder : ['xd'],
+  );
+}
+
+/** 供应商内模型按 sortOrder 升序(缺省排末尾,稳定)——与模型选择器的展示序同口径。 */
+function displayOrderedModels(models: readonly CatalogModel[]): CatalogModel[] {
+  return [...models].sort(
+    (a, b) => (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
+  );
+}
+
+/**
+ * 凭证探测(可选):传入时只收当下有可用凭证的 (供应商 × agent)——没配
+ * key / 没登录的供应商钉上也只会在执行期 NO_CANDIDATE,不给了没用的选项。
+ * 展示层过滤,不是安全边界(执行侧仍逐候选现查)。
+ */
+export type OneshotCredentialProbe = (provider: Provider, agentKind: AgentKind) => boolean;
+
+/**
+ * 目录全量文本模型钉档清单:遍历 供应商 × 可路由 agent × 对话模型,滤掉停用
+ * 轴(供应商级与逐模型)与不可路由组合。供应商序 = 用户显式排序(缺省 xd 在
+ * 首),供应商内模型按 sortOrder。
  */
 export function buildTextOneshotPinOptions(
   catalog: Catalog,
   overrides: ModelDisableOverrides | undefined,
+  providerOrder?: readonly string[],
+  hasCredential?: OneshotCredentialProbe,
 ): TextOneshotPinOption[] {
   const entries: { provider: Provider; agentKind: (typeof ONESHOT_ROUTE_AGENTS)[number]; model: CatalogModel }[] = [];
-  for (const provider of catalog.providers) {
+  for (const provider of orderedProviders(catalog, providerOrder)) {
     if (isProviderDisabled(overrides, provider.id)) continue;
+    if (provider.source === 'builtin') {
+      // 内置四家的执行与凭证都与 agent 无关(xd 网关的请求连 agent 都不看;
+      // 订阅登录态是账号级)——同一模型只出一行,agent 取首个可路由且有凭证
+      // 的(codex 优先,与 resolveOneshotCatalogModel 同偏好)。
+      const seen = new Set<string>();
+      for (const agentKind of ONESHOT_ROUTE_AGENTS) {
+        if (!isRoutableForOneshot(provider, agentKind)) continue;
+        if (hasCredential && !hasCredential(provider, agentKind)) continue;
+        for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {
+          if (seen.has(model.id)) continue;
+          if (!isChatModel(model, provider)) continue;
+          if (isModelDisabled(overrides, provider.id, model.id)) continue;
+          seen.add(model.id);
+          entries.push({ provider, agentKind, model });
+        }
+      }
+      continue;
+    }
+    // 自定义供应商:agent 决定 wire / 凭证 / 上游,(供应商×模型) 跨 agent 是
+    // 两条真路由,各自成行(渲染层补 agent 后缀区分)。
     for (const agentKind of ONESHOT_ROUTE_AGENTS) {
       if (!isRoutableForOneshot(provider, agentKind)) continue;
-      for (const model of provider.models[agentKind] ?? []) {
+      if (hasCredential && !hasCredential(provider, agentKind)) continue;
+      for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {
         if (!isChatModel(model, provider)) continue;
         if (isModelDisabled(overrides, provider.id, model.id)) continue;
         entries.push({ provider, agentKind, model });
@@ -168,21 +234,25 @@ export function buildTextOneshotPinOptions(
 }
 
 /**
- * 插件声明的偏好模型 id → 可路由的目录条目。目录序优先、agent 序 codex 先于
- * claude-code(与 inferProviderAgent 同偏好);停用/不可路由/非聊天模型跳过。
+ * 插件声明的偏好模型 id → 可路由的目录条目。供应商序同钉档清单(用户显式
+ * 排序优先,缺省 xd 在首),agent 序 codex 先于 claude-code(与
+ * inferProviderAgent 同偏好);停用/不可路由/非对话模型跳过。
  * 找不到返回 null = 按未声明处理(回落系统默认链)。
  */
 export function resolveOneshotCatalogModel(
   catalog: Catalog,
   overrides: ModelDisableOverrides | undefined,
   modelId: string,
+  providerOrder?: readonly string[],
+  hasCredential?: OneshotCredentialProbe,
 ): { providerId: string; agentKind: AgentKind; model: string } | null {
   const wanted = modelId.trim();
   if (!wanted) return null;
-  for (const provider of catalog.providers) {
+  for (const provider of orderedProviders(catalog, providerOrder)) {
     if (isProviderDisabled(overrides, provider.id)) continue;
     for (const agentKind of ONESHOT_ROUTE_AGENTS) {
       if (!isRoutableForOneshot(provider, agentKind)) continue;
+      if (hasCredential && !hasCredential(provider, agentKind)) continue;
       const hit = (provider.models[agentKind] ?? []).find(
         (m) => m.id === wanted && isChatModel(m, provider) && !isModelDisabled(overrides, provider.id, m.id),
       );

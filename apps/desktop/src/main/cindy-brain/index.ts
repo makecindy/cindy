@@ -240,6 +240,7 @@ import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
@@ -250,6 +251,7 @@ import {
   encodeCatalogPin,
   resolveOneshotCatalogModel,
 } from '../utility-model/textOneshotPinOptions.js';
+import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import {
   CINDY_CAPABILITY_KEYS,
   cindyCapabilityValueDomain,
@@ -2845,10 +2847,16 @@ export function getGhostCindySlot(): GhostCindySlot {
         }
         return { ok: false, reason: 'failed', message: '快速通道各候选均失败,请稍后再试' };
       },
-      // 身份卡声明的偏好模型(cindy.oneshotModel)→ 当前目录里可路由的条目;
-      // 目录没有/已停用/不可路由 = null,slot 层按未声明回落系统默认链。
+      // 身份卡声明的偏好模型(cindy.oneshotModel)→ 当前目录里可路由且有凭证的
+      // 条目;目录没有/已停用/不可路由/未配置 = null,slot 层按未声明回落系统默认链。
       resolveOneshotModel: (modelId) =>
-        resolveOneshotCatalogModel(getActiveCatalog(), readModelDisableOverrides(), modelId),
+        resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          modelId,
+          readProviderOrder(),
+          hasOneshotProviderCredential,
+        ),
       // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
       // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
@@ -4703,14 +4711,25 @@ export function registerGhostIpc(): void {
     const textDefaultLabel = textDefaultId === null
       ? null
       : (utilityModelPinOptions().find((o) => o.id === textDefaultId)?.label ?? textDefaultId);
-    const textOptions = buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides());
+    const textOptions = buildTextOneshotPinOptions(
+      getActiveCatalog(),
+      readModelDisableOverrides(),
+      readProviderOrder(),
+      hasOneshotProviderCredential,
+    );
     // 纯展示口径,不走 findAvailableGhost 的"当前会话可用"闸:插件被当前项目
     // 停用时卡片的其余部分(overrides/options)照常渲染,声明偏好也不该凭空消失。
     const declaredRaw = typeof ghostId === 'string'
       ? getGhostManager().list().find((g) => g.manifest.id === ghostId)?.manifest.cindy?.oneshotModel
       : undefined;
     const declaredResolved = declaredRaw
-      ? resolveOneshotCatalogModel(getActiveCatalog(), readModelDisableOverrides(), declaredRaw)
+      ? resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          declaredRaw,
+          readProviderOrder(),
+          hasOneshotProviderCredential,
+        )
       : null;
     event.returnValue = {
       overrides,

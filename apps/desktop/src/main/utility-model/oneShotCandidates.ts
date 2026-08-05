@@ -535,6 +535,9 @@ function supportsXaiReasoning(model: string): boolean {
   return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
 }
 
+// 内置供应商的执行分支只认下面硬编码的 xd/anthropic/openai/xai 四家;钉档
+// 清单侧(textOneshotPinOptions.isRoutableForOneshot)按同一集合过滤——新增
+// 第五个聊天型内置供应商时两边一起动,否则清单会列出这里接不住的模型。
 async function requestBuiltinProviderText(
   prompt: string,
   input: {

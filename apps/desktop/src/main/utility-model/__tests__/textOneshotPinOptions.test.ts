@@ -164,9 +164,13 @@ describe('buildTextOneshotPinOptions', () => {
         provider({ id: 'pi-prov', agents: ['pi'], models: { pi: [chat('pi-m')] as never } }),
         provider({
           id: 'half',
+          source: 'user',
           agents: ['codex', 'claude-code'],
           routing: { codex: { upstream: 'https://up.example.com', authStrategy: 'api-key-header' } },
-          models: { codex: [chat('gpt-m-codex')], 'claude-code': [chat('m-cc')] },
+          models: {
+            codex: [chat('gpt-m-codex', { group: 'custom:half' })],
+            'claude-code': [chat('m-cc', { group: 'custom:half' })],
+          },
         }),
       ),
       undefined,
@@ -198,7 +202,52 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options.map((o) => o.id)).toEqual(['cat:ok-key:codex:ok-key-m', 'cat:ok-oauth:codex:ok-oauth-m']);
   });
 
-  it('同供应商同模型跨 agent 重复:两边都补 agent 后缀', () => {
+  it('内置供应商只收执行侧认的四家;第五家内置(如 gemini 配上 agent)不进清单', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({ id: 'xd', models: { codex: [chat('gpt-a')] } }),
+        provider({ id: 'gemini', models: { codex: [chat('gemini-3-flash')] } }),
+      ),
+      undefined,
+    );
+    expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:gpt-a']);
+  });
+
+  it('自定义供应商 wire 与执行侧出线不一致的组合不进清单', () => {
+    // 执行侧:claude-code 恒发 anthropic-messages;codex 发不出 anthropic-messages
+    // (会被静默当 responses)。配置错线的组合钉上恒失败,清单提前过滤。
+    const custom = (id: string, agentKind: 'codex' | 'claude-code', wireProtocol?: string) =>
+      provider({
+        id,
+        source: 'user',
+        agents: [agentKind],
+        routing: {
+          [agentKind]: {
+            upstream: 'https://up.example.com',
+            authStrategy: 'api-key-header',
+            ...(wireProtocol !== undefined ? { wireProtocol } : {}),
+          },
+        } as Provider['routing'],
+        models: { [agentKind]: [chat(`m`, { group: `custom:${id}` })] } as Provider['models'],
+      });
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        custom('cc-anthropic', 'claude-code', 'anthropic-messages'),
+        custom('cc-openai', 'claude-code', 'openai-chat'),
+        custom('cx-chat', 'codex', 'openai-chat'),
+        custom('cx-anthropic', 'codex', 'anthropic-messages'),
+        custom('cx-default', 'codex'),
+      ),
+      undefined,
+    );
+    expect(options.map((o) => o.id)).toEqual([
+      'cat:cc-anthropic:claude-code:m',
+      'cat:cx-chat:codex:m',
+      'cat:cx-default:codex:m',
+    ]);
+  });
+
+  it('内置供应商同一模型跨 agent 折叠成一行(agent 不影响出线);自定义保留两行补后缀', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({
@@ -206,10 +255,93 @@ describe('buildTextOneshotPinOptions', () => {
           name: 'GW',
           models: { codex: [chat('gpt-5.5', { name: 'GPT 5.5' })], 'claude-code': [chat('gpt-5.5', { name: 'GPT 5.5' })] },
         }),
+        provider({
+          id: 'dual',
+          name: 'Dual',
+          source: 'user',
+          agents: ['codex', 'claude-code'],
+          routing: {
+            codex: { upstream: 'https://cx.example.com', authStrategy: 'api-key-header' },
+            'claude-code': { upstream: 'https://cc.example.com', authStrategy: 'api-key-header' },
+          },
+          models: {
+            codex: [chat('gpt-5.5', { name: 'GPT 5.5', group: 'custom:dual' })],
+            'claude-code': [chat('gpt-5.5', { name: 'GPT 5.5', group: 'custom:dual' })],
+          },
+        }),
       ),
       undefined,
     );
-    expect(options.map((o) => o.label)).toEqual(['GPT 5.5 · GW · Codex', 'GPT 5.5 · GW · Claude Code']);
+    expect(options.map((o) => [o.id, o.label])).toEqual([
+      // 内置:折叠成 codex 行,无后缀。
+      ['cat:xd:codex:gpt-5.5', 'GPT 5.5 · GW'],
+      // 自定义:两条真路由,都补 agent 后缀。
+      ['cat:dual:codex:gpt-5.5', 'GPT 5.5 · Dual · Codex'],
+      ['cat:dual:claude-code:gpt-5.5', 'GPT 5.5 · Dual · Claude Code'],
+    ]);
+  });
+
+  it('供应商序:缺省 xd 在首(系统默认链的家);用户显式排序优先', () => {
+    const catalog = catalogOf(
+      provider({ id: 'openai', name: 'OpenAI', models: { codex: [chat('gpt-5.5')] } }),
+      provider({ id: 'xd', name: 'GW', models: { codex: [chat('gpt-a')] } }),
+      provider({ id: 'xai', name: 'xAI', models: { codex: [chat('grok-4')] } }),
+    );
+    // 缺省(未传/空排序):xd 提到最前,其余保持目录序。
+    expect(
+      buildTextOneshotPinOptions(catalog, undefined).map((o) => o.providerId),
+    ).toEqual(['xd', 'openai', 'xai']);
+    expect(
+      buildTextOneshotPinOptions(catalog, undefined, []).map((o) => o.providerId),
+    ).toEqual(['xd', 'openai', 'xai']);
+    // 用户显式排序(设置页拖拽的那份)全听用户的。
+    expect(
+      buildTextOneshotPinOptions(catalog, undefined, ['xai', 'openai']).map((o) => o.providerId),
+    ).toEqual(['xai', 'openai', 'xd']);
+  });
+
+  it('供应商内模型按 sortOrder 升序(缺省排末尾,稳定)', () => {
+    const options = buildTextOneshotPinOptions(
+      catalogOf(
+        provider({
+          id: 'xd',
+          models: {
+            codex: [
+              chat('gpt-late', { sortOrder: 40 }),
+              chat('gpt-early', { sortOrder: 10 }),
+              chat('gpt-none'),
+            ],
+          },
+        }),
+      ),
+      undefined,
+    );
+    expect(options.map((o) => o.modelId)).toEqual(['gpt-early', 'gpt-late', 'gpt-none']);
+  });
+
+  it('凭证探测:未配置的 (供应商×agent) 组合不进清单;声明解析跳过未配置落到下一家', () => {
+    const catalog = catalogOf(
+      provider({ id: 'xd', models: { codex: [chat('gpt-a')] } }),
+      provider({ id: 'openai', name: 'OpenAI', models: { codex: [chat('gpt-5.5')] } }),
+      provider({ id: 'xai', name: 'xAI', models: { codex: [chat('gpt-5.5')] } }),
+    );
+    const onlyXd = (p: Provider) => p.id === 'xd';
+    expect(
+      buildTextOneshotPinOptions(catalog, undefined, undefined, onlyXd).map((o) => o.providerId),
+    ).toEqual(['xd']);
+    // 同名模型两家都有:xd 未配置 → 落到 openai;openai 也未配置 → xai。
+    const noXd = (p: Provider) => p.id !== 'xd';
+    expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-5.5', undefined, noXd)).toEqual({
+      providerId: 'openai',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+    expect(
+      resolveOneshotCatalogModel(catalog, undefined, 'gpt-5.5', undefined, (p) => p.id === 'xai'),
+    ).toEqual({ providerId: 'xai', agentKind: 'codex', model: 'gpt-5.5' });
+    expect(
+      resolveOneshotCatalogModel(catalog, undefined, 'gpt-5.5', undefined, () => false),
+    ).toBeNull();
   });
 });
 
