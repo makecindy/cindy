@@ -432,7 +432,7 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
   const projectCount = scan.candidates.filter((item) => item.sidebarBucket === 'project').length;
   const dialogueCount = scan.candidates.length - projectCount;
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
       <SummaryCell
         label={t('settings.sessionImport.summary.total')}
         value={scan.candidates.length}
@@ -454,8 +454,13 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
         hint={t('settings.sessionImport.summary.existingHint')}
       />
       <SummaryCell
+        label={t('settings.sessionImport.summary.managedDialogue')}
+        value={scan.rejected.managedDialogue ?? 0}
+        hint={t('settings.sessionImport.summary.managedDialogueHint')}
+      />
+      <SummaryCell
         label={t('settings.sessionImport.summary.filtered')}
-        value={scan.rejected.codex + scan.rejected.claude + (scan.rejected.managedDialogue ?? 0)}
+        value={scan.rejected.codex + scan.rejected.claude}
         hint={t('settings.sessionImport.summary.filteredHint')}
       />
     </div>
