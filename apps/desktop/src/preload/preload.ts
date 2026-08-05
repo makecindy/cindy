@@ -804,9 +804,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * catch 后兜底当作 false (那个阶段本来就不可能有 in-flight)。
    */
   anySessionInTurn: (): Promise<boolean> => ipcRenderer.invoke('maker:any-session-in-turn'),
-  pageZoomIn: (): Promise<{ ok: true; zoomLevel: number }> => ipcRenderer.invoke('page-zoom:in'),
-  pageZoomOut: (): Promise<{ ok: true; zoomLevel: number }> => ipcRenderer.invoke('page-zoom:out'),
-  pageZoomReset: (): Promise<{ ok: true; zoomLevel: number }> =>
+  pageZoomIn: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:in'),
+  pageZoomOut: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:out'),
+  pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
   appearanceSettings: {
     getSync: (): AppearanceSettings | null => appearanceSettingsInfo,

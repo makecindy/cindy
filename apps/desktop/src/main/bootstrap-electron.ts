@@ -3289,34 +3289,34 @@ const registerIpcHandlers = () => {
   ipcMain.handle('page-zoom:in', async (event) => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: getPersistedWindowZoom() };
+      return { ok: true as const, zoomFactor: getPersistedWindowZoom() };
     }
     const settings = await updatePersistedWindowZoom(PAGE_ZOOM_FACTOR_STEP);
     return {
       ok: true as const,
-      zoomLevel: settings.windowZoom,
+      zoomFactor: settings.windowZoom,
     };
   });
   ipcMain.handle('page-zoom:out', async (event) => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: getPersistedWindowZoom() };
+      return { ok: true as const, zoomFactor: getPersistedWindowZoom() };
     }
     const settings = await updatePersistedWindowZoom(-PAGE_ZOOM_FACTOR_STEP);
     return {
       ok: true as const,
-      zoomLevel: settings.windowZoom,
+      zoomFactor: settings.windowZoom,
     };
   });
   ipcMain.handle('page-zoom:reset', async (event) => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!targetWindow || targetWindow.isDestroyed()) {
-      return { ok: true as const, zoomLevel: getPersistedWindowZoom() };
+      return { ok: true as const, zoomFactor: getPersistedWindowZoom() };
     }
     const settings = await updatePersistedWindowZoom(null);
     return {
       ok: true as const,
-      zoomLevel: settings.windowZoom,
+      zoomFactor: settings.windowZoom,
     };
   });
 

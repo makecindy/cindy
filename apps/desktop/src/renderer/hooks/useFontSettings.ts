@@ -59,6 +59,18 @@ const SCALED_TAILWIND_TOKENS = {
   '5xl': 48,
 } as const;
 
+const TAILWIND_LINE_HEIGHTS = {
+  xs: 16,
+  sm: 20,
+  base: 24,
+  lg: 28,
+  xl: 28,
+  '2xl': 32,
+  '3xl': 36,
+  '4xl': 40,
+  '5xl': 48,
+} as const;
+
 const FontSettingsContext = createContext<FontSettingsContextValue | undefined>(undefined);
 
 export function clampFontSize(value: number, fallback = DEFAULT_CODE_FONT_SIZE): number {
@@ -128,13 +140,18 @@ export function applyFontSettings(settings: FontSettings): void {
   for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
     set(`--text-${token}`, `${Math.round(base * scale)}px`);
   }
+  for (const [token, base] of Object.entries(TAILWIND_LINE_HEIGHTS)) {
+    set(`--text-${token}-line-height`, `${Math.round(base * scale)}px`);
+  }
 }
 
 export function FontSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<FontSettings>(getInitialFontSettings);
   const settingsRef = useRef(settings);
+  const confirmedSettingsRef = useRef(settings);
+  const pendingWritesRef = useRef<Array<{ id: number; patch: Partial<FontSettings> }>>([]);
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const latestRequestRef = useRef(0);
+  const nextRequestIdRef = useRef(0);
 
   useEffect(() => {
     applyFontSettings(settings);
@@ -145,49 +162,62 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
     if (!bridge?.onChanged) return;
     return bridge.onChanged((next: AppearanceSettings) => {
       const normalized = normalizeAppearanceSettings(next);
-      const nextSettings = {
+      const confirmed = {
         uiFamily: normalized.uiFamily,
         codeFamily: normalized.codeFamily,
         uiSize: normalized.uiSize,
         codeSize: normalized.codeSize,
       };
-      settingsRef.current = nextSettings;
-      setSettings(nextSettings);
+      confirmedSettingsRef.current = confirmed;
+      const optimistic = pendingWritesRef.current.reduce(
+        (current, pending) => ({ ...current, ...pending.patch }),
+        confirmed,
+      );
+      settingsRef.current = optimistic;
+      setSettings(optimistic);
     });
   }, []);
 
-  const patch = useCallback(
-    (next: Partial<FontSettings>) => {
-      const previous = settingsRef.current;
-      const merged = { ...previous, ...next };
-      const requestId = latestRequestRef.current + 1;
-      latestRequestRef.current = requestId;
+  const patch = useCallback((next: Partial<FontSettings>) => {
+    const previous = settingsRef.current;
+    const merged = { ...previous, ...next };
+    const bridge = getBridge();
+    if (!bridge) {
       settingsRef.current = merged;
       setSettings(merged);
-      const bridge = getBridge();
-      if (!bridge) return;
-      writeQueueRef.current = writeQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          try {
-            await bridge.setPatch(next);
-          } catch (error: unknown) {
-            window.electronAPI?.logToMain?.(
-              'error',
-              'renderer/appearance-settings',
-              `appearance settings write failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
-            // A stale failure must not roll back a newer optimistic update or
-            // a snapshot received from another window.
-            if (requestId === latestRequestRef.current && settingsRef.current === merged) {
-              settingsRef.current = previous;
-              setSettings(previous);
-            }
-          }
-        });
-    },
-    [],
-  );
+      return;
+    }
+    const requestId = nextRequestIdRef.current + 1;
+    nextRequestIdRef.current = requestId;
+    pendingWritesRef.current.push({ id: requestId, patch: next });
+    settingsRef.current = merged;
+    setSettings(merged);
+    writeQueueRef.current = writeQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await bridge.setPatch(next);
+          pendingWritesRef.current = pendingWritesRef.current.filter(
+            (pending) => pending.id !== requestId,
+          );
+        } catch (error: unknown) {
+          window.electronAPI?.logToMain?.(
+            'error',
+            'renderer/appearance-settings',
+            `appearance settings write failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          pendingWritesRef.current = pendingWritesRef.current.filter(
+            (pending) => pending.id !== requestId,
+          );
+          const optimistic = pendingWritesRef.current.reduce(
+            (current, pending) => ({ ...current, ...pending.patch }),
+            confirmedSettingsRef.current,
+          );
+          settingsRef.current = optimistic;
+          setSettings(optimistic);
+        }
+      });
+  }, []);
 
   const setUiFamily = useCallback(
     (family: string) => patch({ uiFamily: normalizeFamily(family) }),
