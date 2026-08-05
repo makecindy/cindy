@@ -3433,17 +3433,22 @@ function isCodexUserActionableRetryError(data: unknown): boolean {
  * Codex 原生重连行只应在真正的 turn 进展或明确收尾时让位。
  *
  * `maker:event` 里还混着后台任务更新、tool_result、thinking 等旁路事件；它们
- * 可能属于同一会话但不代表重连已经恢复。Codex 子代理的 descendant 通知不会走这条
- * 主事件流，而是专用的 `agent_task_update`；因此这里保留 `tool_use` 作为根 turn 的
- * 实质进展边界，并与 main 的 `isSubstantiveProgressEvent` 对齐。文本仍共用可见文本判据，
- * 避免空白 delta 误报恢复。
+ * 可能属于同一会话但不代表重连已经恢复。Codex 子代理的 descendant 状态通知不会走这条
+ * 主事件流，而是专用的 `agent_task_update`；但协作控制调用本身仍可能以 `tool_use` 进入流。
+ * `collab:*` 是这类控制调用的稳定命名空间，不代表根 turn 已经恢复，因此不能让它提前
+ * 清掉原生行。其它 `tool_use` 仍作为根 turn 的实质进展边界，并与 main 的
+ * `isSubstantiveProgressEvent` 对齐。文本仍共用可见文本判据，避免空白 delta 误报恢复。
  */
 function isCodexReconnectRecoveryOutput(event: CCAgentStreamEvent): boolean {
   if (event.type === 'text') {
     const text = (event.data as { text?: unknown } | null | undefined)?.text;
     return hasUserVisibleText(text);
   }
-  return event.type === 'tool_use' || event.type === 'done';
+  if (event.type === 'tool_use') {
+    const toolName = (event.data as { toolName?: unknown } | null | undefined)?.toolName;
+    return typeof toolName !== 'string' || !toolName.startsWith('collab:');
+  }
+  return event.type === 'done';
 }
 
 /** Main 的接管 projection 与随后 maker:event 来自两个 channel。只有活动行里保存的

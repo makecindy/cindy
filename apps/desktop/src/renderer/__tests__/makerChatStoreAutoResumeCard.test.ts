@@ -488,6 +488,40 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
     );
   });
 
+  it('协作子代理的 collab tool_use 不会提前清除原生活动行', () => {
+    const reconnecting = handleStreamEvent(
+      EMPTY_SESSION_STATE,
+      reconnectEvent('Reconnecting... 1/5', false),
+    );
+    const withCollabTool = handleStreamEvent(reconnecting, {
+      sessionId: SID,
+      type: 'tool_use',
+      source: 'codex',
+      data: { toolUseId: 'tool-1', toolName: 'collab:spawn', input: { task: '审查' } },
+    });
+
+    expect(
+      withCollabTool.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
+  });
+
+  it('普通根 turn tool_use 仍会清除原生活动行', () => {
+    const reconnecting = handleStreamEvent(
+      EMPTY_SESSION_STATE,
+      reconnectEvent('Reconnecting... 1/5', false),
+    );
+    const withRootTool = handleStreamEvent(reconnecting, {
+      sessionId: SID,
+      type: 'tool_use',
+      source: 'codex',
+      data: { toolUseId: 'tool-1', toolName: 'shell', input: { command: 'pwd' } },
+    });
+
+    expect(
+      withRootTool.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(false);
+  });
+
   it.each([
     ['认证', 'Reconnecting... 1/5 (401 Missing bearer)', { errorStatus: 401 }, /missing bearer/i],
     [
