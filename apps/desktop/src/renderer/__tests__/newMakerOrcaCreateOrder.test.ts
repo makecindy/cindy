@@ -137,9 +137,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     );
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
-    expect(sessionViewSource).toContain(
-      'disabled={remoteSessionUnavailable || remoteHandoffPreparing}',
-    );
+    expect(sessionViewSource).toContain('disabled={remoteHandoffPreparing}');
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {

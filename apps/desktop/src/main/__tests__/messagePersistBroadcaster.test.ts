@@ -29,8 +29,18 @@ vi.mock('../logger.js', () => ({
 }));
 
 const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
+const ownerScopeState = vi.hoisted(() => ({
+  current: true,
+  scope: { ownerScopeKey: 'owner-a', ownerStamp: undefined },
+}));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }] },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => ownerScopeState.scope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => ownerScopeState.current),
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  tapWindowBroadcast: vi.fn(),
 }));
 
 import {
@@ -78,6 +88,7 @@ const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.a
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
 });
@@ -182,6 +193,15 @@ describe('update_plan tool_use persistence', () => {
 });
 
 describe('agent_kind enqueue snapshot', () => {
+  it('owner boundary after commit keeps the durable result instead of triggering retry', async () => {
+    const result = await enqueueDurableWrite('post-commit-owner-switch', () => {
+      ownerScopeState.current = false;
+      return { committed: true };
+    });
+
+    expect(result).toEqual({ committed: true });
+  });
+
   it('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 agent_kind', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -875,7 +895,11 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
       'assistant-final',
       { turnCompleted: true },
     );
-    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-final');
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      'assistant-final',
+      expect.objectContaining({ ownerStamp: undefined }),
+    );
   });
 
   it('terminal error seal 以 durable patch 写 false', async () => {
@@ -885,7 +909,11 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
       'assistant-failed',
       { turnCompleted: false },
     );
-    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-failed');
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      'assistant-failed',
+      expect.objectContaining({ ownerStamp: undefined }),
+    );
   });
 
   it('纯 tool turn 没有 assistant 时不写 seal', async () => {
@@ -921,7 +949,11 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     // live 消息流与 banner 双显示(设计取舍见 onTurnErrorEvent 头注释)。
     expect((optsArg as { shouldBroadcast?: () => boolean })?.shouldBroadcast?.()).toBe(false);
     // 脏信号必须发:让已加载历史的后台会话下次打开时从 DB 重拉,error 卡正常浮现。
-    expect(mockSend).toHaveBeenCalledWith('local-db:session:error-persisted', { sessionId: SESSION });
+    expect(mockSend).toHaveBeenCalledWith(
+      'local-db:session:error-persisted',
+      { sessionId: SESSION },
+      undefined,
+    );
   });
 
   it('message 为空 → 不落库也不发脏信号', async () => {

@@ -67,7 +67,10 @@ describe('codex remote drift uses the bridge-clamped memory flag (R2 P2)', () =>
     // codexRemoteDriftOpts (内部走 remoteMakerMemoryEnabledForBridge)。
     expect(source).toContain('function remoteMakerMemoryEnabledForBridge()');
     expect(source).toContain('makerMemoryEnabled: remoteMakerMemoryEnabledForBridge()');
-    const driftCalls = source.match(/hasPendingRemoteMcpDrift\(live\.remoteHostId, codexRemoteDriftOpts\(\)\)/g) ?? [];
+    const driftCalls =
+      source.match(
+        /hasPendingRemoteMcpDrift\(\s*live\.remoteHostId\s*,\s*codexRemoteDriftOpts\(\)\s*,?\s*\)/g,
+      ) ?? [];
     expect(driftCalls.length).toBe(2);
     // drift 调用点不得残留裸 manager 现值。
     expect(source).not.toContain('makerMemoryEnabled: maker.makerMemory?.isEnabled() ?? false');

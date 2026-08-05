@@ -18,7 +18,10 @@ const sessionViewSource = readFileSync(
 
 function matchIndexes(haystack: string, pattern: RegExp): number[] {
   const indexes: number[] = [];
-  const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  const re = new RegExp(
+    pattern.source,
+    pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`,
+  );
   for (const match of haystack.matchAll(re)) {
     if (typeof match.index === 'number') indexes.push(match.index);
   }
@@ -27,8 +30,11 @@ function matchIndexes(haystack: string, pattern: RegExp): number[] {
 
 describe('interrupted continuation enqueue contract', () => {
   it('does not durable-ack continue prompts at INPUT_ENQUEUE or onAccepted time', () => {
-    const enqueueStart = registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_ENQUEUE');
-    const enqueueEnd = registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_COMPACT', enqueueStart);
+    const enqueueStart = registerSource.search(/ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_ENQUEUE/);
+    const enqueueEndMatch = /ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_COMPACT/.exec(
+      registerSource.slice(enqueueStart + 1),
+    );
+    const enqueueEnd = enqueueEndMatch ? enqueueStart + 1 + enqueueEndMatch.index : -1;
     expect(enqueueStart).toBeGreaterThan(-1);
     expect(enqueueEnd).toBeGreaterThan(enqueueStart);
     const enqueueHandler = registerSource.slice(enqueueStart, enqueueEnd);

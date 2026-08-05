@@ -17,6 +17,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 });
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
     getSessionDeviceId: () => undefined,
     subscribe: vi.fn(() => () => undefined),
@@ -104,6 +105,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (text: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],

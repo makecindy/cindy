@@ -2139,6 +2139,44 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
+  it('keeps the product turn running across claimed mobile continuation boundaries', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerStatus('s1', { isRunning: true });
+      pushMakerText('s1', 'persist-1', 'first segment', false);
+      vi.runOnlyPendingTimers();
+
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: {
+          type: 'status',
+          turnContinuationId: 7,
+          data: { isRunning: false, status: 'Done' },
+        },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', turnContinuationId: 7, data: {} },
+      });
+
+      expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+      expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+      expect(remoteSessionStore.getSessionRunStatus('s1').startedAt).not.toBeNull();
+      expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).toBe(true);
+
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', data: {} },
+      });
+
+      expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+      expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+      expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).not.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves boundary agent metadata when finalizing a streaming row', () => {
     vi.useFakeTimers();
     try {

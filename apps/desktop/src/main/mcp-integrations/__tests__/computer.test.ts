@@ -999,7 +999,7 @@ describe('computer mcp integration', () => {
     expectDriverSessionGenerations([payload.session], 'session-1', [0]);
   });
 
-  it('styles the TapTap cursor once per long-lived MCP session before actions', async () => {
+  it('styles the Cindy cursor once per long-lived MCP session before actions', async () => {
     mcpCallToolMock
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
@@ -1023,6 +1023,79 @@ describe('computer mcp integration', () => {
 
     const toolCalls = mcpCallToolMock.mock.calls.map((call) => call[0]?.name);
     expect(toolCalls).toEqual([
+      'set_agent_cursor_motion',
+      'set_agent_cursor_style',
+      'click',
+      'click',
+    ]);
+    expect(mcpCallToolMock.mock.calls[0]?.[0]?.arguments).toMatchObject({
+      cursor_color: '#DF0C27',
+      cursor_label: BRAND_NAME,
+    });
+    expect(mcpCallToolMock.mock.calls[1]?.[0]?.arguments).toMatchObject({
+      gradient_colors: ['#DF0C27', '#A61629'],
+      bloom_color: '#DF0C27',
+    });
+    expect(mcpConnectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries Cindy cursor styling after a transient styling failure', async () => {
+    mcpCallToolMock
+      .mockRejectedValueOnce(new Error('motion unavailable'))
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+      session: 'session-1',
+    }, { sessionId: 'session-1' })).resolves.toEqual({ ok: true, clicked: true });
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 11,
+      y: 21,
+      session: 'session-1',
+    }, { sessionId: 'session-1' })).resolves.toEqual({ ok: true, clicked: true });
+
+    const toolCalls = mcpCallToolMock.mock.calls.map((call) => call[0]?.name);
+    expect(toolCalls).toEqual([
+      'set_agent_cursor_motion',
+      'set_agent_cursor_style',
+      'click',
+      'set_agent_cursor_motion',
+      'click',
+    ]);
+  });
+
+  it('stops retrying unsupported cursor setup tools for the current MCP session', async () => {
+    mcpCallToolMock
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [{ type: 'text', text: "Permission denied: tool 'set_agent_cursor_style' has no reviewed risk classification" }],
+      })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-unsupported-style' })).resolves.toEqual({ ok: true, clicked: true });
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 11,
+      y: 21,
+    }, { sessionId: 'session-unsupported-style' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual([
       'set_agent_cursor_motion',
       'set_agent_cursor_style',
       'click',
@@ -1031,39 +1104,43 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retries TapTap cursor styling after a transient styling failure', async () => {
+  it('retries unsupported cursor setup after the MCP session is recreated', async () => {
     mcpCallToolMock
-      .mockRejectedValueOnce(new Error('motion unavailable'))
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [{ type: 'text', text: "Permission denied: tool 'set_agent_cursor_style' has no reviewed risk classification" }],
+      })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
 
-    await expect(callComputerDriverTool('click', {
+    await callComputerDriverTool('click', {
       pid: 123,
       window_id: 7,
       x: 10,
       y: 20,
-      session: 'session-1',
-    }, { sessionId: 'session-1' })).resolves.toEqual({ ok: true, clicked: true });
-    await expect(callComputerDriverTool('click', {
+    }, { sessionId: 'session-style-recreated' });
+    await cleanupComputerDriverSession('session-style-recreated');
+    await callComputerDriverTool('click', {
       pid: 123,
       window_id: 7,
       x: 11,
       y: 21,
-      session: 'session-1',
-    }, { sessionId: 'session-1' })).resolves.toEqual({ ok: true, clicked: true });
+    }, { sessionId: 'session-style-recreated' });
 
-    const toolCalls = mcpCallToolMock.mock.calls.map((call) => call[0]?.name);
-    expect(toolCalls).toEqual([
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual([
       'set_agent_cursor_motion',
       'set_agent_cursor_style',
       'click',
+      'end_session',
       'set_agent_cursor_motion',
       'set_agent_cursor_style',
       'click',
     ]);
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
   });
 
   it('throws the driver stderr when a tool call exits non-zero', async () => {
@@ -3288,7 +3365,6 @@ describe('computer mcp integration', () => {
     });
   });
 });
-
 
 function currentPlatformReleaseAsset(version: string, size = 21147689) {
   const name = getCuaDriverReleaseAssetName(version);

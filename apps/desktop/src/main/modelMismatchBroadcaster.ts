@@ -19,9 +19,10 @@ import type { ModelMismatchInfo } from '../shared/modelMismatch.js';
 import { patchMessageAgentMeta } from './localDb/ipc/messages.js';
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 
 const log = createLogger('modelMismatchBroadcaster');
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的模型降级标记。 */
 export const MESSAGE_MODEL_MISMATCH_CHANGED = 'usage:message-model-mismatch';
@@ -42,18 +43,53 @@ export interface ModelMismatchDeps {
   ): Promise<boolean>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageModelMismatchPayload): void;
+  /** Optional owner-aware broadcast used by production; test doubles may omit it. */
+  broadcastWithOwnerScope?(
+    payload: MessageModelMismatchPayload,
+    ownerScope: OwnerScope,
+  ): void;
+}
+
+function captureOwnerScope(): OwnerScope {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(scope: OwnerScope): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
+function broadcastModelMismatchPayload(
+  payload: MessageModelMismatchPayload,
+  ownerScope: OwnerScope,
+): void {
+  if (ownerScope === null) {
+    broadcastTap.tapWindowBroadcast(MESSAGE_MODEL_MISMATCH_CHANGED, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(
+      MESSAGE_MODEL_MISMATCH_CHANGED,
+      payload,
+      ownerScope.ownerStamp,
+    );
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      if (ownerScope === null) {
+        win.webContents.send(MESSAGE_MODEL_MISMATCH_CHANGED, payload);
+      } else {
+        win.webContents.send(MESSAGE_MODEL_MISMATCH_CHANGED, payload, ownerScope.ownerStamp);
+      }
+    }
+  }
 }
 
 const defaultDeps: ModelMismatchDeps = {
   patchAgentMeta: patchMessageAgentMeta,
   enqueue: enqueueDurableWrite,
   broadcast(payload) {
-    tapWindowBroadcast(MESSAGE_MODEL_MISMATCH_CHANGED, payload);
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(MESSAGE_MODEL_MISMATCH_CHANGED, payload);
-      }
-    }
+    broadcastModelMismatchPayload(payload, null);
+  },
+  broadcastWithOwnerScope(payload, ownerScope) {
+    broadcastModelMismatchPayload(payload, ownerScope);
   },
 };
 
@@ -75,12 +111,18 @@ export async function recordModelMismatchOnMessage(
   const { sessionId, clientId, mismatch } = args;
   if (!sessionId || !clientId) return;
   if (!mismatch?.selected || !mismatch.actual) return;
+  const ownerScope = captureOwnerScope();
   try {
     const patched = await deps.enqueue(`model-mismatch:${sessionId}:${clientId}`, () =>
       deps.patchAgentMeta(sessionId, clientId, { modelMismatch: mismatch }),
     );
-    if (!patched) return;
-    deps.broadcast({ sessionId, clientId, modelMismatch: mismatch });
+    if (!patched || !isOwnerScopeCurrent(ownerScope)) return;
+    const payload = { sessionId, clientId, modelMismatch: mismatch };
+    if (deps.broadcastWithOwnerScope) {
+      deps.broadcastWithOwnerScope(payload, ownerScope);
+    } else {
+      deps.broadcast(payload);
+    }
   } catch (err) {
     log.warn('recordModelMismatchOnMessage failed:', err instanceof Error ? err.message : String(err));
   }

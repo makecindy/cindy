@@ -16,6 +16,7 @@
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type { AgentEvent } from '@cindy/maker-core';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
@@ -316,6 +317,8 @@ interface TurnAccumulator {
   text: string;
   sawToolUse: boolean;
   tokensThisTurn: number;
+  /** Usage already sealed by claimed SDK boundaries inside this product turn. */
+  continuationTokens: number;
   /** 本轮是否已 finalize(去重 done / 终止 error 双触发)。 */
   finalized: boolean;
   /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
@@ -337,6 +340,7 @@ function freshTurn(
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
+    continuationTokens: 0,
     finalized: false,
     generation: 0,
     cancelled,
@@ -1186,6 +1190,7 @@ export class GoalController {
     turn.text = '';
     turn.sawToolUse = false;
     turn.tokensThisTurn = 0;
+    turn.continuationTokens = 0;
     turn.finalized = false;
     turn.generation += 1;
   }
@@ -1325,11 +1330,16 @@ export class GoalController {
         // 快照值也无妨(done 必在 status 之后到)。
         const d = event.data as { isRunning?: boolean; tokenUsage?: number } | null;
         if (d && d.isRunning === false && typeof d.tokenUsage === 'number') {
-          turn.tokensThisTurn = d.tokenUsage;
+          if (isTurnContinuationBoundaryEvent(event)) {
+            turn.continuationTokens += Math.max(0, d.tokenUsage);
+          } else {
+            turn.tokensThisTurn = turn.continuationTokens + Math.max(0, d.tokenUsage);
+          }
         }
         return;
       }
       case 'done': {
+        if (isTurnContinuationBoundaryEvent(event)) return;
         // AgentInputCoordinator releases the input boundary on the same terminal
         // event and may immediately start a queued user turn. Drop Goal ownership
         // synchronously here, before finalizeTurn awaits storage, so Clear cannot
@@ -1344,7 +1354,9 @@ export class GoalController {
         // promptTokens/completionTokens → 不命中,沿用上面 status 的 per-turn tokenUsage。
         const u = (event.data as { usage?: { promptTokens?: number; completionTokens?: number } } | null)?.usage;
         if (u && (typeof u.promptTokens === 'number' || typeof u.completionTokens === 'number')) {
-          turn.tokensThisTurn = Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
+          turn.tokensThisTurn =
+            turn.continuationTokens +
+            Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
         }
         void this.finalizeTurn(sessionId, event, false);
         return;

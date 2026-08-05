@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import {
   clearSessionAttention,
@@ -149,7 +150,8 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
   useEffect(() => {
     cancelledRef.current = false;
     void refresh();
-    const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+    const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const event = raw as SchedulerEvent;
       if (event.type === 'session-bound') {
         // Scheduler notifier 是 schedule.notify 的唯一外发通知 owner；普通 session

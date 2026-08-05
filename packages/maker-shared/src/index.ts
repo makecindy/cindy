@@ -44,5 +44,6 @@ export * from './syntheticTrigger.js';
 export * from './systemCard.js';
 export * from './toolUseDescriptor.js';
 export * from './thinkingText.js';
+export * from './turnContinuation.js';
 export * from './workActivityProjection.js';
 export * from './worktreePaths.js';

@@ -28,6 +28,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -36,6 +37,7 @@ import type { PluginMarketPackageReview } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   activeOwnerScopeKey,
+  getActiveDataOwnerPushStamp,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
@@ -88,6 +90,7 @@ import {
 import {
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
+  parseOauthConnectSecretKey,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
@@ -98,6 +101,10 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import {
+  appendReadyGhostOauthReauthSuggest,
+  findGhostOauthReauthSuggest,
+} from './ghostOauthScopeStaleness.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
@@ -286,6 +293,10 @@ import {
   createLegacyGhostRecoveryIpcHandlers,
 } from './legacyGhostRecoveryIpc.js';
 import type { LegacyGhostRecoveryStatus } from '../../shared/legacyGhostRecovery.js';
+import {
+  isDataOwnerPushStamp,
+  type DataOwnerPushStamp,
+} from '../../shared/dataOwnerPush.js';
 
 /**
  * 意识仓库的进程级单例 + IPC 注册。
@@ -302,6 +313,76 @@ import type { LegacyGhostRecoveryStatus } from '../../shared/legacyGhostRecovery
  */
 
 const log = createLogger('brain');
+
+/** Attach the main-owned data-owner boundary to ghost UI pushes. */
+function getGhostOwnerPushStamp(): DataOwnerPushStamp | undefined {
+  try {
+    return getActiveDataOwnerPushStamp();
+  } catch {
+    // Tests and very early bootstrap may not have an app-session store yet.
+    return undefined;
+  }
+}
+
+function isSameGhostOwnerStamp(
+  a: DataOwnerPushStamp,
+  b: DataOwnerPushStamp,
+): boolean {
+  return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+function isGhostOwnerStampCurrent(ownerStamp: DataOwnerPushStamp | undefined): boolean {
+  if (ownerStamp === undefined) return true;
+  const current = getGhostOwnerPushStamp();
+  return current !== undefined && isSameGhostOwnerStamp(ownerStamp, current);
+}
+
+function sendGhostWindowPush(
+  window: BrowserWindow,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  sendGhostContentsPush(window.webContents, channel, payload, ownerStamp);
+}
+
+function sendGhostContentsPush(
+  contents: WebContents,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
+  const stamp = ownerStamp ?? getGhostOwnerPushStamp();
+  // The initial pre-auth bootstrap has no meaningful boundary yet. Keep the
+  // old Electron call shape there; every committed owner carries a stamp.
+  if (stamp === undefined || (stamp.dataOwnerId === null && stamp.ownerGeneration === 0)) {
+    contents.send(channel, payload);
+  } else {
+    contents.send(channel, payload, stamp);
+  }
+}
+
+function broadcastGhostWindowPush(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) sendGhostWindowPush(window, channel, payload, ownerStamp);
+  }
+}
+
+function sendGhostTrustedWindowPush(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || !isTrustedAppRendererWindow(window)) continue;
+    sendGhostWindowPush(window, channel, payload, ownerStamp);
+  }
+}
 
 /**
  * 电子脑管子与 settingsHtml `/app-context` 共用,避免 region / locale 两条口径漂移。
@@ -593,6 +674,30 @@ function availableGhosts(): InstalledGhost[] {
   return getGhostManager().list().filter((ghost) =>
     isGhostAvailableForActiveSession(ghost.manifest.id),
   );
+}
+
+function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
+  try {
+    const suggest = getGhostOauthReauthSuggest(withRuntimeFiloGoogleClient(ghost.manifest));
+    return {
+      ...ghost,
+      ...(suggest
+        ? {
+            oauthScopeStale: {
+              secretKey: suggest.secretKey,
+              missingScopeCount: suggest.missingScopeCount,
+            },
+          }
+        : {}),
+    };
+  } catch (error) {
+    // 详情页角标是提示面，保险库异常不能让插件清单整体消失。
+    log.warn('ghost oauth scope stale projection omitted', {
+      ghostId: ghost.manifest.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return ghost;
+  }
 }
 
 function findAvailableGhost(id: string): InstalledGhost | null {
@@ -1043,10 +1148,7 @@ export function getGhostSessionActivityTracker(): GhostSessionActivityTracker {
   if (!sessionActivityTrackerSingleton) {
     sessionActivityTrackerSingleton = new GhostSessionActivityTracker({
       broadcast: (sessionId, busy) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_SESSION_ACTIVITY_CHANNEL, { sessionId, busy });
-        });
+        broadcastGhostWindowPush(GHOST_SESSION_ACTIVITY_CHANNEL, { sessionId, busy });
       },
       log,
     });
@@ -1070,10 +1172,7 @@ export function getGhostCardService(): GhostCardService {
       sanitize: sanitizeGhostCardHtml,
       persist: (row) => upsertGhostCard(row),
       broadcast: (payload) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_CARD_UPDATED_CHANNEL, payload);
-        });
+        broadcastGhostWindowPush(GHOST_CARD_UPDATED_CHANNEL, payload);
       },
       // 重开态(card-action 后台干活)的供片驱动会话呼吸:working/未声明续期,
       // done 熄灭(TTL 兜底在跟踪器内)。
@@ -1159,14 +1258,11 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
         }
       },
       now: () => Date.now(),
-      onHookFused: (ghost) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_HOOK_FUSED_CHANNEL, {
-            ghostId: ghost.manifest.id,
-            name: ghost.manifest.name,
-          });
-        });
+      onHookFused: (ghost, ownerStamp) => {
+        broadcastGhostWindowPush(GHOST_HOOK_FUSED_CHANNEL, {
+          ghostId: ghost.manifest.id,
+          name: ghost.manifest.name,
+        }, isDataOwnerPushStamp(ownerStamp) ? ownerStamp : undefined);
       },
       log,
     });
@@ -1366,7 +1462,14 @@ export function createGhostSessionTap(sessionId: string): {
       if (state === 'ineligible') return;
       pending.push({
         type: 'event',
-        event: { type: ev.type, data: ev.data, source: ev.source },
+        event: {
+          type: ev.type,
+          data: ev.data,
+          source: ev.source,
+          ...(ev.turnContinuationId !== undefined
+            ? { turnContinuationId: ev.turnContinuationId }
+            : {}),
+        },
       });
       kickResolve();
     },
@@ -1444,13 +1547,18 @@ export async function screenGhostUserMessage(
   sessionId: string,
   text: string,
 ): Promise<GhostScreenResult> {
+  const ownerStamp = getGhostOwnerPushStamp();
   try {
     const hasHookGhost = availableGhosts()
       .some((g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'));
     if (!hasHookGhost) return { action: 'allow' };
     // retry(DB 未就绪)也放行:拦截是尽力而为的旁路,fail-open 不挡发送。
     if ((await isGhostEligibleSession(sessionId)).outcome !== 'eligible') return { action: 'allow' };
-    return await getGhostSubscriptionGateway().screenUserMessage({ sessionId, text });
+    const result = await getGhostSubscriptionGateway().screenUserMessage(
+      { sessionId, text },
+      ownerStamp,
+    );
+    return isGhostOwnerStampCurrent(ownerStamp) ? result : { action: 'allow' };
   } catch (err) {
     log.warn('ghost screen failed (fail-open)', {
       error: err instanceof Error ? err.message : String(err),
@@ -1471,10 +1579,7 @@ export function broadcastGhostMessageBlocked(payload: {
   reason: string;
   text: string;
 }): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_MESSAGE_BLOCKED_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_MESSAGE_BLOCKED_CHANNEL, payload);
 }
 
 /** 改写通知广播(register.ts 的 onUserMessageRewritten 依赖真身)。
@@ -1489,10 +1594,7 @@ export function broadcastGhostMessageRewritten(payload: {
   text: string;
   originalText: string;
 }): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_MESSAGE_REWRITTEN_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_MESSAGE_REWRITTEN_CHANNEL, payload);
 }
 
 /** 是否有启用的意识声明了 will-assistant-message(出口钩子快路径同步守卫)。 */
@@ -1508,19 +1610,22 @@ function broadcastGhostAssistantRewritten(payload: {
   ghostId: string;
   ghostName: string;
   text: string;
-}): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_ASSISTANT_REWRITTEN_CHANNEL, payload);
-  });
+}, ownerStamp?: DataOwnerPushStamp): void {
+  broadcastGhostWindowPush(GHOST_ASSISTANT_REWRITTEN_CHANNEL, payload, ownerStamp);
 }
 
 /** 广播:出口钩子后台处理中/完成的轻指示。 */
-function broadcastGhostAssistantPending(sessionId: string, clientId: string, pending: boolean): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_ASSISTANT_PENDING_CHANNEL, { sessionId, clientId, pending });
-  });
+function broadcastGhostAssistantPending(
+  sessionId: string,
+  clientId: string,
+  pending: boolean,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  broadcastGhostWindowPush(
+    GHOST_ASSISTANT_PENDING_CHANNEL,
+    { sessionId, clientId, pending },
+    ownerStamp,
+  );
 }
 
 /**
@@ -1532,7 +1637,9 @@ async function applyGhostAssistantRenderCard(
   sessionId: string,
   clientId: string,
   card: { ghostId: string; ghostName: string; html: string; height?: number },
+  ownerStamp?: DataOwnerPushStamp,
 ): Promise<void> {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
   const sanitized = sanitizeGhostCardHtml(card.html);
   if (!sanitized.ok) {
     log.warn('ghost assistant render card rejected by sanitizer', { sessionId, reason: sanitized.reason });
@@ -1559,9 +1666,10 @@ async function applyGhostAssistantRenderCard(
       error: err instanceof Error ? err.message : String(err),
     });
   });
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_CARD_UPDATED_CHANNEL, {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
+  broadcastGhostWindowPush(
+    GHOST_CARD_UPDATED_CHANNEL,
+    {
       callId: clientId,
       ghostId: card.ghostId,
       toolUseId: null,
@@ -1573,8 +1681,9 @@ async function applyGhostAssistantRenderCard(
       // clientId 直取),**不进 liveCards 锚定池**——否则 toolUseId:null 的条目会
       // 被同意识进行中 ghost_call 的启发式锚定抢走(review P1,2026-07-13)。
       turnCard: true,
-    });
-  });
+    },
+    ownerStamp,
+  );
 }
 
 /**
@@ -1584,17 +1693,31 @@ async function applyGhostAssistantRenderCard(
  * clientId = 本轮 assistant 消息持久化 id(consumeLastAssistantPersistId 取得)。
  */
 export function runGhostAssistantReplyHook(sessionId: string, clientId: string, text: string): void {
+  const ownerStamp = getGhostOwnerPushStamp();
+  const isCurrent = () => isGhostOwnerStampCurrent(ownerStamp);
   void runAssistantReplyHook(
     {
+      isCurrent,
       hasHook: hasEnabledGhostAssistantHook,
-      isEligible: async (sid) => (await isGhostEligibleSession(sid)).outcome === 'eligible',
-      screen: (sid, t) => getGhostSubscriptionGateway().screenAssistantMessage({ sessionId: sid, text: t }),
+      isEligible: async (sid) => isCurrent() && (await isGhostEligibleSession(sid)).outcome === 'eligible',
+      screen: async (sid, t) => {
+        if (!isCurrent()) return { action: 'allow' as const };
+        const result = await getGhostSubscriptionGateway().screenAssistantMessage(
+          { sessionId: sid, text: t },
+          ownerStamp,
+        );
+        return isCurrent() ? result : { action: 'allow' as const };
+      },
       persistRewrite: async (sid, cid, t) => {
+        if (!isCurrent()) return;
         await updateMessageContent(sid, cid, t);
       },
-      applyRenderCard: (sid, cid, cardArg) => applyGhostAssistantRenderCard(sid, cid, cardArg),
-      broadcastRewritten: broadcastGhostAssistantRewritten,
-      setPending: broadcastGhostAssistantPending,
+      applyRenderCard: (sid, cid, cardArg) =>
+        applyGhostAssistantRenderCard(sid, cid, cardArg, ownerStamp),
+      broadcastRewritten: (payload) =>
+        broadcastGhostAssistantRewritten(payload, ownerStamp),
+      setPending: (sid, cid, pending) =>
+        broadcastGhostAssistantPending(sid, cid, pending, ownerStamp),
       log,
     },
     sessionId,
@@ -1781,10 +1904,7 @@ export function broadcastGhostHostNotice(
     textKey: notice.textKey,
     ...(textArgs ? { textArgs } : {}),
   };
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_NOTIFY_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_NOTIFY_CHANNEL, payload);
   log.info('ghost host notice shown', { ghostId, textKey: notice.textKey });
 }
 
@@ -1797,10 +1917,7 @@ export function getGhostNotifySlot(): GhostNotifySlot {
     notifySlotSingleton = new GhostNotifySlot({
       getGhost: findAvailableGhost,
       broadcast: (payload) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_NOTIFY_CHANNEL, payload);
-        });
+        broadcastGhostWindowPush(GHOST_NOTIFY_CHANNEL, payload);
       },
       log,
     });
@@ -1829,11 +1946,7 @@ export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
  * 判据复用 `isTrustedAppRendererWindow`,与 `ghosts:unread` 同步读那道闸同源。
  */
 function sendToTrustedAppWindows(channel: string, payload: unknown): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    if (!isTrustedAppRendererWindow(window)) return;
-    window.webContents.send(channel, payload);
-  });
+  sendGhostTrustedWindowPush(channel, payload);
 }
 
 function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summary?: string; at?: number }): void {
@@ -2012,7 +2125,7 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
         sendToWindow: (payload) => {
           const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
           if (!win || win.isDestroyed()) return false;
-          win.webContents.send(GHOST_CONFIRM_CHANNEL, payload);
+          sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
           return true;
         },
         log,
@@ -2170,7 +2283,7 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
       broadcast: (payload) => {
         const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
         windows.forEach((window) => {
-          window.webContents.send(GHOST_PREVIEW_OPEN_CHANNEL, payload);
+          sendGhostWindowPush(window, GHOST_PREVIEW_OPEN_CHANNEL, payload);
         });
         return windows.length > 0;
       },
@@ -2772,6 +2885,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth' });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
         broadcastGhostHostNotice(
           ghostId,
           label
@@ -2784,6 +2898,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           source: 'oauth',
           ref: secretKey,
         });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       isConnectTargetCurrent: (ghostId, secretKey, decl) => {
         const ghost = findAvailableGhost(ghostId);
@@ -2822,6 +2937,14 @@ function getGhostConnectionManager(): GhostConnectionManager {
 
 let ghostSetupKvStore: GhostKvStore | null = null;
 
+/** 默认 OAuth 账号的授权面陈旧建议；只返回首个凭证槽，保持 envelope 有界。 */
+function getGhostOauthReauthSuggest(runtimeManifest: GhostManifest): GhostSetupReauthSuggest | undefined {
+  const oauthManager = getGhostOauthAccountManager();
+  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) =>
+    oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl),
+  );
+}
+
 /**
  * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
  * Unlike the legacy plugin-page projection this path is strict: storage or
@@ -2836,7 +2959,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  return evaluateGhostSetupAssessment(
+  const assessment = evaluateGhostSetupAssessment(
     runtimeManifest,
     {
       secretSaved: (key) => ghostSecretSaved(ghostId, key),
@@ -2864,6 +2987,13 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       }),
     },
   );
+  // 性能短路:required 时建议注定被丢弃,不再为它读保险库。
+  // "required 绝不带建议"的契约不变量仍由 appendReadyGhostOauthReauthSuggest 守着。
+  if (assessment.state !== 'ready') return assessment;
+  return appendReadyGhostOauthReauthSuggest(
+    assessment,
+    getGhostOauthReauthSuggest(runtimeManifest),
+  );
 }
 
 /**
@@ -2885,11 +3015,10 @@ export async function executeGhostSetupAction(args: {
     };
   }
   if (args.action.kind === 'oauth_connect') {
-    const prefix = 'oauth_connect:secret:';
-    if (!args.action.id.startsWith(prefix)) {
+    const secretKey = parseOauthConnectSecretKey(args.action.id);
+    if (!secretKey) {
       return { ok: false, errorCode: 'ACTION_STALE', message: '授权动作已失效' };
     }
-    const secretKey = args.action.id.slice(prefix.length);
     const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
     const decl = runtimeManifest.network?.secrets?.find(
       (secret) => secret.key === secretKey && secret.source === 'oauth',
@@ -3735,6 +3864,7 @@ export function registerGhostIpc(): void {
       ghostId,
       onChanged: (secretKey) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       log,
     });
@@ -4248,7 +4378,7 @@ export function registerGhostIpc(): void {
   });
 
   ipcMain.on('ghosts:list', (event) => {
-    event.returnValue = { ghosts: availableGhosts() };
+    event.returnValue = { ghosts: availableGhosts().map(projectGhostForRenderer) };
   });
 
   // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入
@@ -4898,7 +5028,11 @@ export function handleGhostPreviewNavigation(
         return;
       }
       if (hostContents.isDestroyed()) return;
-      hostContents.send(GHOST_PREVIEW_MEDIA_CHANNEL, { ghostId, src: outcome.src, kind: outcome.kind });
+      sendGhostContentsPush(hostContents, GHOST_PREVIEW_MEDIA_CHANNEL, {
+        ghostId,
+        src: outcome.src,
+        kind: outcome.kind,
+      });
     })
     .catch((err) => {
       log.warn('ghost preview failed', {
@@ -4980,10 +5114,7 @@ export function resolveGhostWebviewAttach(partition: unknown, src: unknown): Ins
 
 /** 播种进行中提示广播(renderer 显示/收起非阻塞胶囊;与退出 overlay 同款视觉)。 */
 function broadcastGhostProvisioning(active: boolean): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:provisioning', { active });
-  });
+  broadcastGhostWindowPush('ghosts:provisioning', { active });
 }
 
 /**
@@ -4995,14 +5126,23 @@ function broadcastGhostProvisioning(active: boolean): void {
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,
+  opts?: {
+    /**
+     * true = 花名册没变,只是 renderer 投影字段(OAuth 陈旧角标)需要刷新。
+     * 跳过清单指纹、未读扫尾与 skill 链接对账这些只对装/卸/启停/换版有
+     * 意义的花名册侧效应,OAuth 账号操作不再连带两趟全量磁盘扫描。
+     */
+    projectionOnly?: boolean;
+  },
 ): void {
-  getGhostSetupManifestTracker().note(ghosts);
-  sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
-  const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:changed', { ghosts: visible });
-  });
+  if (!opts?.projectionOnly) {
+    getGhostSetupManifestTracker().note(ghosts);
+    sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
+  }
+  const visible = ghosts
+    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id))
+    .map(projectGhostForRenderer);
+  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
   // 与 renderer 同一份可见清单喂给观察者(独立窗口 controller reconcile 等);
   // 观察者异常不拖垮广播本体。
   if (ghostsChangedObserver) {
@@ -5017,7 +5157,7 @@ function broadcastGhostsChanged(
   // skill 槽共享链接对账:装/卸/启停/换版全走本广播,一处挂接全覆盖。
   // 异步合并执行,不阻塞广播;用全量 list() 而非 per-session 过滤后的 visible
   // (链接对账关心"装了什么",与当前会话可见性无关)。
-  scheduleGhostSkillReconcile();
+  if (!opts?.projectionOnly) scheduleGhostSkillReconcile();
 }
 
 // —— skill 槽链接对账调度:合并突发广播(in-flight + pending 双标志),
@@ -5090,17 +5230,11 @@ export function refreshGhostLocalization(): void {
 
 /** Plugin 顶部快捷行的 host-owned MRU 快照，多窗口同步。 */
 function broadcastGhostRecentUsageChanged(ids: string[]): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:recent-usage-changed', { ids });
-  });
+  broadcastGhostWindowPush('ghosts:recent-usage-changed', { ids });
 }
 
 /** 运行时状态广播(→ 意识面板的错误接管态:crashed / fused 原地显示)。 */
 function broadcastGhostRuntimeStates(): void {
   const states = runtimeSingleton?.listStates() ?? {};
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:runtime-changed', { states });
-  });
+  broadcastGhostWindowPush('ghosts:runtime-changed', { states });
 }
