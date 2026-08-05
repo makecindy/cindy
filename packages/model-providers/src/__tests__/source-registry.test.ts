@@ -417,6 +417,7 @@ describe('loadCatalog', () => {
 
   it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
     const url = 'https://catalog.example.test/providers.json';
+    const newerUpdatedAt = '2099-08-02T00:00:00.000Z';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
     const xai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!xai) throw new Error('missing bundled xAI provider');
@@ -436,7 +437,7 @@ describe('loadCatalog', () => {
       providers: [...MINIMAL.providers, { ...xai, name: 'NEWER-LKG-XAI' }],
       modelRegistry: {
         ...registry,
-        updatedAt: '2026-08-02T00:00:00.000Z',
+        updatedAt: newerUpdatedAt,
         models: registry.models.map((entry: { id: string }) => (
           entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'NEWER-LKG' } : entry
         )),
@@ -455,14 +456,14 @@ describe('loadCatalog', () => {
 
     expect(loaded.source).toBe('remote');
     expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
     expect(
       loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
     ).toBe('NEWER-LKG');
     expect(loaded.catalog.providers.find((provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
     const persisted = JSON.parse(writeCache.mock.calls[0]![1]);
-    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(persisted.modelRegistry.updatedAt).toBe(newerUpdatedAt);
     expect(persisted.providers.find((provider: Provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
   });
@@ -505,12 +506,13 @@ describe('loadCatalog', () => {
 
   it('adopts the newer snapshot returned by a serialized LKG commit', async () => {
     const url = 'https://catalog.example.test/providers.json';
+    const newerUpdatedAt = '2099-08-01T00:00:00.000Z';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
     const newer: Catalog = {
       ...MINIMAL,
       modelRegistry: {
         ...registry,
-        updatedAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: newerUpdatedAt,
       },
     };
     const older: Catalog = {
@@ -530,7 +532,7 @@ describe('loadCatalog', () => {
     );
 
     expect(loaded.source).toBe('remote');
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe(newerUpdatedAt);
   });
 
   it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {

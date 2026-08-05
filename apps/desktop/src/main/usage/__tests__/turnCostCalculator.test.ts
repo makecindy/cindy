@@ -496,6 +496,40 @@ describe('resolveTurnCost', () => {
     });
   });
 
+  it('recomputes DeepSeek BYOK cost from cache-aware official pricing instead of SDK estimates', () => {
+    const result = resolveTurnCost({
+      rawModel: 'deepseek-v4-pro[1m]',
+      tokens: {
+        inputTokens: 2_000,
+        outputTokens: 500,
+        cacheReadTokens: 118_000,
+        cacheCreateTokens: 0,
+      },
+      // 模拟 SDK 把 12 万输入 token 全按 cache miss 估出的高值。
+      sdkCostDelta: 0.052635,
+      pricing: catalog(
+        quote('deepseek-v4-pro', 0.435, 0.87, {
+          providerId: 'deepseek',
+          cacheReadPerMtok: 0.003625,
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      context: { providerId: 'deepseek', billingRoute: 'provider-api', region: 'global' },
+    });
+
+    expect(result).toMatchObject({
+      model: 'deepseek-v4-pro',
+      source: 'reference',
+      money: {
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+      },
+    });
+    expect(result.money?.amount).toBeCloseTo(0.00173275, 10);
+  });
+
   it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
     const result = resolveTurnCost({
       rawModel: 'custom-model',
