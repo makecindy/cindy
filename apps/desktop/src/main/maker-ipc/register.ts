@@ -2153,6 +2153,21 @@ function cancelDirectAbortReconciliation(
 }
 
 /**
+ * Capture only the exact direct-abort owner that a provider-driven close is
+ * about to tear down. Ordinary closes and stale owner/turn generations must
+ * not wake a paused Goal after their routing identity has been discarded.
+ */
+function getDirectAbortBoundaryForClosingSession(
+  sessionId: string,
+  session: WiredSession,
+): DirectAbortReconcileBoundary | null {
+  const boundary = directAbortReconcileBoundaries.get(sessionId);
+  if (!boundary || boundary.session !== session) return null;
+  if (currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation) return null;
+  return boundary;
+}
+
+/**
  * SDK result 事件的 total_cost_usd 是 session 累计 (不是 per-turn) ——
  * 老 vendor/claude/usageExtractor.ts:72-74 也确认过。要算"这一 turn 花了多少"
  * 就要拿这次累计减上次累计。这里 per-session 记一下上次报上来的累计值。
@@ -4486,6 +4501,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
       }
       if (status === 'closed') {
+        const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(
+          session.id,
+          session,
+        );
         try {
           cleanupPendingInteractionsForSession(session.id, 'session_closed');
           // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
@@ -4548,6 +4567,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           sessionTurnActivityTracker.deleteSession(session.id);
           sessionTurnBoundaryGenerationById.delete(session.id);
           markSessionTurnEnded(session.id);
+          if (closedDirectAbortBoundary) {
+            // Provider close is authoritative that this exact abort-owned turn
+            // is idle. Its reconciliation chain was cancelled by teardown, so
+            // preserve the shared terminal wake-up before the intent is orphaned.
+            notifyGoalIdleAfterTurnSettled(session.id);
+          }
         }
       }
     }),

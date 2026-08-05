@@ -1838,6 +1838,7 @@ describe('GoalController', () => {
     ['normal completion', 'blocked', 'done'],
     ['terminal error', 'blocked', 'error'],
     ['abort', 'paused', 'abort'],
+    ['provider close without a terminal event', 'paused', 'closed'],
   ] as const)(
     'honors one manual Resume for a %s turn while a %s goal waits for the old turn to settle',
     async (_label, status, terminalKind) => {
@@ -1853,14 +1854,14 @@ describe('GoalController', () => {
 
       if (terminalKind === 'done') {
         local.session.emitGoalTurn({});
-      } else {
+      } else if (terminalKind !== 'closed') {
         local.session.emitErrorTurn({
           message: terminalKind === 'abort' ? 'AbortError: interrupted' : 'old turn failed',
         });
       }
       sessionInTurn = false;
-      // Production wires reconciliation and every product-terminal event to this observer.
-      // Reconciliation followed by a late error + paired done must still coalesce into one turn.
+      // Production wires reconciliation, provider close, and every product-terminal event to
+      // this observer. A close/retry followed by a late terminal tail must still coalesce once.
       await Promise.all([
         local.controller.maybeContinueActiveGoal('s1'),
         local.controller.maybeContinueActiveGoal('s1'),

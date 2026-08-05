@@ -90,7 +90,7 @@ describe('maker:event hot path ordering', () => {
       'notifyGoalIdleAfterTurnSettled(session.id);',
     );
     expect(
-      [...wireSessionSource.matchAll(/notifyGoalIdleAfterTurnSettled\(session\.id\);/g)],
+      [...terminalIdleBlock.matchAll(/notifyGoalIdleAfterTurnSettled\(session\.id\);/g)],
     ).toHaveLength(1);
   });
 
@@ -579,6 +579,9 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
+    const closeBoundaryStart = source.indexOf('function getDirectAbortBoundaryForClosingSession(');
+    const closeBoundaryEnd = source.indexOf('\n}\n', closeBoundaryStart) + 2;
+    const closeBoundarySource = source.slice(closeBoundaryStart, closeBoundaryEnd);
     const helperStart = source.indexOf('const readDirectAbortTurnId =');
     const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
     const helperSource = source.slice(helperStart, helperEnd);
@@ -587,11 +590,22 @@ describe('maker:event hot path ordering', () => {
 
     expect(source).toContain('const sessionTurnBoundaryGenerationById = new Map<string, number>();');
     expect(source).toContain('const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();');
+    expect(closeBoundaryStart).toBeGreaterThanOrEqual(0);
+    expect(closeBoundaryEnd).toBeGreaterThan(closeBoundaryStart);
+    expect(closeBoundarySource).toContain('boundary.session !== session');
+    expect(closeBoundarySource).toContain(
+      'currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation',
+    );
     expect(helperSource).toContain('wiredSessionsById.get(sessionId)?.session !== boundary.session');
     expect(helperSource).toContain('currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation');
     expect(helperSource).toContain('direct-abort-retry');
     expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
     expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
+    expectOrder(
+      closedBlock,
+      'const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(',
+      'cancelDirectAbortReconciliation(session.id);',
+    );
     expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
     expectOrder(
       closedBlock,
@@ -599,6 +613,15 @@ describe('maker:event hot path ordering', () => {
       'pendingFailedTurnAssistantPersistId.delete(session.id);',
     );
     expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
+    expectOrder(
+      closedBlock,
+      'sessionTurnActivityTracker.deleteSession(session.id);',
+      'if (closedDirectAbortBoundary) {',
+    );
+    expect(closedBlock).toContain('notifyGoalIdleAfterTurnSettled(session.id);');
+    expect(
+      closedBlock.indexOf('notifyGoalIdleAfterTurnSettled(session.id);'),
+    ).toBeGreaterThan(closedBlock.indexOf('sessionTurnBoundaryGenerationById.delete(session.id);'));
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {
