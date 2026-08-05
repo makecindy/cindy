@@ -409,7 +409,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('sidebarTargetSessionId={sidebarTargetSessionId}');
     expect(sessionViewSource).toContain("const ownsWindowRoute = navigationMode === 'route-owner';");
     expect(sessionViewSource).toContain('ownsWindowRoute && handoffFrom');
-    expect(sessionViewSource).toContain('ownsWindowRoute && session?.parentSessionId');
+    expect(sessionViewSource).toContain('canNavigateSession && session?.parentSessionId');
     expect(sessionViewSource).toContain(
       "const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';",
     );

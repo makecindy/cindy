@@ -313,6 +313,12 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(source).toContain(
       "onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined",
     );
+    expect(source).toContain(
+      'onSessionNavigate?.(parentSessionId, getSessionRouteOwnerId(target) ?? parentSessionId)',
+    );
+    expect(source).toContain(
+      'canNavigateSession && session?.parentSessionId && session.forkedAtMessageId',
+    );
   });
 
   it('keeps route-owner session links interactive', async () => {

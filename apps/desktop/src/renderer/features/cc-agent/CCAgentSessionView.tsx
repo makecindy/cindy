@@ -142,6 +142,7 @@ import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
 import {
+  getSessionRouteOwnerId,
   isOrcaLeadSession,
   isOrcaWorkerSession,
   resolveSessionRoute,
@@ -1112,7 +1113,7 @@ export function CCAgentSessionView({
   }, [handoffFrom?.dispatcherSessionId, navigate, ownsWindowRoute, sessionId]);
 
   const handleOpenForkOrigin = useCallback(() => {
-    if (!ownsWindowRoute) {
+    if (!canNavigateSession) {
       log.info('fork origin navigation ignored by embedded sidebar view', { sessionId });
       return;
     }
@@ -1120,6 +1121,7 @@ export function CCAgentSessionView({
     const parentSessionId = session.parentSessionId;
     const forkedAtMessageId = session.forkedAtMessageId;
     void resolveSessionRoute(parentSessionId).then((target) => {
+      onSessionNavigate?.(parentSessionId, getSessionRouteOwnerId(target) ?? parentSessionId);
       navigate(target, {
         state: {
           searchJump: {
@@ -1132,18 +1134,25 @@ export function CCAgentSessionView({
         },
       });
     });
-  }, [navigate, ownsWindowRoute, session?.forkedAtMessageId, session?.parentSessionId, sessionId]);
+  }, [
+    canNavigateSession,
+    navigate,
+    onSessionNavigate,
+    session?.forkedAtMessageId,
+    session?.parentSessionId,
+    sessionId,
+  ]);
 
   const forkOrigin = useMemo(
     () =>
-      ownsWindowRoute && session?.parentSessionId && session.forkedAtMessageId
+      canNavigateSession && session?.parentSessionId && session.forkedAtMessageId
         ? {
             parentSessionId: session.parentSessionId,
             forkedAtMessageId: session.forkedAtMessageId,
             forkedSessionCreatedAt: session.createdAt,
           }
         : null,
-    [ownsWindowRoute, session?.createdAt, session?.forkedAtMessageId, session?.parentSessionId],
+    [canNavigateSession, session?.createdAt, session?.forkedAtMessageId, session?.parentSessionId],
   );
 
   // F-CMD /help: 拉三源(desktop + agent-builtin + agent-skill) palette 快照,
