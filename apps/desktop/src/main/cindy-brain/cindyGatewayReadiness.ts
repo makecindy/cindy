@@ -9,5 +9,5 @@ import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js'
 
 export function isXdGatewayProviderReady(providerId: string): boolean {
   if (providerId !== 'xd') return true;
-  return getAppCapabilities().canUseCindyGateway && effectiveXdGatewayBaseUrl() !== '';
+  return getAppCapabilities().canUseCindyGateway && effectiveXdGatewayBaseUrl().trim() !== '';
 }

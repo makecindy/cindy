@@ -46,6 +46,12 @@ const XD_CASES: Array<{
     expected: false,
   },
   {
+    name: '已登录但 endpoint 仅含空白 → 未就绪',
+    canUseCindyGateway: true,
+    gatewayBaseUrl: '  \n\t  ',
+    expected: false,
+  },
+  {
     name: '未登录但 endpoint 残留 → 未就绪',
     canUseCindyGateway: false,
     gatewayBaseUrl: 'https://gateway.example',
