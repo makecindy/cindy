@@ -1534,6 +1534,28 @@ function persistedZoomMenuItem(
   };
 }
 
+function persistedZoomMenuItems(
+  role: 'resetZoom' | 'zoomIn' | 'zoomOut',
+  delta: number | null,
+  registerAccelerator: boolean,
+): Electron.MenuItemConstructorOptions[] {
+  const item = persistedZoomMenuItem(role, delta, registerAccelerator);
+  if (process.platform !== 'darwin' || role !== 'zoomIn') return [item];
+
+  // macOS treats ⌘= (unshifted Equal) and ⇧⌘= (Plus) as separate accelerator
+  // paths. Keep the second path registered while leaving one visible menu item.
+  return [
+    item,
+    {
+      ...item,
+      id: 'persisted-page-zoom-in-unshifted',
+      accelerator: 'CommandOrControl+=',
+      visible: false,
+      acceleratorWorksWhenHidden: true,
+    },
+  ];
+}
+
 function installApplicationMenu(
   mainWindow: BrowserWindow,
   locale: ApplicationMenuLocale = getPreferredApplicationLocale(),
@@ -1567,9 +1589,9 @@ function installApplicationMenu(
         submenu: [
           toggleSidebarItem,
           { type: 'separator' },
-          persistedZoomMenuItem('resetZoom', null, registerMenuAccelerators),
-          persistedZoomMenuItem('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
-          persistedZoomMenuItem('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('resetZoom', null, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
           { type: 'separator' },
           { role: 'togglefullscreen', registerAccelerator: registerMenuAccelerators },
         ],
@@ -1583,9 +1605,9 @@ function installApplicationMenu(
           { role: 'forceReload', registerAccelerator: registerMenuAccelerators },
           { role: 'toggleDevTools', registerAccelerator: registerMenuAccelerators },
           { type: 'separator' },
-          persistedZoomMenuItem('resetZoom', null, registerMenuAccelerators),
-          persistedZoomMenuItem('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
-          persistedZoomMenuItem('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('resetZoom', null, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
+          ...persistedZoomMenuItems('zoomOut', -PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
           { type: 'separator' },
           { role: 'togglefullscreen', registerAccelerator: registerMenuAccelerators },
         ],

@@ -339,19 +339,19 @@ html:lang(ko) {
 
 .chat-rail-compact [data-chat-input-root] .text-xs {
   font-size: var(--text-xs);
-  line-height: 1rem;
+  line-height: var(--text-xs-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-sm {
   font-size: var(--text-sm);
-  line-height: 1.25rem;
+  line-height: var(--text-sm-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-base {
   font-size: var(--text-base);
-  line-height: 1.5rem;
+  line-height: var(--text-base-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-lg {
   font-size: var(--text-lg);
-  line-height: 1.75rem;
+  line-height: var(--text-lg-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-\[12px\] {
   font-size: 12px;
