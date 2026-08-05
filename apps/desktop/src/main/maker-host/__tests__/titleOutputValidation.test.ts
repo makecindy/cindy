@@ -23,6 +23,24 @@ describe('validateTitleOutput', () => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });
 
+  it.each([
+    ['生成简洁中文标题', 'issue #1688 verbatim echo'],
+    ['简洁中文标题', 'echo without leading verb'],
+    ['请为用户消息生成一个简洁的中文标题', 'long-form Chinese echo'],
+    ['生成简洁标题', 'echo without language word'],
+    ['Generate a concise title', 'English echo'],
+    ['Concise title', 'English echo without verb'],
+    ['簡潔なタイトル', 'Japanese echo'],
+    ['간결한 제목', 'Korean echo'],
+  ])('rejects instruction echo %s (%s)', (value) => {
+    expect(validateTitleOutput(value, 20)).toBeNull();
+  });
+
+  it('keeps titles that merely mention titles', () => {
+    expect(validateTitleOutput('修复标题生成 bug', 20)).toBe('修复标题生成 bug');
+    expect(validateTitleOutput('优化会话标题样式', 20)).toBe('优化会话标题样式');
+  });
+
   it('accepts a concise Unicode title and removes accidental wrapping quotes', () => {
     expect(validateTitleOutput('  「Codex 子代理测试」  ', 20)).toBe('Codex 子代理测试');
   });

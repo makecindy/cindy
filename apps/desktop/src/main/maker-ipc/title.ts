@@ -21,7 +21,6 @@ import { eq } from 'drizzle-orm';
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 
-import type { SupportedLocale } from '../../shared/locale.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -36,7 +35,7 @@ import { createLogger } from '../logger.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { TITLE_LANGUAGE_BY_LOCALE, buildRegenerateTitlePrompt } from './title-prompt.js';
+import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from './title-prompt.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -47,14 +46,8 @@ import {
 
 const log = createLogger('maker-ipc/title');
 
-const TITLE_PROMPT_TEMPLATE = (msg: string, locale: SupportedLocale) =>
-  [
-    'Generate a concise title for the user message below.',
-    `Write the title in ${TITLE_LANGUAGE_BY_LOCALE[locale]}.`,
-    'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
-    '',
-    msg.slice(0, 200),
-  ].join('\n');
+/** 自动起名素材截断长度(字符)。 */
+const AUTO_TITLE_MESSAGE_SLICE = 200;
 
 /** regenerate 素材窗口:最近 N 条非空 user/assistant 消息(不含被过滤的工具行)。 */
 const REGENERATE_RECENT_WINDOW = 8;
@@ -113,7 +106,10 @@ export async function generateMakerSessionTitle(
     {
       sessionId: sessionId ?? '',
       agentKind,
-      prompt: TITLE_PROMPT_TEMPLATE(trimmed, getResolvedMainLocale()),
+      prompt: buildAutoTitlePrompt(
+        trimmed.slice(0, AUTO_TITLE_MESSAGE_SLICE),
+        getResolvedMainLocale(),
+      ),
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,
