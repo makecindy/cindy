@@ -223,7 +223,9 @@ describe('checkImRouteAuth', () => {
   });
 
   it('allows an explicitly connected no-auth proxy without API key material', async () => {
-    const providerSnapshot = [provider({ id: 'local-proxy', strategy: 'none', connected: true })];
+    const providerSnapshot = [
+      provider({ id: 'local-proxy', strategy: 'none', connected: true }),
+    ];
 
     await expect(
       checkImRouteAuth(row({ providerId: 'local-proxy' }), providerSnapshot, deps()),
@@ -286,29 +288,19 @@ describe('resolveEffectiveProvider', () => {
     const nonChat = provider({
       id: 'xd',
       strategy: 'gateway-key',
-      models: {
-        'claude-code': [
-          {
-            ...model('shared-id'),
-            efforts: [] as const,
-            defaultEffort: null,
-            mode: 'image_generation',
-          },
-        ],
-      },
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
     });
     const chat = provider({
       id: 'openai',
       strategy: 'oauth-passthrough',
-      models: {
-        'claude-code': [
-          { ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' },
-        ],
-      },
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
     });
 
     expect(
-      resolveEffectiveProvider(row({ model: 'shared-id', providerId: 'xd' }), [nonChat, chat]),
+      resolveEffectiveProvider(
+        row({ model: 'shared-id', providerId: 'xd' }),
+        [nonChat, chat],
+      ),
     ).toEqual({ kind: 'explicit-invalid' });
   });
 
@@ -316,31 +308,18 @@ describe('resolveEffectiveProvider', () => {
     const nonChat = provider({
       id: 'xd',
       strategy: 'gateway-key',
-      models: {
-        'claude-code': [
-          {
-            ...model('shared-id'),
-            efforts: [] as const,
-            defaultEffort: null,
-            mode: 'image_generation',
-          },
-        ],
-      },
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
     });
     const chat = provider({
       id: 'openai',
       strategy: 'oauth-passthrough',
-      models: {
-        'claude-code': [
-          { ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' },
-        ],
-      },
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
     });
 
-    const resolution = resolveEffectiveProvider(row({ model: 'shared-id', providerId: null }), [
-      nonChat,
-      chat,
-    ]);
+    const resolution = resolveEffectiveProvider(
+      row({ model: 'shared-id', providerId: null }),
+      [nonChat, chat],
+    );
     expect(resolution.kind).toBe('provider');
     expect(resolution.kind === 'provider' ? resolution.provider.id : null).toBe('openai');
   });
