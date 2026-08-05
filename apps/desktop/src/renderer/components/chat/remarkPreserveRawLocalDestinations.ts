@@ -43,7 +43,7 @@ function isLocalDestination(url: string): boolean {
   );
 }
 
-const remarkPreserveLocalImagePaths: Plugin<[], Root> = () => {
+const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
   return (tree) => {
     visit(tree, ['image', 'link'], (node) => {
       const typed = node as Image | Link;
@@ -61,4 +61,4 @@ const remarkPreserveLocalImagePaths: Plugin<[], Root> = () => {
   };
 };
 
-export default remarkPreserveLocalImagePaths;
+export default remarkPreserveRawLocalDestinations;

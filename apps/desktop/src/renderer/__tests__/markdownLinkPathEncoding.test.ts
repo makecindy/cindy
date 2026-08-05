@@ -18,9 +18,9 @@ import { describe, expect, it } from 'vitest';
 
 import { classifyMarkdownLinkTarget } from '@/lib/markdownTarget';
 import remarkLocalPathLinks from '../components/chat/remarkLocalPathLinks';
-import remarkPreserveLocalImagePaths, {
+import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_LINK_HREF_PROP,
-} from '../components/chat/remarkPreserveLocalImagePaths';
+} from '../components/chat/remarkPreserveRawLocalDestinations';
 
 interface CapturedLink {
   raw?: string;
@@ -41,7 +41,7 @@ function renderLink(markdown: string): CapturedLink {
       },
       // 与 MarkdownRenderer 的约束一致:preserve 插件必须排在
       // remarkLocalPathLinks 之后,正文裸路径切出的 link 才拿得到原始值。
-      remarkPlugins: [remarkLocalPathLinks, remarkPreserveLocalImagePaths],
+      remarkPlugins: [remarkLocalPathLinks, remarkPreserveRawLocalDestinations],
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),
