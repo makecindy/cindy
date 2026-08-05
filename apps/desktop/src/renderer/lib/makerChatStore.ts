@@ -7932,6 +7932,7 @@ interface InputProjectionOperation {
   pinnedDeviceId?: string;
   dataOwner: DataOwnerGeneration;
   epoch: number;
+  clearGeneration: number;
 }
 
 /**
@@ -7955,6 +7956,7 @@ function beginInputProjectionOperation(
     ...(pinnedDeviceId ? { pinnedDeviceId } : {}),
     dataOwner: getDataOwnerGeneration(),
     epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+    clearGeneration: rendererClearGenerationBySession.get(sessionId) ?? 0,
   };
 }
 
@@ -7964,6 +7966,7 @@ function isInputProjectionOperationAuthorityCurrent(
 ): boolean {
   return (
     isDataOwnerGenerationCurrent(operation.dataOwner) &&
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) === operation.clearGeneration &&
     (operation.pinnedDeviceId
       ? getStickySessionDeviceId(sessionId) === operation.pinnedDeviceId
       : isCurrentInputProjectionOrigin(sessionId, operation.origin))

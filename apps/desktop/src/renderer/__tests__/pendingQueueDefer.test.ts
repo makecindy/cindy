@@ -493,6 +493,32 @@ describe('renderer input queue facade', () => {
     await expect(steer).resolves.toBe(true);
   });
 
+  it('rejects a pre-clear materialized steer after the clear generation advances', async () => {
+    const sid = `steer-materialized-clear-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'pre-clear text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    const clear = makerChatStore.clearSession(sid);
+    resolveProjection(projection(sid, { pendingQueue: [steered], queuePaused: true }));
+
+    await expect(steer).resolves.toBe(false);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
   it('rejects a materialized composer steer from the previous data owner', async () => {
     const sid = `steer-materialized-owner-${Math.random().toString(36).slice(2, 8)}`;
     let resolveProjection!: (value: AgentInputProjection) => void;
