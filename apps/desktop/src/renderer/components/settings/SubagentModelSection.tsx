@@ -600,11 +600,7 @@ export function SubagentModelSection() {
         <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
 
         <div
-          className={
-            subagentsEnabled
-              ? 'flex items-center justify-between gap-3 px-4 py-4'
-              : 'pointer-events-none flex items-center justify-between gap-3 px-4 py-4 opacity-50'
-          }
+          className={`flex items-center justify-between gap-3 px-4 py-4 ${subagentsEnabled ? '' : 'pointer-events-none opacity-50'}`}
         >
           <div className="flex min-w-0 flex-col gap-1">
             <p
