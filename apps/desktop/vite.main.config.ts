@@ -54,6 +54,13 @@ export default defineConfig(({ mode }) => {
       'process.env.XDT_FILO_GOOGLE_CLIENT_SECRET': JSON.stringify(
         readMainEnv('XDT_FILO_GOOGLE_CLIENT_SECRET'),
       ),
+      // macOS WebAuthn Touch ID 的 Team ID 是公开签名身份，不是凭证。正式打包入口
+      // 只在 Developer ID 签名路径注入；ad-hoc/dev 留空，runtime fail closed。
+      'process.env.CINDY_WEBAUTHN_APPLE_TEAM_ID': JSON.stringify(
+        process.env.CINDY_WEBAUTHN_APPLE_TEAM_ID?.trim() ||
+          allEnv.CINDY_WEBAUTHN_APPLE_TEAM_ID?.trim() ||
+          '',
+      ),
       'process.env.XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG': JSON.stringify(
         readMainEnv('XDT_VOICE_INPUT_DICTIONARY_TEXT_DEBUG'),
       ),

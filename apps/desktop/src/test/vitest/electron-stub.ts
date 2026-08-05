@@ -74,6 +74,7 @@ export const app = createEmitter({
   getName: () => 'XDMaker Test',
   setName: noop,
   getVersion: () => '0.0.0-test',
+  configureWebAuthn: noop,
   setAppUserModelId: noop,
   requestSingleInstanceLock: () => true,
   releaseSingleInstanceLock: noop,

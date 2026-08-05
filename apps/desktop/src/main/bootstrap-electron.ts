@@ -177,6 +177,7 @@ import {
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
 } from './webview-security';
+import { configureRsbBrowserWebAuthn } from './rsb-browser-webauthn.js';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -5866,6 +5867,10 @@ app.on('ready', async () => {
     await runSmokeTest(smoke.userId);
     return;
   }
+
+  // WebAuthn 是 app/session 级能力：在任何 RSB guest 或 popup WebContents 创建
+  // 之前装账户选择回调；正式签名的 macOS 包同时启用 Touch ID 平台认证器。
+  configureRsbBrowserWebAuthn();
 
   // safeStorage 可观测性(#871):这条链路此前在日志里完全不可见,出问题(用户在
   // 系统钥匙串弹窗点了拒绝 → 加解密静默降级失败)只能靠弹窗反推。这里只落派生
