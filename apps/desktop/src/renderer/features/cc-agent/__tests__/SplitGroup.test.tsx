@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { SplitGroup } from '../SplitGroup';
 import { splitGroupStore } from '../splitGroupStore';
 
-const { navigateMock, resolveSessionRouteMock, routeActionMock } = vi.hoisted(() => ({
-  navigateMock: vi.fn(),
-  resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
-  routeActionMock: vi.fn(),
-}));
+const { navigateMock, resolveSessionRouteMock, routeActionMock, useCCSessionsMock } = vi.hoisted(
+  () => ({
+    navigateMock: vi.fn(),
+    resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
+    routeActionMock: vi.fn(),
+    useCCSessionsMock: vi.fn(),
+  }),
+);
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -25,11 +28,13 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useCCSessions', () => ({
-  useCCSessions: () => ({ sessions: [] }),
+  useCCSessions: useCCSessionsMock,
 }));
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
+  useRemoteBootstrapLoadingDeviceIds: () => new Set(),
+  useRemoteBootstrapFailedDeviceIds: () => new Set(),
 }));
 
 vi.mock('@/lib/orcaSessionIdentity', () => ({
@@ -104,6 +109,8 @@ describe('SplitGroup', () => {
     navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
+    useCCSessionsMock.mockReset();
+    useCCSessionsMock.mockReturnValue({ sessions: [], isLoading: true, error: null });
     splitGroupStore.__resetForTest();
   });
 
@@ -117,6 +124,22 @@ describe('SplitGroup', () => {
 
     expect(screen.getByTestId('route-outlet')).toBeTruthy();
     expect(view.container.querySelector('[data-split-drop-target="single"]')).toBeTruthy();
+  });
+
+  it('会话目录加载完成后清理已删除 session 的持久化 pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    act(() => {
+      splitGroupStore.addSession('session-deleted', 'session-a', 'right');
+    });
+
+    renderSplitGroup('session-a');
+
+    await waitFor(() => expect(splitGroupStore.getSnapshot().root).toBeNull());
+    expect(screen.getByTestId('route-outlet')).toBeTruthy();
   });
 
   it('活动 pane 接管路由主权，切换活动任务不会重建 pane 视图', () => {

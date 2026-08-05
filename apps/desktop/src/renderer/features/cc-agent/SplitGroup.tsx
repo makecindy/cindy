@@ -23,7 +23,11 @@ import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import {
+  useRemoteBootstrapFailedDeviceIds,
+  useRemoteBootstrapLoadingDeviceIds,
+  useRemoteProjectSessions,
+} from '@/features/device-link/remoteProjectsStore';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -100,8 +104,14 @@ interface SplitGroupActiveProps {
 function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { sessions: localSessions } = useCCSessions({ includeArchived: 'all' });
+  const {
+    sessions: localSessions,
+    isLoading: localSessionsLoading,
+    error: localSessionsError,
+  } = useCCSessions({ includeArchived: 'all' });
   const remoteSessions = useRemoteProjectSessions();
+  const remoteBootstrapLoadingDeviceIds = useRemoteBootstrapLoadingDeviceIds();
+  const remoteBootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
   const sessions = useMemo(
     () => mergeSessionSources(localSessions, remoteSessions),
     [localSessions, remoteSessions],
@@ -111,6 +121,11 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     [sessions],
   );
   const panes = useMemo(() => getSplitPanes(root), [root]);
+  const sessionsCatalogReady =
+    !localSessionsLoading &&
+    !localSessionsError &&
+    remoteBootstrapLoadingDeviceIds.size === 0 &&
+    remoteBootstrapFailedDeviceIds.size === 0;
 
   const previousActiveSessionIdRef = useRef(activeSessionId);
   const observedActiveSessionIdRef = useRef(activeSessionId);
@@ -124,6 +139,13 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const routePane = panes.find((pane) => pane.sessionId === activeSessionId);
   const previousPane = panes.find((pane) => pane.sessionId === previousActiveSessionIdRef.current);
   const ownerPaneKey = routePane?.key ?? previousPane?.key ?? panes[0]?.key;
+
+  useEffect(() => {
+    if (!sessionsCatalogReady) return;
+    for (const pane of panes) {
+      if (!sessionsById.has(pane.sessionId)) splitGroupStore.removeSession(pane.sessionId);
+    }
+  }, [panes, sessionsById, sessionsCatalogReady]);
 
   const focusSession = useCallback(
     (sessionId: string) => {
