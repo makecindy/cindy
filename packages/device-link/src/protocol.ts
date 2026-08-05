@@ -173,9 +173,16 @@ export type InvokeResultPayload =
     };
 
 /** 被控端 → 控制端:广播转发(MAKER_PUSH.* / local-db 推送) */
+export interface PushOwnerStamp {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+}
+
 export interface PushPayload {
   channel: string;
   payload: unknown;
+  /** Optional for compatibility with older controlled desktops. */
+  ownerStamp?: PushOwnerStamp;
 }
 
 // ─── REST 管理面(GET /api/device-link/devices)────────────────────────────────

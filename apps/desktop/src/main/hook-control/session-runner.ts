@@ -339,10 +339,9 @@ function collectOutboundImages(
 /**
  * 一轮 turn 的两份正文。**必须成对传递**, 所以做成一个值而不是两个参数。
  *
- * 两者在 X 上不相等, 而它们的用途完全不同 —— 混用过一次就是本 PR 的缺陷:
- * 把公开正文缩到末段时, 附件的引用扫描跟着缩了, agent 贴在中间那条消息里的
- * 图和文件被静默丢掉。两个相邻的 string 参数编译器管不了传反, 收成命名字段
- * 之后传错就写不出来。
+ * 两者的用途完全不同 —— 混用过一次就是本 PR 的缺陷: 把引用扫描范围缩到公开
+ * 正文时, agent 贴在被折叠工作过程里的图和文件会被静默丢掉。两个相邻的 string
+ * 参数编译器管不了传反, 收成命名字段之后传错就写不出来。
  */
 interface HookTurnTexts {
   /** 发出去的正文。 */
@@ -355,19 +354,26 @@ interface HookTurnTexts {
  * 收口取文(run() 与 watchContinuation 共用 —— 两处必须同判据, 所以两份正文
  * 的关系只在这里定义一次, 调用方不自己拼)。
  *
- * X 的**公开正文**只取最后一条助手消息: 一次 mention 只有一条公开回帖的名额,
- * 而 agent 的常态是"先说一句要去看看 → 干活 → 给结论", 整轮拼接会把过程叙述
- * 原样发到公开时间线, 稀释真正要公开的最终结论(见 turnObserver.finalSegment)。
+ * X 的**公开消息数**只有一条,但正文判定不能因此改成「只取最后一条助手消息」。
+ * 先按桌面消息流的完成态分组取未折叠的正式答复,再把这份正文作为唯一一条
+ * 公开回帖发送。这样"先说一句要去看看 → 干活 → 给结论"里的短过程旁白仍会
+ * 折进工作过程,而标题、表格、长正文、三项以上列表等正式内容不会被误删。
  *
- * 其余渠道公开正文就是整轮, 不能跟着改: IM 里过程叙述有用, 且只取最后一条会
- * 丢掉"先答后补"型 turn 的正文(实踩: Telegram 群里最终答案丢失 —— 见
- * turnObserver 的文本累积语义注释)。
+ * 所有渠道公开正文都按桌面消息流的完成态分组取「未折叠的正式答复」:
+ * done seal 前、最后一次真实动作后的连续 assistant 正文保留,较早但具有交付
+ * 结构的正文也保留,短过程旁白折进工作过程。判据由 maker-shared 共用实现，
+ * Hook 不再把整轮过程文字原样铺到最终消息里。
  *
  * wholeTurn 则**任何渠道都是整轮**: 它只用于扫描出站引用, 与"发什么"无关。
  */
-function turnTextsFor(observer: HookTurnObserver, im: string | undefined): HookTurnTexts {
+function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   const wholeTurn = observer.text();
-  return { publicText: im === 'x' ? observer.finalSegment() : wholeTurn, wholeTurn };
+  return {
+    // 所有 IM 共用桌面版的最终正文判定; X 的特殊性只在出站层限制为一条消息,
+    // 不能把发送次数限制误写成「只取最后一段」。
+    publicText: observer.finalText(),
+    wholeTurn,
+  };
 }
 
 /**
@@ -377,7 +383,7 @@ function turnTextsFor(observer: HookTurnObserver, im: string | undefined): HookT
  * 拖垮收口, 附件是回帖增强, 文本永远要发出去。
  *
  * 引用扫描按**整轮**来, 而不是按要发出去的那段(见 HookTurnTexts): 否则 agent
- * 贴在中间那条消息里的图和文件会随着"只取末段"一起被丢掉(PR #1272 review)。
+ * 贴在被折叠工作过程里的图和文件会随着正文投影一起被丢掉(PR #1272 review)。
  */
 async function collectOutboundForFinalText(
   texts: HookTurnTexts,
@@ -702,6 +708,7 @@ export function createMakerHookSessionRunner(deps: {
           // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
           // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
           pendingInteractionNotices.set(ireq.requestId, awaitingInteractionNotice(ireq.kind));
+          activeObserver?.markInteractionBoundary();
           activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
           try {
             const decision = await registerHookInteraction({
@@ -1049,7 +1056,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
-        turnTextsFor(observer, req.source?.im),
+        turnTextsFor(observer),
         extraImageAbsPaths,
         [workingDir],
         log,
@@ -1158,7 +1165,7 @@ function beginContinuationWatch(
       // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
       // isDirAuthorized 用 session.workDir 复核同理。
       const collected = await collectOutboundForFinalText(
-        turnTextsFor(observer, req.source?.im),
+        turnTextsFor(observer),
         extraImageAbsPaths,
         [session.workDir],
         log,

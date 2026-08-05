@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   invalidationAtRequestStart,
   persistCachedMessages,
@@ -245,7 +246,12 @@ export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: s
 
 /** 读会话元数据:远程走隧道 local-db:sessions:get(本地 DB 没有该 row,直接调会 404)。 */
 export function getSessionFor(sessionId: string): Promise<Session> {
-  const deviceId = getSessionDeviceId(sessionId);
+  // Session metadata is part of the same remote send attempt as the later
+  // enqueue. Keep using the last known device while the mirror is being
+  // rebuilt; reading the controller's local DB in that window returns either
+  // an unrelated row or a misleading 404 and can make a UI trigger fall back
+  // to the wrong maker instance.
+  const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
 }
@@ -414,9 +420,7 @@ export function pluginEnableStateFor(
       : window.electronAPI.maker.plugins.getState(pluginId, workingDir, workspaceKind);
   }
   const args =
-    workspaceKind === undefined
-      ? [pluginId, workingDir]
-      : [pluginId, workingDir, workspaceKind];
+    workspaceKind === undefined ? [pluginId, workingDir] : [pluginId, workingDir, workspaceKind];
   return invokeRemote(deviceId, 'maker:plugins:get-state', args) as ReturnType<
     typeof window.electronAPI.maker.plugins.getState
   >;
@@ -496,6 +500,24 @@ export function aroundMessagesByClientIdFor(
   ]) as Promise<Message[]>;
 }
 
+/**
+ * 已知稳定 deviceId 时直接查询 clientId 锚点。远程乐观发送用它核实一个
+ * ACK 丢失的 steer 是否已经落库；这里不能重新读取易失的 session origin，
+ * 否则恰好在重连清镜像的窗口会误查控制端本机 DB。
+ */
+export function aroundMessagesByClientIdForDevice(
+  deviceId: string,
+  sessionId: string,
+  clientId: string,
+  opts?: { radius?: number },
+): Promise<Message[]> {
+  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
+    sessionId,
+    clientId,
+    opts,
+  ]) as Promise<Message[]>;
+}
+
 // ─── /goal:device-link 远程路由 ────────────────────────────────────────────────
 // goal-host 在「会话归属设备」上跑(目标随会话在被控端自主续跑,控制端断链不中断)。
 // GoalIndicator / NewGoalDialog / useGoalStatus 经这里按会话来源路由;状态推送
@@ -566,8 +588,9 @@ export function subscribeGoalStatusChanged(
       });
     }
     return (
-      window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+      window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
         if (push.deviceId !== deviceId || push.channel !== 'maker:goal:status-changed') return;
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         const payload = push.payload as { sessionId?: string; goal?: GoalStatusPayload | null };
         if (payload?.sessionId !== sessionId) return;
         cb(payload as { sessionId: string; goal: GoalStatusPayload | null });
@@ -701,11 +724,13 @@ export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void
     );
   }
   return (
-    window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+    window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
       if (
+        push.deviceId === deviceId &&
         push.channel === 'maker:orca:worker-changed' &&
         (push.payload as { leadSessionId?: string })?.leadSessionId === leadSessionId
       ) {
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         cb();
       }
     }) ?? (() => {})

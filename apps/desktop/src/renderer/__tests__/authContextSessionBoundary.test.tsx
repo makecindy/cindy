@@ -103,6 +103,7 @@ function authState(id: string | null, isCanary = false) {
     user: id ? user(id) : null,
     mode: id ? ('cloud' as const) : ('signed-out' as const),
     dataOwnerId: id,
+    ownerGeneration: id ? 1 : 2,
     canEnterApp: id !== null,
     isAuthenticated: id !== null,
     isCanary,
@@ -117,6 +118,7 @@ function localAuthState() {
     user: null,
     mode: 'local' as const,
     dataOwnerId: 'local-v1',
+    ownerGeneration: 3,
     canEnterApp: true,
     isAuthenticated: false,
     isCanary: false,
@@ -127,9 +129,7 @@ function localAuthState() {
 }
 
 describe('AuthContext session cache boundaries', () => {
-  const wrapper = ({ children }: PropsWithChildren) => (
-    <AuthProvider>{children}</AuthProvider>
-  );
+  const wrapper = ({ children }: PropsWithChildren) => <AuthProvider>{children}</AuthProvider>;
 
   beforeEach(() => {
     mocks.reset.mockClear();
@@ -145,7 +145,9 @@ describe('AuthContext session cache boundaries', () => {
     mocks.service.logout.mockResolvedValue(undefined);
     mocks.service.enterLocalMode.mockResolvedValue(localAuthState());
     mocks.service.exitLocalMode.mockResolvedValue(authState(null));
-    (window as unknown as { electronAPI: { onAuthSessionExpired: typeof mocks.registerExpired } }).electronAPI = {
+    (
+      window as unknown as { electronAPI: { onAuthSessionExpired: typeof mocks.registerExpired } }
+    ).electronAPI = {
       onAuthSessionExpired: mocks.registerExpired,
     };
   });
@@ -199,12 +201,14 @@ describe('AuthContext session cache boundaries', () => {
       mocks.service[action].mockRejectedValueOnce(new Error(`${action} failed`));
       const view = renderHook(() => useAuth(), { wrapper });
       await waitFor(() => expect(view.result.current.dataOwnerId).toBe(expectedOwner));
+      const recoveryEpochBeforeFailure = view.result.current.dataOwnerRecoveryEpoch;
 
       await act(async () => {
         await expect(view.result.current[action]()).rejects.toThrow(`${action} failed`);
       });
 
       expect(view.result.current.dataOwnerId).toBe(expectedOwner);
+      expect(view.result.current.dataOwnerRecoveryEpoch).toBe(recoveryEpochBeforeFailure + 1);
       expect(getDataOwnerGeneration().dataOwnerId).toBe(expectedOwner);
       expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
     },
@@ -212,9 +216,11 @@ describe('AuthContext session cache boundaries', () => {
 
   it('keeps a newer pushed owner when an older auth boundary later rejects', async () => {
     let rejectLogout!: (error: Error) => void;
-    mocks.service.logout.mockReturnValueOnce(new Promise<void>((_resolve, reject) => {
-      rejectLogout = reject;
-    }));
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectLogout = reject;
+      }),
+    );
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
 
@@ -237,12 +243,16 @@ describe('AuthContext session cache boundaries', () => {
     let rejectFirst!: (error: Error) => void;
     let rejectSecond!: (error: Error) => void;
     mocks.service.logout
-      .mockReturnValueOnce(new Promise<void>((_resolve, reject) => {
-        rejectFirst = reject;
-      }))
-      .mockReturnValueOnce(new Promise<void>((_resolve, reject) => {
-        rejectSecond = reject;
-      }));
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectSecond = reject;
+        }),
+      );
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
 
@@ -284,12 +294,16 @@ describe('AuthContext session cache boundaries', () => {
     let rejectSecond!: (error: Error) => void;
     mocks.service.initialize.mockResolvedValue(localAuthState());
     mocks.service.exitLocalMode
-      .mockReturnValueOnce(new Promise((resolve) => {
-        resolveFirst = resolve;
-      }))
-      .mockReturnValueOnce(new Promise((_resolve, reject) => {
-        rejectSecond = reject;
-      }));
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectSecond = reject;
+        }),
+      );
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.dataOwnerId).toBe('local-v1'));
 

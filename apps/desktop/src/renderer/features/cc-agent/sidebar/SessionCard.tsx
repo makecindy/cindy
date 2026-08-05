@@ -78,6 +78,7 @@ import { useSessionBoundSchedules, scheduleFocusPath } from '@/features/schedule
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 
 const log = createLogger('SessionCard');
 
@@ -523,6 +524,11 @@ export function SessionCard({
       data-sidebar-session-row="true"
       role="button"
       tabIndex={0}
+      onPointerDown={(e) => {
+        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+          makerChatStore.ensureInitialMessages(session.id);
+        }
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {

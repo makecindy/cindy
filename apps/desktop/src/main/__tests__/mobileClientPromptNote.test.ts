@@ -23,6 +23,7 @@ import {
   prependNoteToWireUserMessage,
 } from '../maker-ipc/agentHandoff';
 import {
+  attachMainOwnedInputBoundary,
   buildMobileClientPromptNote,
   stampMobileClientOrigin,
   stripMainOnlySendOpts,
@@ -195,7 +196,9 @@ describe('注入接线(源码级守卫)', () => {
   );
 
   it('说明只进 wire payload,落库走 persistUserMessage.content', () => {
-    expect(source).toContain('const mobileClientNote = deps.isMobileClientInvoke?.() === true');
+    expect(source).toMatch(
+      /const mobileClientNote =\s*deps\.isMobileClientInvoke\?\.\(\) === true/,
+    );
     expect(source).toContain('prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)');
     // 落库内容必须仍取 persistUserMessage.content —— 若改成 outgoing,提示语会写进
     // 用户消息、污染界面显示的原话。
@@ -262,6 +265,46 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
       .toEqual({ messageUuid: 'u' });
   });
 
+  it('剥掉客户端伪造的 generation,但保留待 IPC 校验的 clear token', () => {
+    expect(
+      stripMainOnlySendOpts({
+        expectedClearBoundaryMs: 123,
+        expectedInputGeneration: 77,
+        messageUuid: 'u',
+      }),
+    ).toEqual({ expectedClearBoundaryMs: 123, messageUuid: 'u' });
+  });
+
+  it('host stamp 覆盖 wire token 并附带 generation', () => {
+    expect(
+      attachMainOwnedInputBoundary(
+        { expectedClearBoundaryMs: 123, expectedInputGeneration: 77, messageUuid: 'u' },
+        { expectedClearBoundaryMs: 456, expectedInputGeneration: 9 },
+      ),
+    ).toEqual({ expectedClearBoundaryMs: 456, expectedInputGeneration: 9, messageUuid: 'u' });
+  });
+
+  it('非对象 sendOpts 也映射 main-owned abort signal 到事务读取的 signal', () => {
+    const controller = new AbortController();
+    expect(
+      attachMainOwnedInputBoundary(undefined, {
+        expectedClearBoundaryMs: 456,
+        expectedInputGeneration: 9,
+        inputAbortSignal: controller.signal,
+      }),
+    ).toEqual({
+      expectedClearBoundaryMs: 456,
+      expectedInputGeneration: 9,
+      signal: controller.signal,
+    });
+  });
+
+  it('剥掉 wire 注入的 signal,只允许 main 写入 AbortSignal', () => {
+    expect(stripMainOnlySendOpts({ messageUuid: 'u', signal: 'forged' })).toEqual({
+      messageUuid: 'u',
+    });
+  });
+
   it('其它字段原样保留', () => {
     const opts = { messageUuid: 'u', userName: 'n', origin: { kind: 'scheduler' } };
     expect(stripMainOnlySendOpts(opts)).toEqual(opts);
@@ -314,15 +357,17 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
   });
 
   it('直连 maker:send 的 wire sendOpts 必须消毒', () => {
-    expect(sendHandler).toContain('stripMainOnlySendOpts(sendOpts)');
+    expect(sendHandler).toContain(
+      'attachMainOwnedInputBoundary(sendOpts, mainOwnedBoundaryStamp)',
+    );
   });
 
   it('直连 maker:steer 的 wire sendOpts 同样必须消毒', () => {
     // 这个 channel 在 device-link allowlist 里开放,sendOpts 是调用方可控输入 ——
     // 不剥的话传 `{ fromMobileClient: true }` 就能让非手机轮次收到伪造的手机说明
     // (review P1/P2 各报一次)。契约与 maker:send 一致:该字段只由 main 盖章。
-    expect(register).toMatch(
-      /MAKER_INVOKE\.STEER[\s\S]*?steerToAgentAccepted\(sessionId, message, stripMainOnlySendOpts\(sendOpts\)\)/,
+    expect(register).toContain(
+      'attachMainOwnedInputBoundary(stripMainOnlySendOpts(sendOpts), boundaryStamp)',
     );
     // coordinator 的内部调用**不得**被消毒 —— 那条路的 sendOpts 是 main 构造的透传值。
     expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) =>');

@@ -40,6 +40,7 @@ import {
   type FileChangeRequestApprovalResponse,
   type McpServerElicitationRequestParams,
   type McpServerElicitationRequestResponse,
+  type CodexMcpServerStatusListResponse,
   type PermissionsRequestApprovalParams,
   type PermissionsRequestApprovalResponse,
   type ServerRequestResolvedNotification,
@@ -172,6 +173,21 @@ export interface ThreadEventHandlers {
   autoApprovalReviewCompleted?: (params: ItemGuardianApprovalReviewCompletedNotification) => void;
   guardianWarning?: (params: GuardianWarningNotification) => void;
   error?: (params: ErrorNotification['params']) => void;
+  /**
+   * Host 被永久替换（强制退役，如账号切换 / auth 失效）时发给每个订阅者的结构化
+   * 生命周期信号。订阅者按自身真实状态收口：
+   *
+   * - 空闲 / 已完成的订阅者静默失效，不产生任何错误事件——不应把一次内部 host 替换
+   *   渲染成历史会话的终止错误（#1391 场景：闲置数小时的已完成会话在切账号时被打
+   *   永久红框）。
+   * - 真实在飞（turn in-flight / turn/start pending / overload retry）的订阅者清理
+   *   在途状态并产生一次终态 error + Done，保证 isTurnRunning 复位、上层 busy 判定 /
+   *   Stop 锁 / 输入队列不卡死（2026-07-19 auth app_session_terminated 实排）。
+   *
+   * 提供该回调时，host **不再**广播 transport error（否则空 turnId 的错误无法被
+   * pending/retry 会话收口）。未提供时保持旧行为（广播 transport error）。
+   */
+  hostForcedRetire?: (signal: { reason: string }) => void;
 
   // ── ServerRequest (Phase 2 approval) ─────────────────────────────────────
   // server → client 的 request, 必须返回 response (否则 server 卡 turn)。
@@ -239,6 +255,12 @@ export interface AppServerHostOptions {
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
    */
   codexProxyActive?: boolean;
+  /** Host creation snapshot: this exact process received the Browser companion. */
+  codexBrowserUseAvailable?: boolean;
+  /** Exact verified Chrome plugin version provisioned into this process. */
+  codexBrowserUseVersion?: string;
+  /** Maximum wait for the provisioned Browser companion to publish its MCP tools. */
+  codexBrowserUseStartupTimeoutMs?: number;
   /**
    * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
    * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
@@ -267,6 +289,10 @@ export class AppServerHost {
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
+  /** Server request may race the child thread/started notification that establishes lineage. */
+  private readonly threadHandlerWaiters = new Map<string, Set<() => void>>();
+  /** One post-start MCP inventory probe per server/tool for this concrete process. */
+  private readonly mcpToolAvailability = new Map<string, Promise<boolean>>();
   /** 找不到 subscriber 时按 threadId 暂存的 notification, drain on subscribe。 */
   private readonly buffered = new Map<string, BufferedNotification[]>();
   /** 血缘迭代重建的重入闸(routeDescendantThreadStarted 与重建互相调用)。 */
@@ -292,6 +318,84 @@ export class AppServerHost {
 
   isCodexProxyActive(): boolean {
     return this.opts.codexProxyActive === true;
+  }
+
+  isCodexBrowserUseAvailable(): boolean {
+    return this.opts.codexBrowserUseAvailable === true;
+  }
+
+  getCodexBrowserUseVersion(): string | null {
+    return this.opts.codexBrowserUseVersion ?? null;
+  }
+
+  /**
+   * Verify that an MCP server connected and published a concrete tool. Static
+   * spawn provisioning is not enough: this is the post-initialize gate that
+   * prevents a Skill from being shown when its runtime tool never registered.
+   */
+  waitForMcpTool(
+    serverName: string,
+    toolName: string,
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<boolean> {
+    const key = `${serverName}\0${toolName}`;
+    const cached = this.mcpToolAvailability.get(key);
+    if (cached) return cached;
+    const probe = this.probeMcpTool(
+      serverName,
+      toolName,
+      opts.timeoutMs ?? this.opts.codexBrowserUseStartupTimeoutMs ?? 10_000,
+      opts.pollIntervalMs ?? 100,
+    );
+    this.mcpToolAvailability.set(key, probe);
+    // A negative readiness probe is a point-in-time result, not a permanent
+    // host capability fact. The MCP child may finish starting later, so the
+    // next session must be allowed to retry. Successful probes stay cached.
+    void probe.then((available) => {
+      if (!available && this.mcpToolAvailability.get(key) === probe) {
+        this.mcpToolAvailability.delete(key);
+      }
+    });
+    return probe;
+  }
+
+  private async probeMcpTool(
+    serverName: string,
+    toolName: string,
+    timeoutMs: number,
+    pollIntervalMs: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    try {
+      while (!this.shuttingDown && Date.now() < deadline) {
+        let cursor: string | null = null;
+        do {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) return false;
+          const response: CodexMcpServerStatusListResponse =
+            await this.request<CodexMcpServerStatusListResponse>(
+              Method.McpServerStatusList,
+              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId: null },
+              { timeoutMs: remaining },
+            );
+          const server = response.data.find((entry) => entry.name === serverName);
+          if (server && Object.hasOwn(server.tools, toolName)) return true;
+          cursor = response.nextCursor;
+        } while (cursor !== null);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.min(pollIntervalMs, remaining));
+        });
+      }
+    } catch (error) {
+      this.logger.warn('MCP tool readiness probe failed', {
+        serverName,
+        toolName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return false;
   }
 
   /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
@@ -429,7 +533,11 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers = this.handlersForThread(params.threadId);
+      const handlers =
+        this.handlersForThread(params.threadId)
+        ?? (this.subscribers.size > 0
+          ? await this.waitForThreadHandlers(params.threadId)
+          : undefined);
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -615,9 +723,16 @@ export class AppServerHost {
   async shutdown(reason = 'AppServerHost.shutdown()'): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    // MCP readiness is scoped to the concrete app-server process. A normal
+    // transport recovery reuses this host object, so never carry a positive
+    // probe result into the replacement process.
+    this.mcpToolAvailability.clear();
     this.subscribers.clear();
     this.lineageRoots.clear();
     this.buffered.clear();
+    for (const threadId of this.threadHandlerWaiters.keys()) {
+      this.notifyThreadHandlerWaiters(threadId);
+    }
     const c = this.client;
     this.client = null;
     this.startPromise = null;
@@ -639,7 +754,7 @@ export class AppServerHost {
   }
 
   /**
-   * 强制收割前把终态 transport error 广播给仍在订阅的 session。
+   * 强制收割前通知订阅者（结构化生命周期信号）。
    *
    * retire()/shutdown() 会静默清空 subscribers —— 常规路径(凭证切换/app 退出)由
    * 上层先 Session.close 收尾,这是对的;但 auth 失效等强制路径会带着 in-flight turn
@@ -647,14 +762,61 @@ export class AppServerHost {
    * 的输入队列 / Stop 的 queueAbortPending 锁 / 凭证切换 busy 判定全部永久卡死
    * (2026-07-19 实排:auth app_session_terminated 触发 retire 后会话假 busy 数小时)。
    * 只广播、不清订阅 —— 紧随其后的 retire() 负责清理。
+   *
+   * 但**不能**对每个订阅者广播 transport error：空闲/已完成的订阅者（没有 in-flight
+   * turn，例如闲置数小时的已完成会话）收到终态 error 后会被写入永久红框，而它并没有
+   * 任何真实工作被中断——这只是一次内部 host 替换（#1391 场景）。而真实在飞的
+   * turn/start pending / overload retry 订阅者若只收到**空 turnId** 的 transport
+   * error，现有 error handler 的 `targetsPendingTurn`（要求非空 turnId）与
+   * `wasTurnRunning`（不含 overload retry）无法把它收口，busy 状态会永久卡死。
+   *
+   * 因此改为发送结构化 `hostForcedRetire` 信号，由每个订阅者按自身完整状态收口
+   * （空闲→静默失效；在飞→终态 error + Done）。未提供该回调的订阅者退回旧行为
+   * （广播 transport error），保证兼容。
    */
   notifySubscribersOfForcedRetire(reason: string): void {
     if (this.subscribers.size === 0) return;
-    this.logger.warn('forced retire with live subscribers — broadcasting terminal transport error', {
+    let notified = 0;
+    let fellBack = 0;
+    for (const [threadId, handlers] of this.subscribers) {
+      if (handlers.hostForcedRetire) {
+        notified += 1;
+        try {
+          handlers.hostForcedRetire({ reason });
+          continue;
+        } catch (e) {
+          // handler 抛错 → 该订阅者收不到结构化信号, 强退场景最需要兜底:
+          // 回退到旧 transport-error 广播, 至少保证有一条终态错误触发收口,
+          // 否则 busy 永久卡死 (copilot review on #1720)。
+          this.logger.warn('forced retire handler threw — falling back to transport error', {
+            threadId,
+            message: (e as Error).message,
+          });
+        }
+      }
+      // 旧订阅者（未接 hostForcedRetire）保持旧行为：广播 transport error。
+      fellBack += 1;
+      try {
+        handlers.error?.({
+          threadId,
+          turnId: '',
+          willRetry: false,
+          scope: 'transport',
+          error: { message: `app-server force-retired: ${reason}` },
+        });
+      } catch (e) {
+        this.logger.warn('forced retire broadcast handler threw', {
+          threadId,
+          message: (e as Error).message,
+        });
+      }
+    }
+    this.logger.warn('forced retire with live subscribers — notifying session lifecycles', {
       subscribers: this.subscribers.size,
+      notified,
+      fellBack,
       reason,
     });
-    this.broadcastTransportErrorToSubscribers(`app-server force-retired: ${reason}`);
   }
 
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────
@@ -680,6 +842,7 @@ export class AppServerHost {
     }
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
+    this.notifyThreadHandlerWaiters(threadId);
 
     // 排空缓存 (thread/started 比 subscribe 早到的固有竞争)
     const buf = this.buffered.get(threadId);
@@ -828,6 +991,43 @@ export class AppServerHost {
     return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
+  /**
+   * Give an already-owned descendant a short window for its thread/started
+   * notification to establish lineage. This closes an observed ordering race
+   * for node_repl elicitation while preserving fail-closed routing: unknown
+   * threads still decline after the bounded wait and can never fan out to an
+   * arbitrary subscriber.
+   */
+  private waitForThreadHandlers(threadId: string): Promise<ThreadEventHandlers | undefined> {
+    const current = this.handlersForThread(threadId);
+    if (current) return Promise.resolve(current);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const waiters = this.threadHandlerWaiters.get(threadId);
+        waiters?.delete(finish);
+        if (waiters?.size === 0) this.threadHandlerWaiters.delete(threadId);
+        resolve(this.handlersForThread(threadId));
+      };
+      // Use the same bounded lineage window as early thread notifications.
+      // Both races are caused by thread/started crossing the subscribe/request
+      // boundary, so they should expire together instead of using a shorter
+      // empirical timeout that can fail only under load.
+      const timer = setTimeout(finish, this.bufferTtlMs);
+      timer.unref?.();
+      const waiters = this.threadHandlerWaiters.get(threadId) ?? new Set<() => void>();
+      waiters.add(finish);
+      this.threadHandlerWaiters.set(threadId, waiters);
+    });
+  }
+
+  private notifyThreadHandlerWaiters(threadId: string): void {
+    for (const finish of [...(this.threadHandlerWaiters.get(threadId) ?? [])]) finish();
+  }
+
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
     const childThreadId = params.thread.id;
     const parentThreadId = params.thread.parentThreadId;
@@ -842,6 +1042,7 @@ export class AppServerHost {
     if (!handlers) return;
 
     this.lineageRoots.set(childThreadId, rootThreadId);
+    this.notifyThreadHandlerWaiters(childThreadId);
     if (handlers.descendantThreadStarted) {
       try {
         handlers.descendantThreadStarted(params);

@@ -1007,6 +1007,12 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Constraints**: the white QR background is a scanner-contrast requirement, not a general brand panel. Do not add a border, edge, shadow, motion or other decoration to the code.
 - **Scope boundary**: this approval covers the current Alipay QR payment paths only. `BillingPaymentAction` currently does not carry a provider; any future non-Alipay `QR_CODE` channel must first add provider-aware rendering rather than inheriting this mark by default.
 
+**Sanctioned brand surface — Computer Use cursor (approved 2026-08-04).**
+
+- **Where**: the optional agent cursor configured by `apps/desktop/src/main/mcp-integrations/computer.ts` while Cindy Computer Use actions are running. Its arrow color and bloom use Brand red `#DF0C27`; the driver-required gradient transitions from Brand red to Deep brand red `#A61629`.
+- **Why the values are concrete**: the cursor is rendered by the out-of-process `cua-driver`, which cannot consume renderer CSS variables or the active theme registry. The fixed two-color brand palette is therefore identical in Light, Dark, and imported themes.
+- **Scope boundary**: this approval identifies Cindy's automated pointer only. It does not authorize brand red for ordinary controls, focus/caret states, buttons, or other working UI. Cursor styling remains optional; a driver capability/policy rejection degrades without blocking Computer Use and is remembered for the current MCP session.
+
 ### 15.8 status-badge-fg
 
 - The orange badge (bg `status-bar-accent` `#EA6B17`) has its own foreground token `status-badge-fg`: **default mirrors `accent-pure-cta-fg`** (light white / dark black — zero change for the 9 existing themes); **CINDY overrides both modes to `#1F1F1F`** (near-black), contrast × `#EA6B17` = **5.19:1 ≥ 4.5** (user-approved; darken toward `#000000` if a future orange fails 4.5).

@@ -27,7 +27,6 @@ import {
   MessageCircleQuestion,
   PanelLeft,
   PanelRight,
-  Plug,
   Sparkles,
   ShieldAlert,
   Terminal,
@@ -49,7 +48,6 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   agent: Bot,
   node: Cpu,
   tool: Wrench,
-  'at-resource': Plug,
   command: Terminal,
   panel: PanelRight,
   code: FileCode2,
@@ -76,6 +74,7 @@ function itemIcon(item: GhostPermissionItem): LucideIcon {
   if (
     item.labelKey === 'networkSecret' ||
     item.labelKey === 'networkSecretOauth' ||
+    item.labelKey === 'networkSecretOrganizationIdentity' ||
     item.labelKey === 'nodeSecret'
   )
     return KeyRound;

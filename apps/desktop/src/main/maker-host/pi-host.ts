@@ -44,6 +44,7 @@ import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
+import { getRipgrepBinaryPath } from './runtime-configs.js';
 
 const log = createLogger('pi-host');
 
@@ -153,9 +154,13 @@ export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): 
 }
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
+  const ripgrepPath = getRipgrepBinaryPath();
   const config: AgentRuntimeConfig = {
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
     systemPrompt: composePiSystemPrompt(hostSystemPrompt, piSystemPrompt),
+    // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
+    // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
+    managedExecutablePaths: { ripgrep: ripgrepPath },
     userDataPath: app.getPath('userData'),
   };
   // 网关 endpoint 随 model-access 凭据同步就绪,用 getter 惰性读(与 claude remoteEndpoint 同理)。

@@ -36,6 +36,7 @@
  */
 
 import { useEffect } from 'react';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -223,7 +224,8 @@ export function usePendingAlertAttention(): void {
   useEffect(() => {
     const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
     if (!sessionsPush) return;
-    return sessionsPush.onPatched(({ sessionId, patch }) => {
+    return sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (patch && typeof patch === 'object' && 'lastTurnEndedAt' in patch) {
         noteInterruptedAck(sessionId);
       }
@@ -235,7 +237,8 @@ export function usePendingAlertAttention(): void {
   useEffect(() => {
     const onErrorPersisted = window.electronAPI?.localDb?.messages?.onErrorPersisted;
     if (!onErrorPersisted) return;
-    return onErrorPersisted(() => {
+    return onErrorPersisted((_payload, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       void refreshPendingAlerts();
     });
   }, []);
@@ -248,7 +251,8 @@ export function usePendingAlertAttention(): void {
   useEffect(() => {
     const onCreated = window.electronAPI?.localDb?.messages?.onCreated;
     if (!onCreated) return;
-    return onCreated(({ message }) => {
+    return onCreated(({ message }, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (message?.role === 'error') void refreshPendingAlerts();
     });
   }, []);

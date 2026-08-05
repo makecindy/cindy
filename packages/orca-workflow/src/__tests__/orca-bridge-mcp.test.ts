@@ -833,6 +833,55 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
   });
 
+  it('read_lead and lead_status stay running across claim-bearing continuation boundaries', async () => {
+    const lead = makeSession('lead-1');
+    const { server } = makeWorkerBridgeLeadHarness(lead);
+
+    await server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: 'continue the lead turn',
+    });
+    lead.emit({
+      type: 'text',
+      data: { text: 'First segment', isFinal: false },
+    } as AgentEvent);
+    lead.emit({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+      turnContinuationId: 1,
+    } as AgentEvent);
+    lead.emit({
+      type: 'done',
+      data: { result: 'First segment result' },
+      turnContinuationId: 1,
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'running',
+      result: 'First segment result',
+    });
+    expect(parseToolJson(await server._registeredTools.lead_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ status: 'running' });
+
+    lead.emit({
+      type: 'done',
+      data: { result: 'Final lead result' },
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'done',
+      result: 'Final lead result',
+    });
+    expect(parseToolJson(await server._registeredTools.lead_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ status: 'done' });
+  });
+
   it('send_to_lead accepted false does not persist success or mark done', async () => {
     const lead = makeSession('lead-1', { sendResult: CANCELLED_SEND });
     const logger = makeLogger();

@@ -230,6 +230,25 @@ describe('agentInputQueue', () => {
     expect(updated.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
   });
 
+  it('drops stale agent-reference offsets from both queued message copies', () => {
+    const entry = queuedMessage(undefined);
+    const reference = {
+      kind: 'project' as const,
+      start: 0,
+      end: 12,
+      href: 'cindy://project/repo',
+      name: 'repo',
+      workingDir: '/repo',
+    };
+    entry.agentReferences = [reference];
+    entry.chatMessage.agentReferences = [reference];
+
+    const updated = updateQueuedMessageText(entry, 'rewritten');
+
+    expect(updated.agentReferences).toBeUndefined();
+    expect(updated.chatMessage.agentReferences).toBeUndefined();
+  });
+
   it('clears stale slash offsets but keeps the explicit no-legacy marker after a text rewrite', () => {
     const entry = queuedMessage(undefined);
     entry.persistedContent = JSON.stringify({

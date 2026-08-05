@@ -6,7 +6,12 @@ import { promises as fs } from 'node:fs';
 import { CodexAgent } from './index.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
-import type { AgentDeps, AgentSessionHandle, TurnPermissionPolicy } from '../base-agent.js';
+import {
+  CodexResumePreparationBlockedError,
+  type AgentDeps,
+  type AgentSessionHandle,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -139,6 +144,16 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
       if (req.method === 'model/list') {
         if (MockCodexTransport.dropModelList) return;
         this.emitLine({ id: req.id, result: { data: [], nextCursor: null } });
+        return;
+      }
+      if (req.method === 'mcpServerStatus/list') {
+        this.emitLine({
+          id: req.id,
+          result: {
+            data: [{ name: 'node_repl', tools: { js: { name: 'js' } } }],
+            nextCursor: null,
+          },
+        });
         return;
       }
       if (req.method === 'config/read') {
@@ -316,6 +331,9 @@ function installFakeHost(
   requestImpl?: (method: string, params: unknown) => Promise<unknown> | unknown,
   opts: {
     codexProxyActive?: boolean;
+    codexBrowserUseAvailable?: boolean;
+    codexBrowserUseVersion?: string;
+    codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
     userAgent?: string;
     codexHome?: string;
@@ -348,6 +366,12 @@ function installFakeHost(
         cwd: '/repo',
       };
     }
+    if (method === Method.SkillsList) {
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
+      };
+    }
     if (method === Method.ThreadFork) {
       return {
         thread: { id: 'fork-thread-id' },
@@ -366,6 +390,15 @@ function installFakeHost(
   });
   const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
+  const isCodexBrowserUseAvailable = vi.fn(
+    () => opts.codexBrowserUseAvailable === true,
+  );
+  const getCodexBrowserUseVersion = vi.fn(
+    () => opts.codexBrowserUseVersion ?? null,
+  );
+  const waitForMcpTool = vi.fn(async () => (
+    opts.codexBrowserMcpToolAvailable ?? opts.codexBrowserUseAvailable === true
+  ));
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
     opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
@@ -379,6 +412,9 @@ function installFakeHost(
     subscribeThread,
     unsubscribeThread,
     isCodexProxyActive,
+    isCodexBrowserUseAvailable,
+    getCodexBrowserUseVersion,
+    waitForMcpTool,
     getRemoteCompactionProviderId,
     getSessionMcpConfig,
     getConnectionId: () => 'test-connection',
@@ -554,6 +590,18 @@ describe('CodexAgent capability routing', () => {
         source: {
           kind: 'harness-plugin',
           harness: 'codex',
+          surface: 'skill',
+          id: 'computer-use:computer-use',
+          artifactId: 'computer-use',
+          containerId: 'computer-use@openai-bundled',
+        },
+        invocation: 'disabled',
+      },
+      {
+        capabilityId: 'computer-use',
+        source: {
+          kind: 'harness-plugin',
+          harness: 'codex',
           surface: 'plugin',
           id: 'computer-use@openai-bundled',
         },
@@ -566,9 +614,189 @@ describe('CodexAgent capability routing', () => {
     ],
   } as const;
 
+  it('resolves workspace routing once from the frozen session context', async () => {
+    const resolveCapabilityRouting = vi.fn(() => ({
+      overrides: [
+        {
+          capabilityId: 'browser-use',
+          source: {
+            kind: 'harness-plugin' as const,
+            harness: 'codex',
+            surface: 'plugin' as const,
+            id: 'chrome@openai-bundled',
+          },
+          invocation: 'disabled' as const,
+        },
+      ],
+    }));
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+      codexBrowserUseVersion: '26.727.51351',
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scoped-capability-routing',
+      model: 'gpt-5.4',
+      workingDir: '/workspace/browser-off',
+      vendorOptions: { frozenDisabledPluginIds: ['browser'] },
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(resolveCapabilityRouting).toHaveBeenCalledOnce();
+    expect(resolveCapabilityRouting).toHaveBeenCalledWith({
+      workingDir: '/workspace/browser-off',
+      remoteHostId: undefined,
+      vendorOptions: { frozenDisabledPluginIds: ['browser'] },
+      codexBrowserUseProvisioned: true,
+      codexBrowserUseVersion: '26.727.51351',
+      ensureCodexBrowserUseReady: expect.any(Function),
+    });
+    expect(params.config).toMatchObject({
+      'plugins."chrome@openai-bundled".enabled': false,
+    });
+    expect(host.waitForMcpTool).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('preserves the remote daemon Browser companion snapshot', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => {
+      expect(ctx?.remoteHostId).toBe('remote-browser-host');
+      return {
+        extraArgs: [],
+        extraEnv: {},
+        codexBrowserUseAvailable: true,
+        codexBrowserUseVersion: '26.727.51351',
+        codexBrowserUseStartupTimeoutMs: 120_000,
+      };
+    });
+    const remoteTransport = new MockCodexTransport();
+    const getRemoteCodexTransport = vi.fn(() => remoteTransport);
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      getRemoteCodexTransport,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-browser-companion',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-browser-host',
+    });
+    const hosts = (agent as unknown as {
+      hosts: Map<string, {
+        isCodexBrowserUseAvailable(): boolean;
+        getCodexBrowserUseVersion(): string | null;
+      }>;
+    }).hosts;
+
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
+      remoteHostId: 'remote-browser-host',
+      credentialMode: undefined,
+    });
+    expect(getRemoteCodexTransport).toHaveBeenCalledWith('remote-browser-host');
+    expect([...hosts.values()]).toHaveLength(1);
+    expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
+    expect([...hosts.values()][0]?.getCodexBrowserUseVersion()).toBe('26.727.51351');
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('fails closed when a provisioned companion does not publish the js tool', async () => {
+    let ready: boolean | undefined;
+    const resolveCapabilityRouting = vi.fn(async (
+      ctx: Parameters<NonNullable<AgentDeps['resolveCapabilityRouting']>>[0],
+    ) => {
+      ready = await ctx.ensureCodexBrowserUseReady();
+      return { overrides: [] };
+    });
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+      codexBrowserMcpToolAvailable: false,
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-missing-tool',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(host.waitForMcpTool).toHaveBeenCalledWith('node_repl', 'js', {
+      timeoutMs: 2_000,
+    });
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
+    expect(resolveCapabilityRouting).toHaveBeenCalledWith(expect.objectContaining({
+      codexBrowserUseProvisioned: true,
+    }));
+    expect(ready).toBe(false);
+
+    await handle.close();
+  });
+
+  it('retries a transient Browser companion readiness miss before freezing routing', async () => {
+    let ready: boolean | undefined;
+    const resolveCapabilityRouting = vi.fn(async (
+      ctx: Parameters<NonNullable<AgentDeps['resolveCapabilityRouting']>>[0],
+    ) => {
+      ready = await ctx.ensureCodexBrowserUseReady();
+      return { overrides: [] };
+    });
+    const agent = new CodexAgent(createDeps({}, { resolveCapabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+      codexBrowserUseAvailable: true,
+    });
+    host.waitForMcpTool
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-transient-miss',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(host.waitForMcpTool).toHaveBeenCalledTimes(2);
+    expect(ready).toBe(true);
+
+    await handle.close();
+  });
+
   it('applies host-owned plugin policy to new and resumed Codex 0.145 threads', async () => {
+    const listComputerUseSkill = (method: string, params: unknown) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [
+            {
+              name: 'computer-use:computer-use',
+              description: 'Control local Mac apps',
+              path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+              scope: 'user',
+              enabled: true,
+            },
+            {
+              name: 'disabled-user-skill',
+              description: 'Already disabled by the user',
+              path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+              scope: 'user',
+              enabled: false,
+            },
+          ],
+          errors: [],
+        })),
+      };
+    };
     const startAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const startHost = installFakeHost(startAgent, undefined, {
+    const startHost = installFakeHost(startAgent, listComputerUseSkill, {
       userAgent: 'mock-codex/0.145.0',
     });
     const startHandle = await startAgent.startSession({
@@ -581,13 +809,28 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(startParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
+      'skills.config': [
+        {
+          path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+          enabled: false,
+        },
+        {
+          path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+          enabled: false,
+        },
+      ],
     });
+    expect(startHost.request).toHaveBeenCalledWith(Method.SkillsList, {
+      cwds: ['/repo'],
+      forceReload: false,
+      perCwdExtraUserRoots: null,
+    }, { timeoutMs: 60_000 });
 
     const resumeAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const resumeHost = installFakeHost(resumeAgent, undefined, {
+    const resumeHost = installFakeHost(resumeAgent, listComputerUseSkill, {
       userAgent: 'mock-codex/0.145.0',
     });
     const resumeHandle = await resumeAgent.startSession({
@@ -601,13 +844,110 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
         'prompt',
+      'skills.config': [
+        {
+          path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+          enabled: false,
+        },
+        {
+          path: '/home/dash/.codex/skills/disabled-user-skill/SKILL.md',
+          enabled: false,
+        },
+      ],
     });
 
     await startHandle.close();
     await resumeHandle.close();
+  });
+
+  it('keeps the plugin enabled when Cindy Computer Use is unavailable but hides its incompatible Skill', async () => {
+    const compatibilityOnlyRouting = {
+      overrides: [capabilityRouting.overrides[1]],
+    } as const;
+    const agent = new CodexAgent(createDeps({}, {
+      capabilityRouting: compatibilityOnlyRouting,
+    }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [{
+            name: 'computer-use:computer-use',
+            description: 'Control local Mac apps',
+            path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+            scope: 'user',
+            enabled: true,
+          }],
+          errors: [],
+        })),
+      };
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-capability-routing-compatibility-only',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(params.config).toMatchObject({
+      'skills.config': [{
+        path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
+        enabled: false,
+      }],
+    });
+    expect(params.config).not.toHaveProperty(
+      'plugins."computer-use@openai-bundled".enabled',
+    );
+
+    await handle.close();
+  });
+
+  it('disables a restricted Skill path even when catalog parsing reports it as an error', async () => {
+    const compatibilityOnlyRouting = {
+      overrides: [capabilityRouting.overrides[1]],
+    } as const;
+    const agent = new CodexAgent(createDeps({}, {
+      capabilityRouting: compatibilityOnlyRouting,
+    }));
+    const brokenSkillPath =
+      '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md';
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [],
+          errors: [{ path: brokenSkillPath, message: 'invalid metadata' }],
+        })),
+      };
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-capability-routing-broken-skill',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(params.config).toMatchObject({
+      'skills.config': [{ path: brokenSkillPath, enabled: false }],
+    });
+    await handle.close();
   });
 
   it('fails closed for older Codex daemons that cannot apply plugin overrides', async () => {
@@ -625,9 +965,25 @@ describe('CodexAgent capability routing', () => {
     ).rejects.toThrow('requires Codex app-server 0.145.0 or newer');
   });
 
-  it('disables an explicit-only plugin on remote Codex where the local overlay is unavailable', async () => {
+  it('keeps remote Computer Use available without a local host replacement', async () => {
     const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
-    const host = installFakeHost(agent, undefined, {
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.SkillsList) return undefined;
+      const { cwds = ['/repo'] } = params as { cwds?: string[] };
+      return {
+        data: cwds.map((cwd) => ({
+          cwd,
+          skills: [{
+            name: 'computer-use:computer-use',
+            description: 'Control remote desktop apps',
+            path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
+            scope: 'user',
+            enabled: true,
+          }],
+          errors: [],
+        })),
+      };
+    }, {
       userAgent: 'mock-codex/0.145.0',
     });
     const handle = await agent.startSession({
@@ -642,13 +998,39 @@ describe('CodexAgent capability routing', () => {
 
     expect(params.config).toMatchObject({
       'plugins."feishu-delegate@personal".enabled': false,
-      'plugins."computer-use@openai-bundled".enabled': false,
+      'skills.config': [{
+        path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
+        enabled: false,
+      }],
     });
     expect(params.config).not.toHaveProperty(
-      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
+      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode',
+    );
+    expect(params.config).not.toHaveProperty(
+      'plugins."computer-use@openai-bundled".enabled',
     );
 
     await handle.close();
+  });
+
+  it('fails closed when restricted Skill discovery is unavailable', async () => {
+    const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.SkillsList) {
+        throw new Error('skills/list unavailable');
+      }
+      return undefined;
+    }, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-capability-routing-skill-discovery-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    })).rejects.toThrow(
+      'Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: skills/list unavailable',
+    );
   });
 
   it('declines an explicit-only downstream MCP unless the user chose that source', async () => {
@@ -3571,6 +3953,30 @@ describe('CodexAgent send', () => {
 });
 
 describe('CodexAgent MCP thread context hooks', () => {
+  it('binds Browser companion availability to the concrete app-server host', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexBrowserUseAvailable: true,
+    }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-browser-companion-host-snapshot',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const hosts = (agent as unknown as {
+      hosts: Map<string, { isCodexBrowserUseAvailable(): boolean }>;
+    }).hosts;
+
+    expect([...hosts.values()]).toHaveLength(1);
+    expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('passes target context to Codex extra spawn config and reuses the shared local host', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
       extraArgs: ['-c', 'mcp_servers.cindy_test.url="http://127.0.0.1:1234/mcp/cindy_test"'],
@@ -3893,6 +4299,198 @@ describe('CodexAgent MCP thread context hooks', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     });
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('silently invalidates idle sessions when the local host is force-retired, while still notifying busy ones', async () => {
+    // 回归:切账号/auth 失效触发 force-retire 时,旧实现把终态 transport error 广播给
+    // 所有订阅者——闲置/已完成的会话也会收到永久红框(#1391 场景,用户侧实测:闲置
+    // 4 小时的已完成会话被写 app-server force-retired 错误)。修复后 host 发结构化
+    // hostForcedRetire 信号,由每个 session 按自身状态收口:空闲订阅者静默失效,
+    // 真实在飞的订阅者收到终态错误 + Done。
+    const agent = new CodexAgent(createDeps());
+
+    const idleHandle = await agent.startSession({
+      sessionId: 'session-force-retire-idle',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const busyHandle = await agent.startSession({
+      sessionId: 'session-force-retire-busy',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+
+    // 两个会话共用一个 app-server host(共享 codex app-server)。
+    expect(createdTransports).toHaveLength(1);
+    const transport = createdTransports[0];
+
+    const idleEvents: Array<Record<string, unknown>> = [];
+    const busyEvents: Array<Record<string, unknown>> = [];
+    const collectIdle = (async () => {
+      for await (const event of idleHandle.events()) idleEvents.push(event as Record<string, unknown>);
+    })();
+    const collectBusy = (async () => {
+      for await (const event of busyHandle.events()) busyEvents.push(event as Record<string, unknown>);
+    })();
+
+    // busy 会话先进入 in-flight turn;idle 会话保持空闲。
+    // threadSeq 从 1 递增:第一个 startSession(idle)拿到 thread-1,第二个(busy)拿到 thread-2。
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-2', turn: { id: 'turn-forced-retire-busy' } },
+    });
+    await waitForExpectation(() => {
+      expect(busyHandle.isTurnRunning?.()).toBe(true);
+    });
+    expect(idleHandle.isTurnRunning?.()).toBe(false);
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with idle subscriber');
+
+    // busy 会话:照旧收到一次终态 transport error + Done,isTurnRunning 复位。
+    expect(busyHandle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      expect(busyEvents.some((e) => e.type === 'error')).toBe(true);
+      expect(busyEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+
+    // idle 会话:不产生任何 error/终态事件(否则 UI 会留下永久红框)。
+    // 断言放在事件流结束后(await collectIdle 之后),不用固定 sleep 赌时序。
+    await idleHandle.close();
+    await busyHandle.close();
+    await collectIdle;
+    await collectBusy;
+    expect(idleEvents.some((e) => e.type === 'error')).toBe(false);
+    expect(idleEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(false);
+
+    await agent.dispose();
+  });
+
+  it('idle session send after force-retire rejects with stale-host error', async () => {
+    // P2 (chatgpt-codex-connector on #1720): 静默失效的空闲会话在 force-retire 后
+    // 下次 send 会因 isCurrentHost()===false 抛 stale-host 错误, 不会透明重建。
+    // 这是本 PR 的已知边界: 透明重建(换 host + 重新 thread)属于独立改动, 这里
+    // 只把行为钉死, 防止未来无意的语义漂移。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-idle-then-send',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire idle then send');
+
+    await expect(
+      handle.send({ type: 'user', content: 'hello after retire' }),
+    ).rejects.toThrow(/Codex session expired/);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('collapses a pending turn/start session with terminal error + Done when the local host is force-retired', async () => {
+    // 回归(Greptile P1 on #1720):空 turnId 的 transport error 无法收口
+    // turn/start pending 的会话(handler 的 targetsPendingTurn 要求非空 turnId),
+    // busy 会永久卡死。修复后由 hostForcedRetire 信号在 session 侧统一收口:
+    // 清理在途状态并推终态。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-pending-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // 模拟 turn/start 已发出但响应未回:send 前 handle 先推初始 status,
+    // 断言按顺序(初始 status → error → Done),不用 nextEvent 逐个取值。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with pending turn/start');
+
+    // pending turn/start 的会话必须收到一次终态 error + Done,且不残留 busy。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      const errorIdx = events.findIndex((e) => e.type === 'error');
+      expect(errorIdx).toBeGreaterThan(0);
+      // 信号路径直接推 app-server-force-retired(reason 精确匹配);RPC 被 reject
+      // 时复用既有墓碑路径推 turn/start failed(无 reason 字段)。两者都必须是一次
+      // 终态,否则 UI 卡红框。willRetry 只有信号路径带 false,这里不强求。
+      expect(events[errorIdx]).toMatchObject({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true }),
+      });
+      const doneIdx = events.findIndex((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done');
+      expect(doneIdx).toBeGreaterThan(errorIdx);
+      expect(events[doneIdx]).toMatchObject({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Done', isRunning: false }),
+      });
+    });
+    expect(transport.closed).toBe(true);
+
+    await sendPromise.catch(() => undefined);
+    await collectEvents;
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('does not re-activate a force-retired session when a late turn/start success response arrives', async () => {
+    // 回归 (Greptile P1 on #1720): 强退发生在 turn/start 尚无 turnId 时, 迟到的
+    // 成功响应不得重新激活已终态收口的会话 (currentTurnId / isTurnInFlight 复活,
+    // 事件队列已 end → 上层 busy 永久卡死)。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-late-start-resp',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // turn/start 发出但响应不立即回 (挂起 RPC)。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    // 强退: notifySubscribersOfForcedRetire 同步执行 → quarantine + 终态收口。
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with late start response');
+
+    // 收口先发生: 终态 error + Done, 不再 busy。
+    await waitForExpectation(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+      expect(events.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // 迟到成功响应随后到达 (挂起 RPC 在 close/reject 之前 resolve 的竞态窗口)。
+    const line = transport.lines.find((l) => l.includes('turn/start'));
+    const req = line ? JSON.parse(line) : null;
+    if (req?.id !== undefined) {
+      transport.emitMockLine({ id: req.id, result: { turn: { id: 'late-success-turn' } } });
+    }
+    await sendPromise.catch(() => undefined);
+    // 事件流结束(collectEvents 完成)后再统一断言, 不用固定 sleep 赌时序:
+    // 全程只能有一次 error + 一次 Done, 迟到响应不得新增第二组终态。
+    await collectEvents;
+
+    // 不得复活 busy, 也不得新增第二组终态事件。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const errorCount = events.filter((e) => e.type === 'error').length;
+    expect(errorCount).toBe(1);
+    const doneCount = events.filter((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done').length;
+    expect(doneCount).toBe(1);
 
     await handle.close();
     await agent.dispose();
@@ -12395,6 +12993,68 @@ describe('CodexAgent steer', () => {
   });
 });
 
+describe('CodexAgent resume preparation', () => {
+  const resumeSessionId = '123e4567-e89b-12d3-a456-426614174000';
+
+  it('does not call thread/resume when the host identifies an unsafe rollout', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new CodexResumePreparationBlockedError('rollout may still have a live writer');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    await expect(agent.startSession({
+      sessionId: 'session-blocked-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+    })).rejects.toThrow('rollout may still have a live writer');
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect((
+      agent as unknown as { hostSessionBindingLeases: Map<string, number> }
+    ).hostSessionBindingLeases.size).toBe(0);
+  });
+
+  it('preserves the existing best-effort resume behavior for incidental preparation errors', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new Error('diagnostic read failed');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-best-effort-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId,
+    });
+
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not apply local rollout preparation to a remote Codex resume', async () => {
+    const prepareCodexResumeSession = vi.fn(async () => {
+      throw new CodexResumePreparationBlockedError('local rollout is empty');
+    });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession }));
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-resume-preparation',
+      model: 'gpt-5.4',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-host',
+      resumeSessionId,
+    });
+
+    expect(prepareCodexResumeSession).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+});
+
 describe('CodexAgent.forkSdkSession', () => {
   it('prepares an imported source thread before thread/fork', async () => {
     const order: string[] = [];
@@ -17550,7 +18210,8 @@ describe('CodexAgent reconnect-stall watchdog', () => {
 });
 
 describe('CodexAgent context window reporting', () => {
-  // agent 侧只负责两件事:按 turn 归属模型、把 host 给的已核实上限与上报值取小。
+  // agent 侧只负责两件事:按 turn 归属模型、已核实上限存在时优先用它(2026-08-04 起
+  // 不再与上报值取小,见 capContextWindow 注释)。
   // 「目录里这个窗口算不算已核实、该用哪条路由的」判定在 host
   // (apps/desktop/.../catalog-to-descriptors.ts 的 resolveVerifiedContextWindow,有独立用例)。
   const GATEWAY_MODEL = 'codex/gpt-5.6-sol';
@@ -17632,7 +18293,12 @@ describe('CodexAgent context window reporting', () => {
     ).toBe(372_000);
   });
 
-  it('上报值本来就更小时取上报值(路由真被降窗)', async () => {
+  // 2026-08-04 语义变更: 上报值更小时**不再**取上报值。原先的 min() 前提是「上报值可信,
+  // 只是可能虚高」, 实测证伪 —— 会话中途切模型后 codex 继续上报切换前那个模型的窗口
+  // (旧模型 258400 vs 新模型的真实窗口), min() 会把已核实的正确窗口拉回旧值, 上下文占比
+  // 与 memory flush 阈值全程按错的窗口走。「路由真被降窗」与「上报值陈旧」在协议上无法
+  // 区分(都只是一个更小的数字), 二选一时信我们自己按 (provider, model) 核实过的那份。
+  it('上报值更小时仍取已核实窗口(与陈旧上报值无法区分,不采信)', async () => {
     expect(
       await reportedContextWindow(
         agentWithWindows({ [GATEWAY_MODEL]: 372_000 }),
@@ -17640,7 +18306,37 @@ describe('CodexAgent context window reporting', () => {
         GATEWAY_MODEL,
         128_000,
       ),
-    ).toBe(128_000);
+    ).toBe(372_000);
+  });
+
+  // 本次故障的核心回归 (rollout 019fcd52 实测): 切模型后 codex 一直上报旧模型的
+  // 258400, 新模型的已核实窗口必须压过它 —— 否则整个会话按旧窗口核算上下文。
+  it('切模型后上游仍报旧模型窗口时,按新模型的已核实窗口核算', async () => {
+    const agent = agentWithVerified((_p, modelId) =>
+      modelId === 'claude-opus-5' ? 1_000_000 : 258_400,
+    );
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-model-switch',
+      model: GATEWAY_MODEL,
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'go' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 258_400);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(258_400);
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('claude-opus-5');
+    // 切模型后的新 turn: 上游**仍**报 258400(这正是上游的 bug), 我们必须按新模型算。
+    await handle.send({ type: 'user', content: 'again' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    pushUsage(handlers, 'turn-2', 258_400);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+    await handle.close();
   });
 
   // host 返回 null 覆盖了所有「不该收敛」的情形:目录未覆盖、只有派生兜底值(自定义 provider
@@ -18051,5 +18747,313 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
     await flush();
     expect(cardFrames()).toHaveLength(afterTerminal);
+  });
+});
+
+describe('CodexAgent compaction storm escalation', () => {
+  /**
+   * 复刻 rollout 019fcd52 (2026-08-04) 的故障:会话中途切模型后 codex 按旧模型窗口
+   * 反复压缩,每次压完水位纹丝不动。本仓修不了上游的窗口核算,但必须熔断并让用户看见。
+   */
+  function installStormHost(agent: CodexAgent) {
+    usageTotal = 0; // 每个用例独立累加,避免跨用例污染 total
+    let turnSeq = 0;
+    return installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) return {};
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+  }
+
+  function collectEvents(handle: Awaited<ReturnType<CodexAgent['startSession']>>): AgentEvent[] {
+    const seen: AgentEvent[] = [];
+    void (async () => {
+      for await (const ev of handle.events()) seen.push(ev);
+    })();
+    return seen;
+  }
+
+  let usageTotal = 0;
+
+  function pushUsageTokens(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    inputTokens: number,
+  ): void {
+    usageTotal += inputTokens;
+    handlers.tokenUsageUpdated?.({
+      threadId: 'start-thread-id',
+      turnId,
+      tokenUsage: {
+        // total 是累加值,与 last 不同量级 —— 不把两者设成相同,否则测不出字段映射。
+        total: { inputTokens: usageTotal, cachedInputTokens: 0, outputTokens: 0 },
+        last: { inputTokens, cachedInputTokens: 0, outputTokens: 0 },
+        // 上游的 bug:切模型后仍报旧模型的 258400。
+        modelContextWindow: 258_400,
+      },
+    } as never);
+  }
+
+  /**
+   * 一轮真实压缩:压缩前水位 → contextCompaction → 一条 0(codex 的压缩完成标记)
+   * → 压缩后水位。实测每轮都是这个形状(rollout 019fcd52),那条 0 必须照实喂 ——
+   * 少了它,测的就是一个现实里不存在的时序。
+   */
+  function pushCompactionCycle(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    seq: number,
+    pre: number,
+    post: number,
+  ): void {
+    pushUsageTokens(handlers, turnId, pre);
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId,
+      item: { id: `compact-${seq}`, type: 'contextCompaction' },
+    } as never);
+    pushUsageTokens(handlers, turnId, 0);
+    pushUsageTokens(handlers, turnId, post);
+  }
+
+  /** 实测风暴的前四轮 (pre, post):历史已压到底只剩 30k,总量却仍是 326k。 */
+  const STORM_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [176_539, 326_503],
+    [32_283, 325_868],
+    [30_544, 325_922],
+    [30_513, 327_909],
+  ];
+
+  /** 健康的长 turn:每轮都把 ~200k 的历史压回 30k 上下(floor 之间不单调下降)。 */
+  const HEALTHY_ROUNDS: ReadonlyArray<readonly [number, number]> = [
+    [210_000, 30_000],
+    [205_000, 31_000],
+    [198_000, 29_000],
+    [212_000, 32_000],
+    [207_000, 30_500],
+  ];
+
+  /** eventQueue 消费端是 async 迭代器,同步推完事件要让出两拍才收得到。 */
+  const flushEvents = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  /** 熔断有两条 reason(有无切模型证据),两条都要认。 */
+  const STORM_REASONS = [
+    'codex_compaction_not_converging',
+    'codex_compaction_not_converging_model_switch',
+  ];
+
+  function findStormError(seen: AgentEvent[]): AgentEvent | undefined {
+    return seen.find(
+      (ev) =>
+        ev.type === 'error' &&
+        STORM_REASONS.includes((ev.data as { reason?: string } | null)?.reason ?? ''),
+    );
+  }
+
+  it('连续无效压缩 → 推终态 error 并 interrupt turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-storm',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    // 实测风暴序列:把 30k 的历史压完,总量仍是 326k。
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    const terminal = findStormError(seen);
+    expect(terminal).toBeDefined();
+    expect((terminal!.data as { isTerminal?: boolean }).isTerminal).toBe(true);
+    expect(
+      host.request.mock.calls.some(
+        ([method, params]) =>
+          method === Method.TurnInterrupt && (params as { turnId?: string }).turnId === 'turn-1',
+      ),
+    ).toBe(true);
+    await handle.close();
+  });
+
+  it('压缩确实生效时不熔断 —— 正常长会话不被误杀', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-healthy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    // 健康长 turn:每轮都把大历史压回 floor,floor 之间不要求单调下降。
+    for (const [i, [pre, post]] of HEALTHY_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    expect(findStormError(seen)).toBeUndefined();
+    expect(
+      host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  /** 跑到熔断, 返回终态错误消息正文 (诊断文案由 modelSwitchRecord 决定)。 */
+  async function stormTerminalAfterSwitches(
+    sessionId: string,
+    switches: readonly string[],
+    /**
+     * server 把请求 id 规范化后的 wire 变体(如 'model-a-codex')。推一条
+     * thread/settings/updated 让 mutableModel 变成它 —— mutableCatalogModel 按设计
+     * 保持目录 id 不动。真实环境里 codex 就是这么干的,不模拟就测不到口径混用。
+     */
+    normalizedWireModel?: string,
+  ): Promise<{ message: string; reason: string }> {
+    const agent = new CodexAgent(createDeps());
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({ sessionId, model: 'model-a', workingDir: '/repo' });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    if (normalizedWireModel) {
+      handlers.threadSettingsUpdated?.({
+        threadId: 'start-thread-id',
+        threadSettings: { model: normalizedWireModel, serviceTier: 'default' },
+      } as never);
+    }
+
+    if (!handle.setModel) throw new Error('expected setModel support');
+    for (const m of switches) await handle.setModel(m);
+
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+    await flushEvents();
+    const terminal = findStormError(seen);
+    expect(terminal).toBeDefined();
+    await handle.close();
+    return terminal!.data as { message: string; reason: string };
+  }
+
+  // 回归 (Codex review, 2026-08-05): server 会把请求 id 规范化成只在 wire 上存在的
+  // 变体('model-a' → 'model-a-codex'), 而 threadSettingsUpdated 刻意只更新
+  // mutableModel、不动 mutableCatalogModel。切换记录若拿 mutableModel 当基准, A→B→A
+  // 时 'model-a' !== 'model-a-codex' 会导致记录清不掉 —— 熔断文案继续声称切换过模型,
+  // 还让用户"切回 model-a-codex"这个选择器里根本不存在的 id。
+  it('server 规范化 wire id 后, A→B→A 仍能正确清除记录', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba-wire',
+      ['model-b', 'model-a'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
+    // 尤其不能把 wire 变体透给用户 —— 它不在模型选择器里。
+    expect(message).not.toContain('model-a-codex');
+  });
+
+  it('server 规范化 wire id 后, A→B→C 的诊断仍用目录 id', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc-wire',
+      ['model-b', 'model-c'],
+      'model-a-codex',
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    // wire 变体不得出现在给用户的文案里。
+    expect(message).not.toContain('model-a-codex');
+  });
+
+  // Codex review: A→B→A 原先会记成 {from:A,to:A}, 文案变成"从 A 切到 A, 请切回 A"。
+  // reason 也必须跟着退回通用那条 —— renderer 拿 reason 的本地化文案盖掉 message,
+  // 只把 message 改成不猜原因是没用的, 用户看到的仍是 reason 对应的那句。
+  it('A→B→A 切回原模型后不点名模型, 且用通用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-aba',
+      ['model-b', 'model-a'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging');
+    expect(message).not.toContain('switched model');
+    // 落到不猜原因的兜底文案。
+    expect(message).toContain('system prompt and tool definitions');
+  });
+
+  // A→B→C: from 保持最初的 A(codex 一直按它算窗口), to 是最新的 C。
+  it('A→B→C 保留最初来源与最新目标, 且用切模型专用 reason', async () => {
+    const { message, reason } = await stormTerminalAfterSwitches(
+      'session-storm-abc',
+      ['model-b', 'model-c'],
+    );
+    expect(reason).toBe('codex_compaction_not_converging_model_switch');
+    expect(message).toContain('switched model from "model-a" to "model-c"');
+    expect(message).toContain('Switch back to "model-a"');
+    expect(message).not.toContain('model-b');
+  });
+
+  it('开着 Maker Memory 时同样熔断(改成无条件回调没打断 flush 路径)', async () => {
+    // 上面两条用例走的是默认的 makerMemory 关闭态 —— 那正是改动前的空洞:
+    // onCompactBoundary 只在 memoryFlushController 存在时注册, 关掉 Maker Memory
+    // 的用户连压缩边界都收不到。这条补另一侧: 开着 memory 时熔断照旧, memory flush
+    // 的通知语义没被无条件化改坏。
+    // 记 debug 日志确认真的走进了 memory 开启分支 —— stub 形状不对时代码会静默
+    // 退回 controller=null, 这条用例就会悄悄退化成上面那条的副本。
+    const debugMessages: string[] = [];
+    const spyLogger: Logger = {
+      trace() {}, debug(msg: string) { debugMessages.push(msg); }, info() {},
+      warn() {}, error() {}, fatal() {},
+      child() { return spyLogger; },
+    };
+    const agent = new CodexAgent(
+      createDeps(
+        { makerMemoryEnabled: true },
+        {
+          logger: spyLogger,
+          makerMemory: {
+            async getStore() {
+              return { async getIndex() { return ''; } };
+            },
+          },
+        } as never,
+      ),
+    );
+    const host = installStormHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-compaction-no-memory',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const seen = collectEvents(handle);
+    await handle.send({ type: 'user', content: 'go' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    for (const [i, [pre, post]] of STORM_ROUNDS.entries()) {
+      pushCompactionCycle(handlers, 'turn-1', i, pre, post);
+    }
+
+    await flushEvents();
+    expect(debugMessages).toContain('maker memory loaded for session');
+    expect(findStormError(seen)).toBeDefined();
+    await handle.close();
   });
 });

@@ -371,10 +371,13 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
   it('installs and enables a unique defaultInstall package and records its release', async () => {
     const item = summary({ defaultInstall: true });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
     runtime.install.mockImplementation(async () => {
       const ghost = {
         manifest: manifest(),
-        dir: '/userData/cindy-brain/cindy-test',
+        dir: installDir,
         enabled: true,
       };
       runtime.ghosts = [ghost];
@@ -399,7 +402,62 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.installationForGhost('cindy-test')).toMatchObject({
       source: 'market',
       releaseId: 'release-1',
+      manifestDigest: ghostManifestDigest(manifest()),
     });
+  });
+
+  it('backfills a missing digest only for an unchanged current market release', async () => {
+    const item = summary({ scope: 'organization', organizationId: 'org-1' });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.ghosts = [{ manifest: manifest(), dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-07-27T00:00:00.000Z',
+    });
+
+    await h.service.snapshot();
+
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      source: 'market',
+      manifestDigest: ghostManifestDigest(manifest()),
+    });
+  });
+
+  it('does not backfill provenance when the installed manifest differs', async () => {
+    const item = summary({ scope: 'organization', organizationId: 'org-1' });
+    const changedManifest = manifest('cindy-test', '1.0.0', ['notify', 'fs']);
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(changedManifest));
+    runtime.ghosts = [{ manifest: changedManifest, dir: installDir, enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-07-27T00:00:00.000Z',
+    });
+
+    await h.service.snapshot();
+
+    expect(h.ledger.installationForGhost(item.ghostId)?.manifestDigest).toBeUndefined();
   });
 
   // 2026-07-26 定案:市场首装一律装完即开,手动安装与 defaultInstall 归一,

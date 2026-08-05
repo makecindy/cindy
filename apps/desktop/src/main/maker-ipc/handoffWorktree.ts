@@ -1,13 +1,19 @@
 import path from 'node:path';
 
-import type { CreateWorktreeReq, CreateWorktreeResp, DetectCwdResp, ListBranchesResp, WorktreeMeta } from '../worktree/types.js';
+import type {
+  CreateWorktreeReq,
+  CreateWorktreeResp,
+  DetectCwdResp,
+  ListBranchesResp,
+  WorktreeMeta,
+} from '../worktree/types.js';
 
 /**
  * send_to_session create 分支的 worktree 准备逻辑(use_worktree=true 时)。
  *
  * 职责:从 dispatcher session 的 workingDir 解析出 base repo,然后为「即将创建的
  * 新 session」预建一个正规的 session worktree(与 UI 新会话勾选 worktree 产出的
- * 完全同类:.cindy-worktrees/<name> + xdt/<name> 分支、worktreeStore 绑定、关闭时
+ * 完全同类:.cindy-worktrees/<name> + cindy/<name> 分支、worktreeStore 绑定、关闭时
  * auto-stash 清理)。调用方拿到 worktree 路径后以其为 workingDir 创建 session。
  *
  * base repo 解析的三种情况(按序):
@@ -41,8 +47,7 @@ export interface HandoffWorktreeDeps {
 }
 
 export type PrepareHandoffWorktreeResult =
-  | { ok: true; sessionId: string; meta: WorktreeMeta }
-  | { ok: false; message: string };
+  { ok: true; sessionId: string; meta: WorktreeMeta } | { ok: false; message: string };
 
 /** a 是否等于 b 或位于 b 目录之下(大小写按 Windows 习惯不敏感比较,POSIX 敏感)。 */
 function isSamePathOrUnder(a: string, b: string): boolean {

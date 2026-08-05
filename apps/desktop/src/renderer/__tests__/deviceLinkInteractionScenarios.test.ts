@@ -19,6 +19,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { Session } from '@/lib/ccAgent.types';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -41,6 +45,7 @@ vi.mock('@/lib/imageRef', () => ({
 }));
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -52,7 +57,13 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import * as messageService from '@/lib/messageService';
 import { getIssueConfirmDraft, saveIssueConfirmDraft } from '@/lib/issueConfirmDraftStore';
 
-type RemotePush = { deviceId: string; channel: string; payload: unknown };
+const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
+type RemotePush = {
+  deviceId: string;
+  channel: string;
+  payload: unknown;
+  ownerStamp?: typeof TEST_OWNER_STAMP;
+};
 type ResolveCall = { requestId: string; decision: Record<string, unknown> };
 
 /** 被控端内存替身:转发 interaction push,记录 resolve-interaction,并提供挂起交互快照。 */
@@ -95,7 +106,7 @@ function makeFakeHost(deviceId: string) {
       pending.set(sessionId, arr);
     },
     registerPush(cb: (p: RemotePush) => void): () => void {
-      pushCb = cb;
+      pushCb = (push) => cb({ ...push, ownerStamp: push.ownerStamp ?? TEST_OWNER_STAMP });
       return () => {
         pushCb = null;
       };
@@ -207,6 +218,8 @@ function openRemoteSession(): string {
 }
 
 beforeEach(() => {
+  dataOwnerTesting.reset();
+  setDataOwnerGeneration(TEST_OWNER_STAMP.dataOwnerId, TEST_OWNER_STAMP.ownerGeneration);
   host = makeFakeHost(DEVICE_ID);
   local = stubElectronApi(host);
   makerChatStore.initGlobalListeners();
@@ -217,6 +230,7 @@ afterEach(() => {
   remoteProjectsStore.clear();
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
+  dataOwnerTesting.reset();
 });
 
 describe('device-link 远程交互往返 — permission', () => {
@@ -775,7 +789,7 @@ describe('远程交互接线不变式', () => {
 
   it('makerChatStore 不向 device-link 远程 session 透传本地 Maker Memory 开关;SSH 跟随全局设置', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain('const deviceLinkRemote = isRemoteSession(sessionId);');
+    expect(src).toContain('const deviceLinkRemote = isRemoteSessionSticky(sessionId);');
     // 该表达式可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
     // SSH remote 与本地同语义 (memory 按 hostId+远端路径 scope 存本机),
     // 不再出现 ssh 强制 false 的三元;device-link 仍整体省略该字段。
@@ -868,7 +882,9 @@ describe('远程交互接线不变式', () => {
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     expect(atomic).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(atomic);
-    expect(persist).toBeGreaterThan(body.indexOf('await remoteMaker.setEffort(sessionId, newEffort);'));
+    expect(persist).toBeGreaterThan(
+      body.indexOf('await remoteMaker.setEffort(sessionId, newEffort);'),
+    );
     expect(persist).toBeGreaterThan(-1);
     expect(sync).toBeGreaterThan(-1);
     expect(persist).toBeLessThan(sync);
@@ -891,7 +907,9 @@ describe('远程交互接线不变式', () => {
     const finalize = body.indexOf('onModelDidChange?.(targetModel);');
     expect(atomic).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(atomic);
-    expect(persist).toBeGreaterThan(body.indexOf('await remoteMaker.setEffort(sessionId, targetEffort);'));
+    expect(persist).toBeGreaterThan(
+      body.indexOf('await remoteMaker.setEffort(sessionId, targetEffort);'),
+    );
     expect(persist).toBeGreaterThan(-1);
     expect(sync).toBeGreaterThan(-1);
     expect(body.slice(persist, sync)).not.toContain('return;');
@@ -904,8 +922,10 @@ describe('远程交互接线不变式', () => {
   it('会话同步 New Maker 草稿默认不应打 modelChosenByVendor 显式选择标记', () => {
     const chatInputSrc = read('components/new-chat/ChatInput.tsx');
     const syncStart = chatInputSrc.indexOf('const syncSessionDraftModelPrefs');
+    const syncEnd = chatInputSrc.indexOf('const persistFastModeChange', syncStart);
     expect(syncStart).toBeGreaterThan(-1);
-    const syncBody = chatInputSrc.slice(syncStart, syncStart + 1900);
+    expect(syncEnd).toBeGreaterThan(syncStart);
+    const syncBody = chatInputSrc.slice(syncStart, syncEnd);
     expect(syncBody).toContain('patchVendorPrefsPreservingModelChoice');
     expect(syncBody).toContain('markModelChoice: false');
     expect(syncBody).toContain(
@@ -993,8 +1013,15 @@ describe('远程交互接线不变式', () => {
       'makerChatStore.setFastMode(sessionId, enabled, sourceRemoteDeviceId)',
     );
     const storeSrc = read('lib/makerChatStore.ts');
-    expect(storeSrc).toContain('sourceRemoteDeviceId || isRemoteSession(sessionId)');
-    expect(storeSrc).toContain('makerApiForDevice(sourceRemoteDeviceId)');
+    const setFastStart = storeSrc.indexOf('async function setFastMode(');
+    const setFastEnd = storeSrc.indexOf('async function setPlanMode(', setFastStart);
+    expect(setFastStart).toBeGreaterThan(-1);
+    expect(setFastEnd).toBeGreaterThan(setFastStart);
+    const setFastBody = storeSrc.slice(setFastStart, setFastEnd);
+    expect(setFastBody).toContain(
+      'const remoteDeviceId = sourceRemoteDeviceId ?? getStickySessionDeviceId(sessionId);',
+    );
+    expect(setFastBody).toContain('makerApiForDevice(remoteDeviceId)');
   });
 
   it('effort 回调必须追踪 sticky deviceId 并向父级保留远程 scope', () => {
@@ -1086,7 +1113,9 @@ describe('远程交互接线不变式', () => {
     expect(applyStart).toBeGreaterThan(-1);
     const applyBody = src.slice(applyStart, applyStart + 3200);
     expect(applyBody).toContain('modelMemory?.setFast(');
-    expect(applyBody).toContain('newProviderId,\n              modelId,\n              restoredFast,');
+    expect(applyBody).toMatch(
+      /modelMemory\?\.setFast\(\s*currentModelAgentKind,\s*newProviderId,\s*modelId,\s*restoredFast,?\s*\)/,
+    );
   });
 
   it('ChatInput 本地切来源把完整选择交给 main 原子落定后再更新 UI', () => {
@@ -1137,7 +1166,8 @@ describe('远程交互接线不变式', () => {
     // handler 可以只委托 helper,但 helper 必须负责 resolved 广播和权威落库。
     // 截取窗口用下一个语法边界而非固定字符数:handler/helper 体量会随入参校验、
     // 注释增长,固定窗口会在无行为回归时误报(#329 曾把调用挤出 1000 字符窗口)。
-    const handlerStart = src.indexOf('ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION');
+    const handlerMatch = /ipcMain\.handle\(\s*MAKER_INVOKE\.RESOLVE_INTERACTION/.exec(src);
+    const handlerStart = handlerMatch?.index ?? -1;
     expect(handlerStart).toBeGreaterThan(-1);
     const handlerEnd = src.indexOf('ipcMain.handle(', handlerStart + 1);
     const handlerBody = src.slice(handlerStart, handlerEnd === -1 ? undefined : handlerEnd);

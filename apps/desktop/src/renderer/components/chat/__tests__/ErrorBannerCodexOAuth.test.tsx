@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import { ErrorBanner } from '../ErrorBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
@@ -130,6 +131,21 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       },
       openChatGPTApp: mocks.openChatGPTApp,
     };
+  });
+
+  it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
+    const error = `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`;
+    render(
+      <ErrorBanner
+        error={error}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.codexResumeNotReady')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it('opens the ChatGPT App for an invalidated system-shared login', async () => {

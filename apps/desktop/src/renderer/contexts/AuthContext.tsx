@@ -23,7 +23,10 @@ import {
   type DesktopLoginActionResult,
   type User,
 } from '@/lib/authService';
-import { setCurrentUserName } from '@/lib/makerChatStore';
+import {
+  cancelRemoteOptimisticSendsForDataOwnerBoundary,
+  setCurrentUserName,
+} from '@/lib/makerChatStore';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { setUserPromptOwner } from '@/lib/userPromptStore';
 import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/memorySettingsStore';
@@ -35,10 +38,7 @@ import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
-import {
-  getDataOwnerGeneration,
-  setDataOwnerGeneration,
-} from './dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
 /**
  * 登录态上下文：user / isAuthenticated / isCanary / deviceId 全部来自 main 的
@@ -52,6 +52,8 @@ export interface AuthContextValue {
   user: User | null;
   mode: 'signed-out' | 'local' | 'cloud';
   dataOwnerId: string | null;
+  /** Failed auth boundaries remount owner-scoped routes so stale generations can rehydrate. */
+  dataOwnerRecoveryEpoch: number;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   /** 当前账号是否加入 Canary 发布通道。 */
@@ -68,21 +70,30 @@ export interface AuthContextValue {
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
   accountDeletionRestored: boolean;
-  getAccountDeletionAvailability: ReturnType<typeof createAuthService>['getAccountDeletionAvailability'];
-  requestAccountDeletionChallenge: ReturnType<typeof createAuthService>['requestAccountDeletionChallenge'];
+  getAccountDeletionAvailability: ReturnType<
+    typeof createAuthService
+  >['getAccountDeletionAvailability'];
+  requestAccountDeletionChallenge: ReturnType<
+    typeof createAuthService
+  >['requestAccountDeletionChallenge'];
   confirmAccountDeletion: ReturnType<typeof createAuthService>['confirmAccountDeletion'];
   getAccountDeletionStatus: ReturnType<typeof createAuthService>['getAccountDeletionStatus'];
   clearAccountDeletionReceipt: ReturnType<typeof createAuthService>['clearAccountDeletionReceipt'];
-  consumeAccountDeletionRestoredNotice: ReturnType<typeof createAuthService>['consumeAccountDeletionRestoredNotice'];
+  consumeAccountDeletionRestoredNotice: ReturnType<
+    typeof createAuthService
+  >['consumeAccountDeletionRestoredNotice'];
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const log = createLogger('AuthContext');
 
-function publishDataOwnerGeneration(dataOwnerId: string | null): void {
+function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
-  setDataOwnerGeneration(dataOwnerId);
+  if (previousOwnerId !== dataOwnerId) {
+    cancelRemoteOptimisticSendsForDataOwnerBoundary();
+  }
+  setDataOwnerGeneration(dataOwnerId, ownerGeneration);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
 
@@ -90,6 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
+  const [dataOwnerRecoveryEpoch, setDataOwnerRecoveryEpoch] = useState(0);
   const [canEnterApp, setCanEnterApp] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCanary, setIsCanary] = useState(false);
@@ -108,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const activeUserIdRef = useRef<string | null>(null);
   const activeDataOwnerIdRef = useRef<string | null>(null);
+  const activeDataOwnerGenerationRef = useRef(0);
   const authStateVersionRef = useRef(0);
 
   // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
@@ -118,7 +131,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       return await operation();
     } catch (error) {
-      publishDataOwnerGeneration(activeDataOwnerIdRef.current);
+      // Restore the exact main-owned generation. Recomputing it locally would
+      // make every stamped push from the still-active owner look stale after a
+      // rejected auth transition.
+      publishDataOwnerGeneration(
+        activeDataOwnerIdRef.current,
+        activeDataOwnerGenerationRef.current,
+      );
+      setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
       throw error;
     }
@@ -139,12 +159,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyIncomingState = useCallback(
     (state: AuthState) => {
       const ownerChanged = activeDataOwnerIdRef.current !== state.dataOwnerId;
-      publishDataOwnerGeneration(state.dataOwnerId);
+      publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
       if (ownerChanged) {
         sessionsStore.reset();
         clearWorkersCache();
       }
       activeDataOwnerIdRef.current = state.dataOwnerId;
+      activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
@@ -308,8 +329,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const enterLocalMode = useCallback(async () => {
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId);
+    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
+    activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -321,8 +343,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const exitLocalMode = useCallback(async () => {
     const state = await runDataOwnerBoundary(() => authServiceRef.current!.exitLocalMode());
-    publishDataOwnerGeneration(state.dataOwnerId);
+    publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
+    activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -375,6 +398,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       mode,
       dataOwnerId,
+      dataOwnerRecoveryEpoch,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -399,6 +423,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       mode,
       dataOwnerId,
+      dataOwnerRecoveryEpoch,
       canEnterApp,
       isAuthenticated,
       isCanary,

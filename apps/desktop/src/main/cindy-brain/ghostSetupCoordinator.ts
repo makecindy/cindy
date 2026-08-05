@@ -160,10 +160,17 @@ export class GhostSetupCoordinator {
       unsubscribe();
       return this.internalFailure('插件配置状态读取失败', error);
     }
-    if (assessment.state === 'ready') {
+    // ready 态的重连建议是非阻塞的:仅 Agent 主动带 plan 且本回合有交互面时才进
+    // 卡流程;无 sessionId 的回合(IM/定时任务)丢弃 plan 直接放行,绝不把 ready
+    // 插件拦成 SETUP_REQUIRED。
+    const reauthAssessment =
+      request.plan && request.sessionId ? toReauthInteractionAssessment(assessment) : null;
+    const reauthMode = reauthAssessment !== null;
+    if (assessment.state === 'ready' && !reauthMode) {
       unsubscribe();
       return { ok: true, assessment };
     }
+    if (reauthAssessment) assessment = reauthAssessment;
     if (!request.sessionId) {
       unsubscribe();
       return {
@@ -186,7 +193,10 @@ export class GhostSetupCoordinator {
 
     const sessionId = request.sessionId;
     const requestId = this.deps.createRequestId?.() ?? randomUUID();
-    let plan = validatePlan(request.plan, assessment) ?? defaultPlan(assessment);
+    let plan =
+      (reauthMode
+        ? validateReauthPlan(request.plan, assessment)
+        : validatePlan(request.plan, assessment)) ?? defaultPlan(assessment);
     let snapshot = toSnapshot(requestId, identity, assessment, plan);
     let settled = false;
     let verifying: Promise<void> | null = null;
@@ -297,12 +307,13 @@ export class GhostSetupCoordinator {
             return;
           }
           const next = current.assessment;
-          if (next.state === 'ready') {
+          const nextReauthAssessment = reauthMode ? toReauthInteractionAssessment(next) : null;
+          if (next.state === 'ready' && !nextReauthAssessment) {
             publishSatisfied(next);
             settle({ ok: true, assessment: next }, 'ready');
             return;
           }
-          publish(next, requiredPhase);
+          publish(nextReauthAssessment ?? next, requiredPhase);
         })().finally(() => {
           verifying = null;
           if (assessmentDirty && !settled) wakeVerify?.();
@@ -567,6 +578,47 @@ function validatePlan(
   return plan;
 }
 
+/**
+ * ready 态的非阻塞重连建议只允许一张卡、一步、一个引用、一个动作。
+ * 其余校验仍复用 required 态 validatePlan，非法 Agent plan 同样回落 Host 默认卡。
+ */
+function validateReauthPlan(
+  plan: GhostSetupPlan | undefined,
+  assessment: GhostSetupAssessment,
+): GhostSetupPlan | null {
+  if (!plan || plan.steps.length !== 1 || plan.steps[0]?.requirementRefs.length !== 1) {
+    return null;
+  }
+  return validatePlan(plan, assessment);
+}
+
+/** 把 ready assessment 的建议映射成现有卡流程可消费的单项 expired assessment。 */
+function toReauthInteractionAssessment(
+  assessment: GhostSetupAssessment,
+): GhostSetupAssessment | null {
+  if (assessment.state !== 'ready' || !assessment.reauthSuggest) return null;
+  const requirement = assessment.reauthSuggest.requirement;
+  return {
+    state: 'required',
+    revision: assessment.revision,
+    groups: [
+      {
+        id: `reauth:${assessment.reauthSuggest.secretKey}`,
+        mode: 'any_of',
+        items: [
+          {
+            ref: requirement.ref,
+            kind: requirement.kind,
+            label: requirement.label,
+            state: 'expired',
+            actions: [requirement.action],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function defaultPlan(assessment: GhostSetupAssessment): GhostSetupPlan {
   const steps = assessment.groups.flatMap((group, index) => {
     if (group.items.some((item) => item.state === 'satisfied')) return [];
@@ -635,9 +687,7 @@ function toSnapshot(
           ? (override?.phase ?? 'pending')
           : ('pending' as const),
       ...(action && !satisfied ? { action } : {}),
-      ...(!satisfied && active && override?.errorCode
-        ? { errorCode: override.errorCode }
-        : {}),
+      ...(!satisfied && active && override?.errorCode ? { errorCode: override.errorCode } : {}),
     };
   });
   return {

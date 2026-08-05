@@ -33,6 +33,7 @@
 
 import { useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
 import {
   remoteProjectsStore,
@@ -507,9 +508,10 @@ export function useDeviceLinkRemoteProjects(): void {
 
     // 被控端 active-catalog 变化：供应商目录与 capabilities.availableModels 必须同代刷新。
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
-    const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push) => {
+    const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (disposed || push.channel !== 'maker:provider:changed' || !eligible.has(push.deviceId))
         return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       evictDeviceProviders(push.deviceId);
       evictDeviceCapabilities(push.deviceId);
       void prefetchDeviceProviders(push.deviceId);

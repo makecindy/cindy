@@ -60,6 +60,27 @@ function parsePayload(result: {
   return JSON.parse(result.content[0].text) as Record<string, unknown>;
 }
 
+const READY_WITH_REAUTH_SUGGEST = {
+  state: "ready" as const,
+  revision: 9,
+  groups: [],
+  reauthSuggest: {
+    ghostId: "xd-feishu",
+    secretKey: "feishu_account",
+    missingScopes: ["approval:task:read"],
+    missingScopeCount: 1,
+    requirement: {
+      ref: "secret:feishu_account",
+      kind: "oauth" as const,
+      label: "飞书账号",
+      action: {
+        id: "oauth_connect:secret:feishu_account",
+        kind: "oauth_connect" as const,
+      },
+    },
+  },
+};
+
 describe("cindy_ghosts · ghost_list(总机接线簿,现查现报)", () => {
   it("返回唤醒中的意识与工具,附调用提示", async () => {
     const result = await handleGhostList(fakeDeps());
@@ -72,6 +93,23 @@ describe("cindy_ghosts · ghost_list(总机接线簿,现查现报)", () => {
     expect(ghosts[0].id).toBe("art");
     expect(ghosts[0].tools[0].name).toBe("gen_image");
     expect(String(payload.hint)).toContain("ghost_call");
+  });
+
+  it("ready assessment 的非阻塞重连建议随 ghost_list 透传", async () => {
+    const result = await handleGhostList(
+      fakeDeps({
+        listAwakeGhosts: async () => [
+          {
+            id: "xd-feishu",
+            name: "XD Feishu",
+            tools: [],
+            setup: READY_WITH_REAUTH_SUGGEST,
+          },
+        ],
+      }),
+    );
+    const ghosts = parsePayload(result).ghosts as Array<{ setup?: unknown }>;
+    expect(ghosts[0].setup).toEqual(READY_WITH_REAUTH_SUGGEST);
   });
 
   it("setup assessment 由 Host 脱敏生成并原样透传", async () => {
@@ -250,11 +288,31 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       ghost_id: "art",
       tool: "gen_image",
     });
-    expect(parsePayload(result).ok).toBe(true);
+    const payload = parsePayload(result);
+    expect(payload.ok).toBe(true);
+    expect(payload).not.toHaveProperty("setup");
     expect(callGhostTool).toHaveBeenCalledWith({
       ghostId: "art",
       tool: "gen_image",
       args: {},
+    });
+  });
+
+  it("成功调用可附 setup.reauthSuggest，仍保持 ok:true", async () => {
+    const result = await handleGhostCall(
+      fakeDeps({
+        callGhostTool: async () => ({
+          ok: true,
+          result: { done: true },
+          setup: READY_WITH_REAUTH_SUGGEST,
+        }),
+      }),
+      { ghost_id: "xd-feishu", tool: "call_tool" },
+    );
+    expect(parsePayload(result)).toMatchObject({
+      ok: true,
+      result: { done: true },
+      setup: { state: "ready", reauthSuggest: { secretKey: "feishu_account" } },
     });
   });
 

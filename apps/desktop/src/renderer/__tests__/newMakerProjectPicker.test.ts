@@ -123,6 +123,19 @@ describe('Shared create project picker', () => {
     expect(folderPickerPopoverSource).toContain('scrollRoot.scrollTop += normalizeWheelDeltaY(e)');
   });
 
+  it('waits for async folder selection before closing the controlled popover', () => {
+    const start = folderPickerPopoverSource.indexOf('const handleSelectPath = async');
+    const end = folderPickerPopoverSource.indexOf('const handleRemoveProject', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = folderPickerPopoverSource.slice(start, end);
+    const selectAt = body.indexOf('await onSelect(folderPath, source, option);');
+    const closeAt = body.indexOf('onOpenChange(false);');
+    expect(selectAt).toBeGreaterThan(-1);
+    expect(closeAt).toBeGreaterThan(selectAt);
+    expect(body).toContain('finally {');
+  });
+
   it('keeps dialogue outside of the project group in the picker menu', () => {
     const topHeadingIndex = folderPickerPopoverSource.indexOf(
       "t('newChat.folderPicker.dialogueOrSelectProject')",

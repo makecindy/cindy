@@ -10,6 +10,10 @@ import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-co
 import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
@@ -2303,7 +2307,10 @@ export const remoteSessionStore = {
 
     // setSessionRunning owns the final flush/finalize and run-state transition;
     // keeping the done path in one call avoids notifying subscribers twice.
-    if (type === 'done' || isTerminalMakerErrorEvent(event)) {
+    if (
+      isProductTurnDoneEvent(event)
+      || (!isTurnContinuationBoundaryEvent(event) && isTerminalMakerErrorEvent(event))
+    ) {
       let terminalPlanChanged = false;
       if (type === 'done' && readString(event, 'source') === 'codex') {
         const data = isRecord(event.data) ? event.data : null;
@@ -2448,6 +2455,13 @@ export const remoteSessionStore = {
       const data = isRecord(event.data) ? event.data : null;
       const current = readSessionRunStatus(sessionId);
       const isRunning = typeof data?.isRunning === 'boolean' ? data.isRunning : current.isRunning;
+      if (!isRunning && isTurnContinuationBoundaryEvent(event)) {
+        // A claimed status(false) closes only the provider SDK segment. Keep the
+        // mobile product turn and its streaming projection alive until an
+        // unclaimed terminal event arrives, matching the desktop lifecycle.
+        if (textFlushed || reconnectCleared) emit();
+        return;
+      }
       const rawTokenUsage = readNumber(data, 'tokenUsage');
       const rawStatus = readString(data, 'status');
       // turn-start 检测用 maker 自己的边界(不用 current.isRunning):activity 推送 / 活跃

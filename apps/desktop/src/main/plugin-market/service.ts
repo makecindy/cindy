@@ -359,6 +359,7 @@ export class PluginMarketService {
     // 而列表随后又把它标成 conflict —— 既定事实已经发生。
     const duplicateGhostIds = combinedDuplicateGhostIds(plugins, customEntries);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
+    await this.migrateMarketManifestDigests(plugins, ledger, owner);
     await this.reconcileRemovedInstallations(ledger, owner);
     // 自定义目录不完整(某来源暂时不可读)时跳过全部默认安装:此刻的合并冲突
     // 集合缺了坏来源声明的 ghostId,自动安装会在它恢复前抢占所有权。
@@ -1312,6 +1313,95 @@ export class PluginMarketService {
         pluginId: matches[0].id,
         exactCurrentRelease: record.releaseId === matches[0].currentRelease.id,
       });
+    }
+  }
+
+  /**
+   * Backfill the digest added by the trusted-install provenance check without
+   * trusting a mutable installed manifest on its own. Only an old market
+   * record whose exact release is still current can be migrated, and the
+   * installed manifest's canonical digest must match the server manifest.
+   * Older or replaced packages stay fail-closed until the user installs a
+   * current release.
+   */
+  private async migrateMarketManifestDigests(
+    summaries: readonly VisiblePluginSummary[],
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
+    const candidates = Object.values(ledger.read().installations).filter(
+      (record) =>
+        record.source === 'market' &&
+        record.installed &&
+        record.manifestDigest === undefined,
+    );
+    for (const record of candidates) {
+      const summary = summaries.find(
+        (plugin) =>
+          plugin.id === record.pluginId &&
+          plugin.ghostId === record.ghostId &&
+          plugin.currentRelease.id === record.releaseId &&
+          plugin.currentRelease.version === record.version &&
+          plugin.currentRelease.sha256 === record.sha256,
+      );
+      if (!summary) continue;
+
+      let plugin: VisiblePluginDetail;
+      try {
+        plugin = await this.api.detail(record.pluginId);
+      } catch (error) {
+        log.warn('market manifest digest migration detail unavailable', {
+          ghostId: record.ghostId,
+          pluginId: record.pluginId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      requireSameMarketOwner(owner);
+      if (
+        plugin.ghostId !== record.ghostId ||
+        plugin.currentRelease.id !== record.releaseId ||
+        plugin.currentRelease.version !== record.version ||
+        plugin.currentRelease.sha256 !== record.sha256 ||
+        plugin.scope !== record.scope ||
+        plugin.organizationId !== record.organizationId
+      ) {
+        continue;
+      }
+      const releaseDigest = ghostManifestDigest(plugin.currentRelease.manifest);
+      let migrated = false;
+      await withGhostInstallLock(record.ghostId, async () => {
+        const installed = getGhostManager()
+          .list()
+          .find((ghost) => ghost.manifest.id === record.ghostId);
+        const installedDigest = installed
+          ? installedGhostRawManifestDigest(installed.dir)
+          : null;
+        if (!installedDigest || installedDigest !== releaseDigest) return;
+        await this.withLedgerMutation(owner, () => {
+          const current = ledger.installationForGhost(record.ghostId);
+          if (
+            !current ||
+            !current.installed ||
+            current.source !== 'market' ||
+            current.manifestDigest !== undefined ||
+            current.pluginId !== record.pluginId ||
+            current.releaseId !== record.releaseId ||
+            current.sha256 !== record.sha256
+          ) {
+            return;
+          }
+          ledger.upsertInstallation({ ...current, manifestDigest: installedDigest });
+          migrated = true;
+        });
+      });
+      if (migrated) {
+        log.info('migrated market installation manifest digest', {
+          ghostId: record.ghostId,
+          pluginId: record.pluginId,
+          releaseId: record.releaseId,
+        });
+      }
     }
   }
 

@@ -42,6 +42,7 @@
 
 import { useSyncExternalStore } from 'react';
 import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 let cache: Schedule[] | null = null;
 let inflight: Promise<Schedule[]> | null = null;
@@ -186,7 +187,10 @@ export function handleAuthStateChange(authState: MinimalAuthState): void {
 // 模块加载时一次性 wire(SSR / 测试环境 window undefined 时跳过)。
 // `if (typeof window !== 'undefined')` 守卫照 sessionsStore.ts:214 范式。
 if (typeof window !== 'undefined' && window.electronAPI?.maker?.schedule?.onEvent) {
-  window.electronAPI.maker.schedule.onEvent(handleSchedulerEvent);
+  window.electronAPI.maker.schedule.onEvent((event, ownerStamp) => {
+    if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    handleSchedulerEvent(event);
+  });
 }
 if (typeof window !== 'undefined' && window.electronAPI?.onAuthStateChange) {
   window.electronAPI.onAuthStateChange(handleAuthStateChange);

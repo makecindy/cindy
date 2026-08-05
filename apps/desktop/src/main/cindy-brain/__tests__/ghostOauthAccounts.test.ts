@@ -9,6 +9,7 @@ import {
   GHOST_OAUTH_INVALID_GRANT_RECHECK_DELAY_MS,
   GHOST_OAUTH_MAX_ACCOUNTS,
   GhostOauthAccountManager,
+  missingAuthScopes,
   type GhostOauthDecl,
   type GhostOauthVault,
 } from '../ghostOauthAccounts.js';
@@ -26,8 +27,12 @@ const DECL: GhostOauthDecl = {
   identity: { url: 'https://api.example.com/userinfo', labelPath: 'email' },
 };
 
-function memoryVault(seed?: Record<string, string>): GhostOauthVault & { data: Map<string, string> } {
-  const data = new Map<string, string>(Object.entries(seed ?? {}).map(([k, v]) => [`${GHOST}\u0000${k}`, v]));
+function memoryVault(
+  seed?: Record<string, string>,
+): GhostOauthVault & { data: Map<string, string> } {
+  const data = new Map<string, string>(
+    Object.entries(seed ?? {}).map(([k, v]) => [`${GHOST}\u0000${k}`, v]),
+  );
   return {
     data,
     read: (ghostId, key) => data.get(`${ghostId}\u0000${key}`) ?? null,
@@ -42,7 +47,10 @@ function memoryVault(seed?: Record<string, string>): GhostOauthVault & { data: M
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 /** 模拟浏览器:从授权 URL 提取回调地址与 state 并回打 code。 */
@@ -70,6 +78,267 @@ function seededVault(rt = 'rt-seed'): ReturnType<typeof memoryVault> {
     [`${KEY}-rt-acc-1`]: rt,
   });
 }
+
+describe('missingAuthScopes(快照推断)', () => {
+  it.each([
+    ['全量快照没有新增 scope', ['scope.a'], { authFace: 'full', authScopes: ['scope.a'] }, false],
+    [
+      '全量快照存在新增 scope',
+      ['scope.a', 'scope.b'],
+      { authFace: 'full', authScopes: ['scope.a'] },
+      true,
+    ],
+    [
+      '主动降面账号不猜',
+      ['scope.a', 'scope.b'],
+      { authFace: 'subset', authScopes: ['scope.a'] },
+      false,
+    ],
+    ['老账号无快照不猜', ['scope.a', 'scope.b'], {}, false],
+    ['只有 scope 面没有 full 标记不猜', ['scope.a', 'scope.b'], { authScopes: ['scope.a'] }, false],
+  ] as const)('%s', (_name, declScopes, row, expected) => {
+    expect(missingAuthScopes(declScopes, row).length > 0).toBe(expected);
+  });
+
+  it('老清单与非法快照继续宽松读取，不误报陈旧授权', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-old',
+        accounts: [
+          { id: 'acc-old', label: 'old@example.com', status: 'connected', createdAt: 1 },
+          {
+            id: 'acc-bad',
+            label: 'bad@example.com',
+            status: 'connected',
+            createdAt: 2,
+            authScopes: ['scope.a', 42],
+            authFace: 'unknown',
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+    const expanded = { ...DECL, scopes: ['scope.a', 'scope.b'] };
+
+    expect(mgr.listAccounts(GHOST, KEY, expanded)).toMatchObject([
+      { id: 'acc-old', scopeStale: false },
+      { id: 'acc-bad', scopeStale: false },
+    ]);
+    expect(mgr.defaultMissingScopes(GHOST, KEY, expanded)).toEqual([]);
+  });
+
+  it('老账号无快照但有真实错误证据时触发建议与详情页角标', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-old',
+        accounts: [
+          {
+            id: 'acc-old',
+            label: 'old@example.com',
+            status: 'connected',
+            createdAt: 1,
+            insufficientScopes: ['scope.b'],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+    const expanded = { ...DECL, scopes: ['scope.a', 'scope.b'] };
+
+    expect(mgr.defaultMissingScopes(GHOST, KEY, expanded)).toEqual(['scope.b']);
+    expect(mgr.listAccounts(GHOST, KEY, expanded)[0]?.scopeStale).toBe(true);
+  });
+
+  it('真实错误证据优先于快照推断；无证据时回退快照', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@example.com',
+            status: 'connected',
+            createdAt: 1,
+            authScopes: ['scope.a'],
+            authFace: 'full',
+            insufficientScopes: ['scope.c'],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+    const expanded = { ...DECL, scopes: ['scope.a', 'scope.b', 'scope.c'] };
+
+    expect(mgr.defaultMissingScopes(GHOST, KEY, expanded)).toEqual(['scope.c']);
+    const manifest = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}');
+    delete manifest.accounts[0].insufficientScopes;
+    vault.store(GHOST, `${KEY}-accounts`, JSON.stringify(manifest));
+    expect(mgr.defaultMissingScopes(GHOST, KEY, expanded)).toEqual(['scope.b', 'scope.c']);
+  });
+
+  it('非法错误证据按 undefined 宽松读取，并回退快照推断', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@example.com',
+            status: 'connected',
+            createdAt: 1,
+            authScopes: ['scope.a'],
+            authFace: 'full',
+            insufficientScopes: ['scope.b', 42],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(
+      mgr.defaultMissingScopes(GHOST, KEY, { ...DECL, scopes: ['scope.a', 'scope.b'] }),
+    ).toEqual(['scope.b']);
+  });
+
+  it.each([
+    ['纯空白', ['   ']],
+    ['单项超长', ['x'.repeat(257)]],
+    ['条数超限', Array.from({ length: 65 }, (_, index) => `scope.${index}`)],
+  ])('%s 的持久化坏证据对判定惰性(按当前声明过滤,不整包丢弃)', (_name, insufficientScopes) => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@example.com',
+            status: 'connected',
+            createdAt: 1,
+            insufficientScopes,
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.defaultMissingScopes(GHOST, KEY, DECL)).toEqual([]);
+  });
+
+  it('历史证据已不在当前声明时忽略，并回退快照推断', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@example.com',
+            status: 'connected',
+            createdAt: 1,
+            authScopes: ['scope.a'],
+            authFace: 'full',
+            insufficientScopes: ['scope.removed'],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(
+      mgr.defaultMissingScopes(GHOST, KEY, { ...DECL, scopes: ['scope.a', 'scope.b'] }),
+    ).toEqual(['scope.b']);
+  });
+
+  it('错误证据只合并到默认账号，重复上报去重', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-2',
+        accounts: [
+          { id: 'acc-1', label: 'one@example.com', status: 'connected', createdAt: 1 },
+          {
+            id: 'acc-2',
+            label: 'two@example.com',
+            status: 'connected',
+            createdAt: 2,
+            insufficientScopes: ['scope.a'],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    const decl = ['scope.a', 'scope.b'];
+    expect(mgr.reportInsufficientScopes(GHOST, KEY, ['scope.a', 'scope.b', 'scope.b'], decl)).toBe(
+      'stored',
+    );
+    expect(mgr.reportInsufficientScopes(GHOST, KEY, ['scope.b'], decl)).toBe('unchanged');
+    const accounts = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts;
+    expect(accounts[0]).not.toHaveProperty('insufficientScopes');
+    expect(accounts[1].insufficientScopes).toEqual(['scope.a', 'scope.b']);
+    expect(
+      new GhostOauthAccountManager({
+        vault: memoryVault(),
+        fetchImpl: vi.fn() as unknown as typeof fetch,
+        openExternal: vi.fn(),
+      }).reportInsufficientScopes(GHOST, KEY, ['scope.a'], decl),
+    ).toBe(false);
+  });
+
+  it('合并时按当前声明面裁剪,清单换代后的过期证据被淘汰,条数不越积越多', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@example.com',
+            status: 'connected',
+            createdAt: 1,
+            insufficientScopes: ['scope.old', 'scope.b'],
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reportInsufficientScopes(GHOST, KEY, ['scope.c'], ['scope.b', 'scope.c'])).toBe(
+      'stored',
+    );
+    const accounts = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts;
+    expect(accounts[0].insufficientScopes).toEqual(['scope.b', 'scope.c']);
+  });
+});
 
 describe('connectAccount', () => {
   it('端口回收器只对第一方官方意识放行(第三方 redirectPort 不许借刀杀进程)', async () => {
@@ -138,13 +407,20 @@ describe('connectAccount', () => {
     expect(result.account.label).toBe('user@example.com');
     expect(result.account.isDefault).toBe(true);
     expect(result.account.status).toBe('connected');
+    expect(result.account.scopeStale).toBe(false);
 
-    const listed = mgr.listAccounts(GHOST, KEY);
+    const listed = mgr.listAccounts(GHOST, KEY, DECL);
     expect(listed).toHaveLength(1);
     expect(vault.read(GHOST, `${KEY}-rt-${result.account.id}`)).toBe('rt-1');
     // 清单里不落任何令牌字节。
     expect(vault.read(GHOST, `${KEY}-accounts`)).not.toContain('rt-1');
     expect(vault.read(GHOST, `${KEY}-accounts`)).not.toContain('at-1');
+    const persistedAccount = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0];
+    expect(persistedAccount).toMatchObject({
+      authScopes: ['scope.a'],
+      authFace: 'full',
+    });
+    expect(persistedAccount).not.toHaveProperty('insufficientScopes');
 
     // 授权余温:access token 已进缓存,取用不再走网络。
     const fetchCalls = fetchImpl.mock.calls.length;
@@ -159,7 +435,11 @@ describe('connectAccount', () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url === DECL.tokenUrl) {
-        return jsonResponse({ access_token: 'at-stale', refresh_token: 'rt-stale', expires_in: 3600 });
+        return jsonResponse({
+          access_token: 'at-stale',
+          refresh_token: 'rt-stale',
+          expires_in: 3600,
+        });
       }
       if (url === DECL.identity?.url) {
         return jsonResponse({ email: 'stale@example.com' });
@@ -187,7 +467,11 @@ describe('connectAccount', () => {
   it('声明 avatarPath → 连接时下载头像存库(不带凭证),listAccounts 带 avatarDataUrl,断开清掉', async () => {
     const avatarDecl: GhostOauthDecl = {
       ...DECL,
-      identity: { url: 'https://api.example.com/userinfo', labelPath: 'email', avatarPath: 'picture' },
+      identity: {
+        url: 'https://api.example.com/userinfo',
+        labelPath: 'email',
+        avatarPath: 'picture',
+      },
     };
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     const expectedDataUrl = `data:image/png;base64,${pngBytes.toString('base64')}`;
@@ -198,12 +482,18 @@ describe('connectAccount', () => {
         return jsonResponse({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
       }
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({ email: 'user@example.com', picture: 'https://cdn.example.com/a.png' });
+        return jsonResponse({
+          email: 'user@example.com',
+          picture: 'https://cdn.example.com/a.png',
+        });
       }
       if (url === 'https://cdn.example.com/a.png') {
         // 头像下载绝不带 Authorization(CDN 域名不在凭证注入白名单)。
         expect(new Headers(init?.headers).get('Authorization')).toBeNull();
-        return new Response(new Uint8Array(pngBytes), { status: 200, headers: { 'Content-Type': 'image/png' } });
+        return new Response(new Uint8Array(pngBytes), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        });
       }
       throw new Error(`unexpected fetch ${url}`);
     });
@@ -231,7 +521,11 @@ describe('connectAccount', () => {
     const avatarDecl: GhostOauthDecl = {
       ...DECL,
       clientId: 'cid-baked',
-      identity: { url: 'https://api.example.com/userinfo', labelPath: 'email', avatarPath: 'picture' },
+      identity: {
+        url: 'https://api.example.com/userinfo',
+        labelPath: 'email',
+        avatarPath: 'picture',
+      },
     };
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -239,7 +533,10 @@ describe('connectAccount', () => {
         return jsonResponse({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
       }
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({ email: 'user@example.com', picture: 'https://internal.example/secret.png' });
+        return jsonResponse({
+          email: 'user@example.com',
+          picture: 'https://internal.example/secret.png',
+        });
       }
       throw new Error(`unexpected fetch ${url}`);
     });
@@ -253,13 +550,19 @@ describe('connectAccount', () => {
     if (!result.ok) return;
     expect(result.account.avatarDataUrl).toBeNull();
     // 头像地址从未被主机请求过(fetch 只打过 token 与身份端点)。
-    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://internal.example/secret.png');
+    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(
+      'https://internal.example/secret.png',
+    );
   });
 
   it('头像下载失败 → 连接照常成功,avatarDataUrl 为 null(best-effort)', async () => {
     const avatarDecl: GhostOauthDecl = {
       ...DECL,
-      identity: { url: 'https://api.example.com/userinfo', labelPath: 'email', avatarPath: 'picture' },
+      identity: {
+        url: 'https://api.example.com/userinfo',
+        labelPath: 'email',
+        avatarPath: 'picture',
+      },
     };
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -267,7 +570,10 @@ describe('connectAccount', () => {
         return jsonResponse({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
       }
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({ email: 'user@example.com', picture: 'https://cdn.example.com/a.png' });
+        return jsonResponse({
+          email: 'user@example.com',
+          picture: 'https://cdn.example.com/a.png',
+        });
       }
       throw new Error('avatar cdn down');
     });
@@ -310,7 +616,11 @@ describe('connectAccount', () => {
     });
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       if (String(input) === DECL.tokenUrl) {
-        return jsonResponse({ access_token: 'at-full', refresh_token: 'rt-full', expires_in: 3600 });
+        return jsonResponse({
+          access_token: 'at-full',
+          refresh_token: 'rt-full',
+          expires_in: 3600,
+        });
       }
       return jsonResponse({ email: 'brand-new@x.com' });
     });
@@ -360,6 +670,10 @@ describe('connectAccount', () => {
     const listed = mgr.listAccounts(GHOST, KEY);
     expect(listed).toHaveLength(2);
     expect(vault.read(GHOST, `${KEY}-rt-acc-1`)).toBe('rt-fresh');
+    expect(JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0]).toMatchObject({
+      authScopes: ['scope.a'],
+      authFace: 'full',
+    });
     // 授权余温:合并账号的 access token 已进缓存。
     await expect(mgr.getFreshAccessToken(GHOST, KEY, DECL, 'acc-1')).resolves.toMatchObject({
       ok: true,
@@ -384,7 +698,11 @@ describe('connectAccount', () => {
     });
     expect((await mgrNew.connectAccount(GHOST, KEY, DECL)).ok).toBe(true);
     expect(onNew).toHaveBeenCalledTimes(1);
-    expect(onNew).toHaveBeenCalledWith({ ghostId: GHOST, secretKey: KEY, label: 'user@example.com' });
+    expect(onNew).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      label: 'user@example.com',
+    });
 
     // 同身份重连(合并):同样触发;钩子抛错不影响 ok 结果
     const onMerge = vi.fn(() => {
@@ -557,7 +875,9 @@ describe('getFreshAccessToken', () => {
     const onAccountStatusChanged = vi.fn();
     const mgr = new GhostOauthAccountManager({
       vault,
-      fetchImpl: vi.fn(async () => jsonResponse({ error: 'invalid_grant' }, 400)) as unknown as typeof fetch,
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ error: 'invalid_grant' }, 400),
+      ) as unknown as typeof fetch,
       openExternal: vi.fn(),
       sleep: instantSleep,
       onAccountStatusChanged,
@@ -629,7 +949,9 @@ describe('getFreshAccessToken', () => {
   it('瞬时刷新失败 → REFRESH_FAILED,账号不标过期', async () => {
     const mgr = new GhostOauthAccountManager({
       vault: seededVault(),
-      fetchImpl: vi.fn(async () => jsonResponse({ error: 'server_error' }, 500)) as unknown as typeof fetch,
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ error: 'server_error' }, 500),
+      ) as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, DECL)).resolves.toMatchObject({
@@ -822,7 +1144,12 @@ describe('多实例共库的 RT 轮换竞态(invalid_grant 防误删)', () => {
       expect(params.refreshToken).toBe('rt-winner');
       return {
         ok: true as const,
-        bundle: { accessToken: 'at-bk2', refreshToken: null, expiresAt: Date.now() + 60_000, grantedScope: null },
+        bundle: {
+          accessToken: 'at-bk2',
+          refreshToken: null,
+          expiresAt: Date.now() + 60_000,
+          grantedScope: null,
+        },
       };
     });
     const mgr = new GhostOauthAccountManager({
@@ -947,7 +1274,12 @@ describe('tokenBroker 模式', () => {
     const fetchImpl = vi.fn();
     const exchange = vi.fn(async () => ({
       ok: true as const,
-      bundle: { accessToken: 'at-bk', refreshToken: 'rt-bk', expiresAt: Date.now() + 60_000, grantedScope: null },
+      bundle: {
+        accessToken: 'at-bk',
+        refreshToken: 'rt-bk',
+        expiresAt: Date.now() + 60_000,
+        grantedScope: null,
+      },
     }));
     const mgr = new GhostOauthAccountManager({
       vault,
@@ -1075,7 +1407,9 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       openExternal: openExternal1,
       broker: { exchange: vi.fn(), refresh: vi.fn() },
     });
-    await expect(mgrNoResolver.connectAccount(GHOST, KEY, bounceDecl(53699))).resolves.toMatchObject({
+    await expect(
+      mgrNoResolver.connectAccount(GHOST, KEY, bounceDecl(53699)),
+    ).resolves.toMatchObject({
       ok: false,
       error: 'INVALID_CONFIG',
     });
@@ -1090,7 +1424,9 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       broker: { exchange: vi.fn(), refresh: vi.fn() },
       resolveBrokerPublicUrl: vi.fn(() => null),
     });
-    await expect(mgrNullResolver.connectAccount(GHOST, KEY, bounceDecl(53699))).resolves.toMatchObject({
+    await expect(
+      mgrNullResolver.connectAccount(GHOST, KEY, bounceDecl(53699)),
+    ).resolves.toMatchObject({
       ok: false,
       error: 'INVALID_CONFIG',
     });
@@ -1117,7 +1453,12 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       expect(params.redirectUri).toBe(PUBLIC_URI);
       return {
         ok: true as const,
-        bundle: { accessToken: 'at-bb', refreshToken: 'rt-bb', expiresAt: Date.now() + 60_000, grantedScope: null },
+        bundle: {
+          accessToken: 'at-bb',
+          refreshToken: 'rt-bb',
+          expiresAt: Date.now() + 60_000,
+          grantedScope: null,
+        },
       };
     });
     const mgr = new GhostOauthAccountManager({
@@ -1153,8 +1494,9 @@ describe('connectAccount · opts.scopes 收窄', () => {
 
   it('声明子集 → 授权 URL 的 scope 面收窄为子集', async () => {
     let capturedScope: string | null = null;
+    const vault = memoryVault();
     const mgr = new GhostOauthAccountManager({
-      vault: memoryVault(),
+      vault,
       fetchImpl: vi.fn(async () =>
         jsonResponse({ access_token: 'at-narrow', refresh_token: 'rt-narrow', expires_in: 3600 }),
       ) as unknown as typeof fetch,
@@ -1167,6 +1509,16 @@ describe('connectAccount · opts.scopes 收窄', () => {
       mgr.connectAccount(GHOST, KEY, NARROW_DECL, { scopes: ['read:x'] }),
     ).resolves.toMatchObject({ ok: true });
     expect(capturedScope).toBe('read:x');
+    expect(JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0]).toMatchObject({
+      authScopes: ['read:x'],
+      authFace: 'subset',
+    });
+    expect(
+      mgr.listAccounts(GHOST, KEY, {
+        ...NARROW_DECL,
+        scopes: ['read:x', 'write:y', 'admin:z'],
+      })[0]?.scopeStale,
+    ).toBe(false);
   });
 
   it('含未声明条目 / 空数组 → INVALID_CONFIG,不拉浏览器', async () => {
@@ -1214,7 +1566,11 @@ describe('identity.displayTemplate 展示名', () => {
     const onConnected = vi.fn();
     const mgr = new GhostOauthAccountManager({
       vault,
-      fetchImpl: slackFetch({ team: 'acme', user: 'devuser', user_id: 'U0EXAMPLE1' }) as unknown as typeof fetch,
+      fetchImpl: slackFetch({
+        team: 'acme',
+        user: 'devuser',
+        user_id: 'U0EXAMPLE1',
+      }) as unknown as typeof fetch,
       openExternal: autoBrowser(),
       onAccountConnected: onConnected,
     });
@@ -1227,9 +1583,16 @@ describe('identity.displayTemplate 展示名', () => {
     const manifest = JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}') as {
       accounts: Array<{ label: string; displayLabel: string }>;
     };
-    expect(manifest.accounts[0]).toMatchObject({ label: 'U0EXAMPLE1', displayLabel: 'acme · devuser' });
+    expect(manifest.accounts[0]).toMatchObject({
+      label: 'U0EXAMPLE1',
+      displayLabel: 'acme · devuser',
+    });
     // 授权成功提示用展示名。
-    expect(onConnected).toHaveBeenCalledWith({ ghostId: GHOST, secretKey: KEY, label: 'acme · devuser' });
+    expect(onConnected).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      label: 'acme · devuser',
+    });
   });
 
   it('同身份重连:按稳定键合并到老账号(旧行 label 是 user_id),并补上展示名', async () => {
@@ -1237,13 +1600,25 @@ describe('identity.displayTemplate 展示名', () => {
       [`${KEY}-client-id`]: 'cid',
       [`${KEY}-accounts`]: JSON.stringify({
         defaultAccountId: 'acc-legacy',
-        accounts: [{ id: 'acc-legacy', label: 'U0EXAMPLE1', status: 'connected', createdAt: 1 }],
+        accounts: [
+          {
+            id: 'acc-legacy',
+            label: 'U0EXAMPLE1',
+            status: 'connected',
+            createdAt: 1,
+            insufficientScopes: ['scope.a'],
+          },
+        ],
       }),
       [`${KEY}-rt-acc-legacy`]: 'rt-old',
     });
     const mgr = new GhostOauthAccountManager({
       vault,
-      fetchImpl: slackFetch({ team: 'acme', user: 'devuser', user_id: 'U0EXAMPLE1' }) as unknown as typeof fetch,
+      fetchImpl: slackFetch({
+        team: 'acme',
+        user: 'devuser',
+        user_id: 'U0EXAMPLE1',
+      }) as unknown as typeof fetch,
       openExternal: autoBrowser(),
     });
     const result = await mgr.connectAccount(GHOST, KEY, SLACK_DECL);
@@ -1253,6 +1628,52 @@ describe('identity.displayTemplate 展示名', () => {
     expect(result.account.id).toBe('acc-legacy');
     expect(result.account.label).toBe('acme · devuser');
     expect(mgr.listAccounts(GHOST, KEY)).toHaveLength(1);
+    expect(JSON.parse(vault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0]).not.toHaveProperty(
+      'insufficientScopes',
+    );
+    expect(mgr.defaultMissingScopes(GHOST, KEY, SLACK_DECL)).toEqual([]);
+  });
+
+  it('同身份重连清除证据时账号清单写失败，返回 VAULT_WRITE_FAILED 而不假报成功', async () => {
+    const baseVault = memoryVault({
+      [`${KEY}-client-id`]: 'cid',
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-legacy',
+        accounts: [
+          {
+            id: 'acc-legacy',
+            label: 'U0EXAMPLE1',
+            status: 'connected',
+            createdAt: 1,
+            insufficientScopes: ['scope.a'],
+          },
+        ],
+      }),
+      [`${KEY}-rt-acc-legacy`]: 'rt-old',
+    });
+    const vault: GhostOauthVault = {
+      read: baseVault.read,
+      remove: baseVault.remove,
+      store: (ghostId, storageKey, value) =>
+        storageKey === `${KEY}-accounts` ? false : baseVault.store(ghostId, storageKey, value),
+    };
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: slackFetch({
+        team: 'acme',
+        user: 'devuser',
+        user_id: 'U0EXAMPLE1',
+      }) as unknown as typeof fetch,
+      openExternal: autoBrowser(),
+    });
+
+    await expect(mgr.connectAccount(GHOST, KEY, SLACK_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'VAULT_WRITE_FAILED',
+    });
+    expect(JSON.parse(baseVault.read(GHOST, `${KEY}-accounts`) ?? '{}').accounts[0]).toMatchObject({
+      insufficientScopes: ['scope.a'],
+    });
   });
 
   it('模板占位符取不到值 → 展示名降级,view.label 回落稳定身份键', async () => {
@@ -1278,10 +1699,16 @@ describe('identity.displayTemplate 展示名', () => {
     });
     const mgr = new GhostOauthAccountManager({
       vault,
-      fetchImpl: slackFetch({ team: 'acme', user: 'devuser', user_id: 'U0EXAMPLE1' }) as unknown as typeof fetch,
+      fetchImpl: slackFetch({
+        team: 'acme',
+        user: 'devuser',
+        user_id: 'U0EXAMPLE1',
+      }) as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
-    await expect(mgr.getFreshAccessToken(GHOST, KEY, SLACK_DECL)).resolves.toMatchObject({ ok: true });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, SLACK_DECL)).resolves.toMatchObject({
+      ok: true,
+    });
     // 回填是 fire-and-forget,轮询等它落库。
     await vi.waitFor(() => {
       expect(mgr.listAccounts(GHOST, KEY)[0]?.label).toBe('acme · devuser');
@@ -1294,7 +1721,13 @@ describe('identity.displayTemplate 展示名', () => {
       [`${KEY}-accounts`]: JSON.stringify({
         defaultAccountId: 'acc-1',
         accounts: [
-          { id: 'acc-1', label: 'U0EXAMPLE1', displayLabel: 'acme · devuser', status: 'connected', createdAt: 1 },
+          {
+            id: 'acc-1',
+            label: 'U0EXAMPLE1',
+            displayLabel: 'acme · devuser',
+            status: 'connected',
+            createdAt: 1,
+          },
         ],
       }),
       [`${KEY}-rt-acc-1`]: 'rt-old',
@@ -1305,7 +1738,9 @@ describe('identity.displayTemplate 展示名', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
-    await expect(mgr.getFreshAccessToken(GHOST, KEY, SLACK_DECL)).resolves.toMatchObject({ ok: true });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, SLACK_DECL)).resolves.toMatchObject({
+      ok: true,
+    });
     // 给潜在的异步回填一个宏任务窗口,再断言没有第二次网络调用。
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1316,7 +1751,11 @@ describe('identity.displayTemplate 展示名', () => {
 describe('identity.avatarPath 头像回填', () => {
   const AVATAR_DECL: GhostOauthDecl = {
     ...DECL,
-    identity: { url: 'https://api.example.com/userinfo', labelPath: 'email', avatarPath: 'picture' },
+    identity: {
+      url: 'https://api.example.com/userinfo',
+      labelPath: 'email',
+      avatarPath: 'picture',
+    },
   };
   const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const PNG_DATA_URL = `data:image/png;base64,${PNG_BYTES.toString('base64')}`;
@@ -1338,10 +1777,16 @@ describe('identity.avatarPath 头像回填', () => {
       const url = String(input);
       if (url === DECL.tokenUrl) return jsonResponse({ access_token: 'at-2', expires_in: 3600 });
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({ email: 'user@example.com', picture: 'https://cdn.example.com/a.png' });
+        return jsonResponse({
+          email: 'user@example.com',
+          picture: 'https://cdn.example.com/a.png',
+        });
       }
       if (url === 'https://cdn.example.com/a.png') {
-        return new Response(new Uint8Array(PNG_BYTES), { status: 200, headers: { 'Content-Type': 'image/png' } });
+        return new Response(new Uint8Array(PNG_BYTES), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        });
       }
       throw new Error(`unexpected fetch ${url}`);
     });
@@ -1354,7 +1799,9 @@ describe('identity.avatarPath 头像回填', () => {
       fetchImpl: avatarFetch() as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
-    await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({ ok: true });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
+      ok: true,
+    });
     // 回填是 fire-and-forget,轮询等它落库。
     await vi.waitFor(() => {
       expect(vault.read(GHOST, `${KEY}-avatar-acc-1`)).toBe(PNG_DATA_URL);
@@ -1389,12 +1836,16 @@ describe('identity.avatarPath 头像回填', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
-    await expect(mgr.getFreshAccessToken('evil-tools', KEY, decl)).resolves.toMatchObject({ ok: true });
+    await expect(mgr.getFreshAccessToken('evil-tools', KEY, decl)).resolves.toMatchObject({
+      ok: true,
+    });
     // 等展示名回填落库,证明身份端点确实拉过了(而不是回填整体没跑)。
     await vi.waitFor(() => {
       expect(mgr.listAccounts('evil-tools', KEY)[0]?.label).toBe('user@example.com·bf');
     });
-    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://cdn.example.com/a.png');
+    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(
+      'https://cdn.example.com/a.png',
+    );
     expect(vault.read('evil-tools', `${KEY}-avatar-acc-1`)).toBeNull();
   });
 
@@ -1412,12 +1863,18 @@ describe('identity.avatarPath 头像回填', () => {
       const url = String(input);
       if (url === DECL.tokenUrl) return jsonResponse({ access_token: 'at-2', expires_in: 3600 });
       if (url === 'https://api.example.com/userinfo') {
-        return jsonResponse({ email: 'user@example.com', picture: 'https://cdn.example.com/a.png' });
+        return jsonResponse({
+          email: 'user@example.com',
+          picture: 'https://cdn.example.com/a.png',
+        });
       }
       if (url === 'https://cdn.example.com/a.png') {
         avatarRequestedResolve();
         await gate;
-        return new Response(new Uint8Array(PNG_BYTES), { status: 200, headers: { 'Content-Type': 'image/png' } });
+        return new Response(new Uint8Array(PNG_BYTES), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        });
       }
       throw new Error(`unexpected fetch ${url}`);
     });
@@ -1426,7 +1883,9 @@ describe('identity.avatarPath 头像回填', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
-    await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({ ok: true });
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
+      ok: true,
+    });
     // 等回填走到头像下载(此时被 gate 卡住),断开账号后再放行下载。
     await avatarRequested;
     mgr.disconnectAccount(GHOST, KEY, 'acc-1');

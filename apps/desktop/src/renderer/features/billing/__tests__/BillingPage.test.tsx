@@ -112,10 +112,7 @@ beforeEach(() => {
 
 async function openSubscriptionManagementMenu() {
   const trigger = await screen.findByText('billing.settings.subscriptionCard.manageAction');
-  fireEvent.pointerDown(
-    trigger.closest('button')!,
-    { button: 0, ctrlKey: false },
-  );
+  fireEvent.pointerDown(trigger.closest('button')!, { button: 0, ctrlKey: false });
   await screen.findByRole('menu');
 }
 
@@ -556,6 +553,11 @@ describe('BillingPage remote catalog rendering', () => {
     }).format(100);
     expect(offerButtons[0].textContent).toContain(twenty);
     expect(offerButtons[1].textContent).toContain(hundred);
+    expect(offerButtons[0].parentElement?.className).toContain('divide-y');
+    expect(offerButtons[0].parentElement?.className).toContain('rounded-xl');
+    expect(
+      within(offerButtons[0]).getByText(`billing.credits:{"amount":"${twenty}"}`),
+    ).toBeTruthy();
   });
 
   it('shows an end date for period-end cancellation and omits invalid dates', async () => {
@@ -894,12 +896,18 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText('alipay')).toBeNull();
     expect(screen.queryByText('stripe')).toBeNull();
 
-    fireEvent.click(screen.getByText('Configured top-up').closest('button')!);
+    const configuredTopup = screen.getByText('Configured top-up').closest('button')!;
+    fireEvent.click(configuredTopup);
+    expect(configuredTopup.getAttribute('aria-pressed')).toBe('true');
+    expect(configuredTopup.className).not.toContain('shadow-[inset');
     expect(await screen.findByText('alipay')).toBeTruthy();
     expect(screen.queryByText('unknown_provider')).toBeNull();
     expect(screen.queryByText('stripe')).toBeNull();
 
-    fireEvent.click(screen.getByText('alipay').closest('button')!);
+    const alipayOption = screen.getByText('alipay').closest('button')!;
+    fireEvent.click(alipayOption);
+    expect(alipayOption.getAttribute('aria-pressed')).toBe('true');
+    expect(alipayOption.className).not.toContain('shadow-[inset');
     fireEvent.change(screen.getByPlaceholderText('billing.amount.placeholder'), {
       target: { value: '1.001' },
     });
@@ -951,7 +959,56 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
-  it('marks the current subscription offer and prevents selecting it again', async () => {
+  it('keeps a Product enterable when its current Offer has another Offer', async () => {
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'plus',
+          name: 'Configured subscription',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'plus_month',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'plus_month_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'plus_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'plus_month_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: {
         subscriptionId: 'subscription_fixture',
@@ -981,15 +1038,289 @@ describe('BillingPage remote catalog rendering', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
 
     const dialog = await screen.findByRole('dialog');
-    const currentPlan = within(dialog).getByRole('button', { name: /Configured subscription/ });
+    const product = within(dialog).getByRole('button', { name: /Configured subscription/ });
+    expect(product).toHaveProperty('disabled', false);
+    const currentPlan = within(dialog).getByText('billing.catalog.currentPlan').closest('button')!;
+    const alternativeOffer = within(dialog).getByText('$20.00').closest('button')!;
+    const alternativeCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(250);
+    expect(
+      within(alternativeOffer).getByText(
+        `billing.credits:{"amount":"${alternativeCredits}"}`,
+      ).className,
+    ).toContain('text-12');
+    expect(within(dialog).queryByText('plus_month_more')).toBeNull();
     expect(currentPlan).toHaveProperty('disabled', true);
     expect(currentPlan.getAttribute('aria-current')).toBe('true');
-    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
-    expect(within(dialog).queryByText('billing.steps.channel.title')).toBeNull();
-    expect(within(dialog).queryByText('stripe')).toBeNull();
+    expect(alternativeOffer).toHaveProperty('disabled', false);
+    expect(alternativeOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(alternativeOffer.className).not.toContain('shadow-[inset');
+    expect(within(dialog).getByText('billing.steps.channel.title')).toBeTruthy();
+    expect(within(dialog).getByText('stripe')).toBeTruthy();
 
-    fireEvent.click(currentPlan);
     expect(checkout.startSubscription).not.toHaveBeenCalled();
+  });
+
+  it('defaults within a Product and keeps unavailable state at the Offer level', async () => {
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'pro',
+          name: 'Pro',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'pro_month_current',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'pro_current_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'pro_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'pro_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          code: 'future',
+          name: 'Coming Soon',
+          kind: 'SUBSCRIPTION' as const,
+          level: 2,
+          sortOrder: 2,
+          offers: [
+            {
+              code: 'future_month',
+              salesState: 'COMING_SOON' as const,
+              purchasable: false,
+              unavailableReason: 'OFFER_COMING_SOON' as const,
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '30',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '500',
+              rolloverCap: '0',
+              purchaseOptions: [],
+            },
+          ],
+        },
+      ],
+    }));
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    const defaultOffer = within(dialog).getByText('$9.00').closest('button')!;
+    await waitFor(() =>
+      expect(document.activeElement).toBe(defaultOffer),
+    );
+    const proProduct = within(dialog).getByRole('button', { name: /Pro/ });
+    const futureProduct = within(dialog).getByRole('button', { name: /Coming Soon/ });
+    expect(proProduct).toHaveProperty('disabled', false);
+    expect(proProduct.closest('section')?.parentElement?.className).toContain('rounded-xl');
+    expect(proProduct.closest('section')?.className).not.toContain('border-[var(--text-primary)]');
+    expect(futureProduct).toHaveProperty('disabled', true);
+    expect(
+      within(futureProduct).getByText('billing.catalog.unavailableReasons.OFFER_COMING_SOON'),
+    ).toBeTruthy();
+
+    const secondOffer = within(dialog).getByText('$20.00').closest('button')!;
+    const defaultCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(100);
+    expect(
+      within(defaultOffer).getByText(`billing.credits:{"amount":"${defaultCredits}"}`),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText('pro_month_current')).toBeNull();
+    expect(within(dialog).queryByText('pro_month_more')).toBeNull();
+    expect(defaultOffer).toHaveProperty('disabled', false);
+    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(defaultOffer.firstElementChild?.querySelector('svg')).toBeNull();
+    expect(defaultOffer.lastElementChild?.querySelector('svg')).toBeTruthy();
+    expect(secondOffer.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(secondOffer);
+    expect(secondOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(secondOffer.className).not.toContain('shadow-[inset');
+  });
+
+  it('shows the server-default Offer price when a Product is collapsed', async () => {
+    const offer = (code: string, amount: string) => ({
+      code,
+      interval: 'MONTH' as const,
+      currency: 'usd',
+      amount,
+      minAmount: null,
+      maxAmount: null,
+      creditAmount: amount,
+      rolloverCap: '0',
+      purchaseOptions: [
+        {
+          id: `${code}_stripe`,
+          provider: 'stripe',
+          capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+          paymentAction: 'REDIRECT' as const,
+        },
+      ],
+    });
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'pro',
+          name: 'Pro',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [offer('pro_default', '20'), offer('pro_cheaper', '9')],
+        },
+        {
+          code: 'basic',
+          name: 'Basic',
+          kind: 'SUBSCRIPTION' as const,
+          level: 0,
+          sortOrder: 2,
+          offers: [offer('basic_default', '5')],
+        },
+      ],
+    }));
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    const defaultOffer = within(dialog).getByText('$20.00').closest('button')!;
+    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Basic/ }));
+    const collapsedProduct = within(dialog).getByRole('button', { name: /Pro/ });
+    expect(within(collapsedProduct).getByText('$20.00')).toBeTruthy();
+    expect(within(collapsedProduct).queryByText('$9.00')).toBeNull();
+    expect(within(collapsedProduct).queryByText(/billing\.amount\.startingAt/)).toBeNull();
+  });
+
+  it('reselects the first valid Offer in the same Product after a catalog refresh', async () => {
+    const firstOffer = {
+      code: 'pro_month',
+      interval: 'MONTH' as const,
+      currency: 'usd',
+      amount: '9',
+      minAmount: null,
+      maxAmount: null,
+      creditAmount: '100',
+      rolloverCap: '0',
+      purchaseOptions: [
+        {
+          id: 'pro_month_stripe',
+          provider: 'stripe',
+          capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+          paymentAction: 'REDIRECT' as const,
+        },
+      ],
+    };
+    const secondOffer = {
+      ...firstOffer,
+      code: 'pro_month_more',
+      amount: '20',
+      creditAmount: '250',
+      purchaseOptions: [
+        {
+          ...firstOffer.purchaseOptions[0],
+          id: 'pro_month_more_stripe',
+        },
+      ],
+    };
+    const product = {
+      code: 'pro',
+      name: 'Pro',
+      kind: 'SUBSCRIPTION' as const,
+      level: 1,
+      sortOrder: 1,
+      offers: [firstOffer, secondOffer],
+    };
+    const otherProduct = {
+      code: 'basic',
+      name: 'Basic',
+      kind: 'SUBSCRIPTION' as const,
+      level: 0,
+      sortOrder: 2,
+      offers: [
+        {
+          ...firstOffer,
+          code: 'basic_month',
+          amount: '5',
+          creditAmount: '50',
+          purchaseOptions: [
+            {
+              ...firstOffer.purchaseOptions[0],
+              id: 'basic_month_stripe',
+            },
+          ],
+        },
+      ],
+    };
+    window.electronAPI.billing.getCatalog = vi
+      .fn()
+      .mockResolvedValueOnce({ products: [product, otherProduct] })
+      .mockResolvedValueOnce({ products: [{ ...product, offers: [firstOffer] }, otherProduct] })
+      .mockResolvedValueOnce({ products: [otherProduct] });
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Pro/ }));
+    const secondOfferButton = within(dialog).getByText('$20.00').closest('button')!;
+    fireEvent.click(secondOfferButton);
+    expect(secondOfferButton.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText('$9.00').closest('button')?.getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    expect(within(dialog).queryByText('pro_month')).toBeNull();
+    expect(within(dialog).queryByText('$20.00')).toBeNull();
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /Basic/ })).toBeTruthy());
+    expect(within(dialog).queryByLabelText('settings.back')).toBeNull();
+    expect(within(dialog).queryByText('$9.00')).toBeNull();
   });
 
   it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
@@ -1010,9 +1341,7 @@ describe('BillingPage remote catalog rendering', () => {
       }));
 
       render(<BillingPage />);
-      expect(
-        await screen.findByText('billing.settings.subscriptionCard.emptyTitle'),
-      ).toBeTruthy();
+      expect(await screen.findByText('billing.settings.subscriptionCard.emptyTitle')).toBeTruthy();
       expect(screen.queryByText(`billing.subscriptionStatus.${status}`)).toBeNull();
       fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
@@ -1093,7 +1422,7 @@ describe('BillingPage remote catalog rendering', () => {
     ).toHaveProperty('disabled', true);
   });
 
-  it('renders multiple remote subscription offers as independent choices', async () => {
+  it('renders single-Offer subscription Products as direct rows', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: (['alipay', 'stripe', 'alipay'] as const).map((provider, index) => ({
         code: `plan_${index + 1}`,
@@ -1134,13 +1463,41 @@ describe('BillingPage remote catalog rendering', () => {
     const planButtons = await screen.findAllByRole('button', { name: /Remote plan/ });
     expect(planButtons).toHaveLength(3);
     expect(planButtons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
-      'false',
+      'true',
       'false',
       'false',
     ]);
+    expect(planButtons.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(within(planButtons[0]).getByText(/1\.00/)).toBeTruthy();
+    expect(within(planButtons[0]).queryByText(/billing\.amount\.startingAt/)).toBeNull();
+    const firstPlanCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'CNY',
+    }).format(100);
+    expect(
+      within(planButtons[0]).getByText(`billing.credits:{"amount":"${firstPlanCredits}"}`),
+    ).toBeTruthy();
+    expect(screen.queryByText('plan_1_month')).toBeNull();
+    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.queryByText('stripe')).toBeNull();
 
     fireEvent.click(planButtons[1]);
-    expect(planButtons[1].getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByText('plan_1_month')).toBeNull();
+    expect(
+      (await screen.findAllByRole('button', { name: /Remote plan/ })).map((button) =>
+        button.getAttribute('aria-pressed'),
+      ),
+    ).toEqual(['false', 'true', 'false']);
+    expect(
+      screen
+        .getAllByRole('button', { name: /Remote plan/ })
+        .map((button) => button.getAttribute('aria-expanded')),
+    ).toEqual([null, null, null]);
+    expect(screen.queryByText('plan_2_month')).toBeNull();
     expect(await screen.findByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
   });
@@ -1453,9 +1810,10 @@ describe('BillingPage plan change', () => {
     const billing = install(billingMocks());
     let resolvePortal!: (result: BillingSubscriptionPortalResult) => void;
     billing.openSubscriptionPortal.mockImplementation(
-      () => new Promise<BillingSubscriptionPortalResult>((resolve) => {
-        resolvePortal = resolve;
-      }),
+      () =>
+        new Promise<BillingSubscriptionPortalResult>((resolve) => {
+          resolvePortal = resolve;
+        }),
     );
 
     render(<BillingPage />);
@@ -1502,7 +1860,9 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.portalAction');
     await waitFor(() => {
-      expect(uiMocks.toastError).toHaveBeenCalledWith('billing.settings.subscriptionCard.portalFailed');
+      expect(uiMocks.toastError).toHaveBeenCalledWith(
+        'billing.settings.subscriptionCard.portalFailed',
+      );
     });
 
     const catalogCalls = billing.getCatalog.mock.calls.length;
@@ -1758,7 +2118,7 @@ describe('BillingPage plan change', () => {
     ).toBeTruthy();
   });
 
-  it('offers same-provider monthly plans in upgrade, same-tier, downgrade order', async () => {
+  it('offers same-provider monthly Products in Catalog order', async () => {
     const billing = install(billingMocks());
     billing.quotePlanChange.mockResolvedValue({
       planChangeId: 'plan_change_1',
@@ -1776,7 +2136,6 @@ describe('BillingPage plan change', () => {
 
     await screen.findByText('billing.planChange.targetTitle');
     const dialog = screen.getByRole('dialog');
-    const currentPlanButton = within(dialog).getByText('Plus plan').closest('button')!;
     const maxButton = screen.getByText('Max plan').closest('button')!;
     const sameLevelButton = screen.getByText('Same-level plan').closest('button')!;
     const starterButton = screen.getByText('Starter plan').closest('button')!;
@@ -1787,9 +2146,7 @@ describe('BillingPage plan change', () => {
       sameLevelButton.compareDocumentPosition(starterButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(within(maxButton).getByText('billing.planChange.upgradeBadge')).toBeTruthy();
-    expect(currentPlanButton.hasAttribute('disabled')).toBe(true);
-    expect(currentPlanButton.getAttribute('aria-current')).toBe('true');
-    expect(within(currentPlanButton).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
     expect(within(maxButton).getByText('stripe')).toBeTruthy();
     expect(within(sameLevelButton).getByText('billing.planChange.sameLevelBadge')).toBeTruthy();
     expect(within(starterButton).getByText('billing.planChange.downgradeBadge')).toBeTruthy();
@@ -1822,6 +2179,87 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('quotes the selected same-Product monthly Offer', async () => {
+    const billing = billingMocks();
+    billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'plus',
+          name: 'Plus plan',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'plus_month',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'listing_plus_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'plus_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'listing_plus_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+    billing.quotePlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'QUOTED',
+      quotedAmountMinor: 1100,
+      quotedCurrency: 'usd',
+      quoteExpiresAt: '2099-01-01T00:00:00.000Z',
+      effectiveAt: '2026-07-24T00:00:00.000Z',
+      paymentAction: null,
+    });
+    install(billing);
+
+    render(<BillingPage />);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
+
+    const productButton = screen
+      .getAllByText('Plus plan')
+      .map((element) => element.closest('button'))
+      .find((button): button is HTMLButtonElement => button !== null)!;
+    expect(productButton).toHaveProperty('disabled', false);
+    fireEvent.click(productButton);
+
+    await waitFor(() =>
+      expect(billing.quotePlanChange).toHaveBeenCalledWith({
+        targetOfferCode: 'plus_month_more',
+        idempotencyKey: 'desktop:plan-change:00000000-0000-4000-8000-000000000042',
+      }),
+    );
   });
 
   it('opens a Stripe plan-change redirect automatically once and keeps the manual fallback', async () => {
@@ -1884,14 +2322,9 @@ describe('BillingPage plan change', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
     const dialog = await screen.findByRole('dialog');
-    const currentButton = within(dialog)
-      .getByText('billing.catalog.currentPlan')
-      .closest('button')!;
-    expect(within(currentButton).getByText('Plus plan')).toBeTruthy();
-    expect(within(currentButton).getByText('$7.00')).toBeTruthy();
-    expect(
-      within(currentButton).getByText('billing.credits:{"amount":"$80.00"}'),
-    ).toBeTruthy();
+    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(within(dialog).getByText('$7.00')).toBeTruthy();
+    expect(within(dialog).getByText('billing.credits:{"amount":"$80.00"}')).toBeTruthy();
   });
 
   it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
@@ -1973,9 +2406,9 @@ describe('BillingPage plan change', () => {
   it('keeps new selection enabled when no current subscription exists (no INCOMPLETE task)', async () => {
     // 服务端不再把未支付的首购作为“当前订阅”下发；页面必须允许正常重新选择。
     const billing = billingMocks();
-    billing.getCurrentSubscription = vi.fn(
-      async () => ({ subscription: null }),
-    ) as unknown as typeof billing.getCurrentSubscription;
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: null,
+    })) as unknown as typeof billing.getCurrentSubscription;
     install(billing);
 
     render(<BillingPage />);
@@ -1994,9 +2427,9 @@ describe('BillingPage plan change', () => {
 
   it('stops treating the abandoned checkout subscription as current when the dialog closes', async () => {
     const billing = billingMocks();
-    billing.getCurrentSubscription = vi.fn(
-      async () => ({ subscription: null }),
-    ) as unknown as typeof billing.getCurrentSubscription;
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: null,
+    })) as unknown as typeof billing.getCurrentSubscription;
     install(billing);
     Object.assign(checkout.state, {
       open: true,
@@ -2023,7 +2456,9 @@ describe('BillingPage plan change', () => {
     fireEvent.click(await screen.findByLabelText('billing.actions.close'));
 
     expect(checkout.close).toHaveBeenCalled();
-    await waitFor(() => expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1),
+    );
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
     fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
     fireEvent.click(screen.getByText('stripe').closest('button')!);

@@ -92,6 +92,7 @@ import {
   beginAppSessionBoundary,
   commitActiveAppSession,
   getActiveAppSession,
+  getActiveDataOwnerPushStamp,
   type AppSessionMode,
 } from './appSessionState.js';
 import {
@@ -183,6 +184,8 @@ export interface AuthState {
   mode: AppSessionMode;
   /** Owner for local databases and owner-scoped private state. */
   dataOwnerId: string | null;
+  /** Main-owned owner boundary generation used to fence late renderer pushes. */
+  ownerGeneration: number;
   /** Local and cloud sessions may enter the main application. */
   canEnterApp: boolean;
   isAuthenticated: boolean;
@@ -1223,10 +1226,12 @@ async function runAuthRefreshWithReplacementRetry(
  * 窗口,本函数沿用同样语义;overlay 等无 listener 的窗口会忽略该事件,无副作用。
  */
 function broadcastToRenderers(channel: string, payload: unknown): void {
+  const ownerStamp = getActiveDataOwnerPushStamp();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send(channel, payload);
+      if (ownerStamp === undefined) win.webContents.send(channel, payload);
+      else win.webContents.send(channel, payload, ownerStamp);
     } catch (err) {
       log.warn(`broadcast '${channel}' to window failed (non-fatal)`, err);
     }
@@ -1267,6 +1272,7 @@ function snapshotAuthState(): AuthState {
       : null,
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
+    ownerGeneration: appSession.generation,
     canEnterApp: appSession.mode !== 'signed-out',
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
@@ -1278,10 +1284,12 @@ function snapshotAuthState(): AuthState {
 
 /** Logged-out projection used by stale/timeout paths that must not expose newer auth state. */
 function snapshotLoggedOutAuthState(): AuthState {
+  const appSession = getActiveAppSession();
   return {
     user: null,
     mode: 'signed-out',
     dataOwnerId: null,
+    ownerGeneration: appSession.generation,
     canEnterApp: false,
     isAuthenticated: false,
     isCanary: false,
