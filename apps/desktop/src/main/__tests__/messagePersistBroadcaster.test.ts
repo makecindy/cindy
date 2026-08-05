@@ -382,6 +382,11 @@ describe('eager-create:tool_use 已到,tool_result_full 早于摘要', () => {
 
 describe('synthetic tool events:本地合成事件也返回 renderer 展示所需 payload', () => {
   it('durable tool_use 等落库成功后才 resolve', async () => {
+    const order: string[] = [];
+    vi.mocked(createMessage).mockImplementationOnce(async () => {
+      order.push('persist');
+      return {} as never;
+    });
     const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
       SESSION,
       {
@@ -389,9 +394,11 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
         data: { toolUseId: 'ghost-plan:1', toolName: 'update_plan', input: { plan: [] } },
       },
       null,
+      () => order.push('broadcast'),
     );
 
     expect(prepared).toEqual({ persistId: expect.any(String) });
+    expect(order).toEqual(['persist', 'broadcast']);
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({
@@ -405,6 +412,7 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
 
   it('durable tool_use 把数据库失败透传给调用方', async () => {
     vi.mocked(createMessage).mockRejectedValueOnce(new Error('db unavailable'));
+    const broadcast = vi.fn();
 
     await expect(
       prepareDurableSyntheticToolUseEventForBroadcast(
@@ -414,8 +422,52 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
           data: { toolUseId: 'ghost-plan:2', toolName: 'update_plan', input: { plan: [] } },
         },
         null,
+        broadcast,
       ),
     ).rejects.toThrow('db unavailable');
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('/clear 发生在 durable write 期间时不广播旧 Plan', async () => {
+    vi.mocked(createMessage).mockImplementationOnce(async () => {
+      noteSessionClearBoundary(SESSION, Date.now() + 1_000);
+      return {} as never;
+    });
+    const broadcast = vi.fn();
+
+    await expect(
+      prepareDurableSyntheticToolUseEventForBroadcast(
+        SESSION,
+        {
+          type: 'tool_use',
+          data: { toolUseId: 'ghost-plan:clear-race', toolName: 'update_plan', input: { plan: [] } },
+        },
+        null,
+        broadcast,
+      ),
+    ).resolves.toEqual({ persistId: expect.any(String) });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('data owner 在 durable write 期间切换时不以新 owner 身份广播旧 Plan', async () => {
+    vi.mocked(createMessage).mockImplementationOnce(async () => {
+      ownerScopeState.current = false;
+      return {} as never;
+    });
+    const broadcast = vi.fn();
+
+    await expect(
+      prepareDurableSyntheticToolUseEventForBroadcast(
+        SESSION,
+        {
+          type: 'tool_use',
+          data: { toolUseId: 'ghost-plan:owner-race', toolName: 'update_plan', input: { plan: [] } },
+        },
+        null,
+        broadcast,
+      ),
+    ).resolves.toEqual({ persistId: expect.any(String) });
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it('Codex imageGeneration 合成 imagegen 三联事件时带 persistId/resolvedContent', async () => {

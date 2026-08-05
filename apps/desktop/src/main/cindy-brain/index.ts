@@ -1823,6 +1823,11 @@ export function setGhostPlanLiveSessionValidator(
   ghostPlanLiveSessionValidator = validator;
 }
 
+/** /clear 同步撤销该任务 clear 前在途调用的 Plan 路由资格。 */
+export function invalidateGhostPlanContextsForSession(sessionId: string): number {
+  return getGhostPipeDispatcher().invalidatePendingPlanContextsForSession(sessionId);
+}
+
 let cindySlotSingleton: GhostCindySlot | null = null;
 let networkSlotSingleton: GhostNetworkSlot | null = null;
 let notifySlotSingleton: GhostNotifySlot | null = null;

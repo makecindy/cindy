@@ -113,12 +113,16 @@ function createVisibleDbMessage(
       ? {}
       : {
           shouldBroadcast: () => {
-            const latestBoundary = clearBoundaryBySession.get(sessionId);
-            return latestBoundary === undefined || createdAt > latestBoundary;
+            return isCreatedAfterClearBoundary(sessionId, createdAt);
           },
         }),
     broadcastOwnerScope: ownerScope,
   });
+}
+
+function isCreatedAfterClearBoundary(sessionId: string, createdAt: number): boolean {
+  const latestBoundary = clearBoundaryBySession.get(sessionId);
+  return latestBoundary === undefined || createdAt > latestBoundary;
 }
 
 /**
@@ -617,12 +621,15 @@ export function prepareSyntheticToolEventForBroadcast(
  * 需要把“已接受”绑定到落库成功的合成 tool_use 专用入口。
  *
  * 与热路径 helper 不同，本函数等待同一 writeChain 上此前写入和本次 create 完成，
- * 并把 owner scope 失效或数据库错误透传给调用方；调用方只应在 resolve 后广播。
+ * 并把入队前 owner scope 失效或数据库错误透传给调用方。落库期间边界变化会保留
+ * 已提交结果、压掉广播。广播必须通过 broadcastAfterPersist 在同一个 owner/clear
+ * guard 内同步完成，不能在 Promise resolve 后另行广播。
  */
 export async function prepareDurableSyntheticToolUseEventForBroadcast(
   sessionId: string,
   event: { type: 'tool_use'; data: unknown },
   agentMeta: AgentMeta | null,
+  broadcastAfterPersist: (prepared: { persistId: string }) => void,
 ): Promise<{ persistId: string }> {
   if (agentMeta) noteAgentMeta(sessionId, agentMeta);
   flushAssistantBlock(sessionId, agentMeta);
@@ -643,8 +650,18 @@ export async function prepareDurableSyntheticToolUseEventForBroadcast(
     createdAt,
   });
 
-  await enqueueDurableWrite(`synthetic_tool_use:${sessionId}:${persistId}`, (ownerScope) =>
-    createVisibleDbMessage(sessionId, body, ownerScope),
+  await enqueueDurableWrite(
+    `synthetic_tool_use:${sessionId}:${persistId}`,
+    async (ownerScope) => {
+      await createVisibleDbMessage(sessionId, body, ownerScope);
+      // createMessage 自己会用同一组 guard 压掉 local-db 广播；这里还必须在
+      // 同一个 owner-scoped durable closure 内重验一次，再同步发 maker:event。
+      // callback 前没有 await，故 owner/clear 不能在验身与广播之间插队。
+      if (!isOwnerScopeCurrent(ownerScope) || !isCreatedAfterClearBoundary(sessionId, createdAt)) {
+        return;
+      }
+      broadcastAfterPersist({ persistId });
+    },
   );
 
   if (toolUseId) {

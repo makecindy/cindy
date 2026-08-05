@@ -218,6 +218,20 @@ export class GhostPipeDispatcher {
     return found ? resolved : null;
   }
 
+  /**
+   * /clear 后撤销 clear 前调用的 Plan 路由资格，但不结算调用、不改超时或心跳语义。
+   * 消息没有 callId，因此旧调用与 clear 后新调用并存时 resolver 会继续 fail closed。
+   */
+  invalidatePendingPlanContextsForSession(sessionId: string): number {
+    let invalidated = 0;
+    for (const entry of this.pending.values()) {
+      if (entry.sessionContext?.sessionId !== sessionId) continue;
+      delete entry.sessionContext;
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */
   private baseTimeoutMs(override?: number): number {
     const requested = Number.isFinite(override)

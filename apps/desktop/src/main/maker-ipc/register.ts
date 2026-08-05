@@ -722,6 +722,7 @@ import {
   setGhostPlanLiveSessionValidator,
   setGhostPlanProjector,
   setGhostWorkspaceSessionService,
+  invalidateGhostPlanContextsForSession,
   notifyGhostSessionEvent,
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
@@ -10832,6 +10833,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        // /clear 只撤销 clear 前在途 Ghost 调用的 Plan 路由资格；工具本身仍可
+        // 继续心跳、返回或超时，且 clear 后新调用会取得新的可信上下文。
+        invalidateGhostPlanContextsForSession(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
         // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
         // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
@@ -12132,16 +12136,18 @@ async function broadcastDurableSyntheticToolUseEvent(
   sessionId: string,
   event: AgentEvent & { type: 'tool_use' },
 ): Promise<void> {
-  const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
+  await prepareDurableSyntheticToolUseEventForBroadcast(
     sessionId,
     { type: event.type, data: event.data },
     (event.agentMeta as AgentMeta | null | undefined) ?? null,
+    ({ persistId }) => {
+      broadcastToAllWindows(MAKER_PUSH.EVENT, {
+        sessionId,
+        event,
+        persistId,
+      });
+    },
   );
-  broadcastToAllWindows(MAKER_PUSH.EVENT, {
-    sessionId,
-    event,
-    persistId: prepared.persistId,
-  });
 }
 
 async function materializeCodexImage(

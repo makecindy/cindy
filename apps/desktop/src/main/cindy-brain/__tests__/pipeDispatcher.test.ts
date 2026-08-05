@@ -392,6 +392,61 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     }
     await Promise.all([p1, p3]);
   });
+
+  it('/clear 只撤销 Plan 路由资格，不影响 tool-progress、tool-result 或 pending 生命周期', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-before-clear',
+      sessionContext: contextA,
+    });
+
+    expect(h.dispatcher.invalidatePendingPlanContextsForSession('session-a')).toBe(1);
+    expect(h.dispatcher.pendingCount()).toBe(1);
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+    expect(
+      h.dispatcher.handleToolProgress('art', { callId: 'call-before-clear' }).accepted,
+    ).toBe(true);
+    expect(
+      h.dispatcher.handleToolResult('art', { callId: 'call-before-clear', ok: true }).accepted,
+    ).toBe(true);
+    await expect(pending).resolves.toEqual({ ok: true, result: null });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('只撤销目标任务；旧调用与 clear 后新调用并存时继续 fail closed', async () => {
+    const h = makeHarness();
+    const oldCall = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-old-a',
+      sessionContext: contextA,
+    });
+    const otherCall = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-b',
+      sessionContext: { sessionId: 'session-b', sessionInstanceId: 'instance-b' },
+    });
+
+    expect(h.dispatcher.invalidatePendingPlanContextsForSession('session-a')).toBe(1);
+    h.dispatcher.handleToolResult('art', { callId: 'call-b', ok: true });
+    await otherCall;
+
+    const newCall = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-new-a',
+      sessionContext: { sessionId: 'session-a', sessionInstanceId: 'instance-after-clear' },
+    });
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+
+    h.dispatcher.handleToolResult('art', { callId: 'call-old-a', ok: true });
+    await oldCall;
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toEqual({
+      sessionId: 'session-a',
+      sessionInstanceId: 'instance-after-clear',
+    });
+    h.dispatcher.handleToolResult('art', { callId: 'call-new-a', ok: true });
+    await newCall;
+  });
 });
 
 describe('长任务续命(hold / release / tool-progress)', () => {

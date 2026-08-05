@@ -123,6 +123,25 @@ describe('GhostPlanSlot', () => {
     expect(projector).not.toHaveBeenCalled();
   });
 
+  it('异步验身期间 /clear 撤销上下文时 fail closed', async () => {
+    let current: typeof trustedContext | null = trustedContext;
+    const projector = vi.fn(async () => {});
+    const slot = new GhostPlanSlot({
+      getGhost: () => ghost(),
+      getCurrentSessionContext: () => current,
+      isTrustedSessionContext: async () => {
+        current = null;
+        return true;
+      },
+      projector,
+    });
+    await expect(slot.handleUpdate('planner', valid)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'NO_SESSION_CONTEXT',
+    });
+    expect(projector).not.toHaveBeenCalled();
+  });
+
   it('拒绝插件伪造 sessionId，且不会投影到伪造目标', async () => {
     const { slot, projector } = harness();
     await expect(slot.handleUpdate('planner', { ...valid, sessionId: 'session-forged' })).resolves.toMatchObject({
