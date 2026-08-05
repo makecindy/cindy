@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentKind } from '@cindy/maker-core';
-import type { ProviderView } from '@cindy/model-providers';
+import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 import { ui as discordUi } from '../../discord/uiText';
 import { ui as feishuUi } from '../../feishu/uiText';
@@ -35,7 +35,7 @@ function row(overrides: Partial<AuthRow> = {}): AuthRow {
   };
 }
 
-function model(id: string) {
+function model(id: string): CatalogModel {
   return {
     id,
     name: id,
@@ -92,6 +92,45 @@ describe('checkImRouteAuth', () => {
 
     expect(message).toContain('Settings');
     expect(message).not.toContain('/new');
+  });
+
+  it('uses the selected user-provider route for codex/ models without an XD gateway key', async () => {
+    const providerSnapshot = [
+      provider({
+        id: 'custom-litellm',
+        source: 'user',
+        strategy: 'api-key-header',
+        agentKind: 'codex',
+        modelId: 'codex/foo',
+        routing: {
+          codex: {
+            upstream: 'https://litellm.example.test',
+            authStrategy: 'api-key-header',
+            headerOverride: { authorization: 'Bearer configured-by-provider' },
+          },
+        },
+        models: { codex: [model('codex/foo')] },
+      }),
+    ];
+
+    // 自定义供应商的 host 注入鉴权不应回落到 codex/ 的 XD 网关 key gate。
+    await expect(
+      checkImRouteAuth(
+        row({ agentKind: 'codex', model: 'codex/foo', providerId: 'custom-litellm' }),
+        providerSnapshot,
+        deps(),
+      ),
+    ).resolves.toEqual({ ok: true, missing: null });
+  });
+
+  it('reports gateway-key for an implicit codex/ route without an XD gateway key', async () => {
+    const providerSnapshot = [
+      provider({ id: 'xd', strategy: 'gateway-key', agentKind: 'codex', modelId: 'codex/foo' }),
+    ];
+
+    await expect(
+      checkImRouteAuth(row({ agentKind: 'codex', model: 'codex/foo' }), providerSnapshot, deps()),
+    ).resolves.toEqual({ ok: false, missing: 'gateway-key' });
   });
 
   it('reports gateway-key when a gateway route has no XD key', async () => {
@@ -184,9 +223,7 @@ describe('checkImRouteAuth', () => {
   });
 
   it('allows an explicitly connected no-auth proxy without API key material', async () => {
-    const providerSnapshot = [
-      provider({ id: 'local-proxy', strategy: 'none', connected: true }),
-    ];
+    const providerSnapshot = [provider({ id: 'local-proxy', strategy: 'none', connected: true })];
 
     await expect(
       checkImRouteAuth(row({ providerId: 'local-proxy' }), providerSnapshot, deps()),
@@ -249,19 +286,29 @@ describe('resolveEffectiveProvider', () => {
     const nonChat = provider({
       id: 'xd',
       strategy: 'gateway-key',
-      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
+      models: {
+        'claude-code': [
+          {
+            ...model('shared-id'),
+            efforts: [] as const,
+            defaultEffort: null,
+            mode: 'image_generation',
+          },
+        ],
+      },
     });
     const chat = provider({
       id: 'openai',
       strategy: 'oauth-passthrough',
-      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
+      models: {
+        'claude-code': [
+          { ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' },
+        ],
+      },
     });
 
     expect(
-      resolveEffectiveProvider(
-        row({ model: 'shared-id', providerId: 'xd' }),
-        [nonChat, chat],
-      ),
+      resolveEffectiveProvider(row({ model: 'shared-id', providerId: 'xd' }), [nonChat, chat]),
     ).toEqual({ kind: 'explicit-invalid' });
   });
 
@@ -269,18 +316,31 @@ describe('resolveEffectiveProvider', () => {
     const nonChat = provider({
       id: 'xd',
       strategy: 'gateway-key',
-      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
+      models: {
+        'claude-code': [
+          {
+            ...model('shared-id'),
+            efforts: [] as const,
+            defaultEffort: null,
+            mode: 'image_generation',
+          },
+        ],
+      },
     });
     const chat = provider({
       id: 'openai',
       strategy: 'oauth-passthrough',
-      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
+      models: {
+        'claude-code': [
+          { ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' },
+        ],
+      },
     });
 
-    const resolution = resolveEffectiveProvider(
-      row({ model: 'shared-id', providerId: null }),
-      [nonChat, chat],
-    );
+    const resolution = resolveEffectiveProvider(row({ model: 'shared-id', providerId: null }), [
+      nonChat,
+      chat,
+    ]);
     expect(resolution.kind).toBe('provider');
     expect(resolution.kind === 'provider' ? resolution.provider.id : null).toBe('openai');
   });
