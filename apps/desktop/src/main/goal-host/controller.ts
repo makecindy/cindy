@@ -390,6 +390,17 @@ export class GoalController {
     ReturnType<typeof setTimeout>
   >();
   /**
+   * deferred Resume 从等待 idle 到 active 落库之间的生命周期上下文。
+   *
+   * waiting set 会在真正重试时先被 claim，避免重复 observer 再排一轮；这里继续保留
+   * boundary + usageResetAt，供并发 close/replacement 精确释放本次边界，并在提交前被
+   * 取消时恢复 usageLimited 的自动续跑 timer。
+   */
+  private readonly deferredManualResumeContexts = new Map<
+    string,
+    { boundary: TurnAccumulator; usageResetAt: number | null }
+  >();
+  /**
    * 连续以"上游没容量"收尾的轮数,按 sessionId。
    *
    * 存在理由:三道预算护栏(budgetTokens / maxTurns / noProgressLimit)**都只在用户
@@ -942,7 +953,7 @@ export class GoalController {
         return;
       }
       if (this.isBusy(sessionId)) {
-        this.deferManualResumeUntilIdle(sessionId, existingBoundary);
+        this.deferManualResumeUntilIdle(sessionId, existingBoundary, state);
         return;
       }
       this.turns.delete(sessionId);
@@ -951,12 +962,16 @@ export class GoalController {
     const lookupBoundary = existingBoundary ?? freshTurn();
     const ownsLookupBoundary = existingBoundary === undefined;
     if (ownsLookupBoundary) this.turns.set(sessionId, lookupBoundary);
+    if (!opts?.auto) this.rebindDeferredManualResumeBoundary(sessionId, lookupBoundary);
     await this.awaitPendingLifecycle(lookupBoundary);
     if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (state === undefined) {
       try {
         state = await this.deps.storage.get(sessionId);
       } catch (error) {
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
         if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
           this.turns.delete(sessionId);
         }
@@ -975,11 +990,10 @@ export class GoalController {
       return;
     }
     if (!opts?.auto && this.isBusy(sessionId)) {
-      this.deferManualResumeUntilIdle(sessionId, lookupBoundary);
+      this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
       return;
     }
-    if (!opts?.auto) this.cancelDeferredManualResume(sessionId);
-    this.cancelUsageResume(sessionId); // 早恢复 / 手动恢复 → 取消挂着的自动续 timer
+    if (!opts?.auto) this.claimDeferredManualResume(sessionId, lookupBoundary);
     // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
     // 的目标一恢复就立刻又撞上限)。
     // **自动续跑(opts.auto)绝不清零**:到点自动续跑正是过载循环的一环,在这里清
@@ -991,16 +1005,22 @@ export class GoalController {
       try {
         ensured = await this.deps.ensureSession(sessionId);
       } catch (error) {
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
         if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
         throw error;
       }
       if (this.turns.get(sessionId) !== lookupBoundary) return;
       if (!ensured) {
-        this.turns.delete(sessionId);
+        if (!opts?.auto) {
+          this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+        }
+        if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
         return;
       }
       if (!opts?.auto && this.isBusy(sessionId)) {
-        this.deferManualResumeUntilIdle(sessionId, lookupBoundary);
+        this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
         return;
       }
     }
@@ -1017,6 +1037,9 @@ export class GoalController {
         }),
       );
     } catch (error) {
+      if (!opts?.auto) {
+        this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+      }
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
       }
@@ -1024,11 +1047,18 @@ export class GoalController {
     }
     if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (!updated) {
+      if (!opts?.auto) {
+        this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
+      }
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
       }
       return;
     }
+    if (!opts?.auto) this.completeDeferredManualResume(sessionId);
+    // usageLimited 的 reset timer 必须活到 active 写真正提交；否则 deferred Resume 在
+    // close/replacement 或持久化失败前被取消时，会同时失去手动意图和唯一自动恢复机会。
+    this.cancelUsageResume(sessionId);
     // 并发 Resume 可能已经在同一个 lookup owner 上登记了另一笔 active 写；新 active
     // owner 必须继承整个 barrier，后续 Stop 才能等所有较早 Resume settle 后最后写 paused。
     const resumedBoundary = freshTurn(
@@ -1069,13 +1099,30 @@ export class GoalController {
     this.scheduleContinuation(sessionId);
   }
 
-  /** Session close/replacement superseded the pending Resume; cancel it without changing Goal state. */
-  cancelDeferredManualResume(sessionId: string): void {
-    this.deferredManualResumes.delete(sessionId);
-    const timer = this.deferredManualResumeTimers.get(sessionId);
-    if (!timer) return;
-    clearTimeout(timer);
-    this.deferredManualResumeTimers.delete(sessionId);
+  /** Session lifecycle superseded the pending Resume; cancel it without changing Goal state. */
+  cancelDeferredManualResume(
+    sessionId: string,
+    opts?: { restoreUsageResume?: boolean },
+  ): void {
+    this.clearDeferredManualResumeRetry(sessionId);
+    const context = this.deferredManualResumeContexts.get(sessionId);
+    this.deferredManualResumeContexts.delete(sessionId);
+    if (!context) return;
+    // 普通 Stop / clear / setGoal 仍要继承当前 barrier；只有 session teardown 或提交失败
+    // 需要把本次 deferred Resume 自己登记的 boundary 精确释放，让恢复后的 usage timer 可跑。
+    if (
+      opts?.restoreUsageResume &&
+      this.turns.get(sessionId) === context.boundary
+    ) {
+      this.turns.delete(sessionId);
+    }
+    if (
+      opts?.restoreUsageResume &&
+      context.usageResetAt != null &&
+      !this.usageResumeTimers.has(sessionId)
+    ) {
+      this.scheduleUsageResume(sessionId, context.usageResetAt);
+    }
   }
 
   /** GET_GOAL_STATUS:返回当前状态扁平 payload(无 goal 返回 null)。 */
@@ -1198,6 +1245,7 @@ export class GoalController {
       this.cancelDeferredManualResume(sessionId);
     }
     this.deferredManualResumes.clear();
+    this.deferredManualResumeContexts.clear();
     this.turns.clear();
     this.consecutiveOverloadTurns.clear();
   }
@@ -1633,10 +1681,12 @@ export class GoalController {
   private deferManualResumeUntilIdle(
     sessionId: string,
     boundary: TurnAccumulator,
+    state: Pick<GoalState, 'status' | 'usageResetAt'>,
   ): void {
     if (this.turns.get(sessionId) !== boundary) return;
+    let deferredBoundary = boundary;
     if (!boundary.cancelled) {
-      const deferredBoundary = freshTurn(
+      deferredBoundary = freshTurn(
         true,
         boundary.pendingPersistence,
         boundary.pendingCompletion,
@@ -1644,11 +1694,42 @@ export class GoalController {
       this.stopSession(sessionId);
       this.turns.set(sessionId, deferredBoundary);
     }
-    this.cancelUsageResume(sessionId);
     this.deferredManualResumes.add(sessionId);
+    this.deferredManualResumeContexts.set(sessionId, {
+      boundary: deferredBoundary,
+      usageResetAt: state.status === 'usageLimited' ? state.usageResetAt : null,
+    });
     // busy 可能只来自一个尚未 dispatch 的旧 Goal fire；上面的 stopSession 已同步
     // 取消它，不会再有 turn terminal 触发 idle observer。此时主动排一次即可。
     if (!this.isBusy(sessionId)) this.scheduleDeferredManualResume(sessionId);
+  }
+
+  private rebindDeferredManualResumeBoundary(
+    sessionId: string,
+    boundary: TurnAccumulator,
+  ): void {
+    const context = this.deferredManualResumeContexts.get(sessionId);
+    if (!context) return;
+    this.deferredManualResumeContexts.set(sessionId, { ...context, boundary });
+  }
+
+  private claimDeferredManualResume(sessionId: string, boundary: TurnAccumulator): void {
+    if (!this.deferredManualResumeContexts.has(sessionId)) return;
+    this.clearDeferredManualResumeRetry(sessionId);
+    this.rebindDeferredManualResumeBoundary(sessionId, boundary);
+  }
+
+  private completeDeferredManualResume(sessionId: string): void {
+    this.clearDeferredManualResumeRetry(sessionId);
+    this.deferredManualResumeContexts.delete(sessionId);
+  }
+
+  private clearDeferredManualResumeRetry(sessionId: string): void {
+    this.deferredManualResumes.delete(sessionId);
+    const timer = this.deferredManualResumeTimers.get(sessionId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.deferredManualResumeTimers.delete(sessionId);
   }
 
   private scheduleDeferredManualResume(sessionId: string): void {

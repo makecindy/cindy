@@ -4096,7 +4096,7 @@ const registerIpcHandlers = () => {
         void getGoalController()?.maybeContinueActiveGoal(sid);
       });
       setGoalDeferredResumeCancelObserver((sid) => {
-        getGoalController()?.cancelDeferredManualResume(sid);
+        getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });
       });
       // 用户 Stop 当前 turn → 暂停 active 目标。返回 Promise 让 ABORT_SESSION 在 abort 前 await,
       // 确保目标先 paused + detach 监听,abort 终止事件不再触发续跑判定。

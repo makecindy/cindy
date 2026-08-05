@@ -640,7 +640,9 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('let goalDeferredResumeCancelObserver:');
     expect(source).toContain('export function setGoalDeferredResumeCancelObserver(');
     expect(bootstrapSource).toContain('setGoalDeferredResumeCancelObserver((sid) => {');
-    expect(bootstrapSource).toContain('getGoalController()?.cancelDeferredManualResume(sid);');
+    expect(bootstrapSource).toContain(
+      'getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });',
+    );
     expect(replacementStart).toBeGreaterThanOrEqual(0);
     expect(replacementEnd).toBeGreaterThan(replacementStart);
     expectOrder(
