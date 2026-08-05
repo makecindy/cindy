@@ -1104,8 +1104,10 @@
         "projectsHint": "Sessions that will appear under project groups",
         "dialogue": "Chat",
         "dialogueHint": "Codex projectless sessions",
-        "filtered": "Skipped",
-        "filteredHint": "Internal or already in app"
+        "existing": "Already in app",
+        "existingHint": "Session with same SDK ID already exists; won't be re-imported",
+        "filtered": "Unreadable",
+        "filteredHint": "Internal agent sessions, invalid files, or beyond scan window — not shown or imported"
       },
       "filters": {
         "source": "Source",

@@ -52,6 +52,14 @@ interface SessionImportScanResult {
     codex: number;
     claude: number;
     existing: number;
+    /** Claude 侧拒绝原因分类(合计等于 claude;见 claude-local-sessions 的 rejected)。 */
+    claudeReasons: {
+      unreadable: number;
+      internal: number;
+      noEvents: number;
+      windowLimit: number;
+      invalidId: number;
+    };
   };
   currentProjectDirs: string[];
 }
@@ -268,6 +276,13 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       codex: codex.rejectedCount,
       claude: claude.rejectedCount,
       existing: existingCount,
+      claudeReasons: claude.rejected ?? {
+        unreadable: 0,
+        internal: 0,
+        noEvents: 0,
+        windowLimit: 0,
+        invalidId: 0,
+      },
     },
     currentProjectDirs: [...currentProjectDirs].sort(),
   };

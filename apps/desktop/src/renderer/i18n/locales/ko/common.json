@@ -1104,8 +1104,10 @@
         "projectsHint": "Sessions under current sidebar projects",
         "dialogue": "New folder sessions",
         "dialogueHint": "Sessions that will create project groups",
-        "filtered": "건너뜀",
-        "filteredHint": "내부 세션이거나 이미 앱에 있음"
+        "existing": "앱에 이미 있음",
+        "existingHint": "동일한 SDK ID 세션이 이미 존재합니다. 다시 가져오지 않음",
+        "filtered": "읽을 수 없음",
+        "filteredHint": "내부 에이전트 세션, 잘못된 파일 또는 스캔 범위 밖 — 표시하거나 가져오지 않음"
       },
       "filters": {
         "source": "소스",

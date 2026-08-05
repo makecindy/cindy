@@ -36,6 +36,13 @@ interface ScanResult {
     codex: number;
     claude: number;
     existing: number;
+    claudeReasons?: {
+      unreadable: number;
+      internal: number;
+      noEvents: number;
+      windowLimit: number;
+      invalidId: number;
+    };
   };
   currentProjectDirs: string[];
 }
@@ -441,8 +448,13 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
         hint={t('settings.sessionImport.summary.dialogueHint')}
       />
       <SummaryCell
+        label={t('settings.sessionImport.summary.existing')}
+        value={scan.rejected.existing}
+        hint={t('settings.sessionImport.summary.existingHint')}
+      />
+      <SummaryCell
         label={t('settings.sessionImport.summary.filtered')}
-        value={scan.rejected.codex + scan.rejected.claude + scan.rejected.existing}
+        value={scan.rejected.codex + scan.rejected.claude}
         hint={t('settings.sessionImport.summary.filteredHint')}
       />
     </div>
