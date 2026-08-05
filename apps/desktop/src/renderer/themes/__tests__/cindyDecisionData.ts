@@ -37,6 +37,8 @@ export const CINDY_REQUIRED_COLOR_IDS = [
   'text-tertiary-hsl',
   'text-disabled',
   'text-disabled-tertiary',
+  'switch-track-off', // 用户裁决 2026-08-05 入表(见 CINDY_EXPECTED_VALUES 同名条目)
+  'switch-track-on', // 用户裁决 2026-08-05 入表(见 CINDY_EXPECTED_VALUES 同名条目)
   'caret-accent',
   'accent-cta-bg',
   'accent-cta-bg-pure',
