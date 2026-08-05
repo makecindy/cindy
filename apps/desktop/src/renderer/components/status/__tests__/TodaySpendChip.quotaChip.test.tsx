@@ -213,7 +213,7 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
     expect(normalSegment?.getAttribute('aria-label')).toBeNull();
   });
 
-  it('93% 已用量只把对应段染红并显示可降级的 6px 呼吸圆点', () => {
+  it('93% 已用量只把对应段染红，不叠加圆点等附加装饰(维护者产品结论)', () => {
     setClaudeUsage(93, 20);
     const { container } = renderClaudeSubscriptionChip();
 
@@ -226,15 +226,8 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
       }),
     ).toBeTruthy();
 
-    const dot = criticalSegment?.parentElement?.querySelector<HTMLElement>(
-      '[data-quota-critical-dot]',
-    );
-    expect(dot).toBeTruthy();
-    expect(dot?.className).toContain('size-1.5');
-    expect(dot?.className).toContain('rounded-full');
-    expect(dot?.className).toContain('session-status-breathing');
-    expect(dot?.className).not.toContain('animate-pulse');
-    expect(dot?.getAttribute('aria-hidden')).toBe('true');
+    // 2026-08-05 dashhuang APPROVE 附带结论:红色段前不再叠加红点。
+    expect(container.querySelector('[data-quota-critical-dot]')).toBeNull();
 
     const normalSegment = container.querySelector<HTMLElement>('[data-quota-severity="normal"]');
     expect(normalSegment?.textContent).toBe('6天 剩余 80%');

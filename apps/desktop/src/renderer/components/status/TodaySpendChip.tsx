@@ -1032,23 +1032,16 @@ function renderClaudeQuotaSegment(
   const severityLabel = getClaudeQuotaSeverityLabel(severity, t);
   const ariaLabel = severityLabel ? `${visibleText} ${severityLabel}` : undefined;
 
+  // 红色段不叠加呼吸圆点(2026-08-05 维护者产品结论:避免视觉噪音);
+  // 非颜色信号由 aria-label 的等级文案承担。
   return (
-    <>
-      {severity === 'crit' && (
-        <span
-          aria-hidden="true"
-          data-quota-critical-dot
-          className="session-status-breathing mr-1 inline-block size-1.5 rounded-full bg-[var(--quota-bar-crit)] align-middle"
-        />
-      )}
-      <span
-        aria-label={ariaLabel}
-        data-quota-severity={severity}
-        className={colorClass}
-      >
-        {content}
-      </span>
-    </>
+    <span
+      aria-label={ariaLabel}
+      data-quota-severity={severity}
+      className={colorClass}
+    >
+      {content}
+    </span>
   );
 }
 
