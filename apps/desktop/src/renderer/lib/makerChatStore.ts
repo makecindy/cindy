@@ -3369,7 +3369,7 @@ function removeCodexReconnectPendingCard(messages: ChatMessage[]): ChatMessage[]
   return messages.filter((message) => message.clientId !== CODEX_RECONNECT_PENDING_CLIENT_ID);
 }
 
-function removeAutoResumePendingCards(messages: ChatMessage[]): ChatMessage[] {
+function removeResumePendingCards(messages: ChatMessage[]): ChatMessage[] {
   if (
     !messages.some(
       (message) =>
@@ -3406,7 +3406,9 @@ function upsertCodexReconnectPendingCard(
     const existing = messages[existingIndex];
     if (existing && shallowEqualRecord(existing.systemCardData, data)) return messages;
     return messages.map((message, index) =>
-      index === existingIndex ? { ...existing, ...card } : message,
+      index === existingIndex
+        ? { ...existing, ...card, createdAt: existing.createdAt ?? card.createdAt }
+        : message,
     );
   }
   return collapseConsecutiveAutoResumeRows([...messages, card]);
@@ -3431,8 +3433,10 @@ function isCodexUserActionableRetryError(data: unknown): boolean {
  * Codex 原生重连行只应在真正的 turn 进展或明确收尾时让位。
  *
  * `maker:event` 里还混着后台任务更新、tool_result、thinking 等旁路事件；它们
- * 可能属于同一会话但不代表重连已经恢复。这里与 main 的
- * `isSubstantiveProgressEvent` 共用可见文本判据，避免空白 delta 也误报恢复。
+ * 可能属于同一会话但不代表重连已经恢复。Codex 子代理的 descendant 通知不会走这条
+ * 主事件流，而是专用的 `agent_task_update`；因此这里保留 `tool_use` 作为根 turn 的
+ * 实质进展边界，并与 main 的 `isSubstantiveProgressEvent` 对齐。文本仍共用可见文本判据，
+ * 避免空白 delta 误报恢复。
  */
 function isCodexReconnectRecoveryOutput(event: CCAgentStreamEvent): boolean {
   if (event.type === 'text') {
@@ -5349,7 +5353,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   // as NO_ACTIVE_TURN, the missing marker tells the catch path not to fallback
   // into a fresh normal turn.
   const steeringIds = new Set(finalized.steeringQueueClientIds);
-  const cleared = removeAutoResumePendingCards(
+  const cleared = removeResumePendingCards(
     finalized.messages.map((m) => {
       let next = m;
       if (m.isStreaming) next = { ...next, isStreaming: false };
@@ -11842,7 +11846,7 @@ function stopSession(
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
     // F7.6 / FP-3: expire any pending ask_user + plan_review messages on stop
-    const msgs = removeAutoResumePendingCards(
+    const msgs = removeResumePendingCards(
       s.messages.map((m) => {
         if (id && m.clientId === id) return { ...m, isStreaming: false };
         if (m.role === 'ask_user' && m.askUserStatus === 'pending') {

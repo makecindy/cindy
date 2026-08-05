@@ -453,6 +453,7 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
     const cards = second.messages.filter((m) => m.clientId === '__codex_reconnect_pending__');
     expect(cards).toHaveLength(1);
     expect(cards[0]?.systemCardData).toMatchObject({ attempt: 2, maxAttempts: 5 });
+    expect(cards[0]?.createdAt).toBe(firstCard?.createdAt);
 
     const recovered = handleStreamEvent(second, {
       sessionId: SID,
