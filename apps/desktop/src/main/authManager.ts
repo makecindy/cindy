@@ -100,8 +100,14 @@ import {
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
+import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 
 const log = createLogger('authManager');
+
+// #1687:持久凭证库(safeStorage)故障升级状态机。运行时刷新的 transient-unreadable
+// 分支喂失败,成功读到持久会话喂恢复;连续跨过阈值才置 unavailable 并随 AuthState
+// 广播,renderer 据此显示可操作提示(检查钥匙串授权 / 重新登录)。
+const credentialStoreHealth = createCredentialStoreHealth();
 
 async function claimLegacyNamespaceForVerifiedUser(userId: string): Promise<void> {
   try {
@@ -197,6 +203,11 @@ export interface AuthState {
   hasAccountDeletionReceipt: boolean;
   /** One-shot successful-login notice for a deletion that was cancelled by signing in. */
   accountDeletionRestored: boolean;
+  /**
+   * 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687)。true 时登录态无法
+   * 续期持久化,renderer 应显示可操作提示;成功读写一次后自动回 false。
+   */
+  credentialStoreUnavailable: boolean;
 }
 
 export interface AuthInitializeOptions {
@@ -1279,6 +1290,7 @@ function snapshotAuthState(): AuthState {
     deviceId,
     hasAccountDeletionReceipt: readPersistedAccountDeletionReceipt() !== null,
     accountDeletionRestored: accountDeletionRestoredNoticePending,
+    credentialStoreUnavailable: credentialStoreHealth.unavailable,
   };
 }
 
@@ -1296,6 +1308,8 @@ function snapshotLoggedOutAuthState(): AuthState {
     deviceId,
     hasAccountDeletionReceipt: readPersistedAccountDeletionReceipt() !== null,
     accountDeletionRestored: false,
+    // 登出投影不携带升级态:登录页可见时用户已有明确的重新登录入口。
+    credentialStoreUnavailable: false,
   };
 }
 
@@ -1433,6 +1447,9 @@ function clearAuth(
 ): void {
   const notify = opts.notify ?? true;
   authStateEpoch += 1; // 迟到的冷启动流程从此作废(见 authStateEpoch 注释)
+  // #1687:登出 / 会话过期整体清态时复位凭证库升级态——升级提示只对「仍以为
+  // 自己登录着」的会话有意义,登录页自身就是恢复入口。
+  credentialStoreHealth.reset();
   accessToken = null;
   pendingAccountToken = null;
   currentUser = null;
@@ -2805,6 +2822,12 @@ export async function refresh(): Promise<boolean> {
       return true;
     };
     const persistedSession = readPersistedAuthSession();
+    // #1687:成功读到持久会话 = 凭证库读取工作正常,连续失败计数清零;
+    // 若此前已升级为 unavailable,立即广播恢复(banner 自动消失)。
+    if (persistedSession !== null && credentialStoreHealth.noteRecovered()) {
+      log.info('credential store recovered — clearing the persistent-unavailability state');
+      notifyRenderer();
+    }
     const refreshRealm = persistedSession?.realm ?? activeAuthRealm;
     if (persistedSession && persistedSession.realm !== activeAuthRealm) {
       try {
@@ -2831,6 +2854,15 @@ export async function refresh(): Promise<boolean> {
           log.warn(
             'runtime refresh: refresh token unreadable but file still present (or encryption unavailable) — treating as transient',
           );
+          // #1687:单次仍按瞬时处理(绝不 expireRuntimeAuth),但连续跨过阈值后
+          // 升级为持久凭证库故障并广播——此前这条路径无论失败多少轮都完全静默,
+          // 用户面对的是假登录态 + 全部鉴权请求 401 而无任何可操作提示。
+          if (credentialStoreHealth.noteReadFailure()) {
+            log.warn(
+              'credential store persistently unavailable — surfacing credentialStoreUnavailable to renderer',
+            );
+            notifyRenderer();
+          }
           // 正常 refresh timer 已经触发过,这里不重排的话,一次密钥链/IO 抖动
           // 会让有效会话在 access token 到期前没有任何后续 refresh(半死)。
           scheduleRefreshRetryAfterTransientFailure();

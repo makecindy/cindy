@@ -162,6 +162,27 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  /**
+   * schedule = 「可以请你新建自动化任务」(2026-08-04)。
+   *
+   * 用途:插件在自己面板上给用户一个「提醒我 XXXX」之类的选项,用户点了以后由
+   * 插件请主机**打开自动化创建面板并预填**(名称 / 要干什么 / 建议频率)。
+   *
+   * 它能做什么、不能做什么(权限文案与实现必须一致):
+   * - 只能**打开面板**。任务由用户在面板上选模型、亲手点保存才落库 —— 插件
+   *   没有任何直接建任务的通道(scheduleSlot 只广播,不碰 storage;有测试钉住)。
+   * - 落成的任务是一条**普通 agent 自动化**:执行者是 AI 会话,不是插件。插件在
+   *   其中的角色是「被这条任务调用的目标」,靠已有的 tool 槽 + ghost_call 被叫到。
+   * - 因此它**会消耗用户的模型额度** —— 装入确认必须说出口。
+   *
+   * 为什么挂在 agent 详单而不是新开一个 slot:
+   * 语义上它就是「让 agent 定期替我干活」,属 agent 槽;而判据的可证明性与新 slot
+   * 等同 —— agent 详单是**严格字段白名单**(见 parse 处 unknownAgentField 分支),
+   * 未登记的子字段一律拒装,所以任何已经装在用户机器上的老包都不可能带
+   * `agent.schedule`。不存在"老包恰好写过同名字段而白拿这份能力"的模糊地带
+   * (与 badge / timer 那套判例同一理由,但少改一处基座白名单)。
+   */
+  schedule?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -830,6 +851,25 @@ export const GHOST_PREVIEW_MAX_HOSTS = 4;
 export const GHOST_PREVIEW_URL_MAX_CHARS = 2048;
 /** preview 槽:同一插件两次打开预览的最小间隔 ms(防标签页刷屏)。 */
 export const GHOST_PREVIEW_OPEN_MIN_INTERVAL_MS = 5000;
+
+/**
+ * agent.schedule:同一插件两次请求打开自动化面板的最小间隔 ms。
+ * 比 preview 长一档 —— 这个面板是**打断式**的(会把用户从当前页带走),
+ * 而预览标签只是在右侧栏多开一页。按尝试记账,spam 顺延窗口。
+ */
+export const GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_MS = 15_000;
+/** agent.schedule:预填任务名长度上限(字符;超出截断)。 */
+export const GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS = 60;
+/** agent.schedule:预填 prompt 长度上限(字符;超出截断)。 */
+export const GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS = 2000;
+/**
+ * agent.schedule:插件能建议的最小触发间隔 ms(30 分钟)。
+ *
+ * 这不是权限闸门(任务由用户在面板上亲手保存,他改成 1 分钟是他的自由),而是
+ * **对插件建议值的钳制** —— 不让插件预填出一个每分钟叫醒一次 AI 会话的任务,
+ * 用户点保存时未必看清频率就把额度烧了。低于此值一律上调到此值。
+ */
+export const GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS = 30 * 60_000;
 
 /**
  * preview 槽详单(与 slots 含 'preview' 严格成对——有槽必有详单:范围是
@@ -1580,6 +1620,19 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         kind: 'agent',
         labelKey: 'agentErrand',
         detailKey: 'agentErrandDetail',
+      });
+    }
+    // 「可以请你新建自动化任务」:独立 key 单列一档。理由同 badge/errand ——
+    // diffGhostPermissionItems 按 key + detail 比对,若并进任何既有 key,已装插件
+    // 在更新里新增 schedule 时 added 为空,plugin-market 的扩权复核不会拦,用户会
+    // 在毫不知情的情况下多给出一份"能反复弹自动化面板、且任务会烧模型额度"的能力。
+    // 排在 background/errand 之下:它必须经用户在面板上亲手保存才生效,风险低半档。
+    if (manifest.agent?.schedule === true) {
+      items.push({
+        key: 'agent:schedule',
+        kind: 'agent',
+        labelKey: 'agentSchedule',
+        detailKey: 'agentScheduleDetail',
       });
     }
   }
@@ -2987,7 +3040,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const agentRaw = raw.agent as Record<string, unknown>;
     const unknownAgentField = Object.keys(agentRaw).find(
-      (key) => key !== 'background' && key !== 'errand',
+      (key) => key !== 'background' && key !== 'errand' && key !== 'schedule',
     );
     if (unknownAgentField) {
       return {
@@ -3001,16 +3054,20 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
       return { ok: false, reason: 'agent.errand 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true) {
+    if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
+      return { ok: false, reason: 'agent.schedule 必须是布尔值' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true 两项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
+      ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
 
@@ -4331,6 +4388,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
  *   - pick-request:pick 槽——请主机弹系统级选文件夹窗口(用户亲选即授权)。
  *   - preview-request:preview 槽——请主机在右侧栏内置浏览器开预览标签页
  *     (URL 必须命中身份卡 preview.hosts 白名单)。
+ *   - schedule-request:agent 槽 schedule 加档——请主机**打开自动化创建面板并预填**
+ *     (名称 / 提示词 / 建议频率)。只能开面板:任务由用户选模型后亲手保存才落库,
+ *     插件没有任何直接建任务的通道。本版也没有"建成了没有"的回执(语义见
+ *     GhostPipeScheduleDraftResult);绑定与查改由后续版本提供。
  *
  * 身份永远由主机按 webContents 反查(不信自报),这里的类型只描述载荷形状。
  */
@@ -4798,6 +4859,81 @@ export type GhostPipePreviewResult =
         | 'INTERNAL';
       message: string;
     };
+
+/**
+ * schedule-request(agent.schedule 加档)的上行载荷。
+ *
+ * 与本文件里其它上行请求(PickRequest / PreviewRequest / WorkspaceRequest …)同规格:
+ * 只描述**形状**,不代表已通过校验 —— 资格审、文本净化截断、频率钳制与限速都在主机侧
+ * scheduleSlot 完成,沙箱给什么都要重新过一遍。
+ */
+export interface GhostPipeScheduleDraftRequest {
+  type: 'schedule-request';
+  /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
+  name: string;
+  /** 预填提示词:这条自动化到点要干什么(净化后按 …PROMPT_MAX_CHARS 截断)。 */
+  prompt: string;
+  /**
+   * 建议触发间隔(毫秒)。低于 GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS
+   * 会被主机上调;缺省 = 不建议频率,面板用自己的默认值。
+   */
+  intervalMs?: number;
+}
+
+/**
+ * schedule-request(agent.schedule 加档)的返回形态。
+ *
+ * ⚠️ ok:true 的语义严格是「**请求已被主机接受并投递给主壳窗口**」。它**不保证**
+ * 面板真的打开了,更不表示任务已创建:
+ *   - 用户当时可能正开着另一个自动化表单在编辑 —— 那种情况下本次草稿会被**丢弃**
+ *     (保护用户没保存的输入),用户看到一句提示,面板不换内容;
+ *   - 即使面板正常打开,任务也要用户选完模型**亲手点保存**才落库。
+ *
+ * 因此插件 UI **不要**据此显示「已开启」之类的完成态,应显示「已为你打开创建面板,
+ * 请确认」。判据不是保守 —— 是这一版本来就没有任何"用户存没存"的回执通道。
+ *
+ * 后续会补上:任务与发起插件的**绑定关系**,以及插件查询 / 管理**自己绑定的那条
+ * 任务**(是否有效、下次运行时间、频率,以及改时间 / 暂停 / 关掉)。届时插件才能在
+ * 自己面板上显示「已开启 · 每小时 · 下次 15:00」并让用户就地改。绑定关系本身即是
+ * 授权边界:插件只能看和改它自己请求创建的那条,看不到用户的其它自动化。
+ */
+export type GhostPipeScheduleDraftResult =
+  | { ok: true }
+  | {
+      ok: false;
+      errorCode:
+        | 'PERMISSION_DENIED'
+        | 'INVALID_REQUEST'
+        | 'RATE_LIMITED'
+        | 'HOST_NOT_READY'
+        | 'INTERNAL';
+      message: string;
+    };
+
+/**
+ * 主机 → renderer 的「打开自动化创建面板并预填」推送载荷。
+ *
+ * 身份三件套(ghostId / name / iconDataUrl)由主机按已装清单填,**不信沙箱自报**
+ * (同 GhostPreviewOpenPush 纪律):面板上要让用户看清是哪个插件在请求。
+ * 文本字段已由主机净化 + 截断;频率建议已钳到最小间隔之上。
+ */
+export interface GhostScheduleDraftPush {
+  /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
+  requestId: string;
+  ghostId: string;
+  /** 插件展示名(主机填,用于面板上的来源标注)。 */
+  ghostName: string;
+  iconDataUrl?: string;
+  /** 预填任务名(已净化截断)。 */
+  name: string;
+  /** 预填提示词 —— 「这条任务到点要干什么」,由插件自己用自然语言写。 */
+  prompt: string;
+  /**
+   * 建议触发间隔 ms。已钳到 GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS 之上。
+   * 缺省 = 不建议频率,面板用它自己的默认值。
+   */
+  intervalMs?: number;
+}
 
 /** host-request 与 settings 页面 `/app-context` 共用的只读返回形态。 */
 export interface GhostAppContextResult {
