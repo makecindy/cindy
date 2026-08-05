@@ -27,6 +27,7 @@ import {
 } from '../dispatcher';
 import type { HookBindingStore } from '../bindings';
 import { isPathWithin } from '../paths';
+import type { HookRequestLedger, HookTerminalRecord } from '../requestLedger';
 import type { HookConnectionConfig } from '../store';
 
 const noopLog = { info: () => {}, warn: () => {} };
@@ -50,6 +51,44 @@ function memoryBindings(): HookBindingStore {
     get: (c, e) => map.get(k(c, e)) ?? null,
     set: (c, e, s) => void map.set(k(c, e), s),
     remove: (c, e) => void map.delete(k(c, e)),
+  };
+}
+
+function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalRecord[] } {
+  const records: HookTerminalRecord[] = [];
+  return {
+    records,
+    get(connectionId, requestId) {
+      return (
+        records.findLast(
+          (record) => record.connectionId === connectionId && record.requestId === requestId,
+        ) ?? null
+      );
+    },
+    listPending(connectionId) {
+      return records
+        .filter((record) => record.connectionId === connectionId && record.delivery === 'pending')
+        .sort((a, b) => a.completedAt - b.completedAt);
+    },
+    set(record) {
+      const index = records.findIndex(
+        (candidate) =>
+          candidate.connectionId === record.connectionId &&
+          candidate.requestId === record.requestId,
+      );
+      if (index >= 0) records.splice(index, 1);
+      records.push(structuredClone(record));
+      return true;
+    },
+    markSent(connectionId, requestId) {
+      const record = records.findLast(
+        (candidate) =>
+          candidate.connectionId === connectionId && candidate.requestId === requestId,
+      );
+      if (!record) return false;
+      record.delivery = 'sent';
+      return true;
+    },
   };
 }
 
@@ -125,6 +164,7 @@ async function tick(times = 10): Promise<void> {
 function makeDispatcher(overrides?: {
   runner?: HookSessionRunner;
   bindings?: HookBindingStore;
+  terminalLedger?: HookRequestLedger;
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
   dialogue?: HookDispatcherDeps['dialogue'];
@@ -134,6 +174,7 @@ function makeDispatcher(overrides?: {
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
   subscribeUiTurnUndispatched?: HookDispatcherDeps['subscribeUiTurnUndispatched'];
   accountInitiallyActive?: boolean;
+  log?: HookDispatcherDeps['log'];
 }) {
   const bindings = overrides?.bindings ?? memoryBindings();
   const fr = fakeRunner();
@@ -141,6 +182,7 @@ function makeDispatcher(overrides?: {
   const d = createHookDispatcher({
     getConnection: () => (overrides?.config === undefined ? CONFIG : overrides.config),
     bindings,
+    terminalLedger: overrides?.terminalLedger,
     runner,
     prepareWorktree: overrides?.prepareWorktree,
     dialogue: overrides?.dialogue,
@@ -150,7 +192,7 @@ function makeDispatcher(overrides?: {
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
     subscribeUiTurnUndispatched: overrides?.subscribeUiTurnUndispatched,
     accountInitiallyActive: overrides?.accountInitiallyActive,
-    log: noopLog,
+    log: overrides?.log ?? noopLog,
   });
   return { d, bindings, fr };
 }
@@ -1204,6 +1246,169 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
+  it('回归: 完成后重建 dispatcher 再收到同 requestId -> 只回放 ack, 不重跑', async () => {
+    const terminalLedger = memoryTerminalLedger();
+    const firstRunner = fakeRunner();
+    const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
+    const firstCollector = collector();
+
+    first.d.handleDispatch('conn-1', dispatch(), firstCollector.send);
+    await tick();
+    firstRunner.finish({ finalText: '只执行一次' });
+    await tick();
+    expect(terminalLedger.records).toHaveLength(1);
+
+    const secondRunner = fakeRunner();
+    const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
+    const secondCollector = collector();
+    second.d.handleDispatch('conn-1', dispatch(), secondCollector.send);
+    await tick();
+
+    expect(secondRunner.calls).toHaveLength(0);
+    expect(secondCollector.sent.map((message) => message.type)).toEqual(['task.ack']);
+    expect(secondCollector.last('task.ack')?.payload).toMatchObject({
+      requestId: 'req-1',
+      result: 'accepted',
+    });
+    expect(secondCollector.last('turn.end')).toBeNull();
+  });
+
+  it('durable outbox 仍 pending 时重投 -> 回放 ACK + turn.end 并标记 sent', async () => {
+    const terminalLedger = memoryTerminalLedger();
+    terminalLedger.set({
+      connectionId: 'conn-1',
+      requestId: 'pending-replay',
+      ack: {
+        requestId: 'pending-replay',
+        result: 'accepted',
+        reason: null,
+        sessionId: 'session-pending-replay',
+        queuePosition: null,
+      },
+      turnEnd: {
+        requestId: 'pending-replay',
+        externalKey: 'team-slack:C1:pending',
+        sessionId: 'session-pending-replay',
+        status: 'ok',
+        finalText: '补发结果',
+        errorMessage: null,
+        usage: { durationMs: 1 },
+      },
+      delivery: 'pending',
+      completedAt: Date.now(),
+    });
+
+    const runner = fakeRunner();
+    const { d } = makeDispatcher({ runner: runner.runner, terminalLedger });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ requestId: 'pending-replay' }), c.send);
+    await tick();
+
+    expect(runner.calls).toHaveLength(0);
+    expect(c.sent.map((message) => message.type)).toEqual(['task.ack', 'turn.end']);
+    expect(terminalLedger.records[0]?.delivery).toBe('sent');
+  });
+
+  it('重建 dispatcher 时请求尚未终结 -> 没有 durable terminal, 仍允许恢复执行', async () => {
+    const terminalLedger = memoryTerminalLedger();
+    const firstRunner = fakeRunner();
+    const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
+    const firstCollector = collector();
+
+    first.d.handleDispatch('conn-1', dispatch(), firstCollector.send);
+    await tick();
+    expect(terminalLedger.records).toHaveLength(0);
+
+    const secondRunner = fakeRunner();
+    const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
+    const secondCollector = collector();
+    second.d.handleDispatch('conn-1', dispatch(), secondCollector.send);
+    await tick();
+
+    expect(secondRunner.calls).toHaveLength(1);
+    secondRunner.finish({ finalText: '恢复完成' });
+    await tick();
+  });
+
+  it('排队任务取消后跨 dispatcher 重投 -> 只回放 queued ack, 不重跑', async () => {
+    const terminalLedger = memoryTerminalLedger();
+    const firstRunner = fakeRunner();
+    const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
+    const firstCollector = collector();
+
+    first.d.handleDispatch('conn-1', dispatch({ requestId: 'running' }), firstCollector.send);
+    await tick();
+    first.d.handleDispatch('conn-1', dispatch({ requestId: 'queued' }), firstCollector.send);
+    await tick();
+    first.d.cancel('conn-1', 'queued');
+    expect(terminalLedger.records).toHaveLength(1);
+
+    const secondRunner = fakeRunner();
+    const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
+    const secondCollector = collector();
+    second.d.handleDispatch('conn-1', dispatch({ requestId: 'queued' }), secondCollector.send);
+    await tick();
+
+    expect(secondRunner.calls).toHaveLength(0);
+    expect(secondCollector.last('task.ack')?.payload).toMatchObject({
+      requestId: 'queued',
+      result: 'queued',
+      queuePosition: 0,
+    });
+    expect(secondCollector.last('turn.end')).toBeNull();
+    firstRunner.finish();
+    await tick();
+  });
+
+  it('terminal ledger 写失败不吞 turn.end, 仅降级为进程内去重', async () => {
+    const warnings: string[] = [];
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      terminalLedger: {
+        get: () => null,
+        listPending: () => [],
+        set: () => false,
+        markSent: () => false,
+      },
+      log: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    fr.finish({ finalText: '磁盘失败也要回答' });
+    await tick();
+
+    expect(c.last('turn.end')?.payload.finalText).toBe('磁盘失败也要回答');
+    expect(warnings).toContain(
+      'hook terminal request was not persisted; using in-memory dedupe only',
+    );
+  });
+
+  it('rejected ACK 被 transport 接收后跨 dispatcher 持久回放', async () => {
+    const terminalLedger = memoryTerminalLedger();
+    const first = makeDispatcher({ config: null, terminalLedger });
+    const firstCollector = collector();
+    first.d.handleDispatch('conn-1', dispatch(), firstCollector.send);
+
+    expect(firstCollector.last('task.ack')?.payload).toMatchObject({
+      requestId: 'req-1',
+      result: 'rejected',
+      reason: 'disabled',
+    });
+    expect(terminalLedger.records).toHaveLength(1);
+
+    const secondRunner = fakeRunner();
+    const second = makeDispatcher({ runner: secondRunner.runner, terminalLedger });
+    const secondCollector = collector();
+    second.d.handleDispatch('conn-1', dispatch(), secondCollector.send);
+    await tick();
+
+    expect(secondRunner.calls).toHaveLength(0);
+    expect(secondCollector.last('task.ack')?.payload.result).toBe('rejected');
+  });
+
   it('队列溢出: 超过上限打回 rejected(invalid)', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
@@ -1224,7 +1429,8 @@ describe('dispatcher 核心语义', () => {
 
   it('onDisconnected 后不再写旧 socket，turn.end 在重连后按序补发', async () => {
     const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner });
+    const terminalLedger = memoryTerminalLedger();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
     const c = collector();
 
     d.handleDispatch('conn-1', dispatch(), c.send);
@@ -1233,10 +1439,72 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '离线结果' });
     await tick();
     expect(c.ofType('turn.end')).toHaveLength(0);
+    expect(terminalLedger.records).toHaveLength(1);
+    expect(terminalLedger.records[0]?.delivery).toBe('pending');
 
     const c2 = collector();
     d.onConnected('conn-1', c2.send);
     expect(c2.last('turn.end')?.payload).toMatchObject({ finalText: '离线结果' });
+    expect(terminalLedger.records).toHaveLength(1);
+    expect(terminalLedger.records[0]?.delivery).toBe('sent');
+  });
+
+  it('离线队列部分补发失败时只持久化 transport 已接收项, 下次重连继续剩余项', async () => {
+    const fr = fakeRunner();
+    const terminalLedger = memoryTerminalLedger();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'r1', externalKey: 'slack:C1:1' }), c.send);
+    d.handleDispatch('conn-1', dispatch({ requestId: 'r2', externalKey: 'slack:C2:2' }), c.send);
+    await tick();
+    d.onDisconnected('conn-1');
+    fr.finish({ finalText: 'one' });
+    fr.finish({ finalText: 'two' });
+    await tick();
+
+    let attempts = 0;
+    d.onConnected('conn-1', () => {
+      attempts += 1;
+      return attempts === 1;
+    });
+    expect(terminalLedger.records.map((record) => [record.requestId, record.delivery])).toEqual([
+      ['r1', 'sent'],
+      ['r2', 'pending'],
+    ]);
+
+    const retry = collector();
+    d.onConnected('conn-1', retry.send);
+    expect(retry.last('turn.end')?.payload).toMatchObject({ requestId: 'r2', finalText: 'two' });
+    expect(terminalLedger.records.map((record) => [record.requestId, record.delivery])).toEqual([
+      ['r1', 'sent'],
+      ['r2', 'sent'],
+    ]);
+  });
+
+  it('内存补发成功但 ledger 更新失败时, 同次重连不重复发送 durable 文本帧', async () => {
+    const fr = fakeRunner();
+    const stored = memoryTerminalLedger();
+    const terminalLedger: HookRequestLedger = {
+      get: stored.get,
+      listPending: stored.listPending,
+      set: stored.set,
+      markSent: () => false,
+    };
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    d.onDisconnected('conn-1');
+    fr.finish({ finalText: '只补发一次' });
+    await tick();
+
+    const reconnected = collector();
+    d.onConnected('conn-1', reconnected.send);
+
+    expect(reconnected.ofType('turn.end')).toHaveLength(1);
+    expect(reconnected.last('turn.end')?.payload.finalText).toBe('只补发一次');
   });
 });
 
