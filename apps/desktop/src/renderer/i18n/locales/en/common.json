@@ -1833,6 +1833,11 @@
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
+      "lifecycleAnnouncement": {
+        "label": "Online/Offline Notifications",
+        "cellLabel": "Message Notifications",
+        "hint": "Have the Discord Bot send a message when this device goes online or offline"
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",

@@ -27,10 +27,17 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
-function installDiscordApi(status: DiscordBotTransportStatus = { kind: 'idle' }) {
+function installDiscordApi(
+  status: DiscordBotTransportStatus = { kind: 'idle' },
+  lifecycleAnnouncement = true,
+) {
   const listeners = new Set<(update: { status: DiscordBotTransportStatus }) => void>();
   const api = {
-    getStatus: vi.fn(async () => ({ status, ownerUserId: '12345678901234567' })),
+    getStatus: vi.fn(async () => ({
+      status,
+      ownerUserId: '12345678901234567',
+      lifecycleAnnouncement,
+    })),
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => ({
       status: { kind: 'connecting' } as DiscordBotTransportStatus,
       saveErrorStatus: undefined as DiscordBotTransportStatus | undefined,
@@ -38,6 +45,10 @@ function installDiscordApi(status: DiscordBotTransportStatus = { kind: 'idle' })
       payload,
     })),
     disconnect: vi.fn(async () => ({ status: { kind: 'idle' } as DiscordBotTransportStatus })),
+    setLifecycleAnnouncement: vi.fn(async (enabled: boolean) => ({
+      ok: true,
+      lifecycleAnnouncement: enabled,
+    })),
     onStatusChange: vi.fn((cb: (update: { status: DiscordBotTransportStatus }) => void) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
@@ -145,5 +156,19 @@ describe('useDiscordBot', () => {
     expect(result.current.token).toBe('');
     expect(result.current.ownerUserId).toBe('');
     expect(result.current.status.kind).toBe('idle');
+  });
+
+  it('loads and updates the lifecycle announcement preference', async () => {
+    const api = installDiscordApi({ kind: 'connected', appId: 'MakerBot#1234' }, false);
+    const { result } = renderHook(() => useDiscordBot());
+
+    await waitFor(() => expect(result.current.lifecycleAnnouncement).toBe(false));
+
+    act(() => {
+      result.current.setLifecycleAnnouncement(true);
+    });
+
+    expect(result.current.lifecycleAnnouncement).toBe(true);
+    expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(true);
   });
 });

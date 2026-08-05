@@ -1832,6 +1832,11 @@
         "confirm": "연동 해제",
         "cancel": "취소"
       },
+      "lifecycleAnnouncement": {
+        "label": "온라인/오프라인 알림",
+        "cellLabel": "메시지 알림",
+        "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",

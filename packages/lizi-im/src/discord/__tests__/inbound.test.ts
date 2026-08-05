@@ -769,6 +769,121 @@ describe('DiscordIM inbound pipeline', () => {
     expect(host.readSecret('discord-bot-runtime-active')).toBeTruthy();
   });
 
+  it('suppresses all lifecycle notices and clears a dirty marker when disabled', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    gateway.connect.mockImplementationOnce(async () => {
+      gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    });
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', 'token'],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-runtime-active', 'previous-run'],
+        ['discord-bot-lifecycle-announcement', 'false'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      ownerNoticeText: (phase) => `localized:${phase}`,
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    im.registerIpc();
+    await im.init();
+    await flushMicrotasks();
+    await im.dispose();
+
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
+    await expect(host.invoke('discordBot:get-status')).resolves.toMatchObject({
+      lifecycleAnnouncement: false,
+    });
+  });
+
+  it('invalidates a queued dirty-runtime notice when lifecycle announcements are disabled', async () => {
+    const fetchStarted = deferred();
+    const releaseFetch = deferred();
+    const channel = makeChannel('dm-1');
+    const client = {
+      users: {
+        fetch: vi.fn(async () => {
+          fetchStarted.resolve();
+          await releaseFetch.promise;
+          return { createDM: vi.fn(async () => channel) };
+        }),
+      },
+    };
+    const gateway = makeGateway({ client });
+    gateway.connect.mockImplementationOnce(async () => {
+      gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    });
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', 'token'],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-runtime-active', 'previous-run'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      ownerNoticeText: (phase) => `localized:${phase}`,
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    im.registerIpc();
+    await im.init();
+    await fetchStarted.promise;
+
+    await host.invoke('discordBot:set-lifecycle-announcement', { enabled: false });
+    expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('false');
+    releaseFetch.resolve();
+    await flushMicrotasks();
+    await im.dispose();
+
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
+  });
+
+  it('keeps linked and disconnected confirmations enabled when lifecycle notices are disabled', async () => {
+    const channel = makeChannel('dm-1');
+    const gateway = makeGateway({ client: makeClient(channel) });
+    gateway.connect.mockImplementationOnce(async () => {
+      gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    });
+    const host = makeHost({
+      initialSecrets: [
+        ['discord-bot-token', 'token'],
+        ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-lifecycle-announcement', 'false'],
+      ],
+    });
+    const im = new DiscordIM(host, {
+      ownerNoticeText: (phase) => `localized:${phase}`,
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    im.registerIpc();
+    await host.invoke('discordBot:set-config', {
+      token: 'new-token',
+      ownerUserId: 'user-1',
+    });
+    await host.invoke('discordBot:disconnect');
+
+    expect(channel.send.mock.calls.map(([payload]) => payload)).toEqual([
+      'localized:linked',
+      'localized:disconnected',
+    ]);
+    expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('false');
+  });
+
   it('does not repeat runtime online notice on transient gateway reconnect', async () => {
     const channel = makeChannel('dm-1');
     const gateway = makeGateway({ client: makeClient(channel) });
@@ -1666,6 +1781,7 @@ describe('DiscordIM inbound pipeline', () => {
         appId: 'bot#0000',
       },
       ownerUserId: 'user-1',
+      lifecycleAnnouncement: true,
     });
   });
 });

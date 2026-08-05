@@ -1894,6 +1894,7 @@ interface ElectronAPI {
     getStatus: () => Promise<{
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
     }>;
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: DiscordBotTransportStatus;
@@ -1902,6 +1903,10 @@ interface ElectronAPI {
     }>;
     disconnect: () => Promise<{
       status: DiscordBotTransportStatus;
+    }>;
+    setLifecycleAnnouncement: (enabled: boolean) => Promise<{
+      ok: boolean;
+      lifecycleAnnouncement: boolean;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
     onStatusChange: (

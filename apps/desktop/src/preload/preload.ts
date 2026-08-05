@@ -1666,6 +1666,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
       ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:get-status'),
     setConfig: (payload: {
       token: string;
@@ -1693,6 +1694,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
+    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+      ok: boolean;
+      lifecycleAnnouncement: boolean;
+    }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('discordBot:check-session-auth'),
     onStatusChange: fanOutDiscordBotStatusChange,

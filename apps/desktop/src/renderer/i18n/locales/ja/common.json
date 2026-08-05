@@ -1832,6 +1832,11 @@
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
+      "lifecycleAnnouncement": {
+        "label": "オンライン・オフライン通知",
+        "cellLabel": "メッセージ通知",
+        "hint": "このデバイスのオンライン・オフライン時に Discord Bot から通知メッセージを送信します"
+      },
       "ownerNotice": {
         "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
         "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",

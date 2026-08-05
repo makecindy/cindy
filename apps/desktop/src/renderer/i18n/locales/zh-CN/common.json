@@ -1832,6 +1832,11 @@
         "confirm": "解绑",
         "cancel": "取消"
       },
+      "lifecycleAnnouncement": {
+        "label": "上下线通知",
+        "cellLabel": "消息通知",
+        "hint": "上下线时由 Discord Bot 发送通知消息"
+      },
       "ownerNotice": {
         "linked": "✅ 关联好啦，直接开聊就行~",
         "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
