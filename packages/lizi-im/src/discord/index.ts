@@ -112,7 +112,6 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         void this.handleButtonInteraction(i as unknown as ButtonInteractionLike);
       },
     });
-    this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
   }
 
   async init(): Promise<void> {

@@ -279,6 +279,24 @@ describe('DiscordIM inbound pipeline', () => {
     );
   });
 
+  it('defers lifecycle preference reads until explicit init', async () => {
+    const host = makeHost({
+      initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
+    });
+    const readSecret = vi.spyOn(host.secrets, 'read');
+    const im = new DiscordIM(host);
+
+    expect(readSecret).not.toHaveBeenCalled();
+
+    im.registerIpc();
+    await im.init();
+
+    expect(readSecret).toHaveBeenCalledWith('discord-bot-lifecycle-announcement');
+    await expect(host.invoke('discordBot:get-status')).resolves.toMatchObject({
+      lifecycleAnnouncement: false,
+    });
+  });
+
   it('silently drops non-owner DM messages', async () => {
     const gateway = makeGateway();
     const im = new DiscordIM(makeHost(), {
@@ -891,6 +909,7 @@ describe('DiscordIM inbound pipeline', () => {
     });
     const im = new DiscordIM(host);
     im.registerIpc();
+    await im.init();
 
     await expect(host.invoke('discordBot:set-lifecycle-announcement', {}))
       .rejects.toThrow('[INVALID_PARAMS] enabled must be a boolean');
