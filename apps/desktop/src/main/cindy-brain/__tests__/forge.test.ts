@@ -923,6 +923,13 @@ describe('FORGE_GUIDE', () => {
       'did-approval-{start,end}',
       'did-user-input-{start,end}',
       '不会给 reasoning、工具',
+      '十八个卡槽',
+      '`plan`(把调用方维护的完整',
+      '不提供读取、清空或生命周期控制',
+      '当前任务 Plan 单向投影',
+      "type: 'plan-update'",
+      "errorCode:'NO_SESSION_CONTEXT'",
+      '这不是 tool-progress',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

@@ -1159,7 +1159,7 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十六个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+十八个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
 见 §4 与 §4.0.2)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
@@ -1169,7 +1169,9 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
-可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
+可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`plan\`(把调用方维护的完整
+Codex Plan 快照单向投影到当前可信任务,不提供读取、清空或生命周期控制,见 §4)、
+\`pick\`(请主机弹系统选文件夹窗口,
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
 预览标签,见 §4.15)、\`skill\`(捆绑 Agent Skills:随包 SKILL.md 技能,启用后
 Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项目目录在
@@ -1458,6 +1460,27 @@ cindy.send({
 //   每次心跳把窗口重新续满一个 330s 档;callId 不是派给你的会被静默丢弃。
 // - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
 //   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
+
+// 当前任务 Plan 单向投影(需在 slots 独立声明 "plan"):
+// - 形状完整复用 Codex update_plan；每次提交完整 plan,不支持增量 patch;
+// - plan 必须非空；status 只用 pending / in_progress / completed;
+// - 在处理收到的 tool-call 期间、发送 tool-result 之前同步；目标由主机给这次
+//   ghost_call 铸造的任务 incarnation 绑定。不要传 sessionId；没有在途可信上下文，
+//   或同一插件正并发处理多个不同任务而无法唯一解析时返回 NO_SESSION_CONTEXT；
+//   返回形状为 { ok:false, errorCode:'NO_SESSION_CONTEXT', message }；
+// - 最多 100 项；explanation/单项 step 最多 4000 字符，总文本最多 64000 字符；
+//   每插件允许每秒 20 次入站尝试，超出返回 RATE_LIMITED；
+// - 这不是 tool-progress:不续命、不接 callId,也不会启动 Agent 回合或改写计划正本。
+const planResult = await cindy.send({
+  type: 'plan-update',
+  explanation: '开始执行实现阶段',
+  plan: [
+    { step: '调查现有接口', status: 'completed' },
+    { step: '实现 Ghost 接口', status: 'in_progress' },
+    { step: '补充测试', status: 'pending' },
+  ],
+});
+// 成功:{ ok:true };失败:{ ok:false, errorCode, message }。
 
 // Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账,你只拿到指纹字符串):
 // 由 tool-call 触发的代办**务必带上收到的 callId**(归因号:让用户在日志/账单里

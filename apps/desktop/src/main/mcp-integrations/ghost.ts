@@ -1359,6 +1359,14 @@ export function getCindyGhostsMcpDeps(
         tool,
         args: mergedArgs,
         callId,
+        ...(sessionIdForConfirm && sessionInstanceIdForGrant
+          ? {
+              sessionContext: {
+                sessionId: sessionIdForConfirm,
+                sessionInstanceId: sessionInstanceIdForGrant,
+              },
+            }
+          : {}),
       });
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层

@@ -356,6 +356,44 @@ describe('超时与收卷', () => {
   });
 });
 
+describe('Plan 的 Host 铸造任务上下文', () => {
+  const contextA = { sessionId: 'session-a', sessionInstanceId: 'instance-a' };
+
+  it('只解析同一 Ghost 唯一的在途任务 incarnation，且不下发给插件', async () => {
+    const h = makeHarness();
+    const p1 = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-1', sessionContext: contextA });
+    const p2 = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-2', sessionContext: contextA });
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toEqual(contextA);
+    expect(h.sent[0]).not.toHaveProperty('sessionContext');
+
+    h.dispatcher.handleToolResult('art', { callId: 'call-1', ok: true });
+    h.dispatcher.handleToolResult('art', { callId: 'call-2', ok: true });
+    await Promise.all([p1, p2]);
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+  });
+
+  it('多个任务并发或存在无上下文调用时 fail closed', async () => {
+    const h = makeHarness();
+    const p1 = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-a', sessionContext: contextA });
+    const p2 = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-b',
+      sessionContext: { sessionId: 'session-b', sessionInstanceId: 'instance-b' },
+    });
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+    h.dispatcher.handleToolResult('art', { callId: 'call-b', ok: true });
+    await p2;
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toEqual(contextA);
+
+    const p3 = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-unscoped' });
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+    for (const callId of ['call-a', 'call-unscoped']) {
+      h.dispatcher.handleToolResult('art', { callId, ok: true });
+    }
+    await Promise.all([p1, p3]);
+  });
+});
+
 describe('长任务续命(hold / release / tool-progress)', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

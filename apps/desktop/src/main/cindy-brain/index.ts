@@ -205,6 +205,11 @@ import {
   type IssuedConnectionToken,
 } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
+import {
+  GhostPlanSlot,
+  type GhostPlanProjector,
+  type GhostPlanSessionContext,
+} from './planSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
@@ -1782,6 +1787,40 @@ const ghostSessionFocusTracker = createGhostSessionFocusTracker((sessionId) =>
 );
 export function noteGhostSessionFocused(sessionId: string | null): void {
   ghostSessionFocusTracker.note(sessionId);
+}
+
+let planSlotSingleton: GhostPlanSlot | null = null;
+let ghostPlanLiveSessionValidator:
+  | ((context: GhostPlanSessionContext) => boolean | Promise<boolean>)
+  | null = null;
+
+/** plan 槽单例:当前任务身份、完整快照校验与现有 Plan UI 投影的统一守门点。 */
+export function getGhostPlanSlot(): GhostPlanSlot {
+  if (!planSlotSingleton) {
+    planSlotSingleton = new GhostPlanSlot({
+      getGhost: findAvailableGhost,
+      getCurrentSessionContext: (ghostId) =>
+        getGhostPipeDispatcher().resolvePendingSessionForGhost(ghostId),
+      isTrustedSessionContext: async (context) =>
+        (await isGhostEligibleSession(context.sessionId)).outcome === 'eligible' &&
+        Boolean(ghostPlanLiveSessionValidator) &&
+        (await ghostPlanLiveSessionValidator!(context)),
+      log,
+    });
+  }
+  return planSlotSingleton;
+}
+
+/** maker-ipc 初始化后注入现有 update_plan 投影链；不在 Ghost 子系统另存 Plan。 */
+export function setGhostPlanProjector(projector: GhostPlanProjector | null): void {
+  getGhostPlanSlot().setProjector(projector);
+}
+
+/** maker-ipc 注入 live session incarnation 校验，防 business id 复用或过期。 */
+export function setGhostPlanLiveSessionValidator(
+  validator: ((context: GhostPlanSessionContext) => boolean | Promise<boolean>) | null,
+): void {
+  ghostPlanLiveSessionValidator = validator;
 }
 
 let cindySlotSingleton: GhostCindySlot | null = null;
@@ -4301,7 +4340,8 @@ export function registerGhostIpc(): void {
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。
   // 上行白名单:tool-result(交卷,派发器配对验身)/ tool-progress(长任务
-  // 心跳续命,派发器配对验身)/ host-request(公开宿主上下文)/ cindy-request(cindy 槽
+  // 心跳续命,派发器配对验身)/ plan-update(当前可信任务 Plan 完整投影)/
+  // host-request(公开宿主上下文)/ cindy-request(cindy 槽
   // 代办,返回值即结果)/ card-update(卡槽③供片,cardService 校验链)/
   // notify(系统提示,notifySlot 资格审+限速)/ fs-request(fs 槽代写文件,
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
@@ -4333,6 +4373,11 @@ export function registerGhostIpc(): void {
       const outcome = getGhostPipeDispatcher().handleToolProgress(id, payload);
       if (!outcome.accepted) log.warn('ghost tool-progress rejected', { id, reason: outcome.reason });
       return { ok: true };
+    }
+    // plan-update = 当前可信任务的完整 Codex update_plan 快照。与 tool-progress
+    // 完全独立:不接 callId、不续命、不接受 sessionId,结构化拒因原样回给作者。
+    if (type === 'plan-update') {
+      return getGhostPlanSlot().handleUpdate(id, payload);
     }
     // host-request = 读取宿主公开上下文;不要求卡槽,只返回构建 region,
     // 不含登录态/路径/设备信息。未知 kind 明确拒绝,避免接口悄悄扩面。

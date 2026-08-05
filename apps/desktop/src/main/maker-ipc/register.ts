@@ -718,6 +718,8 @@ import {
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
   setGhostErrandRunner,
+  setGhostPlanLiveSessionValidator,
+  setGhostPlanProjector,
   setGhostWorkspaceSessionService,
   notifyGhostSessionEvent,
   getInstalledGhostName,
@@ -729,6 +731,7 @@ import {
 } from '../cindy-brain/errandPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
+import { buildGhostPlanProjectionEvent } from './ghostPlanProjection.js';
 import {
   createGhostErrandSession,
   createPluginDraftSession,
@@ -7042,6 +7045,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToSessionLocks.set(targetSessionId, tracked);
     return tracked;
   }
+
+  // Ghost plan 槽只负责守门；投影复用 Codex update_plan 的 synthetic
+  // tool_use → main 单写持久化 → maker:event → Renderer Plan UI 既有链路。
+  setGhostPlanLiveSessionValidator((context) =>
+    maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
+  );
+  setGhostPlanProjector((context, update) => {
+    broadcastSyntheticToolEvent(context.sessionId, buildGhostPlanProjectionEvent(update));
+  });
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
