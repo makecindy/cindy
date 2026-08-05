@@ -94,6 +94,36 @@ describe('agentInputQueue', () => {
     });
   });
 
+  it('drops malformed Appshot metadata without dropping the queued image', () => {
+    expect(
+      buildMakerUserMessage(
+        queuedMessage([
+          {
+            id: 'appshot-invalid',
+            name: 'appshot.png',
+            path: '/repo/appshot.png',
+            ext: '.png',
+            size: 128,
+            category: 'image',
+            mimeType: 'image/png',
+            url: 'xdt-image://session/appshot-invalid.png',
+            appshot: { ...appshot, schemaVersion: 2 } as unknown as AppshotMetadata,
+          },
+        ]),
+      ),
+    ).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        {
+          type: 'image',
+          path: 'xdt-image://session/appshot-invalid.png',
+          mimeType: 'image/png',
+        },
+      ],
+    });
+  });
+
   it('sends queued GIF attachments as file blocks', () => {
     expect(
       buildMakerUserMessage(

@@ -82,6 +82,36 @@ describe('messageAttachmentPayload', () => {
     ]);
   });
 
+  it('drops malformed Appshot metadata without dropping the direct-send image', () => {
+    const payload = buildUserMessageAttachmentPayload([
+      attachment({
+        name: 'appshot.png',
+        path: 'clipboard://appshot-invalid',
+        ext: '.png',
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'xdt-image://session/appshot-invalid.png',
+        appshot: { ...appshot, schemaVersion: 2 } as unknown as AppshotMetadata,
+      }),
+    ]);
+
+    expect(payload.persistImageRefs).toEqual([
+      {
+        url: 'xdt-image://session/appshot-invalid.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+      },
+    ]);
+    expect(buildMakerUserContentBlocks('', undefined, payload.serializedFiles)).toEqual([
+      {
+        type: 'image',
+        path: 'xdt-image://session/appshot-invalid.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+      },
+    ]);
+  });
+
   it('keeps cached image URLs as the primary render, persist, and SDK source', () => {
     const image = attachment({
       name: 'shot.png',

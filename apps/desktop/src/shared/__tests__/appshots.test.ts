@@ -34,6 +34,23 @@ describe('Appshot metadata', () => {
     expect(coerceAppshotMetadata({ ...metadata, applicationName: 'a'.repeat(4097) })).toBeNull();
   });
 
+  it('accepts scalar fields at 4 KiB UTF-8 and rejects one code point above', () => {
+    const boundary = '🙂'.repeat(1024);
+    const oversized = `${boundary}🙂`;
+    const fields = [
+      'captureId',
+      'capturedAt',
+      'applicationName',
+      'bundleIdentifier',
+      'windowTitle',
+    ] as const;
+
+    for (const field of fields) {
+      expect(coerceAppshotMetadata({ ...metadata, [field]: boundary })?.[field]).toBe(boundary);
+      expect(coerceAppshotMetadata({ ...metadata, [field]: oversized })).toBeNull();
+    }
+  });
+
   it('rejects accessibility text over 512 KiB without truncating it', () => {
     expect(
       coerceAppshotMetadata({ ...metadata, accessibilityText: '🙂'.repeat(131_073) }),
@@ -46,6 +63,24 @@ describe('Appshot metadata', () => {
         'Window: ""Draft" &lt;1&gt;", App: A&amp;B.\n' +
         '<accessibility-tree>\n' +
         '&lt;AXButton title="Send &amp; close"&gt;\n' +
+        '</accessibility-tree>\n' +
+        '</appshot>',
+    );
+  });
+
+  it('removes XML-disallowed controls and unpaired surrogates', () => {
+    expect(
+      formatAppshotContext({
+        ...metadata,
+        applicationName: 'A\u0000\u0008\ud800B',
+        windowTitle: null,
+        accessibilityText: 'Send\u0000\u0008\udc00 now',
+      }),
+    ).toBe(
+      '<appshot app="AB" bundle-identifier="com.example.app">\n' +
+        'App: AB.\n' +
+        '<accessibility-tree>\n' +
+        'Send now\n' +
         '</accessibility-tree>\n' +
         '</appshot>',
     );

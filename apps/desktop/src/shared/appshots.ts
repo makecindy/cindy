@@ -46,10 +46,14 @@ const MAX_SCALAR_LENGTH = 4 * 1024;
 const MAX_ACCESSIBILITY_BYTES = 512 * 1024;
 const UNAVAILABLE_REASONS = new Set(['permission', 'unsupported', 'timeout']);
 
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 function isBoundedString(value: unknown, allowEmpty = true): value is string {
   return (
     typeof value === 'string' &&
-    value.length <= MAX_SCALAR_LENGTH &&
+    utf8ByteLength(value) <= MAX_SCALAR_LENGTH &&
     (allowEmpty || value.length > 0)
   );
 }
@@ -67,7 +71,7 @@ export function coerceAppshotMetadata(value: unknown): AppshotMetadata | null {
     !(
       raw.accessibilityText === null ||
       (typeof raw.accessibilityText === 'string' &&
-        new TextEncoder().encode(raw.accessibilityText).byteLength <= MAX_ACCESSIBILITY_BYTES)
+        utf8ByteLength(raw.accessibilityText) <= MAX_ACCESSIBILITY_BYTES)
     ) ||
     typeof raw.accessibilityTruncated !== 'boolean' ||
     !(
