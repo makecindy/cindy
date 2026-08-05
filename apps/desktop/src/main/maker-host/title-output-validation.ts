@@ -37,6 +37,8 @@ function stripWrappingQuotes(value: string): string {
     ["'", "'"],
     ['「', '」'],
     ['『', '』'],
+    ['“', '”'],
+    ['‘', '’'],
   ];
   for (const [open, close] of pairs) {
     if (value.startsWith(open) && value.endsWith(close) && value.length >= 2) {
