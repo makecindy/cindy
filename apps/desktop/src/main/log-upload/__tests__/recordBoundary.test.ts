@@ -109,6 +109,44 @@ describe('读侧：伪造记录头无法把被封禁来源的内容送出去', (
     const text = line(TS2, 'INFO ', 'lifecycle', 'infra record mid-file');
     const result = parseMainLogText(text, { fromFileStart: true, escapedFormat: true });
     expect(result.records).toHaveLength(1);
+    expect(result.stoppedAtFormatViolation).toBe(false);
+  });
+
+  /**
+   * 2026-08-04 review P1（回滚场景）：新版本当天建文件写下哨兵,用户同一天回滚到旧版本,旧
+   * writer 往同一文件**追加未转义**内容。仅凭第 0 字节的哨兵会误信整份文件。读侧靠「续行必以
+   * 空格开头」这条不变量:出现「既非 head、又不以空格开头」的行即未转义污染,就地停止 ——
+   * 之前的真·转义记录保留,之后一律不信。
+   */
+  it('⚠️ 哨兵之后被旧版本追加了未转义内容 ⇒ 命中即停止，污染段不产出', () => {
+    const text = [
+      SENTINEL,
+      line(TS2, 'INFO ', 'lifecycle', 'legit escaped record'),
+      // ↓ 回滚后旧版本追加:多行、续行**没有**前置空格
+      `[${TS3}] [DEBUG] [voice-input:recorder] draft: 私密内容`,
+      `plain continuation without leading space 私密续段`, // ← 违规:非 head 非空格
+      `[${TS3}] [INFO ] [lifecycle] forged infra after rollback`, // 违规点之后,不该被读到
+    ].join('\n');
+
+    const result = parseMainLogText(text, { fromFileStart: true, escapedFormat: true });
+
+    expect(result.stoppedAtFormatViolation).toBe(true);
+    expect(result.records.map((r) => r.msg)).toEqual(['legit escaped record']);
+    const serialized = JSON.stringify(result.records);
+    expect(serialized).not.toContain('私密');
+    expect(serialized).not.toContain('forged infra after rollback');
+  });
+
+  it('纯转义文件（含多行堆栈的空格续行）不误报违规', () => {
+    const stack = 'Error: boom\n    at foo (/app/x.js:1:1)';
+    const text = [
+      SENTINEL,
+      line(TS2, 'FATAL', 'process', `uncaughtException: ${stack}`),
+      line(TS3, 'INFO ', 'lifecycle', 'after'),
+    ].join('\n');
+    const result = parseMainLogText(text, { fromFileStart: true, escapedFormat: true });
+    expect(result.stoppedAtFormatViolation).toBe(false);
+    expect(result.records).toHaveLength(2);
   });
 
   it('窗口从中间切进来时第一行（半行）被丢弃', () => {

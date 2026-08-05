@@ -157,16 +157,27 @@ async function runUploadInner(
     return { kind: 'failed', status: result.status };
   }
 
+  // 只清**其崩溃窗口确被本次采集覆盖**的标记;没覆盖到的(超大文件里同一天靠后那次崩溃落在
+  // 窗口外)保留待下次补传 —— 否则一次「非空但没含这次崩溃」的成功上报会把它永久清掉
+  // (2026-08-04 review)。coveredAnchors 的判定见 collect。
+  const covered = new Set(collected.coveredAnchors);
+  let keptUncovered = 0;
+  for (const claim of request.claimed) {
+    if (covered.has(claim.marker.crashAtMs)) {
+      deps.markers.resolveClaimed(claim);
+    } else {
+      deps.markers.releaseClaimed(claim);
+      keptUncovered += 1;
+    }
+  }
+
   deps.log.info(
     `log upload succeeded: code=${uploadCode} reason=${request.reason} ` +
       `records=${result.records} batches=${result.batches} ` +
       `lookbackDays=${collected.stats.lookbackDays} bytesRead=${collected.stats.bytesRead} ` +
-      `droppedBySource=${collected.stats.droppedBySource} droppedByCap=${collected.stats.droppedByCap}`,
+      `droppedBySource=${collected.stats.droppedBySource} droppedByCap=${collected.stats.droppedByCap} ` +
+      `keptUncoveredMarkers=${keptUncovered}`,
   );
-
-  // 崩溃**即时**上传成功也不能清标记:崩溃当时拿不到收尾日志,完整现场要靠下次启动补传
-  // (需求 §4.1)。即时路径本来就不认领任何标记,这里的 claimed 为空,语义自然成立。
-  for (const claim of request.claimed) deps.markers.resolveClaimed(claim);
 
   return { kind: 'uploaded', uploadCode, recordCount: result.records };
 }

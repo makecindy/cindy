@@ -261,6 +261,62 @@ describe('格式信任：只信第 0 字节就是哨兵的 main 文件', () => {
   });
 });
 
+/**
+ * 2026-08-04 review P1：coveredAnchors 告诉上报侧「哪些崩溃锚点的窗口确被读到」，只有覆盖到的
+ * 标记才该在上报成功后清除。这里锁「读到就覆盖 / 没文件也算覆盖(没东西可补) / 命中未转义污染
+ * 而停止则不算整份覆盖」。
+ */
+describe('崩溃锚点覆盖 coveredAnchors', () => {
+  const logDir = path.join('/tmp', 'cindy-logs');
+
+  it('小文件整份读到 ⇒ 当天锚点被覆盖', async () => {
+    const crashAt = NOW - 30_000;
+    const today = dayKey(NOW);
+    const { deps } = harness({
+      [path.join(logDir, `main-${today}.log`)]: [
+        SENTINEL,
+        mainLine(crashAt, 'FATAL', 'process', 'uncaughtException: boom'),
+      ].join('\n'),
+    });
+    const result = await collectLogs(deps, { reason: 'crash-backfill', anchors: [crashAt] });
+    expect(result.coveredAnchors).toContain(crashAt);
+  });
+
+  it('锚点那天根本没有日志文件 ⇒ 算覆盖（没东西可补，重试无益）', async () => {
+    const today = dayKey(NOW);
+    const goneCrash = NOW - 5 * DAY_MS; // 那天没有 main/agent 文件
+    const { deps } = harness({
+      [path.join(logDir, `main-${today}.log`)]: [
+        SENTINEL,
+        mainLine(NOW - 30_000, 'INFO ', 'lifecycle', 'ok'),
+      ].join('\n'),
+    });
+    const result = await collectLogs(deps, {
+      reason: 'crash-backfill',
+      anchors: [goneCrash],
+    });
+    expect(result.coveredAnchors).toContain(goneCrash);
+  });
+
+  it('⚠️ 命中未转义污染而提前停止 ⇒ 不算整份覆盖 + 计数', async () => {
+    const crashAt = NOW - 30_000;
+    const today = dayKey(NOW);
+    // 哨兵 + 一条真记录 + 回滚追加的未转义多行(续行无空格)。
+    const content = [
+      SENTINEL,
+      mainLine(NOW - 60_000, 'INFO ', 'lifecycle', 'legit'),
+      `[${isoLocal(crashAt)}] [DEBUG] [voice-input:recorder] draft: x`,
+      'plain continuation without leading space',
+    ].join('\n');
+    const { deps } = harness({ [path.join(logDir, `main-${today}.log`)]: content });
+    const result = await collectLogs(deps, { reason: 'crash-backfill', anchors: [crashAt] });
+
+    expect(result.stats.mainFilesStoppedAtViolation).toBe(1);
+    // 停止点之后没读到 ⇒ 崩溃锚点(在污染段)未被整份覆盖。
+    expect(result.coveredAnchors).not.toContain(crashAt);
+  });
+});
+
 describe('第四层：上报记录只有五个白名单字段', () => {
   it('产出的对象没有 tsMs 等内部字段', async () => {
     const logDir = path.join('/tmp', 'cindy-logs');

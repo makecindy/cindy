@@ -53,6 +53,11 @@ export interface ParseMainLogResult {
   records: ParsedRecord[];
   linesScanned: number;
   droppedBySource: number;
+  /**
+   * 解析是否因命中「未转义续行」而提前停止（见解析循环里的记录边界读侧校验）。供采集端观察
+   * 回滚污染。true 时本文件从该点起的内容一律未被信任。
+   */
+  stoppedAtFormatViolation: boolean;
 }
 
 interface PendingRecord {
@@ -87,7 +92,7 @@ export function parseMainLogText(
   // 未转义的存量文件:一条也不产出。调用方本应连窗口都不读(见 collect.ts),这里是同一条
   // 判据的第二道 —— 参数忘了传对时失败方向必须是「少传」。
   if (!options.escapedFormat) {
-    return { records: [], linesScanned: 0, droppedBySource: 0 };
+    return { records: [], linesScanned: 0, droppedBySource: 0, stoppedAtFormatViolation: false };
   }
 
   const records: ParsedRecord[] = [];
@@ -119,6 +124,7 @@ export function parseMainLogText(
     });
   };
 
+  let stoppedAtFormatViolation = false;
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i += 1) {
     // 窗口从中间切进来时,第一行可能是半行 —— 丢掉,避免把半行当完整记录或续行。
@@ -140,8 +146,26 @@ export function parseMainLogText(
       };
       continue;
     }
-    // 续行:并入当前记录。没有当前记录(窗口第一行就是续行)则丢弃。
-    if (pending) pending.lines.push(line);
+    // ── 记录边界不变量的读侧校验（2026-08-04 review：回滚场景）────────────────────
+    // 转义格式下,续行**永远以空格开头**(escapeMainLogContinuationLines)。所以在一份可信
+    // (第 0 字节是哨兵)的文件里,除记录首行外每一行要么命中 head、要么以空格开头。
+    // 出现「既不是 head、又不以空格开头」的行 = 未转义的存量内容 —— 典型来路:新版本当天建了
+    // 文件(写下哨兵),用户同一天回滚到旧版本,旧 writer 往同一个文件**追加**了没有续行转义的
+    // 内容。仅凭第 0 字节的哨兵会误信整份文件,让旧多行正文里那些恰好像放行记录头的行被当成
+    // 独立基础设施记录送走。命中即**就地停止**:此前那段(哨兵之后、污染之前)是真·转义内容,
+    // 保留;之后一律不信(fail closed)。
+    // 空字符串只在结尾出现(split 的产物,行尾换行),不算违规。
+    const isTrailingEmpty = line === '' && i === lines.length - 1;
+    if (line.startsWith(' ')) {
+      // 合法续行:并入当前记录。没有当前记录(窗口第一行就是续行)则丢弃。
+      if (pending) pending.lines.push(line);
+      continue;
+    }
+    if (isTrailingEmpty) continue;
+    // 违规:停止解析,丢弃当前 pending(它的续行可能已被污染打断)。
+    pending = null;
+    stoppedAtFormatViolation = true;
+    break;
   }
   flush();
 
@@ -149,6 +173,7 @@ export function parseMainLogText(
     records: records.filter((r) => Number.isFinite(r.tsMs)),
     linesScanned,
     droppedBySource,
+    stoppedAtFormatViolation,
   };
 }
 

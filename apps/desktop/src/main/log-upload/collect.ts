@@ -187,9 +187,27 @@ export async function collectLogs(
     droppedBySource: 0,
     droppedByCap: 0,
     filesSkippedLegacyFormat: 0,
+    mainFilesStoppedAtViolation: 0,
     lookbackDays,
   };
   const all: ParsedRecord[] = [];
+  // 每一天实际读到了什么，用于判定崩溃锚点是否被覆盖（见文件末尾 coveredAnchors 计算）：
+  //   whole = 整份文件都读了（size ≤ 预算）；minTs/maxTs = 该天解析到的记录时间跨度。
+  const dayCoverage = new Map<string, { whole: boolean; minTs: number; maxTs: number }>();
+  const noteCoverage = (dateKey: string, whole: boolean, recs: ParsedRecord[]): void => {
+    const prev = dayCoverage.get(dateKey) ?? {
+      whole: false,
+      minTs: Number.POSITIVE_INFINITY,
+      maxTs: Number.NEGATIVE_INFINITY,
+    };
+    for (const r of recs) {
+      if (!Number.isFinite(r.tsMs)) continue;
+      if (r.tsMs < prev.minTs) prev.minTs = r.tsMs;
+      if (r.tsMs > prev.maxTs) prev.maxTs = r.tsMs;
+    }
+    prev.whole = prev.whole || whole;
+    dayCoverage.set(dateKey, prev);
+  };
   let budget = MAX_BYTES_TOTAL;
   let sinceLastYield = 0;
 
@@ -239,6 +257,7 @@ export async function collectLogs(
       budget -= buf.length;
       const text = buf.toString('utf8');
 
+      const wholeRead = startOffset === 0 && size <= perFileBudget;
       if (plan.kind === 'main') {
         const parsed = parseMainLogText(text, {
           fromFileStart,
@@ -249,6 +268,9 @@ export async function collectLogs(
         all.push(...parsed.records);
         stats.linesScanned += parsed.linesScanned;
         stats.droppedBySource += parsed.droppedBySource;
+        if (parsed.stoppedAtFormatViolation) stats.mainFilesStoppedAtViolation += 1;
+        // 命中未转义污染而提前停止时,停止点之后没读到 ⇒ 不能算整份覆盖。
+        noteCoverage(plan.dateKey, wholeRead && !parsed.stoppedAtFormatViolation, parsed.records);
         sinceLastYield += parsed.linesScanned;
       } else {
         const parsed = parseAgentLogText(text, {
@@ -258,6 +280,7 @@ export async function collectLogs(
         all.push(...parsed.records);
         stats.linesScanned += parsed.linesScanned;
         stats.droppedBySource += parsed.droppedBySource;
+        noteCoverage(plan.dateKey, wholeRead, parsed.records);
         sinceLastYield += parsed.linesScanned;
       }
     } finally {
@@ -273,7 +296,24 @@ export async function collectLogs(
   stats.droppedByCap = all.length - trimmed.length;
   stats.kept = trimmed.length;
 
-  return { records: trimmed.map(toUploadRecord), stats };
+  // 崩溃锚点覆盖判定(供上报侧决定清哪些标记)。一个锚点 A 视为已覆盖,当且仅当:
+  //   - A 那天根本没有 main / agent 文件(没东西可补,重试也没用 ⇒ 让上报侧放心清掉);或
+  //   - A 那天的文件被整份读过;或
+  //   - A 落在那天已解析记录的时间跨度内(定位窗口确实读到了崩溃附近)。
+  // 只有「文件在、超大、且窗口没够到这次崩溃」才判未覆盖 —— 正是要保住的那种漏采。
+  const coveredAnchors = anchors.filter((a) => {
+    const dk = dateKeyLocal(a);
+    const hasFile =
+      existing.has(`main-${dk}.log`) ||
+      (request.reason !== 'manual' && existing.has(`agent-${dk}.ndjson`));
+    if (!hasFile) return true;
+    const cov = dayCoverage.get(dk);
+    if (!cov) return false; // 文件在但没读到(预算耗尽 / 整份跳过)⇒ 保留标记下次再试
+    if (cov.whole) return true;
+    return a >= cov.minTs && a <= cov.maxTs;
+  });
+
+  return { records: trimmed.map(toUploadRecord), stats, coveredAnchors };
 }
 
 async function safeListDir(deps: CollectDeps): Promise<string[]> {

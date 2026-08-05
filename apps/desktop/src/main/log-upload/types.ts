@@ -52,6 +52,11 @@ export interface CollectStats {
    * 单独计数是为了让「升级当天采到 0 条」在本机日志里能一眼归因，而不是查半天读窗口。
    */
   filesSkippedLegacyFormat: number;
+  /**
+   * 解析中途命中「未转义续行」而提前停止的 main 文件数（回滚场景：新版本建文件、旧版本
+   * 同日追加未转义内容）。用于观察这类污染的发生频次。
+   */
+  mainFilesStoppedAtViolation: number;
   /** 实际回溯的天数。 */
   lookbackDays: number;
 }
@@ -59,6 +64,12 @@ export interface CollectStats {
 export interface CollectResult {
   records: UploadRecord[];
   stats: CollectStats;
+  /**
+   * 崩溃锚点里**其读取窗口确已覆盖**的那些（epoch ms 子集）。上报成功后，只有覆盖到的崩溃
+   * 标记才该被清除；没覆盖到的（超大文件里同一天靠后的那次崩溃落在窗口外）保留待补传，
+   * 避免用一次「非空但没含这次崩溃」的上报把它永久清掉（2026-08-04 review）。
+   */
+  coveredAnchors: number[];
 }
 
 /** 环境元数据。后台按这些维度检索（需求 §4.8）。 */

@@ -30,13 +30,16 @@ function record(msg = 'infra line'): UploadRecord {
   };
 }
 
-function collected(records: UploadRecord[]): CollectResult {
+/** 默认覆盖标准 claim 的锚点，成功路径照旧 resolve；测「未覆盖」时显式传别的集合。 */
+function collected(records: UploadRecord[], coveredAnchors = [1_775_000_000_000]): CollectResult {
   return {
     records,
+    coveredAnchors,
     stats: {
       filesRead: 1,
       bytesRead: 100,
       filesSkippedLegacyFormat: 0,
+      mainFilesStoppedAtViolation: 0,
       linesScanned: records.length,
       kept: records.length,
       droppedBySource: 0,
@@ -46,13 +49,13 @@ function collected(records: UploadRecord[]): CollectResult {
   };
 }
 
-function claim(token: string): ClaimedMarker {
+function claim(token: string, crashAtMs = 1_775_000_000_000): ClaimedMarker {
   return {
     marker: {
       v: 1,
       token,
       kind: 'crash',
-      crashAtMs: 1_775_000_000_000,
+      crashAtMs,
       appVersion: '1.2.3',
       pid: 1,
       createdAt: '2026-08-04T10:00:00.000Z',
@@ -140,6 +143,35 @@ describe('成功路径', () => {
 
     expect(markers.resolveClaimed).toHaveBeenCalledTimes(2);
     expect(markers.releaseClaimed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 2026-08-04 review P1：同一天两次崩溃、当天日志超大时,采集窗口可能只覆盖靠前那次;
+   * 上报虽非空,但没含靠后那次崩溃。这时**只清覆盖到的**标记,没覆盖到的保留待补传 ——
+   * 否则一次成功上报把没采到的崩溃现场永久清掉。
+   */
+  it('⚠️ 只清覆盖到的标记：未覆盖的崩溃标记保留待补传', async () => {
+    const coveredAt = 1_775_000_000_000;
+    const missedAt = 1_775_000_500_000;
+    const { deps, markers } = harness({
+      collect: vi.fn(async () => collected([record()], [coveredAt])) as never,
+    });
+    const covered = claim('covered', coveredAt);
+    const missed = claim('missed', missedAt);
+
+    const outcome = await runUpload(deps, {
+      reason: 'crash-backfill',
+      anchors: [coveredAt, missedAt],
+      claimed: [covered, missed],
+      crashToken: 'covered',
+    });
+
+    expect(outcome.kind).toBe('uploaded');
+    // 覆盖到的那条被清除,没覆盖到的被还原(保留),而不是一起清掉。
+    expect(markers.resolveClaimed).toHaveBeenCalledTimes(1);
+    expect(markers.resolveClaimed).toHaveBeenCalledWith(covered);
+    expect(markers.releaseClaimed).toHaveBeenCalledTimes(1);
+    expect(markers.releaseClaimed).toHaveBeenCalledWith(missed);
   });
 
   it('崩溃归组令牌被带进元数据（即时与补传在后台能归成同一次崩溃）', async () => {
