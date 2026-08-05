@@ -30,11 +30,7 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  DragEvent as ReactDragEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactNode,
-} from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -77,7 +73,10 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  loadScheduleSidebarIndexRuns,
+  type ScheduleSidebarIndexRun,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
@@ -253,16 +252,22 @@ export const SessionItem = memo(function SessionItem({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
-  const rightStatusKind = remoteRightStatus ?? resolveSidebarRightStatus({
-    attentionKind,
-    isUrgentFromContext,
-    isRunning,
-    hasAttentionNotification,
-  });
+  const rightStatusKind =
+    remoteRightStatus ??
+    resolveSidebarRightStatus({
+      attentionKind,
+      isUrgentFromContext,
+      isRunning,
+      hasAttentionNotification,
+    });
   const showRightStatus = rightStatusKind !== 'time';
-  const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
+  const remoteIconKind = session.deviceLinkDeviceId
+    ? 'device-link'
+    : session.remoteHostId
+      ? 'ssh'
+      : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? session.deviceLinkConnectionStatus ?? 'connected'
+    ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
@@ -293,7 +298,9 @@ export const SessionItem = memo(function SessionItem({
   // 组件卸载后 setState。null 明确表示「查过但没映射」,undefined 表示「还没查」——
   // 两者都不显示按钮,避免闪现。
   const shouldResolveSchedule = isAutomationGenerated && !insideAutomationGroup;
-  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(undefined);
+  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(
+    undefined,
+  );
   useEffect(() => {
     if (!shouldResolveSchedule) return;
     let cancelled = false;
@@ -319,8 +326,7 @@ export const SessionItem = memo(function SessionItem({
   const schedulesSnapshot = useSchedulesSnapshot();
   const scheduleStillExists =
     resolvedScheduleId != null &&
-    (schedulesSnapshot == null ||
-      schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
+    (schedulesSnapshot == null || schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
   const effectiveScheduleId = scheduleStillExists ? resolvedScheduleId : null;
   const handleAutomationRunClick = useCallback(async () => {
     if (!effectiveScheduleId) {
@@ -472,7 +478,6 @@ export const SessionItem = memo(function SessionItem({
     if (isActive) scrollIntoNearestView(rowRef.current);
   }, [isActive]);
 
-
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
   // 监听（点击不在 confirm 胶囊上就立刻撤回）。退出 pending → 全部清理。这两条退路确保
   // 用户不会因为忘了取消而误归档，也不会让 pending 态滞留把行的 hover 行为锁死。
@@ -594,10 +599,7 @@ export const SessionItem = memo(function SessionItem({
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按
   // 产品决策收敛为这一项;不自带分隔线,分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (
-    <DropdownMenuItem
-      onSelect={() => void handleCopyDeepLinkSelect()}
-      className={MENU_ITEM_CLASS}
-    >
+    <DropdownMenuItem onSelect={() => void handleCopyDeepLinkSelect()} className={MENU_ITEM_CLASS}>
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
@@ -700,7 +702,7 @@ export const SessionItem = memo(function SessionItem({
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
         'text-left text-sm font-medium',
-        !isEditing && 'cursor-grab active:cursor-grabbing',
+        !isEditing && (splitDragEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'),
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
@@ -788,7 +790,9 @@ export const SessionItem = memo(function SessionItem({
               size={12}
               strokeWidth={1.8}
               connectionStatus={remoteIconConnectionStatus}
-              className={cn(isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon')}
+              className={cn(
+                isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+              )}
             />
           )}
         </span>
@@ -893,15 +897,20 @@ export const SessionItem = memo(function SessionItem({
                   未归档 + 非 draft + 非远程只读。Edit 与左侧 Timer chip 同链路,不再重复
                   暴露;Run 走 main.maker.schedule.runNow,与 AutomationSessionGroupItem
                   组头 [Run ▶️][More ⋮] 保持高频直点、低频收纳的同构。 */}
-              {isAutomationGenerated && !insideAutomationGroup && !isArchived && !isEmpty && !remoteWritesBlocked && effectiveScheduleId && (
-                <SessionAction
-                  label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
-                  onClick={() => void handleAutomationRunClick()}
-                  isActive={isActive}
-                >
-                  <Play size={14} strokeWidth={2} />
-                </SessionAction>
-              )}
+              {isAutomationGenerated &&
+                !insideAutomationGroup &&
+                !isArchived &&
+                !isEmpty &&
+                !remoteWritesBlocked &&
+                effectiveScheduleId && (
+                  <SessionAction
+                    label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
+                    onClick={() => void handleAutomationRunClick()}
+                    isActive={isActive}
+                  >
+                    <Play size={14} strokeWidth={2} />
+                  </SessionAction>
+                )}
               <SessionAction
                 label={t('ccAgent.sidebar.sessionMenu.moreActions')}
                 onClick={(e) => {
