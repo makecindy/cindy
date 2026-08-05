@@ -10,7 +10,14 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: { name?: string }) =>
+      (key === 'settings.ghosts.market.detailsAria' ||
+        key === 'settings.ghosts.market.conflictAria') &&
+      options?.name
+        ? `${key}:${options.name}`
+        : key,
+  }),
   // 页面经批量更新控制器引 @/i18n,其 init 链路需要这些导出。
   initReactI18next: { type: '3rdParty', init: vi.fn() },
   I18nextProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -20,9 +27,10 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 import {
+  __installedPluginLayoutForTests,
   GhostPluginCard,
-  MarketPluginCard,
   LegacyGhostRecoveryNotice,
+  MarketPluginCard,
 } from '../GhostPluginPage';
 import {
   __ingestGhostBadgeForTest,
@@ -30,6 +38,18 @@ import {
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+
+const {
+  InstalledPluginDisclosure,
+  InstalledPluginOverflow,
+  MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS,
+  MAX_VISIBLE_INSTALLED_PLUGINS,
+  initializeInstalledPluginOrderSnapshot,
+  reconcileInstalledPluginOrderSnapshot,
+  shouldInitializeInstalledPluginOrderSnapshot,
+  surfaceNewlyUpdatableInstalledPlugins,
+  visibleInstalledPluginItems,
+} = __installedPluginLayoutForTests;
 
 const commandPlugin: GhostPluginListItem = {
   id: 'filo-google',
@@ -177,9 +197,7 @@ describe('GhostPluginCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
     expect(onManage).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole('button', { name: 'settings.ghosts.page.manageAction' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.page.manageAction' })).toBeTruthy();
   });
 
   it('routes projected icon failures to market recovery', () => {
@@ -271,7 +289,34 @@ describe('GhostPluginCard', () => {
 });
 
 describe('MarketPluginCard', () => {
-  it('exposes both 详情 and 安装 actions for a not-installed plugin', () => {
+  it('uses an icon-only details action in the card-level right action rail', () => {
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy={false}
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const details = screen.getByRole('button', {
+      name: 'settings.ghosts.market.detailsAria:Google Calendar',
+    });
+    expect(details.textContent).toBe('');
+    expect(details.parentElement?.className).toContain('flex-col');
+    expect(details.parentElement?.className).toContain('items-end');
+    expect(screen.queryByText('settings.ghosts.market.details')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Google Calendar' }).tagName).toBe('BUTTON');
+    expect(
+      screen
+        .getByRole('button', { name: 'Google Calendar' })
+        .closest('article')
+        ?.hasAttribute('role'),
+    ).toBe(false);
+  });
+
+  it('exposes both details and install actions for a not-installed plugin', () => {
     const onSelect = vi.fn();
     const onInstall = vi.fn();
     render(
@@ -284,10 +329,55 @@ describe('MarketPluginCard', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.installAria' }));
-    expect(onInstall).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByText('settings.ghosts.market.details'));
+    const details = screen.getByRole('button', {
+      name: 'settings.ghosts.market.detailsAria:Google Calendar',
+    });
+    const install = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(details.className).toContain('absolute');
+    expect(details.className).toContain('inset-0');
+
+    fireEvent.click(details);
     expect(onSelect).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(install);
+    expect(onInstall).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives each icon-only market action a plugin-specific accessible name', () => {
+    render(
+      <>
+        <MarketPluginCard
+          item={marketPlugin}
+          busy={false}
+          onSelect={vi.fn()}
+          onIconLoadError={vi.fn()}
+        />
+        <MarketPluginCard
+          item={{
+            ...marketPlugin,
+            pluginId: 'release-github',
+            ghostId: 'github',
+            name: 'GitHub',
+            installState: 'conflict',
+          }}
+          busy={false}
+          onSelect={vi.fn()}
+          onIconLoadError={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.ghosts.market.detailsAria:Google Calendar',
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.ghosts.market.conflictAria:GitHub',
+      }),
+    ).toBeTruthy();
   });
 
   it('keeps fixed market metadata on one line while truncating long identities', () => {
@@ -324,15 +414,14 @@ describe('MarketPluginCard', () => {
 
     const cardBody = screen.getByRole('button', { name: 'Google Calendar' });
     expect((cardBody as HTMLButtonElement).disabled).toBe(true);
-    expect(cardBody.className).toContain('disabled:cursor-not-allowed');
-    expect(cardBody.className).not.toContain('disabled:cursor-wait');
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'settings.ghosts.page.installAria',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expect(cardBody.className).toContain('cursor-not-allowed');
+    expect(cardBody.className).not.toContain('cursor-wait');
+    const conflictAction = screen.getByRole('button', {
+      name: 'settings.ghosts.market.conflictAria:Google Calendar',
+    });
+    expect((conflictAction as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('status').textContent).toBe('settings.ghosts.market.conflict');
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
 
     rerender(
       <MarketPluginCard
@@ -346,8 +435,168 @@ describe('MarketPluginCard', () => {
 
     const busyCardBody = screen.getByRole('button', { name: 'Google Calendar' });
     expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
-    expect(busyCardBody.className).toContain('disabled:cursor-wait');
-    expect(busyCardBody.className).not.toContain('disabled:cursor-not-allowed');
+    expect(busyCardBody.className).toContain('cursor-wait');
+    expect(busyCardBody.className).not.toContain('cursor-not-allowed');
+  });
+});
+
+describe('installed Plugin disclosure', () => {
+  it('surfaces newly installed plugins before the collapsed grid cutoff', () => {
+    const previousIds = Array.from(
+      { length: MAX_VISIBLE_INSTALLED_PLUGINS },
+      (_, index) => `plugin-${index}`,
+    );
+
+    expect(
+      reconcileInstalledPluginOrderSnapshot(previousIds, previousIds, [
+        ...previousIds,
+        'new-plugin',
+      ]),
+    ).toEqual(['new-plugin', ...previousIds]);
+  });
+
+  it('seeds installs that arrive before the first market snapshot', () => {
+    const preSnapshotIds = Array.from(
+      { length: MAX_VISIBLE_INSTALLED_PLUGINS },
+      (_, index) => `plugin-${index}`,
+    );
+    const marketSortedIds = [...preSnapshotIds].reverse();
+
+    expect(
+      initializeInstalledPluginOrderSnapshot(marketSortedIds, preSnapshotIds, [
+        ...preSnapshotIds,
+        'new-plugin',
+      ]),
+    ).toEqual(['new-plugin', ...marketSortedIds]);
+  });
+
+  it('upgrades a provisional installed order once market data recovers', () => {
+    const unavailableMarketSnapshot = {
+      items: [],
+      unavailableReason: 'authentication-required',
+      customSourceNames: [],
+    };
+    const availableMarketSnapshot = {
+      items: [],
+      unavailableReason: null,
+      customSourceNames: [],
+    };
+
+    expect(
+      shouldInitializeInstalledPluginOrderSnapshot(false, false, unavailableMarketSnapshot),
+    ).toBe(true);
+    expect(
+      shouldInitializeInstalledPluginOrderSnapshot(true, false, unavailableMarketSnapshot),
+    ).toBe(false);
+    expect(shouldInitializeInstalledPluginOrderSnapshot(true, false, availableMarketSnapshot)).toBe(
+      true,
+    );
+    expect(shouldInitializeInstalledPluginOrderSnapshot(true, true, availableMarketSnapshot)).toBe(
+      false,
+    );
+  });
+
+  it('surfaces newly update-available plugins only when they were hidden by the cutoff', () => {
+    const orderSnapshot = Array.from(
+      { length: MAX_VISIBLE_INSTALLED_PLUGINS + 3 },
+      (_, index) => `plugin-${index}`,
+    );
+
+    expect(surfaceNewlyUpdatableInstalledPlugins(orderSnapshot, [], ['plugin-6'])).toBe(
+      orderSnapshot,
+    );
+    expect(
+      surfaceNewlyUpdatableInstalledPlugins(
+        orderSnapshot,
+        ['plugin-1'],
+        ['plugin-1', 'plugin-6', 'plugin-9', 'plugin-10'],
+      ),
+    ).toEqual([
+      'plugin-9',
+      'plugin-10',
+      ...orderSnapshot.filter((id) => id !== 'plugin-9' && id !== 'plugin-10'),
+    ]);
+  });
+
+  it('shows at most eight installed plugins until the user expands the section', () => {
+    const items = Array.from({ length: MAX_VISIBLE_INSTALLED_PLUGINS + 3 }, (_, index) => index);
+
+    expect(visibleInstalledPluginItems(items)).toEqual(
+      items.slice(0, MAX_VISIBLE_INSTALLED_PLUGINS),
+    );
+  });
+
+  it('links the disclosure to its overflow and previews at most three hidden avatars', () => {
+    const onToggle = vi.fn();
+    const previewItems = Array.from(
+      { length: MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS + 2 },
+      (_, index) => ({
+        ...commandPlugin,
+        id: `preview-${index}`,
+        name: `Preview ${index}`,
+        origin: 'public' as const,
+        marketUpdate: null,
+      }),
+    );
+    const { container, rerender } = render(
+      <InstalledPluginDisclosure
+        expanded={false}
+        controlsId="installed-overflow"
+        totalCount={11}
+        previewItems={previewItems}
+        onToggle={onToggle}
+      />,
+    );
+
+    const collapsedButton = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installedExpand',
+    });
+    expect(collapsedButton.getAttribute('aria-expanded')).toBe('false');
+    expect(collapsedButton.getAttribute('aria-controls')).toBe('installed-overflow');
+    expect(container.querySelectorAll('.plugin-installed-preview-card')).toHaveLength(
+      MAX_COLLAPSED_INSTALLED_PLUGIN_PREVIEWS,
+    );
+    fireEvent.click(collapsedButton);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <InstalledPluginDisclosure
+        expanded
+        controlsId="installed-overflow"
+        totalCount={11}
+        previewItems={previewItems}
+        onToggle={onToggle}
+      />,
+    );
+    expect(
+      screen
+        .getByRole('button', { name: 'settings.ghosts.page.installedCollapse' })
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(container.querySelector('.plugin-installed-preview-stack')).toBeNull();
+  });
+
+  it('keeps collapsed overflow hidden and inert until expanded', () => {
+    const { rerender, container } = render(
+      <InstalledPluginOverflow id="installed-overflow" expanded={false}>
+        <button type="button">Hidden plugin</button>
+      </InstalledPluginOverflow>,
+    );
+
+    const collapsedOverflow = container.querySelector('#installed-overflow');
+    expect(collapsedOverflow?.getAttribute('aria-hidden')).toBe('true');
+    expect(collapsedOverflow?.hasAttribute('inert')).toBe(true);
+    expect(collapsedOverflow?.getAttribute('data-expanded')).toBe('false');
+
+    rerender(
+      <InstalledPluginOverflow id="installed-overflow" expanded>
+        <button type="button">Hidden plugin</button>
+      </InstalledPluginOverflow>,
+    );
+    const expandedOverflow = container.querySelector('#installed-overflow');
+    expect(expandedOverflow?.getAttribute('aria-hidden')).toBe('false');
+    expect(expandedOverflow?.hasAttribute('inert')).toBe(false);
+    expect(expandedOverflow?.getAttribute('data-expanded')).toBe('true');
   });
 });
 
@@ -401,9 +650,7 @@ describe('LegacyGhostRecoveryNotice', () => {
       />,
     );
 
-    expect(
-      screen.getByText('settings.ghosts.legacyRecovery.partialBlocked'),
-    ).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.legacyRecovery.partialBlocked')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
   });
 });

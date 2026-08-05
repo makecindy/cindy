@@ -320,9 +320,11 @@ describe('Ghost plugin detail sections', () => {
     );
 
     expect(
-      (screen.getByRole('button', {
-        name: 'settings.ghosts.market.updateTo',
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'settings.ghosts.market.updateTo',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.pointerDown(
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
@@ -376,7 +378,8 @@ describe('Ghost plugin detail sections', () => {
     expect(
       screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
     ).toBeNull();
-    // 卸载等其余菜单项不受影响。
+    // 只剩卸载一项时不画悬空分割线。
+    expect(screen.queryByRole('separator')).toBeNull();
     expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
     vi.unstubAllEnvs();
   });
@@ -414,6 +417,7 @@ describe('Ghost plugin detail sections', () => {
     expect(
       screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
     ).toBeTruthy();
+    expect(screen.getByRole('separator')).toBeTruthy();
     vi.unstubAllEnvs();
   });
 
@@ -445,7 +449,9 @@ describe('Ghost plugin detail sections', () => {
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' })).toBeNull();
+    expect(
+      screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+    ).toBeNull();
     unmount();
 
     // 提供 onExport(已装插件):点击触发导出回调。
@@ -455,9 +461,7 @@ describe('Ghost plugin detail sections', () => {
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    fireEvent.click(
-      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
-    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 
