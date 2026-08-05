@@ -3402,8 +3402,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 还没进入 renderer 时就重新被 Chromium 节流。
           shouldMarkTurnTerminalIdleAfterBroadcast = true;
           agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done');
-          // #9 idle 兜底:turn 收尾后让 goal controller 决定是否补一轮(无 goal/非 active 时 no-op)。
-          goalIdleObserver?.(session.id);
         } else {
           // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
           // done.data 附加 silentStop 标记(见 maker-core translator)。延迟一拍再决策,
@@ -3575,6 +3573,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
       if (shouldMarkTurnTerminalIdleAfterBroadcast) {
         sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);
+        // #9 idle 兜底:正常 done、终止型 error（含 abort）统一在 tracker 已置 idle 后
+        // 唤醒 Goal controller。无 goal / 非 active / 已取消的 deferred Resume 均为 no-op。
+        goalIdleObserver?.(session.id);
         // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
         // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
         noteClaudeSessionTurnState(session.id, false);

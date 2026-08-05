@@ -69,6 +69,31 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource.slice(0, broadcastIndex)).not.toContain('handleAgentEvent(sessionMetaForIsland');
   });
 
+  it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
+    const terminalIdleStart = wireSessionSource.indexOf(
+      'if (shouldMarkTurnTerminalIdleAfterBroadcast) {',
+      broadcastIndex,
+    );
+    const terminalIdleEnd = wireSessionSource.indexOf(
+      '} else if (shouldMarkTurnStatusIdleAfterBroadcast) {',
+      terminalIdleStart,
+    );
+    const terminalIdleBlock = wireSessionSource.slice(terminalIdleStart, terminalIdleEnd);
+
+    expect(terminalIdleStart).toBeGreaterThan(broadcastIndex);
+    expect(terminalIdleEnd).toBeGreaterThan(terminalIdleStart);
+    expectOrder(
+      terminalIdleBlock,
+      'sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);',
+      'goalIdleObserver?.(session.id);',
+    );
+    expect(
+      [...wireSessionSource.matchAll(/goalIdleObserver\?\.\(session\.id\);/g)],
+    ).toHaveLength(1);
+  });
+
   it('defers remote auth island errors until the renderer reports retry failure', () => {
     const wireSessionSource = extractWireSessionSource();
     const deferredHandler = source.match(

@@ -1834,24 +1834,43 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
   });
 
-  it('honors one manual Resume for a blocked goal after the old turn becomes idle', async () => {
-    let sessionInTurn = true;
-    const local = makeController({ isSessionInTurn: () => sessionInTurn });
-    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
-    await local.controller.pauseGoal('s1'); // Explicit Stop leaves a cancelled lifecycle boundary.
-    const sendsBeforeResume = local.session.sends.length;
+  it.each([
+    ['normal completion', 'blocked', 'done'],
+    ['terminal error', 'blocked', 'error'],
+    ['abort', 'paused', 'abort'],
+  ] as const)(
+    'honors one manual Resume for a %s turn while a %s goal waits for the old turn to settle',
+    async (_label, status, terminalKind) => {
+      let sessionInTurn = true;
+      const local = makeController({ isSessionInTurn: () => sessionInTurn });
+      await local.storage.set(seededGoal({ status, lastReason: 'waiting for old turn to settle' }));
+      await local.controller.pauseGoal('s1'); // Explicit Stop leaves a cancelled lifecycle boundary.
+      const sendsBeforeResume = local.session.sends.length;
 
-    await local.controller.resumeGoal('s1');
-    expect((await local.storage.get('s1'))?.status).toBe('blocked');
-    expect(local.session.sends).toHaveLength(sendsBeforeResume);
+      await local.controller.resumeGoal('s1');
+      expect((await local.storage.get('s1'))?.status).toBe(status);
+      expect(local.session.sends).toHaveLength(sendsBeforeResume);
 
-    sessionInTurn = false;
-    await local.controller.maybeContinueActiveGoal('s1');
-    await tick();
+      if (terminalKind === 'done') {
+        local.session.emitGoalTurn({});
+      } else {
+        local.session.emitErrorTurn({
+          message: terminalKind === 'abort' ? 'AbortError: interrupted' : 'old turn failed',
+        });
+      }
+      sessionInTurn = false;
+      // Production wires every product-terminal event to this observer. Duplicate terminal tails
+      // (for example error followed by paired done) must still coalesce into one resumed turn.
+      await Promise.all([
+        local.controller.maybeContinueActiveGoal('s1'),
+        local.controller.maybeContinueActiveGoal('s1'),
+      ]);
+      await tick();
 
-    expect((await local.storage.get('s1'))?.status).toBe('active');
-    expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
-  });
+      expect((await local.storage.get('s1'))?.status).toBe('active');
+      expect(local.session.sends).toHaveLength(sendsBeforeResume + 1);
+    },
+  );
 
   it('lets a later Stop cancel a deferred manual Resume', async () => {
     let sessionInTurn = true;
@@ -1866,6 +1885,38 @@ describe('GoalController', () => {
     await tick();
 
     expect((await local.storage.get('s1'))?.status).toBe('blocked');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('lets clearGoal cancel a deferred manual Resume without reviving the old Goal', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'blocked', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.clearGoal('s1');
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('lets dispose cancel a deferred manual Resume without starting a turn', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'paused', lastReason: 'waiting for input' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    local.controller.dispose();
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
     expect(local.session.sends).toHaveLength(0);
   });
 
