@@ -67,12 +67,16 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   // ── 鉴权 ──────────────────────────────────────────────────────────────────
   'authManager', //          登录/续期/失效/realm 切换
   'auth-adapters', //        各登录方式适配层
-  'auth-boundary', //        鉴权边界校验
+  // 登录 / 账号切换时的服务拆卸序列(shutdown-hang / 账号切换排查必需)。其中镜像缓存清理
+  // 失败会打本地缓存路径,那几条已改走独立的 `auth-boundary:mirror-cache-purge` 子 scope 并
+  // 排除(见 DENIED_SUB_SCOPES);根这里只剩不带路径的服务停止诊断。
+  'auth-boundary', //        鉴权边界校验 / 拆卸序列
   'safe-storage', //         safeStorage 可用性与钥匙串降级(不含密文本身)
 
   // ── 配置与存量迁移基础设施 ────────────────────────────────────────────────
-  'legacyUserDataMigration', // userData 目录迁移
-  'legacy-xdmaker-migration', // 旧品牌数据迁移
+  // 注意:`legacy-xdmaker-migration` **不在这里** —— 它每条记录都带 `rootDir`(解析后的项目
+  // 工作目录),脱敏只抹家目录段、项目目录名仍会外泄(2026-08-04 review)。见 NOTABLE_DENIED_ROOTS。
+  'legacyUserDataMigration', // userData 目录迁移(只记有无 legacy 目录 + 标记,不带工作目录)
   'ownerNamespaceMigration', //  归属命名空间迁移
   'analytics-settings', //       同意状态与开关的读写(不含用户内容)
   'sidebar-settings', //         侧栏偏好读写
@@ -114,6 +118,10 @@ const DENIED_SUB_SCOPES: readonly string[] = [
   // localDb 已改精确放行(见 ALLOWED_EXACT_SCOPES),这条是纵深防御:万一有人把 `localDb`
   // 重新加回根放行,消息导入 / 媒体附件路径这条仍然挡得住。
   'localDb/messages', //                   外部消息导入、附件/媒体清理,带文件路径与 session 投影
+  // 登录/账号切换拆卸时,镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存
+  // 路径写进日志(bootstrap-electron 的 teardownAuthAccountBoundary)。这几条走独立子 scope,
+  // 从 `auth-boundary` 根放行里排除掉,根上只剩不带路径的服务停止诊断(2026-08-04 review)。
+  'auth-boundary:mirror-cache-purge', //   同 device-link:ipc,带本地镜像缓存路径
   'device-link:ipc', //                    镜像缓存清理失败时把 root / remaining 缓存路径写进日志
   'device-link:mediaFetch', //             抓取本地媒体,日志带绝对路径
   'device-link:mediaTransfer', //          传输进度,带文件名
@@ -141,6 +149,8 @@ const DENIED_SUB_SCOPES: readonly string[] = [
  *  - `session-search` / `chat-history-search`：搜索关键词 = 用户输入。
  *  - `skillhub*` / `plugin-*` / `brain*` / `mcp/*`：用户内容与第三方响应。
  *  - `im*` / `git-*` / `worktree*` / `learn-host*` / `goal-host`：同上。
+ *  - `legacy-xdmaker-migration`：迁移每条记录都带 `rootDir`（解析后的项目工作目录），脱敏
+ *    只抹家目录段、项目目录名仍外泄；设置页文案承诺不上传工作目录路径（2026-08-04 review）。
  */
 const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'console',
@@ -157,6 +167,7 @@ const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'brain',
   'goal-host',
   'learn-host',
+  'legacy-xdmaker-migration',
 ];
 
 /** scope 是否落在某个根下（精确相等，或 `<root>/` / `<root>:` 前缀）。 */

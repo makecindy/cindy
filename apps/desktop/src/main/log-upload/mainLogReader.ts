@@ -45,6 +45,16 @@ export interface ParseMainLogOptions {
    * （2026-08-04 review P1）。文件级 all-or-nothing 才是能自证的判据。
    */
   escapedFormat: boolean;
+  /**
+   * 本次读取窗口是否读到了**文件末尾**。默认 `true`（整份读或读到 EOF）。
+   *
+   * 为 `false`（超预算文件从中间切一个窗口、没读到结尾）时，窗口的**最后一行**可能是被字节
+   * 预算从中间截断的半行 —— 它既不是完整记录头、也不以空格开头。若不特判，读侧的记录边界
+   * 校验会把这条合法的半行误判成「未转义污染」而丢弃、并让该文件覆盖不到崩溃锚点，标记清不掉、
+   * 下次启动重复上传同一崩溃窗口（2026-08-04 review P1）。所以窗口未达 EOF 时，末行按半行丢弃，
+   * 不计违规。
+   */
+  windowEndsAtEof?: boolean;
   /** 用于抹掉真实用户名（见 redact）。 */
   homeDir?: string;
 }
@@ -154,16 +164,22 @@ export function parseMainLogText(
     // 内容。仅凭第 0 字节的哨兵会误信整份文件,让旧多行正文里那些恰好像放行记录头的行被当成
     // 独立基础设施记录送走。命中即**就地停止**:此前那段(哨兵之后、污染之前)是真·转义内容,
     // 保留;之后一律不信(fail closed)。
-    // 空字符串只在结尾出现(split 的产物,行尾换行),不算违规。
-    const isTrailingEmpty = line === '' && i === lines.length - 1;
     if (line.startsWith(' ')) {
       // 合法续行:并入当前记录。没有当前记录(窗口第一行就是续行)则丢弃。
       if (pending) pending.lines.push(line);
       continue;
     }
-    if (isTrailingEmpty) continue;
-    // 违规:停止解析,丢弃当前 pending(它的续行可能已被污染打断)。
-    pending = null;
+    // 窗口的**最后一行**在两种情况下不是违规,只是半行 / 分隔产物,丢弃即可,不能停止解析:
+    //   - split 的行尾空串(文件以 '\n' 结尾);
+    //   - 窗口没读到 EOF 时,末行被字节预算从中间截断(可能正好停在记录头中间,既不命中 head
+    //     又不以空格开头)。若把它当违规,合法的超大崩溃日志会覆盖不到锚点、标记清不掉、
+    //     下次重复上传(2026-08-04 review P1)。
+    const isLastLine = i === lines.length - 1;
+    const windowEndsAtEof = options.windowEndsAtEof ?? true;
+    if (isLastLine && (line === '' || !windowEndsAtEof)) continue;
+    // 违规:先 flush 当前 pending 再停止。pending 是「head + 若干合法空格续行」的完整记录,
+    // 违规行是**另起**的一行、不属于它,所以它本身没被污染,该保留;之后一律不信(fail closed)。
+    flush();
     stoppedAtFormatViolation = true;
     break;
   }

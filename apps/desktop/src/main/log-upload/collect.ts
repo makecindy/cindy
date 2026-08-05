@@ -266,11 +266,15 @@ export async function collectLogs(
       const text = buf.toString('utf8');
 
       const wholeRead = startOffset === 0 && size <= perFileBudget;
+      // 窗口是否读到了文件末尾。没到 EOF 时末行可能是被预算截断的半行,读侧据此不把它误判成
+      // 格式污染(2026-08-04 review P1)。
+      const windowEndsAtEof = startOffset + buf.length >= size;
       if (plan.kind === 'main') {
         const parsed = parseMainLogText(text, {
           fromFileStart,
           // 走到这里说明第 0 字节就是哨兵(上面已 continue 掉不是的)。
           escapedFormat: true,
+          windowEndsAtEof,
           homeDir: deps.homeDir,
         });
         all.push(...parsed.records);

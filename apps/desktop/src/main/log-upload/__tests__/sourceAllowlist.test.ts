@@ -205,6 +205,35 @@ describe('localDb：精确匹配，子 scope 不跟着放行', () => {
   });
 });
 
+/**
+ * 2026-08-04 review：又两个会打路径的来源。
+ *  - auth-boundary 根有价值(登出/账号切换的服务拆卸序列,shutdown 排查必需),但镜像缓存清理
+ *    失败那几条带本地缓存路径 → 拆到 auth-boundary:mirror-cache-purge 子 scope 并排除。
+ *  - legacy-xdmaker-migration 每条都带 rootDir(项目工作目录)→ 整个 scope 拒。
+ */
+describe('会打路径的来源被挡在外', () => {
+  it('auth-boundary 根放行（服务停止诊断，不带路径）', () => {
+    expect(isAllowedScope('auth-boundary')).toBe(true);
+    expect(isAllowedScope('auth-boundary:stop-scheduler')).toBe(true); // 其它子 scope 跟随根
+  });
+
+  it('⚠️ auth-boundary:mirror-cache-purge 不放行（带本地镜像缓存路径），两种分隔符都挡', () => {
+    expect(isAllowedScope('auth-boundary:mirror-cache-purge')).toBe(false);
+    expect(isAllowedScope('auth-boundary/mirror-cache-purge')).toBe(false);
+    expect(isAllowedScope('auth-boundary:mirror-cache-purge:retry')).toBe(false);
+  });
+
+  it('⚠️ legacy-xdmaker-migration 整个 scope 不放行（每条都带 rootDir 工作目录）', () => {
+    expect(isAllowedScope('legacy-xdmaker-migration')).toBe(false);
+    expect(isAllowedScope('legacy-xdmaker-migration/x')).toBe(false);
+  });
+
+  it('未被点名的迁移 scope 仍放行（只拒确有路径的那个）', () => {
+    expect(isAllowedScope('legacyUserDataMigration')).toBe(true);
+    expect(isAllowedScope('ownerNamespaceMigration')).toBe(true);
+  });
+});
+
 describe('名单自身的卫生', () => {
   it('放行根没有重复项', () => {
     const roots = __testing.ALLOWED_ROOT_SCOPES;

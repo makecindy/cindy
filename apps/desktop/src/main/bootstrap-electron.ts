@@ -961,6 +961,9 @@ import {
 initLogger();
 const dbClientLog = createLogger('DbClient');
 const authBoundaryLog = createLogger('auth-boundary');
+// 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
+// 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。
+const authBoundaryPurgeLog = createLogger('auth-boundary:mirror-cache-purge');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
 const safeStorageReadLog = createLogger('safe-storage:read');
@@ -1009,19 +1012,19 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     await drainPurgeQueue();
   } catch (err) {
-    authBoundaryLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
+    authBoundaryPurgeLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
   }
   try {
     await getMirrorCache().clearAll();
   } catch (err) {
-    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+    authBoundaryPurgeLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
     if (err instanceof MirrorCachePurgeError) {
       // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
       // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
       // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
       await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
         (enqueueErr: unknown) => {
-          authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+          authBoundaryPurgeLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
         },
       );
     }

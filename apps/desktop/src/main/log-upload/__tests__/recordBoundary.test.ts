@@ -149,6 +149,43 @@ describe('读侧：伪造记录头无法把被封禁来源的内容送出去', (
     expect(result.records).toHaveLength(2);
   });
 
+  /**
+   * 2026-08-04 review P1（我上一版的回归）：超预算窗口没读到 EOF 时，末行可能是被字节预算从
+   * 记录头中间截断的半行 —— 既不命中 head、又不以空格开头。不能把它当未转义污染，否则合法的
+   * 超大崩溃日志会覆盖不到锚点、标记清不掉、下次重复上传。`windowEndsAtEof=false` 时末行按半行
+   * 丢弃、不计违规。
+   */
+  it('⚠️ 窗口未达 EOF、末行是记录头中间的半行 ⇒ 不误判违规', () => {
+    const truncatedHead = `[${TS3}] [INFO ] [lifecy`; // 记录头被预算从中间截断
+    const text = [
+      SENTINEL,
+      line(TS2, 'INFO ', 'lifecycle', 'real record before truncation'),
+      truncatedHead,
+    ].join('\n');
+    const result = parseMainLogText(text, {
+      fromFileStart: true,
+      escapedFormat: true,
+      windowEndsAtEof: false,
+    });
+    expect(result.stoppedAtFormatViolation).toBe(false);
+    expect(result.records.map((r) => r.msg)).toEqual(['real record before truncation']);
+  });
+
+  it('同样的半行、但窗口确已到 EOF ⇒ 是真违规（EOF 处不该有半行记录头）', () => {
+    const text = [
+      SENTINEL,
+      line(TS2, 'INFO ', 'lifecycle', 'real record'),
+      `[${TS3}] [INFO ] [lifecy`, // 到了 EOF 还是残缺头 ⇒ 未转义污染
+    ].join('\n');
+    const result = parseMainLogText(text, {
+      fromFileStart: true,
+      escapedFormat: true,
+      windowEndsAtEof: true,
+    });
+    expect(result.stoppedAtFormatViolation).toBe(true);
+    expect(result.records.map((r) => r.msg)).toEqual(['real record']);
+  });
+
   it('窗口从中间切进来时第一行（半行）被丢弃', () => {
     const text = ['record body cut in half', line(TS2, 'INFO ', 'lifecycle', 'ok')].join('\n');
     const result = parseMainLogText(text, { fromFileStart: false, escapedFormat: true });
