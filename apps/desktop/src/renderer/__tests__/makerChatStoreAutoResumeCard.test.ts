@@ -364,6 +364,35 @@ describe('applyInputProjection 自愈进行中提示', () => {
     expect(rows.some((m) => m.clientId === PENDING_CARD_ID)).toBe(true);
   });
 
+  it('credentialSwitchWait projection 会收掉原生重连行', () => {
+    makerEventCb?.({
+      sessionId: SID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+      },
+    });
+    expect(
+      makerChatStore
+        .getSnapshot(SID)
+        .messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
+
+    inputProjectionCb!(
+      projection({ credentialSwitchWait: { clientId: 'queued-1', blockedBySessionIds: [SID] } }),
+    );
+
+    const snapshot = makerChatStore.getSnapshot(SID);
+    expect(snapshot.credentialSwitchWait).toEqual({
+      clientId: 'queued-1',
+      blockedBySessionIds: [SID],
+    });
+    expect(
+      snapshot.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(false);
+  });
+
   it('Stop 会同步撤掉原生重连活动行', () => {
     makerEventCb?.({
       sessionId: SID,
@@ -520,6 +549,25 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
     expect(
       withRootTool.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
     ).toBe(false);
+  });
+
+  it('带 turnContinuationId 的 done 不会清除原生活动行', () => {
+    const reconnecting = handleStreamEvent(
+      EMPTY_SESSION_STATE,
+      reconnectEvent('Reconnecting... 1/5', false),
+    );
+    const withContinuationDone = handleStreamEvent(reconnecting, {
+      sessionId: SID,
+      type: 'done',
+      data: { reason: 'foreground-done' },
+      turnContinuationId: 1,
+    });
+
+    expect(
+      withContinuationDone.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
+    expect(withContinuationDone.isStreaming).toBe(true);
+    expect(withContinuationDone.agentStatus.isRunning).toBe(true);
   });
 
   it.each([

@@ -3448,7 +3448,7 @@ function isCodexReconnectRecoveryOutput(event: CCAgentStreamEvent): boolean {
     const toolName = (event.data as { toolName?: unknown } | null | undefined)?.toolName;
     return typeof toolName !== 'string' || !toolName.startsWith('collab:');
   }
-  return event.type === 'done';
+  return event.type === 'done' && !isTurnContinuationBoundaryEvent(event);
 }
 
 /** Main 的接管 projection 与随后 maker:event 来自两个 channel。只有活动行里保存的
@@ -3600,11 +3600,11 @@ function applyInputProjection(
       if (messages.some((message) => message.clientId === item.clientId)) return messages;
       return [...messages, { ...item.chatMessage, isPendingPersist: true }];
     }, dedupedMessages);
-    // Codex 原生重连已经被 host 接管或明确回落时，原生进行态行必须让位给
-    // Cindy 的接管行或终态错误。没有这两个字段的普通 projection 不触碰它，
-    // 以免无关队列投影把正在更新的 N/M 进度提前擦掉。
+    // Codex 原生重连已经被 host 接管、进入凭证切换等待或明确回落时，原生进行态行
+    // 必须让位给 Cindy 的接管行、凭证切换状态或终态错误。没有这些字段的普通
+    // projection 不触碰它，以免无关队列投影把正在更新的 N/M 进度提前擦掉。
     const projectionSettledCodexReconnect = Boolean(
-      projection.autoResumePending || projection.error,
+      projection.autoResumePending || projection.error || projection.credentialSwitchWait,
     );
     const messagesBeforeAutoResume = projectionSettledCodexReconnect
       ? removeCodexReconnectPendingCard(withSettlingMessages)
