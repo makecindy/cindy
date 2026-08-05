@@ -313,6 +313,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('const hasWorkerSearchJump = Boolean(');
     expect(sessionViewSource).toContain('routeWorkerHint.hasWorkerParam || !!orcaWorkersReveal || hasWorkerSearchJump');
     expect(sessionViewSource).toContain('const shouldRevealWorkersTab = hasExplicitOrcaWorkersReveal || shouldPassiveRevealWorkersTab;');
+    expect(sessionViewSource).toContain(
+      'if (!ownsRoute || !collabEnabled || isCompactRail || !sessionId) return;',
+    );
     expect(sessionViewSource).toContain('orcaWorkersReveal?.focusWorkerSessionId ??');
     expect(sessionViewSource).toMatch(
       /hasWorkerSearchJump\s*\?\s*\(?searchJump\?\.sessionId\s*\?\?\s*null\)?\s*:\s*null/,

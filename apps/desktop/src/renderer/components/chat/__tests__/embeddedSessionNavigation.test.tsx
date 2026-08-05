@@ -299,7 +299,9 @@ describe('sidebar-embedded session navigation boundary', () => {
         automationOrigin={{ kind: 'scheduler', scheduleId: 'schedule-2', scheduleName: 'Daily' }}
       />,
     );
-    fireEvent.click(screen.getByRole('button'));
+    const automationButton = screen.getByRole('button');
+    expect(automationButton.getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(automationButton);
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled?focus=schedule-2');
   });
 

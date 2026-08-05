@@ -1861,7 +1861,7 @@ export function CCAgentSessionView({
   // 已记录为开/关都尊重用户历史,只 ensure tab 存在,不抢 active tab。
   // doc rail (isCompactRail) 不在这里打开,由 WorkdirBrowseRoute 的 toggle 布局接管。
   useEffect(() => {
-    if (!collabEnabled || isCompactRail || !sessionId) return;
+    if (!ownsRoute || !collabEnabled || isCompactRail || !sessionId) return;
     const shouldRevealForMissingCollapsedRecord =
       passiveOrcaWorkersRevealSessionRef.current !== sessionId &&
       shouldRevealOrcaWorkersAfterPaint({
