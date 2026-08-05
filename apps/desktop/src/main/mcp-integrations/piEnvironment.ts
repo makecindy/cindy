@@ -171,6 +171,11 @@ export async function getPiExtraSpawnConfig(
   const disabledPluginIds = createPluginRegistry().getDisabledRuntimePluginIds(
     sessionCtx?.workingDir ?? '',
   );
+  // PiAgent 传入的是该 session 专属的可变副本。这里必须保留同一引用：start_team
+  // 成功后 MakerSession.setVendorOptions 会原地写入 Lead 身份，既有 HTTP MCP handler
+  // 要在下一次 create_worker 调用时立即看到。复制对象会把 bridge 永久冻结在启动态。
+  const vendorOptions = sessionCtx?.vendorOptions ?? {};
+  vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY] = disabledPluginIds;
   const liziCtx: LiziMcpSessionContext = {
     agentKind: 'pi',
     sessionId,
@@ -178,10 +183,7 @@ export async function getPiExtraSpawnConfig(
       ? { sessionInstanceId: sessionCtx.sessionInstanceId }
       : {}),
     workingDir: sessionCtx?.workingDir ?? '',
-    vendorOptions: {
-      ...sessionCtx?.vendorOptions,
-      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
-    },
+    vendorOptions,
   };
   // 同 session 重建(resume/reattach)直接覆盖注册,注册表以 sessionId 为 key,
   // 天然不累积。必须在返回(即 spawn)前完成 —— cindy-bridge extension 一起进程
