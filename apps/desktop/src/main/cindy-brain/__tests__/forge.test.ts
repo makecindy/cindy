@@ -869,8 +869,7 @@ describe('FORGE_GUIDE', () => {
       'minimize',
       '最小化为浮动气泡',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
-      // 卡槽总数标记随 workspace 槽合入更新为十五个。
-      '十五个卡槽',
+      '所有卡槽里信任面最高的能力',
       '捆绑 Agent Skills(skill 槽)',
       'skill.items',
       'SKILL.md',
@@ -923,7 +922,7 @@ describe('FORGE_GUIDE', () => {
       'did-approval-{start,end}',
       'did-user-input-{start,end}',
       '不会给 reasoning、工具',
-      '十八个卡槽',
+      '可用卡槽',
       '`plan`(把调用方维护的完整',
       '不提供读取、独立清空命令或生命周期控制',
       '当前任务 Plan 单向投影',
@@ -933,6 +932,7 @@ describe('FORGE_GUIDE', () => {
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+    expect(FORGE_GUIDE).not.toMatch(/[一二三四五六七八九十百]+个卡槽/);
   });
 
   it('打包前仅轻提醒一次图标选择，AI 生成有固定提示词且失败不阻塞', () => {
