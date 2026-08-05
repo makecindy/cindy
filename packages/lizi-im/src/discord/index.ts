@@ -225,10 +225,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return configResult();
     });
 
+    // Renderer IPC can run after handler registration but before init(). Read the
+    // persisted preference here instead of exposing the constructor default.
     this.host.ipc.handle('discordBot:get-status', () => ({
       status: this.status,
       ownerUserId: this.ownerUserId || null,
-      lifecycleAnnouncement: this.lifecycleAnnouncementEnabled,
+      lifecycleAnnouncement: this.readLifecycleAnnouncement(),
     }));
 
     this.host.ipc.handle('discordBot:set-lifecycle-announcement', (payload) => {
@@ -239,7 +241,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       if (!this.writeLifecycleAnnouncement(enabled)) {
         return {
           ok: false,
-          lifecycleAnnouncement: this.lifecycleAnnouncementEnabled,
+          // Roll back to the persisted source of truth, which may differ from
+          // the runtime cache before init or after an external account change.
+          lifecycleAnnouncement: this.readLifecycleAnnouncement(),
         };
       }
       this.applyLifecycleAnnouncement(enabled);

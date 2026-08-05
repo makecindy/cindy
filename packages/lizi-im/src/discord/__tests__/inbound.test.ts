@@ -297,6 +297,72 @@ describe('DiscordIM inbound pipeline', () => {
     });
   });
 
+  it('reads the persisted lifecycle preference from IPC before init', async () => {
+    const host = makeHost({
+      initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
+    });
+    const readSecret = vi.spyOn(host.secrets, 'read');
+    const im = new DiscordIM(host);
+
+    expect(readSecret).not.toHaveBeenCalled();
+
+    im.registerIpc();
+
+    await expect(host.invoke('discordBot:get-status')).resolves.toMatchObject({
+      lifecycleAnnouncement: false,
+    });
+    expect(readSecret).toHaveBeenCalledWith('discord-bot-lifecycle-announcement');
+  });
+
+  it('rolls back a pre-init lifecycle write failure to the persisted preference', async () => {
+    const host = makeHost({
+      initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
+      write: (name, value, secrets) => {
+        if (name === 'discord-bot-lifecycle-announcement') return false;
+        secrets.set(name, value);
+        return true;
+      },
+    });
+    const im = new DiscordIM(host);
+    im.registerIpc();
+
+    await expect(
+      host.invoke('discordBot:set-lifecycle-announcement', { enabled: true }),
+    ).resolves.toEqual({
+      ok: false,
+      lifecycleAnnouncement: false,
+    });
+    expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('false');
+  });
+
+  it('rolls back a post-init lifecycle write failure to the persisted preference', async () => {
+    let rejectLifecycleWrites = false;
+    const host = makeHost({
+      initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
+      write: (name, value, secrets) => {
+        if (name === 'discord-bot-lifecycle-announcement' && rejectLifecycleWrites) return false;
+        secrets.set(name, value);
+        return true;
+      },
+    });
+    const im = new DiscordIM(host);
+    im.registerIpc();
+    await im.init();
+
+    // Simulate the active account's persisted preference changing after init,
+    // leaving the runtime cache stale until the next explicit lifecycle load.
+    expect(host.secrets.write('discord-bot-lifecycle-announcement', 'true')).toBe(true);
+    rejectLifecycleWrites = true;
+
+    await expect(
+      host.invoke('discordBot:set-lifecycle-announcement', { enabled: false }),
+    ).resolves.toEqual({
+      ok: false,
+      lifecycleAnnouncement: true,
+    });
+    expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('true');
+  });
+
   it('silently drops non-owner DM messages', async () => {
     const gateway = makeGateway();
     const im = new DiscordIM(makeHost(), {
