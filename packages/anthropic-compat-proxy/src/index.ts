@@ -13,7 +13,7 @@
  *   - transform 链可注入自定义改写;什么都不传走默认 [stripNonAnthropicFields]
  */
 
-export { createAnthropicCompatProxy } from './server.js';
+export { createAnthropicCompatProxy, isFetchBlockedPort } from './server.js';
 export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,

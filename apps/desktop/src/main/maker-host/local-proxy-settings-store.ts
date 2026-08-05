@@ -17,6 +17,8 @@
 
 import Store from 'electron-store';
 
+import { isFetchBlockedPort } from '@cindy/anthropic-compat-proxy';
+
 interface LocalProxySettingsShape {
   enabled: boolean;
   defaultProviderId: string;
@@ -135,9 +137,19 @@ export function setLocalProxyPort(port: number): number {
   return normalized;
 }
 
-/** 端口是否在合法可绑区间(不含 0 哨兵)。UI 校验与 IPC 入参校验共用。 */
+/**
+ * 端口是否在合法可绑区间(不含 0 哨兵)。UI 校验与 IPC 入参校验共用。
+ * 额外拒绝 Fetch/undici 屏蔽端口(如 6000/6667/10080):SDK 会对这些端口直接
+ * ERR_INVALID_ARGUMENT 拒连,固定绑上去外部 CLI 根本连不通,故不允许用户持久化。
+ */
 export function isValidLocalProxyPort(port: unknown): port is number {
-  return typeof port === 'number' && Number.isInteger(port) && port >= MIN_PORT && port <= MAX_PORT;
+  return (
+    typeof port === 'number' &&
+    Number.isInteger(port) &&
+    port >= MIN_PORT &&
+    port <= MAX_PORT &&
+    !isFetchBlockedPort(port)
+  );
 }
 
 /**

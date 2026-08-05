@@ -2115,6 +2115,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   });
 
   // 固定端口(opts.port)时只绑这一个,失败即抛(host 负责 fallback);否则随机选 Fetch-safe 端口。
+  // 固定端口若落在 Fetch 屏蔽端口(fetch/undici 会直接 ERR_INVALID_ARGUMENT 拒连,SDK 根本连不上)
+  // 里,先自证拒绝再抛 —— 与随机选口路径的 isFetchBlockedPort 过滤同源,host 据此 fallback 随机口。
+  if (opts.port !== undefined && isFetchBlockedPort(opts.port)) {
+    throw new Error(
+      `anthropic-compat-proxy: refusing to bind Fetch-blocked loopback port ${opts.port}`,
+    );
+  }
   const port = opts.port !== undefined
     ? await listenOnLoopbackPort(server, host, opts.port)
     : await listenOnFetchSafeLoopbackPort(server, host, logger);

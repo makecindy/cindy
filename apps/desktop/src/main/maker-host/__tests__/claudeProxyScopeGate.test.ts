@@ -43,6 +43,19 @@ vi.mock('../claude-fast-mode-log', () => ({
   createClaudeFastModeResponseObserver: () => () => undefined,
 }));
 
+// 对外 token 鉴权:默认关闭 + 不命中(与真实 store 默认态一致,上面既有 scope-gate / Pi 用例不受影响)。
+// 有界拒绝(P1)用例按需把 externalEnabled 翻开。
+const externalAuthMock = vi.hoisted(() => ({
+  externalEnabled: false,
+  matchToken: (_token: string) => false,
+}));
+vi.mock('../local-proxy-external-auth', () => ({
+  isCindyLocalToken: (token: unknown) =>
+    typeof token === 'string' && token.startsWith('cindy-local-'),
+  isExternalAccessEnabled: () => externalAuthMock.externalEnabled,
+  matchesExternalToken: (token: string) => externalAuthMock.matchToken(token),
+}));
+
 import {
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
@@ -224,5 +237,65 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       headerDelete: ['x-cindy-pi-session-id', 'x-cindy-pi-session-token'],
     });
     expect(decision?.headerOverride).not.toHaveProperty('x-cindy-pi-session-token');
+  });
+});
+
+describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网关 key)', () => {
+  async function drainLocalHandler(
+    decision: unknown,
+  ): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
+    const res = {
+      status: 0,
+      raw: '',
+      writeHead(status: number) { this.status = status; },
+      end(chunk: string) { this.raw = chunk; },
+    };
+    await (decision as { localHandler?: (arg: { res: unknown }) => Promise<void> })
+      .localHandler?.({ res } as never);
+    return { status: res.status, body: res.raw ? JSON.parse(res.raw) : null };
+  }
+
+  beforeEach(() => {
+    // 即使网关 key 就绪,匿名请求也必须被拒 —— 证明它不会借道 gatewayDefaultRouteDecision。
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setClaudeProxySessionIdResolver(() => null);
+  });
+
+  afterEach(() => {
+    externalAuthMock.externalEnabled = false;
+  });
+
+  it('对外开启 + 无会话 + 无 x-api-key + 无 authorization + 无会话头 → 401 external_token_required', async () => {
+    externalAuthMock.externalEnabled = true;
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctxWith({}),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
+  it('内部 oauth-spawn 子进程(带 authorization bearer + 会话头)不被有界拒绝命中', async () => {
+    externalAuthMock.externalEnabled = true;
+    // 带 x-claude-code-session-id(任何 cc 子进程都带)+ OAuth bearer,但会话解析不出(注册时序窗口)。
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctxWith({ 'x-claude-code-session-id': 'sdk-unresolved', authorization: 'Bearer sk-ant-oat01' }),
+    ));
+    // 不是 401 有界拒绝:落到 ② 段默认路由,oauth-spawn 换网关 key。
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
+  });
+
+  it('对外关闭时不启用闸:匿名请求按内部默认路由(oauth-spawn 无 key)→ 直连订阅,字节级不变', async () => {
+    externalAuthMock.externalEnabled = false;
+    setClaudeProxyGatewayKeyReader(() => null);
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctxWith({ authorization: 'Bearer sk-ant-oat01' }),
+    ));
+    expect(decision).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
   });
 });

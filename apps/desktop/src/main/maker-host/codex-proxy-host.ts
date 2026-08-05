@@ -20,6 +20,7 @@ import {
   createImageGenerationIdRecoveryRule,
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
+  isFetchBlockedPort,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
@@ -63,6 +64,7 @@ import {
   resolveProviderOAuthControlRouteDecision,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
+  listExternalRoutableProviders,
   resolveExternalCodexRoute,
   buildRouteDecision,
 } from './provider-route.js';
@@ -2231,14 +2233,19 @@ function stripExternalTokenHeadersCodex(decision: RoutingDecision | null): Routi
 /**
  * 构造 `GET /models` / `/v1/models` 的 OpenAI 形状清单:外部 CLI 用它发现可用模型。
  * 取「codex agent 可路由」供应商并集里的模型,按 id 去重。不含任何凭证 / 上游地址。
+ *
+ * 只宣告 `listExternalRoutableProviders('codex')` 认可的供应商:与实际路由判据
+ * (`isExternalRoutableProvider`,排除 oauth-passthrough 订阅直连等)同源。否则会把外部
+ * 客户端根本路由不通的模型也列进 discovery,诱导其选中后必然上游 401。
  */
 function buildExternalOpenAIModelsPayload(): string {
+  const routableIds = new Set(
+    listExternalRoutableProviders('codex').map((provider) => provider.id),
+  );
   const seen = new Set<string>();
   const data: { id: string; object: 'model'; created: number; owned_by: string }[] = [];
   for (const provider of getActiveCatalog().providers) {
-    if (!provider.agents.includes('codex')) continue;
-    const routing = provider.routing.codex;
-    if (!routing || routing.disabled) continue;
+    if (!routableIds.has(provider.id)) continue;
     for (const model of provider.models.codex ?? []) {
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
@@ -2511,6 +2518,18 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
+    // 有界拒绝(P1):对外访问开启时,这个 codex loopback 端口被公布给外部 CLI。走到这里的请求
+    // 上面既没命中本族对外 token、又不带 `cindy-local-` 前缀(否则已 401)、又解析不出会话、又完全
+    // 不带 Authorization bearer —— 它不是 Cindy 自家 codex 子进程(任何 spawn 模式下子进程都揣着
+    // env_key / OAuth bearer,GET /models 轮询也带),而是本机某个直接打对外端口、连 token 都省了的
+    // 匿名客户端。放行会让带 model 的请求经下方 decideCodexRoute 白嫖 Cindy 的网关 key。故 401。
+    // ⚠ 有界修复:存心伪造一个假 Authorization bearer 的本机进程仍能溜过(loopback 非鉴权边界,且伪造
+    //   bearer 与内部子进程的真实凭证 bearer 无法区分);彻底隔离需把对外监听与内部子进程代理拆到不同
+    //   端口。未开启对外访问时不启用此闸,内部流量字节级不变。
+    // 置于 collab-spawn 分支之前:合法 collab spawn 必带 thread-id,不会走到这个匿名闸。
+    if (isCodexExternalAccessEnabled() && !sessionId && !externalToken) {
+      return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
+    }
     if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
       return unresolvedCollabSpawnRouteDecision();
     }
@@ -2829,16 +2848,22 @@ export async function ensureCodexProxyReady(): Promise<void> {
   _startPromise = (async () => {
     try {
       // 对外模型代理端口策略(与 anthropic host 同):用户开启对外服务时捕获并持久化 codexPort;
-      // 持久化了(>0)就固定绑,固定端口被占用(EADDRINUSE)/无权限(EACCES)则 fallback 随机
-      // 并回写实际值,避免下次又撞同一个占用端口。其它错误照抛给外层兜底。
+      // 持久化了(>0)就固定绑,固定端口不可用则 fallback 随机并回写实际值,避免下次又撞同一个坏
+      // 端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch 屏蔽端口(包内
+      // 直接抛,SDK 连不上)。其它错误照抛给外层兜底。
       const pinnedPort = loadLocalProxySettings().codexPort;
       let handle: ProxyHandle;
       try {
         handle = await createCodexProxyHandle(undefined, pinnedPort > 0 ? pinnedPort : undefined);
       } catch (bindErr) {
         const code = (bindErr as NodeJS.ErrnoException | undefined)?.code;
-        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES')) {
-          log.error('固定的 codex 对外代理端口不可用,fallback 随机端口', { pinnedPort, code });
+        const fetchBlocked = isFetchBlockedPort(pinnedPort);
+        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
+          log.error('固定的 codex 对外代理端口不可用,fallback 随机端口', {
+            pinnedPort,
+            code,
+            fetchBlocked,
+          });
           handle = await createCodexProxyHandle();
           const actual = codexPortFromProxyUrl(handle.url);
           if (actual) setLocalProxyCodexPort(actual);

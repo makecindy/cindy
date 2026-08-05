@@ -121,6 +121,20 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
   createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
 }));
 
+// 对外 token 鉴权:默认关闭 + 不命中(与真实 store 的默认态一致,现有内部路由用例不受影响)。
+// 单测按需翻开 codexEnabled / matchToken 覆盖有界拒绝(P1)分支。
+const externalAuthMock = vi.hoisted(() => ({
+  codexEnabled: false,
+  matchToken: (_token: string) => false,
+}));
+
+vi.mock('../local-proxy-external-auth.js', () => ({
+  isCindyLocalToken: (token: unknown) =>
+    typeof token === 'string' && token.startsWith('cindy-local-'),
+  isCodexExternalAccessEnabled: () => externalAuthMock.codexEnabled,
+  matchesCodexExternalToken: (token: string) => externalAuthMock.matchToken(token),
+}));
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
@@ -132,6 +146,8 @@ async function freshCodexProxyHost() {
   mockState.stripNonAnthropicFields.mockReset();
   mockState.stripNonAnthropicFields.mockReturnValue(null);
   mockState.resetCapturedRegistry();
+  externalAuthMock.codexEnabled = false;
+  externalAuthMock.matchToken = () => false;
   return import('../codex-proxy-host.js');
 }
 
@@ -4074,5 +4090,83 @@ describe('codex proxy host', () => {
     await Promise.all([first, second]);
 
     expect(host.getCodexProxyEndpoint()).toBe('http://127.0.0.1:43210');
+  });
+});
+
+describe('createModelRoutingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网关 key)', () => {
+  // 调用 externalOpenAIError 决策的 localHandler,抓取写出的状态码与错误信封。
+  async function drainLocalHandler(
+    decision: unknown,
+  ): Promise<{ status: number; body: { error?: { code?: string } } | null }> {
+    let status = 0;
+    let raw = '';
+    const res = {
+      writeHead: (s: number) => {
+        status = s;
+        return res;
+      },
+      end: (chunk?: string) => {
+        if (chunk) raw = chunk;
+      },
+    };
+    const handler = (decision as { localHandler?: (arg: { res: unknown }) => Promise<void> })
+      .localHandler;
+    if (!handler) throw new Error('decision 不含 localHandler');
+    await handler({ res });
+    return { status, body: raw ? JSON.parse(raw) : null };
+  }
+
+  it('对外开启 + 无会话 + 无 Authorization → 401 external_token_required', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'codex/gpt-5' },
+        { reqId: 1, method: 'POST', url: '/responses', headers: {} } as never,
+      ),
+    );
+
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
+  it('内部 codex 子进程(带 Authorization bearer)即使无会话也不被有界拒绝命中', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = true;
+    // 非 cindy-local、不命中本族 token 的 bearer —— 模拟内部子进程 spawn 凭证。
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'gpt-5' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { authorization: 'Bearer sk-internal-spawn' },
+        } as never,
+      ),
+    );
+
+    // 未落到 401 有界拒绝:env-key + 非 codex/ 模型 → decideCodexRoute 返回 null(默认上游 passthrough)。
+    expect(decision).toBeNull();
+  });
+
+  it('对外关闭时不启用闸:匿名无会话请求按内部默认路由,字节级不变', async () => {
+    const host = await freshCodexProxyHost();
+    externalAuthMock.codexEnabled = false;
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(
+        { model: 'gpt-5' },
+        { reqId: 1, method: 'POST', url: '/responses', headers: {} } as never,
+      ),
+    );
+
+    expect(decision).toBeNull();
   });
 });

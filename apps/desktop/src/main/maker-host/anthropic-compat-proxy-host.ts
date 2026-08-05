@@ -27,6 +27,7 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   dedupeDuplicateToolUseIds,
+  isFetchBlockedPort,
   repairToolExchangeAdjacency,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
@@ -60,6 +61,7 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  listExternalRoutableProviders,
   resolveExternalModelRouteDecision,
   resolveSessionRouteDecision,
   rewriteImplicitModelIdForRoute,
@@ -209,14 +211,19 @@ function stripExternalTokenHeaders(decision: RoutingDecision | null): RoutingDec
  * 构造 `GET /v1/models` 的 Anthropic 形状清单:外部 CLI 用它发现可用模型。
  * 取「对外可路由的 claude-code 供应商」并集里的模型,按 id 去重(同一 stock claude-* 可能
  * 同时由多家提供)。不含任何凭证 / 上游地址。
+ *
+ * 只宣告 `listExternalRoutableProviders('claude-code')` 认可的供应商:与实际路由判据
+ * (`isExternalRoutableProvider`,排除 oauth-passthrough 订阅直连、网关不可用的 xd 等)同源。
+ * 否则会把外部客户端根本路由不通的模型也列进 discovery,诱导其选中后必然上游 401。
  */
 function buildExternalModelsPayload(): string {
+  const routableIds = new Set(
+    listExternalRoutableProviders('claude-code').map((provider) => provider.id),
+  );
   const seen = new Set<string>();
   const data: { type: 'model'; id: string; display_name: string }[] = [];
   for (const provider of getActiveCatalog().providers) {
-    if (!provider.agents.includes('claude-code')) continue;
-    const routing = provider.routing['claude-code'];
-    if (!routing || routing.disabled) continue;
+    if (!routableIds.has(provider.id)) continue;
     for (const model of provider.models['claude-code'] ?? []) {
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
@@ -463,6 +470,27 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       return null;
     }
+    // 有界拒绝(P1):对外访问开启时,这个端口被公布给外部 CLI。走到这里的请求既没有可用
+    // x-api-key(上面已判)、又没有可解析 session、又不带 authorization bearer、又不带
+    // x-claude-code-session-id 头 —— 它不是 Cindy 自家 cc 子进程(oauth-spawn 必带 OAuth
+    // bearer;任何 cc 子进程都带 x-claude-code-session-id;gateway-spawn 带可用 x-api-key 已在
+    // 上面 return),而是本机某个直接打这个对外端口、连对外 token 都省了的匿名客户端。放行会让它
+    // 经 gatewayDefaultRouteDecision 白嫖 Cindy 的网关 key。故 401,不落默认路由。
+    // ⚠ 有界修复:存心伪造一个假 authorization bearer / 会话头的本机进程仍能溜过(loopback 非鉴权
+    //   边界);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外访问时不启用此闸,内部
+    //   流量字节级不变。
+    if (
+      isExternalAccessEnabled()
+      && sessionId === null
+      && !sdkSessionId
+      && headerValue(ctx.headers, 'authorization') === null
+    ) {
+      return externalErrorDecision(
+        401,
+        'external_token_required',
+        'Cindy 对外模型代理需要有效的访问 token。',
+      );
+    }
     const decision = gatewayDefaultRouteDecision(requestAgent, gatewayKey);
     if (decision) {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
@@ -667,11 +695,13 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         pinnedPort > 0 ? { ...proxyOptions, port: pinnedPort } : proxyOptions,
       );
     } catch (err) {
-      // 固定端口被占用(EADDRINUSE)/ 无权限(EACCES):fallback 随机端口重试,并把
-      // 持久化端口回写成实际绑定值,避免下次启动又撞同一个占用端口。其它错误照抛给外层兜底。
+      // 固定端口不可用时 fallback 随机端口重试,并把持久化端口回写成实际绑定值,避免下次启动
+      // 又撞同一个坏端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch
+      // 屏蔽端口(包内直接抛,SDK 连不上)。其它错误照抛给外层兜底。
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES')) {
-        log.error('固定的对外代理端口不可用,fallback 随机端口', { pinnedPort, code });
+      const fetchBlocked = isFetchBlockedPort(pinnedPort);
+      if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
+        log.error('固定的对外代理端口不可用,fallback 随机端口', { pinnedPort, code, fetchBlocked });
         _handle = await createAnthropicCompatProxy(proxyOptions);
         const actual = portFromProxyUrl(_handle.url);
         if (actual) setLocalProxyPort(actual);
