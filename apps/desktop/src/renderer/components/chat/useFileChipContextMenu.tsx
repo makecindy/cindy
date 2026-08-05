@@ -31,7 +31,7 @@
  * actually opens the menu — chips that are never right-clicked pay nothing.
  */
 
-import { useState, type ReactElement } from 'react';
+import { useRef, useState, type ReactElement } from 'react';
 import {
   AppWindow,
   ClipboardCopy,
@@ -224,11 +224,18 @@ export function useFileChipContextMenu({
     await onViewSource?.();
   }
 
+  // 懒加载代际:root 菜单每次关闭 +1。在途枚举返回时代际不符 = 菜单已关过,
+  // 丢弃写回——否则过期列表把 state 从 null 顶回非 null,下次展开会跳过重载,
+  // 破坏「关闭即重置,注册表变化下次展开可见」的不变量(PR #1835 review)。
+  const openWithEpochRef = useRef(0);
+
   async function loadOpenWithApps(): Promise<void> {
     if (openWithApps !== null) return;
+    const epoch = openWithEpochRef.current;
     const abs = await getAbsPath();
     const res = await window.electronAPI.listOpenWithApps({ filePath: abs });
-    // 枚举失败不挡菜单:空列表 = 只显示「默认应用 / 选择其他应用…」。
+    if (openWithEpochRef.current !== epoch) return;
+    // 枚举失败不挡菜单:空列表 = 只显示「用默认应用打开」。
     setOpenWithApps(res.success ? res.apps : []);
   }
 
@@ -273,6 +280,7 @@ export function useFileChipContextMenu({
         if (!open) {
           setMenuPos(null);
           setOpenWithApps(null);
+          openWithEpochRef.current += 1;
         }
       }}
     >

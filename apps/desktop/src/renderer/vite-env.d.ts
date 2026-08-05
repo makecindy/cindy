@@ -2660,7 +2660,12 @@ interface ElectronAPI {
       entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
       parent: string | null;
     }>;
-    statPath: (path: string) => Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }>;
+    statPath: (path: string) => Promise<{
+      kind: 'dir' | 'file' | 'missing';
+      resolvedPath: string;
+      mtimeMs?: number;
+      birthtimeMs?: number;
+    }>;
     mkdirP: (path: string) => Promise<{ resolvedPath: string }>;
   };
 

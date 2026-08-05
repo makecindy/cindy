@@ -322,6 +322,8 @@ type GeneratedFilesRenderItem = {
   type: 'generated_files';
   key: string;
   files: GeneratedFileRef[];
+  /** 本轮首条消息时间(unix ms);command 候选的 mtime 下界校验用,不可得为 null。 */
+  turnStartMs: number | null;
 };
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
@@ -1052,10 +1054,23 @@ export function buildRenderItems(
   let turnStartIdx = 0;
   const flushGeneratedFiles = (lo: number, hi: number): void => {
     if (!workingDir || hi <= lo) return;
-    const files = collectGeneratedFiles(messages.slice(lo, hi), workingDir);
+    const slice = messages.slice(lo, hi);
+    const files = collectGeneratedFiles(slice, workingDir);
     if (files.length === 0) return;
+    // 本轮时间下界:切片内最早的可解析 createdAt。command 候选靠它过滤
+    // 「命令只是读到的既有文件」(mtime 早于本轮开始 → 非本轮产物)。
+    let turnStartMs: number | null = null;
+    for (const m of slice) {
+      const ts = m.createdAt ? Date.parse(m.createdAt) : NaN;
+      if (Number.isFinite(ts) && (turnStartMs === null || ts < turnStartMs)) turnStartMs = ts;
+    }
     // key 锚定该 turn 首条消息 clientId,窗口滚动 / 流式增量下稳定。
-    items.push({ type: 'generated_files', key: `genfiles-${messages[lo].clientId}`, files });
+    items.push({
+      type: 'generated_files',
+      key: `genfiles-${messages[lo].clientId}`,
+      files,
+      turnStartMs,
+    });
   };
 
   let i = 0;
@@ -3698,7 +3713,7 @@ export function MessageStream({
                         <GeneratedFilesCard
                           key={item.key}
                           files={item.files}
-                          workingDir={workingDir}
+                          turnStartMs={item.turnStartMs}
                         />
                       );
                     }

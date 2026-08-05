@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createOpenWithHandlers,
+  decodeRegOutput,
   expandWindowsEnv,
+  parseChcpCodepage,
   parseCommandLineExe,
   parseRegSubkeys,
   parseRegValues,
@@ -64,6 +66,28 @@ describe('reg.exe output parsing', () => {
       '',
     ].join('\r\n');
     expect(parseRegSubkeys(stdout, parent)).toEqual(['EXCEL.EXE', 'wps.exe']);
+  });
+});
+
+describe('reg.exe output decoding', () => {
+  it('decodes GBK bytes with codepage 936 (中文系统 reg.exe 实际输出)', () => {
+    // 「工作表」的 GBK 编码字节;按 UTF-8 解会全变 U+FFFD。
+    const gbk = new Uint8Array([0xb9, 0xa4, 0xd7, 0xf7, 0xb1, 0xed]);
+    expect(decodeRegOutput(gbk, 936)).toBe('工作表');
+    expect(decodeRegOutput(gbk, null)).toContain('�');
+  });
+
+  it('falls back to UTF-8 for unknown or unmapped codepages', () => {
+    const utf8 = new TextEncoder().encode('Notepad');
+    expect(decodeRegOutput(utf8, null)).toBe('Notepad');
+    expect(decodeRegOutput(utf8, 850)).toBe('Notepad');
+    expect(decodeRegOutput(new TextEncoder().encode('メモ帳'), 65001)).toBe('メモ帳');
+  });
+
+  it('parses chcp output across locales', () => {
+    expect(parseChcpCodepage('活动代码页: 936\r\n')).toBe(936);
+    expect(parseChcpCodepage('Active code page: 437\r\n')).toBe(437);
+    expect(parseChcpCodepage('')).toBeNull();
   });
 });
 

@@ -98,6 +98,47 @@ export function parseCommandLineExe(command: string): string | null {
   return m ? m[1] : trimmed.split(/\s+/)[0] ?? null;
 }
 
+/**
+ * Windows 控制台代码页 → WHATWG TextDecoder label。reg.exe 重定向输出用的是
+ * 控制台代码页(中文系统 936/GBK)而非 UTF-8,直接按 UTF-8 解码会把中文应用名
+ * 变成 U+FFFD。只映射 TextDecoder 支持的常见页;OEM 437/850 等西文页不在
+ * TextDecoder 支持面内,回落 UTF-8(ASCII 部分不受影响)。
+ */
+const CODEPAGE_DECODER_LABELS: Record<number, string> = {
+  932: 'shift_jis',
+  936: 'gb18030',
+  949: 'euc-kr',
+  950: 'big5',
+  866: 'ibm866',
+  874: 'windows-874',
+  1250: 'windows-1250',
+  1251: 'windows-1251',
+  1252: 'windows-1252',
+  1253: 'windows-1253',
+  1254: 'windows-1254',
+  1255: 'windows-1255',
+  1256: 'windows-1256',
+  1257: 'windows-1257',
+  1258: 'windows-1258',
+  65001: 'utf-8',
+};
+
+/** `chcp` 输出(如 `活动代码页: 936` / `Active code page: 437`)→ 代码页号。 */
+export function parseChcpCodepage(stdout: string): number | null {
+  const digits = stdout.match(/\d+/g)?.pop();
+  return digits ? Number(digits) : null;
+}
+
+/** reg.exe 原始 stdout 字节 → 字符串;代码页未知或不支持时回落 UTF-8。 */
+export function decodeRegOutput(data: Uint8Array, codepage: number | null): string {
+  const label = (codepage != null && CODEPAGE_DECODER_LABELS[codepage]) || 'utf-8';
+  try {
+    return new TextDecoder(label).decode(data);
+  } catch {
+    return new TextDecoder('utf-8').decode(data);
+  }
+}
+
 /** reg.exe query 输出 → 该键下的值列表(name + REG_SZ data)。 */
 export function parseRegValues(stdout: string): Array<{ name: string; data: string }> {
   const out: Array<{ name: string; data: string }> = [];

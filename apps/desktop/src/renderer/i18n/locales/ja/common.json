@@ -6086,7 +6086,9 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },
     "generatedFiles": {
-      "title": "このターンで生成されたファイル"
+      "title": "このターンで生成されたファイル",
+      "showMore": "さらに {{count}} 件を表示",
+      "showLess": "折りたたむ"
     },
     "agentActions": {
       "part": {

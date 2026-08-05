@@ -6088,7 +6088,9 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
     },
     "generatedFiles": {
-      "title": "Files created this turn"
+      "title": "Files created this turn",
+      "showMore": "Show {{count}} more",
+      "showLess": "Show less"
     },
     "agentActions": {
       "part": {

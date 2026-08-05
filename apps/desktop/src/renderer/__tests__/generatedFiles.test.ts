@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectGeneratedFiles } from '../lib/generatedFiles';
+import { collectGeneratedFiles, extractCommandPathCandidates } from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
 
@@ -93,5 +93,78 @@ describe('collectGeneratedFiles', () => {
       WORKDIR,
     );
     expect(files.map((f) => f.name)).toEqual(['yes.md']);
+  });
+
+  it('collects script-generated paths from Bash commands as command-source candidates', () => {
+    // Issue 场景:xlsx 由 python openpyxl 脚本生成,没有文件工具记录。
+    const cmd =
+      'python -c "\nimport openpyxl\nwb = openpyxl.Workbook()\n' +
+      "wb.save(r'C:\\Users\\Admin\\Documents\\测试表格.xlsx')\nprint('done')\n\"\n";
+    const files = collectGeneratedFiles([toolUse('Bash', { command: cmd })], 'C:/work');
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toBe('测试表格.xlsx');
+    expect(files[0].source).toBe('command');
+  });
+
+  it('excludes command mentions of files edited by file tools this turn', () => {
+    // 编码会话形态:Edit 改了源码文件,随后命令引用它(跑测试)。它是编辑不是
+    // 新建,不能因 mtime 落在本轮窗口就被当成产物。
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Bash', { command: 'pnpm vitest run C:/work/src/openWithApps.test.ts' }),
+        toolUse('Edit', {
+          file_path: 'C:/work/src/openWithApps.test.ts',
+          old_string: 'a',
+          new_string: 'b',
+        }),
+        toolUse('Bash', { command: "python gen.py > 'C:/work/out/report.csv'" }),
+      ],
+      'C:/work',
+    );
+    // Edit 出现在命令之后也要生效(两遍扫描),真产物 report.csv 不受影响。
+    expect(files.map((f) => f.name)).toEqual(['report.csv']);
+  });
+
+  it('marks file-tool creates as tool source and wins over command mentions of the same path', () => {
+    const files = collectGeneratedFiles(
+      [
+        toolUse('Bash', { command: 'ls C:/work/report.md' }),
+        toolUse('Write', { file_path: 'C:/work/report.md', content: 'x' }),
+      ],
+      'C:/work',
+    );
+    expect(files).toHaveLength(1);
+    expect(files[0].source).toBe('tool');
+  });
+});
+
+describe('extractCommandPathCandidates', () => {
+  it('extracts quoted paths (CJK, spaces) and bare absolute paths', () => {
+    expect(
+      extractCommandPathCandidates("wb.save(r'C:\\Users\\A\\My Docs\\报表 v2.xlsx')"),
+    ).toEqual(['C:\\Users\\A\\My Docs\\报表 v2.xlsx']);
+    expect(extractCommandPathCandidates('node gen.js > C:/out/result.json')).toContain(
+      'C:/out/result.json',
+    );
+    expect(extractCommandPathCandidates('cp a "/home/u/输出/report.pdf"')).toContain(
+      '/home/u/输出/report.pdf',
+    );
+  });
+
+  it('skips temp dirs, extension-less tokens, plain filenames and URLs', () => {
+    expect(extractCommandPathCandidates("save('/tmp/x.xlsx')")).toEqual([]);
+    expect(extractCommandPathCandidates("save('C:\\Users\\A\\AppData\\Local\\Temp\\x.xlsx')")).toEqual([]);
+    expect(extractCommandPathCandidates('cat /dev/null && echo done')).toEqual([]);
+    // 纯文件名不收(随机带点 token 误报率太高),相对路径需含分隔符。
+    expect(extractCommandPathCandidates("save('输出.xlsx')")).toEqual([]);
+    expect(extractCommandPathCandidates("save('out/输出.xlsx')")).toEqual(['out/输出.xlsx']);
+    expect(extractCommandPathCandidates('curl https://x.com/a.js')).toEqual([]);
+    expect(extractCommandPathCandidates('')).toEqual([]);
+  });
+
+  it('dedupes the same path appearing quoted and bare', () => {
+    expect(
+      extractCommandPathCandidates('python gen.py C:/out/a.csv && stat "C:/out/a.csv"'),
+    ).toEqual(['C:/out/a.csv']);
   });
 });

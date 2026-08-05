@@ -243,7 +243,7 @@ import {
   isPathAllowedAgainst,
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
-import { createOpenWithHandlers } from './openWithApps';
+import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
@@ -5150,22 +5150,42 @@ const registerIpcHandlers = () => {
         return null;
       }
     };
+    // reg.exe 重定向输出走控制台代码页(中文系统 GBK)而非 UTF-8,按字节取回、
+    // 用 chcp 探测到的代码页解码,否则中文应用名会变 U+FFFD 乱码。
+    let consoleCodepagePromise: Promise<number | null> | null = null;
+    const getConsoleCodepage = (): Promise<number | null> => {
+      consoleCodepagePromise ??= new Promise((resolve) => {
+        execFile('chcp.com', { windowsHide: true, timeout: 3000 }, (err, stdout) => {
+          resolve(err ? null : parseChcpCodepage(String(stdout ?? '')));
+        });
+      });
+      return consoleCodepagePromise;
+    };
     const openWith = createOpenWithHandlers({
       platform: process.platform,
       isPathAllowed,
       fileExists: (p) => fs.existsSync(p),
-      regQuery: (keyPath, args = []) =>
-        new Promise<string>((resolve) => {
+      regQuery: async (keyPath, args = []) => {
+        const codepage = await getConsoleCodepage();
+        return new Promise<string>((resolve) => {
           execFile(
             'reg.exe',
             ['query', keyPath, ...args],
-            { windowsHide: true, timeout: 5000 },
-            (err, stdout) => resolve(err ? '' : (stdout ?? '')),
+            { windowsHide: true, timeout: 5000, encoding: 'buffer' },
+            (err, stdout) => resolve(err ? '' : decodeRegOutput(stdout ?? Buffer.alloc(0), codepage)),
           );
-        }),
+        });
+      },
       getAppIcon,
       spawnDetached: (command, args) => {
-        spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+        const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false });
+        // detached 子进程无人监听 'error' 会变成 EventEmitter 未处理错误直接压垮
+        // main(典型:existsSync 通过后 exe 被卸载的窗口期)。spawn 错误是异步的,
+        // IPC 已返回,只能记日志兜底(PR #1835 review)。
+        child.once('error', (err) => {
+          createLogger('open-with').warn('spawn failed', { command, message: err.message });
+        });
+        child.unref();
       },
     });
     ipcMain.handle('open-with:list', (event, params: { filePath: string }) => {
