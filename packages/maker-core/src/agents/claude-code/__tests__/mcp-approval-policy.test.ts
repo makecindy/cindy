@@ -11,6 +11,8 @@
  *  - prompt-each-time → 照常弹窗, 但 suggestion 被剥掉(不许持久化授权)
  *  - 策略抛错 / 返回非法值 → 按最保守的 prompt-each-time 处理, 绝不 fail-open
  *  - 非 MCP 内置工具不查策略; MCP 工具名按 `mcp__<server>__<tool>` 正确拆分
+ *  - fail-closed 闸绑定的是「resolver 在不在」而非「有没有界面」: 裸 handle 下(含 auto 档)
+ *    连可信 MCP 也 deny, 而有 resolver 的无界面会话照旧静默放行
  */
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -29,7 +31,10 @@ import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type { McpProvider } from '../../../interfaces/mcp-provider.js';
+import type {
+  McpProvider,
+  McpProviderContext,
+} from '../../../interfaces/mcp-provider.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -757,6 +762,40 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('passes the runtime session instance id into Claude MCP provider context', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    let capturedContext: McpProviderContext | undefined;
+    const deps = createDeps();
+    deps.mcpProviders = [
+      {
+        name: 'cindy_probe',
+        toClaudeSdkConfig: (context) => {
+          capturedContext = context;
+          return { type: 'stdio', command: 'true' };
+        },
+      },
+    ];
+
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-instance-context',
+      sessionInstanceId: 'instance-claude-context',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    expect(capturedContext).toMatchObject({
+      agentKind: 'claude-code',
+      sessionId: 'session-instance-context',
+      sessionInstanceId: 'instance-claude-context',
+      workingDir,
+    });
+    await handle.close();
+  });
+
   it('keeps the first registration when two providers share a name', async () => {
     const configs: Array<{ name: string; marker: string }> = [];
     const contexts: McpToolApprovalContext[] = [];
@@ -826,6 +865,20 @@ describe('a custom server cannot take over a builtin name', () => {
   });
 });
 
+/**
+ * 这道闸绑定的是「resolver 在不在」，**不是**「有没有界面」。两者常被混为一谈，所以
+ * 正反两面都要钉住（见 issue #1577）：
+ *
+ * - 无 resolver（misconfiguration / 不经 Session 直用裸 handle）→ 连可信 MCP 也 deny。
+ *   `canReviewWithoutUi` 刻意只对内建工具成立：host 策略回答的是「值不值得打扰用户」，
+ *   不代表「没有人在场也可以跑」，而裸 handle 下没有任何人能撤销误判。Auto 档不例外。
+ * - 有 resolver 但没有界面（Telegram / 飞书 bot、scheduler 定时任务、Orca headless
+ *   worker）→ 可信 MCP 在 dispatch **之前**就短路放行。这类会话恒有 resolver：
+ *   `Session` 构造函数里那次 `handle.setInteractionResolver(...)` 必定注入（没接
+ *   listener 时该 resolver 自身
+ *   返回 deny），所以它们走的从来不是上面那条 fail-closed 分支。少了这条用例，很容易
+ *   把「headless 下 orca_worker_bridge 会被拒」当成缺陷去改，反而把裸 handle 的边界拆了。
+ */
 describe('fail-closed still precedes the MCP policy', () => {
   it('denies trusted MCP tools when no interaction resolver is attached', async () => {
     const { handle, canUseTool } = await startSession(() => 'auto-approve', { bare: true });
@@ -834,6 +887,34 @@ describe('fail-closed still precedes the MCP policy', () => {
 
     // host 策略说的是"值不值得打扰用户"，不代表"没有用户在场也能跑"。
     expect(result.behavior).toBe('deny');
+    await handle.close();
+  });
+
+  it('denies trusted MCP tools in auto mode too when no resolver is attached', async () => {
+    const { handle, canUseTool } = await startSession(() => 'auto-approve', {
+      bare: true,
+      permissionMode: 'auto',
+    });
+
+    // Auto 只让**内建**工具在无 UI 下由本地规则/轻量 reviewer 自决;mcp__* 被刻意排除。
+    const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-bare-auto' });
+
+    expect(result.behavior).toBe('deny');
+    await handle.close();
+  });
+
+  it('auto-approves trusted MCP tools in auto mode without dispatching an interaction', async () => {
+    const { handle, canUseTool, seen } = await startSession(() => 'auto-approve', {
+      permissionMode: 'auto',
+    });
+
+    const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-auto-trusted' });
+
+    // 无界面会话靠这条短路:逐次弹窗只会让远端 daemon 等审批超时、回报断链。
+    expect(result.behavior).toBe('allow');
+    // 断言 seen 整体为空,而不只是 permission 类:用例声称的是「完全不 dispatch」,
+    // 只查 permission 会让将来改成发 plan_review / ask_user_question 的实现误通过。
+    expect(seen).toHaveLength(0);
     await handle.close();
   });
 });
@@ -866,12 +947,21 @@ describe('remote sessions share the same permission semantics', () => {
       toClaudeSdkConfig: () => ({ type: 'http', url: `https://x/${name}` }),
     })) as McpProvider[];
     let remoteStartParams: Record<string, unknown> | undefined;
+    let remoteIdentity: { sessionId: string; sessionInstanceId?: string } | undefined;
     deps.remoteCcQueryFactory = (async (args: {
+      sessionId: string;
+      sessionInstanceId?: string;
       onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
       startParams: Record<string, unknown>;
     }) => {
       onApprovalRequest = args.onApprovalRequest;
       remoteStartParams = args.startParams;
+      remoteIdentity = {
+        sessionId: args.sessionId,
+        ...(args.sessionInstanceId
+          ? { sessionInstanceId: args.sessionInstanceId }
+          : {}),
+      };
       return createFakeQuery(
         options?.initMcpServerNames,
         options?.failedInitMcpServerNames,
@@ -881,6 +971,7 @@ describe('remote sessions share the same permission semantics', () => {
     const agent = new ClaudeCodeAgent(deps);
     const handle = await agent.startSession({
       sessionId: 'session-remote-mcp-policy',
+      sessionInstanceId: 'instance-remote-mcp-policy',
       model: 'claude-opus-4-6',
       workingDir,
       remoteHostId: 'remote-1',
@@ -894,8 +985,18 @@ describe('remote sessions share the same permission semantics', () => {
       });
     }
     if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
-    return { handle, onApprovalRequest, seen, remoteStartParams };
+    return { handle, onApprovalRequest, seen, remoteStartParams, remoteIdentity };
   }
+
+  it('passes the runtime session instance id into the remote Claude factory', async () => {
+    const { handle, remoteIdentity } = await startRemoteSession(() => 'auto-approve');
+
+    expect(remoteIdentity).toEqual({
+      sessionId: 'session-remote-mcp-policy',
+      sessionInstanceId: 'instance-remote-mcp-policy',
+    });
+    await handle.close();
+  });
 
   it('auto-approves trusted MCP tools without prompting', async () => {
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {

@@ -210,24 +210,51 @@ function providers(): ProviderView[] {
       models: { codex: [model('gpt-5.5')] },
       connected: false,
     },
+    {
+      id: 'pi-native',
+      name: 'pi-native',
+      agents: ['pi'],
+      routing: { pi: {} },
+      models: { pi: [model('pi-model')] },
+      connected: true,
+      access: { kind: 'api' },
+    },
   ] as ProviderView[];
 }
 
 const SCENARIO = {
   agentKind: 'claude-code' as AgentKind,
-  modelFor: (agent: AgentKind) => (agent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6'),
+  modelFor: (agent: AgentKind) =>
+    agent === 'codex' ? 'gpt-5.5' : agent === 'pi' ? 'pi-model' : 'claude-sonnet-4-6',
   noEffortFallback: undefined,
   permissionMode: 'bypassPermissions',
 };
 
 const PERM_MODES = (agent: AgentKind): readonly string[] =>
-  agent === 'codex' ? ['ask', 'auto', 'bypassPermissions'] : ['ask', 'acceptEdits', 'auto', 'bypassPermissions'];
+  agent === 'claude-code'
+    ? ['ask', 'acceptEdits', 'auto', 'bypassPermissions']
+    : ['ask', 'auto', 'bypassPermissions'];
 
 function ctx(over: Partial<InvocationCatalogContext> = {}): InvocationCatalogContext {
   return { providers: providers(), getPermissionModes: PERM_MODES, ...over };
 }
 
 describe('resolveModelInvocation — 六元组回落链', () => {
+  it('keeps an explicit Pi invocation instead of falling back to the scenario agent', () => {
+    const r = resolveModelInvocation(
+      { agentKind: 'pi', model: 'pi-model', permissionMode: 'auto' },
+      SCENARIO,
+      ctx(),
+    );
+    expect(r).toMatchObject({
+      agentKind: 'pi',
+      model: 'pi-model',
+      providerId: null,
+      permissionMode: 'auto',
+    });
+    expect(r.fallbacksApplied).not.toContain('agent:scenario-default');
+  });
+
   it('全显式且全可用 → 原样直传,零回落', () => {
     const r = resolveModelInvocation(
       {
@@ -282,6 +309,40 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     );
     expect(r2.model).toBe('claude-opus-5'); // anthropic 段首个
     expect(r2.fallbacksApplied).toContain('model:first-available');
+  });
+
+  it('retired 模型不参与显式选择、场景默认或首个可用 fallback', () => {
+    const retiredOpus = providers().map((provider) => ({
+      ...provider,
+      models: {
+        ...provider.models,
+        'claude-code': (provider.models['claude-code'] ?? []).map((entry) =>
+          entry.id === 'claude-opus-5' ? { ...entry, status: 'retired' as const } : entry,
+        ),
+      },
+    })) as ProviderView[];
+    const explicit = resolveModelInvocation(
+      { model: 'claude-opus-5' },
+      SCENARIO,
+      ctx({ providers: retiredOpus }),
+    );
+    expect(explicit.model).toBe('claude-sonnet-4-6');
+
+    const retiredDefaults = retiredOpus.map((provider) => ({
+      ...provider,
+      models: {
+        ...provider.models,
+        'claude-code': (provider.models['claude-code'] ?? []).map((entry) =>
+          entry.id === 'claude-sonnet-4-6' ? { ...entry, status: 'retired' as const } : entry,
+        ),
+      },
+    })) as ProviderView[];
+    const noFallback = resolveModelInvocation(
+      { model: 'gone-model' },
+      SCENARIO,
+      ctx({ providers: retiredDefaults }),
+    );
+    expect(noFallback.fallbacksApplied).toContain('model:no-available-models');
   });
 
   it('目录与 caps 全不可用 → 场景默认裸值(宁发可能非法的 id 不发空串,历史降级)', () => {

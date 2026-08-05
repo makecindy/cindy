@@ -3,6 +3,7 @@ import type { DeviceView, PresenceSnapshot } from '@cindy/device-link';
 import {
   collectFreshPresenceDeviceIds,
   createPresenceFreshnessTracker,
+  deviceMirrorCleanupDisposition,
   markPresenceFresh,
   mergeDeviceViewsWithFreshPresence,
   patchDeviceViewsWithPresence,
@@ -36,6 +37,26 @@ function presence(patch: Partial<PresenceSnapshot> = {}): PresenceSnapshot {
     ...patch,
   };
 }
+
+describe('deviceMirrorCleanupDisposition', () => {
+  it('keeps last-known content for recoverable offline devices', () => {
+    expect(deviceMirrorCleanupDisposition('offline')).toBe('soft');
+  });
+
+  it.each(['remote_disabled', 'access_revoked'] as const)(
+    'hard-clears mirrors for the %s permission terminal state',
+    (state) => {
+      expect(deviceMirrorCleanupDisposition(state)).toBe('hard');
+    },
+  );
+
+  it.each(['ready', 'busy', 'self'] as const)(
+    'leaves mirrors unchanged for %s devices',
+    (state) => {
+      expect(deviceMirrorCleanupDisposition(state)).toBe('keep');
+    },
+  );
+});
 
 describe('patchDeviceViewsWithPresence', () => {
   it('patches a known device locally and flags the first controllable transition', () => {

@@ -69,6 +69,9 @@
 - 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、
   model 映射、usage 计量，或任何进入模型 system 段的提示词前，必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
+- 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
+  `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
+  必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。
 - 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
   或身份卡、管子协议、打包与编写手册前，必须先读
   `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
@@ -92,8 +95,10 @@
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
-- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，或新增 IPC channel／推送事件
-  前，必须先读 `docs/dev-rules/remote-and-mobile-adaptation.md`。
+- 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
+  或修改 device-link 的重试／超时／断链恢复逻辑前，必须先读
+  `docs/dev-rules/remote-and-mobile-adaptation.md`；其中恢复路径改动必须回答该文件的
+  「故障半径三问」。
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
 

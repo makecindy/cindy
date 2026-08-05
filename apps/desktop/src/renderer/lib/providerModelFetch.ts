@@ -64,6 +64,82 @@ export function providerModelFetchRequestSignature(
   });
 }
 
+/**
+ * 已存供应商在编辑态的基线快照：端点/协议/鉴权模式来自已存配置,apiKey 是编辑态回填的
+ * 已存明文 key(自定义鉴权请求头是 main-only 密文,不回读进 renderer,故 headers 只含
+ * 已存的非密文头)。用于判定「是否可复用 main-only 密文头」而无需把密钥回读到 renderer。
+ */
+export interface SavedProviderProbeBaseline {
+  baseUrl: string;
+  requestPath: string;
+  modelsUrl: string;
+  wireProtocol: string;
+  authMode: CustomProviderAuthMode;
+  apiKey: string;
+  headers: ReadonlyArray<{ name: string; value: string }>;
+}
+
+function normalizeHeaderRows(
+  rows: ReadonlyArray<{ name: string; value: string }>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (name) out[name] = row.value.trim();
+  }
+  return out;
+}
+
+function headerRowsEqual(
+  a: ReadonlyArray<{ name: string; value: string }>,
+  b: ReadonlyArray<{ name: string; value: string }>,
+): boolean {
+  const na = normalizeHeaderRows(a);
+  const nb = normalizeHeaderRows(b);
+  const ka = Object.keys(na).sort();
+  const kb = Object.keys(nb).sort();
+  if (ka.length !== kb.length) return false;
+  return ka.every((key, i) => key === kb[i] && na[key] === nb[kb[i]]);
+}
+
+/**
+ * 模型发现是否可安全复用已存供应商的 main-only 密文头(经 savedProviderId 让 main 并入)。
+ * 仅当**请求实际目标端点**(baseUrl / modelsUrl)与鉴权模式相对已存配置未改动时才允许——
+ * 否则把已存密钥并到用户新填的任意主机上,会把凭证外泄给新端点。表单显式填的头/key 仍
+ * 由 main 侧以 renderer 值优先覆盖,这里只决定「是否附带 savedProviderId」。
+ */
+export function modelFetchCanReuseSavedCredentials(
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'>,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'>,
+  authMode: CustomProviderAuthMode,
+): boolean {
+  return (
+    authMode === baseline.authMode &&
+    form.baseUrl.trim() === baseline.baseUrl.trim() &&
+    form.modelsUrl.trim() === baseline.modelsUrl.trim()
+  );
+}
+
+/**
+ * 测试连接是否走「已存供应商」受控探测(kind:'saved')。saved 探测整体按已存 spec 发起,
+ * 能带上不回读进表单的 main-only 密文头;但它用的是已存端点/模型/凭证,所以只有当编辑态
+ * 表单里端点、协议、鉴权模式与凭证材料相对已存配置**都未改动**时才可用——否则用 adhoc
+ * 探测用户新填的值(此时若供应商依赖不回读的密文头会失败,但用户正在改端点/凭证,由其
+ * 自行补齐,与本 finding 的「未改动端点」边界一致)。
+ */
+export function connectionTestCanUseSaved(
+  form: ProviderConnectionTestSignatureFields,
+  baseline: SavedProviderProbeBaseline,
+  authMode: CustomProviderAuthMode,
+): boolean {
+  if (authMode !== baseline.authMode) return false;
+  if (form.baseUrl.trim() !== baseline.baseUrl.trim()) return false;
+  if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
+  if (form.wireProtocol !== baseline.wireProtocol) return false;
+  if (authMode === 'apiKey' && form.apiKey.trim() !== baseline.apiKey.trim()) return false;
+  return headerRowsEqual(form.headers, baseline.headers);
+}
+
 /** 测试连接还取决于实际推理协议与首个有效模型；任一变化都必须让旧探测响应失效。 */
 export function providerConnectionTestRequestSignature(
   fields: ProviderConnectionTestSignatureFields,

@@ -4,7 +4,7 @@
  *
  * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉),展示与
  * 交互与新建对话一致,不暴露「跟随默认 / 钉住」这层概念:
- * - Agent = VendorSegmentedSwitcher(cc/codex 分段);
+ * - Agent = VendorSegmentedSwitcher(cc/codex/pi 分段);
  * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态,占满整行(标题在上、
  *   控件 w-full 在下,与 IM 默认配置同款);面板宽度绑定 trigger(DESIGN.md §4);
  * - 动手权限 = PermissionSelector(权限下拉全仓只此一份,不得私搭),
@@ -41,7 +41,7 @@ const PERMISSION_ALLOWED = new Set(['plan', 'acceptEdits', 'auto']);
 const ERRAND_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface ErrandConfig {
-  agentKind?: 'cc' | 'codex';
+  agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
   effort?: string;
   fastMode?: boolean;
@@ -90,8 +90,9 @@ export function GhostErrandPrefs({
   // 保证非空,种子默认兜底)。不能用 getPersistedVendorModel:那是调度专用的严格口径,
   // 仅当用户在新建对话里显式选过该 vendor 模型才返回,否则返回 '',会让 trigger 落到
   // 「选择模型」占位(2026-07-31 Lizi 反馈:应像草稿一样直接显示当前模型)。
-  const followVendor = draft.vendor === 'codex' ? ('codex' as const) : ('cc' as const);
-  const vendor = config.agentKind ?? followVendor;
+  const followVendor: 'cc' | 'codex' | 'pi' =
+    draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
+  const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
   const shownEffort = (config.effort ??
     getEffortForModel(shownModel) ??
@@ -159,7 +160,7 @@ export function GhostErrandPrefs({
             // 值钉进本插件配置(未选过时才实时跟随草稿)。
             void save({
               ...config,
-              agentKind: next === 'codex' ? 'codex' : 'cc',
+              agentKind: next === 'pi' ? 'pi' : next === 'codex' ? 'codex' : 'cc',
               model: undefined,
               effort: undefined,
               fastMode: undefined,

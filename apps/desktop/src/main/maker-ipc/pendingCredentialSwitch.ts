@@ -238,7 +238,7 @@ export class PendingCredentialSwitchService {
     if (!resolveRoute) return { providerId: target.providerId, apply: true };
     try {
       if (!target.agentKind) {
-        for (const agent of ['claude-code', 'codex'] as AgentKind[]) {
+        for (const agent of ['claude-code', 'codex', 'pi'] as AgentKind[]) {
           const resolved = await resolveRoute(agent, target.model, target.providerId);
           if (
             resolved.model !== target.model ||

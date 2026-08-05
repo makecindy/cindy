@@ -140,6 +140,87 @@ describe('MorphPopover interaction contract', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Destination' }));
   });
 
+  it('鼠标选择菜单动作后不回焦 trigger,避免重新弹出 trigger tooltip', async () => {
+    function PointerSelectionHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <MorphPopover
+          open={open}
+          onOpenChange={setOpen}
+          trigger={
+            <button type="button" onClick={() => setOpen(true)}>
+              Toggle
+            </button>
+          }
+        >
+          <button type="button" onClick={() => setOpen(false)}>
+            Select action
+          </button>
+        </MorphPopover>
+      );
+    }
+
+    render(<PointerSelectionHarness />);
+    const trigger = screen.getByRole('button', { name: 'Toggle' });
+    fireEvent.click(trigger);
+    const action = await screen.findByRole('button', { name: 'Select action' });
+    action.focus();
+    fireEvent.pointerDown(action);
+    fireEvent.click(action);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull(),
+    );
+    expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it('动作延迟打开下一层交互面时不在收合结束后抢回 trigger', async () => {
+    setReducedMotion(false);
+
+    function DelayedFocusHandoffHarness() {
+      const [open, setOpen] = useState(false);
+      const destinationRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            trigger={
+              <button type="button" onClick={() => setOpen(true)}>
+                Toggle
+              </button>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                // Radix Dialog 会在菜单开始收合后才 autofocus 新弹层。
+                window.setTimeout(() => destinationRef.current?.focus(), 10);
+              }}
+            >
+              Open dialog
+            </button>
+          </MorphPopover>
+          <button ref={destinationRef} type="button">
+            Dialog field
+          </button>
+        </>
+      );
+    }
+
+    render(<DelayedFocusHandoffHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const action = await screen.findByRole('button', { name: 'Open dialog' });
+    action.focus();
+    fireEvent.click(action);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Open dialog' })).toBeNull(),
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Dialog field' }));
+  });
+
   it('嵌套 Radix portal 内 pointerdown 不算 outside;真正 outside pointerdown 关闭', async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));

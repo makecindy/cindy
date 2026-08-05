@@ -26,7 +26,7 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 const log = desktopMakerLogger.child('errand-prefs-store');
 
 /** errand 会话可选的 agent 种类(与 sessions.agent_kind 同词汇表)。 */
-export const GHOST_ERRAND_AGENT_KINDS = ['cc', 'codex'] as const;
+export const GHOST_ERRAND_AGENT_KINDS = ['cc', 'codex', 'pi'] as const;
 export type GhostErrandAgentKind = (typeof GHOST_ERRAND_AGENT_KINDS)[number];
 
 /** errand 会话可选的思考强度(与 worker 同集合;minimal 刻意不收)。 */

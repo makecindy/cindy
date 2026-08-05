@@ -1742,6 +1742,9 @@ function makeHost(options: {
       isAvailable: options.isAvailable ?? (() => true),
     },
     ipc: {
+      throwIpcError: (code, message) => {
+        throw new Error(`[${code}] ${message}`);
+      },
       handle: (channel, handler) => {
         handlers.set(channel, handler);
       },

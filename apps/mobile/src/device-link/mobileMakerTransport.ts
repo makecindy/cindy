@@ -58,7 +58,7 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -90,7 +90,7 @@ export interface CreateSessionResult {
   usedProjectContext?: boolean;
 }
 
-export type MobileAgentKind = 'claude-code' | 'codex';
+export type MobileAgentKind = 'claude-code' | 'codex' | 'pi';
 
 export type MobileSlashCommand =
   | { kind: 'agent-builtin'; name: string; description: string }
@@ -151,6 +151,8 @@ export interface MessageListOptions {
   limit?: number;
   before?: string;
   beforeTs?: number;
+  /** 只拉该 host 行之后的新消息；旧被控端会忽略未知可选字段并退化为最新页。 */
+  after?: string;
 }
 
 export interface MessageAroundOptions {
@@ -350,6 +352,18 @@ export type MobileWorktreeCreateResult =
 export interface MobileMakerTransport {
   createSession(opts: CreateSessionOptions): Promise<CreateSessionResult>;
   getCapabilities(agentKind: MobileAgentKind): Promise<unknown>;
+  /**
+   * 被控端 runtime 已注册的 agent 集合(maker:list-available-agents,在 REMOTE_INVOKE_ALLOWLIST 内)。
+   * 新建会话入口据此过滤:Pi 二进制缺失时被控端 agent map 无 pi,但模型目录仍投影 Pi,不过滤
+   * 会让用户建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
+   */
+  listAvailableAgents(): Promise<MobileAgentKind[]>;
+  getSessionTree(sessionId: string): Promise<unknown | null>;
+  navigateSessionTree(
+    sessionId: string,
+    entryId: string,
+    options?: { summarize?: boolean; customInstructions?: string },
+  ): Promise<{ tree: unknown; draftText?: string; cancelled?: boolean } | null>;
   /**
    * 列被控端的供应商(来源)结构,用于 provider-aware 模型下拉(隧道 maker:provider:list)。
    * modelVisibilityOverrides = 被控端「模型显示/隐藏」override 快照(旧被控端不回传)。
@@ -595,6 +609,12 @@ export function createMobileMakerTransport({
   return {
     createSession: (opts) => call('maker:create-session', [opts]),
     getCapabilities: (agentKind) => call('maker:get-capabilities', [agentKind]),
+    listAvailableAgents: () => call('maker:list-available-agents', []),
+    // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
+    // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
+    getSessionTree: (sessionId) => call('maker:get-session-tree', [sessionId]),
+    navigateSessionTree: (sessionId, entryId, options) =>
+      call('maker:navigate-session-tree', [sessionId, entryId, options]),
     listProviders: () => call('maker:provider:list', [{
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),

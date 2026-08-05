@@ -488,7 +488,7 @@ export type ControlResult<T extends object = object, E extends string = never> =
  * adding a new vendor (e.g. 'gemini') without updating this union will cause
  * LLM tool calls to fail zod enum validation.
  */
-export type ControlWorkerAgent = 'claude-code' | 'codex';
+export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
@@ -745,6 +745,13 @@ export interface LiziMcpSessionContext {
    * ctx 时，标准范式是工具直接返业务错误码 (如 LEAD_NOT_SUPPORTED) 而不是抛异常。
    */
   sessionId?: string;
+  /**
+   * 当前内存 Session 实例的唯一代号。business sessionId 在重建后可能复用，
+   * 权限读取方用本字段阻断旧 MCP 请求借用新实例权限。宿主可将它作为
+   * opaque route identity 放进 harness 的本地 MCP URL；不得把它暴露成
+   * 模型或插件可控的工具参数。
+   */
+  sessionInstanceId?: string;
 }
 
 export interface CodexHttpMcpConfig {

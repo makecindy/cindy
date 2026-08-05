@@ -14,14 +14,13 @@
  * 上探测式灰态)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Info, Plus, Search, X } from 'lucide-react';
+import { Check, Info, Plus, Search } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
-import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
 import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
@@ -30,6 +29,7 @@ import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { SettingsTextInput } from './SettingsTextInput';
 
 import {
   isLoopbackProviderUrl,
@@ -72,6 +72,7 @@ type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  pi: 'Pi',
 };
 
 function presetRuntimeBaseUrl(
@@ -177,49 +178,14 @@ function cardIcon(sel: { providerId?: string; name: string }): React.ReactNode {
   if (sel.providerId && hasProviderLogo(sel.providerId)) {
     return <ProviderLogoMark providerId={sel.providerId} size={15} />;
   }
-  return <span className="text-12 font-semibold leading-none">{providerMonogram(sel.name)}</span>;
+  return <span className="text-12 font-medium leading-none">{providerMonogram(sel.name)}</span>;
 }
 
-/** 单行供应商名；只有实际发生截断时才在 hover 后展示完整名称。 */
-function ProviderCardName({ name }: { name: string }) {
-  const nameRef = useRef<HTMLSpanElement>(null);
-  const [truncated, setTruncated] = useState(false);
-
-  useLayoutEffect(() => {
-    const element = nameRef.current;
-    if (!element) return;
-    const measure = () => setTruncated(element.scrollWidth > element.clientWidth + 1);
-    measure();
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', measure);
-      return () => window.removeEventListener('resize', measure);
-    }
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    // Tip 启停会改变子树并重挂 span，truncated 变化时必须把 observer 绑定到新节点。
-    return () => observer.disconnect();
-  }, [name, truncated]);
-
-  const text = (
-    <span
-      ref={nameRef}
-      className="min-w-0 truncate text-13 font-medium"
-      style={{ color: 'var(--settings-section-title)' }}
-    >
-      {name}
-    </span>
-  );
-
-  return truncated ? (
-    <Tip text={name} delay={250} contentClassName="z-[10001] max-w-[320px] [word-break:normal]">
-      {text}
-    </Tip>
-  ) : (
-    text
-  );
-}
-
-function ProviderCard({
+/**
+ * 目录单行(2026-07 定稿:第 1 步由三列卡片宫格改为单列列表)——名称在左、
+ * 鉴权方式靠右;行宽给足后不再需要截断测量 + Tip 组合。
+ */
+function ProviderRow({
   icon,
   name,
   meta,
@@ -234,26 +200,27 @@ function ProviderCard({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
-      style={{
-        borderColor: 'var(--border-default)',
-        backgroundColor: 'var(--surface-elevated)',
-      }}
+      title={name}
+      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--surface-hover)]"
     >
-      <span className="flex items-center gap-2">
-        <span
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-          style={{
-            backgroundColor: 'var(--settings-integration-avatar-bg)',
-            border: '1px solid var(--settings-integration-avatar-border)',
-            color: 'var(--settings-integration-avatar-icon)',
-          }}
-        >
-          {icon}
-        </span>
-        <ProviderCardName name={name} />
+      <span
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+        style={{
+          backgroundColor: 'var(--settings-integration-avatar-bg)',
+          border: '1px solid var(--settings-integration-avatar-border)',
+          color: 'var(--settings-integration-avatar-icon)',
+        }}
+      >
+        {icon}
       </span>
-      <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
+      <span
+        className="min-w-0 flex-1 truncate text-13 font-medium"
+        style={{ color: 'var(--settings-section-title)' }}
+      >
+        {name}
+      </span>
+      {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
+      <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
         {meta}
       </span>
     </button>
@@ -272,8 +239,8 @@ function InfoLine({ text }: { text: string }) {
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
     <span
-      className="pb-1.5 pt-3 text-11 font-semibold uppercase"
-      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+      className="block px-2 pb-1.5 pt-3 text-11 font-medium uppercase"
+      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
     >
       {children}
     </span>
@@ -535,6 +502,23 @@ export function AddProviderWizard({
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
+
+  // 遮罩关闭的防误触:从输入框按下、拖到弹窗外松开时,浏览器把合成 click 派发到
+  // 按下点与松开点的最近公共祖先(= 遮罩),target === currentTarget 成立但用户
+  // 并无关闭意图。记录按下是否始于遮罩,按下与松开都在遮罩上才关闭
+  // (PR #1102 review 第七轮)。
+  const overlayMouseDownOnSelfRef = useRef(false);
+
+  // Esc 关闭(DESIGN.md §4:弹窗关闭 = 取消按钮 / Esc / 点遮罩;本弹窗未用 Radix,需自行监听)。
+  // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
+  // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) handleClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleClose]);
 
   // OpenAI 走 useCodexAuth:hook 状态翻 connected 时视为完成(triggerLogin 也会返回,
   // oneshot ref 保证只收口一次)。只收口本向导内发起的登录(openaiLoginStartedRef),
@@ -798,6 +782,13 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
+                ? {
+                    reasoning: true,
+                    reasoningEfforts: [...presetModel.reasoningEfforts],
+                  }
+                : {}),
             };
           });
         if (agentModels.length === 0) continue;
@@ -840,8 +831,11 @@ export function AddProviderWizard({
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
 
-  // ── 步骤指示(OAuth 路径只有 2 步)─────────────────────────────────────
-  const totalSteps = sel?.kind === 'preset' ? 3 : 2;
+  // ── 步骤指示 ─────────────────────────────────────────────────────────
+  // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
+  // 没有第 3 步的两步流程(OAuth 授权即完成、内置 API Key 保存即连接)才收成
+  // 两步。未选择时就显示两步会让「选择模型」凭空消失/出现(2026-07-30 用户反馈)。
+  const totalSteps = sel == null || sel.kind === 'preset' ? 3 : 2;
   const stepLabels = [
     t('settings.providers.wizard.stepPick'),
     t('settings.providers.wizard.stepConnect'),
@@ -902,41 +896,40 @@ export function AddProviderWizard({
     (!presetNeedsApiKey || apiKey.trim().length > 0);
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]">
+    // DESIGN.md §4 Dialog:关闭 = 底部「取消」/ Esc / 点遮罩,不设右上角 ×(与 ConfirmDialog 同构)。
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onMouseDown={(e) => {
+        overlayMouseDownOnSelfRef.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && overlayMouseDownOnSelfRef.current) handleClose();
+        overlayMouseDownOnSelfRef.current = false;
+      }}
+    >
       <div
-        className="flex max-h-[85vh] w-[600px] flex-col overflow-hidden rounded-xl border"
+        className="flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border"
         style={{
           backgroundColor: 'var(--surface-elevated)',
           borderColor: 'var(--border-default)',
         }}
       >
-        {/* 头部:标题 + 步骤指示 */}
-        <div className="flex flex-col gap-3 px-6 pb-4 pt-5">
-          <div className="flex items-center justify-between">
-            <h3
-              className="text-16 font-semibold"
-              style={{ color: 'var(--settings-section-title)' }}
-            >
-              {sel
-                ? t('settings.providers.wizard.titleWith', {
-                    name:
-                      sel.kind === 'preset'
-                        ? presetDisplayName(sel.preset, i18n.language)
-                        : sel.provider.name,
-                  })
-                : t('settings.providers.wizard.title')}
-            </h3>
-            <button
-              type="button"
-              onClick={handleClose}
-              aria-label={t('settings.providers.wizard.closeAria')}
-              className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
-              style={{ color: 'var(--text-tertiary)' }}
-            >
-              <X size={16} />
-            </button>
-          </div>
-          <div className="flex items-center gap-4">
+        {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
+        <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
+          <h3
+            className="min-w-0 truncate text-16 font-medium"
+            style={{ color: 'var(--settings-section-title)' }}
+          >
+            {sel
+              ? t('settings.providers.wizard.titleWith', {
+                  name:
+                    sel.kind === 'preset'
+                      ? presetDisplayName(sel.preset, i18n.language)
+                      : sel.provider.name,
+                })
+              : t('settings.providers.wizard.title')}
+          </h3>
+          <div className="flex shrink-0 items-center gap-4">
             {stepLabels.map((label, i) => {
               const n = i + 1;
               const isCur = n === step || (n === totalSteps && step > totalSteps);
@@ -976,37 +969,52 @@ export function AddProviderWizard({
           </div>
         </div>
 
-        {/* 主体 */}
+        {/* 主体。第 1 步是「固定搜索 + 限高滚动目录 + 钉底自定义入口」的三段结构
+            (滚动区上下以 1px Board 细线与固定区分隔,自定义端点不随目录滚动);
+            第 2/3 步保持整体滚动的表单区。 */}
         <div
-          className="min-h-[320px] flex-1 overflow-y-auto border-t px-6 py-4"
+          className={cn(
+            'min-h-[320px] flex-1',
+            step === 1 ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto border-y px-4 py-4',
+          )}
           style={{ borderColor: 'var(--border-default)' }}
         >
           {step === 1 && (
-            <div className="flex flex-col">
-              <div
-                className="flex h-9 items-center gap-2 rounded-full border px-3.5"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--surface-elevated)',
-                }}
-              >
-                <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t('settings.providers.wizard.searchPlaceholder')}
-                  className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-                  style={{ color: 'var(--settings-section-title)' }}
-                />
+            <>
+              <div className="px-4 pb-3">
+                <div
+                  className="flex h-9 items-center gap-2 rounded-full border px-3.5"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--surface-elevated)',
+                  }}
+                >
+                  <Search
+                    size={14}
+                    className="shrink-0"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
+                    className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
+                    style={{ color: 'var(--settings-section-title)' }}
+                  />
+                </div>
               </div>
 
-              {filteredOauth.length > 0 && (
-                <>
-                  <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
-                  <div className="grid grid-cols-3 gap-2">
+              {/* 目录:单列列表(2026-07 定稿,替代三列卡片宫格),唯一的滚动区。 */}
+              <div
+                className="min-h-0 flex-1 overflow-y-auto border-y px-2 pb-2"
+                style={{ borderColor: 'var(--border-default)' }}
+              >
+                {filteredOauth.length > 0 && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
                     {filteredOauth.map((p) => (
-                      <ProviderCard
+                      <ProviderRow
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
                         name={p.name}
@@ -1018,18 +1026,16 @@ export function AddProviderWizard({
                         onClick={() => pickOauth(p)}
                       />
                     ))}
-                  </div>
-                </>
-              )}
+                  </>
+                )}
 
-              {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
-                <>
-                  <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
-                  <div className="grid grid-cols-3 gap-2">
+                {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
                     {builtinApiKeyChoices
                       .filter((p) => !q || p.name.toLowerCase().includes(q))
                       .map((p) => (
-                        <ProviderCard
+                        <ProviderRow
                           key={p.id}
                           icon={cardIcon({ providerId: p.id, name: p.name })}
                           name={p.name}
@@ -1038,7 +1044,7 @@ export function AddProviderWizard({
                         />
                       ))}
                     {filteredPresets.map((p) => (
-                      <ProviderCard
+                      <ProviderRow
                         key={p.id}
                         icon={cardIcon({
                           providerId: p.id,
@@ -1053,43 +1059,45 @@ export function AddProviderWizard({
                         onClick={() => pickPreset(p)}
                       />
                     ))}
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
 
-              <GroupLabel>{t('settings.providers.wizard.groupCustom')}</GroupLabel>
-              <button
-                type="button"
-                onClick={onOpenCustomForm}
-                className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
-                style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
-              >
-                <span
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                  style={{
-                    border: '1px solid var(--settings-integration-avatar-border)',
-                    color: 'var(--settings-section-desc)',
-                  }}
+              {/* 自定义端点:钉在滚动区外,目录再长也始终可见。 */}
+              <div className="flex flex-col gap-2 px-4 pb-1 pt-3">
+                <button
+                  type="button"
+                  onClick={onOpenCustomForm}
+                  className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
                 >
-                  <Plus size={13} />
-                </span>
-                <span className="flex min-w-0 flex-col">
                   <span
-                    className="text-13 font-medium"
-                    style={{ color: 'var(--settings-section-title)' }}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+                    style={{
+                      border: '1px solid var(--settings-integration-avatar-border)',
+                      color: 'var(--settings-section-desc)',
+                    }}
                   >
-                    {t('settings.providers.wizard.customTitle')}
+                    <Plus size={13} />
                   </span>
-                  <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-                    {t('settings.providers.wizard.customMeta')}
+                  <span className="flex min-w-0 flex-col">
+                    <span
+                      className="text-13 font-medium"
+                      style={{ color: 'var(--settings-section-title)' }}
+                    >
+                      {t('settings.providers.wizard.customTitle')}
+                    </span>
+                    <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
+                      {t('settings.providers.wizard.customMeta')}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
 
-              <p className="pt-4 text-11 leading-snug" style={{ color: 'var(--text-tertiary)' }}>
-                {t('settings.providers.wizard.pickHint')}
-              </p>
-            </div>
+                <p className="text-11 leading-snug" style={{ color: 'var(--text-tertiary)' }}>
+                  {t('settings.providers.wizard.pickHint')}
+                </p>
+              </div>
+            </>
           )}
 
           {step === 2 && sel?.kind === 'oauth' && (
@@ -1127,7 +1135,7 @@ export function AddProviderWizard({
                   <button
                     type="button"
                     onClick={cancelAuthorize}
-                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                     style={{
                       backgroundColor: 'var(--settings-btn-secondary-bg)',
                       borderColor: 'var(--settings-btn-secondary-border)',
@@ -1142,7 +1150,7 @@ export function AddProviderWizard({
                     <button
                       type="button"
                       onClick={() => void handleAuthorize('browser')}
-                      className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                       style={{
                         backgroundColor: 'var(--settings-btn-secondary-bg)',
                         borderColor: 'var(--settings-btn-secondary-border)',
@@ -1161,7 +1169,7 @@ export function AddProviderWizard({
                       <button
                         type="button"
                         onClick={() => void handleAuthorize('device-code')}
-                        className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                         style={{
                           backgroundColor: 'transparent',
                           borderColor: 'var(--settings-btn-secondary-border)',
@@ -1182,7 +1190,7 @@ export function AddProviderWizard({
                     type="button"
                     onClick={() => pickPreset(OFFICIAL_API_PRESETS[sel.provider.id])}
                     disabled={loggingIn}
-                    className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                    className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
                     style={{
                       backgroundColor: 'transparent',
                       borderColor: 'var(--settings-btn-secondary-border)',
@@ -1231,18 +1239,7 @@ export function AddProviderWizard({
                 <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  autoComplete="off"
-                  className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--surface-elevated)',
-                    color: 'var(--settings-section-title)',
-                  }}
-                />
+                <SettingsTextInput value={apiKey} onChange={setApiKey} size="md" mono secret />
               </div>
             </div>
           )}
@@ -1270,18 +1267,13 @@ export function AddProviderWizard({
                   <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
-                  <input
-                    type="password"
+                  <SettingsTextInput
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                    onChange={setApiKey}
                     placeholder="sk-…"
-                    autoComplete="off"
-                    className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-                    style={{
-                      borderColor: 'var(--border-default)',
-                      backgroundColor: 'var(--surface-elevated)',
-                      color: 'var(--settings-section-title)',
-                    }}
+                    size="md"
+                    mono
+                    secret
                   />
                 </div>
               ) : (
@@ -1511,10 +1503,8 @@ export function AddProviderWizard({
         </div>
 
         {/* 底部 */}
-        <div
-          className="flex items-center justify-between border-t px-6 py-3.5"
-          style={{ borderColor: 'var(--border-default)' }}
-        >
+        {/* 底部操作行:不再加分割线 —— 弹窗内只保留滚动区上下两条细线(原型定稿)。 */}
+        <div className="flex items-center justify-between px-4 pb-4 pt-2">
           <button
             type="button"
             onClick={() => {
@@ -1540,7 +1530,7 @@ export function AddProviderWizard({
             <button
               type="button"
               onClick={handleClose}
-              className="flex h-9 items-center justify-center rounded-full border px-5 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
               style={{
                 borderColor: 'var(--settings-btn-secondary-border)',
                 color: 'var(--settings-btn-secondary-text)',
@@ -1571,7 +1561,7 @@ export function AddProviderWizard({
                 onClick={() => void startFetch()}
                 disabled={!presetCanContinue}
                 className={cn(
-                  'flex h-9 items-center justify-center rounded-full px-5 text-13 font-medium transition-opacity',
+                  'flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity',
                   !presetCanContinue ? 'cursor-not-allowed opacity-50' : 'hover:opacity-90',
                 )}
                 style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
@@ -1585,7 +1575,7 @@ export function AddProviderWizard({
                 onClick={() => void handleFinish()}
                 disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
                 className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
+                  'flex h-9 items-center justify-center gap-2 rounded-full px-6 text-13 font-medium transition-opacity',
                   saving || fetchState.status === 'fetching' || checkedCount === 0
                     ? 'cursor-not-allowed opacity-50'
                     : 'hover:opacity-90',

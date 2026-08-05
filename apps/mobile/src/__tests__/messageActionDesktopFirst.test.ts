@@ -10,6 +10,7 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };');
     expect(source).toContain('buildMessageActionBarPresentation');
     expect(sharedSource).toContain("input.canCopy ? 'copy' : null");
+    expect(sharedSource).toContain("input.canFork ? 'fork' : null");
     expect(sharedSource).toContain("input.hasMoreActions ? 'more' : null");
     expect(sharedSource).toContain("input.hasTime ? 'time' : null");
     expect(sharedSource).toContain("input.hasTurnCost ? 'cost' : null");
@@ -20,7 +21,11 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('hitSlop={MESSAGE_CONTROL_HIT_SLOP}');
     expect(source).toContain('buttonSize={actionBar.buttonSize}');
     expect(source).toContain('iconSize={actionBar.iconSize}');
-    expect(source).toContain("return id === 'copy';");
+    expect(source).toContain("return id === 'copy' || id === 'fork';");
+    expect(source).toContain('disabled={disabled && !forkBusy}');
+    expect(source).toContain("busy={id === 'fork' && forkBusy}");
+    expect(source).toContain("if (id === 'fork' && busy)");
+    expect(source).toContain("disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}");
     expect(source).toContain('testID="message.moreButton"');
     expect(source).toContain('{ height: buttonSize, width: buttonSize }');
     expect(source).toContain('height: 24');

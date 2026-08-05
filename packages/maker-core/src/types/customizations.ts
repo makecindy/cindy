@@ -24,7 +24,7 @@ export interface AgentCustomizationFile {
 
 export interface AgentCustomization {
   /** 来自哪个 agent。等价于 AgentKind, 但避开循环依赖故用宽松 string。 */
-  engine: 'claude-code' | 'codex';
+  engine: 'claude-code' | 'codex' | 'pi';
 
   /**
    * Engine-specific 词汇:

@@ -78,6 +78,38 @@ export const DL_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DL_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 
 /**
+ * 个人 Telegram bot 的跨设备上下线 channel(控制端 → 被控端)。
+ *
+ * 背景:个人 Telegram bot 是 BYO token 直连 Bot API 的 getUpdates 长轮询,
+ * 同一 token 同时只有一台设备能收消息(Telegram 侧 409),而两台设备之间**没有
+ * 任何通信通道**。换机器时想让另一端让位, 除了人肉去那台机器操作, 没有别的办法
+ * —— 这两个 channel 就是补这个缺口。
+ *
+ * 为什么不直接把 telegramBot:set-online 放进 allowlist: IM 的所有 IPC 在
+ * host.ipc.handle 里统一包了 assertTrustedAppRendererEvent(见 im/host.ts),
+ * 只认 Electron 持有的真实 sender; 而 dispatchLocalInvoke 用的是合成 event
+ * (sender: undefined), 必然判定不可信。那道闸是有意拦着的(IM 凭证/配置面全算
+ * 敏感面), 不该为远程下线放宽 —— 故与 media:fetch / voice:* 同款: 不是
+ * ipcMain handler, 由被控端 dispatch 在通用路由前拦截执行。
+ *
+ * 准入论证(对照本文件顶部三条判据):
+ *  1. 不依赖 event.sender / 窗口;
+ *  2. 无本机 UI / shell / 对话框副作用;
+ *  3. 语义只在被控端执行才正确 —— 要停的正是那台机器的轮询。
+ * 与"永不放行"的两类刻意划清界限:**不碰凭证**(token / owner id 不读不写不
+ * 外传, 下线只写一个布尔标志、解绑仍然只能本机操作), 也**不是通用设置写**
+ * (单一用途、只切轮询, 不是 *_SET 那种任意配置面)。
+ *
+ * status 是只读投影, 且刻意不含 ownerUserId —— 控制端只需要知道"哪台在用、
+ * 用的哪个 bot", 没有理由让 Telegram 用户 id 过网线。
+ *
+ * 老被控端不识别 → CHANNEL_NOT_ALLOWED, 控制端据此显示「该设备版本不支持」
+ * 而不是静默失败。
+ */
+export const DL_TELEGRAM_STATUS_CHANNEL = 'device-link:telegram:status';
+export const DL_TELEGRAM_SET_ONLINE_CHANNEL = 'device-link:telegram:set-online';
+
+/**
  * 手机端语音词典学习回写 channel。
  *
  * 手机端只负责检测用户是否把一次 voice refine 结果改成了专有名词/术语修正;
@@ -161,6 +193,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
   'maker:set-extra-dirs',
+  // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
+  // SDK leaf 与 SQLite 可见时间线，不依赖 sender/窗口，真相也只在被控端。
+  'maker:get-session-tree',
+  'maker:navigate-session-tree',
   // 会话「非选中模型」effort/fast 写穿(控制端 → 被控端):控制端纯显示,改非选中行的预设记忆时
   // 通知被控端,被控端调它原来的本地 setter(setSessionModelEffort/Fast)写真实存储。选中模型仍走
   // maker:set-model/effort/fast-mode + sessions:patched,不经此 channel。被控端转发给自身 renderer
@@ -195,6 +231,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
+  // Read-only indexed task search for the remote Composer @ palette. Older
+  // controlled clients reject this channel and the controller falls back to
+  // the bounded legacy sessions:list projection.
+  'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
@@ -430,6 +470,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:create',
   'worktree:discard-precreated',
   'worktree:removal-preview',
+  // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
+  // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
+  DL_TELEGRAM_STATUS_CHANNEL,
+  DL_TELEGRAM_SET_ONLINE_CHANNEL,
 ];
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
@@ -491,12 +535,20 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 逐 channel 的 invoke 隧道超时覆盖(ms)。
+ * 逐 channel 的 invoke 隧道超时覆盖(ms),双向使用:
  *
- * client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的 channel
- * 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道 30s
- * 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
+ * **放宽**:client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的
+ * channel 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道
+ * 30s 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
  * 的正确语义。此表给这类 channel「执行预算 + 回程余量」的覆盖值。
+ *
+ * **收紧**:listing tier 的轻量 DB 读(sessions:list / sessions:get)在被控端是毫秒级
+ * 查询,等满默认 30s 只可能是链路不通。它们又是控制端周期对账的高频 channel,弱网下
+ * 每个 30s 超时都占着重试与并发预算(2026-08 实测:单日 2253 次 sessions:list 等满
+ * 30s 超时)。给短超时让失败尽快暴露,把「设备无响应」判定交给控制端熔断器。
+ * 注意:被控端 dispatch 的 REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 取 max(30s, ...本表),
+ * 收紧条目不影响被控端的等待窗口。
+ *
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
@@ -507,6 +559,11 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
+  // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
+  // 不吃满超时),不会误伤首拉重试。
+  'local-db:sessions:list': 12_000,
+  'local-db:sessions:get': 12_000,
 };
 
 /**

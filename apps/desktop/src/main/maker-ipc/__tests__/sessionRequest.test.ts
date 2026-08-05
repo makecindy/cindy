@@ -111,6 +111,33 @@ describe('session IPC request parsing', () => {
     expect(allocateDialogueWorkspace).not.toHaveBeenCalled();
   });
 
+  it('rejects path-traversal ids for project sessions with an explicit workingDir (codex review)', () => {
+    // 项目会话此前直接用 body.id 未校验;device-link 传 `../../..` 会经下游 path.join
+    // 逃出 runtimeDir(如 Pi perm-<id>.json)覆盖任意文件。边界统一按安全单段值拒绝。
+    for (const id of ['../../../../tmp/x', '..', 'a/b', 'a\\b', '.', 'foo/../bar']) {
+      expect(() =>
+        readCreateSessionOpts({
+          agentKind: 'pi',
+          workspaceKind: 'project',
+          model: 'claude-sonnet-4-6',
+          workingDir: '/repo',
+          id,
+        }),
+      ).toThrow('[INVALID_PARAMS]');
+    }
+  });
+
+  it('accepts a safe cuid-style id for a project session', () => {
+    const opts = readCreateSessionOpts({
+      agentKind: 'pi',
+      workspaceKind: 'project',
+      model: 'claude-sonnet-4-6',
+      workingDir: '/repo',
+      id: 'clh1a2b3c0000abcd1234wxyz',
+    });
+    expect(opts.id).toBe('clh1a2b3c0000abcd1234wxyz');
+  });
+
   it('still rejects project sessions without an explicit workingDir', () => {
     expect(() =>
       readCreateSessionOpts({

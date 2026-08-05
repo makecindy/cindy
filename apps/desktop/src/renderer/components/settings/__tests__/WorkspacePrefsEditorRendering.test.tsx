@@ -5,8 +5,12 @@
  *
  * 回归目标(2026-07 用户定稿): 这一行曾自建裸下拉,把 'claude-code' 原始 id 直接
  * 露给用户、自己拼一遍可选模型清单、effort 显示未经 i18n 的 low/medium/high。
- * 这里锁三件事: 三个字段分别落在 VendorSegmentedSwitcher / ModelSelector /
- * PermissionSelector 上;effort 没有独立控件(并进模型 trigger);禁用态整行同步。
+ * 这里锁三件事: 三个字段分别落在 AgentSelect / ModelSelector / PermissionSelector
+ * 上;effort 没有独立控件(并进模型 trigger);禁用态整行同步。
+ *
+ * agent 字段自 2026-08-03 起复用新建对话工具条的引擎下拉(AgentSelect, #1350) ——
+ * 定宽三等分的分段器每多一个引擎就窄一截。控件内部行为(展开/打勾/焦点/重选不回调)
+ * 由 __tests__/agentSelect.test.tsx 负责,这里只验「用了它、参数对、写入对」。
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -37,7 +41,46 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
         },
 }));
 
-// 两个重依赖选择器只验「用了它、参数对」,内部行为由各自的测试负责。
+// 三个重依赖选择器只验「用了它、参数对」,内部行为由各自的测试负责。
+// AgentSelect stub 把每个引擎渲染成一个可点按钮:点击即以该 vendor 回调,
+// 便于验证「切换」与「重选当前项(reselectEmitsChange)」两条写入路径。
+vi.mock('@/components/new-chat/AgentSelect', () => ({
+  AgentSelect: (props: {
+    value: string;
+    disabled?: boolean;
+    ariaContext?: string;
+    reselectEmitsChange?: boolean;
+    side?: string;
+    triggerVariant?: string;
+    dense?: boolean;
+    onChange: (next: string) => void;
+  }) => (
+    <div
+      data-testid="agent-select"
+      data-value={props.value}
+      data-disabled={props.disabled ? 'true' : 'false'}
+      data-aria-context={props.ariaContext}
+      data-reselect-emits={props.reselectEmitsChange ? 'true' : 'false'}
+      data-side={props.side}
+      data-trigger-variant={props.triggerVariant}
+      data-dense={props.dense ? 'true' : 'false'}
+    >
+      {['cc', 'codex', 'pi'].map((vendor) => (
+        <button
+          key={vendor}
+          type="button"
+          data-testid={`agent-option-${vendor}`}
+          disabled={props.disabled === true}
+          onClick={() => props.onChange(vendor)}
+        >
+          {vendor}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
+
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
     modelId: string;
@@ -111,6 +154,7 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
     hint: null,
     retry: null,
     imDefaults: { agentKind: 'claude-code', agents: {} },
+    reloadImDefaults: async () => {},
     applyPatch,
     teams: [],
     selectedTeamId: null,
@@ -130,11 +174,19 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   it('三个字段分别落在标准组件上,且都用 field 形态', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} maxVisibleModelRows={6} />);
 
-    // agent: VendorSegmentedSwitcher 的品牌分段(真实渲染),不再是露原始 id 的下拉
-    const tablist = screen.getByRole('tablist', { name: 'settings.tina.prefs.agentLabel · cindy' });
-    expect(screen.getByRole('tab', { name: 'Claude' }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: 'Codex' }).getAttribute('aria-selected')).toBe('false');
-    expect(tablist.textContent).not.toContain('claude-code');
+    // agent: 与新建对话工具条同一个引擎下拉,不再是露原始 id 的裸下拉
+    const agent = screen.getByTestId('agent-select');
+    expect(agent.getAttribute('data-value')).toBe('cc');
+    expect(agent.getAttribute('data-side')).toBe('bottom');
+    // 设置字段形态: 面板宽度绑 trigger(DESIGN.md §4 宽度铁则); dense 与同排 ModelSelector 齐高
+    expect(agent.getAttribute('data-trigger-variant')).toBe('field');
+    expect(agent.getAttribute('data-dense')).toBe('true');
+    // field 形态的 trigger 是 w-full, 外层字段必须自带确定宽度, 否则整列缩到
+    // 标签固有宽度、面板跟着缩(codex review #1490)。
+    const agentField = agent.closest('div.flex.min-w-0.flex-col');
+    expect(agentField?.className).toContain('w-[168px]');
+    expect(agentField?.className).toContain('basis-[168px]');
+    expect(agent.textContent).not.toContain('claude-code');
 
     const model = screen.getByTestId('model-selector');
     expect(model.getAttribute('data-model')).toBe('claude-opus-4-8');
@@ -249,7 +301,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       />,
     );
 
-    expect(screen.getByRole('tab', { name: 'Codex' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('agent-select').getAttribute('data-value')).toBe('codex');
     expect(screen.getByTestId('model-selector').getAttribute('data-vendor')).toBe('codex');
     expect(screen.getByTestId('permission-selector').getAttribute('data-vendor')).toBe('codex');
   });
@@ -257,9 +309,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   it('不可编辑时整行三个控件同步禁用', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ editable: false })} />);
 
-    expect(screen.getByRole('tablist', { name: 'settings.tina.prefs.agentLabel · cindy' }).className).toContain(
-      'pointer-events-none',
-    );
+    expect(screen.getByTestId('agent-select').getAttribute('data-disabled')).toBe('true');
     expect(screen.getByTestId('model-selector').getAttribute('data-disabled')).toBe('true');
     expect(screen.getByTestId('permission-selector').getAttribute('data-disabled')).toBe('true');
   });
@@ -269,18 +319,21 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   it('禁用态的 agent 分段在按钮级禁用,键盘也进不去', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ editable: false })} />);
 
-    const tabs = screen.getAllByRole('tab');
-    expect(tabs.length).toBe(2);
-    for (const tab of tabs) expect((tab as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('agent-select').getAttribute('data-disabled')).toBe('true');
+    const options = ['cc', 'codex', 'pi'].map((v) => screen.getByTestId(`agent-option-${v}`));
+    for (const opt of options) expect((opt as HTMLButtonElement).disabled).toBe(true);
 
-    tabs.find((t) => t.getAttribute('aria-selected') === 'false')?.click();
+    options[1]?.click();
     expect(applyPatch).not.toHaveBeenCalled();
   });
 
   it('写入在途时同样按钮级禁用', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ pendingWs: 'cindy' })} />);
-    for (const tab of screen.getAllByRole('tab')) {
-      expect((tab as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('agent-select').getAttribute('data-disabled')).toBe('true');
+    for (const vendor of ['cc', 'codex', 'pi']) {
+      expect((screen.getByTestId(`agent-option-${vendor}`) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
     }
   });
 
@@ -307,8 +360,9 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       />,
     );
 
-    // 点当前显示的 Claude 段 = 把继承值钉成显式,否则 IM 默认一变这条目录被静默改掉
-    screen.getByRole('tab', { name: 'Claude' }).click();
+    // 重选当前显示的 Claude = 把继承值钉成显式,否则 IM 默认一变这条目录被静默改掉
+    expect(screen.getByTestId('agent-select').getAttribute('data-reselect-emits')).toBe('true');
+    screen.getByTestId('agent-option-cc').click();
     expect(applyPatch).toHaveBeenCalledWith('cindy', {
       agentKind: 'claude-code',
       model: null,
@@ -333,12 +387,10 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     );
 
     // 显示为默认 agent(claude-code)而非裸值;caps 可解析 → 整行不因 null caps 禁死
-    expect(screen.getByRole('tab', { name: 'Claude' }).getAttribute('aria-selected')).toBe('true');
-    for (const tab of screen.getAllByRole('tab')) {
-      expect((tab as HTMLButtonElement).disabled).toBe(false);
-    }
-    // 用户可以点 Codex 纠正过期值
-    screen.getByRole('tab', { name: 'Codex' }).click();
+    expect(screen.getByTestId('agent-select').getAttribute('data-value')).toBe('cc');
+    expect(screen.getByTestId('agent-select').getAttribute('data-disabled')).toBe('false');
+    // 用户可以选 Codex 纠正过期值
+    screen.getByTestId('agent-option-codex').click();
     expect(applyPatch).toHaveBeenCalledWith('cindy', {
       agentKind: 'codex',
       model: null,
@@ -346,10 +398,10 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     });
   });
 
-  it('切换 agent 分段写入配对 patch(清掉旧模型/档位)', () => {
+  it('切换 agent 写入配对 patch(清掉旧模型/档位)', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 
-    screen.getByRole('tab', { name: 'Codex' }).click();
+    screen.getByTestId('agent-option-codex').click();
 
     expect(applyPatch).toHaveBeenCalledWith('cindy', {
       agentKind: 'codex',
@@ -362,14 +414,12 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   // model/effort、不做能力校准,切 agent 不需要当前 agent 的清单;跟着禁会让瞬时
   // 失败变成死局,用户连切到另一个(可用的)agent 都不行(codex review 2026-07-25)。
   // 模型/权限字段的选项列表真的来自 caps,维持禁用。
-  it('caps 未就绪: agent 分段仍可切换,模型/权限字段禁用', () => {
+  it('caps 未就绪: agent 选择器仍可切换,模型/权限字段禁用', () => {
     capsUnavailable = true;
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 
-    for (const tab of screen.getAllByRole('tab')) {
-      expect((tab as HTMLButtonElement).disabled).toBe(false);
-    }
-    screen.getByRole('tab', { name: 'Codex' }).click();
+    expect(screen.getByTestId('agent-select').getAttribute('data-disabled')).toBe('false');
+    screen.getByTestId('agent-option-codex').click();
     expect(applyPatch).toHaveBeenCalledWith('cindy', {
       agentKind: 'codex',
       model: null,
@@ -380,10 +430,13 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   });
 
   // 读屏可及名:三个字段都带「字段名 · 行别名」上下文,多卡片同屏行与行可区分
-  // (tablist 直接命名;模型/权限经 ariaContext 前置到 trigger aria-label)。
-  it('模型/权限字段带 alias 化 ariaContext', () => {
+  // (三个字段统一经 ariaContext 前置到各自 trigger 的 aria-label)。
+  it('三个字段都带 alias 化 ariaContext', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 
+    expect(screen.getByTestId('agent-select').getAttribute('data-aria-context')).toBe(
+      'settings.tina.prefs.agentLabel · cindy',
+    );
     expect(screen.getByTestId('model-selector').getAttribute('data-aria-context')).toBe(
       'settings.tina.prefs.modelLabel · cindy',
     );

@@ -63,6 +63,15 @@ describe('ChatInput voice button anchor contract', () => {
     expect(slotDecisionBlock).not.toContain('voiceInput.isListening');
     expect(slotDecisionBlock).toContain('voiceInput.isBusy');
   });
+
+  it('keeps the stop controls enabled while voice input owns the editor lock', () => {
+    // The surrounding voice lifecycle lock must not disable the button or
+    // shortcut that is needed to end the active recording.
+    expect(chatInputSource).toContain('const disabledRef = useRef(composerEditorLocked);');
+    expect(chatInputSource).toContain('disabledRef.current = composerEditorLocked;');
+    expect(chatInputSource).toContain('disabled={composerEditorLocked || !editor}');
+    expect(chatInputSource).not.toContain('disabled={composerMutationLocked || !editor}');
+  });
 });
 
 function extractBetween(sourceBlock: string, startNeedle: string, endNeedle: string): string {

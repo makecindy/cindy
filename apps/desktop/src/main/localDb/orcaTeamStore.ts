@@ -13,7 +13,7 @@ const log = createLogger('orca-team-store');
 
 export type OrcaRole = 'lead' | 'worker';
 export type OrcaTeamStatus = 'active' | 'completed' | 'cancelled' | 'failed';
-export type MakerAgentKind = 'claude-code' | 'codex';
+export type MakerAgentKind = 'claude-code' | 'codex' | 'pi';
 
 // Worker 状态枚举与 "占用槽位" 判定下沉到 renderer-safe 模块,
 // 让 main (本文件) 与 renderer (useWorkers) 共享同一份算法, 避免 F6 那种
@@ -386,6 +386,18 @@ export async function addOrUpdateWorker(input: {
 export async function listWorkersByLead(
   leadSessionId: string,
 ): Promise<OrcaWorkerRecord[]> {
+  const grouped = await listWorkersByLeads([leadSessionId]);
+  return grouped[leadSessionId] ?? [];
+}
+
+export async function listWorkersByLeads(
+  leadSessionIds: readonly string[],
+): Promise<Record<string, OrcaWorkerRecord[]>> {
+  const uniqueLeadSessionIds = [...new Set(leadSessionIds)];
+  const grouped = Object.fromEntries(uniqueLeadSessionIds.map((id) => [id, [] as OrcaWorkerRecord[]]));
+  if (uniqueLeadSessionIds.length === 0) {
+    return grouped;
+  }
   const db = getDbClient().drizzle;
   const rows = await db
     .select({ worker: orcaWorkers, team: orcaTeams, session: sessions })
@@ -393,12 +405,15 @@ export async function listWorkersByLead(
     .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
     .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
     .where(and(
-      eq(orcaTeams.leadSessionId, leadSessionId),
+      inArray(orcaTeams.leadSessionId, uniqueLeadSessionIds),
       eq(orcaTeams.status, 'active'),
       eq(sessions.status, 'active'),
     ))
-    .orderBy(desc(orcaWorkers.createdAt));
-  return rows.map((r) => workerToRecord(r.worker, r.team, r.session));
+    .orderBy(orcaTeams.leadSessionId, desc(orcaWorkers.createdAt));
+  for (const row of rows) {
+    grouped[row.team.leadSessionId]?.push(workerToRecord(row.worker, row.team, row.session));
+  }
+  return grouped;
 }
 
 export async function getWorkerLink(input: {
@@ -597,7 +612,7 @@ function workerToRecord(
 }
 
 function fromDbAgentKind(agentKind: string): MakerAgentKind {
-  return agentKind === 'codex' ? 'codex' : 'claude-code';
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
 }
 
 function msToIso(ms: number | null | undefined): string | null {

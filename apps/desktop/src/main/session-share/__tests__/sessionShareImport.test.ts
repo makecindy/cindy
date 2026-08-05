@@ -17,9 +17,11 @@ const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'xdtshare-import-test-'));
 const projectsRoot = path.join(tmpRoot, 'claude-home', 'projects');
 const newWorkdir = path.join(tmpRoot, 'their-proj');
 const sharedMediaRoot = path.join(tmpRoot, 'shared-media');
+const piSessionsRoot = path.join(tmpRoot, 'pi-agent-home', 'sessions', 'shared');
 
 const dbMock = vi.hoisted(() => ({
   conflictRow: null as { id: string; status?: string } | null,
+  queryCalls: [] as Array<{ sql: string; params: unknown[] }>,
   txCalls: [] as Array<{ name: string; args: unknown }>,
   txError: null as Error | null,
 }));
@@ -45,7 +47,10 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
-    queryOne: async () => dbMock.conflictRow ?? undefined,
+    queryOne: async (sql: string, params: unknown[]) => {
+      dbMock.queryCalls.push({ sql, params });
+      return dbMock.conflictRow ?? undefined;
+    },
     tx: async (name: string, args: unknown) => {
       if (dbMock.txError) throw dbMock.txError;
       dbMock.txCalls.push({ name, args });
@@ -169,6 +174,7 @@ const { buildPlainFile, sealPayload } = await import('../xdtshareCrypto.js');
 
 const OLD_SESSION_ID = 'old-session-id';
 const SID = 'aaaaaaaa-1111-2222-3333-444444444444';
+const PI_SID = 'pi-0123456789abcdef0123456789abcdef.jsonl';
 const IMAGE_URL = `xdt-image://${OLD_SESSION_ID}/img-1.png`;
 
 /** 老包媒体入总仓后消息里的新地址 = 字节指纹(与 ingest mock 同算法)。 */
@@ -184,7 +190,7 @@ interface BundleOverrides {
   /** 覆盖 session.json snapshot 字段(导出方会话配置不进导入行的语义测试)。 */
   session?: Record<string, unknown>;
   omitTranscript?: boolean;
-  agentKind?: 'cc' | 'codex';
+  agentKind?: 'cc' | 'codex' | 'pi';
   /** 伪造 media-map 里 image entry 的 filename 字段(路径穿越攻击面测试)。 */
   imageFilenameOverride?: string;
   /** 额外加一条不同 old host 的图片 URL(fork 祖先链多 host 测试)。 */
@@ -199,6 +205,7 @@ interface BundleOverrides {
 
 async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
   const agentKind = overrides.agentKind ?? 'cc';
+  const sdkSessionId = agentKind === 'pi' ? PI_SID : SID;
   const zip = new JSZip();
   const extraImageText = overrides.extraImage ? ` 祖先图 ${overrides.extraImage}` : '';
   const blobHash = overrides.blob
@@ -228,15 +235,20 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
       role: 'assistant',
       content: '"ok"',
       toolUseId: null,
-      agentMeta: `{"sdkSessionId":"${SID}"}`,
-      ...(overrides.omitMessageAgentKind ? {} : { agentKind: 'codex' }),
+      agentMeta: `{"sdkSessionId":"${sdkSessionId}"}`,
+      ...(overrides.omitMessageAgentKind ? {} : { agentKind: agentKind === 'pi' ? 'pi' : 'codex' }),
       createdAt: 1700000000200,
       rewindAt: null,
     },
   ];
   zip.file('session.json', JSON.stringify({ model: 'claude-sonnet-4-6', effort: 'high', permissionMode: 'ask', createdAt: 1700000000000, userSendAt: 1700000000100, ...overrides.session }));
   zip.file('messages.jsonl', messages.map((m) => JSON.stringify(m)).join('\n'));
-  const transcriptPath = agentKind === 'cc' ? `transcripts/claude/${SID}.jsonl` : `transcripts/codex/rollout-x-${SID}.jsonl`;
+  const transcriptPath =
+    agentKind === 'cc'
+      ? `transcripts/claude/${SID}.jsonl`
+      : agentKind === 'pi'
+        ? `transcripts/pi/${PI_SID}`
+        : `transcripts/codex/rollout-x-${SID}.jsonl`;
   if (!overrides.omitTranscript) zip.file(transcriptPath, '{"line":1}\n');
   if (agentKind === 'codex') {
     zip.file('codex-state/thread.json', JSON.stringify({ threads: [{ id: SID }], threadDynamicTools: [], threadSpawnEdges: [] }));
@@ -291,12 +303,12 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
     title: '分享会话',
     workspaceKind: 'project',
     originalWorkingDir: '/old/machine/proj',
-    sdkSessionIds: [SID],
-    activeSdkSessionId: SID,
+    sdkSessionIds: [sdkSessionId],
+    activeSdkSessionId: sdkSessionId,
     exportFidelity: overrides.omitTranscript ? 'db-only' : 'full',
     counts: { messages: 2, media: 2 },
     entries: [],
-    transcripts: [{ sdkSessionId: SID, path: overrides.omitTranscript ? null : transcriptPath }],
+    transcripts: [{ sdkSessionId, path: overrides.omitTranscript ? null : transcriptPath }],
     ...overrides.manifest,
   };
   zip.file('manifest.json', JSON.stringify(manifest));
@@ -313,6 +325,7 @@ async function writeBundleFile(bytes: Buffer, password?: string): Promise<string
 describe('sessionShareImport', () => {
   beforeEach(async () => {
     dbMock.conflictRow = null;
+    dbMock.queryCalls = [];
     dbMock.txCalls = [];
     dbMock.txError = null;
     patchMock.calls = [];
@@ -328,6 +341,7 @@ describe('sessionShareImport', () => {
     worktreeMock.removeCalls = [];
     await fsp.rm(projectsRoot, { recursive: true, force: true });
     await fsp.rm(sharedMediaRoot, { recursive: true, force: true });
+    await fsp.rm(piSessionsRoot, { recursive: true, force: true });
     await fsp.mkdir(newWorkdir, { recursive: true });
   });
 
@@ -875,6 +889,72 @@ describe('sessionShareImport', () => {
     const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
     expect(session.model).toBe('gpt-5.4');
     expect(session.codexHistoryHasProductPrompt).toBe(false);
+  });
+
+  it('pi bundle restores transcript and rewrites portable ids to the local absolute path', async () => {
+    const filePath = await writeBundleFile(await buildBundle({ agentKind: 'pi' }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      sharedMediaRootOverride: sharedMediaRoot,
+      piSessionsRootOverride: piSessionsRoot,
+    });
+
+    const expectedSessionFile = path.join(piSessionsRoot, PI_SID);
+    expect(result.fidelity).toBe('full');
+    expect(await fsp.readFile(expectedSessionFile, 'utf8')).toBe('{"line":1}\n');
+    const txArgs = dbMock.txCalls[0].args as {
+      session: Record<string, unknown>;
+      messages: Array<{ agentMeta: string | null }>;
+    };
+    expect(txArgs.session.sdkSessionId).toBe(expectedSessionFile);
+    expect(txArgs.session.agentKind).toBe('pi');
+    expect(JSON.parse(txArgs.messages[1].agentMeta ?? '{}').sdkSessionId).toBe(
+      expectedSessionFile,
+    );
+    expect(codexMock.importCalls).toHaveLength(0);
+    expect(dbMock.queryCalls[0].params).toEqual(['pi', expectedSessionFile]);
+  });
+
+  it('pi bundle without transcript imports as db-only without a fake resume path', async () => {
+    const filePath = await writeBundleFile(
+      await buildBundle({ agentKind: 'pi', omitTranscript: true }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      sharedMediaRootOverride: sharedMediaRoot,
+      piSessionsRootOverride: piSessionsRoot,
+    });
+
+    expect(result.fidelity).toBe('db-only');
+    const txArgs = dbMock.txCalls[0].args as {
+      session: Record<string, unknown>;
+      messages: Array<{ agentMeta: string | null }>;
+    };
+    expect(txArgs.session.sdkSessionId).toBeNull();
+    expect(JSON.parse(txArgs.messages[1].agentMeta ?? '{}').sdkSessionId).toBeUndefined();
+    expect(dbMock.queryCalls).toHaveLength(0);
+  });
+
+  it('pi transcript write is rolled back when the DB transaction fails', async () => {
+    dbMock.txError = new Error('disk full');
+    const filePath = await writeBundleFile(await buildBundle({ agentKind: 'pi' }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        sharedMediaRootOverride: sharedMediaRoot,
+        piSessionsRootOverride: piSessionsRoot,
+      }),
+    ).rejects.toMatchObject({ code: 'SHARE_IMPORT_FAILED' });
+    expect(fs.existsSync(path.join(piSessionsRoot, PI_SID))).toBe(false);
   });
 
   // ── useWorktree:在 worktree 中创建(与 New Maker 草稿开 worktree 同语义) ──

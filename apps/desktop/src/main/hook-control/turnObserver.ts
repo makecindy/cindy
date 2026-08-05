@@ -10,7 +10,8 @@
  *      (见 dispatcher 的 pending-reopen 记账与协议阶段 18)。
  *
  * 收口语义有几处不是"看着像就行"的细节, 复制第二份必然漂移:
- *   - done 时若还有在途后台 subagent, 延迟定格并用静默超时兜底;
+ *   - done 时只在 provider 明确还有自动续 turn 时延迟定格；UI 任务卡本身
+ *     不是生命周期信号;
  *   - silentStop done 不算收口, 挂到自动续跑守卫上, 只有 exhausted 才算失败;
  *   - 只有**终态** error 才失败 —— 非终态 error 是 agent 正在自愈(上游过载的
  *     自动重试), turn 还在跑, 但过程区必须留一行, 否则零产出的退避窗口里渠道
@@ -20,8 +21,12 @@
  * 本模块只碰事件流与定时器, 不做 IO —— 图片旁路、附件收集、落库都留在调用方。
  */
 
-import type { AgentEvent } from '@cindy/maker-core';
+import type { AgentEvent, TurnContinuationState } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import {
+  buildMessageRenderItems,
+  type MessageRenderNormalizedMessage,
+} from '@cindy/maker-shared/message-render';
 
 import {
   createTurnActivity,
@@ -30,11 +35,9 @@ import {
   pushToolStep,
   renderActivity,
   setActivityNotice,
+  setInteractionNotice,
 } from '../im/shared/turnActivity.js';
-import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
-
-/** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
-const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
+import { overloadFailureNotice, turnRetryNotice } from '../im/shared/turnRetryNotice.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -48,6 +51,12 @@ const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
  * 它触发时 fan out 的是终态 error 事件, 本观察器对终态 error 本来就收口 ——
  * 所以「observer 永不 settle → dispatcher 的队列槽位永不释放」那条路早就被堵上,
  * 与控制连接是否还在无关。
+ *
+ * 后台任务同样不能在 hook 层按静默时长猜成完成:它结束后可能通过
+ * task_notification 自动续跑新 turn。观察器一旦提前 settle,Telegram 群轮次
+ * 就会恢复原权限档并释放 host-turn lease,后续自动续跑可与桌面 turn 并发且重新
+ * 获得 Full access。后台任务无论静默多久都保留观察器;任务终态后的 done、用户
+ * Stop 引发的终态事件或 session closed/error 才是可证明的收口信号。
  *
  * 本 PR 一度在这里另起了一个裸 setTimeout, 上面四条一条都没有: 等交互和跑后台
  * 任务时会误杀, 合盖睡眠会误杀, 而且只 reject 观察者、**不 abort 底层 turn** ——
@@ -128,6 +137,12 @@ function createProgressEmitter(
 export interface ObservableSession {
   readonly id: string;
   onEvent(listener: (ev: AgentEvent) => void): () => void;
+  /** Resolve the provider claim atomically attached to this exact `done`. */
+  beginTurnContinuationWait?(continuationId?: number): TurnContinuationState | null;
+  /** Observe provider-owned continuation cancellation/start transitions. */
+  onTurnContinuationChange?(
+    listener: (continuationId: number, state: TurnContinuationState) => void,
+  ): () => void;
   /**
    * 会话状态变更订阅(生产为 maker-core Session.onStatusChange)。
    *
@@ -141,24 +156,18 @@ export interface ObservableSession {
    * 判据是**状态**不是时间, 所以不会误杀等用户回应交互 / 跑后台任务 / 合盖睡眠
    * 那些合法静默 —— 那正是本 PR 删掉裸 setTimeout 的理由, 两者不冲突。
    */
-  onStatusChange(listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void): () => void;
+  onStatusChange(
+    listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void,
+  ): () => void;
 }
 
 export interface HookTurnObserverDeps {
-  /**
-   * true = 进度快照**只发正文**, 不掺过程区时间线。
-   *
-   * Telegram DM 的 Rich draft 是"部分终稿"动画, 过程时间线随 thinking / tool
-   * 事件反复重排会让 Telegram 整段清空重播 —— DM 因此只流单调增长的正文。
-   * 群/topic 的进度载体是可编辑消息(无 draft 动画), 与 Slack 过程卡同款:
-   * 时间线在上正文在下, 让群成员看到"正在干什么"而不是盯着一句旧话干等
-   * (2026-07-28 实踩)。调用方按 `isTelegram && laneKind !== 'group'` 计算。
-   */
-  answerOnlyProgress: boolean;
   /** 渲染快照出口(turn.progress); 省略 = 不发进度, 零开销路径。 */
   onProgress?: (text: string) => void;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
+  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
+  onTurnTerminal?: () => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -172,21 +181,23 @@ export interface HookTurnObserver {
   readonly finished: Promise<void>;
   /** 摘监听 + 停止发射。幂等; 收口后自动调用过。 */
   stop(): void;
+  /** 真正的新交互请求边界；等待提示的后续文案更新不得重复调用。 */
+  markInteractionBoundary(): void;
   /** 当前累积的助手正文(已定稿段 + 流式尾部)。 */
   text(): string;
+  /** 按桌面消息流同款折叠规则得到的正式答复正文。 */
+  finalText(): string;
   /**
-   * **仅**本轮最后一条助手消息(不含此前的过程叙述)。
+   * 在过程区挂 / 摘一行状态说明(渲染成 `> ⏳ …`, 与过载重试同一个位置)。
    *
-   * 给"一次交互只有一条公开消息名额"的渠道用 —— 目前是 X: 一次 mention 只
-   * 允许回一条推文, 而 agent 的常态是"先说一句要去看看 → 干活 → 给结论",
-   * text() 那样整轮拼接会把过程叙述原样发到公开时间线上, 还会挤占 280 字符
-   * 里本就不够的额度。提示词侧同步告知模型"只有最后一条会被发出"(见
-   * outbound.buildHookPromptNote 的 X 分支), 让机制与模型预期一致 —— 只靠
-   * 提示词要求模型别写过程是软约束, 不听就穿透(2026-08-01 实踩)。
+   * 用途: agent 挂起等用户授权时, 渠道那条消息除了"工作中"什么都不显示 ——
+   * 而卡片可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊了), 群里
+   * 看起来就是彻底静止。**刻意不写卡片去了哪**: 投递位置由 hook server 决定,
+   * 客户端不知道对端版本, 说"已发到私聊"可能是假的。
    *
-   * 最后一条为空白时回退整轮正文: 公开回帖宁可带上过程, 也不能发成空。
+   * null = 摘掉。不新增任何渠道消息, 只改已经在发的那条快照。
    */
-  finalSegment(): string;
+  setNotice(notice: string | null): void;
 }
 
 /** 挂上事件监听并开始观察。调用方必须 await finished 或自己 stop()。 */
@@ -194,16 +205,18 @@ export function observeHookTurn(
   session: ObservableSession,
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
-  const { answerOnlyProgress, onProgress, onToolResult, onSilentStopSettled, log } = deps;
+  const { onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } = deps;
   // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
   // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
   // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
   // turn 只剩最后被替换的那条(实踩: Telegram 群里最终答案丢失)。
   // 正确姿势: isFinal 把该条追加进已定稿段, 流式增量走尾部缓冲。
-  // 定稿段**按消息切开存**(而不是直接拼成一个串): 拼接后消息边界就没了, 而
-  // finalSegment() 需要它 —— 见该方法的注释。join('\n\n') 与此前的逐段拼接
-  // 完全等价(同一条消息的相邻块在入栈时已连拼, 段内不含分隔)。
+  // 定稿段**按消息切开存**(而不是直接拼成一个串): 完成态需要把消息边界
+  // 投影给 buildMessageRenderItems。join('\n\n') 与此前的逐段拼接完全等价
+  // (同一条消息的相邻块在入栈时已连拼, 段内不含分隔)。
   const finalizedSegments: string[] = [];
+  /** finalizedSegments 在共享消息投影里的对应下标(同消息多 block 原位更新)。 */
+  const finalizedRenderIndexes: number[] = [];
   let streamTail = '';
   let assistantText = '';
   /** 最近一次定稿段所属的 claude 消息标识(uuid, 缺失时退到 requestId)。 */
@@ -219,33 +232,123 @@ export function observeHookTurn(
         : streamTail
       : finalizedText;
   };
+  // 完成态正文不在 hook 自造一套「最后一段」启发式，而是把本轮事件投影成
+  // maker-shared 的 normalized messages，交给桌面 / Mobile 共用的
+  // buildMessageRenderItems 判定哪些过程文字折叠、哪些交付正文保持展开。
+  const renderMessages: MessageRenderNormalizedMessage[] = [];
+  const thinkingRenderIndexes = new Map<string, number>();
+  const renderClockBase = Date.now();
+  let renderSequence = 0;
+  let currentTurnRenderStart = 0;
+  const nextRenderIdentity = (prefix: string): { key: string; createdAt: string } => {
+    const sequence = renderSequence++;
+    return {
+      key: `hook-${prefix}-${sequence}`,
+      // 单个 observer 内只需要稳定顺序；用单调毫秒避免真实长 turn 被历史窗口
+      // gap 规则误切成另一轮（这里本来就只观察同一轮及其自动续 turn）。
+      createdAt: new Date(renderClockBase + sequence).toISOString(),
+    };
+  };
+  const pushRenderMessage = (
+    kind: MessageRenderNormalizedMessage['kind'],
+    body: string,
+    sourceExtra: Partial<MessageRenderNormalizedMessage['source']> = {},
+  ): number => {
+    const { key, createdAt } = nextRenderIdentity(kind);
+    renderMessages.push({
+      key,
+      source: {
+        id: key,
+        clientId: key,
+        role: kind === 'tool' ? 'tool_use' : kind,
+        createdAt,
+        ...sourceExtra,
+      },
+      kind,
+      label: kind,
+      body,
+      createdAt,
+    });
+    return renderMessages.length - 1;
+  };
+  const pushFinalizedSegment = (segment: string, sameMessage: boolean): void => {
+    if (sameMessage && finalizedSegments.length > 0) {
+      const segmentIndex = finalizedSegments.length - 1;
+      finalizedSegments[segmentIndex] += segment;
+      const renderIndex = finalizedRenderIndexes[segmentIndex];
+      const rendered = renderMessages[renderIndex];
+      if (rendered) rendered.body = finalizedSegments[segmentIndex];
+      return;
+    }
+    finalizedSegments.push(segment);
+    finalizedRenderIndexes.push(pushRenderMessage('assistant', segment));
+  };
+  const finalizeStreamTail = (): void => {
+    if (streamTail.trim().length === 0) return;
+    pushFinalizedSegment(streamTail, false);
+    streamTail = '';
+    lastFinalUuid = undefined;
+    recomputeAssistantText();
+  };
+  const sealCurrentTurn = (): void => {
+    // 极端 adapter 路径可能只有增量没有 isFinal；done 仍是确定边界，此时把尾段
+    // 物化成一条 assistant message，和桌面 main 在 done 前落最后正文同口径。
+    finalizeStreamTail();
+    for (let index = renderMessages.length - 1; index >= currentTurnRenderStart; index--) {
+      const message = renderMessages[index];
+      if (message.kind !== 'assistant' || message.body.trim().length === 0) continue;
+      message.turnCompleted = true;
+      break;
+    }
+    currentTurnRenderStart = renderMessages.length;
+    // `turnCompleted` seal 之后，即使 provider 复用同一个上游 message id，
+    // 下一 SDK turn 也必须从新的 assistant message 开始。
+    lastFinalUuid = undefined;
+  };
+  const progressAssistantText = (): string => {
+    if (streamTail.trim().length > 0) return streamTail;
+    return finalizedSegments[finalizedSegments.length - 1] ?? '';
+  };
+  const finalAnswerText = (): string => {
+    const visible = buildMessageRenderItems(renderMessages, { isSessionStreaming: false })
+      .flatMap((item) =>
+        item.type === 'message'
+        && item.message.kind === 'assistant'
+        && item.message.body.trim().length > 0
+          ? [item.message.body]
+          : [],
+      )
+      .join('\n\n');
+    return visible.trim().length > 0 ? visible : assistantText;
+  };
   // 进度快照(turn.progress 链路): 过程区时间线与 IM 流式卡同一套纯逻辑
   // (turnActivity), 合成规则同 composeStreamingView —— 有正文时过程区在
   // 上正文在下, done/error 后 stop, 不再发射。
   const activity = createTurnActivity(Date.now());
   const progress = onProgress
     ? createProgressEmitter(onProgress, () => {
-        // 只流正文的唯一例外: 还没有任何正文、而 agent 正在自动重试(上游过载)
-        // 时, 草稿本来就是空的 —— 此时给出那一行状态说明, 否则用户在整个退避
-        // 窗口里完全看不到任何反馈。有正文后仍只发正文, 不掺过程区。
-        // (群/topic 走下面的完整过程卡, notice 已在那条路径里渲染。)
-        if (answerOnlyProgress) return assistantText || (activity.notice ?? '');
         const act = renderActivity(activity, Date.now());
-        if (!act) return assistantText;
-        return assistantText ? `${act}\n\n${assistantText}` : act;
+        // 运行中只展示当前 / 最后一条 assistant 消息。更早的旁白已经进入桌面
+        // 同款「工作过程」语义，不能继续堆在 Slack 正文里随每帧重放。
+        const currentText = progressAssistantText();
+        if (!act) return currentText;
+        return currentText ? `${act}\n\n${currentText}` : act;
       })
     : null;
 
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
-    const runningBgTasks = new Set<string>();
-    let waitingForBgTasks = false;
-    let bgFallbackTimer: NodeJS.Timeout | undefined;
+    let turnTerminalNotified = false;
     let pendingSettleUnsub: (() => void) | undefined;
-    const clearBgTimer = (): void => {
-      if (bgFallbackTimer) {
-        clearTimeout(bgFallbackTimer);
-        bgFallbackTimer = undefined;
+    let pendingContinuationUnsub: (() => void) | undefined;
+    const notifyTurnTerminal = (): void => {
+      if (turnTerminalNotified) return;
+      turnTerminalNotified = true;
+      try {
+        onTurnTerminal?.();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`[hook-runner] onTurnTerminal failed: ${message}`);
       }
     };
     /**
@@ -253,29 +356,24 @@ export function observeHookTurn(
      * 走同一份拆装 —— 之前是三处各抄一遍, 新加一个定时器就得记着补三处。
      */
     const teardown = (): void => {
-      clearBgTimer();
       pendingSettleUnsub?.();
       pendingSettleUnsub = undefined;
+      pendingContinuationUnsub?.();
+      pendingContinuationUnsub = undefined;
       progress?.stop();
       off();
       offStatus();
       stopListening = undefined;
     };
     const finish = (): void => {
+      notifyTurnTerminal();
       teardown();
       resolve();
     };
     const failTurn = (err: Error): void => {
+      notifyTurnTerminal();
       teardown();
       reject(err);
-    };
-    const armBgTimer = (): void => {
-      clearBgTimer();
-      bgFallbackTimer = setTimeout(() => {
-        log.warn(`[hook-runner] bg task events silent, finalizing: ${session.id}`);
-        finish();
-      }, BG_TASK_IDLE_FALLBACK_MS);
-      bgFallbackTimer.unref?.();
     };
     // 会话已死(见 ObservableSession.onStatusChange)。终态事件永远不会来了,
     // 按失败收口 —— 已累积的正文不足以判定这一轮真的完成了。
@@ -284,15 +382,6 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
-      if (waitingForBgTasks) armBgTimer();
-      if (ev.type === 'agent_task_update') {
-        const data = ev.data as { taskId?: string; status?: string } | null;
-        if (data && typeof data.taskId === 'string') {
-          if (data.status === 'running') runningBgTasks.add(data.taskId);
-          else runningBgTasks.delete(data.taskId);
-        }
-        return;
-      }
       if (ev.type === 'text') {
         const data = ev.data as { text?: string; isFinal?: boolean } | null;
         if (data && typeof data.text === 'string') {
@@ -304,14 +393,14 @@ export function observeHookTurn(
             //   (renderer 同款 raw concat), 不同消息之间空行分隔。
             // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
             //   只含 UI 缺的尾段, 与已流增量原样接上。
-            // ③ codex item.completed: 该条全文, 覆盖已流增量。
+            // ③ codex item.completed / pi message_end:该条全文,覆盖已流增量。
             // ④ 未知 source: 保守用前缀启发式。
             const src = (ev as { source?: string }).source;
             const meta = (ev as { agentMeta?: { uuid?: unknown; requestId?: unknown } }).agentMeta;
             const claudeTail = src === 'claude-code' && meta === undefined;
             const segment = claudeTail
               ? streamTail + data.text
-              : src === 'claude-code' || src === 'codex'
+              : src === 'claude-code' || src === 'codex' || src === 'pi'
                 ? data.text
                 : data.text.startsWith(streamTail)
                   ? data.text
@@ -321,9 +410,9 @@ export function observeHookTurn(
             // Anthropic 的 message id(`msg_...`), 同一条消息的各 text block 共享、
             // 不同消息不同, 正好是这里要的语义。
             //
-            // 少了这道回退, 一条含多个 text block 的消息会被拆成多个"消息",
-            // 而 X 的 finalSegment() 只发最后一段 —— 回帖被从中间截断, 用户拿到
-            // 半句话(PR #1272 review 指出)。
+            // 少了这道回退, 一条含多个 text block 的消息会被拆成多个"消息"。
+            // finalText() 会按桌面消息语义识别正式正文; 不能因为某个渠道最终只
+            // 允许一条消息, 就在这里把同一条消息的内容拆成「最后一段」。
             const messageId =
               src === 'claude-code'
                 ? typeof meta?.uuid === 'string'
@@ -348,11 +437,7 @@ export function observeHookTurn(
             // 而实为 ② 时, 旁白会被粘进公开回帖一起发出去。何况 ② 才是 translator
             // 文档里点名的那个场景(PR #1272 review 指出, 推翻了上一版的无条件并入)。
             const sameMessage = messageId !== undefined && messageId === lastFinalUuid;
-            if (sameMessage && finalizedSegments.length > 0) {
-              finalizedSegments[finalizedSegments.length - 1] += segment;
-            } else {
-              finalizedSegments.push(segment);
-            }
+            pushFinalizedSegment(segment, sameMessage);
             lastFinalUuid = messageId;
             streamTail = '';
           } else {
@@ -365,6 +450,39 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'thinking') {
+        // Desktop 不把 thinking 当 assistant block 边界：同一条消息可以在
+        // thinking 前后继续输出文字。这里只投影思考活动本身，不能 flush 正文。
+        // 同一个 blockId 的 start/delta/final 原位更新，和 renderer 消息模型一致。
+        const data = ev.data as {
+          stage?: unknown;
+          blockId?: unknown;
+          text?: unknown;
+          durationMs?: unknown;
+          startedAt?: unknown;
+        } | null;
+        const blockId = typeof data?.blockId === 'string'
+          ? data.blockId
+          : `anonymous-${renderSequence}`;
+        const content = data?.stage === 'redacted'
+          ? { isRedacted: true }
+          : {
+              ...(typeof data?.text === 'string' ? { text: data.text } : {}),
+              ...(typeof data?.durationMs === 'number' ? { durationMs: data.durationMs } : {}),
+            };
+        const existingIndex = thinkingRenderIndexes.get(blockId);
+        if (existingIndex === undefined) {
+          const renderIndex = pushRenderMessage('thinking', '', {
+            clientId: blockId,
+            content,
+            ...(typeof data?.startedAt === 'number'
+              ? { createdAt: new Date(data.startedAt).toISOString() }
+              : {}),
+          });
+          thinkingRenderIndexes.set(blockId, renderIndex);
+        } else {
+          const rendered = renderMessages[existingIndex];
+          if (rendered) rendered.source.content = content;
+        }
         if (pushThinkingStep(activity, ev.data)) {
           progress?.ensureTicker();
           progress?.schedule();
@@ -380,6 +498,15 @@ export function observeHookTurn(
           input?: unknown;
         } | null;
         if (data && typeof data.toolName === 'string') {
+          // tool_use 是明确的 assistant 消息边界，与桌面
+          // messagePersistBroadcaster.flushAssistantBlock 同口径。
+          finalizeStreamTail();
+          lastFinalUuid = undefined;
+          pushRenderMessage('tool', '', {
+            toolName: data.toolName,
+            toolInput: data.input,
+            ...(typeof data.toolUseId === 'string' ? { toolUseId: data.toolUseId } : {}),
+          });
           pushToolStep(
             activity,
             data.toolName,
@@ -392,10 +519,10 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'error' && !isTerminalAgentErrorEvent(ev)) {
-        // 非终止 error = agent 正在自愈(当前只透过载类的自动重试)。turn 没
+        // 非终止 error = agent 正在自愈(仅透已有本地化契约的自动重试)。turn 没
         // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
         // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。
-        const notice = overloadRetryNotice(ev.data);
+        const notice = turnRetryNotice(ev.data);
         if (notice !== null && setActivityNotice(activity, notice)) {
           // ticker 让"第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何
           // 新事件也能看出还在动。
@@ -423,16 +550,45 @@ export function observeHookTurn(
           });
           return;
         }
-        if (runningBgTasks.size > 0) {
-          waitingForBgTasks = true;
-          armBgTimer();
+        sealCurrentTurn();
+        // done 是 SDK turn 的权威完成事件；只有 provider 明确锁存了会自动
+        // 唤醒下一 turn 的任务时，它才是中间边界。agent_task_update 只是 UI
+        // 任务卡事件，Codex / Pi 子代理和 local_bash 都没有资格阻塞收口。
+        const continuationId = ev.turnContinuationId;
+        const continuationState = continuationId === undefined
+          ? null
+          : session.beginTurnContinuationWait?.(continuationId) ?? null;
+        if (continuationState === 'cancelled') {
+          // The provider already observed an explicit stop/teardown. There is
+          // no automatic continuation output to wait for; Session receives a
+          // separate ordered boundary, while this observer can settle now.
+          finish();
+          return;
+        }
+        if (continuationState === 'awaiting' || continuationState === 'active') {
+          pendingContinuationUnsub?.();
+          pendingContinuationUnsub = session.onTurnContinuationChange?.(
+            (changedContinuationId, state) => {
+              if (
+                state !== 'cancelled' ||
+                (continuationId !== undefined && changedContinuationId !== continuationId)
+              ) {
+                return;
+              }
+              pendingContinuationUnsub?.();
+              pendingContinuationUnsub = undefined;
+              finish();
+            },
+          );
           return;
         }
         finish();
       } else if (isTerminalAgentErrorEvent(ev)) {
-        const data = ev.data as
-          | { message?: string; errorStatus?: number; codexErrorInfo?: string }
-          | null;
+        const data = ev.data as {
+          message?: string;
+          errorStatus?: number;
+          codexErrorInfo?: string;
+        } | null;
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
@@ -456,18 +612,28 @@ export function observeHookTurn(
       stopListening?.();
       stopListening = undefined;
     },
+    markInteractionBoundary(): void {
+      // main 的任一 interaction 请求会先封存 assistant block，再落交互消息。
+      // 这只在请求首次出现时调用；剩余等待文案的切换不是新边界。
+      finalizeStreamTail();
+      lastFinalUuid = undefined;
+      pushRenderMessage('system', '', { role: 'system', content: { kind: 'interaction' } });
+    },
+    setNotice(notice: string | null): void {
+      // 走**独立**的等交互通道, 不是瞬态 notice: 后者会被 pushToolStep /
+      // pushThinkingStep / markActivityWriting 的 clearNotice 抹掉, 而挂起期间
+      // agent 的其它子任务照样在吐这些事件。
+      if (!setInteractionNotice(activity, notice)) return;
+      // ticker 让过程区的「第 N 步 · 42s」继续走时间: 等授权期间没有任何 agent
+      // 事件, 不续 ticker 那条消息会连耗时都冻住。
+      progress?.ensureTicker();
+      progress?.schedule();
+    },
     text(): string {
       return assistantText;
     },
-    finalSegment(): string {
-      // streamTail 非空 = 最后一条消息还没收到 isFinal(收口时它就是完整的
-      // 那一条), 此时它**本身**就是最后一条, 不能和上一条定稿段拼起来 ——
-      // 那会把倒数第二条消息也带上。
-      const last =
-        streamTail.trim().length > 0
-          ? streamTail
-          : (finalizedSegments[finalizedSegments.length - 1] ?? '');
-      return last.trim().length > 0 ? last : assistantText;
+    finalText(): string {
+      return finalAnswerText();
     },
   };
 }

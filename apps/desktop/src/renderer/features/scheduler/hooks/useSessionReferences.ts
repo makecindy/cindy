@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import * as sessionService from '@/lib/sessionService';
 import type { SessionReference } from '../../../../shared/sessionReference';
 
@@ -47,12 +48,18 @@ export function useSessionReferences(
   useEffect(() => {
     void refresh();
     if (ids.length === 0) return;
-    const offPatched = window.electronAPI.localDb.sessionsPush.onPatched(({ sessionId }) => {
-      if (idsRef.current.includes(sessionId)) void refresh();
-    });
-    const offCreated = window.electronAPI.localDb.sessionsPush.onCreated(({ sessionId }) => {
-      if (idsRef.current.includes(sessionId)) void refresh();
-    });
+    const offPatched = window.electronAPI.localDb.sessionsPush.onPatched(
+      ({ sessionId }, ownerStamp) => {
+        if (!isDataOwnerPushCurrent(ownerStamp)) return;
+        if (idsRef.current.includes(sessionId)) void refresh();
+      },
+    );
+    const offCreated = window.electronAPI.localDb.sessionsPush.onCreated(
+      ({ sessionId }, ownerStamp) => {
+        if (!isDataOwnerPushCurrent(ownerStamp)) return;
+        if (idsRef.current.includes(sessionId)) void refresh();
+      },
+    );
     return () => {
       requestRevisionRef.current += 1;
       offPatched();

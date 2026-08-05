@@ -18,7 +18,7 @@ import type {
   RsbWindowContext,
 } from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
-import { isValidGhostId } from '../../shared/ghost.js';
+import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
 
 const log = createLogger('right-sidebar-window-ipc');
@@ -30,13 +30,19 @@ function parseContext(raw: unknown): RsbWindowContext {
     if (typeof v !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be string | null`);
     return v;
   };
+  const optionalNullableString = (v: unknown, name: string): string | null | undefined => {
+    if (v === undefined) return undefined;
+    return nullableString(v, name);
+  };
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
   }
+  const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
   return {
     sessionId: nullableString(r.sessionId, 'sessionId'),
     workdir: nullableString(r.workdir, 'workdir'),
     remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
+    ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
     available: r.available,
   };
 }
@@ -54,13 +60,6 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       throwIpcError('INVALID_PARAMS', 'command.url required');
     }
     return { type: 'open-web-browser', sessionId: r.sessionId, url: r.url };
-  }
-  if (r.type === 'open-ghost-tab') {
-    // ghostId 复用身份卡同一校验(小写/数字/连字符,1–32),野值不进命令通道。
-    if (!isValidGhostId(r.ghostId)) {
-      throwIpcError('INVALID_PARAMS', 'command.ghostId must be a valid ghost id');
-    }
-    return { type: 'open-ghost-tab', sessionId: r.sessionId, ghostId: r.ghostId };
   }
   if (r.type === 'ensure-orca-workers-tab') {
     const hasFocusWorkerSessionId =
@@ -175,12 +174,18 @@ export function registerRsbWindowIpc(opts: {
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {
+    if (hasActiveRsbNativePopupSurfaces()) {
+      throwIpcError('PRECONDITION_FAILED', 'active browser popup must be completed or closed first');
+    }
     controller.close();
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED, (_e, detached: unknown) => {
     if (typeof detached !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'detached required (boolean)');
+    }
+    if (detached !== controller.getState().detached && hasActiveRsbNativePopupSurfaces()) {
+      throwIpcError('PRECONDITION_FAILED', 'active browser popup must be completed or closed first');
     }
     return controller.setDetached(detached);
   });

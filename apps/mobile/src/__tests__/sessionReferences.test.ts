@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DeviceLinkError,
   DL_HISTORY_MESSAGES_CHANNEL,
@@ -24,6 +24,14 @@ import {
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+beforeEach(() => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function message(
@@ -74,6 +82,29 @@ describe('mobile session-reference links', () => {
       () => 'dev-source',
       'dev-target',
     )).resolves.toBe(item);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[session-references] trusted history unavailable; preserving raw link text',
+      expect.objectContaining({ phase: 'stored-snapshot' }),
+    );
+  });
+
+  it('does not reuse a stored steer projection when the target itself is unavailable', async () => {
+    const item = {
+      text: 'continue cindy://session/source',
+      sessionRefs: [{ sessionId: 'source', deviceId: 'dev-source' }],
+    };
+    const invoke = asInvoke(async (_deviceId, channel) => {
+      expect(channel).toBe(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL);
+      throw new DeviceLinkError('DEVICE_OFFLINE', 'target offline');
+    });
+
+    await expect(prepareMobileQueuedSessionReferencesForSteer(
+      item,
+      invoke,
+      () => 'dev-source',
+      'dev-target',
+    )).rejects.toMatchObject({ code: 'SESSION_REFERENCE_OFFLINE' });
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it('extracts both schemes, anchors, source devices, and removes exact duplicates', () => {
@@ -154,7 +185,7 @@ describe('mobile session-reference links', () => {
     })).toBe('链接附近 · 4 条 · 已截断');
   });
 
-  it('rejects an old target before reading history from the source device', async () => {
+  it('falls back to raw link text when the target does not support references', async () => {
     const invoke = vi.fn(async (deviceId: string, channel: string) => {
       expect(deviceId).toBe('target-old');
       expect(channel).toBe(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL);
@@ -166,8 +197,59 @@ describe('mobile session-reference links', () => {
       asInvoke(invoke),
       () => 'source-device',
       'target-old',
-    )).rejects.toMatchObject({ code: 'SESSION_REFERENCE_UNSUPPORTED' });
+    )).resolves.toEqual({ text: 'compare cindy://session/source' });
     expect(invoke).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[session-references] trusted history unavailable; preserving raw link text',
+      expect.objectContaining({
+        phase: 'target-capability',
+        code: 'SESSION_REFERENCE_UNSUPPORTED',
+      }),
+    );
+  });
+
+  it('preserves target availability errors instead of treating them as source fallback', async () => {
+    const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+      expect(channel).toBe(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL);
+      throw new DeviceLinkError('DEVICE_OFFLINE', 'target offline');
+    });
+
+    await expect(prepareMobileQueuedSessionReferences(
+      { text: 'compare cindy://session/source' },
+      asInvoke(invoke),
+      () => 'source-device',
+      'target-offline',
+    )).rejects.toMatchObject({ code: 'SESSION_REFERENCE_OFFLINE' });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('falls back to raw link text when the source session is foreign', async () => {
+    const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+      if (channel === DL_SESSION_REFERENCE_CAPABILITY_CHANNEL) {
+        return { supported: true, version: 1 };
+      }
+      if (channel === 'local-db:sessions:get') return null;
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    await expect(prepareMobileQueuedSessionReferences(
+      {
+        text: 'compare cindy://session/foreign',
+        sessionRefs: [{ sessionId: 'stale', deviceId: 'old-device' }],
+        sessionReferencesRequireTrustedSnapshot: true,
+      },
+      asInvoke(invoke),
+      () => 'source-device',
+      'target-new',
+    )).resolves.toEqual({ text: 'compare cindy://session/foreign' });
+    expect(invoke.mock.calls.map((call) => call[1])).toEqual([
+      DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+      'local-db:sessions:get',
+    ]);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[session-references] trusted history unavailable; preserving raw link text',
+      expect.objectContaining({ phase: 'source-resolution' }),
+    );
   });
 
   it('probes a new target before resolving source history', async () => {

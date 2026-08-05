@@ -28,6 +28,7 @@
     "thinking": "思考中…",
     "networkReconnecting": "正在重新连接…",
     "modelBusyRetrying": "模型服务繁忙，正在重试…",
+    "rateLimitRetrying": "请求受到限流，正在重试…",
     "composerSyncing": "正在同步任务数据，同步完成后即可发送。",
     "composerSessionNotSynced": "当前任务还没有同步完成。",
     "composerCreating": "任务创建中，首条消息发出后即可继续发送。",
@@ -203,6 +204,20 @@
     "viewUsageDetail": "查看任务用量详情",
     "linkCopied": "链接已复制",
     "sessionInfo": "任务信息",
+    "branches": "任务分支",
+    "branchCurrent": "当前",
+    "branchEmpty": "当前任务还没有可切换的分支。",
+    "branchEmptyEntry": "空节点",
+    "branchLoadFailed": "读取任务分支失败。",
+    "branchSwitchFailed": "切换任务分支失败。",
+    "branchRunningBlocked": "任务运行中，结束后才能切换分支。",
+    "branchRole": {
+      "user": "用户",
+      "assistant": "助手",
+      "tool": "工具",
+      "summary": "摘要",
+      "system": "系统"
+    },
     "usageSection": "用量",
     "refreshContextUsage": "刷新上下文用量",
     "currentSessionSpend": "本次任务",
@@ -233,7 +248,6 @@
     "backToMenu": "返回任务菜单"
   },
   "messageMenu": {
-    "fork": "开启一个新任务",
     "addToChat": "添加到对话",
     "copyLink": "复制当前消息链接",
     "rewind": "回到此处",

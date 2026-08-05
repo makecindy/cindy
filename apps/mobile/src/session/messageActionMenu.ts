@@ -7,7 +7,7 @@
  */
 import { i18n } from '@/i18n';
 
-export type MobileMessageMenuActionId = 'fork' | 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
+export type MobileMessageMenuActionId = 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
 
 export interface MobileMessageMenuItem {
   id: MobileMessageMenuActionId;
@@ -20,14 +20,13 @@ export function buildMobileMessageMenu(input: {
   canAddToChat: boolean;
   canCopyLink: boolean;
   canDelete: boolean;
-  canFork: boolean;
   canRewind: boolean;
 }): MobileMessageMenuItem[] {
   const items: MobileMessageMenuItem[] = [];
   // 语义与 desktop 的 chat.messageActionBar.* 一一对应:fork 产出的是一条新任务;
-  // copy-link 复制的是带 messageClientId 的消息深链;delete 删的是单条消息。
+  // fork 已与复制同级外显;copy-link 复制的是带 messageClientId 的消息深链;
+  // delete 删的是单条消息。
   // 「添加到对话」指发进当前对话流,按 naming 规则保持「对话」。
-  if (input.canFork) items.push({ id: 'fork', label: i18n.t('session.messageMenu.fork') });
   if (input.canAddToChat) {
     items.push({ id: 'add-to-chat', label: i18n.t('session.messageMenu.addToChat') });
   }

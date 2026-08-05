@@ -31,6 +31,11 @@ const emptySnapshot: RemoteScheduleEventSnapshot = Object.freeze({
 });
 
 const snapshots = new Map<string, RemoteScheduleEventSnapshot>();
+// Per-device mirror invalidation generation. Unlike event `version`, this survives
+// `clearDevice()` so mounted screens can observe a presence-offline cleanup even when
+// that device had not emitted a schedule event in the current process.
+const mirrorInvalidationVersions = new Map<string, number>();
+let mirrorInvalidationSnapshot: ReadonlyMap<string, number> = new Map();
 const subs = new Set<() => void>();
 
 function emit(): void {
@@ -61,9 +66,28 @@ export const remoteScheduleEventStore = {
     emit();
   },
 
+  invalidateDeviceMirror(deviceId: string): void {
+    if (!deviceId) return;
+    snapshots.delete(deviceId);
+    mirrorInvalidationVersions.set(
+      deviceId,
+      (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
+    );
+    mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
+    emit();
+  },
+
+  clearDeviceMirrorInvalidation(deviceId: string): void {
+    if (!mirrorInvalidationVersions.delete(deviceId)) return;
+    mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
+    emit();
+  },
+
   clearAll(): void {
-    if (snapshots.size === 0) return;
+    if (snapshots.size === 0 && mirrorInvalidationVersions.size === 0) return;
     snapshots.clear();
+    mirrorInvalidationVersions.clear();
+    mirrorInvalidationSnapshot = new Map();
     emit();
   },
 
@@ -75,11 +99,22 @@ export const remoteScheduleEventStore = {
     return this.getSnapshot(deviceId).version;
   },
 
+  getMirrorInvalidationSnapshot(): ReadonlyMap<string, number> {
+    return mirrorInvalidationSnapshot;
+  },
+
   subscribe(cb: () => void): () => void {
     subs.add(cb);
     return () => subs.delete(cb);
   },
 };
+
+export function useRemoteScheduleMirrorInvalidations(): ReadonlyMap<string, number> {
+  return useSyncExternalStore(
+    remoteScheduleEventStore.subscribe,
+    remoteScheduleEventStore.getMirrorInvalidationSnapshot,
+  );
+}
 
 export function useRemoteScheduleEventSnapshot(deviceId: string): RemoteScheduleEventSnapshot {
   return useSyncExternalStore(

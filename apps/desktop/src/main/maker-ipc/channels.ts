@@ -185,6 +185,14 @@ export const MAKER_INVOKE = {
   SET_FAST_MODE: 'maker:set-fast-mode',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
+  EXPORT_SESSION_HTML: 'maker:export-session-html',
+  /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
+  COMPACT_SESSION: 'maker:compact-session',
+  /** 读取当前 live agent 的同会话原生分支树(pi get_tree)。 */
+  GET_SESSION_TREE: 'maker:get-session-tree',
+  /** 切换同会话原生分支并原子重建 Cindy 可见消息时间线。 */
+  NAVIGATE_SESSION_TREE: 'maker:navigate-session-tree',
   /**
    * 旧控制端的会话模型预设写穿兼容 channel。新控制端统一经 APPLY_NEW_MAKER_DRAFT_PREF 写被控端
    * providerModelMemory 全局预设;旧控制端仍发此 invoke 时,被控端 renderer 也会将其收敛到同一
@@ -207,6 +215,17 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /**
+   * Owner-scoped provider display-order override.
+   * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
+   * Settings mutation: local trusted renderer only; deliberately excluded from the
+   * device-link allowlist.
+   */
+  PROVIDER_ORDER_SET: 'maker:provider:order:set',
+  /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
+  MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
+  MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
+  MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
@@ -270,8 +289,10 @@ export const MAKER_INVOKE = {
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
-  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
+  // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
   USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
+  // 非 XD Provider 的 Catalog 参考价与用户覆盖；只用于 BYOK / 订阅估值。
+  USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
@@ -575,6 +596,8 @@ export const MAKER_INVOKE = {
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
+  // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
+  AT_CONTEXT_LIST: 'maker:at-context:list',
   // cua-driver installer for direct computer control.
   COMPUTER_INSTALL_DRIVER: 'maker:computer:install-driver',
   // Quiet cua-driver update check (Settings-open triggered only, never polls).
@@ -604,7 +627,7 @@ export const MAKER_INVOKE = {
    *  - GET_STATE: renderer 启动期拉 { detached, lastOpen, open }
    *  - OPEN / CLOSE: 幂等开(已开则 focus)/ 关子窗口,写 lastOpen
    *  - SET_DETACHED(boolean): 落盘偏好;true 附带开窗,false 附带关窗;返回新 state
-   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, available }
+   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    *  - READY: 子窗口根组件挂载握手(resolve main 侧 ensureOpen 等待)
    *  - SEND_COMMAND: 主窗把命令(如 open-terminal 快捷键)转发给子窗口,必要时先开窗
    */
@@ -682,7 +705,7 @@ export const MAKER_SEND = {
    */
   SYNC_SESSION_MODEL_PREF: 'maker:sync-session-model-pref',
   /**
-   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, available }
+   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    * 变化时无条件推(main 只在 detached 时消费,开偏好瞬间就有 context 可转发)。
    * main 校验 sender 必须是主窗,其它窗口的推送丢弃。fire-and-forget。
    */

@@ -48,6 +48,44 @@ export async function downloadRemoteMediaShareTemp(
   }
 }
 
+/**
+ * 下载 → 读成 `data:` URI → 删临时文件。
+ *
+ * 给 HTML 渲染态的同目录资源用:**预签名地址只在 app 侧使用,绝不写进页面**。
+ * 写进页面等于把一个 bearer 凭证交给可执行的不可信文档 —— 内联脚本能读 `img.src`
+ * 再以 no-cors 外传,第三方就能在有效期内下载被控端文件(review P1 实捉)。
+ *
+ * 超过 maxBytes 返回 null(调用方保留原引用,渲染成破图):data URI 会整份进 JS 字符串
+ * 与 DOM,不设上限会被一张大图撑爆内存。
+ */
+export async function downloadRemoteMediaAsDataUri(
+  url: string,
+  mimeType: string,
+  maxBytes: number,
+): Promise<string | null> {
+  const dir = new Directory(Paths.cache, SHARE_TMP_DIR_NAME);
+  let target: File | null = null;
+  try {
+    dir.create({ intermediates: true, idempotent: true });
+    const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
+    const file = await File.downloadFileAsync(url, target, { idempotent: true });
+    const size = file.size ?? 0;
+    if (size <= 0 || size > maxBytes) return null;
+    const base64 = await file.base64();
+    return base64 ? `data:${mimeType};base64,${base64}` : null;
+  } catch {
+    return null;
+  } finally {
+    // 临时文件用完即删:资源可能几十个,留着会把 cache 目录堆满。
+    try {
+      target?.delete();
+    } catch {
+      // 删不掉不影响结果(系统会回收 cache 目录)。
+    }
+  }
+}
+
 export function createExpoRemoteMediaDiskCacheIO(): RemoteMediaDiskCacheIO {
   const dir = new Directory(Paths.cache, CACHE_DIR_NAME);
   return {

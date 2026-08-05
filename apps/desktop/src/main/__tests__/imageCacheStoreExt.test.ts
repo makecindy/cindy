@@ -51,6 +51,10 @@ describe('imageCacheStore.copyFromPath — extension preservation', () => {
     expect(await copiedExt('sheet.xlsx')).toBe('.xlsx');
     expect(await copiedExt('notes.txt')).toBe('.txt');
     expect(await copiedExt('readme.MD')).toBe('.md'); // lowercased
+    expect(await copiedExt('archive.zip')).toBe('.zip');
+    expect(await copiedExt('model.blend')).toBe('.blend');
+    expect(await copiedExt('design.psd')).toBe('.psd');
+    expect(await copiedExt('archive.tar.gz')).toBe('.gz');
   });
 
   it('still preserves image extensions (unchanged behavior)', async () => {
@@ -61,7 +65,7 @@ describe('imageCacheStore.copyFromPath — extension preservation', () => {
   it('falls back to .bin when there is no usable extension', async () => {
     expect(await copiedExt('no-extension')).toBe('.bin');
     expect(await copiedExt('trailing.')).toBe('.bin'); // dot with nothing after
-    expect(await copiedExt('archive.tar.gz')).toBe('.bin'); // .gz is not a supported attachment type
+    expect(await copiedExt(`name.${'a'.repeat(25)}`)).toBe('.bin');
   });
 
   it('does NOT preserve executable/installer extensions (→ .bin, so the chip can not openPath-exec)', async () => {
@@ -70,6 +74,11 @@ describe('imageCacheStore.copyFromPath — extension preservation', () => {
     expect(await copiedExt('image.dmg')).toBe('.bin');
     expect(await copiedExt('tool.app')).toBe('.bin');
     expect(await copiedExt('lib.jar')).toBe('.bin');
+    expect(await copiedExt('script.cmd')).toBe('.bin');
+    expect(await copiedExt('script.ps1')).toBe('.bin');
+    expect(await copiedExt('script.js')).toBe('.bin');
+    expect(await copiedExt('script.py')).toBe('.bin');
+    expect(await copiedExt('update.msu')).toBe('.bin');
   });
 
   it('round-trips setup.exe → .bin cache → Save As setup.exe without opening it', async () => {
@@ -130,5 +139,16 @@ describe('imageCacheStore.writeBuffer — trusted mimeType wins over suggestedNa
       lifecycle: 'committed',
     });
     expect(path.extname(filename).toLowerCase()).toBe('.png');
+  });
+
+  it('keeps a dangerous suggested name inert even when the MIME claims it is an image', async () => {
+    const { filename } = await imageCacheStore.writeBuffer({
+      sessionId: 'sess-ext',
+      buffer: new Uint8Array([1, 2, 3]),
+      mimeType: 'image/png',
+      suggestedName: 'setup.exe',
+      lifecycle: 'committed',
+    });
+    expect(path.extname(filename).toLowerCase()).toBe('.bin');
   });
 });

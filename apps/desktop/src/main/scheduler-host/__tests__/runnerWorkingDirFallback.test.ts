@@ -124,7 +124,14 @@ function createFireContext(): FireContext {
   };
 }
 
-function createRunnerHarness(session: Session) {
+function createRunnerHarness(
+  session: Session,
+  opts: {
+    resolveDefaultModelRoute?: ConstructorParameters<
+      typeof MakerScheduleRunner
+    >[0]['resolveDefaultModelRoute'];
+  } = {},
+) {
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const createSession = vi.fn(async () => session);
@@ -139,6 +146,7 @@ function createRunnerHarness(session: Session) {
     getDb: () => ({}) as never,
     notifier,
     logger,
+    resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
   });
   // 回退分支会把存量 project 形态任务的分类自愈写回 dialogue —— 用 fake
   // scheduler 捕获 update 调用
@@ -227,6 +235,30 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
       expect.objectContaining({ workspaceKind: 'project' }),
       expect.anything(),
     );
+  });
+
+  it('creates unattended Pi schedules with a connected model/provider pair and non-blocking permission mode', async () => {
+    const h = createSessionHarness();
+    const resolveDefaultModelRoute = vi.fn(async () => ({
+      model: 'local-pi-model',
+      providerId: 'local-byom',
+    }));
+    const { runner, createSession } = createRunnerHarness(h.session, { resolveDefaultModelRoute });
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({ agentKind: 'pi', model: undefined, workingDir: '/repo/pi-project' }),
+      h,
+    );
+
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'pi',
+      model: 'local-pi-model',
+      providerId: 'local-byom',
+      permissionMode: 'bypassPermissions',
+      workingDir: '/repo/pi-project',
+    }));
+    expect(resolveDefaultModelRoute).toHaveBeenCalledWith('pi', null);
   });
 
   it('workspaceKind 已是 dialogue → 不重复落库自愈', async () => {

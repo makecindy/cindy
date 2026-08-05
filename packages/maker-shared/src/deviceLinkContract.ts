@@ -234,7 +234,7 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
-  targetAgentKind: 'claude-code' | 'codex';
+  targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -244,7 +244,7 @@ export interface MobileSessionAgentSwitchIntent {
 /** desktop 登记 / 取消跨 Agent 意图后的稳定结果。 */
 export interface MobileSessionAgentSwitchResult {
   switched: boolean;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   engineReady: boolean;
   deferred?: boolean;
@@ -313,6 +313,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:goal:resume',
   'maker:goal:update',
   'maker:fork',
+  'maker:get-session-tree',
+  'maker:navigate-session-tree',
   'maker:rewind:preview',
   'maker:rewind:commit',
   'maker:message:delete',
@@ -443,7 +445,8 @@ export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
   | 'replaced'
   | 'too-many-connections'
-  | 'version-mismatch';
+  | 'version-mismatch'
+  | 'unstable';
 
 /** 连接问题标题(手机端直出文案;桌面端走 i18n,不用这组)。 */
 export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
@@ -456,6 +459,8 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
       return '连接数已达上限';
     case 'version-mismatch':
       return '版本不匹配';
+    case 'unstable':
+      return '连接反复断开';
   }
 }
 
@@ -470,6 +475,8 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
       return '当前账号同时在线的设备过多，请断开其它设备后重试。';
     case 'version-mismatch':
       return '当前 App 版本与服务端协议不一致，请升级到最新版本。';
+    case 'unstable':
+      return '本机连接反复断开又重连，远程操作可能一直超时。请检查网络；若持续如此，重启 App 后重试。';
   }
 }
 
@@ -481,7 +488,7 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
  * 要给出可读提示只能按模板识别。formatRemoteError / throwIpcError 会给部分链路的
  * message 加 `[CODE] ` 头,识别时一并容忍。
  */
-const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex) not authenticated: ?(.*)$/;
+const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex|pi) not authenticated: ?(.*)$/;
 
 /**
  * agent 未鉴权错误 → 手机端直出文案(桌面端走 i18n,不用这组)。
@@ -494,7 +501,7 @@ export function describeAgentAuthError(error: string | null | undefined): string
   if (!error) return null;
   const matched = AGENT_NOT_AUTHENTICATED_RE.exec(error.trim());
   if (!matched) return null;
-  const agentLabel = matched[1] === 'claude-code' ? 'Claude' : 'Codex';
+  const agentLabel = matched[1] === 'claude-code' ? 'Claude' : matched[1] === 'pi' ? 'Pi' : 'Codex';
   const goSettings = `请在电脑端 ${BRAND_NAME} 的「设置 → 模型供应商」`;
   switch (matched[2]) {
     case 'no_key':

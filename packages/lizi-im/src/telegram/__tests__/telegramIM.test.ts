@@ -104,10 +104,18 @@ function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secr
     secrets: {
       write: (name, value) => (secrets.set(name, value), true),
       read: (name) => secrets.get(name) ?? null,
+      readResult: (name) =>
+        secrets.has(name)
+          ? { kind: 'value', value: secrets.get(name)! }
+          : { kind: 'missing' },
       remove: (name) => void secrets.delete(name),
       isAvailable: () => true,
     },
     ipc: {
+      throwIpcError: (code, message) => {
+        const error = Object.assign(new Error(`[${code}] ${message}`), { code });
+        throw error;
+      },
       handle: (channel, handler) => void handlers.set(channel, handler),
       broadcast: (_channel, payload) => void broadcasts.push(payload),
     },
@@ -209,6 +217,49 @@ describe('TelegramIM', () => {
     })) as { saveErrorStatus?: { kind: string } };
     expect(result.saveErrorStatus?.kind).toBe('error');
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  it('set-config 连接失败且旧 secret 回滚写失败: 落下线闩锁, 重启不得用混合配置上线', async () => {
+    await im.dispose();
+    const oldToken = '999:old-token-abcdefghijklmnop';
+    const newToken = '888:new-token-abcdefghijklmnop';
+    const oldApi = createFakeApi();
+    const rejectedApi = createFakeApi({
+      getMeError: new TelegramApiError('getMe', 401, 'Unauthorized'),
+    });
+    im = new TelegramIM(ctx.host, {
+      apiFactory: (token) => (token === oldToken ? oldApi : rejectedApi),
+    });
+    im.registerIpc();
+    const handler = ctx.handlers.get('telegramBot:set-config')!;
+    await handler({ token: oldToken, ownerUserId: OWNER_ID });
+    expect(im.getStatus().kind).toBe('connected');
+
+    const originalWrite = ctx.host.secrets.write;
+    ctx.host.secrets.write = (name, value) => {
+      // 新 token 已经落盘；模拟连接失败后恢复旧 token 时安全存储拒写。
+      if (name === 'telegram-bot-token' && value === oldToken) return false;
+      return originalWrite(name, value);
+    };
+    const result = (await handler({ token: newToken, ownerUserId: '222' })) as {
+      status: { kind: string };
+      saveErrorStatus?: { kind: string };
+    };
+
+    expect(result.status.kind).toBe('error');
+    expect(result.saveErrorStatus?.kind).toBe('error');
+    expect(ctx.secrets.get('telegram-bot-token')).toBe(newToken);
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    ctx.host.secrets.write = originalWrite;
+
+    // 模拟重启：即使磁盘仍是未完成回滚的新 token，也只能停在 offline，零联网。
+    await im.dispose();
+    const rebootApi = createFakeApi();
+    const rebooted = new TelegramIM(ctx.host, { apiFactory: () => rebootApi });
+    await rebooted.init();
+    expect(rebooted.getStatus().kind).toBe('offline');
+    expect(rebootApi.calls).toHaveLength(0);
+    await rebooted.dispose();
   });
 
   it('私聊: 非 owner 忽略, owner 消息进 onMessage', async () => {
@@ -424,6 +475,179 @@ describe('TelegramIM', () => {
     expect((sends[1].params.reply_parameters as { message_id: number }).message_id).toBe(61);
   });
 
+  it('群里的授权卡改投宿主私聊: 不落群、带触发消息深链、不吃回挂配额', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '改一下代码', fromId: 111, messageId: 70, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      {
+        title: '需要授权',
+        body: '要修改 src/app.ts 吗？',
+        buttons: [{ id: 'allow', label: '允许', type: 'primary' }],
+      },
+      // 授权卡由调用方点名转私聊, 并把用户可见说明与**本轮触发消息 id** 一起传进来
+      // (传输层不造文案, 也不猜这张卡属于哪一轮)
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    // 群里的授权卡消不掉, 且只有 owner 能回答它 —— 一律投宿主私聊, 群里一条都不发
+    expect(card.params.chat_id).toBe(OWNER_ID);
+    expect(
+      api.calls.some((c) => c.method === 'sendMessage' && c.params.chat_id === '-100200'),
+    ).toBe(false);
+    // 私聊里看不出是哪个群问的, 所以带触发消息深链(-100 前缀私有超级群)
+    expect(String(card.params.text)).toContain('https://t.me/c/200/70');
+    // 群里的回挂目标不被卡片消耗: 本轮真正的回答仍然挂回那条提问
+    expect(card.params.reply_parameters).toBeUndefined();
+    await im.sendText(events[0].senderId, '改完了');
+    const answer = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === '-100200')
+      .at(-1)!;
+    expect(answer.params.reply_parameters).toEqual({
+      message_id: 70,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it('私聊的授权卡照旧落在私聊、正文不加群来源说明', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('needs approval', 111, 71)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      {
+        title: 'Approval',
+        body: 'Continue?',
+        buttons: [{ id: 'yes', label: 'Yes' }],
+      },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe(OWNER_ID);
+    expect(String(card.params.text)).not.toContain('t.me/c/');
+    expect(String(card.params.text)).not.toContain('群聊里的任务需要你授权');
+  });
+
+  it('未点名转私聊的卡片(命令卡 / 会话选择卡)留在原群 lane', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '/ctr', fromId: 111, messageId: 72, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 不传 deliverToOwnerDm: 这类卡的回调要落在原群 lane, 转到私聊会让
+    // exitControl 释放宿主私聊那把锁而不是原群锁。
+    await im.sendInteractiveCard(events[0].senderId, {
+      title: '选择要接管的任务',
+      body: '挑一个',
+      buttons: [{ id: 'sess-1', label: '任务 A' }],
+    });
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe('-100200');
+    expect(String(card.params.text)).not.toContain('t.me/c/');
+  });
+
+  it('授权卡深链认调用方指定的那一轮, 同 lane 后到的消息不影响它', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // 群里连发两问 —— 处理中的是 80, 81 已在队列里等下一轮
+    api.pushUpdates([
+      groupMessage({ text: '第一问', fromId: 111, messageId: 80, mentionBot: true }),
+      groupMessage({ text: '第二问', fromId: 111, messageId: 81, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(String(card.params.text)).toContain('https://t.me/c/200/80');
+    expect(String(card.params.text)).not.toContain('/81');
+  });
+
+  it('深链只认同群的来源 id: 缺省或跨 chat 一律不渲染链接(不猜, 也不链错群)', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '问题', fromId: 111, messageId: 85, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 不传来源 id: 传输层不得靠回挂状态/流式回合猜, 直接不渲染深链
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    expect(
+      String(api.calls.filter((c) => c.method === 'sendMessage').at(-1)!.params.text),
+    ).not.toContain('t.me/c/');
+
+    // 来源 id 属于别的 chat: 链到别的会话比没有链更糟 —— 同样不渲染
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: '-100999|85',
+      },
+    );
+    expect(
+      String(api.calls.filter((c) => c.method === 'sendMessage').at(-1)!.params.text),
+    ).not.toContain('t.me/c/');
+  });
+
+  it("授权卡深链在本轮已发过群回复后仍然有效('first' 档会消耗回挂目标)", async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '改一下配置', fromId: 111, messageId: 90, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 正常时序: agent 先流式回一句, 再请求授权。默认 replyQuoteGroup='first' 下这条
+    // 群回复会把 turnReplyTargets 消耗掉 —— 深链身份不能借用回挂状态。
+    const handle = await im.startStreamingText(events[0].senderId, '我看一下');
+    await handle.finalize('先读配置文件');
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      {
+        deliverToOwnerDm: true,
+        ownerDmNote: '群聊里的任务需要你授权。',
+        ownerDmSourceMessageId: events[0].messageId,
+      },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe('111');
+    expect(String(card.params.text)).toContain('https://t.me/c/200/90');
+  });
+
   it('私聊出站不回挂 reply', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
@@ -454,6 +678,392 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => {
       expect(im.getStatus()).toEqual({ kind: 'conflict', appId: String(BOT.id) });
     });
+  });
+
+  it('set-online:false → offline, 停止轮询但保留 token/owner/offset', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    // 先让游标前进一格, 验证下线不会把它一并清掉。
+    api.pushUpdates([privateMessage('hi', Number(OWNER_ID), 7)]);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBeDefined();
+    });
+    const offsetBeforeOffline = ctx.secrets.get('telegram-updates-offset');
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus()).toEqual({ kind: 'offline', appId: String(BOT.id) });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    // 解绑才清凭证; 下线只是让位, 绑定信息必须原样留着。
+    expect(ctx.secrets.get('telegram-bot-token')).toBe('999:secret-token-abcdefghijk');
+    expect(ctx.secrets.get('telegram-owner-user-id')).toBe(OWNER_ID);
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe(offsetBeforeOffline);
+
+    // 轮询确已停: 之后不再产生新的 getUpdates 调用。
+    const pollsAtOffline = api.calls.filter((c) => c.method === 'getUpdates').length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
+  });
+
+  it('下线后立即上线重放同一 update: 旧世代收尾不得移除新任务的游标低水位', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((event) => events.push(event));
+    await connect();
+
+    let releaseOldDownload!: () => void;
+    let releaseReplayDownload!: () => void;
+    const oldDownload = new Promise<void>((resolve) => (releaseOldDownload = resolve));
+    const replayDownload = new Promise<void>((resolve) => (releaseReplayDownload = resolve));
+    let getFileCalls = 0;
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        getFileCalls += 1;
+        await (getFileCalls === 1 ? oldDownload : replayDownload);
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    const attachment: TgUpdate = {
+      update_id: 50,
+      message: {
+        message_id: 50,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        caption: '慢附件',
+        photo: [{ file_id: 'slow', file_unique_id: 'slow-u', width: 10, height: 10 }],
+      },
+    };
+
+    api.pushUpdates([attachment]);
+    await vi.waitFor(() => expect(getFileCalls).toBe(1));
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+    api.pushUpdates([attachment]);
+
+    // 同 chat 的重放排在旧任务后；旧任务一收口，重放开始并继续悬在下载中。
+    releaseOldDownload();
+    await vi.waitFor(() => expect(getFileCalls).toBe(2));
+    // 另一 chat 的后续 update 收口会尝试补写游标。先等它确实处理完成，再断言
+    // 游标仍不能越过仍在途的重放 50（避免只读到上一个批次留下的旧值）。
+    api.pushUpdates([
+      groupMessage({ text: 'other chat', fromId: 111, messageId: 51, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].text).toBe('other chat');
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:50`);
+
+    releaseReplayDownload();
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:52`);
+    });
+  });
+
+  it('set-online 畸形 payload 一律报错且不产生上下线副作用', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const handler = ctx.handlers.get('telegramBot:set-online')!;
+
+    for (const bad of [
+      undefined,
+      null,
+      true,
+      'false',
+      [],
+      {},
+      { online: 'false' },
+      { online: 0 },
+      { online: null },
+    ]) {
+      await expect(
+        handler(bad),
+        `payload ${JSON.stringify(bad) ?? 'undefined'} 应被拒绝`,
+      ).rejects.toMatchObject({
+        code: 'INVALID_PARAMS',
+        message: expect.stringMatching(/^\[INVALID_PARAMS\]/),
+      });
+      expect(im.getStatus().kind).toBe('connected');
+      expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    }
+
+    // 轮询仍在继续，证明畸形输入没有暗中走到 goOffline。
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still online', Number(OWNER_ID), 23)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(pollsBefore);
+    });
+  });
+
+  it('下线标志写盘失败 → 报错且**不停轮询**(不留会自己复活的假下线)', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    // 模拟 safeStorage 写失败(Linux 无 keychain / 磁盘写不进)。
+    const originalWrite = ctx.host.secrets.write;
+    ctx.host.secrets.write = (name, value) =>
+      name === 'telegram-bot-offline' ? false : originalWrite(name, value);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    // 关键: 轮询仍在跑 —— 用户看到明确失败, 而不是"看着下线了、重启又上来抢"。
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still here', Number(OWNER_ID), 21)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(
+        pollsBefore,
+      );
+    });
+    ctx.host.secrets.write = originalWrite;
+  });
+
+  it('存储在 remove→read 窗口读取失败: isAvailable 仍为 true 也必须 fail closed', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // remove 看似成功(不抛), 但紧接着单文件读取失败；此时 isAvailable 仍为 true。
+    // 若把"读不到"当成"已删除", 删除失败就被静默放过: 用户看到已上线,
+    // 重启后存储恢复、标志还在, 又被打回 offline。
+    const originalRemove = ctx.host.secrets.remove;
+    const originalReadResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+      if (name === 'telegram-bot-offline') {
+        ctx.host.secrets.readResult = (key) =>
+          key === 'telegram-bot-offline' ? { kind: 'error' } : originalReadResult(key);
+      }
+    };
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    expect(im.getStatus().kind).toBe('error');
+    // 标志确实还在盘上 —— 证明"读不出来"时放行会是真的错。
+    ctx.host.secrets.readResult = originalReadResult;
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
+  it('init 读取下线标志失败时不联网, 不把失败误判成标志缺失', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    const originalReadResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) =>
+      name === 'telegram-bot-offline' ? { kind: 'error' } : originalReadResult(name);
+
+    await im.init();
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('轮询中读取 token 失败时下线报错, 不误报 idle 且不停止轮询', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const originalReadResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) =>
+      name === 'telegram-bot-token' ? { kind: 'error' } : originalReadResult(name);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still polling', Number(OWNER_ID), 22)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(pollsBefore);
+    });
+  });
+
+  it('下线标志删不掉时上线要报错, 不能假装已上线(重启会打回 offline)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // 模拟 remove 失败(文件锁/权限/磁盘错误 —— 真实实现吞掉异常且无返回值)。
+    const originalRemove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+    };
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    // 标志还在 → 重启会回到 offline, 所以此刻绝不能显示成已上线。
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
+  it('安全存储不可用时下线报错, 不会误判成「未配置」而放任轮询继续', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    const originalAvailable = ctx.host.secrets.isAvailable;
+    ctx.host.secrets.isAvailable = () => false;
+
+    await im.goOffline();
+
+    // 关键: 不是 idle。idle 会让设置页显示"未配置"、而轮询其实还在跑。
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.isAvailable = originalAvailable;
+  });
+
+  it('getMe 在途时被下线: 连接结果作废, 不得写 connected、不得起轮询', async () => {
+    // 复现远程下线的真实窗口: 目标机正在 connect 等 getMe, 另一台设备把它下线。
+    // 控制端已收到「已下线」, 这里若无条件写回 connected 就会回来继续抢同一个 bot。
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    let releaseGetMe: (() => void) | null = null;
+    const slowApi = createFakeApi();
+    const originalCall = slowApi.call.bind(slowApi);
+    slowApi.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe') {
+        await new Promise<void>((resolve) => {
+          releaseGetMe = resolve;
+        });
+      }
+      return originalCall(method, params, signal);
+    }) as typeof slowApi.call;
+    const slowIm = new TelegramIM(ctx.host, { apiFactory: () => slowApi });
+    slowIm.registerIpc();
+
+    const connecting = slowIm.init();
+    await vi.waitFor(() => expect(releaseGetMe).not.toBeNull());
+    // getMe 还挂着 —— 此刻下线
+    await slowIm.goOffline();
+    releaseGetMe!();
+    await connecting;
+
+    expect(slowIm.getStatus().kind).toBe('offline');
+    expect(slowApi.calls.some((c) => c.method === 'getUpdates')).toBe(false);
+    await slowIm.dispose();
+  });
+
+  it('换账号后不继承上个账号的 bot 身份(离线态拿不到 getMe 也不许张冠李戴)', async () => {
+    await connect();
+    expect(
+      (
+        (await ctx.handlers.get('telegramBot:get-status')!()) as { botUsername: string | null }
+      ).botUsername,
+    ).toBe(BOT.username);
+
+    // 账号 A 登出 → 账号 B 的 bot 已持久化为下线态
+    await im.dispose();
+    ctx.secrets.set('telegram-bot-token', '888:another-account-token-xyz');
+    ctx.secrets.set('telegram-owner-user-id', '222');
+    ctx.secrets.set('telegram-bot-offline', '1');
+    await im.init();
+
+    const status = (await ctx.handlers.get('telegramBot:get-status')!()) as {
+      status: { kind: string; appId?: string };
+      botUsername: string | null;
+    };
+    expect(status.status.kind).toBe('offline');
+    expect(status.status.appId).toBe('888');
+    // 关键: 不是 A 的 my_cindy_bot
+    expect(status.botUsername).toBeNull();
+  });
+
+  it('带下线标志时 init 直接 offline, 零网络请求(重启不抢回轮询)', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    ctx.secrets.set('telegram-bot-offline', '1');
+
+    await im.init();
+
+    // botId 从 token 前缀解析而来, 不发 getMe。
+    expect(im.getStatus()).toEqual({ kind: 'offline', appId: String(BOT.id) });
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('set-online:true → 清标志并重新拉起轮询', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    ctx.secrets.set('telegram-bot-offline', '1');
+    await im.init();
+    expect(api.calls).toHaveLength(0);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+  });
+
+  it('先下线再解绑: 仍要清掉 Telegram 里的命令菜单(否则失效命令永久残留)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // 下线已把 this.api 置空;此时解绑若不复活 client, deleteMyCommands 会被跳过,
+    // 而 token 随即删除 —— 以后再没机会清, /help 等入口就永久留在 Telegram 里。
+    const before = api.calls.filter((c) => c.method === 'deleteMyCommands').length;
+
+    await ctx.handlers.get('telegramBot:disconnect')!();
+
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'deleteMyCommands').length).toBe(before + 1);
+    });
+    expect(im.getStatus()).toEqual({ kind: 'idle' });
+  });
+
+  it('连接失败带稳定 code, 供 UI 取本地化文案(不直接展示英文 reason)', async () => {
+    const failing = createFakeApi({
+      getMeError: new TelegramApiError('getMe', 401, 'Unauthorized'),
+    });
+    const failIm = new TelegramIM(ctx.host, { apiFactory: () => failing });
+    failIm.registerIpc();
+    await ctx.handlers.get('telegramBot:set-config')!({
+      token: '999:secret-token-abcdefghijk',
+      ownerUserId: OWNER_ID,
+    });
+    const status = failIm.getStatus();
+    expect(status.kind).toBe('error');
+    if (status.kind === 'error') expect(status.code).toBe('invalid-token');
+    await failIm.dispose();
+  });
+
+  it('解绑清掉下线标志(否则重填 token 后重启又被判回 offline)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+
+    await ctx.handlers.get('telegramBot:disconnect')!();
+
+    expect(im.getStatus()).toEqual({ kind: 'idle' });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  it('重填 token 时标志删不掉要报错, 不能连上后重启又掉回 offline', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    const originalRemove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+    };
+
+    await ctx.handlers.get('telegramBot:set-config')!({
+      token: '999:secret-token-abcdefghijk',
+      ownerUserId: OWNER_ID,
+    });
+
+    // 标志还在 → 重启必回 offline, 所以不能报告成功。
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
+  it('下线态重新填 token 点连接: 清掉遗留标志, 直接连上', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+
+    await connect();
+
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
   });
 
   it('相册 settle 期间同 chat 的后续消息保序: 先答相册再答追问', async () => {
@@ -612,65 +1222,154 @@ describe('TelegramIM', () => {
     expect(api2.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
   });
 
-  it('DM 流式走 sendMessageDraft: 空占位→draft 更新→定稿真消息(不 edit)', async () => {
+  it('DM 流式与群一致: send+edit 经典路径, 不再走草稿通道', async () => {
     await connect();
-    const sendsBefore = api.calls.filter((c) => c.method === 'sendMessage').length;
     const handle = await im.startStreamingText(OWNER_ID);
-    // 构造即推空 draft = 客户端原生 Thinking 占位
-    await vi.waitFor(() => {
-      expect(
-        api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === ''),
-      ).toBe(true);
-    });
     handle.replace('部分回答');
     await vi.waitFor(
       () => {
-        expect(
-          api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === '部分回答'),
-        ).toBe(true);
+        expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
       },
       { timeout: 3_000, interval: 50 },
     );
-    // 同一 draft_id 连续更新(客户端动画的前提)
-    const draftIds = new Set(
-      api.calls.filter((c) => c.method === 'sendMessageDraft').map((c) => c.params.draft_id),
-    );
-    expect(draftIds.size).toBe(1);
-    expect([...draftIds][0]).not.toBe(0);
-
+    // 私聊不再依赖 sendMessageDraft(草稿只能一行纯文本, 装不下过程时间线)
+    expect(api.calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     await handle.finalize('最终回答');
-    // 定稿走 rich(markdown 直投 + 👍 特效), 不产生 sendMessage / edit
-    const rich = api.calls.filter((c) => c.method === 'sendRichMessage');
-    expect(rich.length).toBe(1);
-    expect((rich[0].params.rich_message as { markdown?: string }).markdown).toBe('最终回答');
-    expect(rich[0].params.message_effect_id).toBeTruthy();
-    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(sendsBefore);
-    expect(api.calls.some((c) => c.method === 'editMessageText')).toBe(false);
+    // 定稿与群一样是原地 rich 升级(同一条消息), 不另发一条
+    const richEdits = api.calls.filter(
+      (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+    );
+    expect(richEdits.length).toBe(1);
+    expect((richEdits[0].params.rich_message as { markdown?: string }).markdown).toBe('最终回答');
+    expect(api.calls.some((c) => c.method === 'sendRichMessage')).toBe(false);
   });
 
-  it('rich 定稿 404(方法不可用)实例级 latch, 回落经典分段且后续不再尝试', async () => {
+  it('DM 中间态能承载多行过程时间线(工具调用在私聊也可见)', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.replace('⚙️ 工作中 · 2 项 · 3s\n> ✓ 读取 adapter.ts\n> ▸ 搜索 draft\n\n正在看代码');
+    await vi.waitFor(
+      () => {
+        const sent = api.calls.filter((c) => c.method === 'sendMessage').at(-1);
+        expect(sent).toBeTruthy();
+        const text = String(sent?.params.text ?? '');
+        expect(text).toContain('读取 adapter.ts');
+        expect(text).toContain('搜索 draft');
+        expect(text).toContain('正在看代码');
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+    // 收口后只留干净正文(过程区由编排层移除), 与群同口径
+    await handle.finalize('看完了');
+    const richEdits = api.calls.filter(
+      (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+    );
+    expect((richEdits.at(-1)?.params.rich_message as { markdown?: string }).markdown).toBe('看完了');
+  });
+
+  it('rich 原地定稿 404(方法不可用)实例级 latch, 后续不再尝试', async () => {
     await connect();
     const originalCall = api.call.bind(api);
     api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
-      if (method === 'sendRichMessage') {
+      if (method === 'editMessageText' && params?.rich_message !== undefined) {
         api.calls.push({ method, params: params ?? {} });
-        throw new TelegramApiError('sendRichMessage', 404, 'Not Found');
+        throw new TelegramApiError('editMessageText', 404, 'Not Found');
       }
       return originalCall(method, params, signal);
     }) as FakeApi['call'];
 
     const handle = await im.startStreamingText(OWNER_ID);
     await handle.finalize('回答一');
-    // rich 试了一次 → 404 latch → 回落 sendMessage
-    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
+    const richEditCount = () =>
+      api.calls.filter(
+        (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+      ).length;
+    // rich 升级试了一次 → 404 latch; 正文仍由 sendMessage 落地不丢
+    expect(richEditCount()).toBe(1);
     expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
 
     const handle2 = await im.startStreamingText(OWNER_ID);
     await handle2.finalize('回答二');
-    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
+    expect(richEditCount()).toBe(1);
   });
 
-  it('群 lane 流式仍走 send+edit 经典路径, 不用 draft; 定稿 rich 原地升级', async () => {
+  it('429 退避等满 Telegram 给的 retry_after(不再封顶 10s), 终稿不丢', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let htmlEditAttempts = 0;
+    const flood = (): TelegramApiError =>
+      new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      // rich 定稿在 flood 下同样撞 429, 让流程落到 HTML 编辑这条真正带退避的路径。
+      if (method === 'editMessageText' && params?.rich_message !== undefined) throw flood();
+      if (method === 'editMessageText') {
+        htmlEditAttempts += 1;
+        if (htmlEditAttempts === 1) throw flood();
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 10m44s');
+    const sendCount = (): number => api.calls.filter((c) => c.method === 'sendMessage').length;
+    const sendsBeforeFinalize = sendCount();
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('完整的最终答案');
+      // 旧实现把退避封在 10s: 此刻已经重试, 而 flood 窗口还剩 16s → 必然二次
+      // 失败, 整条终稿就是这样丢的(2026-08-04 线上实测)。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(htmlEditAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await finalized;
+      expect(htmlEditAttempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 原位编辑最终成功 → 不需要动用补送, 也不该留下多余消息。
+    expect(sendCount()).toBe(sendsBeforeFinalize);
+    const lastEdit = api.calls.filter((c) => c.method === 'editMessageText').at(-1);
+    expect(String(lastEdit?.params.text ?? '')).toContain('完整的最终答案');
+  });
+
+  it('原位编辑始终失败时, 终稿改由新消息承载并撤掉过程消息', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 11m');
+    const progressMessageId = handle.messageId;
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('flood 下也必须送到的答案');
+      // 两次编辑尝试(rich 直连不退避 + HTML 经 callSend 退避一次)后转补送。
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const answer = api.calls.find(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('必须送到的答案'),
+    );
+    expect(answer).toBeDefined();
+    // 先发新、后删旧: 补送落地后才撤掉那条停在"工作中"的过程消息。
+    const deleted = api.calls.filter((c) => c.method === 'deleteMessage');
+    expect(deleted).toHaveLength(1);
+    expect(api.calls.indexOf(answer!)).toBeLessThan(api.calls.indexOf(deleted[0]!));
+    expect(String(deleted[0]!.params.message_id ?? '')).toBe(
+      progressMessageId.split('|')[1] ?? progressMessageId,
+    );
+  });
+
+  it('群 lane 流式: send+edit 经典路径 + 定稿 rich 原地升级(本次统一的基准)', async () => {
     await connect();
     const handle = await im.startStreamingText('g/-100200/r7');
     handle.replace('进行中');
@@ -685,32 +1384,6 @@ describe('TelegramIM', () => {
     expect((richEdits[0].params.rich_message as { markdown?: string }).markdown).toBe(
       '群里的最终回答',
     );
-  });
-
-  it('draft 400 失败: 本 turn 落回经典路径, 本实例后续 turn 不再尝试 draft', async () => {
-    await connect();
-    const originalCall = api.call.bind(api);
-    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
-      if (method === 'sendMessageDraft') {
-        api.calls.push({ method, params: params ?? {} });
-        throw new TelegramApiError('sendMessageDraft', 400, 'Bad Request: method not available');
-      }
-      return originalCall(method, params, signal);
-    }) as FakeApi['call'];
-
-    const handle = await im.startStreamingText(OWNER_ID);
-    // 首次 pushDraft 失败 → latch 到经典 handle(会先 send 一条占位消息)
-    await vi.waitFor(() => {
-      expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
-    });
-    handle.replace('落回后的内容');
-    await handle.finalize('落回后的最终回答');
-    expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
-
-    // 400 = 能力性失败, 实例级 latch: 新 turn 不再发 draft
-    await im.startStreamingText(OWNER_ID);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
   });
 
   it('多图出站合成原生相册(sendMediaGroup), 单图仍走 sendPhoto', async () => {
@@ -775,6 +1448,712 @@ describe('TelegramIM', () => {
     const withReply = dmSends.filter((c) => c.params.reply_parameters !== undefined);
     expect(withReply).toHaveLength(1);
     expect((withReply[0].params.reply_parameters as { message_id: number }).message_id).toBe(95);
+  });
+
+  it('回挂目标成功才消耗: 首条出站失败后重试仍带 reply_parameters', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('问个事', 111, 96)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    // connect 的 linked 确认也发往 owner 私聊 —— 取基线后只看本例新增的出站。
+    const dmSendsBefore = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID,
+    ).length;
+
+    // 首条 sendMessage 非 400 失败(网络类), 之后恢复 —— 回挂目标不能被那次失败吃掉。
+    const originalCall = api.call.bind(api);
+    let failedOnce = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage' && params?.chat_id === OWNER_ID && !failedOnce) {
+        failedOnce = true;
+        api.calls.push({ method, params: params ?? {} });
+        throw new Error('socket hang up');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    await expect(im.sendText(OWNER_ID, '第一条(会失败)')).rejects.toThrow();
+    await im.sendText(OWNER_ID, '重试的第一条');
+    // 已成功一条 → 'first' 档后续不再挂回
+    await im.sendText(OWNER_ID, '第二条');
+    const dmSends = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID)
+      .slice(dmSendsBefore);
+    expect(dmSends).toHaveLength(3);
+    // 失败那条 + 重试那条都带引用(引用只在成功后被消耗); 第三条不带
+    for (const call of dmSends.slice(0, 2)) {
+      expect((call.params.reply_parameters as { message_id: number } | undefined)?.message_id).toBe(
+        96,
+      );
+    }
+    expect(dmSends[2].params.reply_parameters).toBeUndefined();
+  });
+
+  it('旧轮迟到成功不吃掉新轮目标(提交校身份)', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    // 第一轮触发(msg 300) → 开流 → 首条 send 挂在途(模拟慢请求/限流退避)
+    api.pushUpdates([privateMessage('第一问', 111, 300)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const originalCall = api.call.bind(api);
+    let releaseFirstSend: (() => void) | null = null;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage' && params?.chat_id === OWNER_ID && !releaseFirstSend) {
+        api.calls.push({ method, params: params ?? {} });
+        await new Promise<void>((resolve) => {
+          releaseFirstSend = resolve;
+        });
+        return { message_id: 9001, chat: { id: 111, type: 'private' }, date: 1 } as never;
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const firstHandle = await im.startStreamingText(OWNER_ID);
+    const firstSend = firstHandle.finalize('第一轮答案');
+    await vi.waitFor(() => expect(releaseFirstSend).not.toBeNull());
+
+    // 旧请求还在途, 第二轮触发(msg 301)已 claim 新目标
+    api.pushUpdates([privateMessage('第二问', 111, 301)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await im.startStreamingText(OWNER_ID);
+
+    // 旧请求现在才成功 —— 不得删掉新轮的 301
+    releaseFirstSend!();
+    await firstSend;
+    api.call = originalCall;
+    const sendsBefore = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID,
+    ).length;
+    await im.sendText(OWNER_ID, '第二轮答案');
+    const second = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID)
+      .slice(sendsBefore);
+    expect(second).toHaveLength(1);
+    expect((second[0].params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(301);
+  });
+
+  it('领取过时槽位: 出站失败且调用方放弃后, 下一条回复不再落后一条', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    // 第一条触发(msg 400): 领取目标后出站失败, 调用方直接放弃(不重试)
+    api.pushUpdates([privateMessage('一', 111, 400)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const originalCall = api.call.bind(api);
+    let failed = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage' && params?.chat_id === OWNER_ID && !failed) {
+        failed = true;
+        api.calls.push({ method, params: params ?? {} });
+        throw new Error('socket hang up');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+    await expect(im.sendText(OWNER_ID, '丢掉的回答')).rejects.toThrow();
+
+    // 第二条触发(msg 401): 新目标必须能领到, 不能被上一轮残留的 400 堵死
+    api.pushUpdates([privateMessage('二', 111, 401)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    const sendsBefore = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID,
+    ).length;
+    await im.sendText(OWNER_ID, '第二条的回答');
+    const reply = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID)
+      .slice(sendsBefore);
+    expect((reply[0].params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(401);
+  });
+
+  it("群默认 'first' 档: 终稿编辑失败后, 补送仍引用原触发消息", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 80, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    // 过程消息先落地 —— 'first' 档下它已经把回挂目标 80 消耗掉了。
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 11m');
+    const progressSend = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    );
+    expect((progressSend[0].params.reply_parameters as { message_id: number }).message_id).toBe(80);
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('flood 下补送出来的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 补送的答案不能脱离提问脉络 —— 重新 lease 会拿到空目标, 必须沿用本轮的 80。
+    const answer = api.calls.find(
+      (c) =>
+        c.method === 'sendMessage' && String(c.params.text ?? '').includes('补送出来的答案'),
+    );
+    expect(answer).toBeDefined();
+    expect((answer!.params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(80);
+  });
+
+  it("回挂档位 off 时, 补送不带 reply_parameters", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'off', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 81, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 3m');
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('off 档的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const answer = api.calls.find(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('off 档的答案'),
+    );
+    expect(answer).toBeDefined();
+    expect(answer!.params.reply_parameters).toBeUndefined();
+  });
+
+  it("群 'all' 档: 补送同样挂回, 档位语义不被补送破坏", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 82, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(lane, '⚙️ 工作中 · 2m');
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('all 档补送的答案');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const groupSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    );
+    expect(groupSends.length).toBeGreaterThanOrEqual(2);
+    for (const call of groupSends) {
+      expect((call.params.reply_parameters as { message_id: number } | undefined)?.message_id)
+        .toBe(82);
+    }
+  });
+
+  it('429 退避期间被 dispose: 不再发第二次请求, 也不留后台重试', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '停止边界').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sendAttempts).toBe(1);
+      // 退避还没走完就销毁 —— 等待必须被取消, 且醒来后不得用旧 api 补发。
+      await im.dispose();
+      await vi.advanceTimersByTimeAsync(120_000);
+      const outcome = await sending;
+      expect(outcome).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    // 后台没有遗留任务: 再放一段时间也不会冒出新的请求。
+    await vi.waitFor(() => expect(sendAttempts).toBe(1));
+  });
+
+  it('换 owner 后原位编辑与清理都不再触碰旧回合(edit / editFinal / deleteMessage)', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 5m');
+    const callsBefore = api.calls.length;
+
+    // 只换主人: 不 stopPolling, api 对象不变 —— 唯一能识别授权易主的是世代/主人。
+    await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777888' });
+
+    // editFinal 是 finalize 的第一步, 核验失败即抛 —— 整个收口放弃。
+    await expect(handle.finalize('旧回合的终稿')).rejects.toThrow(/round abandoned/);
+
+    const after = api.calls.slice(callsBefore);
+    expect(after.filter((c) => c.method === 'editMessageText')).toEqual([]);
+    expect(after.filter((c) => c.method === 'deleteMessage')).toEqual([]);
+    expect(after.filter((c) => c.method === 'sendMessage')).toEqual([]);
+  });
+
+  it('换 owner 后的 NO_REPLY 沉默不再删旧回合的占位消息', async () => {
+    await connect();
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 30s');
+    const callsBefore = api.calls.length;
+    await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777889' });
+
+    // NO_REPLY 的删除被 finalize 内部 catch 吞掉, 所以不抛 —— 但一定不能真删。
+    await handle.finalize('NO_REPLY');
+    expect(api.calls.slice(callsBefore).filter((c) => c.method === 'deleteMessage')).toEqual([]);
+  });
+
+  it('多组图片中途换 owner: 第一组之后不再向旧 chat 出站', async () => {
+    await connect();
+    // 11 张 → 分两组(每组 ≤10), 第一组落地后换主人。
+    const paths = Array.from({ length: 11 }, (_, i) => {
+      const p = path.join(tmpDir, `g${i}.png`);
+      fs.writeFileSync(p, 'fake-png');
+      return p;
+    });
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 6m');
+    for (const p of paths) handle.addExtraImageAbsPath?.(p);
+
+    const originalForm = api.callForm.bind(api);
+    let groups = 0;
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      const result = await originalForm(method, form, signal);
+      if (method === 'sendMediaGroup') {
+        groups += 1;
+        if (groups === 1) {
+          await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '777890' });
+        }
+      }
+      return result;
+    }) as FakeApi['callForm'];
+
+    // uploadImages 的核验在第二组之前失败 → finalize 抛出。
+    await expect(handle.finalize('十一张图的回答')).rejects.toThrow(/round abandoned/);
+    // 只发出了第一组, 第二组被挡住。
+    expect(groups).toBe(1);
+    expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(1);
+  });
+
+  it('合法 retry_after 超过 60s 时不提前重试(不再有固定上限)', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let attempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 180', 180);
+        }
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, 'bot-wide flood');
+      // 旧实现封在 60s: 此刻已经重试, 而 flood 窗口还剩两分钟 → 必然再失败。
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await sending;
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retry_after 缺失或非法时走兜底退避(3s)', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let attempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        attempts += 1;
+        // 缺失 retry_after
+        if (attempts === 1) throw new TelegramApiError('sendMessage', 429, 'Too Many Requests');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '无 retry_after');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await sending;
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('补送成功后才换 owner: 剩余分段与图片同样不再发给旧 userId', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let ownerSwitched = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      const result = await originalCall(method, params, signal);
+      // 首段补送刚落地就换主人 —— 此刻 assertRoundStillLive 已经放行过一次,
+      // 剩余分段与图片若不各自核验就会继续发给已失权的旧 userId。
+      if (
+        method === 'sendMessage' &&
+        String(params?.text ?? '').includes('第一段') &&
+        !ownerSwitched
+      ) {
+        ownerSwitched = true;
+        await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '444555' });
+      }
+      return result;
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 7m');
+    vi.useFakeTimers();
+    try {
+      // chunkTelegramSource 不会按 | 分段, 用一段超长正文迫使终稿分片。
+      const long = `第一段${'甲'.repeat(4200)}\n\n第二段尾巴`;
+      const finalized = handle.finalize(long).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(ownerSwitched).toBe(true);
+    // 首段已经发出(那时回合还有效), 但换主人之后的剩余分段一律不许再出站。
+    const tailSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('第二段尾巴'),
+    );
+    expect(tailSends).toEqual([]);
+    // 也不许对新主人产生任何出站。
+    expect(
+      api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '444555'),
+    ).toEqual([]);
+  });
+
+  it('补送成功后换 owner: 受管图片不再上传(sendPhoto / sendMediaGroup 都不发)', async () => {
+    await connect();
+    const imgPath = path.join(tmpDir, 'shot.png');
+    fs.writeFileSync(imgPath, 'fake-png');
+    const originalCall = api.call.bind(api);
+    let ownerSwitched = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      const result = await originalCall(method, params, signal);
+      // 补送刚落地就换主人 —— 图片上传排在它后面, 若不各自核验就会照传。
+      if (method === 'sendMessage' && String(params?.text ?? '').includes('带图答案')) {
+        ownerSwitched = true;
+        await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '444556' });
+      }
+      return result;
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 4m');
+    // 走 abs: 旁路(与既有相册用例同一搭法), 不依赖 resolveImageUrl 注入。
+    handle.addExtraImageAbsPath?.(imgPath);
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize('带图答案').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(ownerSwitched).toBe(true);
+    expect(
+      api.calls.filter((c) => c.method === 'sendPhoto' || c.method === 'sendMediaGroup'),
+    ).toEqual([]);
+  });
+
+  it('退避期间只换 owner(api 对象不变): 旧回合的答案不发给已失权的旧 userId', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'editMessageText') {
+        throw new TelegramApiError('editMessageText', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 9m');
+    const progressMessageId = handle.messageId;
+    const answer = '旧 owner 那一轮的完整答案';
+
+    vi.useFakeTimers();
+    try {
+      const finalized = handle.finalize(answer).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // 只换 ownerUserId、不带 token: 这条分支不 stopPolling, this.api 完全不变,
+      // 只有 configVersion / ownerUserId 变了 —— 补送若按当前世代重新取 api 就会
+      // 把这轮答案照发给已经失去授权的旧主人。
+      await ctx.handlers.get('telegramBot:set-config')!({ ownerUserId: '222333' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      const outcome = await finalized;
+      // 先断言泄露本身: 一个字都不许发出去(未修时补送会成功, 这条先红)。
+      expect(
+        api.calls
+          .filter((c) => c.method === 'sendMessage')
+          .map((c) => String(c.params.text ?? ''))
+          .filter((text) => text.includes('完整答案')),
+      ).toEqual([]);
+      // 生命周期失效不能被当成普通编辑失败: 放弃补送并抛回原始编辑错误。
+      expect(outcome).toBeInstanceOf(TelegramApiError);
+      expect((outcome as TelegramApiError).errorCode).toBe(429);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 过程消息保留(没有补送成功就不该删), 也没有对新主人产生任何出站。
+    expect(api.calls.filter((c) => c.method === 'deleteMessage')).toEqual([]);
+    expect(progressMessageId).not.toBe('');
+    expect(
+      api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222333'),
+    ).toEqual([]);
+  });
+
+  it('dispose() 后重新 init(): 退避重试在新世代恢复可用', async () => {
+    await connect();
+    // 退出登录 → 再登录(同一实例复用; init 里就有 this.disposing = false)。
+    await im.dispose();
+    await im.init();
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        if (sendAttempts === 1) {
+          throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+        }
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '新世代的出站');
+      await vi.advanceTimersByTimeAsync(26_000);
+      await sending;
+    } finally {
+      vi.useRealTimers();
+    }
+    // 一次性的生命周期控制器若不重建, 新世代每次退避都当场判"已停止"→ 永久
+    // 关掉 429 重试, 这里就只会有 1 次尝试。
+    expect(sendAttempts).toBe(2);
+  });
+
+  it('dispose 收尾窗口里的出站: 已取消信号不再干等满整个退避', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      // dispose 的同步段已经 abort 了生命周期取消源, 但它随后要 await stopPolling
+      // (那里等 pollLoop 才把 this.api 置空) —— 这个窗口里的出站拿到的是一个
+      // **进来就已 aborted** 的信号。
+      const disposing = im.dispose();
+      const sending = im.sendText(OWNER_ID, '收尾窗口的出站').catch((err: unknown) => err);
+      await disposing;
+      // 一个定时器都不推进: 已取消的等待必须当场结束, 否则这里会挂到用例超时
+      // (旧实现 addEventListener 对已发生的 abort 不触发, 会干等满 26s)。
+      expect(await sending).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('429 退避期间下线(stopPolling): 不再发第二次请求', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    let sendAttempts = 0;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage') {
+        sendAttempts += 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 26', 26);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      const sending = im.sendText(OWNER_ID, '下线边界').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sendAttempts).toBe(1);
+      // 主动下线: stopPolling 会 abort 当前世代并把 this.api 置空 —— 退避必须
+      // 就此放弃, 不能用那个已经作废的客户端补发。
+      await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await sending).toBeInstanceOf(TelegramApiError);
+      expect(sendAttempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("群 'all' 档: 目标保留整轮, 每条出站都挂回", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '干活', fromId: 222, messageId: 60, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+    await im.startStreamingText(lane);
+    await im.sendText(lane, '第一条');
+    await im.sendText(lane, '第二条');
+    const groupSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    );
+    expect(groupSends.length).toBeGreaterThanOrEqual(2);
+    for (const call of groupSends) {
+      expect((call.params.reply_parameters as { message_id: number } | undefined)?.message_id)
+        .toBe(60);
+    }
+  });
+
+  it("群 'all' 档: A 流式期间 B 排队发提示, A 剩下的答案不能改挂到 B", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    // A 触发(msg 70) → 开流(回合持有目标 70)
+    api.pushUpdates([groupMessage({ text: 'A 问', fromId: 222, messageId: 70, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+    const handle = await im.startStreamingText(lane);
+    handle.replace('A 的第一段');
+    await vi.waitFor(
+      () => {
+        expect(
+          api.calls.some(
+            (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+
+    // B 在 A 流式期间到达并入队 → 排队提示走独立出站(sendMarkdownText)
+    api.pushUpdates([groupMessage({ text: 'B 问', fromId: 333, messageId: 71, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await im.sendMarkdownText(lane, '你排在第 1 位');
+
+    // A 继续输出并定稿 —— 仍须挂回 70, 不得变 71
+    await handle.finalize('A 的最终答案');
+    const quoted = api.calls
+      .filter((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200')
+      .map((c) => (c.params.reply_parameters as { message_id: number } | undefined)?.message_id);
+    expect(quoted.length).toBeGreaterThanOrEqual(2);
+    expect(quoted.every((id) => id === 70)).toBe(true);
+
+    // B 的目标没被那条提示偷走: B 自己的回合能领到 71
+    const beforeB = api.calls.filter(
+      (c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200',
+    ).length;
+    const bHandle = await im.startStreamingText(lane);
+    await bHandle.finalize('B 的答案');
+    const bSends = api.calls
+      .filter((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '-100200')
+      .slice(beforeB);
+    expect((bSends[0].params.reply_parameters as { message_id: number } | undefined)?.message_id)
+      .toBe(71);
   });
 
   it('全响应·自主判断: always 群未召唤消息进 ambient turn, 表情静默, NO_REPLY 删占位', async () => {
@@ -842,6 +2221,39 @@ describe('TelegramIM', () => {
         api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200'),
       ).toBe(true);
     });
+  });
+
+  it('授权卡转私聊时也停掉原群的 typing loop(否则群里一直显示正在输入)', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '改个文件', fromId: 111, messageId: 99, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(
+        api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200'),
+      ).toBe(true);
+    });
+
+    // 卡片投的是宿主私聊 —— callSend 只会停它自己那条 chat 的 typing loop,
+    // 群里那条必须由转发分支显式停掉, 否则每 4.5s 继续打一次 sendChatAction。
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改 src/app.ts？', buttons: [{ id: 'allow', label: '允许' }] },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    const groupTypingAfterCard = api.calls.filter(
+      (c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200',
+    ).length;
+    // **必须跨过一个 TYPING_REFRESH_MS(4.5s)**: loop 每 4.5s 才刷一次, 只等 100ms 的话
+    // 循环还没来得及打下一枪, 断言对「有没有真的停掉」没有判别力(反向验证时会假通过)。
+    await new Promise((r) => setTimeout(r, 4_700));
+    expect(
+      api.calls.filter((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200')
+        .length,
+    ).toBe(groupTypingAfterCard);
   });
 
   it('disconnect 清空凭证并回 idle', async () => {

@@ -109,6 +109,28 @@ describe('权限档钳制', () => {
   });
 });
 
+describe('Pi 代办路由', () => {
+  it('读取 Pi 草稿默认并创建 Pi 会话', async () => {
+    const createSession = vi.fn(async () => 'sess-pi');
+    const getDraftDefaults = vi.fn(() => ({ model: 'gpt-5.5' }));
+    const { deps, emitters } = makeDeps({
+      readConfig: () => ({ agentKind: 'pi' }),
+      createSession,
+      getDraftDefaults,
+    });
+    const runner = createGhostErrandRunner(deps);
+    const pending = runner(REQUEST);
+    await vi.waitFor(() => expect(emitters.has('sess-pi')).toBe(true));
+    emitters.get('sess-pi')!.emit(doneEvent());
+    await pending;
+
+    expect(getDraftDefaults).toHaveBeenCalledWith('pi');
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'pi', model: 'gpt-5.5' }),
+    );
+  });
+});
+
 describe('专属会话建/复用', () => {
   it('无映射时创建会话并写映射,onSession 尽早回报', async () => {
     const { deps, emitters, writes } = makeDeps();

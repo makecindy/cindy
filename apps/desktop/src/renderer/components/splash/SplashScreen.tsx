@@ -52,8 +52,8 @@ import {
 function splashTitleFor(
   phase: SplashPhase,
   t: (key: string) => string,
-  step?: 1 | 2,
-  totalSteps?: 2,
+  step?: 1 | 2 | 3,
+  totalSteps?: 2 | 3,
 ): string | null {
   switch (phase) {
     case 'splash_checking_update':
@@ -65,7 +65,7 @@ function splashTitleFor(
     case 'splash_checking':
       return t('splash.tips.checkingEnv');
     case 'splash_downloading': {
-      // D 场景(两个 vendor 都需要下载)显示 (x/2) 进度标签;B/C 场景维持单文案。
+      // D 场景(两个及以上 vendor 需要下载)显示 (x/y) 进度标签;B/C 场景维持单文案。
       const suffix = step && totalSteps ? `(${step}/${totalSteps})` : '';
       return `${t('splash.tips.waking')}${suffix}`;
     }

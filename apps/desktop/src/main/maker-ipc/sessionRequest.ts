@@ -66,7 +66,7 @@ export interface ReadCreateSessionOptsDeps {
 }
 
 function readAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -117,6 +117,12 @@ export function readCreateSessionOpts(
   const id = needsDialogueWorkspace
     ? readDialogueSessionId(body.id, deps.createSessionId)
     : body.id;
+  // 外部(含 device-link)可控的 session id 会被下游拼进磁盘路径(如 Pi 权限档
+  // perm-<id>.json)。未校验的 `../../..` 之类 id 经 path.join 逃出 runtimeDir,writeFile
+  // 可覆盖任意可写文件(codex review)。在边界统一限制为安全单段值;缺省(自动生成)放行。
+  if (typeof id === 'string' && id.length > 0 && !isSafePathSegment(id)) {
+    throwIpcError('INVALID_PARAMS', 'session id must be a safe path segment');
+  }
   const workingDir = needsDialogueWorkspace
     ? deps.allocateDialogueWorkspace!(
         id as string,

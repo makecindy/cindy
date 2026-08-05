@@ -48,6 +48,7 @@ describe('shared device list presentation model', () => {
     expect(deviceAccessState(device({ busy: true }))).toBe('busy');
     expect(deviceAccessState(device({ deviceId: 'revoked' }), new Set(['revoked']))).toBe('access_revoked');
     expect(deviceAccessState(device({ online: false }))).toBe('offline');
+    expect(deviceAccessState(device({ online: false, remoteControlEnabled: false }))).toBe('offline');
     expect(deviceAccessState(device({ remoteControlEnabled: false }))).toBe('remote_disabled');
     expect(deviceAccessState(device({ isSelf: true }))).toBe('self');
   });

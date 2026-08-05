@@ -5,7 +5,7 @@
  * (SessionCard card 变体)」共用同一份逻辑,确保两处**完全一致**:
  *   - archived          → Archive 图标(vendor 已不重要)
  *   - attached(/ctr 接管中)→ RadioTower,优先级高于 running(接管期桌面被动观察)
- *   - orca-lead(协同)   → UsersRound（与右侧栏「协同」pill 同款）
+ *   - orca-lead(协同)   → UsersRound（与「+」菜单协同项同款）
  *   - 其余              → VendorIcon(Claude Code 像素脸 / Codex CLI 花形+`>_`)
  *   running:图标切 Thinking Orange + 呼吸;需关注:右上叠状态点(全端统一色表:
  *   error 红 / awaiting TapTap 蓝 / 完成未读绿,tone 按行精准订阅 attention store);
@@ -26,7 +26,7 @@ import { useGhostSessionBusy } from '@/cindy-brain/ghostSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 
 export interface SessionStatusIconProps {
   session: Session;
@@ -71,7 +71,7 @@ export function SessionStatusIcon({
   // primitive 订阅(性能不变量同下方 attention hooks)。
   const isGhostBusy = useGhostSessionBusy(session.id);
   const isRunning = isAgentRunning || isGhostBusy;
-  const vendor = session.agentKind === 'codex' ? 'codex' : 'cc';
+  const vendor = agentKindToVendor(session.agentKind);
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';
   // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。

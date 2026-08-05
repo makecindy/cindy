@@ -8,7 +8,7 @@
 
 import type { ControlResult } from '../types.js';
 
-export type HistoryAgentKind = 'cc' | 'codex';
+export type HistoryAgentKind = 'cc' | 'codex' | 'pi';
 export type HistoryOrder = 'asc' | 'desc';
 
 /** Stable business errors exposed by cross-device history readers. */

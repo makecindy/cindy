@@ -116,7 +116,7 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
   model: string;
   providerId?: string | null;
@@ -132,6 +132,11 @@ export interface AgentInputCreateOpts {
   vendorOptions?: Record<string, unknown>;
   remoteHostId?: string;
   resumeSessionId?: string;
+}
+
+/** Optional optimistic-input epoch fence sent by a device-link controller. */
+export interface AgentInputClearBoundaryOpts {
+  expectedClearBoundaryMs?: number | null;
 }
 
 /**
@@ -155,6 +160,14 @@ export interface AutoResumeInfo {
 export interface AgentInputQueuedMessage {
   clientId: string;
   text: string;
+  /**
+   * Host-owned receipt for the first acceptance boundary.  The controlled
+   * Desktop writes this value when it accepts an item; controller-provided
+   * values are never trusted.  It is deliberately omitted from projections,
+   * but retained in crash snapshots so clear-boundary recovery can compare two
+   * timestamps from the same host rather than a controller wall clock.
+   */
+  hostAcceptedAtMs?: number;
   /**
    * Main 在首次入队时从原始 text 冻结的合成指令意图。Ghost rewrite、队列编辑
    * 与 dispatch 前的其它正文变换都不得改写它；执行端用它判断 Continue 的
@@ -196,6 +209,19 @@ export interface AgentInputQueuedMessage {
         /** 老队列快照可能没有；新 scheduler run 始终写入。 */
         runId?: string;
       };
+  /**
+   * 本条由**手机控制端**入队 / 插入。
+   *
+   * 手机会话页的所有发送都走 input:enqueue / input:steer(没有一处调 maker:send),
+   * 而 drain 派发与 steer 都发生在原 invoke 的 AsyncLocalStorage 之外 —— 来源必须在
+   * 入队/插入的那一刻盖在队列项上,才能一路带到最终 wire 消息(见
+   * maker-ipc/mobileClientPromptNote)。
+   *
+   * **只由被控端在 IPC 边界写入,不采信 wire 传来的值**(客户端可控数据)。语义上仅用于
+   * 体验分流(要不要追加一段手机说明),不是安全 / 鉴权判据 —— 平台值本身也是对端自报的,
+   * 见 device-link/invoke-context 的可信度说明。
+   */
+  fromMobileClient?: boolean;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -245,9 +271,30 @@ export type AgentInputRecovery =
   | { kind: 'active-turn'; item: AgentInputQueuedMessage }
   | null;
 
+/**
+ * Normalize the persisted/device-link clear token used by optimistic input
+ * preconditions. `null` is a known "never cleared" boundary; `undefined`
+ * means the payload did not contain a usable token.
+ */
+export function normalizeAgentInputClearBoundaryMs(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+  }
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 export interface AgentInputProjection {
   sessionId: string;
   pendingQueue: AgentInputQueuedMessage[];
+  /**
+   * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
+   * 控制端必须在应用其它 projection 字段、尤其是触发 outbox pump 之前先处理它。
+   * 老被控端可能缺省，消费方需继续兼容 sessions snapshot/patch 收敛。
+   */
+  clearBoundaryMs?: number | null;
   /**
    * Continue 已离开 pendingQueue、但仍占有 coordinator dispatch/turn 边界时
    * 的 clientId。renderer 用它区分「用户取消排队 Continue」与「Continue 正在
@@ -329,8 +376,8 @@ export function sanitizeQueuedMessageForPersistence(
       }
       const record = reference as Record<string, unknown>;
       if (
-        record.kind !== 'message'
-        || (!Object.hasOwn(record, 'text') && !Object.hasOwn(record, 'truncated'))
+        record.kind !== 'message' ||
+        (!Object.hasOwn(record, 'text') && !Object.hasOwn(record, 'truncated'))
       ) {
         return reference;
       }
@@ -438,6 +485,7 @@ export function updateQueuedMessageText(
   };
   if (!hasEncodedQuoteMarker) delete nextChatMessage.quotesEncoded;
   delete nextChatMessage.pastedTextRanges;
+  delete nextChatMessage.agentReferences;
   nextChatMessage.slashCommandRanges = [];
   const updated: AgentInputQueuedMessage = {
     ...entry,
@@ -516,7 +564,8 @@ export function updateQueuedMessageContent(
   return merged;
 }
 
-const SESSION_REF_LINK_RE = /(?:cindy|xdt-maker):\/\/session\/([A-Za-z0-9%~_-]+)(?:\?([A-Za-z0-9%&=~._-]*))?/g;
+const SESSION_REF_LINK_RE =
+  /(?:cindy|xdt-maker):\/\/session\/([A-Za-z0-9%~_-]+)(?:\?([A-Za-z0-9%&=~._-]*))?/g;
 
 /** Rebuild structured references from visible text while retaining device hints. */
 export function reconcileSessionRefsForText(
@@ -708,7 +757,21 @@ const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
  * 括号刻意不在此列:`(见 @a/b.ts)` 里的 `)` 判成边界才切得干净,而真的带括号的
  * 文件名会在精确匹配那一步就命中。
  */
-const REF_CONTINUATION_CHARS = new Set(['.', '/', '\\', '-', '_', '~', '+', '=', '#', '@', '%', '&', '$']);
+const REF_CONTINUATION_CHARS = new Set([
+  '.',
+  '/',
+  '\\',
+  '-',
+  '_',
+  '~',
+  '+',
+  '=',
+  '#',
+  '@',
+  '%',
+  '&',
+  '$',
+]);
 
 /**
  * ref 是纯 ASCII 而紧随其后的是非 ASCII 字母时,认边界。
@@ -744,11 +807,7 @@ function splitTrailingAfterRef(ref: string, refs: ReadonlySet<string>): string |
     // `.` 只在它是 token **最后一个字符**时算边界:`@a/b.ts.`(英文句末)要拆,
     // 而 `@foo` + `.bar` 这种「更长的真实路径」不能被拆坏(review)。
     const trailingPeriod = next === '.' && candidate.length + 1 === ref.length;
-    if (
-      !isRefBoundary(next) &&
-      !isScriptChangeBoundary(candidate, next) &&
-      !trailingPeriod
-    ) {
+    if (!isRefBoundary(next) && !isScriptChangeBoundary(candidate, next) && !trailingPeriod) {
       continue;
     }
     if (matched === null || candidate.length > matched.length) matched = candidate;

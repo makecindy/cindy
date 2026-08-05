@@ -8,6 +8,12 @@
 
 import type { Logger } from './logger.js';
 
+/** Result of a secret read when callers must distinguish absence from failure. */
+export type IMSecretReadResult =
+  | { kind: 'value'; value: string }
+  | { kind: 'missing' }
+  | { kind: 'error' };
+
 /**
  * Host-injected capabilities. Hosts must provide encrypted KV storage, an IPC
  * bridge, and a couple of derived paths. Optionally a logger factory; otherwise
@@ -20,6 +26,12 @@ export interface IMHost {
     write(name: string, plaintext: string): boolean;
     /** Read; missing or unavailable returns null. */
     read(name: string): string | null;
+    /**
+     * Read without collapsing a missing key and a storage/decryption failure.
+     * Optional for backwards-compatible hosts; callers that require certainty
+     * must treat an absent implementation as `error`.
+     */
+    readResult?(name: string): IMSecretReadResult;
     /** Remove (no-op if missing). */
     remove(name: string): void;
     /** Whether encryption is currently usable (e.g. Linux without keychain). */
@@ -28,6 +40,8 @@ export interface IMHost {
 
   /** IPC bridge (replaces electron.ipcMain + BrowserWindow). */
   ipc: {
+    /** Raise a host-standard, renderer-decodable IPC error. */
+    throwIpcError(code: 'INVALID_PARAMS', message: string): never;
     /** Register an `invoke` handler. @cindy/im owns channel names. */
     handle(
       channel: string,
@@ -229,12 +243,33 @@ export interface IMCardActionEvent {
   scopeKey?: string;
 }
 
+/**
+ * 稳定的传输层错误分类。`reason` 是给日志/诊断看的原文(可能是英文技术串或
+ * 渠道原始描述), **不适合直接当 UI 文案**;渲染层按本枚举映射到 i18n key。
+ * 可选字段 —— 未标注 code 的渠道/旧路径由消费方回退到 reason。
+ */
+export type IMErrorCode =
+  /** token 无效 / 被吊销(401 / 404)。 */
+  | 'invalid-token'
+  /** 渠道 API 返回了其它失败码(限流、服务端错误等)。 */
+  | 'provider-api'
+  /** 网络不可达 / 请求异常。 */
+  | 'network'
+  /** 系统安全存储不可用或写入失败,凭证与状态无法落盘。 */
+  | 'secret-unavailable';
+
 export type IMStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
-  | { kind: 'error'; reason: string };
+  /**
+   * 凭证仍在、但用户主动下线 —— 不轮询、不收派发, 重启后保持。
+   * 与 idle 严格区分: idle = 没配置(无凭证), offline = 配好了但停用。
+   * 换机器时把另一端停掉而不清凭证, 之后随时可一键上线。
+   */
+  | { kind: 'offline'; appId: string }
+  | { kind: 'error'; reason: string; code?: IMErrorCode };
 
 // ── Outbound spec ─────────────────────────────────────────────────────────────
 // p2p only — outbound APIs always take a single openId: string.

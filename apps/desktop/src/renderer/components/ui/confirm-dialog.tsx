@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { useTranslation } from 'react-i18next';
 
@@ -49,8 +49,23 @@ export interface ConfirmDialogProps {
   autoFocusConfirm?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
+  /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
+  zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
+  /**
+   * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
+   * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
+   */
+  confirmIcon?: ReactNode;
+  /**
+   * 把 aria-describedby 指向「description + 富内容」整个滚动区,让屏幕阅读器在
+   * 弹窗打开时把 content 里的清单一并朗读出来。授权类确认(如 Full access 的
+   * 权限清单)应开启 —— 否则开场朗读止于 description,SR 用户在没听到实际权限
+   * 的情况下就能确认。缺省关闭:长清单弹窗(如装意识的逐项权限)开场全文朗读
+   * 反而淹没用户,是否开启由调用方按内容长度决定。
+   */
+  describeContent?: boolean;
   /**
    * 进入"操作进行中"态:主按钮内容换成 spinner、所有按钮禁用,
    * 同时 ESC 和点击外部都不再关弹框。典型场景:用户点了确认后触发的
@@ -81,12 +96,17 @@ export function ConfirmDialog({
   autoFocusConfirm,
   confirmDisabled = false,
   confirmVariant = 'default',
+  confirmIcon,
+  describeContent = false,
   loading = false,
   onConfirm,
   onCancel,
   onTertiary,
+  zIndex = 10000,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
+  const bodyId = useId();
   const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
@@ -123,7 +143,7 @@ export function ConfirmDialog({
             'data-[state=open]:animate-confirm-overlay-in',
             'data-[state=closed]:animate-confirm-overlay-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ WebkitAppRegion: 'no-drag', zIndex } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
@@ -134,8 +154,13 @@ export function ConfirmDialog({
             'data-[state=open]:animate-confirm-content-in',
             'data-[state=closed]:animate-confirm-content-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400 } as React.CSSProperties}
-          {...(!description ? { 'aria-describedby': undefined } : {})}
+          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400, zIndex } as React.CSSProperties}
+          {...(describeContent && content
+            ? // 指向滚动区(含 description 与 content):开场朗读覆盖清单全文。
+              { 'aria-describedby': bodyId }
+            : !description
+              ? { 'aria-describedby': undefined }
+              : {})}
           onEscapeKeyDown={(e) => {
             if (loading) e.preventDefault();
           }}
@@ -161,6 +186,7 @@ export function ConfirmDialog({
             // (典型:插件更新确认框的权限变更清单)。
             <div
               ref={scrollRef}
+              id={describeContent && content ? bodyId : undefined}
               // 内容里的折叠区(如权限清单的工具组)展开后高度会变,capture 阶段
               // 收一次点击、下一帧重新判定是否可滚,让滚动条跟着新高度再闪一下。
               onClickCapture={revealScrollbar}
@@ -222,7 +248,14 @@ export function ConfirmDialog({
                 {loading ? (
                   <Spinner size={14} />
                 ) : (
-                  resolvedConfirmText
+                  <>
+                    {confirmIcon && (
+                      <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                        {confirmIcon}
+                      </span>
+                    )}
+                    {resolvedConfirmText}
+                  </>
                 )}
               </button>
             </AlertDialog.Action>

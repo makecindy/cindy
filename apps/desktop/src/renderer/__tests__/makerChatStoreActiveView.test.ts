@@ -38,6 +38,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -269,8 +270,56 @@ describe('makerChatStore active view tracking', () => {
     expect(snapshot.oldestMessageId).toBe('older-plan');
   });
 
+  it('shows the latest page before background plan discovery completes', async () => {
+    const sessionId = sid('initial-page-first');
+    const latestPage = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    let resolveOlderPage!: (rows: Message[]) => void;
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latestPage)
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(4);
+
+    const firstPageSnapshot = makerChatStore.getSnapshot(sessionId);
+    expect(firstPageSnapshot.messages).toHaveLength(50);
+    expect(firstPageSnapshot.historyLoaded).toBe(false);
+    expect(firstPageSnapshot.isLoadingMore).toBe(true);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    // The background phase owns the same pagination lock; a user scroll cannot
+    // start a competing request or move the cursor backwards.
+    makerChatStore.loadOlderMessages(sessionId);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    const olderPage = [
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ];
+    resolveOlderPage(olderPage);
+    await flushPromises();
+
+    const finalSnapshot = makerChatStore.getSnapshot(sessionId);
+    expect(finalSnapshot.messages.some((message) => message.clientId === 'client-older-visible')).toBe(true);
+    expect(finalSnapshot.historyLoaded).toBe(true);
+    expect(finalSnapshot.isLoadingMore).toBe(false);
+  });
+
   it('initial history load treats swallowed plan tool rows as non-anchor rows', async () => {
     const sessionId = sid('initial-plan-non-anchor');
+    // Preserve a local-only row so loadOlderMessages would have a beforeTs
+    // cursor if the initial non-anchor backfill failed to acquire its lock.
+    addMessage(sessionId);
     vi.mocked(messageService.list).mockClear();
     const latestPage = Array.from({ length: 50 }, (_, i) =>
       dbToolUseMessage(
@@ -281,21 +330,37 @@ describe('makerChatStore active view tracking', () => {
         new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
       ),
     );
+    let resolveOlderPage!: (rows: Message[]) => void;
     vi.mocked(messageService.list)
       .mockResolvedValueOnce(latestPage)
-      .mockResolvedValueOnce([
-        dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
-      ]);
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
 
     makerChatStore.ensureInitialMessages(sessionId);
-    await flushPromises();
+    await flushPromises(4);
 
     expect(messageService.list).toHaveBeenCalledTimes(2);
     expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
       limit: 50,
       before: 'plan-00',
     });
-    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-visible');
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
+
+    makerChatStore.loadOlderMessages(sessionId);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    resolveOlderPage([
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ]);
+    await flushPromises();
+
+    const snapshot = makerChatStore.getSnapshot(sessionId);
+    expect(snapshot.oldestMessageId).toBe('older-visible');
+    expect(snapshot.historyLoaded).toBe(true);
+    expect(snapshot.isLoadingMore).toBe(false);
   });
 
   it('continues initial history backfill until the latest plan boundary is found', async () => {
@@ -416,6 +481,163 @@ describe('makerChatStore active view tracking', () => {
       before: 'older-1-00',
     });
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
+  });
+
+  it('continues plan backfill when the visible TaskCreate may be a later step in the same plan', async () => {
+    const sessionId = sid('initial-plan-missing-earlier-create');
+    vi.mocked(messageService.list).mockClear();
+    const filler = Array.from({ length: 47 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (100 + i) * 1000).toISOString(),
+      ),
+    );
+    const laterCreate = dbToolUseMessage(
+      sessionId,
+      'later-task-create',
+      'TaskCreate',
+      { subject: 'Fix renderer' },
+      new Date(BASE_TIME.getTime() + 200_000).toISOString(),
+    );
+    const laterResult = dbToolResultMessage(
+      sessionId,
+      'later-task-result',
+      'tool-later-task-create',
+      'Task #2 created successfully: Fix renderer',
+      new Date(BASE_TIME.getTime() + 201_000).toISOString(),
+    );
+    const laterUpdate = dbToolUseMessage(
+      sessionId,
+      'later-task-update',
+      'TaskUpdate',
+      { taskId: '2', status: 'in_progress' },
+      new Date(BASE_TIME.getTime() + 202_000).toISOString(),
+    );
+    const earlierCreate = dbToolUseMessage(
+      sessionId,
+      'earlier-task-create',
+      'TaskCreate',
+      { subject: 'Inspect logs' },
+      new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+    );
+    const earlierResult = dbToolResultMessage(
+      sessionId,
+      'earlier-task-result',
+      'tool-earlier-task-create',
+      'Task #1 created successfully: Inspect logs',
+      new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+    );
+
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...filler, laterCreate, laterResult, laterUpdate])
+      .mockResolvedValueOnce([earlierCreate, earlierResult]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
+      limit: 50,
+      before: 'latest-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('earlier-task-create');
+  });
+
+  it('continues plan backfill past an unrelated visible task until the updated task is found', async () => {
+    const sessionId = sid('initial-plan-unrelated-task');
+    vi.mocked(messageService.list).mockClear();
+    const fillerPage = (prefix: string, startOffsetSeconds: number, count = 49) =>
+      Array.from({ length: count }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    const latestTaskUpdate = dbToolUseMessage(
+      sessionId,
+      'latest-task-update',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 3_000_000).toISOString(),
+    );
+    const unrelatedCreate = dbToolUseMessage(
+      sessionId,
+      'unrelated-task-create',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      new Date(BASE_TIME.getTime() + 1_100_000).toISOString(),
+    );
+    const unrelatedResult = dbToolResultMessage(
+      sessionId,
+      'unrelated-task-result',
+      'tool-unrelated-task-create',
+      'Task #def created successfully: Fix existing tests',
+      new Date(BASE_TIME.getTime() + 1_100_001).toISOString(),
+    );
+    const targetCreate = dbToolUseMessage(
+      sessionId,
+      'target-task-create',
+      'TaskCreate',
+      { subject: 'Run stress tests' },
+      new Date(BASE_TIME.getTime() - 4_000).toISOString(),
+    );
+    const targetResult = dbToolResultMessage(
+      sessionId,
+      'target-task-result',
+      'tool-target-task-create',
+      'Task #abc created successfully: Run stress tests',
+      new Date(BASE_TIME.getTime() - 3_000).toISOString(),
+    );
+    const missingOlderUpdate = dbToolUseMessage(
+      sessionId,
+      'missing-task-update',
+      'TaskUpdate',
+      { taskId: 'legacy', status: 'completed' },
+      new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+    );
+    const missingOlderCreate = dbToolUseMessage(
+      sessionId,
+      'missing-task-create',
+      'TaskCreate',
+      { subject: 'Inspect collision failures' },
+      new Date(BASE_TIME.getTime() - 6_000).toISOString(),
+    );
+    const missingOlderResult = dbToolResultMessage(
+      sessionId,
+      'missing-task-result',
+      'tool-missing-task-create',
+      'Task #legacy created successfully: Inspect collision failures',
+      new Date(BASE_TIME.getTime() - 5_000).toISOString(),
+    );
+
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...fillerPage('latest', 2000), latestTaskUpdate])
+      .mockResolvedValueOnce([
+        ...fillerPage('middle', 1000, 48),
+        unrelatedCreate,
+        unrelatedResult,
+      ])
+      .mockResolvedValueOnce([
+        ...fillerPage('older-target', 100, 47),
+        targetCreate,
+        targetResult,
+        missingOlderUpdate,
+      ])
+      .mockResolvedValueOnce([missingOlderCreate, missingOlderResult]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    expect(messageService.list).toHaveBeenCalledTimes(4);
+    expect(messageService.list).toHaveBeenNthCalledWith(4, sessionId, {
+      limit: 50,
+      before: 'target-task-create',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('missing-task-create');
   });
 
   it('caps initial plan resolution backfill when a latest TaskUpdate cannot be resolved', async () => {
@@ -595,6 +817,7 @@ describe('makerChatStore active view tracking', () => {
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
     expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
       dbMessage(sessionId, 'latest-page-oldest', 'latest page oldest', '2026-05-19T00:10:00.000Z'),
@@ -882,8 +1105,36 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
 
     dispose(); // 写 lastViewedAt = BASE_TIME
-    // 推进 90s（>60s DEMOTE_IDLE_MS）让 demote timer 至少跑一次（间隔 30s）。
-    vi.advanceTimersByTime(90_000);
+    // 4:59 仍保留，5:00 的 demote timer 才清空（检查间隔 30s）。
+    vi.advanceTimersByTime(4 * 60_000 + 59_000);
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_000);
+
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
+  });
+
+  it('demotes a prefetched session that never enters a mounted view', async () => {
+    const sessionId = sid('prefetch-demote');
+    addMessage(sessionId);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(BASE_TIME.getTime());
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+
+    vi.advanceTimersByTime(4 * 60_000);
+    makerChatStore.ensureInitialMessages(sessionId);
+    expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(
+      BASE_TIME.getTime() + 4 * 60_000,
+    );
+
+    vi.advanceTimersByTime(4 * 60_000 + 59_000);
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_000);
 
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);

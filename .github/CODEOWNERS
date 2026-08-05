@@ -9,3 +9,17 @@
 # 这里同时列出 team 与个人:即使 team 尚未建好或未授权,自动指派仍然生效。
 # team 确认可用后可以删掉个人账号那一项。
 * @makecindy/maintainers
+
+# 统一模型 registry 的协议、内置快照、远程加载与运行时投影是同一权威面。
+# 最后匹配规则覆盖上面的通用 owner；任何改动都会显式请求 registry owner。
+/.github/CODEOWNERS @zqchris
+/cindy-protocol @zqchris
+/packages/model-providers/catalog/model-registry.json @zqchris
+/packages/model-providers/src/catalog.ts @zqchris
+/packages/model-providers/src/modelRegistry.ts @zqchris
+/packages/model-providers/src/source.ts @zqchris
+/packages/model-providers/src/types.ts @zqchris
+/apps/desktop/src/main/maker-host/active-catalog.ts @zqchris
+/apps/desktop/src/main/model-access/devMetaOverlay.ts @zqchris
+/apps/desktop/src/main/usage/modelPriceOverrideStore.ts @zqchris
+/apps/desktop/src/main/usage/modelPricing.ts @zqchris

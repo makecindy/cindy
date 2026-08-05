@@ -24,7 +24,12 @@ import type {
   MobileMakerTransport,
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
-import { remoteFileMediaUrl } from '@/session/fileBrowserGallery';
+import {
+  effectiveRemoteMediaSshContext,
+  remoteFileMediaUrl,
+  type RemoteMediaFetchConstraints,
+  type RemoteMediaSshContext,
+} from '@/session/fileBrowserGallery';
 import {
   isResolvedRemoteMediaFresh,
   resolveMobileRemoteMedia,
@@ -79,20 +84,74 @@ function rememberFetch(key: string, media: MobileResolvedRemoteMedia, now: numbe
 export async function fetchRemoteAbsFileToUrl(
   deps: RemoteAbsFileFetchDeps,
   absPath: string,
+  /**
+   * SSH 会话的取件上下文(见 remoteFileMediaUrl):不传会让被控端把 absPath 当**本机**
+   * 路径解析。**必须进缓存键** —— 同一路径在不同远端主机上是不同文件,漏进去会串味。
+   */
+  ssh?: RemoteMediaSshContext | null,
 ): Promise<string> {
-  const key = `${deps.deviceId}\u0000${absPath}`;
+  // 缓存键与 URL 必须走**同一份**「有效 SSH 上下文」判定(review P2):只看 `ssh` 对象是否
+  // 存在会让字段为空/带空白的对象把键分叉,而 URL 那边已经退化成不带 SSH 参数(被控端按
+  // 本机路径取件)—— 于是同一次取件永远命中不了缓存,每次都白发一轮请求。
+  const eff = effectiveRemoteMediaSshContext(ssh);
+  const sshKey = eff
+    ? `${eff.sessionId}\u0000${eff.remoteHostId}\u0000${eff.workdir}`
+    : '';
+  const key = `${deps.deviceId}\u0000${absPath}\u0000${sshKey}`;
   const cached = lookupCache(key, Date.now());
   if (cached) return cached.url;
   const resolved = await withTransientRemoteRetry(async () => {
     await deps.openLink(deps.deviceId);
     // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
     return resolveMobileRemoteMedia(
-      { kind: 'image', url: remoteFileMediaUrl(absPath) },
+      { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
     );
   });
   rememberFetch(key, resolved, Date.now());
   return resolved.url;
+}
+
+/**
+ * 一次性取件:返回**完整** resolved 结果(含 ossKey)且**不进共享缓存**。
+ *
+ * 给「取回字节后立刻转成 data: URI」的消费方用(HTML 渲染态的同目录资源):
+ *  - 需要 ossKey 才能在用完后 DELETE 掉 OSS 对象 —— fetchRemoteAbsFileToUrl 只回 url、
+ *    丢掉 ossKey,于是每个资源都会遗留一个在世对象,一页最多 32 个,反复进出还会累积
+ *    (review P1)。
+ *  - 不进那份 60s TTL 缓存:对象用完即删,缓存命中会回一个已被删除的死 URL。
+ */
+export async function fetchRemoteAbsFileOnce(
+  deps: RemoteAbsFileFetchDeps,
+  absPath: string,
+  ssh?: RemoteMediaSshContext | null,
+  /**
+   * 每次上传成功、拿到 ossKey 时回调(可能被调用多次,见下)。
+   *
+   * **调用方必须累加收集,并对每个 key 都做 best-effort DELETE**:
+   *  - presign 失败(弱网 / 回包非法)会让 resolveMobileRemoteMedia 在返回之前抛错,
+   *    此时对象已经在 OSS 上,但调用方拿不到 resolved 结果 —— 只围绕结果写 finally 的话
+   *    这个对象永久遗留(review P1);
+   *  - withTransientRemoteRetry 的每一次重试都可能再上传一份,产出**不同**的 key,
+   *    所以只记最后一个同样会漏。
+   */
+  onOssKey?: (ossKey: string) => void,
+  /**
+   * 服务端强制约束(baseDir / maxBytes)。**必须在这里传**,而不是只在手机侧判:
+   * 手机拿到 `media.size` 时被控端已经上传完 OSS(SSH 场景还先整份拉到 Desktop 磁盘缓存),
+   * 流量与磁盘已经花掉了(review P2)。老被控端忽略这两个参数,故手机侧判断照旧保留。
+   */
+  constraints?: RemoteMediaFetchConstraints | null,
+): Promise<MobileResolvedRemoteMedia> {
+  return withTransientRemoteRetry(async () => {
+    await deps.openLink(deps.deviceId);
+    // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
+    return resolveMobileRemoteMedia(
+      { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
+      { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
+      onOssKey ? { onOssKey } : undefined,
+    );
+  });
 }
 
 /**

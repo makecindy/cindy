@@ -1,4 +1,13 @@
-import { Folder, FolderPlus, Globe, MessageCircle, X } from 'lucide-react';
+import {
+  CircleAlert,
+  Folder,
+  FolderPlus,
+  Globe,
+  Loader2,
+  MessageCircle,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -36,8 +45,10 @@ export interface FolderPickerOption {
 export interface FolderPickerDeviceScope {
   deviceId: string;
   deviceName: string;
-  /** 正在经隧道取该设备的最近项目。 */
-  loading?: boolean;
+  /** 远程项目读取状态；只有 ready + 空数组才允许渲染权威空态。 */
+  status: 'loading' | 'ready' | 'error';
+  error?: string | null;
+  retry?: () => void;
 }
 
 export type FolderPickerSelectSource = 'project' | 'recent' | 'browse' | 'dialogue';
@@ -84,8 +95,9 @@ function handleFolderPickerWheel(e: React.WheelEvent<HTMLElement>) {
 
   const current = e.currentTarget;
   const target = e.target instanceof HTMLElement ? e.target : null;
-  const scrollRoot = target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]')
-    ?? current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
+  const scrollRoot =
+    target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]') ??
+    current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
 
   if (!scrollRoot || scrollRoot.scrollHeight <= scrollRoot.clientHeight) return;
 
@@ -100,7 +112,7 @@ interface FolderPickerPopoverProps {
     folderPath: string,
     source: FolderPickerSelectSource,
     option?: FolderPickerOption,
-  ) => void;
+  ) => void | Promise<void>;
   projectOptions?: readonly FolderPickerOption[];
   /**
    * 非空 = 项目区列的是这台对端设备的项目(本机时不传)。只用于空态文案与「浏览文件夹」
@@ -140,13 +152,19 @@ export function FolderPickerPopover({
   const effectiveProjectOptions = projectOptions ?? [];
   const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
 
-  const handleSelectPath = (
+  const handleSelectPath = async (
     folderPath: string,
     source: FolderPickerSelectSource,
     option?: FolderPickerOption,
-  ) => {
-    onSelect(folderPath, source, option);
+  ): Promise<void> => {
+    try {
+      await onSelect(folderPath, source, option);
+    } finally {
+      // Selection callbacks may persist the directory before handing a pending
+      // send back to the parent. Close only after that hand-off completes so a
+      // controlled popover cannot clear the pending payload first.
     onOpenChange(false);
+    }
   };
 
   const handleRemoveProject = (project: FolderPickerOption) => {
@@ -184,7 +202,10 @@ export function FolderPickerPopover({
         >
           <Folder
             size={20}
-            className={cn('shrink-0 text-[var(--folder-item-icon)]', project.missing && 'opacity-50')}
+            className={cn(
+              'shrink-0 text-[var(--folder-item-icon)]',
+              project.missing && 'opacity-50',
+            )}
           />
           <div className="flex min-w-0 flex-1 flex-col items-start">
             <span
@@ -253,8 +274,7 @@ export function FolderPickerPopover({
     }
     const result = await window.electronAPI.showOpenDirectoryDialog();
     if (!result.canceled && result.path) {
-      onSelect(result.path, 'browse');
-      onOpenChange(false);
+      await handleSelectPath(result.path, 'browse');
     }
     // If canceled, popover stays open per spec
   };
@@ -304,10 +324,40 @@ export function FolderPickerPopover({
               data-folder-picker-scroll="true"
               className="pending-queue-scroll -mr-2 max-h-[224px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2"
             >
-              {deviceScope?.loading ? (
-                <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
-                  {t('newChat.addRemoteProject.existingLoading')}
+              {deviceScope?.status === 'loading' ? (
+                <div className="flex items-center gap-2 px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                  <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
+                    <Loader2 size={14} />
+                  </span>
+                  <span>{t('newChat.addRemoteProject.existingLoading')}</span>
                 </div>
+              ) : deviceScope?.status === 'error' ? (
+                <>
+                  <div
+                    role="alert"
+                    className="mx-1 flex items-start gap-2 rounded-[8px] border border-[var(--error-border)] bg-[var(--error-bg)] px-3 py-2"
+                  >
+                    <CircleAlert size={14} className="mt-0.5 shrink-0 text-[var(--error-fg)]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs leading-[1.45] text-[var(--error-fg)]">
+                        {t('newChat.folderPicker.remoteProjectsLoadFailed', {
+                          device: deviceScope.deviceName,
+                        })}
+                      </p>
+                      {deviceScope.retry && (
+                        <button
+                          type="button"
+                          onClick={deviceScope.retry}
+                          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
+                        >
+                          <RefreshCw size={12} />
+                          {t('newChat.folderPicker.retryRemoteProjects')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {effectiveProjectOptions.map(renderProject)}
+                </>
               ) : effectiveProjectOptions.length > 0 ? (
                 effectiveProjectOptions.map(renderProject)
               ) : deviceScope && onAddRemoteProject ? (

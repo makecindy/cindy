@@ -208,6 +208,28 @@ describe('CreateWorkerPopover', () => {
     resetProviderModelMemoryForTest();
   });
 
+  it('centers the setup and keeps agent and model on one row without changing its size', () => {
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    const overlay = panel?.parentElement;
+    expect(overlay?.className).toContain('items-center');
+    expect(overlay?.className).not.toContain('items-start');
+    expect(overlay?.className).not.toContain('pt-[10vh]');
+    expect(panel?.className).toContain('w-[500px]');
+    expect(panel?.className).toContain('p-6');
+
+    const agentSwitcher = screen.getByRole('tablist', {
+      name: 'orca.createWorker.agentLabel',
+    });
+    const pairedFields = agentSwitcher.closest('.grid');
+    expect(pairedFields?.className).toContain('grid-cols-[220px_minmax(0,1fr)]');
+    expect(pairedFields?.contains(screen.getByTestId('model-selector'))).toBe(true);
+
+    const initialTask = screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder');
+    expect(initialTask.className).toContain('h-[96px]');
+  });
+
   it('disables immediately and collapses repeated click events into one request', async () => {
     let finishCreate!: () => void;
     const onCreate = vi.fn(

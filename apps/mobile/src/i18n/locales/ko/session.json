@@ -28,6 +28,7 @@
     "thinking": "생각 중…",
     "networkReconnecting": "다시 연결하는 중…",
     "modelBusyRetrying": "모델 서비스 혼잡, 다시 시도 중…",
+    "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 다시 시도 중…",
     "composerSyncing": "세션 데이터를 동기화 중입니다. 완료되면 보낼 수 있습니다.",
     "composerSessionNotSynced": "이 세션은 아직 동기화가 끝나지 않았습니다.",
     "composerCreating": "세션을 만드는 중입니다. 첫 메시지가 전송되면 계속 보낼 수 있습니다.",
@@ -203,6 +204,20 @@
     "viewUsageDetail": "세션 사용량 세부 정보 보기",
     "linkCopied": "링크 복사됨",
     "sessionInfo": "세션 정보",
+    "branches": "세션 분기",
+    "branchCurrent": "현재",
+    "branchEmpty": "아직 전환할 수 있는 분기가 없습니다.",
+    "branchEmptyEntry": "빈 항목",
+    "branchLoadFailed": "세션 분기를 불러오지 못했습니다.",
+    "branchSwitchFailed": "세션 분기를 전환하지 못했습니다.",
+    "branchRunningBlocked": "실행 중인 작업이 끝난 뒤 분기를 전환하세요.",
+    "branchRole": {
+      "user": "사용자",
+      "assistant": "어시스턴트",
+      "tool": "도구",
+      "summary": "요약",
+      "system": "시스템"
+    },
     "usageSection": "사용량",
     "refreshContextUsage": "컨텍스트 사용량 새로 고침",
     "currentSessionSpend": "이번 세션",
@@ -233,7 +248,6 @@
     "backToMenu": "세션 메뉴로 돌아가기"
   },
   "messageMenu": {
-    "fork": "새 세션에서 계속하기",
     "addToChat": "대화에 추가",
     "copyLink": "현재 메시지 링크 복사",
     "rewind": "여기로 돌아가기",

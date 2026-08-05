@@ -9,6 +9,7 @@
 import {
   AppWindow,
   Bell,
+  BellDot,
   BadgeCheck,
   Bot,
   ChevronDown,
@@ -65,10 +66,15 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {
   if (item.labelKey === 'panelLeft') return PanelLeft;
+  // 未读角标与一次性提示同属 notify kind,但一个是常驻注意力入口、一个是弹完就走
+  // (两者是并列的两档权限,可以只申请其中一项),同时出现时同图标读起来像重复项,
+  // 给角标换一枚带点的铃铛以示区分。
+  if (item.labelKey === 'badge') return BellDot;
   // network 槽的凭证条目换钥匙图标(与域名条目区分:一个是"去哪",一个是"带什么")。
   if (
     item.labelKey === 'networkSecret' ||
     item.labelKey === 'networkSecretOauth' ||
+    item.labelKey === 'networkSecretOrganizationIdentity' ||
     item.labelKey === 'nodeSecret'
   )
     return KeyRound;

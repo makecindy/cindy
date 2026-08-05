@@ -55,4 +55,21 @@ describe('safe storage Codex restart invariants', () => {
       expect(src.slice(start, end)).toContain('isValidRendererKey(key)');
     }
   });
+
+  it('keeps safe-storage-read fail-closed and downgrades expected permission denials', () => {
+    const src = source();
+    const start = src.indexOf("'safe-storage-read'");
+    const end = src.indexOf("'safe-storage-remove'", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    expect(body).toContain('assertTrustedAppRendererEvent(event);');
+    expect(body.indexOf('assertTrustedAppRendererEvent(event);')).toBeLessThan(
+      body.indexOf('resolveSafeStorageFilepath(key)'),
+    );
+    expect(body).toContain("isIpcError(err) && err.code === 'PERMISSION_DENIED'");
+    expect(body).toContain("safeStorageReadLog.debug('read denied for untrusted renderer')");
+    expect(body).toContain("safeStorageReadLog.error('read failed'");
+    expect(body).not.toContain("console.error('[safe-storage-read]', err)");
+  });
 });

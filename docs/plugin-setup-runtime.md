@@ -362,7 +362,12 @@ Main → Renderer：
 
 禁止在 setup ready 前产生授权记忆、目录票据、沙箱副作用或插件调用。已经进入 dispatch 的调用不因后续配置变化自动重试。
 
-`grant_only` 只建立附件用户授权，不执行插件工具，并保持忽略 `tool` 的调用语义；但它同样必须先通过 Host-authoritative setup gate，禁止未配置插件提前获得持久授权。旧插件页 `GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的 requirement 时不得 fail-open。
+`grant_only` 只建立附件交接，不执行插件工具，并保持忽略 `tool` 的调用语义。非
+Full Access 下，用户确认会建立人工 `ghost-grant`；本地 Full Access 下则只建立
+`ghost-tool-grant` 取件引用，不弹卡，也不形成降档后仍生效的人工永久授权。两种路径都必须
+先通过 Host-authoritative setup gate，禁止未配置插件提前获得任何媒体引用。旧插件页
+`GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的
+requirement 时不得 fail-open。
 
 ### 5.2 Coordinator
 

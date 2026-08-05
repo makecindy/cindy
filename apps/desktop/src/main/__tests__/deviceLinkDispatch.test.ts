@@ -27,6 +27,7 @@ vi.mock('../voice-input/index.js', () => ({
 }));
 
 import {
+  markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
@@ -35,7 +36,12 @@ import {
   type ActiveController,
 } from '../device-link/dispatch';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
-import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
+import {
+  deviceLinkInvokeControllerSupports,
+  getDeviceLinkInvokeContext,
+  isDeviceLinkInvoke,
+} from '../device-link/invoke-context';
+import * as subscriptions from '../device-link/subscriptions';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -97,6 +103,30 @@ describe('runInvoke 双层校验', () => {
       },
     });
     expect(isDeviceLinkInvoke()).toBe(false);
+  });
+
+  it('能力查询只信任当前 device-link controller context,未知控制端 fail closed', async () => {
+    subscriptions.subscribe(
+      'ctrl-cap',
+      ['sessions'],
+      'Desktop',
+      [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
+    );
+    subscriptions.subscribe('ctrl-legacy', ['sessions'], 'Legacy');
+    registry.register('maker:list-active', () => ({
+      explicitProviderNull: deviceLinkInvokeControllerSupports(
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ),
+    }));
+
+    await expect(runInvoke('ctrl-cap', { channel: 'maker:list-active', args: [] })).resolves.toEqual({
+      ok: true,
+      result: { explicitProviderNull: true },
+    });
+    await expect(runInvoke('ctrl-legacy', { channel: 'maker:list-active', args: [] })).resolves.toEqual({
+      ok: true,
+      result: { explicitProviderNull: false },
+    });
   });
 
   it('本机 handler 抛 throwIpcError → IPC_ERROR 透传 [CODE] message', async () => {
@@ -383,9 +413,11 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
+  pushSessionActivityToController,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,
@@ -394,8 +426,11 @@ import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/dev
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
-function makeFakeClient() {
+function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'online') {
   let frameHandler: ((env: Envelope) => unknown | Promise<unknown>) | null = null;
+  let status = initialStatus;
+  let reliableSendQueueDepth = 0;
+  let nextPushError: Error | null = null;
   const calls = {
     linkAccept: [] as Array<{ dst: string; requestId: string }>,
     closed: [] as Array<{ dst: string; reason: string }>,
@@ -403,20 +438,37 @@ function makeFakeClient() {
     invokeResult: [] as Array<{ dst: string; requestId: string; payload: unknown }>,
   };
   const client = {
+    getStatus: () => status,
     onFrame: (cb: (env: Envelope) => unknown | Promise<unknown>) => {
       frameHandler = cb;
       return () => {};
     },
     sendLinkAccept: (dst: string, requestId: string) => calls.linkAccept.push({ dst, requestId }),
     closeLink: (dst: string, reason: string) => calls.closed.push({ dst, reason }),
-    sendPush: (dst: string, channel: string, payload: unknown) =>
-      calls.push.push({ dst, channel, payload }),
+    sendPush: (dst: string, channel: string, payload: unknown) => {
+      if (nextPushError) {
+        const err = nextPushError;
+        nextPushError = null;
+        throw err;
+      }
+      calls.push.push({ dst, channel, payload });
+    },
     sendInvokeResult: (dst: string, requestId: string, payload: unknown) =>
       calls.invokeResult.push({ dst, requestId, payload }),
+    getReliableSendQueueDepth: () => reliableSendQueueDepth,
   };
   return {
     client: client as never,
     calls,
+    setStatus: (nextStatus: 'stopped' | 'connecting' | 'online') => {
+      status = nextStatus;
+    },
+    setReliableSendQueueDepth: (depth: number) => {
+      reliableSendQueueDepth = depth;
+    },
+    failNextPush: (err: Error) => {
+      nextPushError = err;
+    },
     feed: (env: Envelope) => frameHandler?.(env),
   };
 }
@@ -510,6 +562,24 @@ describe('被控端控制链路生命周期', () => {
 
     expect(() => dropAllControllers(client, 'user')).not.toThrow();
     expect(getActiveControllers()).toEqual([]);
+    expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('显式 dropAll 清理断线期间已排队的 push', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-drop-queue', SUB, ['session:s1']));
+    handleControllerOffline('ctrl-drop-queue');
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-stale',
+    });
+    expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toHaveLength(1);
+
+    dropAllControllers(client, 'toggle-off');
+
+    expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
@@ -607,14 +677,26 @@ describe('被控端控制链路生命周期', () => {
     )).toBe(false);
   });
 
-  it('link-close → 移除控制端,最后一个关闭后停 broadcast-tap', () => {
+  it('link-close clears remembered routing and queued pushes', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
-    feed({ v: 1, kind: 'link-open', id: 'r3', src: 'ctrl-c', payload: { controllerName: 'C', protocolVersion: 1, appVersion: '1' } });
-    expect(getActiveControllers()).toHaveLength(1);
+    feed(subFrame('ctrl-c', SUB, ['session:s1'], 'C'));
+    handleControllerOffline('ctrl-c');
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-before-close',
+    });
+    expect(dispatchTesting.queuedPushesFor('ctrl-c')).toHaveLength(1);
+
     feed({ v: 1, kind: 'link-close', src: 'ctrl-c', payload: { reason: 'user' } });
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-after-close',
+    });
+
     expect(getActiveControllers()).toHaveLength(0);
+    expect(dispatchTesting.queuedPushesFor('ctrl-c')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
@@ -1559,6 +1641,36 @@ describe('被控端订阅 registry + topic 转发', () => {
     )).toBe(false);
   });
 
+  it('link-close(transport-timeout) 保留被控端反向控制状态;永久关闭 reason 维持清理语义', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    // 对端(另一台桌面)作为控制端订阅本机 sessions
+    feed(subFrame('ctrl-desktop', SUB, ['sessions'], 'OtherMac'));
+    calls.push.length = 0;
+
+    // 对端作为**被控端**对另一条方向的 link 做瞬时重置 → 发来 transport-timeout。
+    // 互控场景下这不得清掉它作为控制端的订阅/记忆路由——否则反向实时推送
+    // 静默断流而对端毫不知情。
+    feed({
+      v: 1,
+      kind: 'link-close',
+      src: 'ctrl-desktop',
+      payload: { reason: 'transport-timeout' },
+    });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    expect(calls.push).toEqual([
+      { dst: 'ctrl-desktop', channel: 'local-db:sessions:created', payload: { sessionId: 's1' } },
+    ]);
+
+    // 永久关闭(user)仍完整清理
+    calls.push.length = 0;
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-desktop', payload: { reason: 'user' } });
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's2' });
+    expect(calls.push).toEqual([]);
+  });
+
   it('subscribe 帧 → 回 invoke-result;sessions topic 只发列表订阅者,不发未订阅的 heavy 事件', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
@@ -1621,6 +1733,171 @@ describe('被控端订阅 registry + topic 转发', () => {
         },
       },
     ]);
+  });
+
+  describe('会话活动出站整流(latest-wins 暂存)', () => {
+    it('窗口占用达软上限时暂存并合并同会话帧;窗口空出后只发最新值', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'step 1' });
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'step 2' });
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's2', phase: 'running', compactDetail: 'other' });
+        expect(calls.push).toEqual([]);
+        // 同一会话只保留最新值 → 暂存里只有 s1 + s2 两个键
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(2);
+
+        setReliableSendQueueDepth(0);
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'running', compactDetail: 'step 2' },
+          },
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's2', phase: 'running', compactDetail: 'other' },
+          },
+        ]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('BACKPRESSURE 保留暂存退避重试;其它错误沿 best-effort 丢弃不堵队', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, failNextPush } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        failNextPush(new DeviceLinkError('BACKPRESSURE', 'buffer full'));
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'busy' });
+        expect(calls.push).toEqual([]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'running', compactDetail: 'busy' },
+          },
+        ]);
+
+        // 非背压错误(如 PAYLOAD_TOO_LARGE)丢弃该条,后续帧不受影响
+        calls.push.length = 0;
+        failNextPush(new DeviceLinkError('PAYLOAD_TOO_LARGE', 'too large'));
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's3', phase: 'running', compactDetail: 'x' });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's4', phase: 'running', compactDetail: 'y' });
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's4', phase: 'running', compactDetail: 'y' },
+          },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('定向 replay 只投给目标控制端,不扇出给其它订阅者;未订阅目标为 no-op', () => {
+      remoteControlEnabled = true;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+      feed(subFrame('ctrl-b', SUB, ['sessions'], 'MacB'));
+      calls.push.length = 0;
+
+      pushSessionActivityToController('ctrl-b', { sessionId: 's1', phase: 'running', compactDetail: 'replay' });
+      expect(calls.push).toEqual([
+        {
+          dst: 'ctrl-b',
+          channel: SESSION_ACTIVITY_CHANNEL,
+          payload: { sessionId: 's1', phase: 'running', compactDetail: 'replay' },
+        },
+      ]);
+
+      // 未订阅 sessions 的控制端:不投递、不暂存
+      calls.push.length = 0;
+      pushSessionActivityToController('ctrl-unknown', { sessionId: 's1', phase: 'running', compactDetail: 'replay' });
+      expect(calls.push).toEqual([]);
+      expect(dispatchTesting.sessionActivityStageSize('ctrl-unknown')).toBe(0);
+    });
+
+    it('relay 离线期间保持退避重试,恢复在线后无需新事件即自动投递暂存值', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setStatus, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        // 背压下暂存 → 随后 relay 离线
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+        setStatus('connecting');
+        setReliableSendQueueDepth(0);
+
+        // 离线期间定时器照常触发:不投递、不丢暂存、继续自我调度
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs * 3);
+        expect(calls.push).toEqual([]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        // 恢复在线:无需新活动事件/重订阅,下一轮重试自动投递
+        setStatus('online');
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false },
+          },
+        ]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('退订 sessions 清空该控制端暂存(含排期中的重试)', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'running', compactDetail: 'staged' });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        feed(subFrame('ctrl-a', UNSUB, ['sessions']));
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+
+        setReliableSendQueueDepth(0);
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs * 2);
+        expect(calls.push).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('订阅 session:<id> → heavy 事件转发 + 横幅亮;纯 sessions 不亮横幅', () => {
@@ -1725,9 +2002,76 @@ describe('被控端订阅 registry + topic 转发', () => {
         appVersion: '1.0.0',
       },
     });
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    feed(subFrame('ctrl-modern', SUB, ['session:s1'], 'Modern reconnect'));
     expect(getUpdateRelaunchControllers()).toEqual([
       { deviceId: 'ctrl-modern', name: 'Modern reconnect' },
     ]);
+  });
+
+  it('modern reconnect after releasing every topic waits for a fresh subscribe', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+    feed(subFrame('ctrl-modern', UNSUB, ['sessions']));
+    handleControllerOffline('ctrl-modern');
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+
+    expect(calls.push).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+  });
+
+  it('dropAll closes an accepted modern reconnect before explicit subscribe', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+    handleControllerOffline('ctrl-modern');
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    dropAllControllers(client, 'shutdown');
+
+    expect(calls.closed).toContainEqual({
+      dst: 'ctrl-modern',
+      reason: 'shutdown',
+    });
   });
 
   it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {
@@ -1893,7 +2237,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(calls.push).toEqual([]);
   });
 
-  it('unsubscribe 移除 topic;registry 空后停 tap', () => {
+  it('explicit unsubscribe removes the final remembered topic and stops the tap', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -1903,15 +2247,49 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
-  it('presence-offline 清掉该控制端订阅(僵尸兜底)', () => {
+  it('relay-offline queues broadcasts for active topic subscribers', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed, setStatus } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+    setStatus('connecting');
+
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm1',
+    });
+
+    expect(calls.push).toEqual([]);
+    expect(dispatchTesting.queuedPushesFor('ctrl-a')).toEqual([
+      {
+        channel: 'local-db:messages:created',
+        payload: { sessionId: 's1', id: 'm1' },
+        topic: 'session:s1',
+      },
+    ]);
+  });
+
+  it('presence-offline keeps the tap alive and queues broadcasts for remembered topics', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
-    feed(subFrame('ctrl-a', SUB, ['sessions']));
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
     handleControllerOffline('ctrl-a');
-    expect(hasBroadcastTapListener()).toBe(false);
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+
+    expect(hasBroadcastTapListener()).toBe(true);
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm1',
+    });
+
     expect(calls.push).toEqual([]);
+    expect(dispatchTesting.queuedPushesFor('ctrl-a')).toEqual([
+      {
+        channel: 'local-db:messages:created',
+        payload: { sessionId: 's1', id: 'm1' },
+        topic: 'session:s1',
+      },
+    ]);
   });
 
   it('开关关闭 → subscribe 帧回 REMOTE_DISABLED,不记录', () => {
@@ -1953,6 +2331,36 @@ describe('远程 set-* 持久化回流', () => {
       model: 'claude-x',
       providerId: 'anthropic',
     });
+  });
+
+  it('set-model handler 返回 superseded 时不持久化过期 model/provider', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => ({ deferred: false, superseded: true }));
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'stale-model', 'stale-provider', 7],
+    });
+
+    expect(r).toEqual({ ok: true, result: { deferred: false, superseded: true } });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('set-model handler 已在 session 锁内持久化时 dispatch 不重复回流', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const handlerResult = { deferred: false, superseded: false };
+    markRemoteSettingPersistedInsideHandler(handlerResult);
+    registry.register('maker:set-model', () => handlerResult);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'claude-x', 'anthropic'],
+    });
+
+    expect(r).toEqual({ ok: true, result: handlerResult });
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it('set-fast-mode → {fastMode}', async () => {

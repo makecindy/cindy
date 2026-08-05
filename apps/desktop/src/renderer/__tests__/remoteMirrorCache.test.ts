@@ -727,6 +727,39 @@ describe('在途最新页遇上权威作废', () => {
   });
 });
 
+describe('首拉在途遇上消息代际失效', () => {
+  it('messages:deleted 作废首拉后自动重拉当前代,不让 historyLoaded 永久卡 false', async () => {
+    const s = sid();
+    registerRemote(s);
+    let resolveInitial: (rows: Message[]) => void = () => {};
+    remoteListPromise = new Promise<Message[]>((resolve) => {
+      resolveInitial = resolve;
+    });
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    expect(
+      invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:list'),
+    ).toHaveLength(1);
+
+    // messages:deleted 与其它 renderer 删除入口共用 removeMessagesByClientIds，
+    // 即使当前窗口没有这条消息也会 bump epoch 作废在途首拉。
+    makerChatStore.removeMessagesByClientIds(s, ['client-deleted']);
+    remoteListPromise = Promise.resolve([
+      dbMessage(s, 'fresh', '当前代的消息', '2026-01-02T00:00:00.000Z'),
+    ]);
+    resolveInitial([dbMessage(s, 'stale', '上一代的迟到消息', '2026-01-01T00:00:00.000Z')]);
+    await flush(40);
+
+    expect(
+      invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:list'),
+    ).toHaveLength(2);
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.historyLoaded).toBe(true);
+    expect(snapshot.messages.map((message) => message.clientId)).toEqual(['client-fresh']);
+  });
+});
+
 describe('作废式重载 → 缓存一起清', () => {
   // review(codex P1):粘滞抑制标记只活在本进程里。rewind 后权威首拉失败、用户直接退出 app,
   // 重启后标记没了而盘上那份还是 rewind 之前的窗口 —— 照样 hydrate 出已被软删的消息。

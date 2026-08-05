@@ -45,6 +45,7 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 vi.mock('../../../device-link/broadcast-tap', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 

@@ -33,7 +33,22 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+/**
+ * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
+ *
+ * 放在这一层(desktop main)而不是 @cindy/im: 传输层没有 locale、也不该持有产品措辞。
+ * 与个人 bot 其它 bot 侧文案(im/telegram/uiText.ts)同口径 —— 那一整套目前是单语中文,
+ * 见该文件头部说明; 若要做多语言应连同整套一起改, 不在这一句上开特例。
+ */
+const GROUP_APPROVAL_OWNER_DM_NOTE =
+  '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
+
 import { eq } from 'drizzle-orm';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { isCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
@@ -105,11 +120,10 @@ import {
   markActivityWriting,
   pushToolStep,
   renderActivity,
-  renderActivityLine,
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
-import { overloadRetryNotice, terminalErrorText } from './turnRetryNotice';
+import { terminalErrorText, turnRetryNotice } from './turnRetryNotice';
 import {
   toCoreAgentKind,
   readPermissionMode,
@@ -1019,7 +1033,8 @@ export function createTurnRunner(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
-        providerId: row.providerId ?? undefined,
+        // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+        providerId: row.providerId,
         resumeSessionId: row.sdkSessionId ?? undefined,
         vendorOptions: state.attached
           ? undefined
@@ -1218,7 +1233,8 @@ export function createTurnRunner(
       effort: row.effort,
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
-      providerId: row.providerId ?? undefined,
+      // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+      providerId: row.providerId,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: attached ? undefined : adapter.sessions.defaultTitle(userId),
@@ -1371,9 +1387,26 @@ export function createTurnRunner(
       return;
     }
 
+    const migratedSourceMessageId =
+      sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
     let messageId: string;
     try {
-      const result = await richIm.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+      const result = await richIm.sendInteractiveCard(userId, spec, {
+        threadTs: scopeKey,
+        // **只有授权卡**转宿主私聊: 群里的授权卡消不掉且只有宿主能答。问答 / 计划审阅
+        // 留在原 lane(它们在群里可见是合理的), 命令卡与会话选择卡更不能转 —— 那会让
+        // 回调落到私聊锁上。
+        ...(req.kind === 'permission'
+          ? {
+              deliverToOwnerDm: true,
+              ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+              // 迁移路径同样按业务 turn 取来源消息(可能没有进行中的 turn)。
+              ...(migratedSourceMessageId !== undefined
+                ? { ownerDmSourceMessageId: migratedSourceMessageId }
+                : {}),
+            }
+          : {}),
+      });
       messageId = result.messageId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1573,7 +1606,7 @@ export function createTurnRunner(
         // done / 终止型 error 同时是"session 空闲了"的信号 — 触发排队消息派发。
         // 非终止 error 表示底层仍在自动恢复，不能抢跑下一条消息（放行排队消息会让
         // 下一条撞上 SESSION_RUNNING）。
-        if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        if (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event)) {
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -1597,6 +1630,10 @@ export function createTurnRunner(
         case 'tool_result_full':
           return handleToolResultFullEvent(turn, event);
         case 'done':
+          // The provider may emit a claim-bearing SDK boundary before an
+          // automatic continuation. Keep the same IM turn/card alive; only
+          // the following unclaimed done is the product completion.
+          if (isTurnContinuationBoundaryEvent(event)) return;
           // silent-stop done(上游用空内容静默收尾): 不当普通 done 收口 —
           // 守卫可能自动续跑,续跑轮事件要继续流进本 turn 的卡片,
           // 见 handleSilentStopDone。
@@ -1733,16 +1770,11 @@ export function createTurnRunner(
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
   function composeStreamingView(turn: TurnState): string {
-    const body = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
+    const rawBody = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
+    // External-channel safeguard: maker-core normally strips these tokens,
+    // while this boundary also protects old continuations and future adapters.
+    const body = stripInternalWebCitations(rawBody);
     if (turn.done) return body;
-    if (adapter.answerOnlyProgress?.(turn.userId)) {
-      // Telegram 私聊: 多行过程时间线会打断客户端的草稿动画渲染 → 中间态
-      // 只发正文; 正文出来之前用单行紧凑状态(当前工具/思考 · N 项 · 时长)
-      // 顶住草稿占位 —— 工具期停在纯 "Thinking…" 是哑巴(桌面端有时间线,
-      // 渠道零信息, Chris 2026-07-30 实测点名)。notice(过载重试)含在内。
-      if (body) return body;
-      return renderActivityLine(turn.activity, Date.now());
-    }
     const act = renderActivity(turn.activity, Date.now());
     if (!act) return body;
     return body ? `${act}\n\n${body}` : act;
@@ -1769,8 +1801,8 @@ export function createTurnRunner(
   /**
    * 非终止 error → 过程区状态行 + 卡片刷新。turn 不收口。
    *
-   * 只对"正在自动重试的过载"出提示(见 turnRetryNotice.ts): 其它非终止 error 的
-   * message 是内部英文串, 没有对应中文表达, 保持既有静默。
+   * 只对已有本地化契约的自动重试出提示(见 turnRetryNotice.ts): 其它非终止
+   * error 的 message 是内部英文串, 没有对应中文表达, 保持既有静默。
    *
    * **要惰性建卡**(与 ensureActivityTicker「ticker 不该是创建卡片的理由」相反):
    * 过载重投只在本 turn 零产出时发生(maker-core 的 currentTurnProducedOutput
@@ -1779,7 +1811,7 @@ export function createTurnRunner(
    * 同一张卡上, 重试耗尽时 handleTurnErrorAsync 会把它 finalize 成失败说明。
    */
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
-    const notice = overloadRetryNotice(event.data);
+    const notice = turnRetryNotice(event.data);
     if (notice === null) return;
     if (!setActivityNotice(turn.activity, notice)) return;
     ensureActivityTicker(turn);
@@ -1860,6 +1892,11 @@ export function createTurnRunner(
     // A desktop-originated scheduler turn has no such token, so it cannot be
     // safely mirrored and must never fall through to rich-card primitives.
     if (output.kind === 'chunked-text') return;
+    // Lifecycle status is not user-facing scheduler content. In particular,
+    // the claim-bearing status(false) paired with an SDK boundary must not
+    // create or close a projection card.
+    if (event.type === 'status') return;
+    if (event.type === 'done' && isTurnContinuationBoundaryEvent(event)) return;
     // 首条事件惰性建转播态(避免给空 turn 开卡)。
     if (!state.scheduledTranspond) {
       const origin = event.turnOrigin;
@@ -1922,7 +1959,7 @@ export function createTurnRunner(
         // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
         // 万一那轮重试成功后 agent 零输出收口, thread 里就多出一张只有标题的卡。
         {
-          const notice = overloadRetryNotice(event.data);
+          const notice = turnRetryNotice(event.data);
           if (notice !== null && setActivityNotice(t.activity, notice)) {
             t.streamingHandle?.replace(composeTranspondView(t, false));
           }
@@ -2580,11 +2617,25 @@ export function createTurnRunner(
       // (eventually resolved) interaction card — not into the pre-existing card
       // that sits above it. Without this, the user sees the conclusion stream
       // into a card chronologically older than the "✅ 已选择" patch.
+      // 深链身份必须在 finalizeActiveStream **之后**照样可用: 它取自本 turn 的
+      // userMessageId(业务事实), 与流式 handle 生命周期无关 —— 传输层猜不出这个。
+      const ownerDmSourceMessageId =
+        sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
       let messageId: string;
       try {
-        const result = await output.im.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+        const result = await output.im.sendInteractiveCard(userId, spec, {
+          threadTs: scopeKey,
+          // 同上: 只有 permission 卡转宿主私聊
+          ...(req.kind === 'permission'
+            ? {
+                deliverToOwnerDm: true,
+                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
+              }
+            : {}),
+        });
         messageId = result.messageId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

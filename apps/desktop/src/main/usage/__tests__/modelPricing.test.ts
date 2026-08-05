@@ -54,27 +54,38 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 }));
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import { DEFAULT_USAGE_CURRENCY } from '../../../shared/regionalMoney';
+import { getActiveCatalog } from '../../maker-host/active-catalog';
 import {
-  __resetActiveLedgerCurrencyForTesting,
-  currentLedgerCurrency,
-} from '../ledgerCurrency';
+  applyModelPriceOverrides,
+  clearModelPriceOverride,
+  readModelPriceOverridesSnapshot,
+  setModelPriceOverride,
+} from '../modelPriceOverrideStore';
+import { __resetActiveLedgerCurrencyForTesting, currentLedgerCurrency } from '../ledgerCurrency';
 import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
-  getCodexSubscriptionValuePrice,
-  getModelPricing,
-  getModelPricingForModel,
-  getSubscriptionDirectValuePrice,
+  getGatewayModelPricing,
+  getGatewayModelPricingForModel,
   MODEL_PRICING_CHANGED_CHANNEL,
   prewarmModelPricing,
   replaceGatewayModelPricing,
   trackGatewayModelPricingSync,
 } from '../modelPricing';
+import {
+  getClaudeSubscriptionValuePrice,
+  getCodexProviderSubscriptionValuePrice,
+  getCodexSubscriptionValuePrice,
+  getSubscriptionDirectValuePrice,
+} from '../referenceModelPricing';
 
 let tempUserDataDir: string | null = null;
-const EXPECTED_GATEWAY_CURRENCY =
-  CURRENT_CINDY_REGION === 'global' ? 'USD' : 'CNY';
+// 目录整份没声明 currency 时的回落值。不再按构建区域推断 —— 服务端漏发 currency 时
+// 按区域猜会把 USD 口径的报价数值盖上 CNY 戳,产生 6.7 倍量级的错账。回落链是
+// 「上次已知 → USD」(见 usage/ledgerCurrency),测试从干净状态起跑,所以是 USD。
+const EXPECTED_GATEWAY_CURRENCY = 'USD';
 
 function userDataPath(...segments: string[]): string {
   if (!tempUserDataDir) throw new Error('temp userData is not initialized');
@@ -147,6 +158,8 @@ describe('gateway model pricing projection', () => {
           cacheReadPerMtok: 0.3,
           cacheCreatePerMtok: 3.75,
           costDiscount: 0.4,
+          // 这批 model 都没声明 currency,回落值是本地推断的 —— 下游据此把金额标成估算。
+          currencyInferred: true,
         },
         'codex/gpt-5.5': {
           providerId: 'xd',
@@ -157,10 +170,41 @@ describe('gateway model pricing projection', () => {
           inputPerMtok: 2,
           outputPerMtok: 8,
           cacheReadPerMtok: expect.closeTo(0.2),
+          currencyInferred: true,
         },
       },
     });
-    expect(mocks.send).toHaveBeenCalledWith(MODEL_PRICING_CHANGED_CHANNEL, pricing);
+    expect(mocks.send).toHaveBeenCalledWith(
+      MODEL_PRICING_CHANGED_CHANNEL,
+      expect.objectContaining(pricing),
+    );
+  });
+
+  it('preserves Gateway context-length tiers in the effective quote', () => {
+    const pricing = replaceGatewayModelPricing([
+      {
+        id: 'gpt-tiered',
+        inputCostPerToken: 0.000002,
+        outputCostPerToken: 0.000008,
+        tieredPricing: [
+          {
+            range: [200_001, 1_000_001],
+            inputCostPerToken: 0.000004,
+            outputCostPerToken: 0.000012,
+            cacheReadInputTokenCost: 0.0000004,
+          },
+        ],
+      },
+    ]);
+
+    const [band] = pricing?.xd?.['gpt-tiered']?.inputTokenPriceBands ?? [];
+    expect(band).toMatchObject({
+      minInputTokens: 200_001,
+      maxInputTokens: 1_000_001,
+      inputPerMtok: 4,
+      outputPerMtok: 12,
+    });
+    expect(band?.cacheReadPerMtok).toBeCloseTo(0.4);
   });
 
   it('keeps legal zero tiers but drops missing, invalid and 0/0 standard prices', () => {
@@ -203,14 +247,14 @@ describe('gateway model pricing projection', () => {
         outputCostPerToken: 0.000002,
       },
     ]);
-    expect(await getModelPricing()).not.toBeNull();
+    expect(await getGatewayModelPricing()).not.toBeNull();
 
     expect(replaceGatewayModelPricing([{ id: 'unpriced' }])).toEqual({});
-    expect(await getModelPricing()).toEqual({});
+    expect((await getGatewayModelPricing())?.xd).toBeUndefined();
     expect(mocks.send).toHaveBeenLastCalledWith(MODEL_PRICING_CHANGED_CHANNEL, {});
 
     clearGatewayModelPricing();
-    expect(await getModelPricing()).toEqual({});
+    expect((await getGatewayModelPricing())?.xd).toBeUndefined();
   });
 
   it('hydrates a successful empty pricing snapshot as loaded', async () => {
@@ -227,7 +271,7 @@ describe('gateway model pricing projection', () => {
     });
 
     __resetModelPricingCacheForTesting();
-    await expect(getModelPricing()).resolves.toEqual({});
+    await expect(getGatewayModelPricing()).resolves.toEqual({});
   });
 });
 
@@ -241,22 +285,30 @@ describe('pricing cache lifecycle', () => {
         inputCostPerToken: 0.000005,
         outputCostPerToken: 0.00003,
         costDiscount: 0.2,
+        tieredPricing: [
+          {
+            range: [272_001, 1_000_001],
+            inputCostPerToken: 0.00001,
+            outputCostPerToken: 0.000045,
+          },
+        ],
       },
     ]);
 
     await vi.waitFor(async () => {
       const raw = JSON.parse(await readFile(userDataPath('cache', 'model-pricing.json'), 'utf8'));
       expect(raw).toMatchObject({
-        // 账号币种与报价同快照持久化后升到 8:旧缓存缺少账号币种，
-        // 必须靠版本号失效掉。改缓存结构时同步这里。
-        version: 8,
+        // 币种回落不再按构建区域猜之后升到 9:v8 快照里那些按区域兜底写入的
+        // accountCurrency 与 quote 没有 currencyInferred 标记，复用会让猜出来的币种
+        // 重新冒充精确报价。改缓存结构或币种语义时同步这里。
+        version: 9,
         scope: expectedScope(),
         pricing,
       });
     });
 
     __resetModelPricingCacheForTesting();
-    await expect(getModelPricing()).resolves.toEqual(pricing);
+    await expect(getGatewayModelPricing()).resolves.toMatchObject(pricing);
     await prewarmModelPricing();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -284,7 +336,8 @@ describe('pricing cache lifecycle', () => {
     __resetActiveLedgerCurrencyForTesting();
     expect(currentLedgerCurrency()).toBe(DEFAULT_USAGE_CURRENCY);
 
-    await expect(getModelPricing()).resolves.toEqual({});
+    const hydrated = await getGatewayModelPricing();
+    expect(hydrated).toEqual({});
 
     expect(currentLedgerCurrency()).toBe('USD');
     expect(fetchMock).not.toHaveBeenCalled();
@@ -312,7 +365,7 @@ describe('pricing cache lifecycle', () => {
     });
 
     mocks.getCurrentDbClientUserId.mockReturnValue('user-a');
-    await expect(getModelPricing()).resolves.toEqual(pricing);
+    await expect(getGatewayModelPricing()).resolves.toMatchObject(pricing);
   });
 
   it('does not hydrate another account pricing snapshot', async () => {
@@ -341,7 +394,44 @@ describe('pricing cache lifecycle', () => {
     );
     mocks.getCurrentDbClientUserId.mockReturnValue('user-b');
 
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getGatewayModelPricing()).resolves.toBeNull();
+  });
+
+  it('discards a v8 snapshot whose currency was guessed by build region', async () => {
+    // 回归护栏。v8 快照里的 accountCurrency 与 quote 币种可能是旧版本按构建区域兜底
+    // 写进去的，而那一版还没有 currencyInferred 字段 —— 无从分辨「服务端声明的」与
+    // 「本地猜的」。若继续复用，离线或 /models 失败时猜出来的币种会重新冒充精确报价，
+    // 正好绕过本次修复。只能靠版本号整份作废。
+    await mkdir(userDataPath('cache'), { recursive: true });
+    await writeFile(
+      userDataPath('cache', 'model-pricing.json'),
+      JSON.stringify({
+        version: 8,
+        scope: expectedScope(),
+        fetchedAt: Date.now(),
+        accountCurrency: 'CNY',
+        pricing: {
+          xd: {
+            'gpt-5.5': {
+              providerId: 'xd',
+              modelId: 'gpt-5.5',
+              currency: 'CNY',
+              source: 'gateway',
+              approximate: false,
+              inputPerMtok: 5,
+              outputPerMtok: 30,
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    __resetActiveLedgerCurrencyForTesting();
+    const hydrated = await getGatewayModelPricing();
+    expect(hydrated).toBeNull();
+    // 账本币种也不能被它带偏，回退链重新从「上次已知 → USD」起算。
+    expect(currentLedgerCurrency()).toBe('USD');
   });
 
   it('does not hydrate pricing written for an older gateway key identity', async () => {
@@ -367,7 +457,7 @@ describe('pricing cache lifecycle', () => {
       ctimeNs: 7n,
     });
 
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getGatewayModelPricing()).resolves.toBeNull();
   });
 
   it('rejects malformed or non-gateway disk quotes', async () => {
@@ -384,7 +474,7 @@ describe('pricing cache lifecycle', () => {
               providerId: 'xd',
               modelId: 'bad',
               currency: 'USD',
-              source: 'subscription-reference',
+              source: 'provider-reference',
               approximate: true,
               inputPerMtok: -1,
               outputPerMtok: 2,
@@ -394,10 +484,10 @@ describe('pricing cache lifecycle', () => {
       }),
       'utf8',
     );
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getGatewayModelPricing()).resolves.toBeNull();
   });
 
-  it('requires provider identity on accounting lookups', async () => {
+  it('returns only the Gateway snapshot on accounting lookups', async () => {
     replaceGatewayModelPricing([
       {
         id: 'same-id',
@@ -405,10 +495,7 @@ describe('pricing cache lifecycle', () => {
         outputCostPerToken: 0.000002,
       },
     ]);
-    await expect(getModelPricingForModel('xd', 'same-id')).resolves.toMatchObject({
-      xd: { 'same-id': { inputPerMtok: 1, outputPerMtok: 2 } },
-    });
-    await expect(getModelPricingForModel('openai', 'same-id')).resolves.toMatchObject({
+    await expect(getGatewayModelPricingForModel()).resolves.toMatchObject({
       xd: { 'same-id': { inputPerMtok: 1, outputPerMtok: 2 } },
     });
   });
@@ -426,7 +513,7 @@ describe('pricing cache lifecycle', () => {
       // 永不 settle 的同步:黑洞网络下 /models fetch 没有超时。
       trackGatewayModelPricingSync(new Promise(() => {}));
       let settled = false;
-      const lookup = getModelPricingForModel('xd', 'gpt-x').then((value) => {
+      const lookup = getGatewayModelPricingForModel().then((value) => {
         settled = true;
         return value;
       });
@@ -443,12 +530,36 @@ describe('pricing cache lifecycle', () => {
 });
 
 describe('reference pricing helpers', () => {
+  it('resolves historical subscription prices by their effective date', () => {
+    expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-08-31')).toMatchObject({
+      inputPerMtok: 2,
+      outputPerMtok: 10,
+    });
+    expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-09-01')).toMatchObject({
+      inputPerMtok: 3,
+      outputPerMtok: 15,
+    });
+    expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-06-29')).toBeUndefined();
+    expect(getClaudeSubscriptionValuePrice('sonnet', null, '2026-03-01')).toMatchObject({
+      modelId: 'sonnet',
+      inputPerMtok: 3,
+      outputPerMtok: 15,
+    });
+    expect(
+      getClaudeSubscriptionValuePrice('claude-sonnet-4-6-20260701', null, '2026-08-01'),
+    ).toMatchObject({
+      modelId: 'claude-sonnet-4-6-20260701',
+      inputPerMtok: 3,
+      outputPerMtok: 15,
+    });
+  });
+
   it('returns subscription reference quotes separately from the XD cache', () => {
     expect(getCodexSubscriptionValuePrice('gpt-5.5', null)).toMatchObject({
       providerId: 'openai',
       modelId: 'gpt-5.5',
       currency: 'USD',
-      source: 'subscription-reference',
+      source: 'provider-reference',
       approximate: true,
       inputPerMtok: 5,
       outputPerMtok: 30,
@@ -459,6 +570,83 @@ describe('reference pricing helpers', () => {
       modelId: 'chatgpt/gpt-5.5',
       source: 'subscription-reference',
     });
+    expect(
+      getSubscriptionDirectValuePrice('chatgpt/gpt-5.5', 'claude-code', {
+        openai: {
+          'gpt-5.5': {
+            providerId: 'openai',
+            modelId: 'gpt-5.5',
+            currency: 'USD',
+            source: 'user-override',
+            approximate: true,
+            inputPerMtok: 9,
+            outputPerMtok: 27,
+          },
+        },
+      }),
+    ).toMatchObject({
+      modelId: 'chatgpt/gpt-5.5',
+      source: 'user-override',
+      inputPerMtok: 9,
+      outputPerMtok: 27,
+    });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
+  });
+
+  it('prices Codex Anthropic subscription rounds through the anthropic date route', () => {
+    expect(
+      getCodexProviderSubscriptionValuePrice('anthropic', 'claude-sonnet-5', null, '2026-08-31'),
+    ).toMatchObject({ providerId: 'anthropic', inputPerMtok: 2, outputPerMtok: 10 });
+    expect(
+      getCodexProviderSubscriptionValuePrice('anthropic', 'claude-sonnet-5', null, '2026-09-01'),
+    ).toMatchObject({ inputPerMtok: 3, outputPerMtok: 15 });
+  });
+
+  it('re-merges sparse price overrides against the reference effective at the queried date', () => {
+    const registry = getActiveCatalog().modelRegistry;
+    const target = {
+      providerId: 'anthropic',
+      agent: 'claude-code',
+      modelId: 'claude-sonnet-5',
+    } as const;
+    const currentReference = providerReferencePriceQuote(
+      target.providerId,
+      target.modelId,
+      registry,
+      { agent: target.agent },
+    );
+    expect(currentReference).toBeDefined();
+    try {
+      // 只覆盖输入价:其余字段保持跟随参考价,形成稀疏 override。
+      setModelPriceOverride(
+        target,
+        {
+          currency: currentReference!.currency,
+          inputPerMtok: 2.5,
+          outputPerMtok: currentReference!.outputPerMtok,
+          cacheReadPerMtok: currentReference!.cacheReadPerMtok ?? null,
+          cacheCreatePerMtok: currentReference!.cacheCreatePerMtok ?? null,
+        },
+        registry,
+      );
+      const pricing = applyModelPriceOverrides({}, registry);
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-08-31'),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 10 });
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-09-01'),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 15 });
+      expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing)).toMatchObject({
+        source: 'user-override',
+        inputPerMtok: 2.5,
+      });
+      // 批量路径:传入一次性快照时结果一致,不逐行重读覆盖文件。
+      const snapshot = readModelPriceOverridesSnapshot();
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-08-31', snapshot),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 10 });
+    } finally {
+      clearModelPriceOverride(target);
+    }
   });
 });

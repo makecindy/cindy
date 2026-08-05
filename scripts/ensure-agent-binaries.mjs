@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * ensure-agent-binaries — 按需下载 agent CLI 二进制（claude / codex / ripgrep）。
+ * ensure-agent-binaries — 按需下载 Desktop runtime 二进制
+ * （claude / codex / ripgrep / pi）。
  *
  * 这些二进制不再进 git/LFS（见 .gitattributes / .gitignore）。本脚本在 dev 启动、
  * 打包、发版时按"当前/目标平台 + tools/<kind>/latest.json 里 pin 的版本"从上游按需
@@ -11,7 +12,7 @@
  * 的本地二进制（copy-on-write clone，秒级、不占双倍磁盘）→ 都没有才走网络下载。
  *
  * 既可 CLI 跑，也可被 import：
- *   CLI:    node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep --platform=current
+ *   CLI:    node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep,pi --platform=current
  *   import: import { ensureBinary } from './ensure-agent-binaries.mjs'
  */
 import fs from 'node:fs';
@@ -20,20 +21,33 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { downloadFromCdn } from './agent-binary-cdn-fallback.mjs';
+import { verifyDirDistManifest } from '../tools/shared/dir-dist-manifest.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
 
 // kind → 本地落点 + 提供 ensurePlatform/readPinnedVersion 的下载模块
+// dirDist: 产物是"目录 + 主执行文件"（非单文件），sibling-worktree 单文件复用不适用
 const KINDS = {
   claude: { binDir: 'claude-code-bin', base: 'claude', module: '../tools/claude/update.mjs' },
   codex: { binDir: 'codex-bin', base: 'codex', module: '../tools/codex/update.mjs' },
   ripgrep: { binDir: 'ripgrep-bin', base: 'rg', module: '../tools/ripgrep/update.mjs' },
+  pi: { binDir: 'pi-bin', base: 'pi', module: '../tools/pi/update.mjs', dirDist: true },
 };
+
+/**
+ * Dev 启动 guard 与 postinstall 的共享真源。新增 runtime kind 时只改 KINDS，
+ * 避免“安装脚本已支持，但全新 checkout 的 dev 首启不会准备”。
+ */
+export const SUPPORTED_BINARY_KINDS = Object.freeze(Object.keys(KINDS));
 
 const log = (msg) => console.log(`\x1b[36m[ensure-agent-binaries]\x1b[0m ${msg}`);
 const warn = (msg) => console.log(`\x1b[33m[ensure-agent-binaries]\x1b[0m ${msg}`);
+
+export function supportsCdnFallback(kind) {
+  return KINDS[kind]?.dirDist !== true;
+}
 
 export function currentPlatformKey() {
   return `${process.platform}-${process.arch}`;
@@ -74,6 +88,15 @@ export function isValidBinary(absPath) {
 }
 
 /**
+ * dirDist kind 的就位判定:主执行文件合法 **且** 安装清单齐全。pi 这类目录分发缺
+ * theme/ 等旁侧资产时 RPC 启动即崩,只验主执行文件会把残缺目录当"已就位"跳过安装,
+ * 随后被打进安装包(codex 报)。清单缺失(旧安装/半成品)按未就位处理,重新 promote 自愈。
+ */
+export function isValidDirDist(binDirPath, binPath) {
+  return isValidBinary(binPath) && verifyDirDistManifest(binDirPath);
+}
+
+/**
  * 枚举当前仓库的其它 git worktree 根路径（排除 rootDir 自身；主 checkout 排最前，
  * 与 `git worktree list` 输出顺序一致）。git 不可用 / 不在 git 仓库里时返回 []，
  * 调用方直接走网络下载，不因此报错。
@@ -91,7 +114,9 @@ export function listSiblingWorktreeRoots(rootDir) {
   }
   let selfReal = rootDir;
   try {
-    selfReal = fs.realpathSync(rootDir);
+    // Windows 的 TEMP 可能是 8.3 短路径，而 git worktree 输出长路径。native
+    // realpath 会把两种表示解析到同一物理目录，避免把当前 worktree 当成兄弟项。
+    selfReal = fs.realpathSync.native(rootDir);
   } catch {
     /* keep rootDir as-is */
   }
@@ -102,7 +127,7 @@ export function listSiblingWorktreeRoots(rootDir) {
     if (!raw) continue;
     let real;
     try {
-      real = fs.realpathSync(raw); // stale 的 worktree 条目（目录已删）直接跳过
+      real = fs.realpathSync.native(raw); // stale 的 worktree 条目（目录已删）直接跳过
     } catch {
       continue;
     }
@@ -168,7 +193,9 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   }
 
   // 已就位且版本标记 == pin 才跳过；标记缺失/不匹配则刷新（promoteOnePlatform 写入标记）。
-  if (!force && isValidBinary(binPath) && readInstalledVersion(markerPath) === version) {
+  // dirDist 的"已就位"额外要求安装清单齐全,不能只看主执行文件。
+  const presentAndValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  if (!force && presentAndValid && readInstalledVersion(markerPath) === version) {
     log(`${kind} ${platformKey}: already present @ ${version}, skip`);
     return binPath;
   }
@@ -178,7 +205,8 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 磁盘），弱网/断网时这是唯一不用等超时的路径。force 语义是"强制重新获取"，
   // 保持走正宗下载不复用。
   let reusedFrom = null;
-  if (!force) {
+  // dirDist kind 的产物含主执行文件之外的运行时资产，单文件复用会产出缺资产的坏安装。
+  if (!force && !cfg.dirDist) {
     reusedFrom = tryReuseFromSiblingWorktree({
       candidates: listSiblingWorktreeRoots(ROOT).map((root) =>
         path.join(root, 'apps', cfg.binDir, platformKey),
@@ -197,6 +225,12 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
     try {
       await mod.ensurePlatform({ version, platformKey, force });
     } catch (upstreamErr) {
+      if (!supportsCdnFallback(kind)) {
+        throw new Error(
+          `Failed to download ${kind} ${platformKey}@${version} from upstream: ${upstreamErr.message}. ` +
+            'This runtime is a directory distribution, so the single-binary CDN fallback is unsafe.',
+        );
+      }
       // claude / codex / ripgrep：上游慢/失败（含 fetch-with-timeout 的 connect/stall/total/throughput 超时）→
       // 回退公司 CDN（国内快，.gz gunzip 后与上游裸二进制字节一致）。
       warn(`${kind} ${platformKey}: upstream failed/slow (${upstreamErr.message}); falling back to CDN...`);
@@ -220,7 +254,8 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 被占用（app 运行中、EBUSY）时只 warn 不抛，会留下旧 binary + 旧标记，这里据此把静默失败
   // 转成显式错误。本地复用路径同样受此终检兜底。
   const installed = readInstalledVersion(markerPath);
-  if (!isValidBinary(binPath) || installed !== version) {
+  const finalValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  if (!finalValid || installed !== version) {
     throw new Error(
       `${kind} ${platformKey}: ensure failed — expected ${version} at ${binPath} but installed marker is ${installed ?? '(none)'}. ` +
         `The previous binary may be locked (app running); close it and retry, or run "pnpm update:${kind}".`,
@@ -244,7 +279,9 @@ function parseArgs(argv) {
 
 async function main() {
   const { kinds, platform, force, bestEffort } = parseArgs(process.argv.slice(2));
-  const kindList = kinds ? kinds.split(',').map((k) => k.trim()).filter(Boolean) : Object.keys(KINDS);
+  const kindList = kinds
+    ? kinds.split(',').map((k) => k.trim()).filter(Boolean)
+    : SUPPORTED_BINARY_KINDS;
   const platformKey = !platform || platform === 'current' ? currentPlatformKey() : platform;
 
   // best-effort 模式（postinstall hook 用）：可被 XDT_SKIP_AGENT_BIN_INSTALL 跳过；

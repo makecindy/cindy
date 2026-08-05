@@ -142,6 +142,48 @@ describe('payloadSummary', () => {
     expect(buildPayloadToolDiff('Edit', { old_string: 'a', new_string: 'b' })).toBeUndefined();
   });
 
+  it('builds pi edit diffs from both the declared edits[] and the legacy top-level shape', () => {
+    // 声明 schema 形态:{ path, edits: [{ oldText, newText }] }。
+    expect(buildPayloadToolDiff('edit', {
+      path: '/repo/app.ts',
+      edits: [
+        { oldText: 'a', newText: 'b' },
+        { oldText: '', newText: 'c\nd' },
+      ],
+    })).toEqual({
+      deletions: 1,
+      filePath: '/repo/app.ts',
+      insertions: 3,
+      segments: [
+        { key: 'edit:0', oldString: 'a', newString: 'b', label: 'Edit 1/2' },
+        { key: 'edit:1', oldString: '', newString: 'c\nd', label: 'Edit 2/2' },
+      ],
+    });
+
+    // legacy 顶层单段:{ path, oldText, newText } —— 必须产出真实 diff 而非空段。
+    expect(buildPayloadToolDiff('edit', {
+      path: '/repo/app.ts',
+      oldText: 'old A\nold B',
+      newText: 'new A',
+    })).toEqual({
+      deletions: 2,
+      filePath: '/repo/app.ts',
+      insertions: 1,
+      segments: [{ key: 'edit:0', oldString: 'old A\nold B', newString: 'new A' }],
+    });
+
+    // pi write 用 path + content。
+    expect(buildPayloadToolDiff('write', {
+      path: '/repo/new.ts',
+      content: 'line A\nline B',
+    })).toEqual({
+      deletions: 0,
+      filePath: '/repo/new.ts',
+      insertions: 2,
+      segments: [{ key: 'write:0', oldString: '', newString: 'line A\nline B' }],
+    });
+  });
+
   it('summarizes payload chrome data without UI dependencies', () => {
     expect(summarizeMessagePayload(buildDiffPayload(diff))).toEqual({
       kind: 'diff',

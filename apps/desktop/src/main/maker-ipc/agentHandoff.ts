@@ -14,7 +14,7 @@
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
 /** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域)。 */
-export type DbAgentKind = 'cc' | 'codex';
+export type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 /** 构造交接文本所需的最小消息投影(content 已 JSON.parse,即 camel Message.content)。 */
 export interface HandoffSourceMessage {
@@ -539,20 +539,31 @@ export type HandoffWireMessage =
   | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
 /**
- * 把交接文本前置到发给 agent 的 wire 消息上(不影响落库/显示内容)。
+ * 把一段内部说明前置到发给 agent 的 wire 消息上(**不影响落库/显示内容**)。
  * blocks 形态下前插独立 text block,string 形态下直接前拼。
+ *
+ * 交接前缀与手机客户端说明(mobileClientPromptNote)共用这一份形态处理 —— blocks /
+ * string 两态各自前置的写法复制一遍就会有一处写错的风险,判据只留一份。
  */
+export function prependNoteToWireUserMessage(
+  message: HandoffWireMessage,
+  note: string,
+): HandoffWireMessage {
+  if (typeof message === 'string') {
+    return `${note}\n\n${message}`;
+  }
+  if (typeof message.content === 'string') {
+    return { ...message, content: `${note}\n\n${message.content}` };
+  }
+  return { ...message, content: [{ type: 'text', text: note }, ...message.content] };
+}
+
+/** 把交接文本前置到发给 agent 的 wire 消息上(不影响落库/显示内容)。 */
 export function prependHandoffToUserMessage(
   message: HandoffWireMessage,
   handoff: string,
 ): HandoffWireMessage {
-  if (typeof message === 'string') {
-    return `${handoff}\n\n${message}`;
-  }
-  if (typeof message.content === 'string') {
-    return { ...message, content: `${handoff}\n\n${message.content}` };
-  }
-  return { ...message, content: [{ type: 'text', text: handoff }, ...message.content] };
+  return prependNoteToWireUserMessage(message, handoff);
 }
 
 /**

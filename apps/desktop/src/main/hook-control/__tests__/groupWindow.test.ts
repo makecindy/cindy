@@ -1,5 +1,5 @@
 /**
- * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、GC、lane 解析、
+ * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、永久留存、lane 解析、
  * 上下文拼装(trigger 剔重 / 游标增量 / 字符预算)。DB 用内存 better-sqlite3
  * 直接执行 0083 migration SQL, 经 drizzle 同步 driver 假装成 DbClient。
  */
@@ -22,10 +22,20 @@ vi.mock('../../localDb/client/current.js', () => ({
 import {
   buildGroupContextPrefix,
   groupLaneOf,
-  recordGroupMessage,
+  listTelegramKnownGroups,
+  listTelegramKnownGroupsForStableBinding,
+  mergeTelegramGroupActivationViews,
+  recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
+  WINDOW_KEEP_PER_PRINCIPAL,
 } from '../groupWindow.js';
+
+const PRINCIPAL_ID = '9';
+
+function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
+  return recordScopedGroupMessage(payload, PRINCIPAL_ID);
+}
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
@@ -62,13 +72,52 @@ afterEach(() => {
 });
 
 describe('groupLaneOf', () => {
-  it('解析 group / topic lane, DM 与其它 provider 返回 null', () => {
-    expect(groupLaneOf('telegram:group:1:-900:42:9:g1')).toEqual({ chatId: '-900', threadId: '' });
-    expect(groupLaneOf('telegram:topic:1:-900:77:9:g2')).toEqual({
-      chatId: '-900',
-      threadId: '77',
+  // 生产形态(2026-08-03 实测): 主群流 6 段、topic 7 段。旧解析器硬要求 7 段
+  // 且从 parts[5] 取 principal, 于是主群流全部返回 null —— 群消息入了库却从
+  // 不拼上下文。这组用真实 wire 值钉死形态, 不再只按文档写。
+  it('主群流(6 段, 生产形态): chatId 在 parts[3], principal 紧邻 g<n> 左侧', () => {
+    expect(groupLaneOf('telegram:group:8950734557:-1003778432310:435427284:g1')).toEqual({
+      chatId: '-1003778432310',
+      threadId: '',
+      principalId: '435427284',
     });
-    expect(groupLaneOf('telegram:dm:1:9:g1')).toBeNull();
+  });
+
+  it('topic(7 段, 生产形态): threadId 在 parts[4]', () => {
+    expect(groupLaneOf('telegram:topic:8950734557:-1003778432310:77:435427284:g2')).toEqual({
+      chatId: '-1003778432310',
+      threadId: '77',
+      principalId: '435427284',
+    });
+  });
+
+  it('带 rootMessageId 的旧文档形态(group 7 段)仍然兼容', () => {
+    expect(groupLaneOf('telegram:group:1:-900:42:9:g1')).toEqual({
+      chatId: '-900',
+      threadId: '',
+      principalId: '9',
+    });
+  });
+
+  it('无换代后缀的旧 server 形态: 末段即 principal', () => {
+    expect(groupLaneOf('telegram:group:1:-900:9')).toEqual({
+      chatId: '-900',
+      threadId: '',
+      principalId: '9',
+    });
+  });
+
+  it('形状对不上时 fail-closed: 换代后缀/threadId 绝不当成 principal', () => {
+    // 段数不够的 topic(末段前只到 threadId 位)—— 宁可不拼, 不能拿 threadId
+    // 当 principal 写进存储命名空间。
+    expect(groupLaneOf('telegram:topic:1:-900:77:g1')).toBeNull();
+    // 段数不够的 group(principal 位与 chatId 撞位)
+    expect(groupLaneOf('telegram:group:1:-900:g1')).toBeNull();
+    expect(groupLaneOf('telegram:group:1:-900')).toBeNull();
+  });
+
+  it('DM 与其它 provider 返回 null', () => {
+    expect(groupLaneOf('telegram:dm:8950734557:435427284:g1')).toBeNull();
     expect(groupLaneOf('slack:C123:171234.5678')).toBeNull();
   });
 });
@@ -76,15 +125,15 @@ describe('groupLaneOf', () => {
 describe('recordGroupMessage', () => {
   it('同一条消息重放只落一行(幂等)', async () => {
     const payload = frame({ messageId: '4213' });
-    await recordGroupMessage(payload);
-    await recordGroupMessage(payload);
+    await expect(recordGroupMessage(payload)).resolves.toBe(true);
+    await expect(recordGroupMessage(payload)).resolves.toBe(false);
     const rows = sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get() as {
       n: number;
     };
     expect(rows.n).toBe(1);
   });
 
-  it('每键行数超限时保最新', async () => {
+  it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));
     }
@@ -97,10 +146,47 @@ describe('recordGroupMessage', () => {
       .get() as { message_id: string };
     expect(oldest.message_id).toBe('m2');
   });
+
+  it('每个 principal 跨群和 topic 只保留最近的总量上限', async () => {
+    sqlite
+      .prepare(
+        `WITH RECURSIVE seq(n) AS (
+           SELECT 1
+           UNION ALL
+           SELECT n + 1 FROM seq WHERE n < ?
+         )
+         INSERT INTO hook_group_messages
+           (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
+         SELECT 'telegram:9', '-' || n, '', 'old-' || n, 'Group ' || n, '@x', 0, 'old', NULL, n, n
+         FROM seq`,
+      )
+      .run(WINDOW_KEEP_PER_PRINCIPAL);
+
+    await recordGroupMessage(frame({ chatId: '-new', messageId: 'newest' }));
+
+    const count = sqlite
+      .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram:9'")
+      .get() as { n: number };
+    expect(count.n).toBe(WINDOW_KEEP_PER_PRINCIPAL);
+    expect(
+      sqlite
+        .prepare(
+          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'old-1'",
+        )
+        .get(),
+    ).toBeUndefined();
+    expect(
+      sqlite
+        .prepare(
+          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'newest'",
+        )
+        .get(),
+    ).toBeDefined();
+  });
 });
 
 describe('sweepGroupWindowExpired', () => {
-  it('启动清扫在无流量时也清掉过期行(强制绕过间隔门控)', async () => {
+  it('保留新账号命名空间，并清除无法安全归属的旧 telegram 命名空间', async () => {
     const fresh = frame({ messageId: 'fresh' });
     await recordGroupMessage(fresh);
     // 直接落一条 8 天前的过期行, 模拟群早已不活跃(无按键 GC 机会)。
@@ -116,6 +202,84 @@ describe('sweepGroupWindowExpired', () => {
       .prepare('SELECT message_id AS id FROM hook_group_messages ORDER BY id ASC')
       .all() as Array<{ id: string }>;
     expect(ids.map((row) => row.id)).toEqual(['fresh']);
+  });
+});
+
+describe('listTelegramKnownGroups', () => {
+  it('按最近活跃列出官方群，并忽略 personal 命名空间', async () => {
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Older', messageId: '1', sentAt: 1 }),
+    );
+    await recordGroupMessage(
+      frame({ chatId: '-902', chatName: 'Newer', messageId: '2', sentAt: 2 }),
+    );
+    sqlite
+      .prepare(
+        `INSERT INTO hook_group_messages
+          (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
+         VALUES ('telegram-personal:1', '-999', '', '3', 'Personal', '@x', 0, 'x', NULL, 3, 3)`,
+      )
+      .run();
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Renamed', messageId: '4', sentAt: 4 }),
+    );
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Stale delayed name', messageId: '6', sentAt: 3 }),
+    );
+    await recordScopedGroupMessage(
+      frame({ chatId: '-903', chatName: 'Other account', messageId: '5', sentAt: 5 }),
+      '10',
+    );
+    await expect(listTelegramKnownGroups(PRINCIPAL_ID)).resolves.toEqual([
+      { chatId: '-901', chatName: 'Renamed' },
+      { chatId: '-902', chatName: 'Newer' },
+    ]);
+  });
+
+  it('does not return a previous principal snapshot after the binding changes mid-query', async () => {
+    let releaseQuery!: (groups: Array<{ chatId: string; chatName: string | null }>) => void;
+    const pendingGroups = new Promise<Array<{ chatId: string; chatName: string | null }>>(
+      (resolve) => {
+        releaseQuery = resolve;
+      },
+    );
+    let current = {
+      state: 'confirmed',
+      bindingId: 'binding-old',
+      principalId: PRINCIPAL_ID,
+    };
+    const result = listTelegramKnownGroupsForStableBinding(
+      { bindingId: 'binding-old', principalId: PRINCIPAL_ID },
+      () => current,
+      () => pendingGroups,
+    );
+
+    current = {
+      state: 'confirmed',
+      bindingId: 'binding-new',
+      principalId: '10',
+    };
+    releaseQuery([{ chatId: '-901', chatName: 'Old account group' }]);
+
+    await expect(result).resolves.toBeNull();
+  });
+});
+
+describe('mergeTelegramGroupActivationViews', () => {
+  it('补回本地历史已淘汰但服务端仍保留 override 的群', () => {
+    expect(
+      mergeTelegramGroupActivationViews(
+        [
+          { chatId: '-901', chatName: 'Ops' },
+          { chatId: '-902', chatName: null },
+        ],
+        { '-901': 'always', '-999': 'always' },
+      ),
+    ).toEqual([
+      { chatId: '-901', chatName: 'Ops', activation: 'always' },
+      { chatId: '-902', chatName: null, activation: 'mention' },
+      { chatId: '-999', chatName: '-999', activation: 'always' },
+    ]);
   });
 });
 
@@ -234,5 +398,67 @@ describe('buildGroupContextPrefix', () => {
     ).prefix;
     expect(topicPrefix).toContain('topic 讨论');
     expect(topicPrefix).not.toContain('主群闲聊');
+  });
+
+  it('主群流读得到被分进 reply-root 桶的发言(普通群的 reply 链不是 topic)', async () => {
+    await recordGroupMessage(frame({ messageId: '20', text: '主群里的话' }));
+    // Telegram 对**非 forum 群**的 reply 链也下发 message_thread_id(值 = reply root),
+    // server 曾把它当 topic 下发, 这条发言因此落进 threadId='19' 的桶 —— 但它属于主群流。
+    // 客户端拿不到 is_forum / is_topic_message, 只能在读取侧兜: 主群流不按 threadId 过滤。
+    await recordGroupMessage(frame({ messageId: '21', text: 'reply 链里的话', threadId: '19' }));
+    const prefix = (
+      await buildGroupContextPrefix({
+        requestId: 'r-reply-bucket',
+        externalKey: 'telegram:group:1:-900:9:g1',
+        workspace: 'chat',
+        sessionId: null,
+        prompt: 'q',
+      })
+    ).prefix;
+    expect(prefix).toContain('主群里的话');
+    expect(prefix).toContain('reply 链里的话');
+  });
+
+  it('其它 topic 的突发流量不得把主群流发言挤出预算', async () => {
+    // forum 群的 General 也走 group lane, 于是兜底集会带进该群其它 topic 的发言。
+    // 按全局 id 排序时它们(更新)会先吃满 4000 字符预算, 把主群流那条挤掉并让游标越过去
+    // —— 主群流预算优先, 兜底集只能用剩下的。
+    // 正文取到接近单条上限(500): 短句会在预算溢出后仍塞进缝隙, 用例就失去判别力。
+    await recordGroupMessage(
+      frame({ messageId: '40', text: `主群流的关键一句${'z'.repeat(500)}` }),
+    );
+    for (let i = 0; i < 20; i += 1) {
+      await recordGroupMessage(
+        frame({ messageId: `5${i}`, threadId: '77', text: `topic 长文${'x'.repeat(500)}` }),
+      );
+    }
+    const prefix = (
+      await buildGroupContextPrefix({
+        requestId: 'r-forum-burst',
+        externalKey: 'telegram:group:1:-900:9:g1',
+        workspace: 'chat',
+        sessionId: null,
+        prompt: 'q',
+      })
+    ).prefix;
+    expect(prefix).toContain('主群流的关键一句');
+  });
+
+  it('换绑 Telegram 主账号后不读取前一账号的群历史', async () => {
+    await recordScopedGroupMessage(
+      frame({ messageId: '30', text: '前一账号的私密上下文' }),
+      'old-owner',
+    );
+    await recordScopedGroupMessage(frame({ messageId: '31', text: '当前账号的上下文' }), '9');
+
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'r7',
+      externalKey: 'telegram:group:1:-900:42:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    expect(assembly.prefix).toContain('当前账号的上下文');
+    expect(assembly.prefix).not.toContain('前一账号的私密上下文');
   });
 });

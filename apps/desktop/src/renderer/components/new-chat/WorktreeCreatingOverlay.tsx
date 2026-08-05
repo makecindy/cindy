@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 
 interface WorktreeCreatingOverlayProps {
-  /** 当前正在创建的目标分支名 (含 xdt/ 前缀)。 */
+  /** 当前正在创建的目标托管分支名。 */
   branchName: string;
 }
 

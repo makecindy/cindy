@@ -28,6 +28,7 @@
     "thinking": "考えています…",
     "networkReconnecting": "再接続中…",
     "modelBusyRetrying": "モデルサービスが混雑、再試行中…",
+    "rateLimitRetrying": "リクエストがレート制限されました。再試行中…",
     "composerSyncing": "セッションデータを同期中です。完了すると送信できます。",
     "composerSessionNotSynced": "このセッションはまだ同期が完了していません。",
     "composerCreating": "セッションを作成中です。最初のメッセージ送信後に続けて送信できます。",
@@ -203,6 +204,20 @@
     "viewUsageDetail": "セッションの使用量詳細を表示",
     "linkCopied": "リンクをコピーしました",
     "sessionInfo": "セッション情報",
+    "branches": "セッション分岐",
+    "branchCurrent": "現在",
+    "branchEmpty": "切り替え可能な分岐はまだありません。",
+    "branchEmptyEntry": "空の項目",
+    "branchLoadFailed": "セッション分岐を読み込めませんでした。",
+    "branchSwitchFailed": "セッション分岐を切り替えられませんでした。",
+    "branchRunningBlocked": "実行中のタスクが完了してから分岐を切り替えてください。",
+    "branchRole": {
+      "user": "ユーザー",
+      "assistant": "アシスタント",
+      "tool": "ツール",
+      "summary": "要約",
+      "system": "システム"
+    },
     "usageSection": "使用量",
     "refreshContextUsage": "コンテキスト使用量を更新",
     "currentSessionSpend": "今回のセッション",
@@ -233,7 +248,6 @@
     "backToMenu": "セッションメニューに戻る"
   },
   "messageMenu": {
-    "fork": "新しいセッションで続ける",
     "addToChat": "会話に追加",
     "copyLink": "現在のメッセージリンクをコピー",
     "rewind": "ここまで戻る",

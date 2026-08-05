@@ -17,8 +17,9 @@
  *     路由由 makerTransport.regenerateSessionTitleFor 决定;老被控端不识别该
  *     channel 时 invoke 被拒,走同一条失败 toast
  *
- * 视觉:边框 / 圆角 / 透明底等共有部分内置;字号字重(各处不同)与布局定位
- * (flex-1 / 固定宽)分别由 inputClassName / containerClassName 传入。
+ * 视觉:中性胶囊描边 / 透明底 / 键盘聚焦环等共有部分内置;
+ * 字号字重(各处不同)与布局定位(flex-1 / 固定宽)分别由
+ * inputClassName / containerClassName 传入。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -67,7 +68,7 @@ interface SessionRenameInputProps {
   inputClassName?: string;
   /** 外层容器布局类:min-w-0 flex-1 或固定宽度。 */
   containerClassName?: string;
-  /** 位于侧栏 active 反相底色上时，input 与 Magic 按钮都切到配套前景色。 */
+  /** 位于侧栏 active 反相底色上时，input / 描边 / Magic 按钮都切到配套色系。 */
   activeForeground?: boolean;
 }
 
@@ -85,13 +86,22 @@ export function SessionRenameInput({
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [generating, setGenerating] = useState(false);
+  const [keyboardFocusVisible, setKeyboardFocusVisible] = useState(false);
+  // input 是程序化聚焦的文本控件，Chromium 会在鼠标双击进入编辑时也将它
+  // 匹配为 :focus-visible。记住首次聚焦与后续 pointer 聚焦，只在键盘路径上显示
+  // Focus Blue；鼠标进入编辑时只保留中性描边。
+  const applyingInitialFocusRef = useRef(true);
+  const pointerFocusRef = useRef(false);
   // 卸载 = 编辑态已终结(提交/取消)。迟到的 AI 结果(成功或失败)据此丢弃:
   // 不再填入输入框、不再 toast、不再 setState,避免污染用户的下一轮编辑。
   const mountedRef = useRef(true);
 
   useEffect(() => {
+    const origin = document.activeElement;
+    setKeyboardFocusVisible(origin instanceof HTMLElement && origin.matches(':focus-visible'));
     inputRef.current?.focus();
     inputRef.current?.select();
+    applyingInitialFocusRef.current = false;
     return () => {
       mountedRef.current = false;
     };
@@ -168,6 +178,26 @@ export function SessionRenameInput({
         ref={inputRef}
         value={value}
         onChange={(e) => onValueChange(e.target.value)}
+        onFocus={() => {
+          if (applyingInitialFocusRef.current) return;
+          setKeyboardFocusVisible(!pointerFocusRef.current);
+        }}
+        onBlur={() => {
+          // pointerup 可能落在 input 外（例如按下后拖出再松开），因此不能只靠
+          // onPointerUp / onPointerCancel 清理；否则后续 Shift+Tab 回来会被误判为鼠标聚焦。
+          pointerFocusRef.current = false;
+          setKeyboardFocusVisible(false);
+        }}
+        onPointerDown={() => {
+          pointerFocusRef.current = true;
+          setKeyboardFocusVisible(false);
+        }}
+        onPointerUp={() => {
+          pointerFocusRef.current = false;
+        }}
+        onPointerCancel={() => {
+          pointerFocusRef.current = false;
+        }}
         onKeyDown={(e) => {
           e.stopPropagation();
           // IME 组合中的 Enter 是确认候选词,不是提交
@@ -186,10 +216,11 @@ export function SessionRenameInput({
         // 吃掉浏览器默认的双击选词。stopPropagation 不影响默认选词行为。
         onDoubleClick={(e) => e.stopPropagation()}
         className={cn(
-          'w-full min-w-0 px-1.5 rounded',
-          'bg-transparent outline-none',
-          'border-[1.5px] border-[var(--focus-ring)]',
-          'pr-7',
+          'w-full min-w-0 rounded-full border bg-transparent px-1.5 pr-7 outline-none',
+          activeForeground
+            ? 'border-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_28%,transparent)]'
+            : 'border-[var(--border-default)]',
+          keyboardFocusVisible && 'ring-2 ring-[var(--focus-ring-soft)]',
           inputClassName,
           activeForeground && 'text-sidebar-item-active-foreground',
         )}
@@ -209,7 +240,10 @@ export function SessionRenameInput({
           e.preventDefault();
           e.stopPropagation();
         }}
-        onPointerDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          setKeyboardFocusVisible(false);
+          e.stopPropagation();
+        }}
         onDoubleClick={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
@@ -221,7 +255,7 @@ export function SessionRenameInput({
           activeForeground
             ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
             : 'text-[var(--cmd-palette-item-meta)] hover:bg-titlebar-button-hover hover:text-foreground',
-          'focus:outline-none',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         )}
       >
         {generating ? <Spinner size={13} /> : <Sparkles size={13} />}

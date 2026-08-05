@@ -16,5 +16,15 @@
   "sectionRemoteDisabled": "パソコンで操作",
   "sectionAccessRevoked": "再度の許可が必要",
   "retryAccess": "アクセスを再試行",
-  "recheck": "再確認"
+  "recheck": "再確認",
+  "authFailedTitle": "ログインの有効期限が切れました",
+  "authFailedHint": "ログインの有効期限が切れています。ログアウトして、もう一度ログインしてください。",
+  "replacedTitle": "接続が置き換えられました",
+  "replacedHint": "このデバイスの接続は別の場所で置き換えられました。再接続しています。",
+  "tooManyConnectionsTitle": "接続数の上限に達しました",
+  "tooManyConnectionsHint": "このアカウントでオンラインのデバイスが多すぎます。別のデバイスを切断して再試行してください。",
+  "versionMismatchTitle": "バージョンが一致しません",
+  "versionMismatchHint": "このアプリのバージョンはサービスと互換性がありません。最新版に更新して再試行してください。",
+  "unstableTitle": "接続が繰り返し切断されています",
+  "unstableHint": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合はアプリを再起動してください。"
 }

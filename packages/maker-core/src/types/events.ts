@@ -57,7 +57,7 @@ export interface AgentTaskUsage {
 }
 
 export interface AgentTaskUpdateEventData {
-  provider: 'claude-code' | 'codex';
+  provider: 'claude-code' | 'codex' | 'pi';
   /** Provider task id when available; falls back to the parent tool call id. */
   taskId: string;
   /** The tool_use id that launched or controls this subagent task. */
@@ -114,13 +114,22 @@ export interface AgentEvent {
   type: AgentEventType;
   data: unknown;
   /** 事件来源标识，便于调试 */
-  source?: 'claude-code' | 'codex';
+  source?: 'claude-code' | 'codex' | 'pi';
   /**
    * 本事件所属 turn 的发起来源,由 Session 在事件 fan-out 前打标(见 session.ts
    * 的 currentTurnOrigin)。turn 结束(isTerminalTurnEvent)后清空,不污染下一轮。
    * translator 不产生此字段;消费方(IM 转播等)按需读取,默认忽略。
    */
   turnOrigin?: SendOrigin;
+  /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
+  turnAttemptToken?: number;
+  /**
+   * Provider-owned claim attached synchronously to a `done` boundary when that
+   * boundary has an automatic continuation. Consumers pass it back to the
+   * session lifecycle API; unlike a live task-map sample it cannot race later
+   * task notifications or a fast result-only continuation turn.
+   */
+  turnContinuationId?: number;
   /**
    * Vendor-specific 元数据透传 (claude-code 的 SDK uuid / parentUuid / sdkSessionId /
    * model / stopReason / requestId / usage 等)。host 落库时塞进 messages.agent_meta 列,

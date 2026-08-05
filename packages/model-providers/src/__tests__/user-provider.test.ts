@@ -269,4 +269,65 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.routing).toEqual({});
     expect(p.models).toEqual({});
   });
+
+  it('keeps legacy Pi custom models non-reasoning until the capability is explicitly enabled', () => {
+    const p = buildUserProvider({
+      id: 'localollama',
+      name: 'Local Ollama',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'qwen3:8b', name: 'Qwen3 8B', supportsImageInput: true }],
+        },
+      },
+    });
+    expect(p.agents).toEqual(['pi']);
+    expect(p.auth).toEqual({ method: 'none' });
+    expect((p.models.pi ?? []).map((m) => m.id)).toEqual(['qwen3:8b']);
+    expect((p.models.pi ?? [])[0]?.efforts).toEqual([]);
+    expect((p.models.pi ?? [])[0]?.defaultEffort).toBeNull();
+    expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
+    expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
+  });
+
+  it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
+    const p = buildUserProvider({
+      id: 'reasoning-pi',
+      name: 'Reasoning Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.test/v1',
+          wireProtocol: 'openai-responses',
+          models: [
+            {
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high', 'xhigh'],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(p.models.pi?.[0]).toMatchObject({
+      efforts: ['low', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('orders pi after claude-code and codex (AGENT_ORDER)', () => {
+    const p = buildUserProvider({
+      id: 'multi',
+      name: 'Multi',
+      runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:8000/v1', models: [{ id: 'pi-m', name: 'Pi M' }] },
+        codex: { baseUrl: 'https://v.ai/openai/v1', models: [{ id: 'cx-m', name: 'Cx M' }] },
+        'claude-code': { baseUrl: 'https://v.ai/anthropic', models: [{ id: 'cc-m', name: 'Cc M' }] },
+      },
+    });
+    expect(p.agents).toEqual(['claude-code', 'codex', 'pi']);
+  });
 });

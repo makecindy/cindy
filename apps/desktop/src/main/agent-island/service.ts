@@ -1,7 +1,7 @@
 import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { release as getOsRelease } from 'node:os';
-import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
+import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
   type AgentEvent,
@@ -11,6 +11,10 @@ import {
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import {
+  isProductTurnCompletionTailEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import type { ApplicationMenuCommand } from '../../shared/applicationMenuCommands.js';
 
 import { hasSessionAttention as hasAppBadgeSessionAttention } from '../appBadgeService.js';
@@ -148,6 +152,8 @@ interface AgentIslandUserPromptDebugMeta {
   source?: string;
   clientId?: string;
   notifiedAt?: number;
+  /** The prompt replaces a failed turn whose terminal event was intentionally withheld. */
+  replacesCurrentTurn?: boolean;
 }
 
 export interface AgentIslandServiceDeps {
@@ -605,7 +611,10 @@ export class AgentIslandService {
     setAgentIslandAppFocused(this.state, focused, now);
   }
 
-  handleAgentEvent(meta: AgentIslandSessionMeta, event: AgentEvent): void {
+  handleAgentEvent(
+    meta: AgentIslandSessionMeta,
+    event: AgentEvent,
+  ): void {
     const hydrated = this.hydrateMeta(meta);
     const providerTurnId = providerTurnIdFromAgentEvent(event);
     const replacementPending =
@@ -758,7 +767,7 @@ export class AgentIslandService {
     }
   }
 
-  handleUserPrompt(meta: AgentIslandSessionMeta, prompt: string, debugMeta: AgentIslandUserPromptDebugMeta = {}): void {
+  handleUserPrompt(meta: AgentIslandSessionMeta, prompt: string, debugMeta: AgentIslandUserPromptDebugMeta = {}): boolean {
     const receivedAt = Date.now();
     const hydrated = this.hydrateMeta(meta);
     const previousInteractionEpoch = this.interactionEpochBySession.get(hydrated.sessionId);
@@ -766,12 +775,16 @@ export class AgentIslandService {
     const wasReplacementTurnPending = this.replacementTurnPendingSessionIds.has(hydrated.sessionId);
     const wasReplacementTurnDispatching =
       this.replacementTurnDispatchingSessionIds.has(hydrated.sessionId);
-    const deferInteractionEpochUntilDispatch = wasStopped || wasReplacementTurnPending;
+    const startsReplacementTurn = debugMeta.replacesCurrentTurn === true;
+    const deferInteractionEpochUntilDispatch =
+      startsReplacementTurn || wasStopped || wasReplacementTurnPending;
     if (!deferInteractionEpochUntilDispatch) {
       this.advanceInteractionEpoch(hydrated.sessionId);
     }
     if (wasStopped) {
       this.stoppedSessionIds.delete(hydrated.sessionId);
+    }
+    if (wasStopped || startsReplacementTurn) {
       this.replacementTurnPendingSessionIds.add(hydrated.sessionId);
     }
     if (deferInteractionEpochUntilDispatch) {
@@ -812,11 +825,12 @@ export class AgentIslandService {
         this.replacementTurnDispatchingSessionIds.delete(hydrated.sessionId);
       }
       this.restoreInteractionEpoch(hydrated.sessionId, previousInteractionEpoch);
-      return;
+      return false;
     }
     this.ensureMetadata(hydrated.sessionId);
     this.syncSessionAttention(hydrated.sessionId);
     this.publish();
+    return true;
   }
 
   commitUserPrompt(sessionId: string, clientId: string | undefined): void {
@@ -957,6 +971,7 @@ export class AgentIslandService {
   }
 
   private prunePermissionRequestsForAgentEvent(sessionId: string, event: AgentEvent): void {
+    if (isTurnContinuationBoundaryEvent(event)) return;
     if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
       this.deletePermissionRequestsForSession(sessionId);
       return;
@@ -1131,8 +1146,12 @@ export class AgentIslandService {
     this.commitMetadata(sessionId, next);
   }
 
-  replaySessionActivity(): void {
-    this.sessionActivityRelay.replay(this.buildSessionActivityPayload());
+  /**
+   * 按需重放当前会话活动快照。`emit` 由调用方(bootstrap)注入定向 sink 时,
+   * 快照只投给刚完成 sessions 订阅的那一台控制端;不传则沿默认广播通道扇出。
+   */
+  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void): void {
+    this.sessionActivityRelay.replay(this.buildSessionActivityPayload(), emit);
   }
 
   /**
@@ -1623,6 +1642,7 @@ export class AgentIslandService {
   private handleNativeScreenMetrics(metrics: {
     screens: AgentIslandNativeScreenMetrics[];
     preferredDisplayId: number | null;
+    forceRefresh: boolean;
   }): void {
     const signature = metrics.screens
       .map((item) => [
@@ -1633,7 +1653,11 @@ export class AgentIslandService {
         Math.round(item.topBarHeight),
       ].join(':'))
       .join('|');
-    if (signature === this.screenMetricsSignature && metrics.preferredDisplayId === this.nativePreferredDisplayId) {
+    if (
+      !metrics.forceRefresh
+      && signature === this.screenMetricsSignature
+      && metrics.preferredDisplayId === this.nativePreferredDisplayId
+    ) {
       return;
     }
     this.screenMetricsByDisplayId.clear();
@@ -2197,13 +2221,11 @@ function getAgentIslandSoundEventForTransition(
 }
 
 function isCompletionDoneEvent(event: AgentEvent): boolean {
-  if (event.type === 'done') return true;
-  if (event.type !== 'status') return false;
-  const data = event.data as { isRunning?: unknown; status?: unknown } | undefined;
-  return data?.isRunning === false && data.status === 'Done';
+  return isProductTurnCompletionTailEvent(event);
 }
 
 function isCancelledTerminalEvent(event: AgentEvent): boolean {
+  if (isTurnContinuationBoundaryEvent(event)) return false;
   if (event.type !== 'done' && event.type !== 'status') return false;
   const data = event.data as { cancelled?: unknown } | undefined;
   return data?.cancelled === true;
@@ -2264,4 +2286,3 @@ function isPlaceholderSessionTitle(title: string | null): boolean {
   const normalized = title.trim().toLowerCase();
   return normalized === '' || normalized === 'new maker' || normalized === 'untitled';
 }
-

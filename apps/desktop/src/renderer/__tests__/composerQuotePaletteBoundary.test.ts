@@ -17,4 +17,29 @@ describe('composer quote palette boundary wiring', () => {
     );
     expect(triggerSource).toContain("textSoFar = ''; // chips reset the @ / slash run");
   });
+
+  it('routes @ plugin selection through the shared command placement', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain("type: 'plugin-command'");
+    expect(source).toContain('placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current)');
+    expect(source).not.toContain('scanPluginAtResources');
+  });
+
+  it('records a scheduled mention query before reserving its scan sequence', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
+      'utf8',
+    );
+    const guard = 'if (normalizedQuery === atLastScanQueryRef.current) return;';
+    const record = 'atLastScanQueryRef.current = normalizedQuery;';
+    const reserve = 'const seq = ++atScanSeqRef.current;';
+    const effectStart = source.indexOf(guard, source.indexOf('// Derive query string'));
+
+    expect(effectStart).toBeGreaterThan(-1);
+    expect(source.indexOf(record, effectStart)).toBeLessThan(source.indexOf(reserve, effectStart));
+  });
 });

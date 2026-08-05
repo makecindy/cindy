@@ -14,7 +14,7 @@
  * 剔除(旧 server 不发时降级为不剔重, 仅多一条重复)。
  */
 
-import { and, desc, eq, gt, lt, notLike } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
 
 import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
 
@@ -24,46 +24,81 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('hook-group-window');
 
-/** 每个群/topic 键保留的最大行数(插入时 GC)。 */
+/** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
 const WINDOW_KEEP_PER_KEY = 500;
-/** 条目 TTL: 超过即在插入时顺手清除(上下文只有近期值)。 */
-const WINDOW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** 每个 principal 跨全部群/topic 永久保留的最近行数。 */
+export const WINDOW_KEEP_PER_PRINCIPAL = 10_000;
+/** 单次上下文拼装最多读取的增量行数。 */
+const CONTEXT_READ_LIMIT = 500;
 /** 拼进 prompt 的上下文字符预算(保新丢旧, 与 Slack 通道同策略)。 */
 const CONTEXT_MAX_CHARS = 4_000;
 /** 单条上下文行的正文截断。 */
 const ENTRY_TEXT_MAX_CHARS = 500;
 
 /**
- * 从 externalKey 解析 Telegram 群/topic lane。server 侧格式(见
- * telegram-hook-server 文档):
- *   telegram:group:<botId>:<chatId>:<rootMessageId>:<principal>:g<n>
- *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n>
+ * 从 externalKey 解析 Telegram 群/topic lane。
+ *
+ * 实测的 server 下发形态(2026-08-03 生产库 hook-bindings.json):
+ *   telegram:group:<botId>:<chatId>:<principal>:g<n>            ← 6 段
+ *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n> ← 7 段
+ * 文档曾写 group 形态带 <rootMessageId>(7 段), 实现里没有 —— 旧解析器
+ * 硬要求 `length >= 7` 且从 parts[5] 取 principal, 于是主群流(6 段)一律
+ * 返回 null: 群消息正常入库却从不拼上下文(用户实踩“读不到群历史”),
+ * 同时 task.dispatch 的群账号边界检查也被跳过。
+ *
+ * externalKey 在协议里是**不透明字符串**, 段数会随 provider 版本变 ——
+ * 所以只靠两侧锚点定位, 不数中间段: chatId 固定在左侧 parts[3]
+ * (topic 的 threadId 在 parts[4]), principal 紧邻末尾的换代后缀 g<n> 左侧。
+ * 这样 6 段主群流、7 段 topic、以及将来真的加回 rootMessageId 的 7/8 段
+ * 形态都能对;形状对不上时 fail-closed 返回 null(宁可不拼上下文,
+ * 不得把换代后缀或 threadId 当成 principal 写进存储命名空间)。
  * DM lane 与其它 provider 返回 null(无群窗口)。
  */
 export function groupLaneOf(
   externalKey: string,
-): { chatId: string; threadId: string } | null {
+): { chatId: string; threadId: string; principalId: string } | null {
   const parts = externalKey.split(':');
   if (parts[0] !== 'telegram') return null;
-  if (parts[1] === 'group' && parts.length >= 7 && parts[3]) {
-    return { chatId: parts[3], threadId: '' };
-  }
-  if (parts[1] === 'topic' && parts.length >= 7 && parts[3] && parts[4]) {
-    return { chatId: parts[3], threadId: parts[4] };
-  }
-  return null;
+  const kind = parts[1];
+  if (kind !== 'group' && kind !== 'topic') return null;
+  const lastIndex = parts.length - 1;
+  // 换代后缀可选(旧 server 不带): 带则 principal 在它左侧, 不带则就是末段。
+  const principalIndex = /^g\d+$/.test(parts[lastIndex] ?? '') ? lastIndex - 1 : lastIndex;
+  const chatId = parts[3] ?? '';
+  const threadId = kind === 'topic' ? (parts[4] ?? '') : '';
+  const principalId = parts[principalIndex] ?? '';
+  if (!chatId || !principalId) return null;
+  if (kind === 'topic' && !threadId) return null;
+  // principal 不得与 chatId / threadId 撞位 —— 撞上说明段数不够、形状未知。
+  if (principalIndex <= (kind === 'topic' ? 4 : 3)) return null;
+  return { chatId, threadId, principalId };
 }
 
-/** group.message 帧入窗(幂等: 重放/重连的同一条消息按唯一键直接忽略)。 */
-export async function recordGroupMessage(payload: GroupMessagePayload): Promise<void> {
-  await sweepExpiredRows();
+/** 同一设备先后绑定不同 Telegram 主账号时，群历史绝不共用命名空间。 */
+function providerOf(principalId: string): string {
+  if (!principalId) throw new Error('Telegram principal is required for group history');
+  return `telegram:${principalId}`;
+}
+
+/**
+ * group.message 帧入窗。返回 true 表示本次确实插入，供调用方在幂等入窗后
+ * 执行一次自动通讯录登记；重放/重连的同一条消息返回 false。
+ *
+ * 消息先落当前主账号的本地数据库，不做 TTL；每个群/topic 只保留最近 500
+ * 条，避免未受信任群成员无限占用磁盘。引用与 prompt 仍只从本机窗口读取。
+ */
+export async function recordGroupMessage(
+  payload: GroupMessagePayload,
+  principalId: string,
+): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const threadId = payload.threadId ?? '';
-  await db
+  const storageProvider = providerOf(principalId);
+  const inserted = await db
     .insert(hookGroupMessages)
     .values({
-      provider: payload.provider,
+      provider: storageProvider,
       chatId: payload.chatId,
       threadId,
       messageId: payload.messageId,
@@ -78,68 +113,57 @@ export async function recordGroupMessage(payload: GroupMessagePayload): Promise<
       sentAt: payload.sentAt,
       createdAt: now,
     })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: hookGroupMessages.id });
+  if (inserted.length === 0) return false;
 
   const keyFilter = and(
-    eq(hookGroupMessages.provider, payload.provider),
+    eq(hookGroupMessages.provider, storageProvider),
     eq(hookGroupMessages.chatId, payload.chatId),
     eq(hookGroupMessages.threadId, threadId),
   );
-  // GC: TTL 过期行 + 每键行数上限(保最新)。
-  await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS)));
-  const overflow = await db
+  const oldestKept = await db
     .select({ id: hookGroupMessages.id })
     .from(hookGroupMessages)
     .where(keyFilter)
     .orderBy(desc(hookGroupMessages.id))
     .limit(1)
     .offset(WINDOW_KEEP_PER_KEY - 1);
-  const threshold = overflow[0]?.id;
+  const threshold = oldestKept[0]?.id;
   if (threshold !== undefined) {
     await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
   }
-}
 
-/**
- * 全局 TTL 清扫: 不活跃群(不再有新消息触发按键 GC)的过期行也要清理。
- * 每次入窗/拼装时最多每 6 小时全表扫一次(sent_at 无全局索引, 行量有
- * 每键 500 上限, 全表量级可控)。
- */
-let lastGlobalSweepAt = 0;
-const GLOBAL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-async function sweepExpiredRows(): Promise<void> {
-  const now = Date.now();
-  if (now - lastGlobalSweepAt < GLOBAL_SWEEP_INTERVAL_MS) return;
-  // 先占位挡住并发重复清扫; 失败时归零放行下次调用重试, 不吞掉 6h 窗口。
-  lastGlobalSweepAt = now;
-  try {
-    const db = getDbClient().drizzle;
-    // 只清官方 hook 通道自己的行: 个人 Telegram bot 的窗口(provider
-    // 'telegram-personal[:botId]', 见 im/telegram/groupWindow.ts)是永久保留
-    // 的长期记忆, 不参与本 TTL(2026-07-30 产品拍板, review P1 堵共享表漏扫)。
+  const oldestPrincipalRowKept = await db
+    .select({ id: hookGroupMessages.id })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, storageProvider))
+    .orderBy(desc(hookGroupMessages.id))
+    .limit(1)
+    .offset(WINDOW_KEEP_PER_PRINCIPAL - 1);
+  const principalThreshold = oldestPrincipalRowKept[0]?.id;
+  if (principalThreshold !== undefined) {
     await db
       .delete(hookGroupMessages)
       .where(
         and(
-          lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS),
-          notLike(hookGroupMessages.provider, 'telegram-personal%'),
+          eq(hookGroupMessages.provider, storageProvider),
+          lt(hookGroupMessages.id, principalThreshold),
         ),
       );
-  } catch (err) {
-    lastGlobalSweepAt = 0;
-    throw err;
   }
+  return true;
 }
 
 /**
- * 启动清扫入口: 账号 DB 就绪后强制跑一次全局 TTL 清扫(绕过间隔门控)。
- * 流量路径的清扫只在有群消息/派发时触发, 群不再活跃或 Telegram 通道
- * 关闭后, 7 天留存承诺要靠这里在每次启动兜底。
+ * 兼容旧生命周期入口。新命名空间的群窗口不做 TTL 清扫；旧版无法可靠归属
+ * principal 的 provider='telegram' 行在升级启动时显式清除，避免敏感孤儿数据
+ * 永久残留。删除幂等，后续启动没有额外副作用。
  */
 export async function sweepGroupWindowExpired(): Promise<void> {
-  lastGlobalSweepAt = 0;
-  await sweepExpiredRows();
+  await getDbClient()
+    .drizzle.delete(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, 'telegram'));
 }
 
 /**
@@ -179,56 +203,90 @@ export async function buildGroupContextPrefix(
 ): Promise<GroupContextAssembly> {
   const lane = groupLaneOf(payload.externalKey);
   if (lane === null) return NO_CONTEXT;
-  await sweepExpiredRows();
   const db = getDbClient().drizzle;
   const cursorKey = cursorKeyOf(payload.externalKey);
   const cursor = contextCursors.get(cursorKey) ?? 0;
   const triggerMessageId = payload.source?.triggerMessageId ?? null;
-  const rows = await db
-    .select({
-      id: hookGroupMessages.id,
-      messageId: hookGroupMessages.messageId,
-      author: hookGroupMessages.author,
-      text: hookGroupMessages.text,
-      fileNames: hookGroupMessages.fileNames,
-    })
-    .from(hookGroupMessages)
-    .where(
-      and(
-        eq(hookGroupMessages.provider, 'telegram'),
-        eq(hookGroupMessages.chatId, lane.chatId),
-        eq(hookGroupMessages.threadId, lane.threadId),
-        gt(hookGroupMessages.id, cursor),
-      ),
-    )
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(WINDOW_KEEP_PER_KEY);
+  const readWindow = async (
+    threadFilter: SQL<unknown>,
+  ): Promise<
+    Array<{
+      id: number;
+      messageId: string;
+      author: string;
+      text: string;
+      fileNames: string | null;
+    }>
+  > =>
+    db
+      .select({
+        id: hookGroupMessages.id,
+        messageId: hookGroupMessages.messageId,
+        author: hookGroupMessages.author,
+        text: hookGroupMessages.text,
+        fileNames: hookGroupMessages.fileNames,
+      })
+      .from(hookGroupMessages)
+      .where(
+        and(
+          eq(hookGroupMessages.provider, providerOf(lane.principalId)),
+          eq(hookGroupMessages.chatId, lane.chatId),
+          threadFilter,
+          gt(hookGroupMessages.id, cursor),
+        ),
+      )
+      .orderBy(desc(hookGroupMessages.id))
+      .limit(CONTEXT_READ_LIMIT);
 
-  // 从最新往回累加, 超出预算保新丢旧(rows 已是新→旧序)。
-  const lines: string[] = [];
+  // 本 lane 自己的消息(主群流 threadId='' 或指定 topic) —— 预算优先给它。
+  const primaryRows = await readWindow(eq(hookGroupMessages.threadId, lane.threadId));
+  // 主群流额外兜一层非空 threadId 的行: server 曾把普通群里 reply 链的
+  // message_thread_id 当成 topic 下发(Telegram 对非 forum 群的 reply 链也给这个字段,
+  // 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03 实机: 172 条在
+  // 主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里答"我看不到群里的历史
+  // 消息"。判据只能在 server 修(客户端拿不到 is_forum / is_topic_message), 这里按"宁可多
+  // 读同群发言、不可漏读"兜住存量与老 server。**只作兜底, 不与主群流争预算也不推游标越过
+  // 主群流未读**: forum 群的 General 也走 group lane, 否则该群其它 topic 的突发流量会把
+  // General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
+  // 这条兜底最终只服务存量行。topic lane 不读兜底集(topic 之间严格隔离)。
+  const fallbackRows =
+    lane.threadId === '' ? await readWindow(ne(hookGroupMessages.threadId, '')) : [];
+
+  // 从最新往回累加, 超出预算保新丢旧(两个集合各自已是新→旧序)。
+  const picked: Array<{ id: number; line: string }> = [];
   let totalChars = 0;
   let truncated = false;
   let maxId = cursor;
-  for (const row of rows) {
-    if (row.id > maxId) maxId = row.id;
-    if (triggerMessageId !== null && row.messageId === triggerMessageId) continue;
-    let fileNote = '';
-    if (row.fileNames !== null) {
-      try {
-        const names = JSON.parse(row.fileNames) as string[];
-        if (names.length > 0) fileNote = ` (附件: ${names.join(', ')})`;
-      } catch {
-        /* 老行损坏时静默丢附件标注 */
+  const consume = (rows: typeof primaryRows): void => {
+    for (const row of rows) {
+      if (row.id > maxId) maxId = row.id;
+      if (triggerMessageId !== null && row.messageId === triggerMessageId) continue;
+      let fileNote = '';
+      if (row.fileNames !== null) {
+        try {
+          const names = JSON.parse(row.fileNames) as string[];
+          if (names.length > 0) fileNote = ` (附件: ${names.join(', ')})`;
+        } catch {
+          /* 老行损坏时静默丢附件标注 */
+        }
       }
+      const line = neutralizeFenceTags(`[${row.author}] ${row.text}${fileNote}`);
+      if (totalChars + line.length > CONTEXT_MAX_CHARS) {
+        truncated = true;
+        break;
+      }
+      picked.push({ id: row.id, line });
+      totalChars += line.length;
     }
-    const line = neutralizeFenceTags(`[${row.author}] ${row.text}${fileNote}`);
-    if (totalChars + line.length > CONTEXT_MAX_CHARS) {
-      truncated = true;
-      break;
-    }
-    lines.unshift(line);
-    totalChars += line.length;
-  }
+  };
+  consume(primaryRows);
+  consume(fallbackRows);
+  // 拼装按时间序(id 升序): 两个集合交错取回, 单独 unshift 会把兜底集整块排到前面。
+  picked.sort((a, b) => a.id - b.id);
+  const lines = picked.map((entry) => entry.line);
+  // 游标仍是单值(取两集合的最大 id): 窗口行 id 全局单调, 兜底集的 id 必然高于同批取回的
+  // 主群流行, 所以推进它不会跳过任何**已取回**的主群流消息; 被省略的主群流行只可能是它
+  // 自己超字符预算的那几条 —— 保新丢旧是既有策略, 与其它 topic 的流量无关。
   // 游标推进与"是否有可拼内容"解耦(窗口里只剩触发消息时也要前移),
   // 但延迟到任务受理: dispatch 被拒时这批消息不能被跳过。
   const commit =
@@ -245,12 +303,9 @@ export async function buildGroupContextPrefix(
       : (): void => undefined;
   if (lines.length === 0) return { prefix: '', commit };
   if (truncated) lines.unshift('[... 更早的消息已省略 ...]');
-  const header =
-    cursor > 0 ? '[自你上次请求后群里新增的消息]' : '[群里最近的消息]';
+  const header = cursor > 0 ? '[自你上次请求后群里新增的消息]' : '[群里最近的消息]';
   // lane 标识含 IM 聊天 id, 不写日志(同 manager/session-runner 的约定)。
-  log.info(
-    `group context assembled: entries=${lines.length}${truncated ? ' (truncated)' : ''}`,
-  );
+  log.info(`group context assembled: entries=${lines.length}${truncated ? ' (truncated)' : ''}`);
   // 显式数据栅栏: 群消息是未受信任的第三方数据, 用 tag 块与指令区隔开
   // (与 Slack 通道的 thread_context 块同一约定)。自然语言栅栏不能根绝
   // 注入 —— 强制边界仍是会话权限模式(非 bypass 档的工具调用走交互卡确认)。
@@ -265,5 +320,95 @@ export async function buildGroupContextPrefix(
 /** 测试与登出清理: 重置内存游标(窗口行随 DB 生命周期)。 */
 export function resetGroupContextCursors(): void {
   contextCursors.clear();
-  lastGlobalSweepAt = 0;
+}
+
+/** 设置卡数据源：官方群窗口里出现过的群，按最近活跃排序。 */
+export async function listTelegramKnownGroups(
+  principalId: string,
+): Promise<Array<{ chatId: string; chatName: string | null }>> {
+  const db = getDbClient().drizzle;
+  const storageProvider = providerOf(principalId);
+  const rankedGroups = db
+    .select({
+      chatId: hookGroupMessages.chatId,
+      chatName: hookGroupMessages.chatName,
+      sentAt: hookGroupMessages.sentAt,
+      latestRank:
+        sql<number>`row_number() over (partition by ${hookGroupMessages.chatId} order by ${hookGroupMessages.sentAt} desc, ${hookGroupMessages.id} desc)`.as(
+          'latest_rank',
+        ),
+    })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, storageProvider))
+    .as('ranked_groups');
+  const rows = await db
+    .select({
+      chatId: rankedGroups.chatId,
+      chatName: rankedGroups.chatName,
+    })
+    .from(rankedGroups)
+    .where(eq(rankedGroups.latestRank, 1))
+    .orderBy(desc(rankedGroups.sentAt))
+    .limit(50);
+  return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
+}
+
+/**
+ * Query a binding's local groups and reject the snapshot if that binding was
+ * replaced while SQLite was yielding. The final identity check is synchronous
+ * with returning the rows, so a Renderer never observes the previous owner's
+ * chat ids through the binding-change TOCTOU window.
+ */
+export async function listTelegramKnownGroupsForStableBinding(
+  binding: { bindingId: string; principalId: string },
+  currentBinding: () => {
+    state: string;
+    bindingId: string | null;
+    principalId: string | null;
+  } | null,
+  query: typeof listTelegramKnownGroups = listTelegramKnownGroups,
+): Promise<Array<{ chatId: string; chatName: string | null }> | null> {
+  const groups = await query(binding.principalId);
+  const current = currentBinding();
+  if (
+    current?.state !== 'confirmed' ||
+    current.bindingId !== binding.bindingId ||
+    current.principalId !== binding.principalId
+  ) {
+    return null;
+  }
+  return groups;
+}
+
+export interface TelegramGroupActivationView {
+  chatId: string;
+  chatName: string | null;
+  activation: 'mention' | 'always';
+}
+
+/**
+ * 设置卡必须同时展示本地窗口里的群和服务端仍保留 override 的群。后者可能因
+ * principal 总量上限或最近 50 群限制而不在本地查询结果中；若不补回，用户将
+ * 无法把仍为 always 的群恢复为 mention。
+ */
+export function mergeTelegramGroupActivationViews(
+  knownGroups: ReadonlyArray<{ chatId: string; chatName: string | null }>,
+  groupActivation: Readonly<Record<string, 'mention' | 'always'>>,
+): TelegramGroupActivationView[] {
+  const groups = new Map<string, TelegramGroupActivationView>();
+  for (const group of knownGroups) {
+    groups.set(group.chatId, {
+      ...group,
+      activation: groupActivation[group.chatId] === 'always' ? 'always' : 'mention',
+    });
+  }
+  for (const [chatId, activation] of Object.entries(groupActivation)) {
+    if (groups.has(chatId)) continue;
+    groups.set(chatId, {
+      chatId,
+      chatName: chatId,
+      activation: activation === 'always' ? 'always' : 'mention',
+    });
+  }
+  return [...groups.values()];
 }

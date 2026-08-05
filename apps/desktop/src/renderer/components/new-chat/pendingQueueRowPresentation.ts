@@ -48,24 +48,21 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
+  const isPendingEnqueue = entry.isPendingEnqueue === true;
 
   return {
     isOrca,
     isScheduler,
-    senderLabel: isOrca
-      ? origin.senderLabel
-      : isScheduler
-        ? origin.scheduleName
-        : null,
+    senderLabel: isOrca ? origin.senderLabel : isScheduler ? origin.scheduleName : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
       : isScheduler
-        ? (entry.persistedContent || entry.text)
+        ? entry.persistedContent || entry.text
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           : entry.text,
-    canEdit: !isOrca && !isScheduler && !isSyntheticTrigger,
-    canSteer: !isOrca && !isScheduler && !isSyntheticTrigger,
+    canEdit: !isPendingEnqueue && !isOrca && !isScheduler && !isSyntheticTrigger,
+    canSteer: !isPendingEnqueue && !isOrca && !isScheduler && !isSyntheticTrigger,
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };
@@ -81,7 +78,5 @@ export function resolvePendingQueueEditSubmission(
   entry: QueuedMessage,
   visibleText: string,
 ): string | null {
-  return visibleText === getPendingQueueRowPresentation(entry).displayText
-    ? null
-    : visibleText;
+  return visibleText === getPendingQueueRowPresentation(entry).displayText ? null : visibleText;
 }

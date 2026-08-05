@@ -12,5 +12,9 @@
 import type { AgentKind } from '@cindy/maker-scheduler';
 
 export function defaultModelFor(agentKind: AgentKind): string {
-  return agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6';
+  if (agentKind === 'codex') return 'gpt-5.5';
+  // Pi 没有跨来源合法的静态默认。runner 会用实时连接目录解析
+  // {model,providerId}；空字符串可阻止其它调用方制造“看似可用”的 Claude 假路由。
+  if (agentKind === 'pi') return '';
+  return 'claude-sonnet-4-6';
 }

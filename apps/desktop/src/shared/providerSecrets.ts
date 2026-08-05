@@ -81,12 +81,19 @@ const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
 
+/** Custom-provider runtime header blobs are main-only credential material. */
+export const CUSTOM_PROVIDER_HEADER_SECRET_PREFIX = 'provider_headers_';
+
 /**
  * Whether the generic Renderer safeStorage bridge may access this logical
  * key. Main-only credentials use dedicated IPC that never returns plaintext.
  */
 export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean {
-  return !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(storageKey.toLowerCase());
+  const normalized = storageKey.toLowerCase();
+  return (
+    !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(normalized)
+    && !normalized.startsWith(CUSTOM_PROVIDER_HEADER_SECRET_PREFIX)
+  );
 }
 
 /**
@@ -115,6 +122,16 @@ export function customProviderSecretStorageKey(providerId: string, agent: string
   assertSafeKeyPart(providerId, 'providerId');
   assertSafeKeyPart(agent, 'agent');
   return `provider_key_${providerId}_${agent}`;
+}
+
+/**
+ * Main-only encrypted blob containing all custom headers for one provider runtime.
+ * Header values are never persisted in the custom_providers SQLite row.
+ */
+export function customProviderHeaderStorageKey(providerId: string, agent: string): string {
+  assertSafeKeyPart(providerId, 'providerId');
+  assertSafeKeyPart(agent, 'agent');
+  return `${CUSTOM_PROVIDER_HEADER_SECRET_PREFIX}${providerId}_${agent}`;
 }
 
 /**

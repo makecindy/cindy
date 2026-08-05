@@ -24,8 +24,12 @@ import {
 } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
-import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  isCodexResumeNotReadyProjectionError,
+  type AgentInputReference,
+} from '@cindy/maker-shared/agent-input-projection';
 import {
   connectedProvidersForAgent,
   providerOffersModel,
@@ -55,6 +59,10 @@ import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
+import {
+  useWorkerProjection,
+  useWorkerProjectionOwner,
+} from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
@@ -82,6 +90,7 @@ import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn';
+import { CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
@@ -102,8 +111,13 @@ import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
+import { useAuth } from '@/contexts/AuthContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
 import {
@@ -406,17 +420,24 @@ function RightSidebarSessionIdRegistration({
 function RightSidebarWorkdirRegistration({
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   declare,
 }: {
   workdir: string;
   /** 非空 = SSH remote 会话(workdir 为远端路径);plugin 据此走远端 file-service。 */
   remoteHostId: string | null;
-  declare: (workdir: string, remoteHostId?: string | null) => void;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
+  declare: (
+    workdir: string,
+    remoteHostId?: string | null,
+    deviceLinkDeviceId?: string | null,
+  ) => void;
 }) {
   useLayoutEffect(() => {
-    declare(workdir, remoteHostId);
-    return () => declare('');
-  }, [workdir, remoteHostId, declare]);
+    declare(workdir, remoteHostId, deviceLinkDeviceId);
+    return () => declare('', null, undefined);
+  }, [workdir, remoteHostId, deviceLinkDeviceId, declare]);
   return null;
 }
 
@@ -495,7 +516,11 @@ export function CCAgentSessionView({
       sessionId: string | null,
       opts?: { initialCollapsed?: boolean; writeInitialCollapsedRecord?: boolean },
     ) => void;
-    setRightSidebarWorkdir?: (workdir: string) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
   const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
@@ -690,6 +715,10 @@ export function CCAgentSessionView({
     () => (sessionId ? getStickySessionDeviceId(sessionId) : undefined),
     [sessionId, remoteProjectSessions],
   );
+  // 右栏本地-only 能力需要区分三态：字符串=远端、null=已确认本机、undefined=归属尚未解析。
+  // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
+  const rightSidebarDeviceLinkDeviceId =
+    remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
@@ -714,8 +743,8 @@ export function CCAgentSessionView({
     if (!remoteDeviceId || !remoteModelMemoryScopeKey) return;
     const deviceId = remoteDeviceId;
     const scopeKey = remoteModelMemoryScopeKey;
-    const agent = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
-    const vendorSlot = agent === 'codex' ? 'codex' : 'claudeCode';
+    const agent = dbToMakerAgentKind(session?.agentKind);
+    const vendorSlot = agent === 'claude-code' ? 'claudeCode' : agent;
     let cancelled = false;
 
     const applySnapshot = (snapshot: RemoteModelMemorySnapshot | undefined) => {
@@ -732,8 +761,9 @@ export function CCAgentSessionView({
         // 旧版被控端无该 channel / 离线:保持空镜像,非选中行回落模型默认。
       });
 
-    const off = window.electronAPI.deviceLink.onRemotePush((push) => {
+    const off = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (push.deviceId !== deviceId || push.channel !== 'maker:new-maker-draft:changed') return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       const payload = push.payload as Record<
         string,
         { providerModelMemory?: RemoteModelMemorySnapshot } | undefined
@@ -820,7 +850,8 @@ export function CCAgentSessionView({
     const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
     if (!sessionsPush) return;
     const refreshSequence = sessionRefreshSequenceRef.current;
-    const unsub = sessionsPush.onPatched(({ sessionId: patchedId, patch }) => {
+    const unsub = sessionsPush.onPatched(({ sessionId: patchedId, patch }, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (patchedId !== sessionId || !refreshSequence.isCurrentSession(patchedId)) return;
       const patchBuffer = sessionSnapshotPatchBufferRef.current;
       patchBuffer.stage(patchedId, patch);
@@ -1108,7 +1139,7 @@ export function CCAgentSessionView({
   const isRemoteSession = !!session?.remoteHostId;
   useEffect(() => {
     let cancelled = false;
-    const agentKind = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind = dbToMakerAgentKind(session?.agentKind);
     // SSH remote 显式禁用控制端本机 skill 扫描；本地无 workingDir 时 Claude 仍扫全局 skills。
     const wd = session?.workingDir;
     // 先同步清空:切换会话(尤其 local→remote)时 loadAllCommands 是异步的,清空可避免
@@ -1153,17 +1184,21 @@ export function CCAgentSessionView({
 
   // Pending send: stored when folder picker needs to open mid-send
   const pendingSendRef = useRef<{
+    deliveryMode: MessageDeliveryMode;
     message: string;
     model: string;
     effort: Effort;
     permissionMode: PermissionMode;
     files?: AttachedFile[];
     mentions?: MentionedResource[];
+    vendorOptions?: Record<string, unknown>;
     /** 正文前缀含「选中引用」编码块——补选目录后的派发同样要携带,否则该消息持久化后渲染不出胶囊。 */
     quotesEncoded?: boolean;
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: PastedTextRange[];
     slashCommandRanges?: SlashCommandRange[];
+    onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+    onDeferredAccepted?: () => void;
   } | null>(null);
 
   const handleTitleUpdate = useCallback(() => {
@@ -1200,6 +1235,7 @@ export function CCAgentSessionView({
     loadOlderMessages,
     isLoadingMore,
     hasMoreMessages,
+    historyWindowHasIsland,
     pendingPermission,
     respondToPermission,
     pendingAskUser,
@@ -1247,36 +1283,43 @@ export function CCAgentSessionView({
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
-  const displayAgentKind =
-    agentSwitchIntent?.target ?? (session?.agentKind === 'codex' ? 'codex' : 'claude-code');
+  const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
+  const { mode: authMode, user: authUser } = useAuth();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
-    if (
-      remoteDeviceId ||
-      session?.remoteHostId ||
-      session?.agentKind !== 'cc' ||
-      !session.model
-    ) {
+    if (remoteDeviceId || session?.remoteHostId || session?.agentKind !== 'cc' || !session.model) {
       return false;
     }
     return connectedProvidersForAgent(localProviders, 'claude-code').some(
       (provider) =>
-        provider.id === 'anthropic' &&
-        providerOffersModel(provider, session.model, 'claude-code'),
+        provider.id === 'anthropic' && providerOffersModel(provider, session.model, 'claude-code'),
     );
-  }, [
-    localProviders,
-    remoteDeviceId,
-    session?.agentKind,
-    session?.model,
-    session?.remoteHostId,
-  ]);
+  }, [localProviders, remoteDeviceId, session?.agentKind, session?.model, session?.remoteHostId]);
+  /**
+   * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
+   * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里
+   * 没有余额页可跳，此时不传回调，ErrorBanner 会保持原样文案、不加按钮。
+   */
+  const canAccessBilling = canAccessBillingSettings({
+    mode: authMode,
+    membershipKind: authUser?.membershipKind ?? null,
+  });
+  const handleViewBalance = useCallback(() => {
+    navigate('/settings?tab=billing');
+  }, [navigate]);
+  // live 错误的来源 provider 快照:错误出现时取值、任务切换时重置、错误存续期间
+  // 切 provider 不跟随。语义与边界条件见 useLiveErrorSourceProvider 头注释。
+  const liveErrorSourceProviderId = useLiveErrorSourceProvider(
+    error,
+    sessionId,
+    session?.providerId ?? null,
+  );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -1348,6 +1391,26 @@ export function CCAgentSessionView({
   const [errorTailBannerHiddenFor, setErrorTailBannerHiddenFor] = useState<string | null>(null);
   const errorTailBannerHidden =
     errorTailBannerHiddenFor !== null && errorTailBannerHiddenFor === errorTailMsg?.clientId;
+  /**
+   * Claude Code captures the subscription token and plan metadata when its process is spawned.
+   * Settings auth changes only affect future sessions, so a subscription-plan retry must first
+   * use the existing soft-close path; the next dispatch then lazy-creates Claude with fresh auth.
+   * preserveWorkspace keeps this recovery from triggering worktree cleanup, and makerApiFor
+   * keeps the same behavior for device-link sessions.
+   */
+  const rebuildClaudeSubscriptionSessionBeforeRetry = useCallback(
+    async (reason: string | null | undefined): Promise<void> => {
+      if (
+        !sessionId ||
+        session?.agentKind !== 'cc' ||
+        reason !== CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON
+      ) {
+        return;
+      }
+      await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
+    },
+    [session?.agentKind, sessionId],
+  );
   // 抑制交棒(review P2):本地 hidden 态只服务「点击 → enqueue 被接受」的短窗口;
   // 合成续跑项进入队列或 coordinator dispatch 边界后就释放 hidden 态，由
   // main projection 接管抑制。排队项被取消 / dispatch 前被 Ghost block 时，
@@ -1365,6 +1428,9 @@ export function CCAgentSessionView({
       // 隐藏的英文续跑指令([UI_ACTION_TRIGGER] 前缀,消息流不渲染)——用户视角
       // 就是任务继续跑了。transcript 里已有原任务与(可能的)部分进展,模型自查
       // 进度接着做。send 失败恢复红条让用户能重试。
+      await rebuildClaudeSubscriptionSessionBeforeRetry(
+        errorTailKind === 'error' ? errorTailMsg.errorReason : null,
+      );
       await makerChatStore.sendUiTrigger(
         sessionId,
         errorTailKind === 'interrupted'
@@ -1383,7 +1449,7 @@ export function CCAgentSessionView({
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [errorTailKind, errorTailMsg, sessionId]);
+  }, [errorTailKind, errorTailMsg, rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
     // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
@@ -1628,7 +1694,7 @@ export function CCAgentSessionView({
   const getHelpCommandsSnapshot = useCallback(async (): Promise<UnifiedCommand[]> => {
     const cached = allCommandsRef.current;
     if (cached.length > 0) return cached;
-    const agentKind = session?.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind = dbToMakerAgentKind(session?.agentKind);
     try {
       // device-link 远程会话同源:传 remoteDeviceId,fallback 快照也从被控端读(见上方 cache effect 说明)。
       return await loadAllCommands(
@@ -1720,10 +1786,7 @@ export function CCAgentSessionView({
         // 全在本地,不回 SDK(原生 /workflows 在非交互 SDK 模式下不可用)。
         if (!sessionId) return;
         const latest = findLatestWorkflowTask(taskUpdatesRef.current);
-        void openBackgroundTasksTab(
-          sessionId,
-          latest ? { focusTaskId: latest.taskId } : {},
-        );
+        void openBackgroundTasksTab(sessionId, latest ? { focusTaskId: latest.taskId } : {});
         return;
       }
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
@@ -1734,7 +1797,7 @@ export function CCAgentSessionView({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex'>('codex');
+  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -1801,7 +1864,7 @@ export function CCAgentSessionView({
       ? routeWorkerHint.hasWorkerParam
         ? routeWorkerHint.workerSessionId
         : (orcaWorkersReveal?.focusWorkerSessionId ??
-          (hasWorkerSearchJump ? searchJump?.sessionId ?? null : null))
+          (hasWorkerSearchJump ? (searchJump?.sessionId ?? null) : null))
       : null;
     const workerSearchJump =
       focusWorkerSessionId && searchJump?.sessionId === focusWorkerSessionId
@@ -1883,12 +1946,12 @@ export function CCAgentSessionView({
   // remote-forward 直连本机 MCP bridge、worker 创建继承 remoteHostId;device-link 会话的
   // Lead / Worker / team 真身都在被控端,enableOrca 与团队读写经隧道路由过去 ——
   // 三类都已接通,不再按 agent 或远端形态限流。
-  // 注意:doc rail (isCompactRail) 也允许显示 toggle —— WorkdirBrowseRoute 已经
+  // 注意:doc rail (isCompactRail) 也允许显示协同菜单项 —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
-  // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
-  // 工具行同时传 denseToolbar=true,协同 pill 自动收成 icon-only,窄 rail 视觉 OK。
+  // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
+  const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: session?.workspaceKind,
+    workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
     remoteHostId: session?.remoteHostId,
@@ -1898,6 +1961,7 @@ export function CCAgentSessionView({
   });
   const collabPolicyEligible = !orcaMode && collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
+    workspaceKind: collabWorkspaceKind,
     // SSH 远端会话的 workingDir 是远端主机路径, 跳过项目级查询; 用户级/全局级 collab
     // 开关仍生效 (与 main 侧 remote 分支同口径)。
     skipQuery: collabEntry.skipProjectQuery,
@@ -1909,22 +1973,17 @@ export function CCAgentSessionView({
   const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
   const collabSessionId = sessionId;
+  const collabProjectionLeadId = collabEnabled ? collabSessionId : undefined;
+  useWorkerProjectionOwner(collabProjectionLeadId);
+  const collabWorkerProjection = useWorkerProjection(collabProjectionLeadId);
   useEffect(() => {
-    if (!collabSessionId || !collabEnabled) return;
-    let cancelled = false;
-    void orcaWorkflowsFor(collabSessionId)
-      .listWorkersByLead(collabSessionId)
-      .then((workers) => {
-        if (cancelled || workers.length === 0) return;
-        const activeWorker = workers[0]; // MVP: 假设最多 1 个 active Worker
-        const kind: 'cc' | 'codex' = activeWorker.session?.agentKind === 'codex' ? 'codex' : 'cc';
-        setCollabWorker(kind);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [collabSessionId, collabEnabled]);
+    if (!collabProjectionLeadId) return;
+    const activeWorker = collabWorkerProjection.workers[0]; // MVP: 假设最多 1 个 active Worker
+    if (!activeWorker) return;
+    // orca worker 创建面未开 pi;万一读到脏值也按 codex 收敛,不撑开 toggle 契约。
+    const normalizedKind = normalizeDbAgentKind(activeWorker.agent);
+    setCollabWorker(normalizedKind === 'cc' ? 'cc' : 'codex');
+  }, [collabProjectionLeadId, collabWorkerProjection.workers]);
 
   // F-COLLAB: "外部触发" 协同状态变化时自动打开协同 tab (典型场景: MCP team
   // 工具, 未来也覆盖飞书等其它入口)。
@@ -1970,7 +2029,7 @@ export function CCAgentSessionView({
   // navigate 触发条件:仅兼容 orca route 仍在场时需要跳回单 session 路由。
   // doc 模式 (isCompactRail=true) 下 OrcaSplitView 把 Lead pane 渲染为
   // <CCAgentSessionView ... orcaMode compact />,orcaMode 这里只是表"在 split-pane 里"的语义标,
-  // 不能当 navigate 判据 —— 否则用户在 doc rail 工具行点协同 pill 关协同会跳出 doc 模式。
+  // 不能当 navigate 判据 —— 否则用户在 doc rail 的「+」菜单关闭协同会跳出 doc 模式。
   // disableOrca 后 lead.orcaRole 被清掉,WorkdirBrowseRoute 的 isOrcaLeadSession 自动 fallback
   // 到单 CCAgentSessionView,留在 doc 模式即可。
   const { requestStop: requestStopCollab } = useStopOrcaCollab({
@@ -2008,8 +2067,8 @@ export function CCAgentSessionView({
         : Promise.resolve();
       try {
         const workerAgent = form.agent;
-        const worker: 'cc' | 'codex' = workerAgent === 'codex' ? 'codex' : 'cc';
-        setCollabWorker(worker);
+        const normalizedWorker = normalizeDbAgentKind(workerAgent);
+        setCollabWorker(normalizedWorker === 'cc' ? 'cc' : 'codex');
         setCreateWorkerOpen(false);
         // 粘滞归属(codex review P2):入口与协同策略查询都按粘滞 remoteDeviceId 指向被控端,
         // mutation 必须同口径 —— 非粘滞的 makerApiFor 在 relay 瞬断窗口内会退回本机
@@ -2092,19 +2151,24 @@ export function CCAgentSessionView({
       // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③
       if (newDir && pendingSendRef.current) {
         const {
+          deliveryMode,
           message,
           model,
           effort,
           permissionMode,
           files,
           mentions,
+          vendorOptions,
           quotesEncoded,
           agentReferences,
           pastedTextRanges,
           slashCommandRanges,
+          onRemoteOptimisticFailure,
+          onDeferredAccepted,
         } = pendingSendRef.current;
         pendingSendRef.current = null;
-        sendMessage(
+        const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;
+        void dispatch(
           message,
           model,
           effort,
@@ -2112,18 +2176,37 @@ export function CCAgentSessionView({
           newDir,
           files,
           mentions,
-          quotesEncoded || agentReferences?.length || pastedTextRanges?.length || slashCommandRanges !== undefined
+          quotesEncoded ||
+            vendorOptions !== undefined ||
+            agentReferences?.length ||
+            pastedTextRanges?.length ||
+            slashCommandRanges !== undefined ||
+            onRemoteOptimisticFailure !== undefined ||
+            onDeferredAccepted !== undefined
             ? {
+                ...(vendorOptions ? { vendorOptions } : {}),
                 ...(quotesEncoded ? { quotesEncoded: true } : {}),
                 ...(agentReferences?.length ? { agentReferences } : {}),
                 ...(pastedTextRanges?.length ? { pastedTextRanges } : {}),
                 ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
+                ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
+                ...(onDeferredAccepted ? { onDeferredAccepted } : {}),
               }
             : undefined,
+        ).then(
+          (accepted) => {
+            if (accepted) onDeferredAccepted?.();
+          },
+          (error) => {
+            log.warn(
+              'pending send after working directory selection failed:',
+              error instanceof Error ? error.message : String(error),
+            );
+          },
         );
       }
     },
-    [sendMessage, refreshServerSession],
+    [refreshServerSession, sendMessage, steerMessage],
   );
 
   const handleFolderPickerOpenChange = useCallback((open: boolean) => {
@@ -2154,7 +2237,7 @@ export function CCAgentSessionView({
         capabilities: sessionCaps,
         providerId: session?.providerId ?? null,
         modelId: newModelId,
-        agentKind: session?.agentKind === 'codex' ? 'codex' : 'claude-code',
+        agentKind: dbToMakerAgentKind(session?.agentKind),
       });
       if (!supportsFast) {
         const currentFastMode = sessionId ? makerChatStore.getSnapshot(sessionId).fastMode : false;
@@ -2300,7 +2383,7 @@ export function CCAgentSessionView({
       }
       const createOpts = session?.workingDir
         ? {
-            agentKind: 'claude-code' as const,
+            agentKind: session.agentKind === 'pi' ? ('pi' as const) : ('claude-code' as const),
             workingDir: session.workingDir,
             model: session.model,
             orcaRole: session.orcaRole ?? null,
@@ -2352,6 +2435,8 @@ export function CCAgentSessionView({
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        onDeferredAccepted?: () => void;
       },
     ) => {
       const deliveryMode = opts?.deliveryMode ?? 'queue';
@@ -2381,21 +2466,19 @@ export function CCAgentSessionView({
         return;
       }
 
-      // 断线缓存的远程 session 可打开查看,但不可继续发送。返回 false 让 ChatInput 保留草稿。
-      if (remoteSessionUnavailable) return false;
-
-      // ① Agent readiness check. Claude still gates on the shared API Key;
-      // Codex gates on the app's Codex connection state. Both use the same
-      // confirm dialog and settings navigation path as voice input.
-      // device-link:远程会话就绪态以被控端为准(传 remoteDeviceId 走隧道查被控端
-      // maker:agent:status);本地会话 remoteDeviceId 为 undefined → 走本机检查(行为不变)。
-      const { proceed } = await vendorAuthGate.checkAndConfirm(isCodex ? 'codex' : 'cc', {
-        deviceId: remoteDeviceId,
-        // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
-        // PR #744 review 第十七轮)。
-        existingSessionRoute: true,
-      });
-      if (!proceed) return false;
+      // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
+      // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
+      // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
+      // 再弹出旧页面的认证对话框或导航回旧路由。
+      if (!remoteDeviceId) {
+        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
+          // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
+          // PR #744 review 第十七轮)。
+          existingSessionRoute: true,
+        });
+        if (!proceed) return false;
+      }
 
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
@@ -2403,21 +2486,32 @@ export function CCAgentSessionView({
       // 草稿提交的首条之前,顺序倒置。
       if (sessionHandoffPreparing) return false;
 
+      const orcaLeadVendorOptions =
+        sessionId && session !== null && isOrcaLeadSession(session)
+          ? { vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: sessionId } }
+          : undefined;
+
       // ② Working directory check
       if (!session?.workingDir) {
         pendingSendRef.current = {
+          deliveryMode,
           message,
           model,
           effort,
           permissionMode,
           files,
           mentions,
+          ...orcaLeadVendorOptions,
           ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
           ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
           ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
           ...(opts?.slashCommandRanges !== undefined
             ? { slashCommandRanges: opts.slashCommandRanges }
             : {}),
+          ...(opts?.onRemoteOptimisticFailure
+            ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
+            : {}),
+          ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
         };
         setFolderPickerOpen(true);
         return false;
@@ -2447,12 +2541,7 @@ export function CCAgentSessionView({
       }
 
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
-      const orcaLeadVendorOptions =
-        sessionId && isOrcaLeadSession(session)
-          ? { vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: sessionId } }
-          : undefined;
-      const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;
-      return dispatch(message, model, effort, permissionMode, session.workingDir, files, mentions, {
+      const sendOptions = {
         ...orcaLeadVendorOptions,
         ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
         ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
@@ -2460,7 +2549,33 @@ export function CCAgentSessionView({
         ...(opts?.slashCommandRanges !== undefined
           ? { slashCommandRanges: opts.slashCommandRanges }
           : {}),
-      });
+        ...(opts?.onRemoteOptimisticFailure
+          ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
+          : {}),
+        ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
+      };
+      if (deliveryMode === 'steer') {
+        return steerMessage(
+          message,
+          model,
+          effort,
+          permissionMode,
+          session.workingDir,
+          files,
+          mentions,
+          sendOptions,
+        );
+      }
+      return sendMessage(
+        message,
+        model,
+        effort,
+        permissionMode,
+        session.workingDir,
+        files,
+        mentions,
+        sendOptions,
+      );
     },
     [
       maybeDispatchDesktopSlashCommand,
@@ -2477,7 +2592,6 @@ export function CCAgentSessionView({
       t,
       vendorAuthGate,
       remoteDeviceId,
-      remoteSessionUnavailable,
       sessionHandoffPreparing,
     ],
   );
@@ -2588,10 +2702,12 @@ export function CCAgentSessionView({
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
-    void retryLastError().catch((error) => {
-      log.warn('retryLastError failed', error);
-    });
-  }, [retryLastError]);
+    void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
+      .then(() => retryLastError())
+      .catch((error) => {
+        log.warn('retryLastError failed', error);
+      });
+  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
@@ -2617,13 +2733,7 @@ export function CCAgentSessionView({
 
     await refreshServerSession();
     await retryLastError();
-  }, [
-    canSwitchToClaudeSubscription,
-    refreshServerSession,
-    retryLastError,
-    session,
-    sessionId,
-  ]);
+  }, [canSwitchToClaudeSubscription, refreshServerSession, retryLastError, session, sessionId]);
 
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
@@ -2640,7 +2750,10 @@ export function CCAgentSessionView({
         kind: 'usage-limit-recovery',
         requestId,
         sessionId,
-        agentKind: session?.agentKind === 'codex' ? 'codex' : 'claude-code',
+        agentKind:
+          session?.agentKind === 'codex' || session?.agentKind === 'pi'
+            ? session.agentKind
+            : 'claude-code',
         resetAtMs: usageLimitRecovery.resetAtMs,
       }),
     });
@@ -2668,10 +2781,13 @@ export function CCAgentSessionView({
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const ipcError = extractIpcError(err);
+      const detail = ipcError?.message || (err instanceof Error ? err.message : String(err));
       toast.error(
-        ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
+        isCodexResumeNotReadyProjectionError(detail)
+          ? t('chat.errorBanner.codexResumeNotReady')
+          : ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
           ? t('chat.userMessage.forkErrors.unsupportedHistory')
-          : ipcError?.message || (err instanceof Error ? err.message : String(err)),
+          : detail,
       );
     } finally {
       setForkStripEncryptedRunning(false);
@@ -2697,14 +2813,25 @@ export function CCAgentSessionView({
     // 远程模型可能只存在于被控端(本地目录查不到 → 误判跨 vendor),且本地 DB 没有该会话行,
     // sessionService.update 会写错 / refreshServerSession 对远程是 no-op。直接跳过(规则:host 为准)。
     if (getSessionDeviceId(sessionId)) return;
-    const agent = isCodex ? 'codex' : 'claude-code';
+    const agent = displayAgentKind;
     if (!shouldFallbackVendorModel(providers, sessionModel, agent)) return;
-    const defaultModel = getDefaultModelForVendor(isCodex ? 'codex' : 'cc');
+    // 用三值化后的 agent 映射选默认模型:Pi 会话必须回退到 Pi 目录默认,而不是被
+    // `isCodex ? 'codex' : 'cc'` 误写成 CC 首选(可能是更贵的 Opus)(codex review)。
+    const defaultModel = getDefaultModelForVendor(
+      agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
+    );
     sessionService
       .update(sessionId, { model: defaultModel.id })
       .then(() => refreshServerSession())
       .catch((err) => log.warn('vendor fallback patch failed:', err));
-  }, [isCodex, providers, refreshServerSession, sessionAgentKind, sessionId, sessionModel]);
+  }, [
+    displayAgentKind,
+    providers,
+    refreshServerSession,
+    sessionAgentKind,
+    sessionId,
+    sessionModel,
+  ]);
 
   // 远程协同交接被 app 关闭打断时的兜底:把上次没能发出去的正文回填到输入框。
   // 只回填、不自动补发(理由见 pendingFirstMessage 的「可恢复副本」注释)。
@@ -3072,6 +3199,7 @@ export function CCAgentSessionView({
         <RightSidebarWorkdirRegistration
           workdir={session?.workingDir ?? ''}
           remoteHostId={session?.remoteHostId ?? null}
+          deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
           declare={setRightSidebarWorkdir}
         />
       )}
@@ -3155,25 +3283,37 @@ export function CCAgentSessionView({
           </div>
         )}
 
-        {/* device-link 远程会话状态 banner:断链重连 / 被控离线时提示 + 重新同步(以被控端为准重拉对账)。
-          suspect-stall(链路在线但本轮久未更新且核实不到被控端)优先 —— 它可能在 connected 时触发,
-          额外给「结束本轮」手动收尾。connected / local 且无 stall 时不渲染。 */}
+        {/* device-link 远程会话状态 banner:断链重连 / 被控离线 / 通路不稳定(degraded,弱网熔断)
+          时提示 + 重新同步(以被控端为准重拉对账)。suspect-stall(链路在线但本轮久未更新且核实
+          不到被控端)优先 —— 它可能在 connected 时触发,额外给「结束本轮」手动收尾。
+          unstable 描述跨连接抖动,即使此刻 online 也要展示。connected / local 且无 stall 时不渲染。 */}
         {remoteSync.suspectStall ? (
           <RemoteSessionBanner
             status="suspect-stall"
             onResync={remoteSync.resync}
             onFinalize={remoteSync.forceFinalize}
           />
-        ) : remoteConn === 'reconnecting' || remoteConn === 'host-offline' ? (
+        ) : remoteConn === 'reconnecting' ||
+          remoteConn === 'host-offline' ||
+          remoteConn === 'degraded' ||
+          remoteLinkIssue?.kind === 'unstable' ? (
           <RemoteSessionBanner
-            status={remoteConn}
+            status={
+              remoteLinkIssue?.kind === 'unstable'
+                ? 'reconnecting'
+                : remoteConn === 'host-offline'
+                  ? 'host-offline'
+                  : remoteConn === 'degraded'
+                    ? 'degraded'
+                    : 'reconnecting'
+            }
             issue={remoteLinkIssue}
             onResync={remoteSync.resync}
           />
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
-        {showRemoteLoading && <RemoteSessionLoading />}
+        {showRemoteLoading && remoteConn === 'connected' && <RemoteSessionLoading />}
 
         {/* Full-area drop overlay.
           Keep the event-capture surface for the whole chat area, but leave the
@@ -3259,7 +3399,9 @@ export function CCAgentSessionView({
                 }}
                 // 被控端可见性 chip 嵌进状态栏中央槽位,与 thinking / 时间 token 同行
                 // (不再单独占一行)。中央槽位独立于状态栏淡入淡出 → 空闲时仍显示。
-                centerSlot={showInlineControlledBanner ? <ControlledBanner placement="statusbar" /> : null}
+                centerSlot={
+                  showInlineControlledBanner ? <ControlledBanner placement="statusbar" /> : null
+                }
               />
             )}
 
@@ -3320,10 +3462,10 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                  errorSourceProviderId={errorTailMsg?.errorProviderId ?? null}
                   onSwitchToClaudeSubscription={
-                    canSwitchToClaudeSubscription
-                      ? handleSwitchToClaudeSubscription
-                      : undefined
+                    canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                   }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
@@ -3360,9 +3502,7 @@ export function CCAgentSessionView({
                 onRetry={handleRetry}
                 onSilentStopContinue={handleSilentStopContinue}
                 onContinueAfterUsageReset={
-                  usageLimitRecovery && !remoteDeviceId
-                    ? handleContinueAfterUsageReset
-                    : undefined
+                  usageLimitRecovery && !remoteDeviceId ? handleContinueAfterUsageReset : undefined
                 }
                 onCancel={handleDismissError}
                 agentKind={session?.agentKind}
@@ -3373,6 +3513,8 @@ export function CCAgentSessionView({
                 onSwitchToClaudeSubscription={
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }
+                onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
@@ -3518,18 +3660,24 @@ export function CCAgentSessionView({
                  胶囊的悬停浮层向上展开,会盖住交互卡内容(条件集与下方 ternary
                  的静默判定保持一致)。 */}
               <PinnedPlanPanel
+                sessionId={sessionId ?? null}
                 messages={messages}
                 animated={isStreaming}
                 width={inputWidth}
-                visible={!(
-                  pendingPlanReview ||
-                  pendingPermission ||
-                  pendingAskUser ||
-                  pendingPluginSetup ||
-                  pendingIssueConfirm ||
-                  pendingRenameSessionsConfirm ||
-                  pendingGhostGrantConfirm
-                )}
+                taskHistoryMayBeIncomplete={
+                  !historyLoaded || hasMoreMessages || historyWindowHasIsland
+                }
+                visible={
+                  !(
+                    pendingPlanReview ||
+                    pendingPermission ||
+                    pendingAskUser ||
+                    pendingPluginSetup ||
+                    pendingIssueConfirm ||
+                    pendingRenameSessionsConfirm ||
+                    pendingGhostGrantConfirm
+                  )
+                }
               />
               {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
                  全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
@@ -3563,13 +3711,10 @@ export function CCAgentSessionView({
                   sessionId={sessionId}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
-                  runtimeAgentKind={
-                    session
-                      ? session.agentKind === 'codex'
-                        ? 'codex'
-                        : 'claude-code'
-                      : null
-                  }
+                  runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
+                  // 协同会话不参与跨引擎切换；session 未加载时保留 undefined 未知态，
+                  // 仅在完整元数据确认非 Orca 后传 null 开放入口。
+                  sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={remoteDeviceId}
@@ -3587,7 +3732,7 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteSessionUnavailable || remoteHandoffPreparing}
+                  disabled={remoteHandoffPreparing}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
@@ -3610,25 +3755,22 @@ export function CCAgentSessionView({
                   attachmentState={attachmentState}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}
-                  vendorKey={isCodex ? 'codex' : 'cc'}
+                  vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   compactToolbar={compactToolbar}
-                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把
-                  // 字号/控件压一档,同时让协同 toggle 只剩 logo。
+                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
                   denseToolbar={isCompactRail}
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
                   disableAutofocus={isCompactRail}
                   focusOnStorageKeyChange={ownsRoute}
-                  // F-COLLAB: 协同模式 toggle。在以下场景渲染:
-                  // - 普通主会话视图 (含 doc rail) 的 Claude / Codex 项目会话,本地 /
-                  //   SSH 远端 / device-link 被控端三类都算(判定见 collabEntry)。
-                  // 排除 worker 子会话(worker 自己不能再开协同)与对话模式(无项目目录)。
-                  // orcaMode 路由下 toggle 也保留显示 — ON 态的 orange pill 本身就是
+                  // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
+                  // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
+                  // (worker 自己不能再开协同)。
+                  // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
-                  // doc rail 的 denseToolbar=true 会把 pill 收成 icon-only 形态。
                   collaboration={
                     allowCollabToggle || (orcaMode && collabEnabled)
                       ? {
@@ -3664,25 +3806,23 @@ export function CCAgentSessionView({
                               }
                             : undefined,
                           disabled:
-                            !collabEnabled &&
-                            (collabPolicy.loading || !collabPolicy.enabled),
+                            !collabEnabled && (collabPolicy.loading || !collabPolicy.enabled),
                           // unsupported(被控端版本过旧、没有 maker:plugins:get-state)
                           // 排在 unavailable 之前:它是确定性的不支持,给「稍后重试」是
                           // 误导,上面的 onDisabledActivate 也只挂在 unavailable 上。
-                          disabledReason:
-                            !collabEnabled
-                              ? collabPolicy.loading
-                                ? t('newChat.collaboration.loadingHint')
-                                : collabPolicy.unsupported
-                                  ? t('newChat.collaboration.unsupportedRemoteHint')
-                                  : collabPolicy.unavailable || !collabPolicy.enabled
-                                    ? t(
-                                        collabPolicy.unavailable
-                                          ? 'newChat.collaboration.unavailableHint'
-                                          : 'newChat.collaboration.disabledHint',
-                                      )
-                                    : undefined
-                              : undefined,
+                          disabledReason: !collabEnabled
+                            ? collabPolicy.loading
+                              ? t('newChat.collaboration.loadingHint')
+                              : collabPolicy.unsupported
+                                ? t('newChat.collaboration.unsupportedRemoteHint')
+                                : collabPolicy.unavailable || !collabPolicy.enabled
+                                  ? t(
+                                      collabPolicy.unavailable
+                                        ? 'newChat.collaboration.unavailableHint'
+                                        : 'newChat.collaboration.disabledHint',
+                                    )
+                                  : undefined
+                            : undefined,
                         }
                       : undefined
                   }
@@ -3785,7 +3925,7 @@ export function CCAgentSessionView({
                     </Tip>
                   )}
                   <TodaySpendChip
-                    vendorKey={displayAgentKind === 'codex' ? 'codex' : 'cc'}
+                    vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                     providerId={
                       agentSwitchIntent
@@ -3802,7 +3942,7 @@ export function CCAgentSessionView({
                   <ContextCapacityRing
                     contextTokens={agentStatus.contextTokens}
                     model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                    vendorKey={displayAgentKind === 'codex' ? 'codex' : 'cc'}
+                    vendorKey={normalizeDbAgentKind(displayAgentKind)}
                     sdkContextWindow={agentStatus.contextWindow}
                     deviceId={remoteDeviceId}
                     onCompact={
@@ -4263,7 +4403,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelContextWindow(
   model: string,
-  vendorKey: 'cc' | 'codex',
+  vendorKey: 'cc' | 'codex' | 'pi',
   deviceId?: string,
 ): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
@@ -4280,7 +4420,7 @@ function ContextCapacityRing({
 }: {
   contextTokens: number;
   model: string;
-  vendorKey: 'cc' | 'codex';
+  vendorKey: 'cc' | 'codex' | 'pi';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
   /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */

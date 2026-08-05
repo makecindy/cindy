@@ -54,7 +54,8 @@ describe('create_worker tool', () => {
     const { registry } = setup();
 
     expect(registry.get('create_worker')?.description).toContain(
-      '注:create_worker 建的是 Orca worker(session 级、持久、UI 可见),不是 subagent。若用户要的是 subagent(一次性、用完即弃),请用原生 subagent 机制(Codex:spawn_agent;Claude Code:Task 工具),不要用 create_worker。',
+      '注:create_worker 建的是 Orca worker(session 级、持久、UI 可见),不是 subagent。若用户要的是 subagent(一次性、用完即弃),请用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task 工具),不要用 create_worker。'
+        + 'Orca worker 永远不是 subagent 的替代品;你没有原生 subagent 机制时,如实告知用户并请他决定,不要拿 worker 顶替。',
     );
     expect(registry.get('create_worker')?.description).toContain(
       '用户一次要求创建 2 个及以上 Worker 时必须改用 create_workers；不要并行或连续多次调用 create_worker。',
@@ -147,6 +148,23 @@ describe('create_worker tool', () => {
     });
   });
 
+  it('accepts pi as a first-class worker agent and passes it through to host', async () => {
+    const { registry, createWorker } = setup();
+
+    const res = await registry.call('create_worker', {
+      role: 'developer',
+      agent: 'pi',
+      label: 'pi_dev_1',
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(parse(res)).toMatchObject({ ok: true, label: 'pi_dev_1' });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'pi',
+      label: 'pi_dev_1',
+    }));
+  });
+
   it('trims valid labels before validating and calling host', async () => {
     const { registry, createWorker } = setup();
 
@@ -180,7 +198,7 @@ describe('create_worker tool', () => {
       ok: false,
       errorCode: 'WORKER_CANNOT_NEST',
       data: {
-        hint: 'create_worker 是 Orca Lead 创建 worker session 的入口,不是 subagent 入口。若用户明确要求 subagent / 子代理,请使用你自己的原生 subagent 机制(Codex:spawn_agent;Claude Code:Task/Agent 工具),不要使用 Orca create_worker / start_team。',
+        hint: 'create_worker 是 Orca Lead 创建 worker session 的入口,不是 subagent 入口。若用户明确要求 subagent / 子代理,请使用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task/Agent 工具),不要使用 Orca create_worker / start_team。没有原生 subagent 机制时如实告知用户,Orca worker 不是它的替代品。',
       },
     });
     expect(createWorker).not.toHaveBeenCalled();

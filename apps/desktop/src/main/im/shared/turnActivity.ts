@@ -46,6 +46,18 @@ export interface TurnActivityState {
    * ErrorBanner「恢复后由后续正常事件自动清除」同口径。
    */
   notice: string | null;
+  /**
+   * 一行**等用户**状态(等授权 / 等回答 / 等审阅), 与上面的 notice 分开存。
+   *
+   * 为什么不能共用 notice: notice 的语义是"这一刻卡在哪, 有真实进展就作废", 所以
+   * pushToolStep / pushThinkingStep / markActivityWriting 都会 clearNotice。而"在等
+   * 你确认"恰恰要在**有进展的时候也留着** —— 权限请求挂起期间 agent 的其它子任务
+   * 照样会吐 thinking / tool_use / 正文, 那些事件一到就把提示抹掉, 于是剩下的授权
+   * 最长要等 30 分钟而过程区一个字都不提(2026-08-03 review P2)。
+   *
+   * 只由交互挂起/收口显式设置与清除, 进展事件一律不动它。
+   */
+  interactionNotice: string | null;
 }
 
 /** Replay/delta bookkeeping stays private and is never serialized with card state. */
@@ -70,6 +82,7 @@ export function createTurnActivity(startedAt: number): TurnActivityState {
     startedAt,
     writing: false,
     notice: null,
+    interactionNotice: null,
   };
   internalStateByActivity.set(activity, {
     seenKeys: new Set(),
@@ -102,6 +115,20 @@ export function setActivityNotice(activity: TurnActivityState, notice: string | 
   const next = notice && notice.trim().length > 0 ? truncate(notice, STEP_LABEL_MAX) : null;
   if (activity.notice === next) return false;
   activity.notice = next;
+  return true;
+}
+
+/**
+ * 设置 / 清除"在等你确认"那一行。返回是否真的变了(同 setActivityNotice 的语义)。
+ * 与 setActivityNotice 的区别只有一个: 进展事件不会清掉它。
+ */
+export function setInteractionNotice(
+  activity: TurnActivityState,
+  notice: string | null,
+): boolean {
+  const next = notice && notice.trim().length > 0 ? truncate(notice, STEP_LABEL_MAX) : null;
+  if (activity.interactionNotice === next) return false;
+  activity.interactionNotice = next;
   return true;
 }
 
@@ -207,25 +234,9 @@ function formatElapsed(ms: number): string {
  * turn 上, 那是渠道消息唯一可能整段静止的窗口(见 TurnActivityState.notice)。
  * 此时省掉"N 项"段 —— 报"0 项"没有信息量。
  */
-/**
- * 单行紧凑状态 — Telegram DM 草稿占位专用。draft 通道容不下多行时间线
- * (反复重排会打断客户端草稿动画), 但工具期一直停在纯 "Thinking…" 占位又是
- * 哑巴(桌面端有工作时间线, 渠道零信息)。一行讲清"这一刻在干什么":
- * `⚙️ <最近一步> · N 项 · 21s`。notice(过载重试等)优先; 零进展返回空串
- * (保持原生 Thinking 占位)。
- */
-export function renderActivityLine(activity: TurnActivityState, now: number): string {
-  if (activity.notice !== null) return `⏳ ${activity.notice}`;
-  const latest = activity.recentSteps[activity.recentSteps.length - 1];
-  if (!latest) return '';
-  const prefix = latest.kind === 'thinking' ? '✦ ' : '';
-  const elapsed = formatElapsed(now - activity.startedAt);
-  const count = activity.totalSteps > 1 ? ` · ${activity.totalSteps} 项` : '';
-  return `⚙️ ${prefix}${latest.label}${count} · ${elapsed}`;
-}
-
 export function renderActivity(activity: TurnActivityState, now: number): string {
-  if (activity.totalSteps === 0 && activity.notice === null) return '';
+  if (activity.totalSteps === 0 && activity.notice === null && activity.interactionNotice === null)
+    return '';
   const elapsed = formatElapsed(now - activity.startedAt);
   const lines = [
     activity.totalSteps > 0
@@ -235,11 +246,17 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   const last = activity.recentSteps.length - 1;
   activity.recentSteps.forEach((step, index) => {
     // 有状态说明时它才是"当前在做的事", 已完成的工作项一律收成 ✓。
-    const isTail = index === last && !activity.writing && activity.notice === null;
+    const isTail =
+      index === last &&
+      !activity.writing &&
+      activity.notice === null &&
+      activity.interactionNotice === null;
     const marker = isTail ? '▸' : '✓';
     const prefix = step.kind === 'thinking' ? '✦ ' : '';
     lines.push(`> ${marker} ${prefix}${step.label}`);
   });
   if (activity.notice !== null) lines.push(`> ⏳ ${activity.notice}`);
+  // 等用户那一行放最后: 它是此刻唯一需要用户动手的事。
+  if (activity.interactionNotice !== null) lines.push(`> ⏳ ${activity.interactionNotice}`);
   return lines.join('\n');
 }

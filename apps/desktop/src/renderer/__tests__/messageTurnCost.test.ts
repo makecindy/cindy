@@ -43,6 +43,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -55,6 +56,10 @@ import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 describe('formatTurnCostUsd', () => {
   it('始终保留两位小数，小于一美分显示下限', () => {
@@ -72,6 +77,7 @@ describe('formatTurnCostUsd', () => {
 // ── store 集成:历史映射 + 实时推送 ──────────────────────────────────────────
 
 type FanOutCb = (data: unknown) => void;
+const TEST_OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
 
 function makeElectronApiStub() {
   let turnCostCb: FanOutCb | null = null;
@@ -92,7 +98,13 @@ function makeElectronApiStub() {
     localDb: { messages: { onCreated: fanOut() } },
     deviceLink: {
       onRemotePush: (cb: FanOutCb) => {
-        remotePushCb = cb;
+        remotePushCb = (data) => {
+          if (data && typeof data === 'object' && !Array.isArray(data)) {
+            cb({ ...(data as Record<string, unknown>), ownerStamp: TEST_OWNER_STAMP });
+          } else {
+            cb(data);
+          }
+        };
         return () => {
           remotePushCb = null;
         };
@@ -160,6 +172,8 @@ describe('makerChatStore per-turn 费用', () => {
   const SID = 'sess-turn-cost';
 
   beforeEach(() => {
+    dataOwnerTesting.reset();
+    setDataOwnerGeneration(TEST_OWNER_STAMP.dataOwnerId, TEST_OWNER_STAMP.ownerGeneration);
     const { stub, getRemotePushCb: getRemote, getTurnCostCb: getTurn } = makeElectronApiStub();
     getRemotePushCb = getRemote;
     getTurnCostCb = getTurn;
@@ -172,6 +186,7 @@ describe('makerChatStore per-turn 费用', () => {
     makerChatStore.__teardownGlobalListeners();
     delete (globalThis as { window?: unknown }).window;
     vi.clearAllMocks();
+    dataOwnerTesting.reset();
   });
 
   it('历史加载:原始分段与用户轮累计成本分别映射;无值不映射', async () => {
@@ -209,6 +224,10 @@ describe('makerChatStore per-turn 费用', () => {
         },
       }),
       serverMessage({ clientId: 'a-no-cost' }),
+      serverMessage({
+        clientId: 'a-usage-only',
+        agentMeta: { turnUsageDetails: GPT_DETAILS },
+      }),
     ]);
     makerChatStore.ensureInitialMessages(SID);
     await flush();
@@ -220,6 +239,7 @@ describe('makerChatStore per-turn 费用', () => {
     const staleEstimateMetaModel = snap.messages.find((m) => m.clientId === 'a-stale-estimate-meta-model');
     const livePricingPreserved = snap.messages.find((m) => m.clientId === 'a-live-pricing-preserved');
     const noCost = snap.messages.find((m) => m.clientId === 'a-no-cost');
+    const usageOnly = snap.messages.find((m) => m.clientId === 'a-usage-only');
     expect(withCost?.turnMoney).toEqual(legacyMoney(0.05));
     expect(withCost?.turnCostIsEstimate).toBe(true);
     expect(withCost?.userTurnMoney).toEqual(legacyMoney(12.34));
@@ -232,6 +252,9 @@ describe('makerChatStore per-turn 费用', () => {
     expect(staleEstimateMetaModel?.turnMoney).toEqual(legacyMoney(2.011));
     expect(livePricingPreserved?.turnMoney).toEqual(legacyMoney(3.14));
     expect(noCost?.turnMoney).toBeUndefined();
+    expect(usageOnly?.turnMoney).toBeUndefined();
+    expect(usageOnly?.turnUsageDetails).toEqual(GPT_DETAILS);
+    expect(usageOnly?.turnCompleted).toBe(true);
   });
 
   it('device-link 旧历史:缺少持久化累计值时按完整用户轮投影', async () => {
@@ -386,6 +409,25 @@ describe('makerChatStore per-turn 费用', () => {
     const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-live-estimate');
     expect(msg?.turnMoney).toEqual(legacyMoney(2.011));
     expect(msg?.turnCostIsEstimate).toBe(true);
+  });
+
+  it('实时推送:没有价格时仍补 token/cache 明细', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'a-usage-only' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    getTurnCostCb()?.({
+      sessionId: SID,
+      clientId: 'a-usage-only',
+      turnUsageDetails: DETAILS,
+    });
+
+    const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-usage-only');
+    expect(msg?.turnUsageDetails).toEqual(DETAILS);
+    expect(msg?.turnMoney).toBeUndefined();
   });
 
   it('实时推送:订阅估算值不像旧 full-cache 口径时保留原始 live pricing 值', async () => {

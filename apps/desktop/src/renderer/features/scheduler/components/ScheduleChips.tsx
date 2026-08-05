@@ -45,7 +45,7 @@ import { PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 import type { SessionReference } from '../../../../shared/sessionReference';
 
 export type Destination = 'local' | 'worktree' | 'thread';
-export type AgentKind = 'claude-code' | 'codex';
+export type AgentKind = 'claude-code' | 'codex' | 'pi';
 
 interface ChipButtonProps {
   icon?: React.ReactNode;
@@ -160,9 +160,10 @@ export function ProjectChip({
   );
 }
 
-const AGENT_META: Record<AgentKind, { label: string; vendor: 'cc' | 'codex' }> = {
+const AGENT_META: Record<AgentKind, { label: string; vendor: 'cc' | 'codex' | 'pi' }> = {
   'claude-code': { label: 'Claude Code', vendor: 'cc' },
   codex: { label: 'Codex', vendor: 'codex' },
+  pi: { label: 'Pi', vendor: 'pi' },
 };
 
 export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onChange: (v: AgentKind) => void; disabled?: boolean }) {
@@ -1145,7 +1146,7 @@ export function ModelEffortChip({
       : t('scheduler.chips.model.default');
 
   // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
-  const vendorKey = agentKind === 'codex' ? 'codex' : 'cc';
+  const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
   const railSources = useMemo(
     () => connectedProvidersForAgent(providers, agentKind),
     [providers, agentKind],
@@ -1325,7 +1326,7 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
             )}
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title} · {s.agentKind === 'cc' ? 'Claude Code' : 'Codex'}
+                {s.title} · {s.agentKind === 'cc' ? 'Claude Code' : s.agentKind === 'pi' ? 'Pi' : 'Codex'}
               </option>
             ))}
           </select>

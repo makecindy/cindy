@@ -19,12 +19,16 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import {
+  GHOST_ICON_MAX_BYTES,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { GHOST_MANIFEST_MAX_BYTES, readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
+import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
@@ -34,11 +38,12 @@ const MAX_BASIC_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_NODE_TOTAL_BYTES = 256 * 1024 * 1024;
 const MAX_BASIC_CINDY_BYTES = 8 * 1024 * 1024;
 const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
+const FORGE_AI_ICON_PATH = 'assets/icon.png';
 
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
 function shouldSkip(name: string): boolean {
   if (name.startsWith('.')) return true; // .git / .DS_Store / .disabled 等
-  if (name === 'node_modules') return true;
+  if (name.toLowerCase() === 'node_modules') return true;
   if (name.toLowerCase().endsWith('.cindy')) return true; // 上次打包产物,防套娃
   return false;
 }
@@ -418,7 +423,11 @@ export async function scaffoldGhostDir(
   const resolved = path.resolve(input.dir);
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '没有会话工作目录,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '没有会话工作目录,无法确定骨架输出位置',
+    };
   }
   // 字面 startsWith 不设防软链:工作目录里若有 out -> /tmp/out 之类的
   // 软链祖先,字面在内、实际在外。两边都按 realpath 对账——目标还不存在,
@@ -427,7 +436,11 @@ export async function scaffoldGhostDir(
   try {
     realWorkdir = await fs.promises.realpath(path.resolve(workdir));
   } catch {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
+    return {
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+      message: '会话工作目录不存在,无法确定骨架输出位置',
+    };
   }
   let realAncestor = resolved;
   const pendingSegments: string[] = [];
@@ -537,11 +550,31 @@ export async function scaffoldGhostDir(
 }
 
 /**
- * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
- * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
- * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ * 打包核心:校验 + 收集 + 生成 zip buffer,不写盘。packGhostDir(产物进源码目录)
+ * 与 packGhostDirToFile(产物去调用方指定路径,自定义市场安装管道用)共用,
+ * 保证两条路径的校验与打包规则永远一致。
  */
-export async function packGhostDir(dir: string): Promise<ForgePackResult> {
+async function buildGhostPackage(
+  dir: string,
+  /**
+   * 调用方**已经校验过**的规范根(realpath 产物)。传入时,这里会核对自己解析出的
+   * realpath 仍等于它,不等即拒。
+   *
+   * 为什么必须由调用方给:光靠"我自己 realpath 一次、再拿它当 containWithin 的锚点"
+   * 是**自我参照**——插件目录或其父目录在调用方校验之后、这里解析之前被换成指向
+   * 目录外的符号链接时,解析结果就是那个外部目录,以它为锚点的一切包含性判定自然
+   * 全部通过,外部 payload 会被打包进去(外部目录只要留着同样的 ghost.json,清单
+   * 对账也发现不了)。锚点必须来自上游的既有结论,不能在下游重新发明。
+   */
+  expectedRealDir?: string,
+  options?: { iconPng?: Buffer },
+): Promise<
+  // manifestRaw = 校验前的原始清单对象。作者期严格校验(见 firstGhostAuthoringIssue)
+  // 需要它来看见「作者写了但被校验器按未登记字段忽略掉」的内容——校验后的
+  // manifest 里那些字段已经不见了,只看它无从判断。
+  | { ok: true; buf: Buffer; manifest: GhostManifest; manifestRaw: Record<string, unknown> }
+  | Exclude<ForgePackResult, { ok: true }>
+> {
   try {
     let stat: fs.Stats;
     try {
@@ -552,13 +585,42 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     if (!stat.isDirectory()) {
       return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `不是目录:${dir}` };
     }
+    // 后续所有读取都以 realpath 根做 containWithin 复核:O_NOFOLLOW 只管最后
+    // 一个路径分量,校验后中间目录被换成根外链接的窗口靠它堵。
+    const realDir = await fs.promises.realpath(dir);
+    if (expectedRealDir !== undefined && realDir !== expectedRealDir) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: '插件目录在打包前被替换(实际规范路径与调用方校验过的不一致)',
+      };
+    }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
+    // 读到的**原始字节**要留作不可变快照:后面生成 zip 时逐文件重新读盘,若
+    // ghost.json 在"这里校验"与"写入 zip"之间被并发改写(保 id/version、加权限
+    // 声明),返回的 manifest 与包里那份就会分叉——安装侧拿返回值做审阅比对,
+    // 装进去的却是改过的包。快照写入让"校验的 = 返回的 = 包里的"三者恒等。
+    // 与市场发现/安装层同一把闸(单句柄限量读,拒符号链接):打包输入目录是
+    // 用户可写的活目录,按路径无界 readFile 会跟随链接读到目录外、或被超大
+    // 文件耗尽内存。快照字节也必须出自这把闸,不能再按路径重读。
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        await fs.promises.readFile(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'),
+      const bytes = await readBoundedFileNoFollow(
+        path.join(realDir, GHOST_MANIFEST_FILE),
+        GHOST_MANIFEST_MAX_BYTES,
+        { containWithin: realDir },
       );
+      if (bytes === null) {
+        return {
+          ok: false,
+          errorCode: 'MANIFEST_INVALID',
+          message: `${GHOST_MANIFEST_FILE} 不是普通文件或超过 ${GHOST_MANIFEST_MAX_BYTES} 字节上限`,
+        };
+      }
+      manifestBytes = bytes;
+      manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {
         ok: false,
@@ -566,9 +628,35 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         message: `${GHOST_MANIFEST_FILE} 缺失或不是合法 JSON:${err instanceof Error ? err.message : String(err)}`,
       };
     }
+    const iconPng = options?.iconPng;
+    if (iconPng !== undefined) {
+      if (iconPng.byteLength === 0 || iconPng.byteLength > GHOST_ICON_MAX_BYTES) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `AI 图标体积必须在 1–${GHOST_ICON_MAX_BYTES} 字节之间`,
+        };
+      }
+      // 无效清单先交给正式 validator，避免 overlay 把 null/数组等输入改造成
+      // 另一种形状、掩盖原始 MANIFEST_INVALID。只有普通对象才写入快照。
+      if (typeof manifestRaw === 'object' && manifestRaw !== null && !Array.isArray(manifestRaw)) {
+        // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
+        // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
+        manifestRaw = { ...manifestRaw, icon: FORGE_AI_ICON_PATH };
+        // 采用紧凑 JSON，避免仅为 overlay 重排空白就把清单推过安装侧上限。
+        manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw)}\n`, 'utf-8');
+      }
+    }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${v.reason}` };
+    }
+    if (manifestBytes.byteLength > GHOST_INSTALL_MANIFEST_MAX_BYTES) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `${GHOST_MANIFEST_FILE} 合成后超过安装器 ${GHOST_INSTALL_MANIFEST_MAX_BYTES} 字节上限`,
+      };
     }
     const manifest = v.manifest;
 
@@ -592,7 +680,9 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     for (const rel of mustExist) {
       try {
-        const st = await fs.promises.stat(path.join(dir, rel));
+        // lstat 与收集侧(walk 的 Dirent)同一语义:声明的入口若是符号链接,
+        // stat 会判"在场"而 walk 不收集它,装出的包缺入口、运行期才 404。
+        const st = await fs.promises.lstat(path.join(dir, rel));
         if (!st.isFile()) throw new Error('not a file');
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
@@ -605,19 +695,23 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       const skillMdPath = path.join(dir, ...item.dir.split('/'), 'SKILL.md');
       let content: string;
       try {
-        content = await fs.promises.readFile(skillMdPath, 'utf-8');
+        // 同一把单句柄限量闸:超限在读之前拒,符号链接不放行。
+        const bytes = await readBoundedFileNoFollow(skillMdPath, GHOST_SKILL_MD_MAX_BYTES, {
+          containWithin: realDir,
+        });
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `${item.dir}/SKILL.md 不是普通文件或超过 ${GHOST_SKILL_MD_MAX_BYTES} 字节上限`,
+          };
+        }
+        content = bytes.toString('utf-8');
       } catch (err) {
         return {
           ok: false,
           errorCode: 'ENTRY_MISSING',
           message: `读取 ${item.dir}/SKILL.md 失败:${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-      if (Buffer.byteLength(content, 'utf8') > GHOST_SKILL_MD_MAX_BYTES) {
-        return {
-          ok: false,
-          errorCode: 'MANIFEST_INVALID',
-          message: `${item.dir}/SKILL.md 过大(上限 ${GHOST_SKILL_MD_MAX_BYTES} 字节)`,
         };
       }
       const consistencyError = checkSkillMdConsistency(content, item);
@@ -636,7 +730,10 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
     const seenPackPaths = new Set<string>();
-    const walk = async (cur: string, relBase: string): Promise<ForgePackResult | null> => {
+    const walk = async (
+      cur: string,
+      relBase: string,
+    ): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
@@ -654,6 +751,15 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
+        } else if (e.isSymbolicLink()) {
+          // 符号链接一律不穿透。此前是静默跳过——OneDrive 未水合占位文件、
+          // 仓库里提交的链接都会被悄悄丢出包外,校验说"在场"、包里却没有,
+          // 运行期才 404。改为结构化拒绝,错误可见。
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `源码目录含符号链接条目,不允许打包:${rel}`,
+          };
         } else if (e.isFile()) {
           files.push({ rel, abs });
           totalBytes += (await fs.promises.stat(abs)).size;
@@ -673,13 +779,95 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     };
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
+    // AI icon overlay changes both the manifest snapshot and the icon bytes. A
+    // source tree carrying a publisher/reviewer signature cannot be modified
+    // here without re-signing, so let the host fall back to the original icon
+    // package instead of producing a package that installation must reject.
+    const signatureEntry = files.find((file) => file.rel === GHOST_SIGNATURE_FILE);
+    if (iconPng !== undefined && signatureEntry) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message:
+          '已签名插件不能使用 AI 图标覆盖；请保留原图标，或先修改源码图标再由正式发布流水线重新签名',
+      };
+    }
+    const foldedAiIconPath = FORGE_AI_ICON_PATH.toLowerCase();
+    const iconSourceEntry = files.find((file) => file.rel.toLowerCase() === foldedAiIconPath);
+    const iconPathOccupiedByDirectory = [...seenPackPaths].some(
+      (rel) => rel === foldedAiIconPath || rel.startsWith(`${foldedAiIconPath}/`),
+    );
+    if (iconPng !== undefined && iconPathOccupiedByDirectory && !iconSourceEntry) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `AI 图标目标路径已被源码目录占用:${FORGE_AI_ICON_PATH}`,
+      };
+    }
+    if (iconPng !== undefined && iconSourceEntry && iconSourceEntry.rel !== FORGE_AI_ICON_PATH) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `AI 图标目标路径与源码中的大小写冲突:${iconSourceEntry.rel}`,
+      };
+    }
+    if (iconPng !== undefined && !iconSourceEntry && files.length + 1 > maxFiles) {
+      return { ok: false, errorCode: 'TOO_LARGE', message: `文件过多(上限 ${maxFiles} 个)` };
+    }
 
-    // 5) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
-    // 文件收集在写盘之前完成 + shouldSkip 跳过 *.cindy,自身产物不会进包;
-    // 同名覆盖:同 id 同版本重打包语义上就是同一个包。
+    // 5) 生成 zip buffer。文件收集在此之前完成 + shouldSkip 跳过 *.cindy,
+    // 产物自身不会进包;写盘位置由调用方决定(packGhostDir 进源码目录,
+    // packGhostDirToFile 进调用方指定路径)。
     const zip = new JSZip();
+    // 身份卡用第 1 步的不可变快照,其余文件走同一把单句柄限量闸现读:walk 里
+    // 的 stat 只是预算预估,文件可在 walk 与此处之间被换成超大文件或符号链接
+    // (网络共享/并发写)。真正的边界在读取时按**剩余总预算**强制执行,任何
+    // 文件被并发改动(换链接/删除/膨胀)都结构化拒绝,不把无界字节交给 JSZip。
+    let packedBytes = 0;
     for (const f of files) {
-      zip.file(f.rel, await fs.promises.readFile(f.abs));
+      let content: Buffer;
+      if (f.rel === GHOST_MANIFEST_FILE) {
+        content = manifestBytes;
+      } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
+        content = iconPng;
+      } else {
+        let bytes: Buffer | null;
+        try {
+          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes, {
+            containWithin: realDir,
+          });
+        } catch {
+          bytes = null;
+        }
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'TOO_LARGE',
+            message: `文件在打包期间被并发改动或超出剩余体积预算:${f.rel}`,
+          };
+        }
+        content = bytes;
+      }
+      packedBytes += content.byteLength;
+      if (packedBytes > maxTotalBytes) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `总体积超上限(${maxTotalBytes} 字节)`,
+        };
+      }
+      zip.file(f.rel, content);
+    }
+    if (iconPng !== undefined && !iconSourceEntry) {
+      packedBytes += iconPng.byteLength;
+      if (packedBytes > maxTotalBytes) {
+        return {
+          ok: false,
+          errorCode: 'TOO_LARGE',
+          message: `总体积超上限(${maxTotalBytes} 字节)`,
+        };
+      }
+      zip.file(FORGE_AI_ICON_PATH, iconPng);
     }
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
@@ -690,9 +878,12 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    const cindyPath = path.join(dir, `${manifest.id}-${manifest.version}.cindy`);
-    await fs.promises.writeFile(cindyPath, buf);
-    return { ok: true, cindyPath, manifest };
+    return {
+      ok: true,
+      buf,
+      manifest,
+      manifestRaw: (manifestRaw ?? {}) as Record<string, unknown>,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -700,6 +891,90 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       message: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/**
+ * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
+ * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
+ * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ */
+export async function packGhostDir(
+  dir: string,
+  options?: { iconPng?: Buffer },
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir, undefined, options);
+  if (!built.ok) return built;
+  const authoringIssue = firstGhostAuthoringIssue(built.manifestRaw);
+  if (authoringIssue) {
+    return { ok: false, errorCode: 'MANIFEST_INVALID', message: authoringIssue };
+  }
+  // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
+  // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
+  const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
+  try {
+    await fs.promises.writeFile(cindyPath, built.buf);
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * **作者期严格校验**(只在 packGhostDir 这条打包出口上跑,不进任何安装路径)。
+ *
+ * 未读角标现在由 `badge` **卡槽**声明。槽名走硬白名单,写错直接被
+ * validateGhostManifest 拒掉,所以本身不需要额外把关。真正会静默失败的是另一种:
+ * 作者(或 agent)照着**早期示例**写成顶层 `notify: { badge: ... }` —— 那个字段
+ * 从来没被登记过,校验器一律忽略,于是包打出来了、装进去了、运行期每次发 badge
+ * 都被拒,作者却以为自己声明过(codex review)。
+ *
+ * 这里在打包期把它变成一条可行动的报错。放在 packGhostDir 而不是共用校验器或
+ * packGhostDirToFile:后两者会作用到**已在用户机器上**的清单与自定义市场安装管道,
+ * 给它们加新拒绝面就会踩存量红线;而作者正在打包的这一份没有存量问题。
+ */
+function firstGhostAuthoringIssue(raw: Record<string, unknown>): string | null {
+  const notifyRaw = raw.notify;
+  if (
+    notifyRaw !== null &&
+    typeof notifyRaw === 'object' &&
+    !Array.isArray(notifyRaw) &&
+    'badge' in (notifyRaw as Record<string, unknown>)
+  ) {
+    return '未读角标已改为独立卡槽:请把 notify.badge 删掉,改成在 slots 里声明 "badge"(并同时声明 "panel")';
+  }
+  return null;
+}
+
+/**
+ * 打包到调用方指定的绝对路径。自定义市场安装管道用:市场克隆缓存是只读事实,
+ * 产物落到临时目录,装完即删。校验与打包规则与 packGhostDir 完全一致。
+ *
+ * `expectedRealDir` **必填**:这条路径的输入来自用户可写的市场目录,打包器不能
+ * 自己 realpath 一次就当锚点(自我参照,见 buildGhostPackage 的说明)。做成必填
+ * 而不是可选,是为了让新调用方无法跳过——签名逼着它交出上游已经校验过的规范根。
+ */
+export async function packGhostDirToFile(
+  dir: string,
+  destPath: string,
+  expectedRealDir: string,
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir, expectedRealDir);
+  if (!built.ok) return built;
+  try {
+    // 0o600:临时包可能落在共享 /tmp,不给同机其它用户读权限。
+    await fs.promises.writeFile(destPath, built.buf, { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, cindyPath: destPath, manifest: built.manifest };
 }
 
 /**
@@ -732,12 +1007,13 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 值得主动摆出来让用户选的"隐藏"设计选项(详见对应章节):
 
 - **界面形态**:无界面(纯工具)/ 聊天卡片(card 槽,§4.5)/ 停靠面板(panel.position
-  left,§5)/ 右侧栏页签(position "tab",§5)。
+  left,§5)/ 插件页内独占面板(position "tab",从插件页「使用」打开、离开即关,§5)。
 - **唤起方式**:只靠 AI 按 whenToUse 自动想起,还是同时声明 \`command\` 点名词让用户
   显式点名(推荐,§2)。
 - **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
   的场景,§2)。
-- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、
+- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、留一条持久
+  未读绿点(badge 槽,§4.9.1)、
   动手前弹确认框征求同意(confirm 槽,§4.18)。
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
@@ -805,8 +1081,8 @@ my-ghost/
              "minWidth": 240, "defaultFraction": 0.24,
              "systemButtons": { "maximize": false } },
   // panel.position:面板显示形态。left(缺省)= 停靠主聊天窗左侧;
-  // "tab" = 右侧栏页签(与文件/审查/终端同一容器,每会话至多一个,用户从
-  // 空态列表或「+」菜单打开;此形态没有拖缝宽度,声明 minWidth /
+  // "tab" = 插件页内的独占面板(用户在插件页点插件卡的「使用」打开,离开
+  // 插件页即关闭;同一时刻至多一个;此形态没有拖缝宽度,声明 minWidth /
   // defaultFraction 会被拒装,请移除)。right 已退役(右侧是右侧边栏的地盘;
   // 旧包声明 right 自动并入 left,用户想放右边可自己拖拽换位)。
   // top/bottom 暂未支持(排期中)
@@ -888,7 +1164,8 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
-见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`confirm\`(弹主机
+见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
+(在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
@@ -905,6 +1182,9 @@ Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项�
 要把任务交给 Agent 干并**取回结果**(而不是发进用户的会话),另写
 \`"agent": { "errand": true }\`(可与 background 并存),见 §4.11.1;同样是装入
 确认框单列的高风险档。
+要请用户新建一条**自动化**(让插件里的内容定期自己刷新),另写
+\`"agent": { "schedule": true }\`(可与前两项并存),见 §4.11.2。它只能打开预填好的
+创建面板,任务由用户选好模型后亲手保存才存在;装入确认框单列一档。
 
 **node 工作进程详单**(声明 node 槽时必写,详见 §4.12):
 
@@ -969,7 +1249,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
     "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
@@ -990,7 +1270,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
-      "scopes": ["read.a", "write.b"],              // 可选 ≤32 条:申请的权限范围(确认框逐条展示给用户)
+      "scopes": ["read.a", "write.b"],              // 可选 ≤48 条:申请的权限范围(确认框逐条展示给用户)
       "scopeDelimiter": ",",                        // 可选:authorize URL 的 scope 拼接分隔符;缺省空格(OAuth 标准),Slack 这类逗号分隔的服务商声明 ","(目前只认这一个值)
       "pkce": true,                                 // 可选:PKCE(S256)开关,缺省 true
       "extraAuthorizeParams": { "access_type": "offline", "prompt": "consent" },  // 可选 ≤8 条:服务商特有授权参数(协议保留参数禁写)
@@ -1058,6 +1338,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 措辞套路(实测有效):description 写清"干什么 + 返回什么";参数 description 里直接
 写行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——AI 会照做。
 这是你影响 AI 行为的**唯一合法通道**,不要试图在别处塞指令。
+
+### 3.1 @ 插件入口
+
+Composer 的 \`@\` 面板只展示已安装且可用的插件入口；插件作者无需声明资源搜索字段。
+历史的 \`manifest.atResourceProvider\` 已移除且不再生效，不能通过该字段接入资源搜索。
 
 ## 3.5 工具面设计:直接声明,还是两段式目录
 
@@ -1224,9 +1509,23 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 //   例:{ kind: 'gen_video', prompt: '猫在奔跑', ratio: '9:16', resolution: '1080p' }
 //   ⚠️ 高分辨率 + 长时长明显更贵也更慢:用户没提要求时不要自作主张调高,
 //      不传让型号自己定。
-//   成功返回多带一个 videoParams: { durationSeconds, resolution, ratio, fps }
-//   = 本单**实际生效**的参数(主机权威)。老宿主会静默忽略这四项,拿 videoParams
+// 要不要出声 audio(可选布尔,**三态,不传与传 false 不是一回事**):
+//   不传(缺省,**推荐**):随该型号自己的默认。有的型号原生音画同生,不传
+//     出来就是有声的;有的型号压根不出声。不传永远不会因这项被拒。
+//   true:显式要音轨。**台词/音效/配乐的内容写在 prompt 里**——台词用双引号
+//     括起来(如 男人说:"你好"),音效和配乐直接描述(如 脚步踩在雪地上咯吱作响、
+//     背景音乐是轻快的吉他)。主机不替你改写提示词,你不写就只能靠模型自由发挥。
+//   false:显式要静音。
+//   型号没有音频开关时,**显式传**这项会被明拒(不会静默忽略),拒绝话术会
+//     告诉你不传即按该型号默认出片;不传就不会撞这条。
+//   例:{ kind: 'gen_video', prompt: '雪地里有人走过,脚步声咯吱作响', audio: true }
+//   ⚠️ 用户没提声音需求时就别传:传 true 不会凭空变好,传 false 反而可能把
+//      本来有声的型号弄成默片。
+//   成功返回多带一个 videoParams: { durationSeconds, resolution, ratio, fps, audio? }
+//   = 本单**实际生效**的参数(主机权威)。老宿主会静默忽略这几项,拿 videoParams
 //   跟你传的值对一下就知道兑现没有;要在交卷 note 里报参数,以它为准别报你传的。
+//   \`audio\` 缺席 = 主机说不上来(型号没这个旋钮,或老宿主不认识这个字段),
+//   **别把缺席读成"无声"**;要跟用户说有没有声音,只有它明确是 true/false 时才说。
 // 视频异步模式(可能超过 30 分钟续命天花板,或不想吊着 tool-call 等时):
 //   加 mode:'submit' → 受理后立即返回 { ok:true, jobId, status:'running',
 //   expectedSeconds }(资格审/源图归属仍同步校验,拒绝立即可见),生成在
@@ -1552,7 +1851,7 @@ cindy.onHostMessage(async function (msg) {
 \`\`\`json
 "slots": [..., "subscribe"],
 "subscribe": {
-  "topics": ["turn", "session"],                        // did- 旁听(元数据,不含消息内容)
+  "topics": ["turn", "session", "activity"],           // did- 旁听(元数据,不含消息内容)
   "hooks": ["will-user-message", "will-assistant-message"]  // will- 拦截(声明任一必须 launch:"resident")
 },
 "launch": "resident"               // 拦截要求常驻在场(否则每条消息都等你冷启动)
@@ -1567,9 +1866,32 @@ cindy.onHostMessage(function (msg) {
     // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
+    // 生命周期:会话被关掉或引擎被替换时,主机会给还在场的那一轮补发
+    // endReason: 'interrupted',让 start/end 成对。但这不是投递保证——熄灯期
+    // 缓冲溢出照样会丢(见 msg.dropped),状态机别只靠 end 归位。
     return;
   }
   // did-turn-start / did-session-created / did-session-archived 同理(见 topics)。
+  // activity topic 只提供内层活动边界元数据:
+  // did-thinking-{start,end}: { sessionId, blockId }(不含 reasoning 正文);
+  // did-approval-{start,end}: { sessionId, requestId };
+  // did-user-input-{start,end}: { sessionId, requestId }。
+  // approval = permission / plan_review; user-input = ask_user_question。
+  // **blockId / requestId 都是主机生成的不透明配对键**,不是 agent 或 provider 侧的
+  // 原始 id:只保证同一段思考 / 同一个请求的 start 与 end 拿到同一个值,同一个上游
+  // 请求在不同会话里也是不同值。它们不承载任何语义(看不出是哪个工具、哪个 MCP
+  // 服务、是不是计划审批),也**关联不到**主机或 provider 的任何其他标识 —— 别拿它
+  // 去和你从别处拿到的 id 对齐,只用来配对。
+  // **按 requestId 配对,不是全局开关**:一轮里并行工具调用可能同时挂着多个审批,
+  // 每个 requestId 各发自己的 start / end。要判断"是否仍在等审批",用 requestId
+  // 集合(收到 start 加入、end 移除),集合非空即仍在等;别用单个布尔位,否则先结束
+  // 的那个请求会把还在等的抹掉。
+  // **审批可能跨过 did-turn-end**:codex 计划模式的 plan_review 就是在计划轮次
+  // 收尾之后才发起的,你会先收到 did-turn-end、再收到 did-approval-start。所以
+  // 别拿 did-turn-end 去清空审批状态——只认对应 requestId 的 did-approval-end。
+  // thinking 不同:它只在轮次内,did-turn-end 前主机必定先补发未收口的
+  // did-thinking-end。审批 / 等待输入则由主机在真实决策落地(批准、拒绝、回答、
+  // 超时、取消)时收口,会话被关闭 / 重建时也会给所有在场 requestId 各补一条 end。
   if (msg.name === 'did-session-switched') {
     // 用户把某个会话切到台前(切换会话 / 从非会话页切回都算)。
     // msg.data = { sessionId, workdir? }。连续停留同一会话不重发。
@@ -1601,12 +1923,26 @@ cindy.onHostMessage(function (msg) {
 硬规则(主机代码强制):
 - **旁听 topic**:\`turn\`(轮次开始/结束,带 agent / 模型 / 耗时 / token 用量)、
   \`session\`(会话创建 / 归档 / 切换——切换 = 用户把哪个会话切到台前,连续停留
-  同一会话不重发)。**只有元数据,永远不含消息内容**(v1 不开正文旁听)。
-  没声明的 topic 主机不投;
-- **只覆盖你自己的主会话**:orca worker、后台自动化会话不投(与你无关的噪音);
+  同一会话不重发)、\`activity\`(思考 / 审批 / 等待用户输入的开始结束边界)。
+  activity 只带 \`sessionId\` + \`blockId\` 或 \`requestId\`;**不会给 reasoning、工具
+  input、命令、文件内容、计划正文、问题内容或答案**。旧插件不声明 activity 时行为
+  完全不变;没声明的 topic 主机不投;
+- **只覆盖你自己的主会话**:orca worker、后台自动化会话不投(与你无关的噪音)。
+  粒度到**轮次**:主会话里由 \`/goal\` 自动续跑、定时任务、hook 渠道发起的轮次不投,
+  **连它们触发的审批与提问也不投**。
+  已知例外:飞书 / Slack 等渠道**接管**(attached)现有主会话代发的轮次,其
+  \`did-turn-*\` 与 thinking 边界仍会投给你(该轮次在主机侧没打来源标记,这是
+  \`turn\` topic 的既有行为,不是 activity 引入的);它触发的审批与提问**不会**投
+  (走渠道卡的确认面,主机按面拦掉)。所以:\`did-approval-*\` /
+  \`did-user-input-*\` 一定是用户本人在 Desktop 上被问到,不会出现没有对应轮次的
+  孤儿审批;但 \`did-turn-*\` / \`did-thinking-*\` 偶尔可能来自渠道代发的轮次,别把
+  "有 thinking"直接等同于"用户本人正在用 Desktop";
 - **旁听是 fire-and-forget**:主机投完即走,你崩了/慢了不影响任何会话;熄灯期事件
   进队列(上限 100,溢出丢最旧,下一条带 \`dropped\` 计数),事件到达会把你按需
-  拉起补投——但订阅型意识**建议 \`launch:"resident"\`**(要秒收就得在场);
+  拉起补投——但订阅型意识**建议 \`launch:"resident"\`**(要秒收就得在场)。
+  **\`dropped\` 非零就必须重置你本地派生的状态**:被丢的可能正是某条
+  \`did-turn-end\` 或 \`did-*-end\`,你要是继续拿旧状态往下推,就会永久停在
+  "在忙 / 在等审批"。收到 \`dropped\` 时把状态清空、以此后到达的事件为准;
 - **钩子超时 = 放行**:\`will-\` 裁决必须 3 秒内回,超时主机按 allow 放行(聊天绝不
   因你卡死);连续 3 次超时/崩溃,主机**熔断**你的钩子能力(降级为只旁听 + 提示
   用户),旁听不受影响。要过外部合规接口就在窗口内 \`await cindy.fetch\`(network
@@ -1754,6 +2090,21 @@ BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注�
 照"请重新登录"画)——确认框已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
 
+**Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
+Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
+Plugin Market organization 安装记录、安装 manifest digest 未被篡改并声明了目标服务域名时,
+按需向 auth-server 换取短时 Connection JWT;audience 与组织身份由主机推导,插件清单和
+运行时代码都不能选择、读取或保存 audience/token。该凭证必须固定声明
+\`"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }\`,
+且 \`hosts\` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
+\`oidc-token\` 的 \`inject.hosts\` 只接受精确域名,不允许 \`*.example.com\` 通配；Host
+会从通过 digest 校验的市场 manifest 读取这些声明,目标请求必须精确命中声明域名才会签发并注入。
+它没有用户输入、\`url\`、\`exchange\` 或 \`oauth\` 详单,也不要放进 \`setup.requires\`;没有企业
+身份时 cindy.fetch 会 fail-closed 并返回结构化错误。企业服务应使用 Connection JWT
+中的 \`sub\`、\`email\` 或 \`identities\` 等声明自行选择业务身份,不要要求 Cindy 客户端先把
+令牌交给插件代码。上游返回 401 时,Host 只对 GET / HEAD / OPTIONS 自动换令牌重试一次；
+POST / PUT / PATCH / DELETE 和上传请求只作废令牌缓存、不自动重放,避免重复业务写入。
+
 **key 换令牌二段式(exchange,可选)**:有些服务的 API key 不直接当请求凭证,要先
 POST 一个交换端点换临时令牌(令牌才进 Authorization)。在凭证上声明 \`exchange\`
 (字段见 §2),主机就照单代办整个流程:换取 → 按 ttlSeconds 缓存 → \`inject.format\`
@@ -1780,8 +2131,9 @@ settingsHtml 里自填**(用户用自己注册的 OAuth 应用,配额风控归�
 \`\`\`js
 // 状态回查(哪些 oauth 凭证槽、client 配没配、连了哪些账号;零令牌字节):
 const list = await (await fetch('/oauth')).json();
-// → [{ key:'acct', clientConfigured:true, clientCustom:false, accounts:[{ id, label, status:'connected'|'expired', isDefault, createdAt, avatarDataUrl }] }]
+// → [{ key:'acct', clientConfigured:true, clientCustom:false, accounts:[{ id, label, status:'connected'|'expired', isDefault, createdAt, avatarDataUrl, scopeStale }] }]
 // avatarDataUrl = 头像 data URL(声明了 identity.avatarPath 且主机下载成功才有,否则 null;<img src> 直接用)
+// scopeStale = true 表示该账号有真实权限错误证据,或其全量授权快照未包含插件后来新增的 scope;账号仍可用,设置页应显示非阻塞提示并复用现有重新连接动作
 // clientConfigured = 自填或内置任一在场;clientCustom = 用户自填过(UI 显示"内置应用身份/已自定义")
 // client 凭证只写入库(和 /secrets 同纪律,存入后拿不回;clientSecret 可省略 = 纯 PKCE):
 await fetch('/oauth/acct/client', { method:'PUT', body: JSON.stringify({ clientId, clientSecret }) });  // 204 即入库
@@ -1799,6 +2151,11 @@ const r = await (await fetch('/oauth/acct/connect', connectInit)).json();
 // 断开账号 / 设默认账号:
 await fetch('/oauth/acct/accounts/<accountId>', { method:'DELETE' });          // 204(幂等)
 await fetch('/oauth/acct/default', { method:'POST', body: JSON.stringify({ accountId }) });  // 204
+// 真实 API 返回缺失 scope 时可 fire-and-forget 上报；只接受清单 oauth.scopes 内的值,
+// 任一越界整包 400 拒绝。主机会据此在对话流与详情页非阻塞引导用户重新连接。
+// 证据只记默认账号:带 authAccount 指定非默认账号的调用报错时不要上报,
+// 否则会引导用户重连错账号:
+await fetch('/oauth/acct/insufficient-scopes', { method:'POST', body: JSON.stringify({ scopes:['write.b'] }) });  // 204
 \`\`\`
 
 多账号:每个 oauth 凭证槽最多 8 个账号;cindy.fetch 可带 \`authAccount: '<账号id>'\`
@@ -1861,8 +2218,8 @@ const r = await cindy.fetch({
 **目录上传(uploadDir,目录过户票据)**:要把用户的一个本地目录整体传给你的
 服务(静态站点部署等),流程是"主 agent 过户 → 你凭票上传"——主 agent 调
 ghost_call 时把目录**绝对路径**放在顶层 \`dir\` 参数(会话工作目录内直接放行,
-工作目录外主机会弹确认卡、用户点允许才过户;自动排除 node_modules/.git/.env
-等),主机收集文件后把一次性限时票据注入你的
+工作目录外若主 agent 是本地 Full Access 会话则自动过户、不弹卡;其它权限档及
+远程会话仍由用户确认;自动排除 node_modules/.git/.env 等),主机收集文件后把一次性限时票据注入你的
 \`args.dir_deposit\`(含 token / file_count / total_bytes / rel_paths 相对路径清单);
 你在工具描述里写清"目录经 ghost_call 顶层 dir 交付",然后:
 
@@ -1890,7 +2247,7 @@ preset 判定等纯逻辑);伪造/过期/别人的票据统一"票据无效"。�
 (邮件附件、云盘文档等任意类型)存到用户本地时,流程同样是"主 agent 过户 →
 你凭票下载"——主 agent 调 ghost_call 时把**目标目录绝对路径**放在顶层
 \`save_dir\` 参数(目录必须已存在;会话工作目录内直接放行,工作目录外主机会
-弹确认卡、用户点允许才过户),主机把限时
+在本地 Full Access 下自动过户、不弹卡;其它权限档及远程会话仍弹确认卡),主机把限时
 票据注入你的 \`args.save_deposit\`(含 token / dir_name 目录名);你在工具
 描述里写清"下载目录经 ghost_call 顶层 save_dir 交付",然后:
 
@@ -2075,6 +2432,43 @@ const r = await cindy.send({ type: 'notify', text: '视频已生成,点面板查
   给你,用 §4.18 的 confirm 槽(主机同款确认框);要在聊天流里放按钮用交互卡
   (§4.5 的 data-ghost-action)。
 
+### 4.9.1 未读角标(badge 槽 —— 与 notify 槽并列的独立一档)
+
+toast 是"说一句就走",错过就没了。要留下一条**持久**的"我这儿有新内容"——
+用户没去看就一直亮着——在身份卡里加一档:
+
+\`\`\`json
+{ "slots": ["panel", "badge"] }
+\`\`\`
+
+\`badge\` 与 \`notify\` 是**并列的两档权限**,谁也不是谁的前置。只想安静点个绿点就
+别申请 \`notify\` 槽——多要一档"能弹全屏顶部提示"的权限,用户装的时候只会更犹豫。
+两个都要就两个都声明。
+
+\`\`\`js
+// 有新内容:点亮侧栏插件入口与自己卡片上的绿点,并把摘要显示在卡片简介位
+await cindy.send({ type: 'badge', unread: true, summary: '3 条新工单待处理' });
+// 自己清零(比如插件内已读)
+await cindy.send({ type: 'badge', unread: false });
+\`\`\`
+
+规则(都由主机强制):
+
+- **必须同时声明 \`panel\`**,装入时校验,漏了整个包装不进去。这是本档唯一的门槛:
+  未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,给了就是骗点击;
+- 装入确认框里**单列一项**权限,已装插件加这一档会触发扩权重新确认——常驻的
+  注意力入口值这一次打断;
+- \`summary\`(可选):**纯文本**,≤80 字符,换行会被坍缩成空格,超长直接拒
+  (\`ok:false\`,不静默截断);净化后为空按"没给摘要"处理,点照亮;
+- **限速**只挡点亮方向:同一意识两次点亮最小间隔 500 毫秒;\`unread:false\` 的
+  清零不限速(降级动作被拦会留下一颗清不掉的死点);
+- **用户打开你的面板 = 已读**,主机自动清零(三种面板宿主都算:插件页页签、
+  停靠态、独立窗口);
+- **沉睡只停显示、不算已读**:用户唤醒你之后那颗点会回来。卸载、或更新后身份卡
+  不再声明 badge,既有未读则被清除(权限撤了就不再兑现);
+- 角标**不出声、不震动、不进系统通知中心**——它只是屏幕内的一颗点;
+- 状态跨重启存活,按账号隔离(账号 A 的未读不会在账号 B 的界面上亮)。
+
 ## 4.10 写文件(fs 槽)
 
 声明 \`"slots": [..., "fs"]\` 后,电子脑可以请主机代写文件(创建/覆盖)。沙箱本身
@@ -2235,6 +2629,79 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
   \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
   超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。
 - 这个能力必然产生模型费用且耗时分钟级:能用快问快答(§4.0.2)解决的,不要派活。
+
+### 4.11.2 请用户新建一条自动化(agent.schedule 加档)
+
+**这是"让插件里的内容自己保持新鲜"的正路。** 你的插件自己跑不了业务逻辑——沙箱只在
+被唤起时活着,也没有定时器。要做出「每小时帮我看一眼,有事就点亮插件入口」这种效果,
+正确的分工是:
+
+    插件不是执行者,而是**定时任务的目标**。执行者是 Cindy 的 AI。
+
+完整回路(以「Codex 重置提醒」为例):
+
+1. 用户在你的面板上点一个选项,比如「重置时间快到了提醒我」;
+2. 你调 \`cindy.agent.requestSchedule(...)\`,请主机**打开预填好的新建自动化面板**;
+3. 用户在面板上选个模型(或就用默认)→ **亲手点保存**。任务这才存在;
+4. 到点了,Cindy 起一轮 AI 去干活:查本机重置时间、看 X 上的相关发帖、**判断**要不要
+   提醒——这些判断是 AI 做的,不是你做的;
+5. 那一轮 AI **调用你申报的 tool**(§3)把结果交给你,你在 tool 里更新自己的数据;
+6. 你顺手发一个未读角标(§4.9.1),用户的插件入口和图标上就亮起点;
+7. 用户回来点开面板,看到刷新后的内容。
+
+所以你需要的是三样东西的组合:\`agent.schedule\` 加档(第 2 步)+ 一个 \`tool\`(第 5 步)
++ \`badge\` 槽(第 6 步)。三者缺一,回路就断在那里。
+
+需声明 \`"slots": [..., "agent", "tool", "badge"]\` + \`"agent": { "schedule": true }\`
+(装入确认里单列一档,文案会告诉用户"任务由你亲手保存、跑起来会产生模型费用")。
+
+\`\`\`js
+// 用户在面板上点了「提醒我」之后:
+const r = await cindy.agent.requestSchedule({
+  name: 'Codex 重置提醒',            // 预填的自动化名称(≤60 字)
+  prompt: [                          // 到点了让 AI 干什么——用自然语言写清楚,
+    '检查本机 Codex 的限额重置时间。',  // 包含"什么情况下才值得提醒我"
+    '再看一眼 X 上 @tobi 最近有没有相关发帖。',
+    '如果重置时间在 2 小时内,调用 codex-reset-planner 插件的 update_status 工具',
+    '把最新状态写回去;否则什么都不用做。',
+  ].join('\\n'),                      // (≤2000 字)
+  intervalMs: 60 * 60 * 1000,        // 可选:建议每小时一次。**最小 30 分钟**,
+                                     // 低于此值主机会自动上调
+});
+// { ok: true } = 请求已被接受并投递(**不保证面板真开了,更不代表用户存了**)
+// { ok:false, errorCode:'PERMISSION_DENIED' | 'INVALID_REQUEST'
+//            | 'RATE_LIMITED' | 'HOST_NOT_READY' | 'INTERNAL', message }
+\`\`\`
+
+主机强制的边界(都不是建议):
+
+- **你只能打开面板,不能创建任务。** 没有任何"直接建一条自动化"的接口——主机这一侧
+  压根没接调度存储,不是"忍着不用"。用户不点保存,什么都不会发生;
+- **本版没有回执。** \`ok:true\` 只表示请求被接受并投递给了主壳窗口:用户当时可能正开着
+  另一个自动化表单在编辑,那种情况下本次草稿会被**丢弃**(保护他没保存的输入),他看到
+  一句提示、面板不换内容。即使面板正常打开,任务也要他亲手点保存才落库。所以你的 UI
+  **不要**显示"已开启"这类完成态,写"已为你打开创建面板,请确认"才准确;
+  想确认用户是否照做了,当前唯一可信的信号是任务真的跑起来调了你的 tool。
+  **后续版本会补上**:任务与发起插件的**绑定关系**,以及你查询 / 管理**自己绑定的那条
+  任务**(是否有效、下次运行时间、频率,以及改时间 / 暂停 / 关掉)。届时你就能在自己面板
+  上显示"已开启 · 每小时 · 下次 15:00"并让用户就地改。绑定本身即授权边界:你只能看和改
+  自己请求创建的那条,看不到用户的其它自动化;
+- \`prompt\` 里要**自己说清楚该调你哪个工具**(见上面示例第 3 行)。AI 不会自动猜到
+  "跑完要更新哪个插件";
+- 预填内容会**净化 + 截断**(去控制字符,名称 60 字 / prompt 2000 字);净化后为空一律
+  \`INVALID_REQUEST\`;
+- \`intervalMs\` 低于 **30 分钟**会被自动上调。这不是权限闸门(用户自己在面板上改成
+  1 分钟是他的自由),是不让你预填出一个每分钟烧一次模型额度的任务;
+- 同一插件两次请求至少隔 **15 秒**(\`RATE_LIMITED\`)。这个面板是打断式的——它会把
+  用户从当前页带到自动化页,别拿它刷屏;
+- 面板上会显示**是你在请求**(插件名由主机填,你伪装不了),用户永远知道在替谁保存;
+- **面板会开在主窗口**,不是你的面板窗。用户把你的面板拉成独立窗口后点这个入口时,
+  创建表单出现在主窗口里(独立面板窗挂的是轻壳,承载不了自动化页)——文案上别写
+  "将在此处打开",写"去自动化页确认"之类更准;
+- 一个都没有主窗口时(极端情况)→ \`HOST_NOT_READY\`。
+
+什么时候**不该**用它:一次性的、当场就要结果的事,用快问快答(§4.0.2)或派活取件
+(§4.11.1)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 槽)
 
@@ -2569,6 +3036,26 @@ SKILL.md 硬规则(打包与装入双侧强制,任一不满足直接拒):
 - \`name\`:小写字母/数字加单连字符分段(禁首尾/连续连字符),≤64 字符;
 - SKILL.md 单文件 ≤64KB;items 最多 4 条。
 
+正文开头建议写一段**环境守卫**(非强制,但强烈建议):技能挂进的是**共享**技能根,
+用户在 Cindy 之外直接跑 Claude Code / Codex 时同样会看到你的技能,而那里没有插件
+通道。Agent 读完正文自然会发现调不动 \`ghost_call\`,但很容易转头用 shell 自己实现
+一个"看起来像"的替代品——这段守卫拦的就是这个。放在 H1 标题之后的第一段
+(Agent 从头读正文):
+
+\`\`\`markdown
+> **本技能属于 Cindy 插件 \`<插件 id>\`:动手前先看工具列表,没有名字含 \`ghost_call\`
+> 的工具就说明不在 Cindy 中,本技能不可用。** 此时不要执行任何步骤,也不要用 shell
+> 或别的工具自己实现一遍——能力在插件的运行时里,替代品做不出等价产出。直接告诉
+> 用户「这个技能需要在 Cindy 客户端里使用」,然后停下。
+\`\`\`
+
+- 判据只写"名字含 \`ghost_call\`",**不要写某个引擎的工具名全称**:Claude Code 与
+  Codex 的 MCP 工具名前缀不同,写死一边会让另一边误判成"不在 Cindy";
+- 写在正文里,**不要塞进 frontmatter \`description\`**:description 每个会话都常驻
+  上下文,正文只在技能被激活后才读,守卫写正文不花常驻预算;
+- 一个插件多条 item 时每份 SKILL.md 各写各的(技能之间互相看不见);
+- 技能正文是英文时照译一份,别中英混排。
+
 信任与作用域(如实告知用户,也请作者自重):
 
 - 技能指令由**主 Agent 以用户全部权限执行**,对所有项目、所有会话生效,
@@ -2674,13 +3161,16 @@ if (r.ok && r.confirmed) {
 
 - 显示形态由 \`panel.position\` 决定:\`left\`(缺省)= 停靠主聊天窗左侧的常驻
   面板(\`right\` 已退役:右侧是右侧边栏的地盘,旧包声明 right 自动并入 left,
-  用户想放右边可自己拖拽换位);\`"tab"\` = 右侧栏页签——与文件/审查/终端同一
-  容器,每会话至多一个页签,由用户从右侧栏空态列表或「+」菜单打开。当用户在会话视图内装入
-  tab 型插件并勾选「立即开启」时,装入完成后会自动展开右侧栏并打开/聚焦该
-  页签;从插件页(无会话路由)装入或未勾选时,仍由用户手动从空态/「+」菜单
-  打开。页签形态没有拖缝宽度语义,声明 \`minWidth\` / \`defaultFraction\` 会被
-  拒装。两种形态的面板代码完全一样(同一 panel.html,供片/主题/媒体规则不变),
-  只是宿主容器不同;页签形态请把界面做成自适应宽度;
+  用户想放右边可自己拖拽换位);\`"tab"\` = **插件页内的独占面板**——由插件页
+  自己承载(不进右侧栏页签容器):用户在插件页点你这张卡的「使用」按钮打开,
+  同一时刻至多一个,**用户离开插件页即关闭卸载**(面板收束,2026-08-02 定案:
+  插件面板不再常驻右侧栏干扰其它会话)。装入时勾选「立即开启并打开面板」会
+  在装完后进入插件页并打开你的面板;不勾选则由用户之后自己从插件页点「使用」。
+  停用/卸载插件同样立即关闭面板。页签形态没有拖缝宽度语义,声明 \`minWidth\` /
+  \`defaultFraction\` 会被拒装。两种形态的面板代码完全一样(同一 panel.html,
+  供片/主题/媒体规则不变),只是宿主容器不同;此形态请把界面做成自适应宽度,
+  并且**不要假设自己会在后台长期存活**——每次打开都可能是全新加载,状态要
+  自己持久化(见 §4.6 的偏好存储);
 - 停靠形态的**标题条(标准头)由主机绘制**:标题(\`panel.title\`)+ 一批系统
   按钮(当前:「撑满内容区」、「在独立窗口中打开」——用户可把你的面板抽进
   自己的 OS 窗口,关窗/合并即回停靠原位——以及「最小化为浮动气泡」——用户
@@ -2689,8 +3179,8 @@ if (r.ok && r.confirmed) {
   也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
   标题栏**。不想要某颗系统按钮时在身份卡声明
   \`"systemButtons": { "maximize": false, "detach": false, "minimize": false }\`
-  逐个关闭(缺省全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 没有
-  标准头,声明本字段拒装);
+  逐个关闭(缺省全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 由插件页
+  自绘头,没有这套标准头,声明本字段拒装);
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
 - 重启回放:\`fetch('cindy-ghost://<id>/gallery')\` 返回本意识作品清单 \`[{src, caption}]\`;
@@ -2745,6 +3235,42 @@ if (r.ok && r.confirmed) {
 - 崩溃只影响自己的面板(错误接管态),反复崩会被熔断。
 
 ## 7. 打包与测试
+
+### 7.1 打包前轻量确认图标
+
+准备调用 \`ghost_forge_pack\` 前检查一次图标。如果清单没有 \`icon\`，或者本次用了
+\`ghost_forge_scaffold\` 且没有明确替换它生成的占位图，就视为图标尚未配置。此时只
+**轻提醒一次**，不要把图标变成验收门槛，也不要擅自开始耗时的图片生成。提示与选项
+使用用户当前对话语言：
+
+- **使用 AI 生成（推荐）**：仅在用户选择后，调用当前可用的图片生成能力；它与当前
+  聊天模型解耦，不要因为用户正在使用 GLM、Claude 等文本模型而切换聊天模型。把插件
+  展示名与一句话用途填入下面模板后原样注入，不要临场追加文字、品牌或复杂场景：
+
+  \`\`\`text
+  Create a polished square app icon for a Cindy plugin named "{{name}}". Purpose: {{one-sentence purpose}}. Show one clear, original visual metaphor for that purpose. Use a clean geometric composition, a restrained natural color palette, high contrast, and a centered subject with generous safe padding so it remains readable at 32–48 px. Use one symbol only on a simple solid or transparent background. No text, letters, numbers, UI mockups, scenes, baked-in rounded corners, trademarks, copied brand shapes, watermarks, heavy gradients, inner shadows, or photorealism. Output a 1024×1024 PNG.
+  \`\`\`
+
+  只尝试一次。图片能力不可用、超时或失败时不要重试，直接调用
+  \`ghost_forge_pack({ dir })\`，保留占位图/宿主默认图标继续打包，不让图标阻塞用户。
+  生成成功后，从图片工具结果的 \`xdt_image_url\` 取单张地址；如果结果只有
+  \`xdt_image_urls\`，取数组第一项(例如 \`const selectedImageUrl = result.xdt_image_url ?? result.xdt_image_urls?.[0]\`)。
+  仅当它是 \`cindy-media://\` 地址时，才把它原样交给
+  \`ghost_forge_pack({ dir, icon_source: selectedImageUrl })\`；主机会转成 1024×1024 PNG 并
+  嵌入安装包。icon_source 处理失败时 pack 也会自动回退默认图标，不要再发起第二次生成。
+  如果源码根目录已有 \`cindy-signatures.json\`，pack 会保留原图标和原签名，不做 AI
+  图标覆盖；任何文件变更都必须交给发布流水线重新签名，不能静默降级信任等级。
+- **上传图片**：让用户提供图片，保存到 \`assets/icon.png\`，并同步把
+  \`ghost.json\` 的 \`icon\` 字段设为 \`assets/icon.png\` 后继续；不要要求用户先把图片
+  处理成圆角，宿主负责最终显示形态。
+- **使用默认图标（跳过）**：立即继续打包；scaffold 项目保留占位图，未使用 scaffold
+  的项目可以省略 \`icon\`，由宿主显示默认图标。跳过与使用默认是同一个选择。
+
+如果插件明确对应现有品牌或服务（如 X/Twitter、Notion），不要用 AI 仿制商标。将推荐
+项改为“使用官方品牌图标”，只从品牌官网、官方开发者文档或官方媒体资源中查询并设置；
+来源不可靠或获取失败时同样回退上传/默认，不延长创建流程。
+
+### 7.2 打包、安装与验证
 
 1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
    一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件；
@@ -2804,18 +3330,18 @@ if (r.ok && r.confirmed) {
     或用 $command 点名;AI 工具调用不受影响(见 §2 说明)
 - 声明了 tool 槽但缺 tools(或反之)· panel.html 声明了但 slots 没有 "panel"
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
-- panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——页签形态没有标准头)
+- panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2
 - cindy 详单格式错(未知类目/动作、空数组、有详单但 slots 没有 "cindy")
-- agent 详单格式错(有详单但 slots 没有 "agent"，或 background / errand 都不是 true；只需点击触发时应省略 agent 字段)
+- agent 详单格式错(有详单但 slots 没有 "agent"，或 background / errand / schedule 都不是 true；只需点击触发时应省略 agent 字段)
 - node 详单格式错(槽/详单不成对、entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   写了 command/args/shell/env、resident 又写 idleTimeoutSeconds)
 - id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、
   inject.hosts 不是 hosts 声明条目的子集、有详单但 slots 没有 "network"、
-  secret.source 不是 "user"/"login-email"/"oauth"、
-  source:"login-email" 还声明了 url 或 exchange、
+  secret.source 不是 "user"/"login-email"/"oauth"/"oidc-token"、
+  source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个
   {value}、contentType 不在白名单、tokenPath 不是点分路径、ttlSeconds 越界)

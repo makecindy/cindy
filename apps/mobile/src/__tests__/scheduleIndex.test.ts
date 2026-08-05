@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
+  getScheduleIndexInvalidationVersion,
   invalidateOfflineScheduleIndexFailureFor,
+  invalidateRunningSessionScheduleEntries,
+  invalidateScheduleIndexForDevice,
   invalidateTransientScheduleIndexFailures,
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
@@ -222,6 +225,35 @@ describe('scheduleIndex', () => {
     });
   });
 
+  it('clears running only for soft-offline device sessions', () => {
+    const current = new Map<string, RemoteSessionScheduleInfo>([
+      ['session-1', { scheduleId: 'sched-1', scheduleName: 'Daily', scheduleStatus: 'active', allSchedulesStopped: false, unreadRunIds: ['run-1'], unreadCount: 1, running: true, latestRunAt: 2 }],
+      ['session-2', { scheduleId: 'sched-2', scheduleName: 'Weekly', scheduleStatus: 'active', allSchedulesStopped: false, unreadRunIds: [], unreadCount: 0, running: false, latestRunAt: 3 }],
+      ['other-device-session', { scheduleId: 'keep', scheduleName: 'Keep', scheduleStatus: 'paused', allSchedulesStopped: true, unreadRunIds: ['keep-run'], unreadCount: 1, running: true, latestRunAt: 4 }],
+    ]);
+
+    const next = invalidateRunningSessionScheduleEntries(current, ['session-1', 'session-2']);
+
+    expect(next).not.toBe(current);
+    expect(next.get('session-1')).toEqual({
+      ...current.get('session-1'),
+      running: false,
+    });
+    expect(next.get('session-2')).toBe(current.get('session-2'));
+    expect(next.get('other-device-session')).toBe(current.get('other-device-session'));
+  });
+
+  it('keeps the existing map reference when no selected schedule is running', () => {
+    const current = new Map<string, RemoteSessionScheduleInfo>([
+      ['session-1', { scheduleId: 'sched-1', scheduleName: 'Daily', scheduleStatus: 'active', allSchedulesStopped: false, unreadRunIds: [], unreadCount: 0, running: false, latestRunAt: 2 }],
+      ['other-device-session', { scheduleId: 'keep', scheduleName: 'Keep', scheduleStatus: 'active', allSchedulesStopped: false, unreadRunIds: [], unreadCount: 0, running: true, latestRunAt: 1 }],
+    ]);
+
+    const next = invalidateRunningSessionScheduleEntries(current, ['session-1', 'missing']);
+
+    expect(next).toBe(current);
+  });
+
   it('replaces only entries for the refreshed device sessions', () => {
     const current = new Map([
       ['session-1', { scheduleId: 'old', scheduleName: 'Old', allSchedulesStopped: false, unreadRunIds: ['old-run'], unreadCount: 1, running: false, latestRunAt: 1 }],
@@ -303,6 +335,34 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     await loadSessionScheduleIndexThrottled('dev-1', load, { now });
     await loadSessionScheduleIndexThrottled('dev-1', load, { now, force: true });
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('offline invalidation evicts success cache and increments generation', async () => {
+    resetScheduleIndexThrottleForTesting();
+    const load = vi.fn()
+      .mockResolvedValueOnce(new Map([['s1', { running: true } as RemoteSessionScheduleInfo]]))
+      .mockResolvedValueOnce(new Map([['s1', { running: false } as RemoteSessionScheduleInfo]]));
+    const now = () => 1000;
+    await loadSessionScheduleIndexThrottled('dev-1', load, { now });
+    const before = getScheduleIndexInvalidationVersion('dev-1');
+    invalidateScheduleIndexForDevice('dev-1');
+    expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(before + 1);
+    const next = await loadSessionScheduleIndexThrottled('dev-1', load, { now });
+    expect(next.get('s1')?.running).toBe(false);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('stale in-flight completion cannot repopulate after offline invalidation', async () => {
+    resetScheduleIndexThrottleForTesting();
+    let resolveLoad!: (value: Map<string, RemoteSessionScheduleInfo>) => void;
+    const load = vi.fn(() => new Promise<Map<string, RemoteSessionScheduleInfo>>((resolve) => {
+      resolveLoad = resolve;
+    }));
+    const first = loadSessionScheduleIndexThrottled('dev-1', load);
+    invalidateScheduleIndexForDevice('dev-1');
+    resolveLoad(new Map([['s1', { running: true } as RemoteSessionScheduleInfo]]));
+    await first;
+    expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(1);
   });
 
   it('失败负缓存:reject 后 TTL 内复用同一次失败不重放批次,过期后正常重试', async () => {

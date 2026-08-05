@@ -14,8 +14,8 @@ export type HomeSection = { data: HomeRow[]; key: string; title: string | null }
  * 把 home 展示模型拆成 SectionList 的分区(纯函数,便于单测)。
  * - 置顶单独成区;`pinnedCollapsed` 时清空 data 但**保留分区**(SectionList 对空 data 仍渲染
  *   表头,所以折叠时表头照常显示,只折叠下属会话)。
- * - 分组模式仅用于固定顺序:项目 folder 行在普通对话前;不渲染额外「项目 / 对话」汇总表头。
- * - 混排模式仍把普通对话 + 项目下属会话展平,按活动时间倒序。
+ * - 分组模式保留项目 folder 行,与普通对话按活动时间倒序混排。
+ * - 非分组模式把普通对话 + 项目下属会话展平,按活动时间倒序。
  */
 export function buildHomeSections(
   home: MobileHomePresentation,
@@ -33,32 +33,13 @@ export function buildHomeSections(
     });
   }
 
-  if (groupByProject) {
-    const projectRows = buildProjectHomeRows(home);
-    if (projectRows.length > 0) {
-      sections.push({
-        data: projectRows,
-        key: 'projects',
-        title: null,
-      });
-    }
-    const dialogueRows = buildDialogueHomeRows(home);
-    if (dialogueRows.length > 0) {
-      sections.push({
-        data: dialogueRows,
-        key: 'dialogue',
-        title: null,
-      });
-    }
-  } else {
-    const rows = buildMixedHomeRows(home);
-    if (rows.length > 0) {
-      sections.push({
-        data: rows,
-        key: 'mixed',
-        title: null,
-      });
-    }
+  const rows = groupByProject ? buildGroupedHomeRows(home) : buildMixedHomeRows(home);
+  if (rows.length > 0) {
+    sections.push({
+      data: rows,
+      key: groupByProject ? 'grouped' : 'mixed',
+      title: null,
+    });
   }
   return sections;
 }
@@ -66,8 +47,8 @@ export function buildHomeSections(
 /**
  * 取某行在整个列表里的前一行:同 section 内取 index-1;section 首行跨区取前一个
  * **非空** section 的末行(置顶收起时 pinned 区 data 为空,要跳过)。
- * SectionList 的 renderItem 只给区内 index,分组模式 projects → dialogue 边界的
- * 分割线唯一化(prevIsBlock)必须跨区看邻接,否则项目末块底线 + 组块顶线叠成双线。
+ * SectionList 的 renderItem 只给区内 index,置顶区 → 主列表边界的分割线唯一化
+ * (prevIsBlock)必须跨区看邻接,否则相邻块的边线可能叠成双线。
  */
 export function homeRowBefore(
   sections: HomeSection[],
@@ -113,16 +94,16 @@ export function buildMixedHomeRows(home: MobileHomePresentation): HomeRow[] {
   ].sort(compareHomeRowsByActivityDesc);
 }
 
-/** 分组模式:固定为桌面侧栏层级,先 project folders,再 dialogue sessions;各段内保留上游排序。 */
+/** 分组模式:项目保留 folder 行,与普通对话统一按活动时间倒序混排。 */
 export function buildGroupedHomeRows(home: MobileHomePresentation): HomeRow[] {
   return [
     ...buildProjectHomeRows(home),
     ...buildDialogueHomeRows(home),
-  ];
+  ].sort(compareHomeRowsByActivityDesc);
 }
 
 function compareHomeRowsByActivityDesc(a: HomeRow, b: HomeRow): number {
-  return homeRowActivity(b).localeCompare(homeRowActivity(a));
+  return homeRowActivity(b).localeCompare(homeRowActivity(a)) || a.key.localeCompare(b.key);
 }
 
 function homeRowActivity(row: HomeRow): string {

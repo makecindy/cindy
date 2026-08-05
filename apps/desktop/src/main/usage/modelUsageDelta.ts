@@ -9,6 +9,18 @@
  * 钳制: 子进程重 spawn (resume / 崩溃重启) 后累计值归零, delta 会算出负数 —
  * 一律 Math.max(0, ...) 钳到 0 (接受少记一个 turn 的取舍, 与 total_cost_usd 一致)。
  *
+ * ## 已知上游行为: output 归属可能滞后一轮
+ *
+ * 部分路由(实测 Vertex, requestId 前缀 msg_vrtx_)在 done 事件时点报出的 modelUsage
+ * 尚未结算本轮的输出 token: 一条几千 token 的长回复只报个位数 output, 差额在下一轮的
+ * delta 里补上。result.usage 与 modelUsage 两个源同时滞后, 所以客户端在 done 时刻拿
+ * 不到正确值 —— 总量不丢, 但**归属会错位一轮**, 表现为某条消息的费用明显偏低、下一条
+ * 明显偏高。
+ *
+ * 这里不做纠正: 把 output 挪到别处需要知道"本轮真实输出是多少", 而两个可用数据源都
+ * 还没结算; 猜一个值会把"归属错位"升级成"金额算错"。detectOutputLag 只把可疑轮次标出
+ * 来供日志定位, 不参与任何计费。
+ *
  * 纯函数、零 Electron 依赖 — 可直接单测。
  */
 
@@ -108,4 +120,23 @@ export function computeModelUsageDeltas(
   }
 
   return { next, deltas };
+}
+
+/**
+ * 本轮 output 归属是否可疑（见文件头「已知上游行为」）。
+ *
+ * 判据：这一轮明明送进去了实质性的输入（input + cache 合计过万 token，说明不是空转），
+ * 报回来的 output 却只有个位到几十 —— 真实回复不可能这么短。阈值取得很松，只求把
+ * "长回复被记成 7 个 token" 这种量级的异常捞出来，不追求精确。
+ *
+ * 纯诊断：调用方只应拿它打日志。不参与计费，也不改任何金额。
+ */
+export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolean {
+  const OUTPUT_FLOOR = 64;
+  const INPUT_SIGNIFICANT = 10_000;
+  return deltas.some((delta) => {
+    const inputSide =
+      delta.inputTokensDelta + delta.cacheReadTokensDelta + delta.cacheCreateTokensDelta;
+    return inputSide >= INPUT_SIGNIFICANT && delta.outputTokensDelta < OUTPUT_FLOOR;
+  });
 }

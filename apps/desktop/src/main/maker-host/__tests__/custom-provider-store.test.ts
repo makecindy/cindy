@@ -92,6 +92,8 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    // 'cindy' 撞 pi 网关 provider id,必须保留
+    expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
 
   it('rejects empty runtimes / invalid runtime key', () => {
@@ -130,6 +132,17 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       validateCustomProviderConfig({
         ...valid,
         runtimes: {
+          pi: {
+            baseUrl: 'https://x/v1',
+            models: [{ id: 'm', name: 'M', supportsImageInput: 'yes' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
           codex: {
             baseUrl: 'https://x/v1',
             models: [{ id: 'm', name: 'M', defaultEnabled: 'false' }],
@@ -145,6 +158,85 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
             baseUrl: 'https://x/v1',
             models: [{ id: 'm', name: 'M', contextWindow: 0 }],
           },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('accepts a pi runtime (BYOM) with any of pi wire protocols', () => {
+    for (const wp of ['anthropic-messages', 'openai-responses', 'openai-chat']) {
+      expect(
+        validateCustomProviderConfig({
+          id: 'localpi',
+          name: 'Local pi',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: wp, models: [{ id: 'm', name: 'M' }] },
+          },
+        }).ok,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
+    const config = (model: Record<string, unknown>, agent: 'pi' | 'codex' = 'pi') => ({
+      id: 'reasoning-provider',
+      name: 'Reasoning provider',
+      runtimes: {
+        [agent]: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'reasoner', name: 'Reasoner', ...model }],
+        },
+      },
+    });
+
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['low', 'high', 'xhigh'],
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(validateCustomProviderConfig(config({ reasoning: true })).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['high', 'high'],
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['ultra'],
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config(
+          {
+            reasoning: true,
+            reasoningEfforts: ['high'],
+          },
+          'codex',
+        ),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('rejects an invalid wireProtocol on a pi runtime', () => {
+    expect(
+      validateCustomProviderConfig({
+        id: 'localpi',
+        name: 'Local pi',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: 'bogus-proto', models: [{ id: 'm', name: 'M' }] },
         },
       }).ok,
     ).toBe(false);
@@ -220,7 +312,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('openrouter'))?.name).toBe('Edited in another window');
   });
 
-  it('round-trips headers + dedupes models on normalize', async () => {
+  it('never persists headers and still dedupes models on normalize', async () => {
     mountDb();
     await createCustomProvider({
       ...valid,
@@ -241,7 +333,65 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'a', name: 'A', contextWindow: 1_000_000 },
       { id: 'hidden', name: 'Hidden', defaultEnabled: false },
     ]);
-    expect(got?.runtimes.codex?.headers).toEqual({ 'X-Org': 'acme' });
+    expect(got?.runtimes.codex?.headers).toBeUndefined();
+  });
+
+  it('round-trips only an explicitly enabled Pi image-input capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'visual-pi',
+      name: 'Visual Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [
+            { id: 'vision', name: 'Vision', supportsImageInput: true },
+            { id: 'legacy', name: 'Legacy' },
+            { id: 'explicit-text', name: 'Explicit text', supportsImageInput: false },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('visual-pi'))?.runtimes.pi?.models).toEqual([
+      { id: 'vision', name: 'Vision', supportsImageInput: true },
+      { id: 'legacy', name: 'Legacy' },
+      { id: 'explicit-text', name: 'Explicit text' },
+    ]);
+  });
+
+  it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'reasoning-pi',
+      name: 'Reasoning Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [
+            {
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high', 'xhigh'],
+            },
+            { id: 'legacy', name: 'Legacy' },
+            { id: 'explicit-off', name: 'Explicit off', reasoning: false },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('reasoning-pi'))?.runtimes.pi?.models).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        reasoning: true,
+        reasoningEfforts: ['low', 'high', 'xhigh'],
+      },
+      { id: 'legacy', name: 'Legacy' },
+      { id: 'explicit-off', name: 'Explicit off' },
+    ]);
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {

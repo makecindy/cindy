@@ -396,6 +396,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
   let cwd = projectDirFromClaudeStorageDir(path.basename(path.dirname(file))) ?? '';
   let sawTopLevelEvent = false;
   let removedIdeContextWithoutTitle = false;
+  let hitLineLimitBeforeTitle = false;
   let lineCount = 0;
 
   try {
@@ -407,6 +408,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
         !removedIdeContextWithoutTitle &&
         !isIdeOnlyUserRecord(obj)
       ) {
+        hitLineLimitBeforeTitle = true;
         break;
       }
       if (!obj || obj.isSidechain === true) continue;
@@ -422,6 +424,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
       if (type === 'user' && !title && isRecord(obj.message)) {
         const content = obj.message.content;
         const text = extractUserText(content).trim();
+        if (text && isInternalClaudeReviewChannelText(text)) return null;
         if (text) title = makeTitle(text);
         else if (hasCompleteIdeOpenedFileBlock(content)) removedIdeContextWithoutTitle = true;
       }
@@ -435,7 +438,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
     input.destroy();
   }
 
-  if (!sawTopLevelEvent || !isLikelySessionId(sdkSessionId)) return null;
+  if (!sawTopLevelEvent || hitLineLimitBeforeTitle || !isLikelySessionId(sdkSessionId)) return null;
   return {
     sdkSessionId,
     title: title || 'Claude Code Session',
@@ -483,6 +486,7 @@ export async function readClaudeCodeSessionSummary(file: string): Promise<Claude
 
     if (type === 'user' && !title && isRecord(obj.message)) {
       const text = extractUserText(obj.message.content).trim();
+      if (text && isInternalClaudeReviewChannelText(text)) return null;
       if (text) title = makeTitle(text);
     }
     if (type === 'assistant' && isRecord(obj.message)) {
@@ -815,6 +819,18 @@ function hasCompleteIdeOpenedFileBlock(content: unknown): boolean {
     typeof block.text === 'string' &&
     stripCompleteIdeOpenedFileBlocks(block.text) !== block.text
   ));
+}
+
+/** Whether the first real user message belongs to Cindy's internal review runtime. */
+function isInternalClaudeReviewChannelText(text: string): boolean {
+  const openingTag = text.trimStart().match(/^<channel\b[^>]*>/i)?.[0];
+  if (!openingTag) return false;
+
+  for (const match of openingTag.matchAll(/\bsource\s*=\s*(["'])([^"']+)\1/gi)) {
+    const source = match[2]?.trim().toLowerCase();
+    if (source === 'review-session-channel' || source === 'local-review') return true;
+  }
+  return false;
 }
 
 /** Whether a scan-limit boundary row is a removable IDE-only user record. */

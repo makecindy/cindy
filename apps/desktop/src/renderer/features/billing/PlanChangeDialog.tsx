@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
 import {
+  ArrowLeft,
   ArrowDownRight,
+  ArrowRight,
   ArrowUpRight,
   Check,
   CircleAlert,
@@ -40,6 +42,35 @@ export type PlanChangeCandidate = {
   direction: 'UPGRADE' | 'SAME_LEVEL' | 'DOWNGRADE' | null;
 };
 
+type PlanChangeProductGroup = {
+  product: BillingCatalogProduct;
+  candidates: PlanChangeCandidate[];
+  defaultCandidate: PlanChangeCandidate;
+};
+
+function groupPlanChangeCandidates(candidates: PlanChangeCandidate[]): PlanChangeProductGroup[] {
+  const groups = new Map<
+    string,
+    { product: BillingCatalogProduct; candidates: PlanChangeCandidate[] }
+  >();
+  for (const candidate of candidates) {
+    const group = groups.get(candidate.product.code);
+    if (group) {
+      group.candidates.push(candidate);
+    } else {
+      groups.set(candidate.product.code, {
+        product: candidate.product,
+        candidates: [candidate],
+      });
+    }
+  }
+  return Array.from(groups.values()).map(({ product, candidates }) => ({
+    product,
+    candidates,
+    defaultCandidate: candidates[0],
+  }));
+}
+
 function formatEffectiveDate(iso: string, locale: string): string {
   const timestamp = Date.parse(iso);
   if (!Number.isFinite(timestamp)) return iso;
@@ -68,10 +99,70 @@ export function PlanChangeTargetDialog({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const displayedPlans = [
-    ...(currentPlan ? [{ candidate: currentPlan, current: true }] : []),
-    ...candidates.map((candidate) => ({ candidate, current: false })),
-  ];
+  const groups = useMemo(() => groupPlanChangeCandidates(candidates), [candidates]);
+  const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
+  const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
+  const selectedGroup = groups.find((group) => group.product.code === selectedProductCode) ?? null;
+  const selectedCandidate =
+    selectedGroup?.candidates.find((candidate) => candidate.offer.code === selectedOfferCode) ??
+    selectedGroup?.defaultCandidate ??
+    null;
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedProductCode(null);
+      setSelectedOfferCode(null);
+      return;
+    }
+    if (!selectedProductCode) return;
+    if (!selectedGroup) {
+      setSelectedProductCode(null);
+      setSelectedOfferCode(null);
+      return;
+    }
+    if (!selectedGroup.candidates.some((candidate) => candidate.offer.code === selectedOfferCode)) {
+      setSelectedOfferCode(selectedGroup.defaultCandidate.offer.code);
+    }
+  }, [open, selectedGroup, selectedOfferCode, selectedProductCode]);
+
+  const selectProduct = (productCode: string) => {
+    const group = groups.find((candidate) => candidate.product.code === productCode);
+    if (!group) return;
+    setSelectedProductCode(productCode);
+    setSelectedOfferCode(group.defaultCandidate.offer.code);
+  };
+
+  const backToProducts = () => {
+    setSelectedProductCode(null);
+    setSelectedOfferCode(null);
+  };
+
+  const renderAmount = (candidate: PlanChangeCandidate) => (
+    <div className="shrink-0 text-right">
+      <p className="text-12 font-medium tabular-nums text-[var(--text-primary)]">
+        {candidate.offer.amount
+          ? formatMoney(candidate.offer.amount, candidate.offer.currency, billingLocale)
+          : '—'}
+        {candidate.offer.interval && (
+          <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
+            / {t(`billing.intervals.${candidate.offer.interval}`)}
+          </span>
+        )}
+      </p>
+      {candidate.offer.creditAmount && (
+        <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
+          {t('billing.credits', {
+            amount: formatMoney(
+              candidate.offer.creditAmount,
+              candidate.offer.currency,
+              billingLocale,
+            ),
+          })}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
@@ -86,9 +177,11 @@ export function PlanChangeTargetDialog({
           )}
         >
           <div className="flex items-center justify-between gap-4 px-6 pb-4 pt-5">
-            <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
-              {t('billing.planChange.targetTitle')}
-            </Dialog.Title>
+            <div className="flex min-w-0 items-center gap-2">
+              <Dialog.Title className="truncate text-16 font-medium tracking-[-0.01em]">
+                {selectedGroup?.product.name ?? t('billing.planChange.targetTitle')}
+              </Dialog.Title>
+            </div>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -101,107 +194,184 @@ export function PlanChangeTargetDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-6 py-4 [scrollbar-gutter:stable]">
-            {displayedPlans.length > 0 && (
+            {selectedGroup ? (
               <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-                {displayedPlans.map(({ candidate, current }) => {
-                  const DirectionIcon =
-                    candidate.direction === 'UPGRADE'
-                      ? ArrowUpRight
-                      : candidate.direction === 'DOWNGRADE'
-                        ? ArrowDownRight
-                        : null;
-                  const directionLabel =
-                    current
-                      ? t('billing.catalog.currentPlan')
-                      : candidate.direction === 'UPGRADE'
-                        ? t('billing.planChange.upgradeBadge')
-                        : candidate.direction === 'DOWNGRADE'
-                          ? t('billing.planChange.downgradeBadge')
-                          : candidate.direction === 'SAME_LEVEL'
-                            ? t('billing.planChange.sameLevelBadge')
-                            : null;
-                  const providerLabel = candidate.providers
-                    .map((provider) => t(`billing.providers.${provider}`))
-                    .join(', ');
+                {selectedGroup.candidates.map((candidate) => {
+                  const active = selectedCandidate?.offer.code === candidate.offer.code;
+                  const offerName = candidate.offer.name?.trim();
                   return (
                     <button
                       key={candidate.offer.code}
                       type="button"
-                      disabled={current}
-                      aria-current={current ? 'true' : undefined}
-                      onClick={() => {
-                        if (!current) onSelect(candidate);
-                      }}
+                      aria-pressed={active}
+                      onClick={() => setSelectedOfferCode(candidate.offer.code)}
                       className={cn(
-                        'flex w-full items-center justify-between gap-4 px-4 py-3 text-left',
-                        !current && 'transition-colors hover:bg-[var(--surface-hover-soft)]',
+                        'flex min-h-[72px] w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
-                        'focus-visible:ring-[var(--text-primary)]',
+                        'focus-visible:ring-[var(--focus-ring)]',
+                        active
+                          ? 'bg-[var(--surface-hover-soft)]'
+                          : 'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
                       )}
                     >
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-13 font-medium text-[var(--text-primary)]">
-                          {candidate.product.name}
-                        </p>
-                        {(directionLabel || providerLabel) && (
-                          <p className="mt-0.5 flex min-h-4 items-center gap-1 text-11 text-[var(--text-tertiary)]">
-                            {DirectionIcon && <DirectionIcon size={12} />}
-                            {directionLabel && <span>{directionLabel}</span>}
-                            {directionLabel && providerLabel && <span aria-hidden>·</span>}
-                            {providerLabel && <span>{providerLabel}</span>}
+                        {offerName && (
+                          <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                            {offerName}
                           </p>
                         )}
                       </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">
-                          {candidate.offer.amount
-                            ? formatMoney(
-                                candidate.offer.amount,
-                                candidate.offer.currency,
-                                billingLocale,
-                              )
-                            : '—'}
-                          {candidate.offer.interval && (
-                            <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
-                              / {t(`billing.intervals.${candidate.offer.interval}`)}
-                            </span>
+                      <div className="flex shrink-0 items-center gap-3">
+                        {renderAmount(candidate)}
+                        <span
+                          className={cn(
+                            'grid size-5 shrink-0 place-items-center rounded-full border',
+                            active
+                              ? 'border-[var(--text-primary)] bg-[var(--text-primary)] text-[var(--surface)]'
+                              : 'border-[var(--border-default)]',
                           )}
-                        </p>
-                        {candidate.offer.creditAmount && (
-                          <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                            {t('billing.credits', {
-                              amount: formatMoney(
-                                candidate.offer.creditAmount,
-                                candidate.offer.currency,
-                                billingLocale,
-                              ),
-                            })}
-                          </p>
-                        )}
+                        >
+                          {active && <Check size={12} strokeWidth={2.5} />}
+                        </span>
                       </div>
                     </button>
                   );
                 })}
               </div>
-            )}
-            {candidates.length === 0 && (
-              <div
-                className={cn(
-                  'flex min-h-[184px] flex-col items-center justify-center rounded-xl border',
-                  'border-[var(--border-default)] px-6 text-center',
-                  displayedPlans.length > 0 && 'mt-4',
+            ) : (
+              <>
+                {currentPlan && (
+                  <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
+                    <div className="flex w-full items-center justify-between gap-4 bg-[var(--surface-chip)] px-4 py-3 text-left">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                            {currentPlan.product.name}
+                          </p>
+                          <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                            {t('billing.catalog.currentPlan')}
+                          </span>
+                        </div>
+                      </div>
+                      {renderAmount(currentPlan)}
+                    </div>
+                  </div>
                 )}
-              >
-                <div className="grid size-11 place-items-center rounded-full bg-[var(--surface-chip)]">
-                  <PackageOpen size={22} />
-                </div>
-                <p className="mt-4 text-sm font-medium">{t('billing.planChange.emptyTitle')}</p>
-                <p className="mt-1 text-12 text-[var(--text-secondary)]">
-                  {t('billing.planChange.emptyDescription')}
-                </p>
-              </div>
+
+                {groups.length > 0 && (
+                  <div
+                    className={cn(
+                      'divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]',
+                      currentPlan && 'mt-4',
+                    )}
+                  >
+                    {groups.map((group) => {
+                      const candidate = group.defaultCandidate;
+                      const hasMultipleOffers = group.candidates.length > 1;
+                      const DirectionIcon =
+                        candidate.direction === 'UPGRADE'
+                          ? ArrowUpRight
+                          : candidate.direction === 'DOWNGRADE'
+                            ? ArrowDownRight
+                            : null;
+                      const directionLabel =
+                        candidate.direction === 'UPGRADE'
+                          ? t('billing.planChange.upgradeBadge')
+                          : candidate.direction === 'DOWNGRADE'
+                            ? t('billing.planChange.downgradeBadge')
+                            : candidate.direction === 'SAME_LEVEL'
+                              ? t('billing.planChange.sameLevelBadge')
+                              : null;
+                      const providerLabel = candidate.providers
+                        .map((provider) => t(`billing.providers.${provider}`))
+                        .join(', ');
+                      return (
+                        <button
+                          key={group.product.code}
+                          type="button"
+                          onClick={() => {
+                            if (hasMultipleOffers) {
+                              selectProduct(group.product.code);
+                            } else {
+                              onSelect(candidate);
+                            }
+                          }}
+                          className={cn(
+                            'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors',
+                            'hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none',
+                            'focus-visible:ring-2 focus-visible:ring-inset',
+                            'focus-visible:ring-[var(--focus-ring)]',
+                          )}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                              {group.product.name}
+                            </p>
+                            {(DirectionIcon || directionLabel || providerLabel) && (
+                              <p className="mt-0.5 flex min-h-4 items-center gap-1 text-11 text-[var(--text-tertiary)]">
+                                {DirectionIcon && <DirectionIcon size={12} />}
+                                {directionLabel && <span>{directionLabel}</span>}
+                                {directionLabel && providerLabel && <span aria-hidden>·</span>}
+                                {providerLabel && <span>{providerLabel}</span>}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-3">
+                            {renderAmount(candidate)}
+                            {hasMultipleOffers && (
+                              <ArrowRight size={16} className="text-[var(--text-tertiary)]" />
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {groups.length === 0 && (
+                  <div
+                    className={cn(
+                      'flex min-h-[184px] flex-col items-center justify-center rounded-xl border',
+                      'border-[var(--border-default)] px-6 text-center',
+                      currentPlan && 'mt-4',
+                    )}
+                  >
+                    <div className="grid size-11 place-items-center rounded-full bg-[var(--surface-chip)]">
+                      <PackageOpen size={22} />
+                    </div>
+                    <p className="mt-4 text-sm font-medium">{t('billing.planChange.emptyTitle')}</p>
+                    <p className="mt-1 text-12 text-[var(--text-secondary)]">
+                      {t('billing.planChange.emptyDescription')}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </div>
+
+          {selectedGroup && (
+            <div className="flex min-h-16 items-center justify-between gap-4 border-t border-[var(--border-default)] px-6 py-3">
+              <button
+                type="button"
+                onClick={backToProducts}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md px-1 text-13 font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                <ArrowLeft size={15} />
+                {t('billing.planChange.back')}
+              </button>
+              <button
+                type="button"
+                disabled={selectedCandidate === null}
+                onClick={() => {
+                  if (selectedCandidate) onSelect(selectedCandidate);
+                }}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-5 text-13 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                {t('billing.settings.subscriptionCard.changeAction')}
+                <ArrowUpRight size={15} />
+              </button>
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -430,7 +600,11 @@ export function PlanChangeStatusDialog({
                 >
                   {qrDataUrl ? (
                     <>
-                      <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                      <img
+                        src={qrDataUrl}
+                        className="size-full"
+                        alt={t('billing.checkout.qrAlt')}
+                      />
                       <span
                         aria-hidden="true"
                         className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"

@@ -1,16 +1,16 @@
 /**
- * ImBotSection —— 「IM 机器人」设置页(单页 + 页内分栏 tab)。
+ * ImBotSection —— 「IM 机器人」设置页(单页 + 官方/个人纵向分区)。
  *
- * 侧边栏「IM 机器人」是普通 cell(不再有可展开的子 cell),内容整合在本页,
- * 顶部用 pill 分段 tab 切换两个分栏(视觉对齐 ImDefaultSettingsSection 的
- * agent 切换器 / VendorSegmentedSwitcher),每个分栏配一条简短 Tips 说明差异:
- *   1. Cindy(group='cindy',默认):官方 Cindy 机器人渠道 —— Slack 卡片
- *      (HookConnectionsSection,原 Tina 设置区,共享 App 零凭证)
+ * 侧边栏「IM 机器人」是普通 cell(不再有可展开的子 cell),内容整合在本页。
+ * 官方与个人分区同时渲染、上下排列,避免 tab 把另一组支持的机器人类型藏起来；
+ * 每个分区配一条简短 Tips 说明差异:
+ *   1. Cindy(group='cindy',默认):官方 Cindy 机器人渠道 —— 多渠道卡片
+ *      (HookConnectionsSection,原 Tina 设置区,由 Cindy 维护、用户零凭证)
  *   2. 个人(group='personal'):按渠道折叠的用户自配机器人。每个渠道独立保存
  *      Agent / 模型与凭证配置；同一时刻最多展开一个，渠道增加时页面不会线性变长。
  *
- * 分栏选择经 ?imGroup= 参数由 SettingsView 驱动(深链可直达某分栏);缺省/非法
- * 时 SettingsView 落到默认分栏(旧「飞书机器人」深链落「个人」,其余落「Cindy」)。
+ * ?imGroup= 参数仍由 SettingsView 驱动,但只负责把深链滚动到对应分区；缺省时
+ * 保持页面顶部不动,旧「飞书机器人」深链继续定位到「个人」。
  * Beta 标识用一颗 pill(主题 token,无硬编码 hex),表示整块功能处于 Beta。
  *
  * 可见性(imBotVisibility 单点):本地模式与「国区构建 + 个人账号登录」都
@@ -19,10 +19,9 @@
  */
 
 import { Lightbulb } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { DiscordBotSection } from './DiscordBotSection';
@@ -40,24 +39,29 @@ import {
   type ImBotIdentity,
 } from './imBotVisibility';
 
-/** 「IM 机器人」页内分栏 id(tab 与 ?imGroup= 参数共用)。 */
+/** 「IM 机器人」页面分区 id(与 ?imGroup= 参数共用)。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
 
-/** 分栏 tab 的固定顺序(Cindy 在前为默认)。 */
-export const IM_BOT_SETTINGS_GROUPS: readonly ImBotSettingsGroup[] = ['cindy', 'personal'];
-const PERSONAL_ONLY_IM_BOT_SETTINGS_GROUPS: readonly ImBotSettingsGroup[] = ['personal'];
-
-/** 分栏标题的 i18n key(tab 文案)。 */
-export const IM_BOT_GROUP_LABEL_KEY: Record<ImBotSettingsGroup, string> = {
+/** 分区标题的 i18n key。 */
+const IM_BOT_GROUP_LABEL_KEY: Record<ImBotSettingsGroup, string> = {
   cindy: 'settings.imBot.groups.cindy',
   personal: 'settings.imBot.groups.personal',
 };
 
-/** 分栏 Tips 的 i18n key —— 一句话讲清该分栏是什么、与另一栏的差异。 */
+/** 分区 Tips 的 i18n key —— 一句话讲清该分区是什么、与另一区的差异。 */
 const IM_BOT_GROUP_TIP_KEY: Record<ImBotSettingsGroup, string> = {
   cindy: 'settings.imBot.tips.cindy',
   personal: 'settings.imBot.tips.personal',
 };
+
+function GroupTip({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-xl bg-[var(--surface-chip)] px-3.5 py-2.5">
+      <Lightbulb size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
+      <p className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">{message}</p>
+    </div>
+  );
+}
 
 export function isImBotSettingsGroup(value: string | null): value is ImBotSettingsGroup {
   return value === 'cindy' || value === 'personal';
@@ -77,9 +81,7 @@ function PersonalGroupContent({
     'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
   >(null);
 
-  const toggle = (
-    channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk',
-  ) => {
+  const toggle = (channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
@@ -112,13 +114,7 @@ function PersonalGroupContent({
   );
 }
 
-export function ImBotSection({
-  group,
-  onGroupChange,
-}: {
-  group: ImBotSettingsGroup;
-  onGroupChange: (group: ImBotSettingsGroup) => void;
-}) {
+export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
   const { t } = useTranslation();
   const { mode, dataOwnerId, user } = useAuth();
   const identity: ImBotIdentity = {
@@ -130,10 +126,27 @@ export function ImBotSection({
   const discordVisible = showDiscordBot(identity);
   const larkVisible = showLarkBot(identity);
   const telegramVisible = showTelegramBot(identity);
-  const availableGroups = cindyGroupAvailable
-    ? IM_BOT_SETTINGS_GROUPS
-    : PERSONAL_ONLY_IM_BOT_SETTINGS_GROUPS;
-  const effectiveGroup = cindyGroupAvailable ? group : 'personal';
+  const cindySectionRef = useRef<HTMLElement | null>(null);
+  const personalSectionRef = useRef<HTMLElement | null>(null);
+  const effectiveTargetGroup = targetGroup
+    ? cindyGroupAvailable
+      ? targetGroup
+      : 'personal'
+    : null;
+
+  useEffect(() => {
+    if (!effectiveTargetGroup) return;
+    const section =
+      effectiveTargetGroup === 'cindy' ? cindySectionRef.current : personalSectionRef.current;
+    if (!section) return;
+
+    // SettingsView 切 tab 时会先把外层滚动容器回顶；下一帧再处理分区深链，
+    // 避免父级回顶覆盖 personal 定位。
+    const frame = window.requestAnimationFrame(() => {
+      section.scrollIntoView({ block: 'start', inline: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectiveTargetGroup]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -146,67 +159,44 @@ export function ImBotSection({
         </span>
       </div>
 
-      {/* 分栏 pill tab —— 视觉对齐 ImDefaultSettingsSection 的 agent 切换器 */}
-      <div
-        className="mt-3 flex h-9 w-[220px] items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
-        role="tablist"
-        aria-label={t('settings.sections.imBot')}
-      >
-        {availableGroups.map((g) => {
-          const active = g === effectiveGroup;
-          return (
-            <button
-              key={g}
-              type="button"
-              role="tab"
-              id={`im-bot-group-tab-${g}`}
-              aria-selected={active}
-              aria-controls={`im-bot-group-panel-${g}`}
-              onClick={() => {
-                if (!active) onGroupChange(g);
-              }}
-              className={cn(
-                'flex h-full min-w-0 flex-1 items-center justify-center rounded-full px-3',
-                'border text-[13px] leading-none transition-colors',
-                active
-                  ? 'border-[var(--border-default)] bg-[var(--surface-elevated)] font-medium text-[var(--settings-section-title)]'
-                  : 'border-transparent font-normal text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-              )}
+      <div key={`${mode}:${dataOwnerId ?? 'none'}`} className="mt-4 flex flex-col gap-8">
+        {cindyGroupAvailable && (
+          <section
+            ref={cindySectionRef}
+            id="im-bot-group-cindy"
+            aria-labelledby="im-bot-group-heading-cindy"
+            className="flex scroll-mt-4 flex-col gap-3"
+          >
+            <h3
+              id="im-bot-group-heading-cindy"
+              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
             >
-              <span className="truncate">{t(IM_BOT_GROUP_LABEL_KEY[g])}</span>
-            </button>
-          );
-        })}
-      </div>
+              {t(IM_BOT_GROUP_LABEL_KEY.cindy)}
+            </h3>
+            <GroupTip message={t(IM_BOT_GROUP_TIP_KEY.cindy)} />
+            <HookConnectionsSection />
+          </section>
+        )}
 
-      {/* Tips —— 一句话讲清当前分栏与另一栏的差异 */}
-      <div className="mt-2 flex items-start gap-2 rounded-lg bg-[var(--surface-chip)] px-3.5 py-2.5">
-        <Lightbulb size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
-        <p className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
-          {t(
-            effectiveGroup === 'personal' && !discordVisible
-              ? 'settings.imBot.tips.personalFeishuOnly'
-              : IM_BOT_GROUP_TIP_KEY[effectiveGroup],
-          )}
-        </p>
-      </div>
-
-      <div
-        key={`${mode}:${dataOwnerId ?? 'none'}`}
-        role="tabpanel"
-        id={`im-bot-group-panel-${effectiveGroup}`}
-        aria-labelledby={`im-bot-group-tab-${effectiveGroup}`}
-        className="mt-4 flex flex-col gap-8"
-      >
-        {effectiveGroup === 'cindy' ? (
-          <HookConnectionsSection />
-        ) : (
+        <section
+          ref={personalSectionRef}
+          id="im-bot-group-personal"
+          aria-labelledby="im-bot-group-heading-personal"
+          className="flex scroll-mt-4 flex-col gap-3"
+        >
+          <h3
+            id="im-bot-group-heading-personal"
+            className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+          >
+            {t(IM_BOT_GROUP_LABEL_KEY.personal)}
+          </h3>
+          <GroupTip message={t(IM_BOT_GROUP_TIP_KEY.personal)} />
           <PersonalGroupContent
             showDiscord={discordVisible}
             showLark={larkVisible}
             showTelegram={telegramVisible}
           />
-        )}
+        </section>
       </div>
     </div>
   );

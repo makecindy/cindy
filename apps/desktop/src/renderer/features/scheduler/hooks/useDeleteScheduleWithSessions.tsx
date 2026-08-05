@@ -9,7 +9,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
+import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 
 const RUNS_PER_DELETE_PREVIEW_LIMIT = 10000;
 
@@ -202,7 +202,7 @@ async function applyGeneratedSessionDisposition(
         void window.electronAPI.cleanupSessionImages(sessionId).catch(() => undefined);
       }
       makerChatStore.purgeSession(sessionId);
-      clearComposerDraft(sessionId);
+      discardComposerDraft(sessionId);
     } catch {
       failed.push(sessionId);
     }

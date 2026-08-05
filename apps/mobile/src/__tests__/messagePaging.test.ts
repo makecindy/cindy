@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   hasMoreOlderMessages,
   hasOlderMessagesAfterReopen,
+  collectCompleteIncrementalMessages,
   hasOlderMessagesByServerCount,
+  incrementalMessagePageNeedsFallback,
+  latestMessageCursor,
   listMessagesWithPayloadRetry,
   MESSAGE_PAGE_SIZE,
   oldestMessageCursor,
@@ -39,6 +42,22 @@ describe('messagePaging', () => {
       message('m1', '2026-01-01T00:00:01.000Z'),
       message('m2', '2026-01-01T00:00:02.000Z'),
     ])).toBe('m1');
+  });
+
+  it('finds the latest host cursor and skips local system cards', () => {
+    expect(latestMessageCursor([
+      message('m1', '2026-01-01T00:00:01.000Z'),
+      message('mobile-system-context-1', '2026-01-01T00:00:03.000Z'),
+      message('m2', '2026-01-01T00:00:02.000Z'),
+    ])).toBe('m2');
+  });
+
+  it('uses the host rowid to choose a same-timestamp cursor', () => {
+    const createdAt = '2026-01-01T00:00:01.000Z';
+    expect(latestMessageCursor([
+      { ...message('z-older', createdAt), rowid: 4 },
+      { ...message('a-newer', createdAt), rowid: 5 },
+    ])).toBe('a-newer');
   });
 
   it('returns null when no stable message id exists', () => {
@@ -111,6 +130,244 @@ describe('messagePaging', () => {
       limit: 1,
       reducedByPayloadTooLarge: true,
     })).toBe(false);
+  });
+
+  describe('incrementalMessagePageNeedsFallback', () => {
+    const page = {
+      messages: [message('m2', '2026-01-01T00:00:02.000Z')],
+      limit: 20,
+      reducedByPayloadTooLarge: false,
+    };
+
+    it('accepts a complete page when the fresh count delta matches it', () => {
+      expect(incrementalMessagePageNeedsFallback({
+        page,
+        totalCount: 2,
+        previousTotalCount: 1,
+      })).toBe(false);
+    });
+
+    it('falls back when the fresh count delta is larger than the returned page', () => {
+      expect(incrementalMessagePageNeedsFallback({
+        page,
+        totalCount: 3,
+        previousTotalCount: 1,
+      })).toBe(true);
+    });
+
+    it('falls back when the fresh count regresses', () => {
+      expect(incrementalMessagePageNeedsFallback({
+        page,
+        totalCount: 1,
+        previousTotalCount: 2,
+      })).toBe(true);
+    });
+
+    it('falls back when an older host ignores the after cursor', () => {
+      expect(incrementalMessagePageNeedsFallback({
+        page: {
+          ...page,
+          messages: [
+            message('m1', '2026-01-01T00:00:01.000Z'),
+            message('m2', '2026-01-01T00:00:02.000Z'),
+          ],
+        },
+        afterMessage: message('m1', '2026-01-01T00:00:01.000Z'),
+      })).toBe(true);
+    });
+
+    it('uses rowid when checking an incremental cursor with equal timestamps', () => {
+      const createdAt = '2026-01-01T00:00:01.000Z';
+      expect(incrementalMessagePageNeedsFallback({
+        page: {
+          ...page,
+          messages: [{ ...message('m2', createdAt), rowid: 5 }],
+        },
+        afterMessage: { ...message('m1', createdAt), rowid: 4 },
+      })).toBe(false);
+      expect(incrementalMessagePageNeedsFallback({
+        page: {
+          ...page,
+          messages: [{ ...message('m0', createdAt), rowid: 3 }],
+        },
+        afterMessage: { ...message('m1', createdAt), rowid: 4 },
+      })).toBe(true);
+    });
+
+    it('falls back for a full or payload-reduced page when the total is unknown', () => {
+      const fullPage = {
+        messages: Array.from({ length: 20 }, (_, index) =>
+          message(`m${index}`, `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`)),
+        limit: 20,
+        reducedByPayloadTooLarge: false,
+      };
+      expect(incrementalMessagePageNeedsFallback({
+        page: fullPage,
+      })).toBe(true);
+      expect(incrementalMessagePageNeedsFallback({
+        page: { ...page, reducedByPayloadTooLarge: true },
+      })).toBe(true);
+      expect(incrementalMessagePageNeedsFallback({
+        page,
+      })).toBe(false);
+    });
+  });
+
+
+  describe('collectCompleteIncrementalMessages', () => {
+    it('walks multiple after pages to collect a large delta', async () => {
+      const anchor = message('m0', '2026-01-01T00:00:00.000Z');
+      const pages = new Map([
+        ['m2', { messages: [message('m3', '2026-01-01T00:00:03.000Z'), message('m4', '2026-01-01T00:00:04.000Z')], limit: 2, reducedByPayloadTooLarge: false }],
+      ]);
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: { messages: [message('m1', '2026-01-01T00:00:01.000Z'), message('m2', '2026-01-01T00:00:02.000Z')], limit: 2, reducedByPayloadTooLarge: false },
+        afterMessage: anchor,
+        fetchAfter: async (cursor) => pages.get(cursor) ?? { messages: [], limit: 2, reducedByPayloadTooLarge: false },
+        fetchLatest: async () => { throw new Error('tail fallback should not run'); },
+        fetchBefore: async () => { throw new Error('before fallback should not run'); },
+      });
+      expect(result?.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4']);
+    });
+
+    it('walks backward from the latest tail when after is ignored', async () => {
+      const anchor = message('m1', '2026-01-01T00:00:01.000Z');
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: { messages: [message('m4', '2026-01-01T00:00:04.000Z'), message('m5', '2026-01-01T00:00:05.000Z')], limit: 2, reducedByPayloadTooLarge: false },
+        afterMessage: anchor,
+        fetchAfter: async () => ({ messages: [message('m4', '2026-01-01T00:00:04.000Z'), message('m5', '2026-01-01T00:00:05.000Z')], limit: 2, reducedByPayloadTooLarge: false }),
+        fetchLatest: async () => ({ messages: [message('m4', '2026-01-01T00:00:04.000Z'), message('m5', '2026-01-01T00:00:05.000Z')], limit: 2, reducedByPayloadTooLarge: false }),
+        fetchBefore: async (before) => before === 'm4'
+          ? { messages: [message('m2', '2026-01-01T00:00:02.000Z'), message('m3', '2026-01-01T00:00:03.000Z')], limit: 2, reducedByPayloadTooLarge: false }
+          : before === 'm2'
+            ? { messages: [message('m1', '2026-01-01T00:00:01.000Z')], limit: 2, reducedByPayloadTooLarge: false }
+            : { messages: [], limit: 2, reducedByPayloadTooLarge: false },
+      });
+      expect(result?.map((item) => item.id)).toEqual(['m2', 'm3', 'm4', 'm5']);
+    });
+    it('keeps paging until a short page even when a net delta would be smaller', async () => {
+      const anchor = message('m0', '2026-01-01T00:00:00.000Z');
+      const calls: string[] = [];
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: { messages: [message('m1', '2026-01-01T00:00:01.000Z'), message('m2', '2026-01-01T00:00:02.000Z')], limit: 2, reducedByPayloadTooLarge: false },
+        afterMessage: anchor,
+        fetchAfter: async (cursor) => {
+          calls.push(cursor);
+          return cursor === 'm2'
+            ? { messages: [message('m3', '2026-01-01T00:00:03.000Z'), message('m4', '2026-01-01T00:00:04.000Z')], limit: 2, reducedByPayloadTooLarge: false }
+            : { messages: [message('m5', '2026-01-01T00:00:05.000Z')], limit: 2, reducedByPayloadTooLarge: false };
+        },
+        fetchLatest: async () => { throw new Error('tail fallback should not run'); },
+        fetchBefore: async () => { throw new Error('before fallback should not run'); },
+      });
+      expect(calls).toEqual(['m2', 'm4']);
+      expect(result?.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+    });
+
+    it('does not accept a forward prefix after reaching the page limit', async () => {
+      const anchor = message('m0', '2026-01-01T00:00:00.000Z');
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: {
+          messages: [
+            message('m1', '2026-01-01T00:00:01.000Z'),
+            message('m2', '2026-01-01T00:00:02.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        },
+        afterMessage: anchor,
+        fetchAfter: async () => ({
+          messages: [
+            message('m3', '2026-01-01T00:00:03.000Z'),
+            message('m4', '2026-01-01T00:00:04.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+        fetchLatest: async () => {
+          throw new Error('tail fallback should not run');
+        },
+        fetchBefore: async () => {
+          throw new Error('before fallback should not run');
+        },
+        maxPages: 1,
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('does not accept an unknown after cursor from an empty continuation', async () => {
+      const anchor = message('deleted-anchor', '2026-01-01T00:00:01.000Z');
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: {
+          messages: [
+            message('m4', '2026-01-01T00:00:04.000Z'),
+            message('m5', '2026-01-01T00:00:05.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        },
+        afterMessage: anchor,
+        fetchAfter: async () => ({
+          messages: [],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+        fetchLatest: async () => ({
+          messages: [
+            message('m4', '2026-01-01T00:00:04.000Z'),
+            message('m5', '2026-01-01T00:00:05.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+        fetchBefore: async () => ({
+          messages: [message('m2', '2026-01-01T00:00:02.000Z')],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('rejects a short backward page that never reaches the original cursor', async () => {
+      const anchor = message('deleted-anchor', '2026-01-01T00:00:01.000Z');
+      const result = await collectCompleteIncrementalMessages({
+        initialPage: {
+          messages: [
+            message('m4', '2026-01-01T00:00:04.000Z'),
+            message('m5', '2026-01-01T00:00:05.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        },
+        afterMessage: anchor,
+        fetchAfter: async () => ({
+          messages: [
+            message('m4', '2026-01-01T00:00:04.000Z'),
+            message('m5', '2026-01-01T00:00:05.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+        fetchLatest: async () => ({
+          messages: [
+            message('m4', '2026-01-01T00:00:04.000Z'),
+            message('m5', '2026-01-01T00:00:05.000Z'),
+          ],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+        fetchBefore: async () => ({
+          messages: [message('m2', '2026-01-01T00:00:02.000Z')],
+          limit: 2,
+          reducedByPayloadTooLarge: false,
+        }),
+      });
+
+      expect(result).toBeNull();
+    });
   });
 
   describe('shouldRefreshLatestMessageWindowOnReopen', () => {

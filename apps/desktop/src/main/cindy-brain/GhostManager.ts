@@ -7,6 +7,8 @@ import JSZip from 'jszip';
 import {
   GHOST_MANIFEST_FILE,
   GHOST_LOCALE_MAX_BYTES,
+  GHOST_ICON_MAX_BYTES,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
@@ -24,19 +26,17 @@ import {
   verifyGhostZipSignatures,
   type GhostTrustRegistry,
 } from './ghostSignature.js';
-import { isPathInsideDir } from './dirDeposit.js';
+import {
+  readBoundedFileFollowLinks,
+  readBoundedFileNoFollowSync,
+} from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_NODE_CINDY_FILE_BYTES = 128 * 1024 * 1024;
 /** 身份卡本身只应是小 JSON；先限流读取，避免在识别包类型前被单文件撑爆内存。 */
-const MAX_GHOST_MANIFEST_BYTES = 256 * 1024;
-/**
- * icon 文件大小上限。icon 以 data URL 形态随 ghosts:list(sendSync)下发,
- * 上限同时保护装载与首帧同步 IPC 的载荷体积。
- */
-const MAX_GHOST_ICON_BYTES = 512 * 1024; // 512 KB
+const MAX_GHOST_MANIFEST_BYTES = GHOST_INSTALL_MANIFEST_MAX_BYTES;
 /** 解压后总大小/条目数上限；Node 包允许携带已打包 CLI，但仍有硬闸。 */
 export const MAX_BASIC_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
 export const MAX_NODE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
@@ -44,8 +44,14 @@ export const MAX_BASIC_ZIP_ENTRIES = 256;
 export const MAX_NODE_ZIP_ENTRIES = 2_048;
 /** 停用标记文件名(安装目录内;存在即停用)。 */
 const DISABLED_MARKER_FILE = '.disabled';
-/** 安装时已验证的信任结果快照(作者包不能提供，staging 阶段由主机写)。 */
+/** 安装时由主机写入的信任快照与权限 receipt；作者包不能提供。 */
 const TRUST_METADATA_FILE = '.cindy-trust.json';
+
+interface GhostInstalledHostMetadata {
+  trust: GhostTrustInfo;
+  /** Legacy receipt retained only for backward-compatible metadata reads. */
+  approvedAtResourceProviderTool?: string;
+}
 
 /** 注入式日志接口 —— manager 不直接依赖 main/logger,单测零 electron。 */
 export interface GhostManagerLogger {
@@ -114,7 +120,11 @@ export class GhostManager {
       const manifestPath = path.join(dir, GHOST_MANIFEST_FILE);
       let raw: unknown;
       try {
-        raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        // 已安装目录也可能被外部进程/同步盘改动,且 list() 每次市场快照都会
+        // 执行:单句柄限量闸(拒链接),不让无界字节进 main。
+        const bytes = readBoundedFileNoFollowSync(manifestPath, MAX_GHOST_MANIFEST_BYTES);
+        if (bytes === null) throw new Error('manifest is not a bounded regular file');
+        raw = JSON.parse(bytes.toString('utf-8'));
       } catch (err) {
         this.options.log?.warn('ghost dir skipped: unreadable manifest', {
           dir,
@@ -134,15 +144,18 @@ export class GhostManager {
         });
         continue;
       }
+      const hostMetadata = this.readInstalledHostMetadata(dir);
+      // 历史 manifest / receipt 中可能保留已移除的资源搜索元数据；它不参与当前
+      // 运行时入口，插件本体与已批准的其它能力仍按现有授权照常可用。
+      const manifest = v.manifest;
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
-      const iconDataUrl = this.readInstalledIconDataUrl(dir, v.manifest);
-      const localizedManifest = this.readInstalledLocalizedManifest(dir, v.manifest);
-      const trust = this.readInstalledTrust(dir);
+      const iconDataUrl = this.readInstalledIconDataUrl(dir, manifest);
+      const localizedManifest = this.readInstalledLocalizedManifest(dir, manifest);
       result.push({
         manifest: localizedManifest,
         dir,
         enabled: !fs.existsSync(path.join(dir, DISABLED_MARKER_FILE)),
-        ...(trust ? { trust } : {}),
+        ...(hostMetadata ? { trust: hostMetadata.trust } : {}),
         ...(iconDataUrl !== null ? { iconDataUrl } : {}),
       });
     }
@@ -164,16 +177,15 @@ export class GhostManager {
     for (const candidatePath of candidates) {
       try {
         const absPath = path.join(dir, ...candidatePath.split('/'));
-        const stat = fs.lstatSync(absPath);
-        if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
-          throw new Error(`locale 文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
+        // lstat 判完再按路径 readFileSync 是三次独立打开,期间可被换成超大
+        // 文件或根外链接。单句柄限量闸 + containWithin 一次完成全部校验。
+        const bytes = readBoundedFileNoFollowSync(absPath, GHOST_LOCALE_MAX_BYTES, {
+          containWithin: fs.realpathSync(dir),
+        });
+        if (bytes === null) {
+          throw new Error(`locale 文件缺失、超过 ${GHOST_LOCALE_MAX_BYTES} 字节或位于插件目录之外`);
         }
-        const realDir = fs.realpathSync.native(dir);
-        const realLocalePath = fs.realpathSync.native(absPath);
-        if (!isPathInsideDir(realDir, realLocalePath)) {
-          throw new Error('locale 文件经软链解析后位于插件目录之外');
-        }
-        const raw = JSON.parse(fs.readFileSync(realLocalePath, 'utf8'));
+        const raw = JSON.parse(bytes.toString('utf8'));
         const validated = validateGhostManifestLocaleResource(raw, manifest);
         if (!validated.ok) throw new Error(validated.reason);
         return resolveGhostManifestLocale(runtimeManifest, validated.resource);
@@ -227,31 +239,61 @@ export class GhostManager {
     if (manifest.icon === undefined) return null;
     const iconPath = path.join(dir, ...manifest.icon.split('/'));
     try {
-      const stat = fs.statSync(iconPath);
-      if (!stat.isFile() || stat.size > MAX_GHOST_ICON_BYTES) {
+      // statSync 后再 readFileSync 是两次独立打开:并发方可在其间把 icon 换成
+      // 指向宿主任意文件的链接,字节会被包成 dataURL 经 IPC 送进 Renderer。
+      // 单句柄限量闸拒链接、限大小;containWithin 堵中间目录链接。
+      const bytes = readBoundedFileNoFollowSync(iconPath, GHOST_ICON_MAX_BYTES, {
+        containWithin: fs.realpathSync(dir),
+      });
+      if (bytes === null) {
         this.options.log?.warn('ghost icon skipped: missing or oversize', { dir, icon: manifest.icon });
         return null;
       }
-      return buildIconDataUrl(manifest.icon, fs.readFileSync(iconPath));
+      return buildIconDataUrl(manifest.icon, bytes);
     } catch {
       this.options.log?.warn('ghost icon skipped: unreadable', { dir, icon: manifest.icon });
       return null;
     }
   }
 
-  /** 读取主机安装时写下的签名验证快照；坏文件只降级未显示，不信作者自报。 */
-  private readInstalledTrust(dir: string): GhostTrustInfo | null {
+  /** 读取主机安装时写下的信任快照与权限 receipt；坏文件一律 fail closed。 */
+  private readInstalledHostMetadata(dir: string): GhostInstalledHostMetadata | null {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, TRUST_METADATA_FILE), 'utf8')) as GhostTrustInfo;
+      const bytes = readBoundedFileNoFollowSync(path.join(dir, TRUST_METADATA_FILE), 64 * 1024);
+      if (bytes === null) return null;
+      const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
       if (
         !raw ||
         typeof raw !== 'object' ||
+        typeof raw.level !== 'string' ||
         !['cindy-official', 'reviewed', 'verified-publisher', 'unverified'].includes(raw.level) ||
         typeof raw.publisherSigned !== 'boolean' ||
         typeof raw.publisherVerified !== 'boolean' ||
         typeof raw.reviewed !== 'boolean'
       ) return null;
-      return raw;
+      const trust: GhostTrustInfo = {
+        level: raw.level as GhostTrustInfo['level'],
+        publisherSigned: raw.publisherSigned,
+        publisherVerified: raw.publisherVerified,
+        reviewed: raw.reviewed,
+        ...(typeof raw.publisherName === 'string' ? { publisherName: raw.publisherName } : {}),
+        ...(typeof raw.publisherKeyId === 'string' ? { publisherKeyId: raw.publisherKeyId } : {}),
+        ...(typeof raw.reviewerName === 'string' ? { reviewerName: raw.reviewerName } : {}),
+        ...(typeof raw.unknownReviewer === 'boolean' ? { unknownReviewer: raw.unknownReviewer } : {}),
+      };
+      const approval = raw.approvedAtResourceProvider;
+      const approvedAtResourceProviderTool =
+        approval
+        && typeof approval === 'object'
+        && !Array.isArray(approval)
+        && Object.keys(approval).length === 1
+        && typeof (approval as Record<string, unknown>).tool === 'string'
+          ? (approval as Record<string, string>).tool
+          : undefined;
+      return {
+        trust,
+        ...(approvedAtResourceProviderTool ? { approvedAtResourceProviderTool } : {}),
+      };
     } catch {
       return null;
     }
@@ -267,6 +309,8 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        /** 包内原始清单，仅供 Main 安全比较。 */
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -277,6 +321,7 @@ export class GhostManager {
     if ('rejection' in parsed) return parsed;
     return {
       manifest: parsed.manifest,
+      canonicalManifest: parsed.canonicalManifest,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
@@ -289,6 +334,7 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -297,19 +343,21 @@ export class GhostManager {
       }
     | { rejection: InstallRejection }
   > {
-    // 1) 读源文件(带体积上限)
+    // 1) 读源文件(带体积上限)。stat 后再 readFile 是两次独立打开,期间文件
+    // 可被换成超大文件绕过上限——单句柄限量读。允许跟随链接:用户拖入的
+    // .cindy 本身可以是链接,防篡改由 expectedPackageSha256 对账负责。
     let buf: Buffer;
     try {
-      const stat = await fs.promises.stat(lizFilePath);
-      if (!stat.isFile()) {
-        return { rejection: { code: 'source-not-found', reason: '路径不是文件' } };
-      }
-      if (stat.size > MAX_NODE_CINDY_FILE_BYTES) {
+      const bytes = await readBoundedFileFollowLinks(lizFilePath, MAX_NODE_CINDY_FILE_BYTES);
+      if (bytes === null) {
         return {
-          rejection: { code: 'file-invalid', reason: `文件过大:${stat.size} 字节(上限 ${MAX_NODE_CINDY_FILE_BYTES})` },
+          rejection: {
+            code: 'file-invalid',
+            reason: `不是普通文件或超过体积上限(${MAX_NODE_CINDY_FILE_BYTES} 字节)`,
+          },
         };
       }
-      buf = await fs.promises.readFile(lizFilePath);
+      buf = bytes;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { rejection: { code: 'source-not-found', reason: '文件不存在' } };
@@ -512,14 +560,14 @@ export class GhostManager {
       try {
         iconData = await readZipEntryBufferWithLimit(
           iconEntry,
-          MAX_GHOST_ICON_BYTES,
+          GHOST_ICON_MAX_BYTES,
           'icon',
         );
       } catch {
         return {
           rejection: {
             code: 'file-invalid',
-            reason: `icon 过大(上限 ${MAX_GHOST_ICON_BYTES} 字节)`,
+            reason: `icon 过大(上限 ${GHOST_ICON_MAX_BYTES} 字节)`,
           },
         };
       }
@@ -563,6 +611,7 @@ export class GhostManager {
 
     return {
       manifest: localizedManifest,
+      canonicalManifest: v.manifest,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
@@ -759,7 +808,11 @@ export class GhostManager {
     allEntries: JSZip.JSZipObject[],
     prefix: string,
     stagingDir: string,
-    opts: { disabled: boolean; maxUncompressedBytes: number; trust: GhostTrustInfo },
+    opts: {
+      disabled: boolean;
+      maxUncompressedBytes: number;
+      trust: GhostTrustInfo;
+    },
   ): Promise<void> {
     await fs.promises.mkdir(stagingDir, { recursive: true });
     let totalBytes = 0;
@@ -785,7 +838,9 @@ export class GhostManager {
     }
     await fs.promises.writeFile(
       path.join(stagingDir, TRUST_METADATA_FILE),
-      `${JSON.stringify(opts.trust, null, 2)}\n`,
+      `${JSON.stringify({
+        ...opts.trust,
+      }, null, 2)}\n`,
     );
   }
 

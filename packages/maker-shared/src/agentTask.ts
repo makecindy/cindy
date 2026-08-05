@@ -128,7 +128,7 @@ export function normalizeWorkflowProgressEntries(
 }
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex';
+  provider: 'claude-code' | 'codex' | 'pi';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -152,10 +152,21 @@ export interface AgentTaskUpdate {
   updatedAt?: string;
 }
 
-/** Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents. */
+/**
+ * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
+ * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
+ *
+ * MCP 工具一律带 `mcp__` 前缀,不会与裸 `subagent` 撞名。
+ */
 export function isAgentTaskToolName(toolName: string): boolean {
-  return toolName === 'Agent' || toolName === 'Task' || toolName.startsWith('collab:');
+  return toolName === 'Agent'
+    || toolName === 'Task'
+    || toolName === PI_SUBAGENT_TOOL_NAME
+    || toolName.startsWith('collab:');
 }
+
+/** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
+export const PI_SUBAGENT_TOOL_NAME = 'subagent';
 
 /**
  * Validate + shape a raw `agent_task_update` event payload into an `AgentTaskUpdate`.
@@ -163,7 +174,7 @@ export function isAgentTaskToolName(toolName: string): boolean {
  */
 export function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex',
+  source?: 'claude-code' | 'codex' | 'pi',
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -178,10 +189,10 @@ export function normalizeAgentTaskUpdate(
     rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'stopped'
       ? rawStatus
       : 'running';
-  const provider = raw.provider === 'codex' || raw.provider === 'claude-code'
+  const provider = raw.provider === 'codex' || raw.provider === 'claude-code' || raw.provider === 'pi'
     ? raw.provider
-    : source === 'codex'
-      ? 'codex'
+    : source === 'codex' || source === 'pi'
+      ? source
       : 'claude-code';
   const usageRaw = raw.usage && typeof raw.usage === 'object' ? raw.usage as Record<string, unknown> : null;
   const usage: AgentTaskUsage | undefined = usageRaw
@@ -254,7 +265,7 @@ export function isSameAgentTaskAlias(left: AgentTaskUpdate, right: AgentTaskUpda
 export function applyAgentTaskUpdateEvent(
   prevMap: ReadonlyMap<string, AgentTaskUpdate> | undefined,
   data: unknown,
-  source: 'claude-code' | 'codex' | undefined,
+  source: 'claude-code' | 'codex' | 'pi' | undefined,
   nowIso: string,
 ): Map<string, AgentTaskUpdate> | null {
   const update = normalizeAgentTaskUpdate(data, source);
@@ -309,16 +320,40 @@ export function findAgentTaskUpdate(
  */
 export interface AgentTaskCardModel {
   status: AgentTaskStatus;
-  provider: 'claude-code' | 'codex';
+  provider: 'claude-code' | 'codex' | 'pi';
   /** Best title, or null when nothing usable was found (caller supplies its own fallback). */
   title: string | null;
   description?: string;
   summary?: string;
+  /**
+   * Codex `collab:spawn` 启动回执:translator 的 tool_result 只放 agentPath 原文
+   * (恰等于 input.name,见 subagentSpawnReceiptName 判据)。命中时 summary 不携带
+   * 裸路径,各端用本字段按自己的 locale 组装「Subagent 已启动」句子。
+   */
+  spawnedAgentName?: string;
   lastToolName?: string;
   outputFile?: string;
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+}
+
+/**
+ * codex spawn 启动回执判据:translator(maker-core codex)约定 `collab:spawn` 卡的
+ * tool_result fullText 只放 agentPath 原文、且与 `input.name` 逐字相等。命中即返回
+ * 该名字,供各端替换为本地化句子;未来 vendored Codex 升级后的富卡(agentsStates
+ * 摘要)不会与 input.name 相等,自然不命中。桌面 AgentTaskCard 与本文件的
+ * buildAgentTaskCardModel 共用本判据,不要各自内联复制。
+ */
+export function subagentSpawnReceiptName(
+  toolName: string | undefined,
+  toolInput: unknown,
+  result: string | undefined,
+): string | undefined {
+  if (toolName !== 'collab:spawn') return undefined;
+  const name = readInputString(toolInput, ['name']);
+  const trimmed = result?.trim();
+  return name && trimmed && trimmed === name ? name : undefined;
 }
 
 export function buildAgentTaskCardModel(input: {
@@ -329,8 +364,13 @@ export function buildAgentTaskCardModel(input: {
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
   const status: AgentTaskStatus = update?.status ?? (result ? 'completed' : 'running');
-  const provider: 'claude-code' | 'codex' =
-    update?.provider ?? (toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
+  const provider: 'claude-code' | 'codex' | 'pi' =
+    update?.provider
+    ?? (toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolName === PI_SUBAGENT_TOOL_NAME
+        ? 'pi'
+        : 'claude-code');
   const title = compactText(
     update?.title
       ?? readInputString(toolInput, ['description', 'task', 'name'])
@@ -340,13 +380,22 @@ export function buildAgentTaskCardModel(input: {
   const description = compactText(
     update?.description ?? readInputString(toolInput, ['prompt', 'description', 'task']),
   );
-  const summary = detailText(result, update?.summary);
+  const spawnReceiptName = subagentSpawnReceiptName(toolName, toolInput, result);
+  // 有实时 update(子线程送来的 tokens / 工具调用数 / 终态)时不再暴露启动回执:
+  // title 与运行状态已经表达了同样的信息,再显示「Subagent X 已启动」会让 codex 卡
+  // 比 Claude 子代理卡多出一行冗余文案 —— 两者共用同一张卡,形态必须一致。历史回放
+  // 拿不到 live update,回执仍是唯一可读摘要,保留原样。
+  const spawnedAgentName = update ? undefined : spawnReceiptName;
+  // 启动回执命中时 summary 不携带裸路径(路径已在 spawnedAgentName / title 中),
+  // 否则手机端会把 agentPath 原样当摘要展示。
+  const summary = spawnReceiptName ? detailText(update?.summary) : detailText(result, update?.summary);
   return {
     status,
     provider,
     title: title ?? null,
     ...(description ? { description } : {}),
     ...(summary ? { summary } : {}),
+    ...(spawnedAgentName ? { spawnedAgentName } : {}),
     ...(update?.lastToolName ? { lastToolName: update.lastToolName } : {}),
     ...(update?.outputFile ? { outputFile: update.outputFile } : {}),
     ...(typeof update?.usage?.totalTokens === 'number' ? { totalTokens: update.usage.totalTokens } : {}),

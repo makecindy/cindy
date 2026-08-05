@@ -14,9 +14,9 @@
  *       networkSlot 凭返回的 read() 逐文件读盘代组 multipart 出网。
  *
  * 安全论证:dir 只能来自主 agent 的 ghost_call 调用(用户信任域、权限模式
- * 管辖),且被钳制在会话 workdir 内——workdir 内容本就是主 agent 可读可发网
- * 的范围,本通道不扩大攻击面;意识自造 token 无效(票据按 ghostId 绑定、
- * 主机侧随机发放)。
+ * 管辖)。默认钳制在会话 workdir 内；workdir 外仅接受 Host 已完成的人工确认
+ * 或实时 Full Access 裁决，并用 canonical 路径快照复核。意识自造 token 无效
+ * (票据按 ghostId 绑定、主机侧随机发放)。
  *
  * 纯 Node(fs/path/crypto),零 Electron(规则 14):单测直接驱动。
  * 收集逻辑源自 @cindy/mcps xd-service/collect.ts(该包随 MCP 退役删除,
@@ -140,11 +140,62 @@ export function isPathInsideDir(parentAbs: string, childAbs: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/** 两个 realpath 快照是否指向同一规范路径(Windows 大小写不敏感)。 */
+function sameRealPath(a: string, b: string): boolean {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 interface VaultEntry {
   ghostId: string;
+  /** 出票时目录/单文件根的 canonical 真身；消费时重新核对，防换链。 */
+  rootRealPath: string;
   files: CollectedDirFile[];
   totalBytes: number;
   expiresAt: number;
+}
+
+/**
+ * 读取票据文件前后的路径复核。最终分量用 O_NOFOLLOW 打开，随后用句柄
+ * identity 对照当前路径，避免出票后把文件或祖先目录换成外部 symlink。
+ */
+async function readDepositedFile(
+  rootRealPath: string,
+  file: CollectedDirFile,
+): Promise<Uint8Array> {
+  const rootBefore = fs.realpathSync.native(rootRealPath);
+  const fileBefore = fs.realpathSync.native(file.absPath);
+  if (
+    !sameRealPath(rootBefore, rootRealPath) ||
+    !isPathInsideDir(rootRealPath, fileBefore)
+  ) {
+    throw new Error('目录过户路径在出票后发生变化');
+  }
+
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  const handle = await fs.promises.open(file.absPath, flags);
+  try {
+    const openedStat = await handle.stat();
+    if (!openedStat.isFile()) throw new Error('目录过户目标不再是文件');
+
+    // open 之后再复核一次：若祖先目录在 realpath 与 open 之间被换链，
+    // 当前路径真身或 inode/dev identity 会与已打开句柄不一致，拒绝读字节。
+    const rootAfter = fs.realpathSync.native(rootRealPath);
+    const fileAfter = fs.realpathSync.native(file.absPath);
+    const pathStat = fs.statSync(file.absPath);
+    if (
+      !sameRealPath(rootAfter, rootRealPath) ||
+      !isPathInsideDir(rootRealPath, fileAfter) ||
+      pathStat.dev !== openedStat.dev ||
+      pathStat.ino !== openedStat.ino
+    ) {
+      throw new Error('目录过户路径在出票后发生变化');
+    }
+
+    const bytes = await handle.readFile();
+    return new Uint8Array(bytes);
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -158,17 +209,19 @@ export class DirDepositVault {
 
   /**
    * 过户一个目录。workdirAbs 是当前会话工作目录(钳制边界);userGranted=true
-   * 表示用户已在确认卡上对**这个路径**点了允许(GhostGrantConfirmBridge),
-   * 跳过 workdir 钳制(存在性/类型校验照常)——除接线层的确认流外,任何
-   * 调用方不得传 true。缺 workdir 语境且未获用户确认时直接拒绝。
+   * 是历史字段名，表示 Host 已通过人工确认或实时 Full Access 对**这个路径**
+   * 完成可信裁决，因而可跳过 workdir 钳制(存在性/类型校验照常)——除接线层
+   * 的授权流外,任何调用方不得传 true。expectedRealPath 是裁决时的 canonical
+   * 快照；提供时出票前必须复核一致。缺 workdir 语境且未获可信裁决时直接拒绝。
    */
   deposit(params: {
     ghostId: string;
     dirAbs: string;
     workdirAbs: string | null;
     userGranted?: boolean;
+    expectedRealPath?: string;
   }): { ok: true; receipt: DirDepositReceipt } | { ok: false; message: string } {
-    const { ghostId, dirAbs, workdirAbs, userGranted } = params;
+    const { ghostId, dirAbs, workdirAbs, userGranted, expectedRealPath } = params;
     if (!path.isAbsolute(dirAbs)) {
       return { ok: false, message: `dir 必须是绝对路径,得到:${dirAbs}` };
     }
@@ -184,6 +237,9 @@ export class DirDepositVault {
       realDir = fs.realpathSync.native(dirAbs);
     } catch {
       return { ok: false, message: `目录不存在:${dirAbs}` };
+    }
+    if (expectedRealPath && !sameRealPath(realDir, expectedRealPath)) {
+      return { ok: false, message: '路径在授权后发生变化，请重新确认' };
     }
     // workdir 真身单独解:解不开(远程路径 / 已删)按「不在 workdir 内」处理,
     // 未获用户确认时拒,而不是误报"目录不存在"。
@@ -227,6 +283,7 @@ export class DirDepositVault {
     const token = randomUUID();
     this.entries.set(token, {
       ghostId,
+      rootRealPath: realDir,
       files: collected.files,
       totalBytes: collected.totalBytes,
       expiresAt: this.now() + GHOST_DIR_DEPOSIT_TTL_MS,
@@ -257,7 +314,7 @@ export class DirDepositVault {
       files: entry.files.map((f) => ({
         relPath: f.relPath,
         size: f.size,
-        read: () => fs.promises.readFile(f.absPath).then((b) => new Uint8Array(b)),
+        read: () => readDepositedFile(entry.rootRealPath, f),
       })),
     };
   }
@@ -326,15 +383,140 @@ export function sanitizeSaveFileName(raw: string | undefined): string {
   return cleaned;
 }
 
-/** 防覆盖去重:已存在时在扩展名前插 " (n)"。 */
-function dedupeFileName(dirAbs: string, fileName: string): string {
-  let candidate = fileName;
+/** 防覆盖去重候选:第 n 个重名在扩展名前插 " (n)"。 */
+function dedupeFileName(fileName: string, n: number): string {
+  if (n === 0) return fileName;
   const ext = path.extname(fileName);
   const stem = fileName.slice(0, fileName.length - ext.length);
-  for (let n = 1; fs.existsSync(path.join(dirAbs, candidate)); n++) {
-    candidate = `${stem} (${n})${ext}`;
+  return `${stem} (${n})${ext}`;
+}
+
+/**
+ * 在 canonical 根下原子创建一个不覆盖的文件。先用 O_EXCL/O_NOFOLLOW
+ * 钉住句柄，再核对根路径、目标真身与句柄 identity，最后才写入字节。
+ */
+async function writeNewSaveFile(
+  dirRealPath: string,
+  fileName: string,
+  bytes: Uint8Array,
+): Promise<string | null> {
+  const flags =
+    fs.constants.O_WRONLY |
+    fs.constants.O_CREAT |
+    fs.constants.O_EXCL |
+    (fs.constants.O_NOFOLLOW ?? 0);
+
+  for (let n = 0; n < 10_000; n++) {
+    let currentRoot: string;
+    try {
+      currentRoot = fs.realpathSync.native(dirRealPath);
+    } catch {
+      return null;
+    }
+    if (!sameRealPath(currentRoot, dirRealPath)) return null;
+
+    const candidate = dedupeFileName(fileName, n);
+    const target = path.join(dirRealPath, candidate);
+    let handle: fs.promises.FileHandle;
+    try {
+      handle = await fs.promises.open(target, flags, 0o666);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      return null;
+    }
+
+    let openedStat: fs.Stats | null = null;
+    let result: string | null = null;
+    let closeFailed = false;
+    try {
+      openedStat = await handle.stat();
+      const rootAfter = fs.realpathSync.native(dirRealPath);
+      const targetAfter = fs.realpathSync.native(target);
+      const pathStat = fs.statSync(target);
+      if (
+        !openedStat.isFile() ||
+        !sameRealPath(rootAfter, dirRealPath) ||
+        !sameRealPath(path.dirname(targetAfter), dirRealPath) ||
+        pathStat.dev !== openedStat.dev ||
+        pathStat.ino !== openedStat.ino
+      ) {
+        return null;
+      }
+      await handle.writeFile(bytes);
+
+      // 写入本身也可能触发另一个进程的 rename / replace；提交成功前再
+      // 复核 canonical 根、目标父目录与句柄 identity，避免把已移出批准
+      // 目录的 inode 当成成功交接。
+      const writtenStat = await handle.stat();
+      const rootAfterWrite = fs.realpathSync.native(dirRealPath);
+      const targetAfterWrite = fs.realpathSync.native(target);
+      const pathStatAfterWrite = fs.statSync(target);
+      if (
+        !writtenStat.isFile() ||
+        !sameRealPath(rootAfterWrite, dirRealPath) ||
+        !sameRealPath(path.dirname(targetAfterWrite), dirRealPath) ||
+        writtenStat.dev !== openedStat.dev ||
+        writtenStat.ino !== openedStat.ino ||
+        pathStatAfterWrite.dev !== writtenStat.dev ||
+        pathStatAfterWrite.ino !== writtenStat.ino
+      ) {
+        return null;
+      }
+      result = candidate;
+    } catch {
+      // result 保持 null；失败路径在 finally 中尽力清理。
+    } finally {
+      // 校验或写入失败时，先通过仍持有的句柄清空可能已经写入的字节。
+      // 这样即使路径随后被替换，也不会把半成品字节留在原 inode 上。
+      if (result !== null) {
+        // 保留成功路径原有的 close 语义；close 失败仍视为写盘失败。
+        try {
+          await handle.close();
+        } catch {
+          closeFailed = true;
+          result = null;
+        }
+      }
+
+      if (result === null) {
+        if (openedStat?.isFile()) {
+          try {
+            await handle.truncate(0);
+          } catch {
+            // 清理失败不能覆盖原始失败结果。
+          }
+        }
+
+        // Windows 下先关闭句柄再 unlink；失败路径的 close 只做 best effort，
+        // 不能把原始 null 结果升级成异常。
+        try {
+          await handle.close();
+        } catch {
+          // 清理失败不能覆盖原始失败结果。
+        }
+
+        // 仅当路径仍指向本次 O_EXCL 打开的同一 dev/ino 时删除，避免目标在
+        // 校验窗口内被替换成 symlink/其它文件后误删替代目标。
+        if (openedStat?.isFile()) {
+          try {
+            const currentStat = await fs.promises.lstat(target);
+            if (
+              currentStat.dev === openedStat.dev &&
+              currentStat.ino === openedStat.ino
+            ) {
+              await fs.promises.unlink(target);
+            }
+          } catch {
+            // 清理失败不能覆盖原始失败结果。
+          }
+        }
+      }
+    }
+    if (closeFailed) return null;
+    if (result !== null) return result;
+    return null;
   }
-  return candidate;
+  return null;
 }
 
 /**
@@ -345,14 +527,15 @@ export class SaveDepositVault {
   private readonly entries = new Map<string, SaveVaultEntry>();
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** 过户一个可写目录(钳制与 userGranted 旁路口径与 DirDepositVault.deposit 完全一致)。 */
+  /** 过户一个可写目录(钳制、授权快照与 DirDepositVault.deposit 完全一致)。 */
   deposit(params: {
     ghostId: string;
     dirAbs: string;
     workdirAbs: string | null;
     userGranted?: boolean;
+    expectedRealPath?: string;
   }): { ok: true; receipt: SaveDepositReceipt } | { ok: false; message: string } {
-    const { ghostId, dirAbs, workdirAbs, userGranted } = params;
+    const { ghostId, dirAbs, workdirAbs, userGranted, expectedRealPath } = params;
     if (!path.isAbsolute(dirAbs)) {
       return { ok: false, message: `save_dir 必须是绝对路径,得到:${dirAbs}` };
     }
@@ -364,6 +547,9 @@ export class SaveDepositVault {
       realDir = fs.realpathSync.native(dirAbs);
     } catch {
       return { ok: false, message: `目录不存在:${dirAbs}(落盘目录需要预先存在)` };
+    }
+    if (expectedRealPath && !sameRealPath(realDir, expectedRealPath)) {
+      return { ok: false, message: '路径在授权后发生变化，请重新确认' };
     }
     let realWorkdir: string | null = null;
     if (workdirAbs) {
@@ -416,14 +602,14 @@ export class SaveDepositVault {
       return null;
     }
     if (entry.usesLeft <= 0 || bytes.byteLength > entry.bytesLeft) return null;
-    const finalName = dedupeFileName(entry.dirAbs, sanitizeSaveFileName(fileName));
-    try {
-      // 异步写:上限 256MB,同步写会把 main event loop 卡住数百 ms 到秒级
-      //(遇杀软实时扫描更糟),期间全部 IPC / 窗口交互冻结(规则 15)。
-      await fs.promises.writeFile(path.join(entry.dirAbs, finalName), bytes);
-    } catch {
-      return null;
-    }
+    // 异步写:上限 256MB,同步写会把 main event loop 卡住数百 ms 到秒级
+    //(遇杀软实时扫描更糟),期间全部 IPC / 窗口交互冻结(规则 15)。
+    const finalName = await writeNewSaveFile(
+      entry.dirAbs,
+      sanitizeSaveFileName(fileName),
+      bytes,
+    );
+    if (!finalName) return null;
     entry.usesLeft -= 1;
     entry.bytesLeft -= bytes.byteLength;
     if (entry.usesLeft <= 0 || entry.bytesLeft <= 0) this.entries.delete(token);

@@ -12,6 +12,8 @@
 
 import {
   getModel,
+  connectedProvidersForAgent,
+  isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
   modelSupportsFastMode,
@@ -26,8 +28,13 @@ import { getDesktopProviderService } from './createDesktopProviderService.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import {
+  isRegistryTombstoneForConsumer,
+  MODEL_PLANE_POLICIES,
+} from './model-plane/modelPlanePolicy.js';
+import {
   checkModelRoute,
   resolveLenientRoute,
+  type ModelRouteGuardOptions,
   type ModelRouteVerdict,
 } from './model-route-guard.js';
 
@@ -36,8 +43,46 @@ import {
  * projections intentionally hide. Otherwise an old controller can name a
  * hidden media model and make checkModelRoute treat it as catalog-unknown.
  */
-async function listRouteGuardProviders(): Promise<ProviderView[]> {
-  return getDesktopProviderService().listProviders({ catalog: getActiveCatalog() });
+async function listRouteGuardProviders(
+  catalog = getActiveCatalog(),
+): Promise<ProviderView[]> {
+  return getDesktopProviderService().listProviders({ catalog });
+}
+
+function tombstoneGuardOptions(
+  catalog: ReturnType<typeof getActiveCatalog>,
+): ModelRouteGuardOptions {
+  return {
+    isRetiredTombstone: (providerId, modelId, agent) => {
+      const providerIds = providerId ? [providerId] : MODEL_PLANE_POLICIES.keys();
+      return [...providerIds].some((id) =>
+        isRegistryTombstoneForConsumer(catalog.modelRegistry, id, modelId, agent),
+      );
+    },
+  };
+}
+
+/**
+ * 无模型的 headless 调度不能给 Pi 硬塞 Claude 型号：Pi 的可用面由实时连接来源
+ * 决定。按模型选择器同一 rail（已连接、runtime 可用、未停用）取首个可聊天模型，
+ * 并把 providerId 与 model 成对返回，避免 BYOM 同名模型落到 Cindy 默认路由。
+ */
+export async function resolveDefaultScheduleRoute(
+  agent: AgentKind,
+  preferredProviderId?: string | null,
+): Promise<{ model: string; providerId: string } | null> {
+  const views = await listRouteGuardProviders();
+  const connected = connectedProvidersForAgent(views, agent);
+  const candidates = preferredProviderId
+    ? connected.filter((provider) => provider.id === preferredProviderId)
+    : connected;
+  for (const provider of candidates) {
+    for (const model of provider.models[agent] ?? []) {
+      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) continue;
+      return { model: model.id, providerId: provider.id };
+    }
+  }
+  return null;
 }
 
 /** 该 agent 的静态原生默认来源偏好(nativeDefaultSourceId 的无 rail 近似)。 */
@@ -90,13 +135,17 @@ export async function verdictForModelRoute(
   model: string,
   providerId: string | null,
 ): Promise<ModelRouteVerdict> {
+  const catalog = getActiveCatalog();
+  const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
-    views = await listRouteGuardProviders();
+    views = await listRouteGuardProviders(catalog);
   } catch {
+    const tombstoneVerdict = checkModelRoute([], agent, model, providerId, guardOptions);
+    if (tombstoneVerdict.kind === 'reject') return tombstoneVerdict;
     return overrideOnlyVerdict(agent, model, providerId);
   }
-  return checkModelRoute(views, agent, model, providerId);
+  return checkModelRoute(views, agent, model, providerId, guardOptions);
 }
 
 /**
@@ -116,13 +165,18 @@ export async function resolveLenientSessionRoute(
   /** 仅 desiredFastMode=true 且路由被本解析改动时给出:落地拷贝不支持 Fast ⇒ false。 */
   fastMode?: boolean;
 }> {
+  const catalog = getActiveCatalog();
+  const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
-    views = await listRouteGuardProviders();
+    views = await listRouteGuardProviders(catalog);
   } catch {
     // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
     // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。
     if (!model) return { model, providerId, degraded: false };
+    if (checkModelRoute([], agent, model, providerId, guardOptions).kind === 'reject') {
+      return { model: undefined, providerId: null, degraded: true };
+    }
     if (overrideOnlyVerdict(agent, model, providerId).kind === 'pass') {
       return { model, providerId, degraded: false };
     }
@@ -137,7 +191,7 @@ export async function resolveLenientSessionRoute(
     degraded: boolean;
     effort?: string;
     fastMode?: boolean;
-  } = resolveLenientRoute(views, agent, model, providerId, opts);
+  } = resolveLenientRoute(views, agent, model, providerId, { ...opts, ...guardOptions });
   // Fast reconcile(PR #744 review 第十七轮):Fast 能力是 per-(来源, 模型) 的
   // (modelSupportsFastMode)。保存的 fast=true 是对**原路由**的选择,解析改了模型
   // 或来源时按落地那份拷贝重查,不支持则清掉 —— 否则不支持 Fast 的兜底路由会带着
@@ -194,6 +248,8 @@ export async function resolveRouteCopyCapabilities(
 const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   'claude-code': 'claude-haiku-4-5',
   codex: 'gpt-5.4-mini',
+  // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
+  pi: 'claude-haiku-4-5',
 };
 
 /**

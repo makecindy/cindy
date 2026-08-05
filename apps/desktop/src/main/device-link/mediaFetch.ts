@@ -152,6 +152,62 @@ function parsePathQuery(url: string): string {
 }
 
 /**
+ * xdt-file/audio URL 上的**服务端强制约束**(手机端 HTML 资源透传会带;普通媒体取件不带)。
+ *
+ * 为什么要在被控端强制,而不是信控制端已经判过:
+ *  - `baseDir` —— 控制端只能做词法校验(拒 `..`),那**只能保证词法子树**。产物目录里若已
+ *    存在一个指向目录外的软链,词法路径完全合法,而本模块原先 realpath 后只比对全局敏感
+ *    目录 blocklist,于是 blocklist 之外的用户文件会被取回并内联进不可信页面(review P1
+ *    security)。真正的边界只能在这里画:资源与 baseDir **各自 realpath 后**判定包含关系。
+ *  - `maxBytes` —— 控制端拿到 `media.size` 时字节已经上传到 OSS(SSH 场景还先整份拉到
+ *    Desktop 磁盘缓存),流量与磁盘已经花掉。一份不可信 HTML 引用一个 2 GB 的白名单扩展名
+ *    文件、再叠上 4 路并发,就能打出数 GB 的无用流量(review P2)。必须在 stat 之后、
+ *    上传/拉取之前拒绝。
+ *
+ * 缺省(参数不出现)= 不约束,老控制端行为不变。参数出现但畸形一律抛错(fail-closed),
+ * 不静默降级成"不约束"—— 那会让约束可被畸形输入摘掉。
+ */
+interface PathMediaConstraints {
+  /** 资源 realpath 必须落在此目录 realpath 的子树内;null = 不约束。 */
+  baseDir: string | null;
+  /** 字节上限(> 0);null = 不约束。 */
+  maxBytes: number | null;
+}
+
+function parsePathMediaConstraints(url: string): PathMediaConstraints {
+  const params = new URL(url).searchParams;
+  const rawBaseDir = params.get('baseDir');
+  const rawMaxBytes = params.get('maxBytes');
+
+  let baseDir: string | null = null;
+  if (rawBaseDir !== null) {
+    if (!rawBaseDir.trim()) throw new Error('媒体 baseDir 不能为空');
+    if (!(rawBaseDir.startsWith('/') || WIN_ABS_RE.test(rawBaseDir))) {
+      throw new Error('媒体 baseDir 必须为绝对路径');
+    }
+    baseDir = path.resolve(rawBaseDir);
+  }
+
+  let maxBytes: number | null = null;
+  if (rawMaxBytes !== null) {
+    const n = Number(rawMaxBytes);
+    if (!Number.isInteger(n) || n <= 0) throw new Error('媒体 maxBytes 必须为正整数');
+    maxBytes = n;
+  }
+  return { baseDir, maxBytes };
+}
+
+/**
+ * `realChild` 是否落在 `realBase` 子树内(相等也算)。**两侧都必须是 realpath 结果** ——
+ * 只 realpath 一侧时,`/tmp` → `/private/tmp` 这类平台软链会让合法资源被误拒。
+ * win32 上 `path.relative` 本身按大小写不敏感比较,无需额外归一化。
+ */
+function isInsideRealDir(realChild: string, realBase: string): boolean {
+  const rel = path.relative(realBase, realChild);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
  * xdt-file/audio URL 上的 SSH 取件上下文。URL 只作声明，真正的 host/workdir
  * 必须按 sessionId 从本地会话库反查，并与 URL 声明逐项一致后才可使用。
  */
@@ -242,10 +298,21 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
   const skipCache = record.skipCache === true;
   const isPathMedia = url.startsWith('xdt-file://') || url.startsWith('xdt-audio://');
   const sshOrigin = isPathMedia ? await parseSshMediaOrigin(url) : null;
+  const constraints: PathMediaConstraints = isPathMedia
+    ? parsePathMediaConstraints(url)
+    : { baseDir: null, maxBytes: null };
   let absPath: string;
   let mimeType: string | undefined;
   if (sshOrigin) {
-    const materialized = await materializeSshRemoteMedia(sshOrigin, url);
+    // SSH 分支的两道约束必须在 materialize **内部**生效:它 stat 完就会把整份文件分片拉进
+    // Desktop 磁盘缓存,拉完再判等于流量已经花掉。
+    const sshLimits = constraints.baseDir !== null || constraints.maxBytes !== null
+      ? {
+        ...(constraints.baseDir ? { baseDir: constraints.baseDir } : {}),
+        ...(constraints.maxBytes !== null ? { maxBytes: constraints.maxBytes } : {}),
+      }
+      : undefined;
+    const materialized = await materializeSshRemoteMedia(sshOrigin, url, undefined, sshLimits);
     if (!materialized.ok) {
       throw new Error(`SSH 媒体取回失败（${materialized.status}）：${materialized.message}`);
     }
@@ -283,9 +350,34 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
       log.warn(`media:fetch blocked sensitive realpath ${url.slice(0, 60)}`);
       throw new Error('该路径位于敏感目录,已阻止远程取件');
     }
+    // baseDir 包含判定(review P1 security):blocklist 只挡"敏感目录",挡不住"产物目录里
+    // 一个指向别的普通用户目录的软链"。两侧都取 realpath 后比较,才是真正的同目录约束。
+    if (constraints.baseDir) {
+      let realBase: string;
+      try {
+        realBase = await realpath(constraints.baseDir);
+      } catch {
+        // 基目录都解析不了就别猜(fail-closed):宁可这一个资源取不到、渲染成破图。
+        throw new Error('资源基目录不存在或不可读');
+      }
+      if (!isInsideRealDir(real, realBase)) {
+        log.warn(`media:fetch blocked out-of-base resource ${url.slice(0, 60)}`);
+        throw new Error('资源不在允许的基目录内,已阻止远程取件');
+      }
+    }
     // 语义扩展名取请求路径(absPath 此时仍是请求路径),再切到 realpath 读字节。
     uploadExtHint = path.extname(absPath);
     absPath = real;
+  }
+
+  // 大小门禁:必须在 uploadLocalFile 之前(review P2)。SSH 分支已在 materialize 内部按
+  // 远端 stat 判过,这里只管本机分支(realpath 后 stat,与后续上传读的是同一个 inode)。
+  if (constraints.maxBytes !== null && !sshOrigin) {
+    const sizeStat = await stat(absPath);
+    if (sizeStat.size > constraints.maxBytes) {
+      log.warn(`media:fetch rejected oversize ${sizeStat.size}B > ${constraints.maxBytes}B ${url.slice(0, 60)}`);
+      throw new Error(`资源超出取件大小上限(${sizeStat.size} > ${constraints.maxBytes} 字节)`);
+    }
   }
 
   if (record.thumbnail === true && canThumbnail(absPath, mimeType)) {
@@ -350,6 +442,8 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
 export const __testing = {
   resolveLocalMedia,
   parsePathQuery,
+  parsePathMediaConstraints,
+  isInsideRealDir,
   parseSshMediaOrigin,
   uploadCache,
   UPLOAD_CACHE_TTL_MS,

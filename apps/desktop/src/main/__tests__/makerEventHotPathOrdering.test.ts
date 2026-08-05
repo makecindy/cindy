@@ -16,6 +16,8 @@ const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
+const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
   it('rewires a replacement Session instance that retains the same business id', () => {
@@ -25,12 +27,21 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('if (existing?.session === session)');
     expect(wireSessionSource).toContain('for (const dispose of existing.disposers) dispose();');
     expect(wireSessionSource).toContain('existing.session.setInteractionListener(null);');
-    expect(wireSessionSource).toContain(
-      'registration.disposers.push(session.onEvent((event: AgentEvent) => {',
+    expect(wireSessionSource).toMatch(
+      /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
     );
-    expect(wireSessionSource).toContain(
-      'registration.disposers.push(session.onStatusChange((status) => {',
+    expect(wireSessionSource).toMatch(
+      /registration\.disposers\.push\(\s*session\.onStatusChange\(\(status\) => \{/,
     );
+    // #1286:拆线(实例替换 / 会话关闭)必须给插件补 did-turn-end,否则订阅方的
+    // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。同一个 disposer 里
+    // 摘 interaction observer(#1283),不摘会让 activity 的审批边界发给已拆线的 tap。
+    const tapDisposerIndex = wireSessionSource.indexOf('ghostSessionTap.dispose();');
+    expect(tapDisposerIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.lastIndexOf('registration.disposers.push(', tapDisposerIndex),
+    ).toBeGreaterThanOrEqual(0);
+    expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
@@ -61,7 +72,7 @@ describe('maker:event hot path ordering', () => {
   it('defers remote auth island errors until the renderer reports retry failure', () => {
     const wireSessionSource = extractWireSessionSource();
     const deferredHandler = source.match(
-      /ipcMain\.handle\(MAKER_INVOKE\.PERSIST_TURN_ERROR_DEFERRED,[\s\S]*?\n {2}\}\);/,
+      /ipcMain\.handle\(\s*MAKER_INVOKE\.PERSIST_TURN_ERROR_DEFERRED,[\s\S]*?\n\s*\}\);/,
     )?.[0];
 
     expect(source).toContain('function isRemoteAuthRetryErrorEvent(');
@@ -74,6 +85,57 @@ describe('maker:event hot path ordering', () => {
       deferredHandler ?? '',
       'onTurnErrorEvent(sid, errData, agentMeta);',
       'getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);',
+    );
+  });
+
+  it('keeps auto-resume-owned terminal errors out of Agent Island until they are final', () => {
+    const handler = source.match(
+      /function handleAgentIslandEventAfterBroadcast\([\s\S]*?\n}\n\nfunction surfaceSuppressedAutoResumeErrorInAgentIsland/,
+    )?.[0];
+    expect(handler).toBeTruthy();
+    if (!handler) return;
+
+    expectOrder(handler, 'service.deferRemoteAuthRetryError(meta, event);', 'const terminalError =');
+    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true');
+    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true');
+    expect(handler).toContain(
+      'autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id)',
+    );
+    expect(handler).toContain(
+      'autoResumeBookkeeping.shouldSuppressAgentIslandCompletionTail(session.id)',
+    );
+    expect(handler).toContain('(terminalError && autoResumeOwnsError)');
+    expect(handler).toContain(
+      '(isAgentIslandCompletionTail(event) && autoResumeOwnsCompletionTail)',
+    );
+    expectOrder(handler, 'const autoResumeOwnsError =', 'service.handleAgentEvent(meta, event);');
+    expect(handler).not.toContain('suppressErrorSound');
+
+    expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
+    expect(source).toContain("data: { ...detail, isTerminal: true }");
+    expect(source).toContain(
+      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
+    );
+    expect(source).toContain('if (!attempt.isCurrent()) {');
+    expect(source).toContain(
+      'autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.markReplacementDispatching(sessionId, clientId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);',
+    );
+    expect(source).toContain('onRejectedUserTurn: (sessionId, item) => {');
+    expect(source).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
+    expect(source).toContain(
+      'autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, clientId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);',
+    );
+    expect(source).not.toContain(
+      'autoResumeBookkeeping.discardSuppressedError(sessionId);',
     );
   });
 
@@ -92,7 +154,7 @@ describe('maker:event hot path ordering', () => {
     // 回看窗口要盖住赋值点与所属 if 条件之间的声明/注释(done 分支里 silent-stop
     // 的 isSilentStopDone 判定 + 设计注释就有 ~500 字符),太窄会把仍在正确分支内的
     // 赋值误判成"脱离 done 路径"。
-    const CONTEXT_LOOKBACK = 700;
+    const CONTEXT_LOOKBACK = 1_400;
     const statusContexts = statusIdleAssignments.map((index) =>
       wireSessionSource.slice(Math.max(0, index - CONTEXT_LOOKBACK), index + 'shouldMarkTurnStatusIdleAfterBroadcast = true;'.length),
     );
@@ -104,6 +166,20 @@ describe('maker:event hot path ordering', () => {
     expect(terminalContexts.some((context) => context.includes("event.type === 'done'"))).toBe(true);
     expect(terminalContexts.some((context) => context.includes('isTerminalTurnErrorEvent(event)'))).toBe(true);
     expect([...statusContexts, ...terminalContexts].join('\n')).not.toContain("event.type === 'error'");
+    // Keep a direct structural guard too: each terminal idle assignment must
+    // remain inside its corresponding done/error branch.
+    expect(
+      wireSessionSource.lastIndexOf(
+        "if (event.type === 'done') {",
+        terminalIdleAssignments[0],
+      ),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.lastIndexOf(
+        'if (isTerminalTurnErrorEvent(event)) {',
+        terminalIdleAssignments[1],
+      ),
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it('does not persist remote Codex account snapshots into local account usage', () => {
@@ -113,11 +189,14 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('fires git snapshots only from post-broadcast done events', () => {
+  it('fires git snapshots only from post-broadcast product-terminal done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
     const snapshotIndex = wireSessionSource.indexOf('void gitSnapshotCoordinator?.onTurnEnd(session.id);');
-    const doneBlockIndex = wireSessionSource.indexOf("if (event.type === 'done') {", broadcastIndex);
+    const doneBlockIndex = wireSessionSource.indexOf(
+      "if (event.type === 'done' && !isContinuationBoundary) {",
+      broadcastIndex,
+    );
     const beforeBroadcast = wireSessionSource.slice(0, broadcastIndex);
 
     expect(snapshotIndex).toBeGreaterThan(broadcastIndex);
@@ -146,6 +225,29 @@ describe('maker:event hot path ordering', () => {
     expect(abortIndex).toBeGreaterThan(broadcastIndex);
     expect(beforeBroadcast).not.toContain('gitSnapshotCoordinator?.onTurnAbort');
     expect(abortContext).toContain('isTerminalTurnErrorEvent(event)');
+  });
+
+  it('writes one durable Assistant boundary for both success and terminal error', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const boundaryStart = wireSessionSource.indexOf('let turnAssistantPersistId: string | undefined;');
+    const boundaryEnd = wireSessionSource.indexOf('const autoResumeSuppressesPersist', boundaryStart);
+    const boundaryBlock = wireSessionSource.slice(boundaryStart, boundaryEnd);
+
+    expect(boundaryStart).toBeGreaterThanOrEqual(0);
+    expect(boundaryEnd).toBeGreaterThan(boundaryStart);
+    expectOrder(boundaryBlock, 'flushAssistantBlock(session.id, eventAgentMeta);', 'consumeLastAssistantPersistId(session.id);');
+    expectOrder(boundaryBlock, 'consumeLastAssistantPersistId(session.id);', 'consumeLastTopLevelAssistantPersistId(session.id);');
+    expectOrder(boundaryBlock, 'consumeLastTopLevelAssistantPersistId(session.id);', 'flushOrphanToolResults(session.id, eventAgentMeta);');
+    expect(boundaryBlock).toContain("event.type === 'done'");
+    expect(boundaryBlock).toContain('markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId)');
+    expect(boundaryBlock).toContain('markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)');
+    expect(boundaryBlock).toContain('pendingFailedTurnAssistantPersistId.get(session.id)');
+    expect(boundaryBlock).toContain('isPairedFailedTurnDone = true');
+    expectOrder(
+      boundaryBlock,
+      'isPairedFailedTurnDone = true',
+      "else if (!isPairedFailedTurnDone)",
+    );
   });
 
   it('rejects stale Agent Island interactions before renderer delivery', () => {
@@ -239,12 +341,12 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       directAbortSource,
       'const sess = getStableSessionForTurnBoundary(sessionId);',
-      'if (!sess) return;',
+      'if (!sess) {',
     );
     expect(directAbortSource).not.toContain('const sess = maker.getSession(sessionId);');
     expectOrder(
       directAbortSource,
-      'if (!sess) return;',
+      'if (!sess) {',
       'handleAgentIslandSessionStopped(sess);',
     );
     expectOrder(
@@ -292,6 +394,89 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('tears down every automatic recovery path before an explicit Stop aborts the session', () => {
+    const resetStart = source.indexOf('function resetAutomaticRecoveryForExplicitStop(');
+    const resetEnd = source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
+    const resetSource = source.slice(resetStart, resetEnd);
+    const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
+    const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
+    const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
+    const inputStopStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.INPUT_STOP');
+    const inputStopEnd = source.indexOf('\n  ipcMain.handle(MAKER_INVOKE.INPUT_RESUME', inputStopStart);
+    const inputStopSource = source.slice(inputStopStart, inputStopEnd);
+    const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
+    const directAbortEnd = source.indexOf('\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION', directAbortStart);
+    const directAbortSource = source.slice(directAbortStart, directAbortEnd);
+    const goalPauseStart = source.indexOf('async function pauseGoalBeforeExplicitStop(');
+    const goalPauseEnd = source.indexOf('\n}\n// (Option B)', goalPauseStart) + 2;
+    const goalPauseSource = source.slice(goalPauseStart, goalPauseEnd);
+
+    expect(resetStart).toBeGreaterThanOrEqual(0);
+    expect(resetSource).toContain('silentStopAutoResumeGuard.noteSessionReset(sessionId);');
+    expect(resetSource).toContain('interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);');
+    expect(resetSource).toContain('autoResumeBookkeeping.teardown(sessionId);');
+    expect(source).toContain('noteSessionReset: resetAutomaticRecoveryForExplicitStop,');
+    expect(source).toContain('resetAutomaticRecoveryForExplicitStop(sid);');
+
+    expectOrder(
+      coordinatorAbortSource,
+      'resetAutomaticRecoveryForExplicitStop(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
+    );
+    expectOrder(
+      directAbortSource,
+      'resetAutomaticRecoveryForExplicitStop(sessionId);',
+      'const goalPause = pauseGoalBeforeExplicitStop(sessionId);',
+    );
+    expectOrder(
+      directAbortSource,
+      'const goalPause = pauseGoalBeforeExplicitStop(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
+    );
+    // no-session 分支会先 await goalPause 后返回；有 live session 时真正的 abort 必须
+    // 立即启动，只在 abort/reconcile 之后读取 Goal 持久化结果。
+    expect(directAbortSource.indexOf('const settledGoalPause = await goalPauseResult;')).toBeGreaterThan(
+      directAbortSource.indexOf('await sess.abort();'),
+    );
+    expectOrder(
+      inputStopSource,
+      'resetAutomaticRecoveryForExplicitStop(sid);',
+      'const goalPause = pauseGoalBeforeExplicitStop(sid);',
+    );
+    expectOrder(
+      inputStopSource,
+      'const goalPause = pauseGoalBeforeExplicitStop(sid);',
+      'inputCoordinator.stop(',
+    );
+    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await goalPause;');
+    expect(goalPauseStart).toBeGreaterThanOrEqual(0);
+    expect(goalPauseSource).toContain('catch (err)');
+    expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
+    expect(goalPauseSource).toContain("log.error('goal pause persistence failed during explicit stop'");
+    expect(goalPauseSource).toContain(
+      "throwIpcError('INTERNAL', 'Failed to persist the stopped Goal state');",
+    );
+    expect(goalPauseSource).not.toContain('throw err;');
+    expect(goalPauseSource).not.toContain('Promise.race');
+    expect(goalPauseSource).not.toContain('setTimeout');
+    expect(directAbortSource).toContain('const goalPauseResult = goalPause.then(');
+    expectOrder(directAbortSource, 'await sess.abort();', 'const settledGoalPause = await goalPauseResult;');
+    expectOrder(directAbortSource, 'if (abortFailed)', 'if (!settledGoalPause.ok) throw settledGoalPause.error;');
+  });
+
+  it('commits a Goal state update before its post-write readback', () => {
+    const updateStart = goalStorageSource.indexOf('async update(sessionId: string');
+    const updateEnd = goalStorageSource.indexOf('\n  async clear(', updateStart);
+    const updateSource = goalStorageSource.slice(updateStart, updateEnd);
+
+    expect(updateStart).toBeGreaterThanOrEqual(0);
+    expect(updateSource).not.toContain('const existing = await this.get(sessionId);');
+    const writeIndex = updateSource.indexOf('await this.getDb().update(sessionGoals)');
+    const postWriteReadIndex = updateSource.lastIndexOf('return this.get(sessionId);');
+    expect(writeIndex).toBeGreaterThanOrEqual(0);
+    expect(postWriteReadIndex).toBeGreaterThan(writeIndex);
+  });
+
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
     const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
     const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
@@ -311,6 +496,11 @@ describe('maker:event hot path ordering', () => {
     expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
     expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
     expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
+    expectOrder(reconcileSource, 'flushAssistantBlock(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
+    expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
+    expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
+    expectOrder(reconcileSource, 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)', 'markTurnEndedAfterPersistDrain(sessionId);');
+    expectOrder(reconcileSource, 'markTurnEndedAfterPersistDrain(sessionId);', 'resetTurnPersistState(sessionId);');
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
@@ -328,6 +518,11 @@ describe('maker:event hot path ordering', () => {
     expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
     expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
     expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
+    expectOrder(
+      closedBlock,
+      'cancelDirectAbortReconciliation(session.id);',
+      'pendingFailedTurnAssistantPersistId.delete(session.id);',
+    );
     expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
   });
 
@@ -342,20 +537,24 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();');
     expect(wireSessionSource).toContain('!turnModelPromiseBySession.has(session.id)');
     expect(wireSessionSource).toContain('turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));');
-    expect(codexDoneSource).toContain('const modelPromise = turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);');
+    expect(codexDoneSource).toMatch(
+      /const modelPromise\s*=\s*turnModelPromiseBySession\.get\(session\.id\)\s*\?\?\s*readSessionModelForUsage\(session\.id\);/,
+    );
     expect(codexDoneSource).toContain('turnModelPromiseBySession.delete(session.id);');
     expect(codexDoneSource).not.toContain('hasCodexOAuthLogin()');
     expect(codexDoneSource).toContain('promptTokens + completionTokens + cachedTokens');
     expect(codexDoneSource).not.toContain('promptTokens + completionTokens + reasoningTokens + cachedTokens');
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
-    expect(codexDoneSource).toContain("&& pricingModel.startsWith('codex/');");
-    expect(codexDoneSource).toContain('&& pricingModel.startsWith(XAI_MODEL_PREFIX);');
+    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
+    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\(XAI_MODEL_PREFIX\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
     expect(codexDoneSource).toContain('!isCustomProviderRoute');
     expect(codexDoneSource).toContain('(sessionProvider === \'xd\' && hasGatewayKey)');
-    expect(codexDoneSource).toContain('const isSubscriptionValue = isRemoteCodexSession ||');
+    expect(codexDoneSource).toMatch(
+      /const isSubscriptionValue\s*=\s*isRemoteCodexSession\s*\|\|/,
+    );
     expect(codexDoneSource).toContain('isCodexXaiProviderRoute ||');
     // 用正则而非整串匹配:这段条件已按多行排版,单行字面量会因换行/缩进调整而假失败。
     // 要守的语义是——订阅计价只在「OpenAI 供应商 + oauth-bearer 注入 + 无生效网关路由」时成立。
@@ -366,35 +565,54 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('? codexSubscriptionUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain(': codexApiUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain('? getSubscriptionDirectValuePrice(pricingModel)');
-    expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
+    expect(codexDoneSource).toContain(
+      "? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)",
+    );
+    // 订阅估值按显式来源取各自 registry 日期定价:内置 anthropic(access.kind=subscription)
+    // 不再被记成 #billing=api;默认/openai 仍走 OpenAI 价表。
+    expect(codexDoneSource).toContain("sessionProviderAccessKind === 'subscription'");
+    expect(codexDoneSource).toContain('isCodexSubscriptionAccessRoute ||');
+    expect(codexDoneSource).toMatch(
+      /\? getCodexProviderSubscriptionValuePrice\(\s*subscriptionValueProviderId,\s*pricingModel,\s*pricing,\s*\)/,
+    );
     expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");
-    expect(codexDoneSource).toContain('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain('? await getModelPricing()');
-    expect(codexDoneSource).toContain("? await getModelPricingForModel('xd', pricingModel)");
+    expect(codexDoneSource).toContain(
+      "? getModelPriceQuote(pricing, sessionProvider, pricingModel, 'codex')",
+    );
+    expect(codexDoneSource).toContain('const pricing = isSubscriptionValue');
+    expect(codexDoneSource).not.toContain('isSubscriptionValue && !isCodexXaiProviderRoute');
+    expect(codexDoneSource).toContain('? getReferenceModelPricing()');
+    expect(codexDoneSource).toContain('? await getGatewayModelPricingForModel()');
     expect(codexDoneSource).toContain('price ?? undefined');
-    expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
+    expect(codexDoneSource).toContain(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue && !isCodexXaiProviderRoute/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
-    const modelCostRecordIndex = codexDoneSource.indexOf('if (!isSubscriptionValue && money)');
+    const modelCostRecordIndex = codexDoneSource.indexOf(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
-    expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute'));
+    expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue'));
     expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
     expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
     expect(codexDoneSource).toContain('money,');
-    expect(codexDoneSource).toContain('if (!isRemoteCodexSession &&');
-    expect(codexDoneSource).toContain('!isCustomProviderRoute &&');
-    expect(codexDoneSource).toContain("!model.startsWith(XAI_MODEL_PREFIX) &&");
-    expect(codexDoneSource).toContain("(codexAuthInjection === 'env-key' || model.startsWith('codex/') || (sessionProvider === 'xd' && hasGatewayKey))");
+    expect(codexDoneSource).toMatch(
+      /const hasEffectiveGatewayRoute\s*=\s*!isRemoteCodexSession\s*&&\s*!isCustomProviderRoute\s*&&/,
+    );
+    expect(codexDoneSource).toContain('const isCodexXaiProviderRoute =');
+    expect(codexDoneSource).toMatch(
+      /codexAuthInjection === 'env-key'\s*\|\|\s*isCodexBudgetRoute\s*\|\|\s*\(sessionProvider === 'xd' && hasGatewayKey\)/,
+    );
     expect(codexDoneSource).not.toContain("sessionProvider !== 'xai'");
     expect(codexDoneSource).not.toContain('isEstimate: true');
   });
@@ -411,26 +629,31 @@ describe('maker:event hot path ordering', () => {
     // 主路径:按真实 provider / billing route 取价，所有 sink 共用区域金额结果。
     expect(claudeDoneSource).toContain('const billingRoute: BillingRoute = session.remoteHostId');
     expect(claudeDoneSource).toContain("billingRoute === 'xd-gateway'");
-    expect(claudeDoneSource).toContain("await getModelPricingForModel(");
-    expect(claudeDoneSource).toContain("'xd',");
-    expect(claudeDoneSource).toContain('normalizeModelIdForPricing(deltas[0]?.model)');
-    expect(claudeDoneSource).toContain(': await getModelPricing();');
-    expect(claudeDoneSource).toContain('const { turnMoney, perModel } = resolveClaudeTurnCostSinks(');
+    expect(claudeDoneSource).toContain('await getGatewayModelPricingForModel()');
+    expect(claudeDoneSource).toContain(': getReferenceModelPricing();');
+    expect(claudeDoneSource).toContain(
+      'const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
+    );
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
-    expect(claudeDoneSource).toContain('money: m.money,');
+    expect(claudeDoneSource).toContain(
+      "money: m.money?.kind === 'actual-cost' ? m.money : null,",
+    );
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
-    expect(claudeDoneSource).toContain(
-      'model: isClaudeSubscriptionValueRow ? claudeSubscriptionUsageModelKey(m.model) : m.model,',
+    expect(claudeDoneSource).toMatch(
+      /model:\s*isClaudeSubscriptionValueRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
     );
     expect(claudeDoneSource).toContain(
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
     );
     expect(claudeDoneSource).toContain(
       "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",
+    );
+    expect(claudeDoneSource).toMatch(
+      /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
     expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");

@@ -16,6 +16,7 @@ import { McpServersSection } from './McpServersSection';
 import { RemoteControlSection } from './RemoteControlSection';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
+import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
@@ -88,21 +89,22 @@ export function SettingsView() {
     if (rawTab !== 'billing' || canAccessBilling) return;
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
+    // 计费页不可见时它的深链意图(intent=topup)也一并作废,不留在 URL 上等着
+    // 用户切到别的 tab 再被误消费。
+    next.delete('intent');
     setSearchParams(next, { replace: true });
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
 
-  // 「IM 机器人」页内分栏:?imGroup=cindy|personal 定位到某个 tab(深链可直达)。
-  // 缺省/非法 imGroup 一律落到默认分栏:旧「飞书机器人」深链落「个人」(飞书在
-  // 个人栏),其余(im-bot / slack-bot / tina)落「Cindy」。
+  // 「IM 机器人」官方/个人已纵向同页展示；?imGroup=cindy|personal 只负责把
+  // 深链滚动到对应分区。旧「飞书机器人」深链继续定位到「个人」。
   const activeImGroupRaw = activeTab === 'im-bot' ? searchParams.get('imGroup') : null;
   const activeImBotGroup: ImBotSettingsGroup | null = isImBotSettingsGroup(activeImGroupRaw)
     ? activeImGroupRaw
     : null;
-  const imBotFallbackGroup: ImBotSettingsGroup =
-    searchParams.get('tab') === 'feishu-bot' ? 'personal' : 'cindy';
-  // 渲染层直接用兜底值,imGroup 缺省时不回写 URL(少一次 replace,深链语义不变)。
-  const resolvedImBotGroup: ImBotSettingsGroup | null =
-    activeTab === 'im-bot' ? (activeImBotGroup ?? imBotFallbackGroup) : null;
+  const imBotTargetGroup: ImBotSettingsGroup | null =
+    activeTab === 'im-bot'
+      ? (activeImBotGroup ?? (searchParams.get('tab') === 'feishu-bot' ? 'personal' : null))
+      : null;
 
   // 切分区后外层滚动容器回顶:滚动偏移是容器的、不随内层 key 重挂归零,
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
@@ -119,9 +121,11 @@ export function SettingsView() {
       next.delete('ghost');
       next.delete('imGroup');
       next.delete('section');
-      // providers 页深链参数(connect/wizard):切走 tab 即作废,防再切回来被误消费。
+      // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
+      // 作废,防再切回来被误消费。
       next.delete('connect');
       next.delete('wizard');
+      next.delete('intent');
       if (tab === 'general') {
         next.delete('tab');
       } else {
@@ -130,17 +134,6 @@ export function SettingsView() {
       setSearchParams(next, { replace: true });
     },
     [activeTab, searchParams, setSearchParams],
-  );
-
-  const handleSelectImBotGroup = useCallback(
-    (group: ImBotSettingsGroup) => {
-      const next = new URLSearchParams(searchParams);
-      next.delete('openPanel');
-      next.set('tab', 'im-bot');
-      next.set('imGroup', group);
-      setSearchParams(next, { replace: true });
-    },
-    [searchParams, setSearchParams],
   );
 
   useEffect(() => {
@@ -303,6 +296,15 @@ export function SettingsView() {
                   aria-label={t('settings.sections.windowBehavior')}
                 >
                   <WindowBehaviorSection />
+                </section>
+
+                {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
+                <section
+                  id="settings-composer"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.composer')}
+                >
+                  <ComposerSendShortcutSection />
                 </section>
 
                 {/* Section — Experimental (py 18)
@@ -508,14 +510,9 @@ export function SettingsView() {
 
             {activeTab === 'im-bot' && (
               <div role="tabpanel" id="settings-panel-im-bot" aria-labelledby="settings-tab-im-bot">
-                {/* 单页 + 页内分栏 tab:imGroup 缺省时渲染默认分栏 */}
+                {/* 官方/个人纵向同页展示；imGroup 只保留深链定位语义。 */}
                 <section aria-label={t('settings.sections.imBot')}>
-                  {resolvedImBotGroup && (
-                    <ImBotSection
-                      group={resolvedImBotGroup}
-                      onGroupChange={handleSelectImBotGroup}
-                    />
-                  )}
+                  <ImBotSection targetGroup={imBotTargetGroup} />
                 </section>
               </div>
             )}

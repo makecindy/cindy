@@ -114,6 +114,10 @@ export interface LinkOpenPayload {
 /** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
 export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds-v2';
 
+/** 控制端能区分 set-model 中显式 providerId:null 与 JSON optional 占位。 */
+export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
+  'set-model-explicit-provider-null-v1';
+
 export interface LinkAcceptPayload {
   appVersion: string;
   /** 被控端 allowlist 的指纹,便于控制端探测版本差异 */
@@ -129,7 +133,22 @@ export interface LinkAcceptPayload {
   transportBaseSeq?: number;
 }
 
-export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked';
+/**
+ * link-close 的关闭原因。
+ *
+ * wire 语义分两档:
+ * - **永久关闭**(user/toggle-off/shutdown/revoked 及存量客户端眼中的一切未知
+ *   reason):接收方拆可靠层、拒在途请求,不自动重建;只特判 `'revoked'`
+ *   额外标记撤权。新增枚举值对存量客户端 fail-generic 到这一档——因此
+ *   **任何可恢复语义的新 reason 都必须经能力协商后才可发送**。
+ * - **可恢复瞬时重置**(`transport-timeout`):被控端对该 peer 的可靠重试
+ *   耗尽,单独重置这条 link(不拆 relay 连接)。**仅当控制端在 link-open 声明
+ *   了 `transport-timeout-close-v1` 能力时才会收到**(见 transport.ts);未声明
+ *   的旧控制端走整连接重连的兼容恢复路径。理解该 reason 的接收端按瞬时
+ *   重置处理:保留可靠层 stream/pending/在途请求,立即重新 link-open(或触发
+ *   rehydrate);重建后按 reconnect-continuity 语义同 seq 续传。
+ */
+export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked' | 'transport-timeout';
 
 export interface LinkClosePayload {
   reason: LinkCloseReason;
@@ -154,9 +173,16 @@ export type InvokeResultPayload =
     };
 
 /** 被控端 → 控制端:广播转发(MAKER_PUSH.* / local-db 推送) */
+export interface PushOwnerStamp {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+}
+
 export interface PushPayload {
   channel: string;
   payload: unknown;
+  /** Optional for compatibility with older controlled desktops. */
+  ownerStamp?: PushOwnerStamp;
 }
 
 // ─── REST 管理面(GET /api/device-link/devices)────────────────────────────────

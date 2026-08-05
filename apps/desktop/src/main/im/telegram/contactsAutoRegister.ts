@@ -1,7 +1,7 @@
 /**
  * main/im/telegram/contactsAutoRegister.ts
  * ---------------------------------------------------------------------------
- * 群多人对话的「记住每个人」①层(设计 v3 §2.2, D1 拍板): 群里说话的人自动
+ * Telegram 群多人对话的「记住每个人」①层(设计 v3 §2.2, D1 拍板): 群里说话的人自动
  * 登记进智能通讯录 — telegram 数字 id 为主身份, username 为副身份, 建档带
  * 来源群名。零 LLM 成本; ②层(agent 在 turn 里用 contacts 工具写深度信息)
  * 走既有 cindy_contacts MCP, 不在本文件。
@@ -52,7 +52,7 @@ export function autoRegisterTelegramSpeaker(
       kind: 'person',
       displayName,
       source: 'agent',
-      summary: `${groupNote}成员(个人 bot 自动登记)`,
+      summary: `${groupNote}成员(bot 自动登记)`,
       identities: [
         { platform: 'telegram', value: speaker.id },
         ...(speaker.username ? [{ platform: 'telegram', value: `@${speaker.username}` }] : []),
@@ -68,4 +68,9 @@ export function autoRegisterTelegramSpeaker(
       `telegram contact auto-register skipped: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/** 账号切换或官方绑定换人时清空进程内去重，不把旧 owner 状态带进新边界。 */
+export function resetTelegramSpeakerRegistrationCache(): void {
+  seenTelegramIds.clear();
 }

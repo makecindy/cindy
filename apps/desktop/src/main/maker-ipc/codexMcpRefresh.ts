@@ -8,6 +8,8 @@
 export async function refreshCodexMcpEnvironment(deps: {
   restartCodex: () => Promise<void>;
   shutdownCodexEnvironment: () => Promise<void>;
+  /** Schedule the same refresh for the next idle boundary when the host is busy. */
+  onDeferred?: () => void;
   logger?: {
     warn: (message: string, meta?: Record<string, unknown>) => void;
   };
@@ -18,6 +20,7 @@ export async function refreshCodexMcpEnvironment(deps: {
     deps.logger?.warn('Codex MCP refresh deferred because the shared host could not restart', {
       error: err instanceof Error ? err.message : String(err),
     });
+    deps.onDeferred?.();
     return { codexMcpRefreshed: false };
   }
 
@@ -27,6 +30,7 @@ export async function refreshCodexMcpEnvironment(deps: {
     deps.logger?.warn('Codex MCP refresh deferred because the old bridge could not shut down', {
       error: err instanceof Error ? err.message : String(err),
     });
+    deps.onDeferred?.();
     return { codexMcpRefreshed: false };
   }
 

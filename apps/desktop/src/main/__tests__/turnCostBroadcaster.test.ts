@@ -21,6 +21,15 @@ vi.mock('electron', () => ({
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+const ownerScopeState = vi.hoisted(() => ({
+  current: true,
+  scope: { ownerScopeKey: 'owner-a', ownerStamp: undefined },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => ownerScopeState.scope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => ownerScopeState.current),
+  tapWindowBroadcast: vi.fn(),
+}));
 vi.mock('../localDb/ipc/messages.js', () => ({
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId: string, _clientId: string, patch: Record<string, unknown>) => ({
     previous: {},
@@ -38,9 +47,10 @@ vi.mock('../messagePersistBroadcaster.js', () => ({
 
 import {
   recordTurnCostOnMessage,
-  recordSchedulerTurnCost,
   recordTurnUsageOnMessage,
+  recordSchedulerTurnCost,
   codexUsageToTokens,
+  piUsageToTokens,
   type TurnCostDeps,
   type MessageTurnCostPayload,
 } from '../turnCostBroadcaster.js';
@@ -127,9 +137,22 @@ const DETAILS = buildTurnUsageDetails({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerScopeState.current = true;
 });
 
 describe('recordTurnCostOnMessage', () => {
+  it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
+    const { deps, broadcasts } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
+    expect(broadcasts).toHaveLength(0);
+  });
+
   it('patch 成功 → 写入原始分段与本用户轮累计，并广播同值', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
@@ -182,6 +205,21 @@ describe('recordTurnCostOnMessage', () => {
       userTurnMoney: usdMoney(0.042),
       userTurnCostUsd: 0.042,
       userTurnCostIsEstimate: false,
+      turnUsageDetails: DETAILS,
+    });
+  });
+
+  it('价格未知时仍可单独持久化并广播 token/cache 明细', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true);
+    await expect(recordTurnUsageOnMessage({
+      sessionId: 's1',
+      clientId: 'm1',
+      turnUsageDetails: DETAILS,
+    }, deps)).resolves.toBe(true);
+    expect(patchCalls[0]?.patch).toEqual({ turnUsageDetails: DETAILS });
+    expect(broadcasts[0]).toEqual({
+      sessionId: 's1',
+      clientId: 'm1',
       turnUsageDetails: DETAILS,
     });
   });
@@ -488,6 +526,28 @@ describe('recordSchedulerTurnCost', () => {
     expect(recordDirect).not.toHaveBeenCalled();
   });
 
+  it('owner boundary after message ledger commit does not fall back to direct charging', async () => {
+    const { deps } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+    const recordOnMessage: typeof recordTurnCostOnMessage = (args) =>
+      recordTurnCostOnMessage(args, deps);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBeNull();
+
+    expect(recordDirect).not.toHaveBeenCalled();
+  });
+
   it('纯 tool turn 没有 assistant message 时按 runId 直接归因并刷新自动化', async () => {
     const recordOnMessage = vi.fn(async () => true);
     const recordDirect = vi.fn(async () => 'schedule-1');
@@ -581,6 +641,22 @@ describe('codexUsageToTokens', () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreateTokens: 0,
+    });
+  });
+});
+
+describe('piUsageToTokens', () => {
+  it('maps Pi camelCase usage including cache create', () => {
+    expect(piUsageToTokens({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 500,
+      cacheCreationTokens: 30,
+    })).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 500,
+      cacheCreateTokens: 30,
     });
   });
 });

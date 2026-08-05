@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   mobileAgentLabel,
+  mobileAgentLabelFromUnknown,
+  mobileAgentVendor,
   normalizeSessionAgentSwitchIntent,
   sessionAgentKind,
   supportsMobileSessionAgentSwitch,
@@ -42,8 +44,17 @@ describe('mobile session Agent switch contract', () => {
   it('maps DB Agent kinds and labels consistently', () => {
     expect(sessionAgentKind({ agentKind: 'cc' })).toBe('claude-code');
     expect(sessionAgentKind({ agentKind: 'codex' })).toBe('codex');
+    expect(sessionAgentKind({ agentKind: 'pi' })).toBe('pi');
     expect(mobileAgentLabel('claude-code')).toBe('Claude Code');
     expect(mobileAgentLabel('codex')).toBe('Codex');
+    expect(mobileAgentLabel('pi')).toBe('Pi');
+    expect(mobileAgentLabelFromUnknown('pi')).toBe('Pi');
+    expect(mobileAgentVendor('claude-code')).toBe('cc');
+    expect(mobileAgentVendor('codex')).toBe('codex');
+    expect(mobileAgentVendor('pi')).toBe('pi');
+    expect(normalizeSessionAgentSwitchIntent({
+      targetAgentKind: 'pi', model: 'gpt-5.5', providerId: 'openai',
+    })).toEqual({ targetAgentKind: 'pi', model: 'gpt-5.5', providerId: 'openai' });
   });
 
   it('requires host capability and excludes SSH / Orca sessions', () => {

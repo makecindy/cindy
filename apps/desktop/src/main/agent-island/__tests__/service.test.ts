@@ -125,6 +125,7 @@ vi.mock('../layoutPreferenceStore.js', () => ({
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
 
@@ -2214,6 +2215,63 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  it('uses the same replacement boundary when auto-resume withheld the old error', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        complete: customSound('complete.wav'),
+      },
+    });
+    const meta = { sessionId: 'auto-resume-replacement', agentKind: 'claude-code' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleUserPrompt(meta, 'continue automatically', {
+      clientId: 'auto-retry-1',
+      replacesCurrentTurn: true,
+    });
+    service.handleUserPromptDispatching(meta.sessionId);
+    playSound.mockClear();
+
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+    service.handleAgentEvent(
+      meta,
+      { type: 'done', source: 'claude-code', data: { reason: 'turn_interrupted' } },
+    );
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'running',
+    });
+
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: true, status: 'Thinking...' } },
+    );
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+
+    expect(playSound).toHaveBeenCalledTimes(1);
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+  });
+
   it('accepts replacement-turn interaction requests before its running status arrives', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -3954,6 +4012,63 @@ describe('AgentIslandService native publishing', () => {
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(1)).toMatchObject({ width: 540, contentWidth: 500 });
     expect(framesById.get(2)).toMatchObject({ width: 360, contentWidth: 320 });
+  });
+
+  it('re-publishes native frames when a wake refresh keeps the same screen signature', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const setNativeScreenMetrics = (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: {
+          screens: Array<{
+            displayId: number;
+            frame: { x: number; y: number; width: number; height: number };
+            hasNotch: boolean;
+            notchWidth: number;
+            topBarHeight: number;
+            menuBarHeight: number;
+            safeAreaTop: number;
+            isMain: boolean;
+            signature: string;
+          }>;
+          preferredDisplayId: number | null;
+          forceRefresh?: boolean;
+        }): void;
+      }
+    ).handleNativeScreenMetrics.bind(service);
+    const metrics = {
+      preferredDisplayId: mocks.primaryDisplay.id,
+      screens: [{
+        displayId: mocks.primaryDisplay.id,
+        frame: mocks.primaryDisplay.bounds,
+        hasNotch: false,
+        notchWidth: 0,
+        topBarHeight: 24,
+        menuBarHeight: 24,
+        safeAreaTop: 0,
+        isMain: true,
+        signature: 'primary',
+      }],
+    };
+
+    publish.mockClear();
+    setNativeScreenMetrics(metrics);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    setNativeScreenMetrics(metrics);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    setNativeScreenMetrics({ ...metrics, forceRefresh: true });
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 
   it('uses native notched-display metrics when computing display frames', async () => {

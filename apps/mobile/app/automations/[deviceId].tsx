@@ -58,6 +58,7 @@ import { shouldRefreshRunsForSchedule } from '@cindy/maker-shared/schedule-event
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
   applyMobileTemplateParams,
+  applyScheduleWireCompat,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -67,7 +68,10 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftCronExpr,
+  updateDraftIntervalMinutes,
   updateDraftRunMode,
+  updateDraftTimezone,
   updateDraftSessionMode,
   updateDraftWorkspaceKind,
   validateTemplateParamValues,
@@ -84,6 +88,7 @@ import type {
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
 import { shouldSuppressRemoteListEmptyState } from '@/session/sessionEmptyState';
 import type { RemoteSession } from '@/session/types';
+import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { fontWeight, lineHeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, iconStroke, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -401,19 +406,30 @@ export default function AutomationsScreen() {
         await openLink(deviceId);
         await subscribe(`automations:${deviceId}`, deviceId, ['sessions']);
       });
+      // intervalMs:null 的清空表达只有新 desktop 认识(旧引擎会当成已设间隔立即
+      // 触发),发送前按 host 能力位降级 wire 形态;探测失败按不支持处理
+      // (失败方向的取舍见 applyScheduleWireCompat 注释)。
+      const wireInput = await (async () => {
+        if (input.intervalMs !== null) return input;
+        const caps = await maker.getCapabilities(formDraft.agentKind).catch(() => null);
+        const supportsIntervalNullClear = !!(
+          caps as { supportsScheduleIntervalNullClear?: boolean } | null
+        )?.supportsScheduleIntervalNullClear;
+        return applyScheduleWireCompat(input, { supportsIntervalNullClear });
+      })();
       const saved = await (async () => {
         if (formMode === 'edit' && formScheduleId) {
-          return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, input));
+          return withTransientRemoteRetry(() => maker.schedule.update(formScheduleId, wireInput));
         }
         if (selectedTemplate && !templatePromptDirty) {
-          const { prompt: _templatePrompt, ...overrides } = input;
+          const { prompt: _templatePrompt, ...overrides } = wireInput;
           return maker.schedule.createFromTemplate({
             templateId: selectedTemplate.id,
             paramValues: templateParamValues,
             overrides,
           });
         }
-        return maker.schedule.create(input);
+        return maker.schedule.create(wireInput);
       })();
       closeScheduleForm();
       if (saved?.id) {
@@ -1207,7 +1223,7 @@ function ScheduleFormCard({
             <TextInput
               editable={!busy}
               keyboardType="number-pad"
-              onChangeText={(value) => setField('intervalMinutes', value)}
+              onChangeText={(value) => onChange(updateDraftIntervalMinutes(draft, value))}
               placeholder={t('devices.automations.form.intervalPlaceholder')}
               placeholderTextColor={colors.textTertiary}
               style={styles.input}
@@ -1220,7 +1236,7 @@ function ScheduleFormCard({
             <TextInput
               autoCapitalize="none"
               editable={!busy}
-              onChangeText={(value) => setField('cronExpr', value)}
+              onChangeText={(value) => onChange(updateDraftCronExpr(draft, value))}
               placeholder="0 9 * * *"
               placeholderTextColor={colors.textTertiary}
               style={styles.input}
@@ -1299,6 +1315,13 @@ function ScheduleFormCard({
             onPress={() => onChange(updateDraftAgentKind(draft, 'codex'))}
             testID="automations.form.agentCodex"
           />
+          <SegmentButton
+            active={draft.agentKind === 'pi'}
+            disabled={busy || hasRealBinding}
+            label="Pi"
+            onPress={() => onChange(updateDraftAgentKind(draft, 'pi'))}
+            testID="automations.form.agentPi"
+          />
         </View>
       </View>
 
@@ -1308,7 +1331,7 @@ function ScheduleFormCard({
           autoCapitalize="none"
           editable={!busy}
           onChangeText={(value) => setField('model', value)}
-          placeholder={hasRealBinding ? t('devices.automations.form.modelPlaceholderBound') : draft.agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6'}
+          placeholder={hasRealBinding ? t('devices.automations.form.modelPlaceholderBound') : draft.agentKind === 'codex' ? 'gpt-5.5' : draft.agentKind === 'pi' ? t('devices.automations.form.modelPlaceholderPiDefault') : 'claude-sonnet-4-6'}
           placeholderTextColor={colors.textTertiary}
           style={styles.input}
           testID="automations.form.modelInput"
@@ -1330,7 +1353,7 @@ function ScheduleFormCard({
         />
       </View>
 
-      {draft.agentKind === 'codex' && !hideWorkspaceFields ? (
+      {(draft.agentKind === 'codex' || draft.agentKind === 'pi') && !hideWorkspaceFields ? (
         <ToggleRow
           active={draft.fastMode}
           disabled={busy}
@@ -1347,7 +1370,7 @@ function ScheduleFormCard({
         <TextInput
           autoCapitalize="none"
           editable={!busy}
-          onChangeText={(value) => setField('timezone', value)}
+          onChangeText={(value) => onChange(updateDraftTimezone(draft, value))}
           placeholder="Asia/Shanghai"
           placeholderTextColor={colors.textTertiary}
           style={styles.input}
@@ -2146,7 +2169,7 @@ function buildBoundSessionOptions(
 }
 
 function formatSessionOptionMeta(session: RemoteSession): string {
-  const agent = session.agentKind === 'codex' ? 'Codex' : 'Claude';
+  const agent = mobileAgentLabelFromUnknown(session.agentKind);
   const workspace = session.workingDir ? lastPathSegment(session.workingDir) : 'Dialogue';
   return `${agent} · ${workspace} · ${session.id.slice(0, 8)}`;
 }

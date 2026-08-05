@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, Copy, FolderOpen } from 'lucide-react';
 import type { ContextMenuEvent, WebviewTag } from 'electron';
@@ -13,10 +13,16 @@ import { toast } from '@/lib/toast';
 
 import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
+import {
+  clearGhostUnread,
+  useElementVisible,
+  useGhostUnread,
+  useHostWindowForeground,
+} from './ghostUnreadStore';
 
 /**
- * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与右侧栏页签
- * (ghostTabPlugins)共用的渲染内核,从 ghostPanels.tsx 原样抽出:
+ * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与插件页内面板
+ * (features/plugin/GhostPagePanelHost)共用的渲染内核,从 ghostPanels.tsx 原样抽出:
  * 沙箱 webview 装载、主题注入、崩溃接管、媒体右键菜单,全部与宿主容器无关。
  * 安全边界不变:分区/地址由 main 侧 webview 附加闸验明正身(webview-security),
  * 本模块不因换容器多要任何特权。
@@ -81,7 +87,7 @@ export interface GhostPanelMediaMenuState {
  * 目录(showItemInFolder)。菜单是宿主自绘(webview 里的右键经 Electron
  * context-menu 事件转出,面板自己画不了也伪造不了),地址已过 main 闸换发,
  * 两个动作走与聊天媒体完全相同的通用 IPC。
- * (导出给 pooledGhostPanelBody 复用 —— 常驻池形态的面板体右键走同一套菜单。)
+ * (页签形态的面板体右键走同一套菜单。)
  */
 export function GhostPanelMediaMenu({
   menu,
@@ -176,6 +182,42 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * 面板体挂载 = 未读已读(badge 槽的 explicit 清零)。
+   *
+   * 清零收在这里而不是各宿主的"打开"动作里:面板体有三个宿主(插件页页签
+   * GhostPagePanelHost、布局停靠 ghostPanels、独立窗口 GhostPanelWindowLayout),
+   * 挂载到本组件才是"内容确实在用户眼前"的唯一判据,三处天然对称。
+   * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
+   * 正看着它,不该留一颗清不掉的点。
+   *
+   * 清零的必要条件是**两层可见性同时成立**,缺一层都会把用户没看见的未读吞掉:
+   *   1. `foreground` —— 宿主窗口可见且聚焦。停靠面板与独立面板窗口长期挂着,
+   *      只看挂载的话,窗口最小化 / 失焦期间到来的未读会被一律清掉,常开面板的
+   *      用户从此收不到这个插件的提醒(codex review P1)。
+   *   2. `visible` —— 本面板**自己**占着可见面积。光有第 1 层还不够:同一个前台
+   *      窗口里,另一个停靠面板被最大化时本面板仍然挂载,却被压成零宽/隐藏,
+   *      用户根本没看到内容(codex review)。
+   * 两层都满足的那一刻 effect 重跑并清零,语义正是「他看的时候才算看过」。
+   */
+  const unread = useGhostUnread(manifest.id);
+  const foreground = useHostWindowForeground();
+  const { ref: observeHost, visible } = useElementVisible();
+  // 同一个 div 既要给 webview 挂载用(命令式 hostRef),又要被可见性观察器盯住。
+  // 合成一个 callback ref:崩溃走 fallback 时它带 null 触发(观察器解绑),
+  // 用户「重载」生成新 div 时又带新节点触发(观察器重挂)——正是 ref 对象做不到的。
+  const setHostNode = useCallback(
+    (el: HTMLDivElement | null) => {
+      hostRef.current = el;
+      observeHost(el);
+    },
+    [observeHost],
+  );
+  useEffect(() => {
+    if (!unread || !foreground || !visible) return;
+    clearGhostUnread(manifest.id);
+  }, [manifest.id, unread, foreground, visible]);
 
   const panelHtml = manifest.panel?.html;
   useEffect(() => {
@@ -273,7 +315,7 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   // (globals.css 与内置浏览器 pool 同款规则)。
   return (
     <>
-      <div ref={hostRef} data-ghost-webview className="flex min-h-0 flex-1" />
+      <div ref={setHostNode} data-ghost-webview className="flex min-h-0 flex-1" />
       {mediaMenu ? (
         <GhostPanelMediaMenu menu={mediaMenu} onClose={() => setMediaMenu(null)} />
       ) : null}

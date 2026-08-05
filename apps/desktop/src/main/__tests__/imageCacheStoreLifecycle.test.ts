@@ -107,6 +107,21 @@ describe('imageCacheStore lifecycle metadata', () => {
     expect(await exists(absPath)).toBe(true);
   });
 
+  it('removeFile removes the image and its lifecycle metadata', async () => {
+    const cached = await imageCacheStore.writeBuffer({
+      sessionId: 'session-a',
+      buffer: new Uint8Array([1, 2, 3]),
+      mimeType: 'image/png',
+      lifecycle: 'committed',
+    });
+    const { absPath } = imageCacheStore.resolveSafe(cached.url);
+
+    await imageCacheStore.removeFile(cached.url);
+
+    expect(await exists(absPath)).toBe(false);
+    expect(await exists(`${absPath}.xdt-meta.json`)).toBe(false);
+  });
+
   it('markFilesCommitted turns a draft image into a sweep-safe history image', async () => {
     const cached = await imageCacheStore.writeBuffer({
       sessionId: 'session-a',

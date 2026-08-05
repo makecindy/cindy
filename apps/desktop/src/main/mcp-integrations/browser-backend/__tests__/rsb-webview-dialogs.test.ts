@@ -223,6 +223,29 @@ describe('RsbWebviewDialogs', () => {
     }
   });
 
+  it('stops a pending response without sending a debugger command after dispose', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = dialogHarness();
+      const dialogs = new RsbWebviewDialogs({ warn: vi.fn() });
+      await dialogs.observe(harness.wc);
+
+      const response = dialogs.respond(harness.wc, { accept: true, timeoutMs: 1_000 });
+      const rejected = expect(response).rejects.toThrow('page dialog monitor is disposed');
+      await Promise.resolve();
+      dialogs.dispose();
+      await vi.advanceTimersByTimeAsync(50);
+
+      await rejected;
+      expect(harness.sendCommand).not.toHaveBeenCalledWith(
+        'Page.handleJavaScriptDialog',
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('detaches only debugger sessions it owns', async () => {
     const owned = dialogHarness();
     const ownedDialogs = new RsbWebviewDialogs({ warn: vi.fn() });

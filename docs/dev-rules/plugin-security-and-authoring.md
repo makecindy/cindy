@@ -30,7 +30,7 @@
 | 身份卡字段与校验、管子协议类型 | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型） |
 | 打包限制 | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
 | 运行时、沙箱进程与生命周期 | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`） |
+| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`（未读角标，落盘账本 `ghostUnreadStore.ts`）、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`） |
 | 面板供片、注入主题 token 与协议 | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
 | 权限注入／更新确认 UI | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx` |
 | 远程／手机版能力准入白名单 | `packages/device-link/src/allowlist.ts` |
@@ -74,6 +74,14 @@
 ## 4. 网络、凭证与资源交接
 
 - network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**给沙箱。
+- `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
+  Membership 生效；只有当前组织的 Plugin Market organization 安装记录仍有效、且
+  安装目录 manifest digest 与记录一致时，Host 才会根据当前组织和插件 id 推导 audience。
+  插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
+  `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
+  不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或
+  `setup.requires` 配置动作。Connection JWT 请求遇到 401 时，仅 GET / HEAD / OPTIONS
+  可自动换令牌重试一次；非幂等请求只作废缓存，不自动重放。
 - 插件 setup 的完成状态只由 Host 读取真实持久化状态后判定。简单的
   `source: "user"` Secret 可由 Host 在聊天 Setup 卡中生成 `inline_form` 并直接写入
   保险库；插件详情页的 `settings.js` 仍可通过 `/oauth`、`/kv`、`/secrets`、
@@ -104,6 +112,25 @@
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
+  `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
+  仍沿用现有确认与授权记忆策略；仅当 Host 能现读到**本地活跃会话**的运行时权限恰为
+  `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
+  也不得回退可能滞后的 DB `permission_mode`。business `sessionId` 不足以证明仍是同一内存
+  Session，必须同时匹配由 Maker 铸造、调用方不可覆盖的 instance identity；权限切换在途、
+  close／detach 已开始、会话缺失、实例不匹配、查询失败、远程会话均 fail closed。
+  对 Codex、Pi 与远端 Claude Code 这类进程外 harness，instance 只作为 opaque MCP route
+  identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
+  严格比对，不匹配直接 401。兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
+  但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
+  自动批准须在日志标明来源为 Full Access，不得伪装为用户点击，也不得写入人工目录授权
+  记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
+  边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
+  授权。热切回其它档位后新请求必须恢复确认。此旁路**不适用于** workspace 创建、插件
+  Setup／安装／更新、OAuth、Secret／凭证或其它确认边界。
+  `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
+  并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
+  再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
+  TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
@@ -204,6 +231,17 @@
   权限原样不扩权、来源记日志），本地包要有"不必重新提供原始包、但仍逐条确认"的恢复
   路径，格式 bump 走"按旧编码核对 → 原地升级"而不是 fail closed。不得再把一次内部
   机制升级变成全体用户重新确认。
+- **manifest 枚举扩展在客户端降级方向不兼容（#1283 披露）。** `validateGhostManifest()`
+  对 `slots` / `subscribe.topics` 的未知枚举值、以及 `schemaVersion` 不等于 2，都是整份
+  判无效（`return { ok: false }`）；而 `GhostManager.list()` 每次调用都重新校验已装目录，
+  无效即 `continue` 跳过。所以用户把客户端**降级**到某个枚举值引入之前的版本后，声明了该值
+  的插件会从已装列表**整个消失**（不是能力降级）——界面上看不到、无从修复，已存凭证与偏好
+  变成孤儿。这不是某次扩展的疏漏：校验器只在**字段**级向前兼容（「宽进严出：忽略未知字段」），
+  不在**取值**级向前兼容，历史上每次新增卡槽都有同样特征。已发布的旧版无法追改，唯一可行
+  方向是让**新版**把未知枚举值降级为「忽略 + warn」而非整份拒绝，使此后的扩展天然降级安全
+  （救不了「从引入版降到引入前」那一段，任何方案都救不了）。改动方向本身要过第 5 节红线
+  评估：放宽校验等于让主机接受读不全的权限声明，不能顺手做。**触及 `validateGhostManifest()`
+  的枚举白名单、或 `GhostManager.list()` 的跳过逻辑时必须一并考虑。**
 - `networkSlot.ts` 的 `as: 'media'` 不能只信任 Content-Type（GLB 常见
   `application/octet-stream`），需要安全的 magic-byte／扩展名嗅探。
 - SSH 远程场景必须让 `LiziMcpSessionContext` 携带 remote 标识；目录过户不得回退读取本机

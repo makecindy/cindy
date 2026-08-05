@@ -52,12 +52,14 @@ const D_GHOST_CALL = [
   "顶层 dir(不是塞进 args):主机会收集文件并以",
   "一次性票据注入 args.dir_deposit,插件凭票上传——这是插件触碰用户目录的唯一通道。",
   "过户钳制(attachments / dir / save_dir 通用):路径在当前会话工作目录内直接放行;",
-  "工作目录外会向用户弹确认卡,用户点允许才继续——被拒绝/超时会返回对应错误,",
-  "此时不要重试,转告用户即可。已允许过的不重复弹卡:同一文件(按内容指纹)对",
-  "同一插件永久生效,同一目录在本会话内生效。",
-  "批量预授权:计划连续多次调用同一插件、每次用一个工作目录外文件时(如逐张图生成视频),",
-  "**必须**先发一次 grant_only:true + attachments 列出整批文件(≤32 张,tool 随便填会被忽略)",
-  "——用户只需在一张卡上批一次;跳过预授权会让用户被迫一张张点允许。",
+  "工作目录外若是本地 Full Access(bypassPermissions)会话则自动过户、不弹卡;其它权限档及",
+  "远程会话仍向用户弹确认卡,被拒绝/超时后不要重试,转告用户即可。Full Access 自动交接",
+  "不写人工永久授权,热切回其它权限档后会恢复确认;用户已明确允许的同一文件(按内容指纹)",
+  "对同一插件永久生效,同一目录在本会话内生效。",
+  "批量预授权:非 Full Access 下计划连续多次调用同一插件、每次用一个工作目录外文件时",
+  "(如逐张图生成视频),**必须**先发一次 grant_only:true + attachments 列出整批文件",
+  "(≤32 张,tool 随便填会被忽略)——用户只需在一张卡上批一次。Full Access 下普通调用本就",
+  "自动过户;grant_only 只做提前交接,不会建立降档后仍生效的人工授权。",
   "结构化错误:GHOST_NOT_FOUND(未安装或已卸载)/ GHOST_ASLEEP(未启用,可提示用户到主界面侧边栏「插件」中启用)/",
   "GHOST_DISABLED_IN_WORKDIR(用户在当前工作目录停用了该插件——不要重试,改用其它方式完成)/",
   "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
@@ -71,8 +73,8 @@ const D_GHOST_FORGE_GUIDE = [
   "管子 API(cindy.send)、面板与主题、沙箱红线、打包与测试流程。整本超出单次工具",
   '结果上限,分章取用:不传参数返回目录,传 section(章号如 "4.7" 或章标题关键词如',
   '"network")返回单章正文。用户说"帮我做一个 XX 插件 / 改一下某插件"时,先取目录、',
-  "先按第 0 章「设计对齐」用带选项的提问卡片和用户确认界面形态(停靠面板/右侧栏页签/",
-  "纯工具)等关键决策,再按需读相关章;新插件可用 ghost_forge_scaffold 生成骨架,",
+  "先按第 0 章「设计对齐」用带选项的提问卡片和用户确认界面形态(停靠面板/插件页内",
+  "面板/纯工具)等关键决策,再按需读相关章;新插件可用 ghost_forge_scaffold 生成骨架,",
   "修改完成后再用 ghost_forge_pack 打包装入。",
 ].join("\n");
 
@@ -87,7 +89,9 @@ const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy,随后主机会弹出装入确认框(同 id 已装则显示",
   '"更新 vX → vY")——装不装永远由用户在弹窗上决定,本工具不会私自装入。',
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
-  "隐藏文件 / *.cindy)。失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
+  "隐藏文件 / *.cindy)。仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
+  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
+  "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
   "按 message 修正源码后重新打包即可。打包成功 ≠ 已装入:告知用户去点确认框。",
 ].join("\n");
 
@@ -109,8 +113,9 @@ const SETUP_PLAN_MAX_TITLE_LENGTH = 120;
 const SETUP_PLAN_MAX_DESCRIPTION_LENGTH = 500;
 
 /**
- * ghost_call 顶层 setup_plan schema。snake_case 仅存在于 Agent/MCP 边界；
- * handleGhostCall 会转成 camelCase 后单独交给 Host，绝不混入插件 args。
+ * ghost_call 顶层 setup_plan schema。required 配置卡与 ready 态 reauthSuggest
+ * 重连卡共用该形状；snake_case 仅存在于 Agent/MCP 边界，handleGhostCall
+ * 会转成 camelCase 后单独交给 Host，绝不混入插件 args。
  * 导出仅供边界单测，未从 package root 暴露。
  */
 export const ghostSetupPlanInputSchema = z
@@ -212,6 +217,9 @@ const SETUP_REQUIREMENT_KINDS = new Set([
   "client_config",
 ]);
 const SETUP_REQUIREMENT_STATES = new Set(["missing", "expired", "satisfied"]);
+// 对主机声明上限 GHOST_OAUTH_SCOPES_MAX(desktop shared/ghost.ts,当前 48;包依赖
+// 方向不允许引用)只留防御余量;该值涨过 64 时必须同步,否则整份 assessment 判废。
+const SETUP_REAUTH_SCOPE_MAX = 64;
 
 function sanitizeSetupAction(
   raw: unknown,
@@ -348,10 +356,68 @@ export function sanitizeGhostSetupAssessment(
     }
     groups.push({ id: group.id, mode: "any_of", items });
   }
+  let reauthSuggest: CindyGhostSetupAssessment["reauthSuggest"];
+  if (value.reauthSuggest !== undefined) {
+    // 在场即严:非法 reauthSuggest 判废整份 assessment,与缺省合法互补。
+    reauthSuggest = sanitizeSetupReauthSuggest(value.reauthSuggest) ?? undefined;
+    if (!reauthSuggest) return null;
+  }
   return {
     state: value.state as CindyGhostSetupAssessment["state"],
     revision: value.revision as number,
     groups,
+    ...(reauthSuggest ? { reauthSuggest } : {}),
+  };
+}
+
+/**
+ * reauthSuggest 的独立 sanitize(与 sanitizeSetupAction 等"一形状一函数"
+ * 同款)。action 部分复用 sanitizeSetupAction —— 由它统一收 id 非空 + 256
+ * 上界与 kind 白名单,再钉死本形状只认 oauth_connect。
+ */
+function sanitizeSetupReauthSuggest(
+  raw: unknown,
+): NonNullable<CindyGhostSetupAssessment["reauthSuggest"]> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const suggest = raw as Record<string, unknown>;
+  const requirement = suggest.requirement;
+  if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return null;
+  const req = requirement as Record<string, unknown>;
+  const action = sanitizeSetupAction(req.action);
+  if (!action || action.kind !== "oauth_connect") return null;
+  if (
+    typeof suggest.ghostId !== "string" ||
+    suggest.ghostId.length === 0 ||
+    suggest.ghostId.length > 128 ||
+    typeof suggest.secretKey !== "string" ||
+    suggest.secretKey.length === 0 ||
+    suggest.secretKey.length > 128 ||
+    !Array.isArray(suggest.missingScopes) ||
+    suggest.missingScopes.length === 0 ||
+    suggest.missingScopes.length > SETUP_REAUTH_SCOPE_MAX ||
+    !suggest.missingScopes.every(
+      (scope) => typeof scope === "string" && scope.length > 0 && scope.length <= 256,
+    ) ||
+    suggest.missingScopeCount !== suggest.missingScopes.length ||
+    typeof req.ref !== "string" ||
+    req.ref.length === 0 ||
+    req.kind !== "oauth" ||
+    typeof req.label !== "string" ||
+    req.label.length === 0
+  ) {
+    return null;
+  }
+  return {
+    ghostId: suggest.ghostId,
+    secretKey: suggest.secretKey,
+    missingScopes: [...suggest.missingScopes] as string[],
+    missingScopeCount: suggest.missingScopes.length,
+    requirement: {
+      ref: req.ref,
+      kind: "oauth",
+      label: req.label,
+      action: { id: action.id, kind: "oauth_connect" },
+    },
   };
 }
 
@@ -566,7 +632,9 @@ export async function handleGhostCall(
     // IM/hook 出站消费它,保证"意识画卡后删字段"也不影响媒体送达 IM 用户。
     // 声明了媒体字段(含 xdt_audio_tracks)时以声明为准,账本不注入
     // (声明是意图表达,能覆盖 render:false 抑制等语义)。
-    const { producedMedia, ...resultForModel } = result;
+    const { producedMedia, setup: unsafeSetup, ...resultForModel } = result;
+    const setup = sanitizeGhostSetupAssessment(unsafeSetup);
+    const advisory = setup?.state === "ready" && setup.reauthSuggest ? { setup } : {};
     const declaredMedia = [
       "xdt_image_urls",
       "xdt_video_urls",
@@ -607,6 +675,7 @@ export async function handleGhostCall(
           : {};
     return textResult({
       ...resultForModel,
+      ...advisory,
       ...hoisted,
       ...producedFallback,
       ...mediaHint,
@@ -697,10 +766,13 @@ export async function handleForgeScaffold(
 /** ghost_forge_pack 的 handler 主体(导出供单测)。 */
 export async function handleForgePack(
   deps: CindyGhostsMcpDeps,
-  input: { dir: string },
+  input: { dir: string; icon_source?: string },
 ): Promise<McpTextResult> {
   try {
-    const result = await deps.forgePack({ dir: input.dir });
+    const result = await deps.forgePack({
+      dir: input.dir,
+      ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
+    });
     if (!result.ok) {
       deps.logger?.warn("ghost_forge_pack rejected", {
         dir: input.dir,
@@ -732,17 +804,21 @@ export function createCindyGhostsMcpServer(
     version: "1.0.0",
   });
 
-  // 花名册快照:装配时取一次,拼进两件工具的描述(语义召回的数据源;
+  // 花名册快照:装配时取一次,只拼进 ghost_list 的描述(语义召回的数据源;
   // 会话内恒定,缓存安全)。无花名册 dep / 空清单 = 描述保持基线。
+  //
+  // 只拼一处:两件工具的描述都进 system prompt 固定前缀,同一份花名册拼两遍
+  // 等于让整份已装插件清单在上下文里出现两次(12 个插件实测约 1.5k 字符/份)。
+  // ghost_call 的调用前提是已知 ghost_id + tool,那必然来自 ghost_list 的描述
+  // 或返回值(D_GHOST_CALL 首行已写明这点),再挂一份花名册对路由没有增量作用。
   const roster = formatGhostRoster(deps.getRosterItems?.() ?? []);
   const dGhostList = roster ? `${D_GHOST_LIST}\n\n${roster}` : D_GHOST_LIST;
-  const dGhostCall = roster ? `${D_GHOST_CALL}\n\n${roster}` : D_GHOST_CALL;
 
   server.tool("ghost_list", dGhostList, {}, async () => handleGhostList(deps));
 
   server.tool(
     "ghost_call",
-    dGhostCall,
+    D_GHOST_CALL,
     {
       ghost_id: z.string().describe("目标插件 id(来自 ghost_list)"),
       tool: z.string().describe("工具名(来自 ghost_list 该插件的 tools)"),
@@ -754,31 +830,31 @@ export function createCindyGhostsMcpServer(
         .boolean()
         .optional()
         .describe(
-          "可选:true = 本次调用只做 attachments 批量预授权、不执行工具(tool/args/dir/save_dir 全部被忽略)。计划连续多次调用同一插件使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 张;用户在一张确认卡上批完,后续调用不再弹卡。",
+          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 张,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
         ),
       attachments: z
         .array(z.string())
         .max(32)
         .optional()
         .describe(
-          "可选,普通调用 ≤4 张(grant_only 预授权 ≤32 张):要交给插件的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行,工作目录外主机会弹确认卡由用户决定。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。仅在用户明确要拿自己的文件给插件处理时使用;非媒体类型文件改用顶层 dir。",
+          "可选,普通调用 ≤4 张(grant_only 批量交接 ≤32 张):要交给插件的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。仅在用户明确要拿自己的文件给插件处理时使用;非媒体类型文件改用顶层 dir。",
         ),
       dir: z
         .string()
         .optional()
         .describe(
-          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。位于当前会话工作目录内直接放行,工作目录外主机会弹确认卡由用户决定;主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
+          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。位于当前会话工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
         ),
       save_dir: z
         .string()
         .optional()
         .describe(
-          "可选:让插件把下载的文件存进的本地目录绝对路径(如附件下载目标目录)。必须是已存在的目录;位于当前会话工作目录内直接放行,工作目录外主机会弹确认卡由用户决定。主机发限时票据注入 args.save_deposit = { token, dir_name },插件凭票让主机把下载字节直接写进该目录(文件名主机消毒、不覆盖已有文件),插件摸不到绝对路径与字节。仅当目标工具的说明要求提供落盘目录时使用。",
+          "可选:让插件把下载的文件存进的本地目录绝对路径(如附件下载目标目录)。必须是已存在的目录;位于当前会话工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。主机发限时票据注入 args.save_deposit = { token, dir_name },插件凭票让主机把下载字节直接写进该目录(文件名主机消毒、不覆盖已有文件),插件摸不到绝对路径与字节。仅当目标工具的说明要求提供落盘目录时使用。",
         ),
       setup_plan: ghostSetupPlanInputSchema
         .optional()
         .describe(
-          "可选:当 ghost_list 对目标插件返回 setup.state=required 时,基于该 assessment 编排 Ask 风格配置卡。assessment_revision 必须原样带回;requirement_refs 与 action_id 只能选 Host 给出的引用和动作。每个未满足 any_of 组里的所有可执行选项都必须保留为独立 step,让用户看到完整选择;Host 会拒绝隐藏任一合法配置路径的 plan。文案保持克制:单字段配置只写一句必要说明,不要在 intro、step title、description 中重复插件名、字段 label 或 Host hint。Host 会校验并执行动作,配置完成后继续本次 ghost_call;本字段不会进入插件 args。不要提供插件名、icon、URL、凭证值或完成状态。用户取消会返回 SETUP_CANCELLED;无交互面返回 SETUP_REQUIRED + 脱敏 setup,都不要自动重试。",
+          "可选:当 ghost_list 对目标插件返回 setup.state=required 时,基于该 assessment 编排 Ask 风格配置卡。assessment_revision 必须原样带回;requirement_refs 与 action_id 只能选 Host 给出的引用和动作。每个未满足 any_of 组里的所有可执行选项都必须保留为独立 step,让用户看到完整选择;Host 会拒绝隐藏任一合法配置路径的 plan。成功结果若带 setup.reauthSuggest,插件仍可用,但当前授权未含插件新增权限;通常只在插件返回权限或 scope 错误后,下一次 ghost_call 可携带只引用该 requirement 的单步 setup_plan 弹出重新连接卡,未报错时不要主动打断用户。文案保持克制:单字段配置只写一句必要说明,不要在 intro、step title、description 中重复插件名、字段 label 或 Host hint。Host 会校验并执行动作,配置完成后继续本次 ghost_call;本字段不会进入插件 args。不要提供插件名、icon、URL、凭证值或完成状态。用户取消会返回 SETUP_CANCELLED;无交互面返回 SETUP_REQUIRED + 脱敏 setup,都不要自动重试。",
         ),
     },
     async (input, extra) =>
@@ -824,6 +900,12 @@ export function createCindyGhostsMcpServer(
     D_GHOST_FORGE_PACK,
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
+      icon_source: z
+        .string()
+        .optional()
+        .describe(
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
+        ),
     },
     async (input) => handleForgePack(deps, input),
   );

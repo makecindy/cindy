@@ -3,17 +3,21 @@
  *
  *   - release：优先从 Model Access 公共匿名接口拉取完整 Catalog；失败时回退旧 OSS 目录。
  *   - dev：直接读仓库本地文件（`localPath`），改了即时生效、默认不联网。
- *   - 兜底优先级：本地(dev) → 公共 API → 旧 OSS → 内置 bundled。
+ *   - 兜底优先级：本地(dev) → 公共 API → 上次有效快照(LKG) → 旧 OSS → 内置 bundled。
  *
- * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）；
- * 本模块刻意**不做磁盘缓存**——公共 API 与迁移期 OSS 都是远端目录源，bundled 是最终兜底，
- * 无需再引入会让「重启即拉最新」失效的磁盘新鲜窗口。
+ * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）。
+ * host 可注入按源隔离的 LKG 读写：启动仍先请求最新远端，只有远端失败才读缓存，所以不会
+ * 引入“新鲜窗口”；坏 JSON / 坏 schema 永不覆盖最后一份有效快照。
  *
  * 本模块不碰文件系统 / 网络 / userData——这些能力由 host 通过 `CatalogIO` 注入，
  * 保证包可独立单测，也保证跨平台路径 / CORS 等细节留在 host。
  */
 
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
+import {
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
+} from './modelRegistry.js';
 import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
@@ -46,11 +50,18 @@ export interface CatalogIO {
   fetchText?: (url: string, timeoutMs: number) => Promise<string>;
   /** 读本地文件（dev / localPath）；不存在返回 null。 */
   readFile?: (path: string) => Promise<string | null>;
+  /** 读取某远端 scope 的上次有效完整快照；不存在返回 null。 */
+  readCache?: (scope: string) => Promise<string | null>;
+  /**
+   * 原子保存某远端 scope 的完整有效快照。实现可在串行区内保留磁盘上的更新快照，
+   * 并返回最终胜出的文本，使调用方内存态与 LKG 使用同一版本。
+   */
+  writeCache?: (scope: string, text: string) => Promise<string | void>;
   /** 诊断日志（可选）。 */
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
-export type CatalogLoadSource = 'local' | 'remote' | 'bundled';
+export type CatalogLoadSource = 'local' | 'remote' | 'cache' | 'bundled';
 
 export interface CatalogLoadResult {
   catalog: Catalog;
@@ -77,6 +88,43 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
 export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | null {
   if (!cfg.fallbackBaseUrl?.trim()) return null;
   return trimTrailingSlashes(cfg.fallbackBaseUrl.trim()) + CATALOG_CFG_PATH;
+}
+
+/**
+ * The migration-only OSS snapshot used to carry cindyModelMeta beside the provider
+ * catalog. Strip that one retired block only at the legacy source boundary; canonical
+ * API, local dev files, and parseCatalog itself remain strict about unknown fields.
+ */
+function parseRemoteCatalog(input: string, allowLegacyModelMeta: boolean): Catalog {
+  if (!allowLegacyModelMeta) return parseCatalog(input);
+  const raw: unknown = JSON.parse(input);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return parseCatalog(raw);
+  // Keep every unknown field so parseCatalog can reject it; only the retired legacy block is
+  // exempt. A null-prototype destination makes special JSON keys such as `__proto__` ordinary
+  // own properties instead of invoking an inherited setter during the compatibility copy.
+  const migrated = Object.create(null) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key !== 'cindyModelMeta') migrated[key] = value;
+  }
+  return parseCatalog(migrated);
+}
+
+/** Strip credentials and request-only URL parts before diagnostics leave this package. */
+function catalogUrlForLog(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '[redacted invalid catalog URL]';
+  }
+}
+
+function remoteErrorForLog(error: unknown, remoteUrl: string, logUrl: string): string {
+  return String(error).split(remoteUrl).join(logUrl);
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
@@ -202,18 +250,78 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);
   }
-  // cindyModelMeta 仍按整段缺省兜底透传(消费点见 types.ts:服务端 + 客户端展示元数据基线)。
-  const cindyModelMeta = primary.cindyModelMeta ?? BUNDLED_CATALOG.cindyModelMeta;
+  // modelRegistry 是带 updatedAt 的完整快照，不做逐字段拼接。远端比 bundled 旧时
+  // 保留新版客户端随包快照，避免复现 presets 曾出现的“旧远端遮掉新本地能力”；
+  // 远端较新时整份生效，继续支持 status=retired、route 删除和价格纠错。
+  const selectedRegistry = selectNewerModelRegistry(primary, BUNDLED_CATALOG);
+  // xAI is the only provider whose model list is a static part of this Catalog snapshot. When
+  // bundled wins the registry revision guard, keep its xAI provider with that same snapshot
+  // instead of combining a new registry with an older remote/LKG list.
+  const providers = selectedRegistry.fromFallback && primary.modelRegistry !== undefined
+    ? merged.map((provider) =>
+        provider.id === 'xai' ? (bundledById.get('xai') ?? provider) : provider,
+      )
+    : merged;
   return {
     version: primary.version,
-    providers: merged,
+    providers,
     ...(presets && presets.length > 0 ? { presets } : {}),
-    ...(cindyModelMeta !== undefined ? { cindyModelMeta } : {}),
+    ...(selectedRegistry.modelRegistry ? { modelRegistry: selectedRegistry.modelRegistry } : {}),
   };
 }
 
 function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>): void {
   io.log?.(level, `[model-providers] ${msg}`, meta);
+}
+
+function registryUpdatedAt(catalog: Catalog): number | null {
+  const value = catalog.modelRegistry?.updatedAt;
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function selectNewerModelRegistry(
+  primary: Catalog,
+  fallback: Catalog,
+): { modelRegistry: Catalog['modelRegistry']; fromFallback: boolean } {
+  if (primary.modelRegistry && fallback.modelRegistry) {
+    const relation = compareModelRegistryRevisions(primary.modelRegistry, fallback.modelRegistry);
+    if (relation === 'older' || relation === 'conflict' || relation === 'invalid-incoming') {
+      // 同 revision 异内容是非法重发；fallback 是已经随客户端发布/缓存验证过的
+      // LKG，启动期也必须保它，不能只在在线 refresh 路径防守。
+      return { modelRegistry: fallback.modelRegistry, fromFallback: true };
+    }
+    return { modelRegistry: primary.modelRegistry, fromFallback: false };
+  }
+  if (primary.modelRegistry) {
+    return { modelRegistry: primary.modelRegistry, fromFallback: false };
+  }
+  return { modelRegistry: fallback.modelRegistry, fromFallback: fallback.modelRegistry !== undefined };
+}
+
+/**
+ * modelRegistry is the only monotonic revision carried by the Catalog today. If it proves the
+ * LKG is newer, preserve that complete snapshot: combining its registry with older remote xAI
+ * providers/presets would create a catalog version that never existed and can reintroduce retired
+ * models. A future top-level Catalog revision may allow finer-grained arbitration.
+ *
+ * Equal `updatedAt` with different canonical registry content is an illegal republish
+ * (corrections must forward-fix with a higher updatedAt): keep the LKG snapshot so a
+ * quietly mutated remote revision can never win a tie. Callers log the conflict.
+ */
+function preserveNewerCachedCatalog(
+  remote: Catalog,
+  cached: Catalog,
+): { catalog: Catalog; tieConflict: boolean } {
+  const decision = decideModelRegistrySnapshot(remote.modelRegistry, cached.modelRegistry);
+  if (decision === 'preserve-current-conflict') {
+    return { catalog: cached, tieConflict: true };
+  }
+  if (decision === 'preserve-current') {
+    return { catalog: cached, tieConflict: false };
+  }
+  return { catalog: remote, tieConflict: false };
 }
 
 /**
@@ -223,7 +331,7 @@ function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?
  *
  * 顺序：
  *  1. dev：cfg.localPath + io.readFile → 读本地、合并 bundled、直接返回（不联网）。
- *  2. 远端依次尝试公共 API、迁移期旧 OSS（除非 disableFetch / 无 URL / 无 fetchText）。
+ *  2. 远端依次尝试公共 API、迁移期旧 OSS；每个远端失败后先尝试它自己的 LKG。
  *  3. 任意上述来源均不可用 → 内置 bundled。
  */
 export async function loadCatalogWithSource(
@@ -248,29 +356,107 @@ export async function loadCatalogWithSource(
   const url = resolveCatalogUrl(cfg);
   const fallbackUrl = resolveFallbackCatalogUrl(cfg);
   if (!cfg.disableFetch && io.fetchText) {
-    const remoteUrls = cfg.url?.trim()
-      ? [url].filter((value): value is string => !!value)
-      : [url, fallbackUrl].filter((value): value is string => !!value);
+    const remoteSources = cfg.url?.trim()
+      ? url
+        ? [{ url, allowLegacyModelMeta: false }]
+        : []
+      : [
+          ...(url ? [{ url, allowLegacyModelMeta: false }] : []),
+          ...(fallbackUrl ? [{ url: fallbackUrl, allowLegacyModelMeta: true }] : []),
+        ];
     const now = cfg.now ?? Date.now;
     const configuredBudget = cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
     const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
     const deadline = now() + budgetMs;
-    for (const remoteUrl of remoteUrls) {
+    for (const { url: remoteUrl, allowLegacyModelMeta } of remoteSources) {
+      const logUrl = catalogUrlForLog(remoteUrl);
       const remainingMs = Math.max(0, deadline - now());
-      if (remainingMs === 0) {
-        log(io, 'warn', 'remote catalog fallback budget exhausted');
-        break;
-      }
-      try {
-        const text = await io.fetchText(remoteUrl, remainingMs);
-        const parsed = parseCatalog(text);
-        log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
-        return { catalog: mergeWithBundled(parsed), source: 'remote' };
-      } catch (err) {
-        log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
-          url: remoteUrl,
-          err: String(err),
+      if (remainingMs > 0) {
+        try {
+          const text = await io.fetchText(remoteUrl, remainingMs);
+          let parsed = parseRemoteCatalog(text, allowLegacyModelMeta);
+          // Never propagate the retired compatibility block into a newly written LKG.
+          let cacheText = allowLegacyModelMeta ? JSON.stringify(parsed) : text;
+          const remoteRegistryUpdatedAt = registryUpdatedAt(parsed);
+          if (io.readCache) {
+            try {
+              const cachedText = await io.readCache(remoteUrl);
+              if (cachedText !== null) {
+                const cached = parseRemoteCatalog(cachedText, allowLegacyModelMeta);
+                const selected = preserveNewerCachedCatalog(parsed, cached);
+                if (selected.catalog !== parsed) {
+                  parsed = selected.catalog;
+                  cacheText = JSON.stringify(selected.catalog);
+                  log(
+                    io,
+                    'warn',
+                    selected.tieConflict
+                      ? 'remote registry republished the same updatedAt with different content; keeping LKG'
+                      : 'remote catalog registry is older than LKG; preserving complete newer snapshot',
+                    {
+                      url: logUrl,
+                      remoteUpdatedAt: remoteRegistryUpdatedAt,
+                      cachedUpdatedAt: registryUpdatedAt(cached),
+                    },
+                  );
+                }
+              }
+            } catch (err) {
+              log(io, 'warn', 'cached catalog could not be compared with remote snapshot', {
+                url: logUrl,
+                err: remoteErrorForLog(err, remoteUrl, logUrl),
+              });
+            }
+          }
+          if (io.writeCache) {
+            try {
+              const committedText = await io.writeCache(remoteUrl, cacheText);
+              if (typeof committedText === 'string') {
+                const committed = parseRemoteCatalog(committedText, allowLegacyModelMeta);
+                const selected = preserveNewerCachedCatalog(parsed, committed).catalog;
+                if (selected !== parsed) {
+                  parsed = selected;
+                  log(io, 'warn', 'serialized LKG commit preserved a newer catalog snapshot', {
+                    url: logUrl,
+                    remoteUpdatedAt: remoteRegistryUpdatedAt,
+                    committedUpdatedAt: registryUpdatedAt(committed),
+                  });
+                }
+              }
+            } catch (err) {
+              log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
+                url: logUrl,
+                err: remoteErrorForLog(err, remoteUrl, logUrl),
+              });
+            }
+          }
+          log(io, 'info', 'loaded catalog from remote', { url: logUrl });
+          return { catalog: mergeWithBundled(parsed), source: 'remote' };
+        } catch (err) {
+          log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
+            url: logUrl,
+            err: remoteErrorForLog(err, remoteUrl, logUrl),
+          });
+        }
+      } else {
+        log(io, 'warn', 'remote catalog fallback budget exhausted, trying cache', {
+          url: logUrl,
         });
+      }
+      if (io.readCache) {
+        try {
+          const cached = await io.readCache(remoteUrl);
+          if (cached !== null) {
+            const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
+            log(io, 'info', 'loaded last-known-good catalog snapshot', { url: logUrl });
+            return { catalog: mergeWithBundled(parsed), source: 'cache' };
+          }
+        } catch (err) {
+          log(io, 'warn', 'cached catalog read/parse failed, trying fallback', {
+            url: logUrl,
+            err: remoteErrorForLog(err, remoteUrl, logUrl),
+          });
+        }
       }
     }
   }

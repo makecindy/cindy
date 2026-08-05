@@ -63,6 +63,9 @@ function makeHost() {
       isAvailable: () => true,
     },
     ipc: {
+      throwIpcError: (code, message) => {
+        throw new Error(`[${code}] ${message}`);
+      },
       handle: (channel, handler) => void handlers.set(channel, handler),
       broadcast: (channel, payload) =>
         void broadcasts.push({ channel, payload }),

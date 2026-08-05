@@ -39,9 +39,10 @@ export interface CollabEntryPolicyScope {
   policyDeviceId?: string;
   /**
    * true = 跳过项目级查询,只落用户级/全局级。
-   * SSH 远端会话的 workingDir 是远端机器上的路径,拿它在**执行查询的那台机器**的 fs 上
-   * 找项目配置既无意义又会误判(命中同路径的本地目录会误开,查不到又会误拒);远端项目级
-   * collab 配置机制尚未存在(main 侧 assertCollabProjectEnabled 的 remote 分支同口径)。
+   * 尚未分配运行目录的 dialogue 草稿自然只读用户级开关;已有 workingDir 的本地 dialogue
+   * 则把 kind 与目录交给 Main 的可信判据(托管 dialogue 强制只读全局,显式真实目录尊重项目覆盖)。
+   * SSH 远端会话的 workingDir 属于远端机器,拿它在**执行查询的那台机器**的 fs 上找项目
+   * 配置既无意义又会误判。远端项目级 collab 配置机制尚未存在(main 侧 remote 分支同口径)。
    */
   skipProjectQuery: boolean;
 }
@@ -60,7 +61,8 @@ function nonEmpty(value: string | null | undefined): string | null {
  * | 本地项目                          | ✅       | 本机项目级                      |
  * | SSH 远端项目(remoteHostId)        | ✅       | skipProjectQuery(仅用户/全局级) |
  * | device-link 项目(deviceLinkDeviceId) | ✅    | 隧道到该被控设备查项目级        |
- * | dialogue(无项目目录)              | ❌       | —                               |
+ * | dialogue 草稿(尚无运行目录)       | ✅       | skipProjectQuery(仅用户/全局级) |
+ * | 本地 dialogue(已有运行目录)       | ✅       | 查询目录;Main 区分托管/显式目录 |
  * | Orca Worker 子会话                | ❌       | —                               |
  *
  * 两个远端维度**可以同时成立**(在被控设备上打开的 SSH 远端项目):此时既要隧道到被控端,
@@ -68,13 +70,20 @@ function nonEmpty(value: string | null | undefined): string | null {
  */
 export function resolveCollabEntryPolicy(target: CollabEntryTarget): CollabEntryPolicyScope {
   if (target.orcaRole === 'worker') return NOT_ELIGIBLE;
-  if (target.workspaceKind !== 'project') return NOT_ELIGIBLE;
-  if (nonEmpty(target.workingDir) === null) return NOT_ELIGIBLE;
+  if (target.workspaceKind !== 'project' && target.workspaceKind !== 'dialogue') {
+    return NOT_ELIGIBLE;
+  }
+  const workingDir = nonEmpty(target.workingDir);
+  if (target.workspaceKind === 'project' && workingDir === null) {
+    return NOT_ELIGIBLE;
+  }
 
   const deviceId = nonEmpty(target.deviceLinkDeviceId);
   return {
     eligible: true,
     ...(deviceId ? { policyDeviceId: deviceId } : {}),
-    skipProjectQuery: nonEmpty(target.remoteHostId) !== null,
+    skipProjectQuery:
+      nonEmpty(target.remoteHostId) !== null ||
+      (target.workspaceKind === 'dialogue' && workingDir === null),
   };
 }

@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   invalidationAtRequestStart,
   persistCachedMessages,
@@ -39,10 +40,17 @@ type FullMaker = typeof window.electronAPI.maker;
 export interface RoutableMaker {
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
+  // session-agent-switch:跨引擎切换是**会话级**操作,数据真相(pending 意图注册表 +
+  // 引擎交接)都在会话所在端。远程会话必须隧道到被控端,否则打到控制端本机 maker 上
+  // 会因本机无此 session 直接失败。只读入口供重连 / 重开视图后恢复 main 权威意图。
+  switchSessionAgent: FullMaker['switchSessionAgent'];
+  getSessionAgentSwitchIntent: FullMaker['getSessionAgentSwitchIntent'];
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
   setPlanMode: FullMaker['setPlanMode'];
+  getSessionTree: FullMaker['getSessionTree'];
+  navigateSessionTree: FullMaker['navigateSessionTree'];
   resolveInteraction: FullMaker['resolveInteraction'];
   getPendingInteractions: FullMaker['getPendingInteractions'];
   deleteMessage: FullMaker['deleteMessage'];
@@ -82,20 +90,61 @@ function invokeRemote(deviceId: string, channel: string, args: unknown[]): Promi
   return window.electronAPI.deviceLink.invoke(deviceId, channel, args);
 }
 
-/** 远程被控设备的 maker 操作适配器:每个方法把入参原样隧道到对应 channel。 */
+type SetModelArgs = Parameters<FullMaker['setModel']>;
+
+/**
+ * maker:set-model 的 wire 参数不能直接原样转发：Device Link 通过 JSON 传数组，
+ * undefined 会变成 null。保留中间参数的 null 占位，但裁掉尾部多余的 undefined，
+ * 使被控端能区分 providerId / revision / selection 的位置而不收到假的尾参。
+ */
+function buildRemoteSetModelArgs(args: SetModelArgs): unknown[] {
+  const [sessionId, model, providerId, expectedAgentSwitchRevision, selection] = args;
+  if (
+    providerId === undefined &&
+    (expectedAgentSwitchRevision !== undefined || selection !== undefined)
+  ) {
+    throw new Error(
+      '[INVALID_PARAMS] providerId is required when expectedAgentSwitchRevision or selection is provided',
+    );
+  }
+  const wireArgs: unknown[] = [sessionId, model];
+  if (
+    providerId !== undefined ||
+    expectedAgentSwitchRevision !== undefined ||
+    selection !== undefined
+  ) {
+    wireArgs.push(providerId === undefined ? null : providerId);
+  }
+  if (expectedAgentSwitchRevision !== undefined || selection !== undefined) {
+    wireArgs.push(
+      expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision,
+    );
+  }
+  if (selection !== undefined) wireArgs.push(selection);
+  return wireArgs;
+}
+
+/** 远程被控设备的 maker 操作适配器:每个方法把入参隧道到对应 channel。 */
 function remoteMakerApi(deviceId: string): RoutableMaker {
-  // 入参顺序与 window.electronAPI.maker.* / maker:* handler 完全一致,原样转发即可。
+  // 除 setModel 外，入参顺序与 window.electronAPI.maker.* / maker:* handler 完全一致。
   const t =
     (channel: string) =>
     (...args: unknown[]): Promise<unknown> =>
       invokeRemote(deviceId, channel, args);
   return {
     send: t('maker:send') as FullMaker['send'],
-    setModel: t('maker:set-model') as FullMaker['setModel'],
+    setModel: (async (...args: SetModelArgs) =>
+      invokeRemote(deviceId, 'maker:set-model', buildRemoteSetModelArgs(args))) as FullMaker['setModel'],
+    switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
+    getSessionAgentSwitchIntent: t(
+      'maker:get-session-agent-switch-intent',
+    ) as FullMaker['getSessionAgentSwitchIntent'],
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
+    getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
+    navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
     resolveInteraction: t('maker:resolve-interaction') as FullMaker['resolveInteraction'],
     getPendingInteractions: t(
       'maker:get-pending-interactions',
@@ -197,7 +246,12 @@ export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: s
 
 /** 读会话元数据:远程走隧道 local-db:sessions:get(本地 DB 没有该 row,直接调会 404)。 */
 export function getSessionFor(sessionId: string): Promise<Session> {
-  const deviceId = getSessionDeviceId(sessionId);
+  // Session metadata is part of the same remote send attempt as the later
+  // enqueue. Keep using the last known device while the mirror is being
+  // rebuilt; reading the controller's local DB in that window returns either
+  // an unrelated row or a misleading 404 and can make a UI trigger fall back
+  // to the wrong maker instance.
+  const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
 }
@@ -358,9 +412,16 @@ export function pluginEnableStateFor(
   deviceId: string | null | undefined,
   pluginId: string,
   workingDir?: string,
+  workspaceKind?: string | null,
 ): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
-  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
-  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+  if (!deviceId) {
+    return workspaceKind === undefined
+      ? window.electronAPI.maker.plugins.getState(pluginId, workingDir)
+      : window.electronAPI.maker.plugins.getState(pluginId, workingDir, workspaceKind);
+  }
+  const args =
+    workspaceKind === undefined ? [pluginId, workingDir] : [pluginId, workingDir, workspaceKind];
+  return invokeRemote(deviceId, 'maker:plugins:get-state', args) as ReturnType<
     typeof window.electronAPI.maker.plugins.getState
   >;
 }
@@ -439,6 +500,24 @@ export function aroundMessagesByClientIdFor(
   ]) as Promise<Message[]>;
 }
 
+/**
+ * 已知稳定 deviceId 时直接查询 clientId 锚点。远程乐观发送用它核实一个
+ * ACK 丢失的 steer 是否已经落库；这里不能重新读取易失的 session origin，
+ * 否则恰好在重连清镜像的窗口会误查控制端本机 DB。
+ */
+export function aroundMessagesByClientIdForDevice(
+  deviceId: string,
+  sessionId: string,
+  clientId: string,
+  opts?: { radius?: number },
+): Promise<Message[]> {
+  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
+    sessionId,
+    clientId,
+    opts,
+  ]) as Promise<Message[]>;
+}
+
 // ─── /goal:device-link 远程路由 ────────────────────────────────────────────────
 // goal-host 在「会话归属设备」上跑(目标随会话在被控端自主续跑,控制端断链不中断)。
 // GoalIndicator / NewGoalDialog / useGoalStatus 经这里按会话来源路由;状态推送
@@ -509,8 +588,9 @@ export function subscribeGoalStatusChanged(
       });
     }
     return (
-      window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+      window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
         if (push.deviceId !== deviceId || push.channel !== 'maker:goal:status-changed') return;
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         const payload = push.payload as { sessionId?: string; goal?: GoalStatusPayload | null };
         if (payload?.sessionId !== sessionId) return;
         cb(payload as { sessionId: string; goal: GoalStatusPayload | null });
@@ -633,7 +713,9 @@ export function orcaWorkflowsForDevice(deviceId: string): RoutableOrcaWorkflows 
  * 返回 unsubscribe。
  */
 export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void): () => void {
-  const deviceId = getSessionDeviceId(leadSessionId);
+  // 订阅与 Orca 投影查询一样使用粘滞归属。relay 瞬时重连会清空
+  // remoteProjectsStore；此时不能把仍属于被控端的 Lead 改订到控制端本机事件源。
+  const deviceId = getStickySessionDeviceId(leadSessionId);
   if (!deviceId) {
     return (
       window.electronAPI.localDb.orcaWorkflows.onOrcaWorkerChanged?.((payload: unknown) => {
@@ -642,11 +724,13 @@ export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void
     );
   }
   return (
-    window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+    window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
       if (
+        push.deviceId === deviceId &&
         push.channel === 'maker:orca:worker-changed' &&
         (push.payload as { leadSessionId?: string })?.leadSessionId === leadSessionId
       ) {
+        if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         cb();
       }
     }) ?? (() => {})

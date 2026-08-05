@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Text } from '@/components/AppText';
+import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   AlertCircle,
   ArrowUp,
@@ -193,6 +194,7 @@ export function PendingSendBubble({
   const selected = interactive && actions.selectedClientId === item.clientId;
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
+  const rendersSentInlineBody = item.sentInlineTokens.some((token) => token.kind !== 'text');
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
@@ -231,7 +233,16 @@ export function PendingSendBubble({
           ]}
           testID={`pendingSend.bubble.${item.clientId}`}
         >
-          {item.text ? (
+          {rendersSentInlineBody ? (
+            <SentInlineAtomBody
+              interactiveAtoms={false}
+              maxVisibleLines={selected ? undefined : 6}
+              numberOfLines={selected ? undefined : 6}
+              testID="pendingSend.sentInlineAtoms"
+              textStyle={styles.bubbleText}
+              tokens={item.sentInlineTokens}
+            />
+          ) : item.text ? (
             <Text numberOfLines={selected ? undefined : 6} style={styles.bubbleText}>
               {item.text}
             </Text>

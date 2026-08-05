@@ -12,7 +12,8 @@
  */
 
 import {
-  isAgentSelectableModel,
+  getModel,
+  isModelSelectableForNewRoute,
   isModelVisible,
   providerOffersModel,
   providersForAgent,
@@ -26,6 +27,26 @@ import {
 // 同型，picker 现有代码（effortDisplayNames 按 string 索引等）零改动即可消费。
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
+
+/**
+ * 按目标 `(provider, agent, model)` 读取 effort 能力。
+ *
+ * 不能复用 `deriveModelsFromProviders`：后者是 picker 的跨来源 union，按目录顺序
+ * first-wins；同一模型 id 在内置来源与 BYOM 上的显式 effort 子集可以不同。运行时切换
+ * 若读拍平条目，会把另一来源支持的档位写给目标 provider。
+ */
+export function resolveProviderModelEfforts(params: {
+  providers: ProviderView[];
+  providerId: string;
+  modelId: string;
+  agentKind: AgentKind;
+}): Pick<ModelDescriptor, 'efforts' | 'defaultEffort'> | null {
+  const { providers, providerId, modelId, agentKind } = params;
+  const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
+  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  if (!model) return null;
+  return { efforts: model.efforts, defaultEffort: model.defaultEffort };
+}
 
 /** CatalogModel → renderer ModelDescriptor（name→displayName；group/sortOrder 不在 renderer 型里——
  *  picker 的分组走 categorize(id 前缀)，与既有内置模型一致）。 */
@@ -152,15 +173,12 @@ export function deriveModelsFromProviders(
     if (opts?.excludeProvider?.(provider)) continue;
     if (opts?.admissionFiltered && provider.suspended) continue;
     for (const m of provider.models[agent] ?? []) {
+      // chat / disabled / retired 准入与 main 侧 catalog-to-descriptors.ts 的
+      // deriveAvailableModels 同源，但只在 admissionFiltered 时生效：current-model
+      // 元数据查询必须继续保留运行中已选条目。
       if (
         opts?.admissionFiltered &&
-        (m.disabled === true ||
-          // 非聊天模型同样不进 picker(issue #882 第 3 点):isAgentSelectableModel 现在
-          // 内部就是 isChatEligible(+ userProvider 例外),与 main 侧
-          // catalog-to-descriptors.ts deriveAvailableModels 用的同一份权威判定
-          // 保持一致——但只在 admissionFiltered 时生效,不能无条件开(见上方函数
-          // 文档:current-model 元数据查询不能被这个轴过滤掉)。
-          !isAgentSelectableModel(m, { userProvider: provider.source === 'user' }))
+        !isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })
       ) {
         continue;
       }
@@ -193,6 +211,7 @@ export function selectVisibleModels(params: {
   providers: ProviderView[];
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
+  devicePiModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
@@ -209,7 +228,16 @@ export function selectVisibleModels(params: {
    */
   excludeChatBridgedCodex?: boolean;
 }): ModelDescriptor[] {
-  const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect, excludeChatBridgedCodex } = params;
+  const {
+    agentKind,
+    deviceId,
+    providers,
+    deviceCcModels,
+    deviceCodexModels,
+    devicePiModels = [],
+    excludeSubscriptionDirect,
+    excludeChatBridgedCodex,
+  } = params;
   // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
   // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
   const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
@@ -218,14 +246,18 @@ export function selectVisibleModels(params: {
     : undefined;
   const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
   const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
+  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
+  if (agentKind === 'pi') return pi;
   const merged = [...cc];
   const seen = new Set(merged.map((m) => m.id));
-  for (const m of codex) {
-    if (seen.has(m.id)) continue;
-    seen.add(m.id);
-    merged.push(m);
+  for (const list of [codex, pi]) {
+    for (const m of list) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      merged.push(m);
+    }
   }
   return merged;
 }
@@ -240,17 +272,22 @@ export function resolveVisibleModelAgentKind(params: {
   agentKind: AgentKind | null;
   ccModels: ModelDescriptor[];
   codexModels: ModelDescriptor[];
+  piModels?: ModelDescriptor[];
   providers: ProviderView[];
 }): AgentKind | null {
-  const { modelId, agentKind, ccModels, codexModels, providers } = params;
+  const { modelId, agentKind, ccModels, codexModels, piModels = [], providers } = params;
   if (agentKind) return agentKind;
   if (ccModels.some((model) => model.id === modelId)) return 'claude-code';
   if (codexModels.some((model) => model.id === modelId)) return 'codex';
+  if (piModels.some((model) => model.id === modelId)) return 'pi';
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'claude-code'))) {
     return 'claude-code';
   }
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'codex'))) {
     return 'codex';
+  }
+  if (providers.some((provider) => providerOffersModel(provider, modelId, 'pi'))) {
+    return 'pi';
   }
   return null;
 }

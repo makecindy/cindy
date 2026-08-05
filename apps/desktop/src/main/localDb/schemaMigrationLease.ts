@@ -22,6 +22,76 @@ export type AcquireSchemaMigrationLeaseResult =
 export type EnsureSchemaMigrationReaderLeaseResult =
   { acquired: true; newlyAcquired: boolean } | { acquired: false; reason: 'writer-active' };
 
+export type SchemaStartupLeaseResult =
+  | {
+      acquired: true;
+      kind: 'reader' | 'writer';
+      lease: SchemaMigrationLease;
+      newlyAcquired: boolean;
+    }
+  | {
+      acquired: false;
+      reason: 'writer-active' | 'readers-active';
+      activeReaderCount?: number;
+    };
+
+export interface AcquireSchemaStartupLeaseOptions {
+  dbFilePath: string;
+  packaged: boolean;
+  sharedPassive: boolean;
+  readerLifecycle?: SchemaMigrationReaderLeaseLifecycle;
+}
+
+/**
+ * Select the startup lease without deciding how the caller presents failures.
+ * Packaged instances may join existing readers, but only as a reader; this keeps
+ * the actual fallback branch small and directly testable without Electron.
+ */
+export function acquireSchemaStartupLease(
+  options: AcquireSchemaStartupLeaseOptions,
+): SchemaStartupLeaseResult {
+  const readerLifecycle = options.readerLifecycle ?? new SchemaMigrationReaderLeaseLifecycle();
+  if (options.sharedPassive) {
+    const result = readerLifecycle.ensure(options.dbFilePath);
+    return result.acquired
+      ? {
+          acquired: true,
+          kind: 'reader',
+          lease: readerLifecycleLease(readerLifecycle, result),
+          newlyAcquired: result.newlyAcquired,
+        }
+      : result;
+  }
+
+  const writer = acquireSchemaMigrationWriterLease(options.dbFilePath);
+  if (writer.acquired) {
+    return { acquired: true, kind: 'writer', lease: writer.lease, newlyAcquired: true };
+  }
+  if (!options.packaged || writer.reason !== 'readers-active') return writer;
+
+  const packagedReader = readerLifecycle.ensure(options.dbFilePath);
+  return packagedReader.acquired
+    ? {
+        acquired: true,
+        kind: 'reader',
+        lease: readerLifecycleLease(readerLifecycle, packagedReader),
+        newlyAcquired: packagedReader.newlyAcquired,
+      }
+    : packagedReader;
+}
+
+function readerLifecycleLease(
+  lifecycle: SchemaMigrationReaderLeaseLifecycle,
+  result: EnsureSchemaMigrationReaderLeaseResult,
+): SchemaMigrationLease {
+  return {
+    kind: 'reader',
+    release: () => {
+      if ('newlyAcquired' in result && result.newlyAcquired) lifecycle.release();
+    },
+  };
+}
+
 interface LeaseOwner {
   pid: number;
   token: string;

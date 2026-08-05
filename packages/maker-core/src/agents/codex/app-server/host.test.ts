@@ -74,6 +74,10 @@ class NotificationTransport implements Transport {
   private readonly closeHandlers = new Set<CloseHandler>();
   readonly lines: string[] = [];
 
+  constructor(
+    private readonly resultForMethod?: (method: string) => unknown,
+  ) {}
+
   async writeLine(line: string): Promise<void> {
     this.lines.push(line);
     const msg = JSON.parse(line) as { id?: unknown; method?: string };
@@ -84,7 +88,7 @@ class NotificationTransport implements Transport {
           codexHome: '/tmp/codex-home',
           platformOs: 'linux',
         }
-      : {};
+      : this.resultForMethod?.(msg.method ?? '') ?? {};
     this.emit({ id: msg.id, result });
   }
 
@@ -111,6 +115,70 @@ class NotificationTransport implements Transport {
     for (const handler of this.lineHandlers) handler(line);
   }
 }
+
+describe('AppServerHost MCP readiness', () => {
+  it('retries a negative tool probe instead of permanently caching it', async () => {
+    let available = false;
+    const transport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{
+              name: 'node_repl',
+              tools: available ? { js: {} } : {},
+              authStatus: 'notApplicable',
+            }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexBrowserUseStartupTimeoutMs: 10,
+    });
+
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
+    available = true;
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+
+    await host.shutdown();
+  });
+
+  it('re-probes MCP readiness after the app-server respawns', async () => {
+    const firstTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: { js: {} }, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const secondTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: {}, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const transports = [firstTransport, secondTransport];
+    const createTransport = vi.fn(() => transports.shift() ?? secondTransport);
+    const host = new AppServerHost({
+      createTransport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexBrowserUseStartupTimeoutMs: 10,
+    });
+
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+    await host.shutdown();
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
+
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+});
 
 const logger: Logger = {
   trace: vi.fn(),
@@ -163,24 +231,36 @@ describe('AppServerHost.request startup timeout', () => {
   });
 
   it('treats timeoutMs as an overall deadline across startup + request (copilot R9)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     // timeoutMs 不是「startup 一次 + request 再一次」的双重施加: startup 用掉
     // 的预算要从 request 里扣, 最坏等待仍是 1× timeoutMs — 否则 60s 关键 RPC
     // 在冷启动路径上最坏拖到 ~120s, UI 长时间卡 generating。
-    // DelayedTransport(40): startup ~40ms, 预算 50ms → request 只剩 ~10ms。
-    // 1× 语义 ~50ms 超时; 2× 语义要 ~90ms (40 + 50) 才超时。
+    // fake clock 下 DelayedTransport(40): startup 精确用掉 40ms,
+    // 50ms overall deadline 只剩 10ms 给 request; 若误变成 2× 语义则要到 90ms。
     const host = new AppServerHost({
       createTransport: () => new DelayedTransport(40),
       logger,
       clientInfo: { name: 'cindy-test', version: '0.0.0' },
     });
 
-    const startedAt = Date.now();
-    await expect(host.request('turn/start', {}, { timeoutMs: 50 })).rejects.toThrow(
-      /timed out after \d+ms|consumed the entire/,
-    );
-    expect(Date.now() - startedAt).toBeLessThan(70);
+    try {
+      const request = host.request('turn/start', {}, { timeoutMs: 50 });
+      const settled = vi.fn();
+      void request.then(settled, settled);
+      const rejection = expect(request).rejects.toThrow(
+        'codex app-server turn/start timed out after 10ms',
+      );
 
-    await host.shutdown();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(settled).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.shutdown();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -466,6 +546,394 @@ describe('AppServerHost descendant thread routing', () => {
       expect.objectContaining({ threadId: 'child-thread' }),
       { requestId: 'server-tool' },
     );
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('briefly waits for descendant lineage before declining an MCP elicitation', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const mcpServerElicitation = vi.fn(async () => ({
+      action: 'accept' as const,
+      content: { value: 'ok' },
+      _meta: null,
+    }));
+    const subscription = host.subscribeThread('root-thread', { mcpServerElicitation });
+    const initialLineCount = transport.lines.length;
+
+    // The request is dispatched asynchronously. Emit the lineage notification
+    // immediately afterwards to reproduce the observed cross-message race.
+    transport.emit({
+      id: 'early-elicitation',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'turn-1',
+        serverName: 'node_repl',
+        mode: 'form',
+        _meta: null,
+        message: 'Confirm',
+        requestedSchema: {},
+      },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    await vi.waitFor(() => {
+      expect(transport.lines.length).toBe(initialLineCount + 1);
+    });
+    expect(JSON.parse(transport.lines.at(-1)!)).toEqual({
+      id: 'early-elicitation',
+      result: { action: 'accept', content: { value: 'ok' }, _meta: null },
+    });
+    expect(mcpServerElicitation).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread', serverName: 'node_repl' }),
+    );
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('declines an MCP elicitation whose lineage stays unknown for the bounded window', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 20,
+    });
+    await host.ensureStarted();
+
+    const mcpServerElicitation = vi.fn();
+    const subscription = host.subscribeThread('root-thread', { mcpServerElicitation });
+    const initialLineCount = transport.lines.length;
+    transport.emit({
+      id: 'unknown-elicitation',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'unknown-thread',
+        turnId: 'turn-1',
+        serverName: 'node_repl',
+        mode: 'form',
+        _meta: null,
+        message: 'Confirm',
+        requestedSchema: {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(transport.lines.length).toBe(initialLineCount + 1);
+    });
+    expect(JSON.parse(transport.lines.at(-1)!)).toEqual({
+      id: 'unknown-elicitation',
+      result: { action: 'decline', content: null, _meta: null },
+    });
+    expect(mcpServerElicitation).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+});
+
+describe('AppServerHost descendant notification routing', () => {
+  it('routes descendant item/tokenUsage/turn notifications to the root descendant channel only', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const itemStarted = vi.fn();
+    const tokenUsageUpdated = vi.fn();
+    const turnCompleted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      itemStarted,
+      tokenUsageUpdated,
+      turnCompleted,
+    });
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+
+    const childItem = {
+      method: 'item/started',
+      params: { threadId: 'child-thread', turnId: 'turn-c1', item: { id: 'i-1', type: 'commandExecution' } },
+    };
+    const childUsage = {
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'child-thread', turnId: 'turn-c1', tokenUsage: { total: { totalTokens: 42 } } },
+    };
+    const grandchildTurn = {
+      method: 'turn/completed',
+      params: { threadId: 'grandchild-thread', turn: { id: 'turn-g1', status: 'completed' } },
+    };
+    transport.emit(childItem);
+    transport.emit(childUsage);
+    transport.emit(grandchildTurn);
+
+    expect(descendantNotification.mock.calls).toEqual([
+      ['child-thread', 'item/started', childItem.params],
+      ['child-thread', 'thread/tokenUsage/updated', childUsage.params],
+      ['grandchild-thread', 'turn/completed', grandchildTurn.params],
+    ]);
+    // 关键隔离:子线程事件绝不能进主线程 handler —— 否则子代理的 exec 会被渲染成
+    // 主会话自己的工具调用,并污染主 turn 的 usage 与状态机。
+    expect(itemStarted).not.toHaveBeenCalled();
+    expect(tokenUsageUpdated).not.toHaveBeenCalled();
+    expect(turnCompleted).not.toHaveBeenCalled();
+
+    // 主线程自己的同名事件照旧走主通道。
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'root-thread', turnId: 'turn-r1', item: { id: 'i-2', type: 'commandExecution' } },
+    });
+    expect(itemStarted).toHaveBeenCalledTimes(1);
+    expect(descendantNotification).toHaveBeenCalledTimes(3);
+
+    await subscription.release();
+    transport.emit(childItem);
+    expect(descendantNotification).toHaveBeenCalledTimes(3);
+    // thread/started 只走专用的 descendantThreadStarted,不重复出现在本通道。
+    expect(descendantNotification.mock.calls.some(([, method]) => method === 'thread/started')).toBe(false);
+
+    await host.shutdown();
+  });
+
+  it('keeps buffering notifications for threads with no known lineage', async () => {
+    // 未知线程仍走 TTL 缓冲(解 subscribe 竞争);只有血缘已知的子线程才就地收口。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'late-thread', turnId: 'turn-1', item: { id: 'i-1', type: 'commandExecution' } },
+    });
+
+    const itemStarted = vi.fn();
+    const descendantNotification = vi.fn();
+    const subscription = host.subscribeThread('late-thread', { itemStarted, descendantNotification });
+    expect(itemStarted).toHaveBeenCalledTimes(1);
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+});
+describe('AppServerHost buffered descendant notification replay', () => {
+  it('replays a child thread\'s pre-subscribe item/usage/turn notifications in arrival order', async () => {
+    // thread/started 与该 child 的 item / usage / turn 全部早于 root 的 subscribeThread 到达时,
+    // 它们分别缓存在 **child id** 下。root 侧的 drain 只排空 root id 的队列,这些永远排不到 →
+    // 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在 running(codex review)。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    // 订阅之前:child 与 grandchild 的血缘 + 各自的业务通知全部先到。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+    const childItem = {
+      method: 'item/started',
+      params: { threadId: 'child-thread', turnId: 't1', item: { id: 'i-1', type: 'commandExecution' } },
+    };
+    const childUsage = {
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'child-thread', turnId: 't1', tokenUsage: { total: { totalTokens: 99 } } },
+    };
+    const childTurnEnd = {
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 't1', status: 'completed' } },
+    };
+    transport.emit(childItem);
+    transport.emit(childUsage);
+    transport.emit(childTurnEnd);
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+    });
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const itemStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+      itemStarted,
+    });
+
+    // 血缘照旧重建(child + grandchild)。
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
+    // 关键:child 的三条业务通知按到达顺序补投,grandchild 的也补投。
+    expect(descendantNotification.mock.calls).toEqual([
+      ['child-thread', 'item/started', childItem.params],
+      ['child-thread', 'thread/tokenUsage/updated', childUsage.params],
+      ['child-thread', 'turn/completed', childTurnEnd.params],
+      [
+        'grandchild-thread',
+        'item/started',
+        { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+      ],
+    ]);
+    // thread/started 不进本通道(有专用 handler),也不得重复投递业务通知到主线程通道。
+    expect(descendantNotification.mock.calls.some(([, method]) => method === 'thread/started')).toBe(false);
+    expect(itemStarted).not.toHaveBeenCalled();
+
+    // 补投过一次后不再重复:同一批不会因后续血缘重建被投第二遍。
+    descendantNotification.mockClear();
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'great-grandchild', parentThreadId: 'grandchild-thread' } },
+    });
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('rescans buffered lineage when a live thread/started unlocks an already-buffered grandchild', async () => {
+    // 与上一例的区别:root **已经订阅**,而孙线程的 thread/started 先于父线程到达。此时孙的
+    // 血缘无从判断 → 连同它的业务通知一起缓存在孙自己的 id 下。父线程随后建立血缘时,原实现
+    // 只排空父线程那一条队列(而且按契约跳过 thread/started),不再扫待解析的后代血缘 →
+    // 孙线程的 tool / token / 终态通知一直烂在缓冲区,卡片漏计并可能持续显示运行中(review)。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const itemStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+      itemStarted,
+    });
+
+    // 逆序:孙先到(父线程此刻还没有血缘),连它的业务通知一起被缓冲。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    const grandchildItem = {
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+    };
+    const grandchildTurnEnd = {
+      method: 'turn/completed',
+      params: { threadId: 'grandchild-thread', turn: { id: 't2', status: 'completed' } },
+    };
+    transport.emit(grandchildItem);
+    transport.emit(grandchildTurnEnd);
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    // 父线程血缘到达:必须顺带把孙线程解锁并补投它的缓冲通知。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
+    expect(descendantNotification.mock.calls).toEqual([
+      ['grandchild-thread', 'item/started', grandchildItem.params],
+      ['grandchild-thread', 'turn/completed', grandchildTurnEnd.params],
+    ]);
+    // 后代通知不得漏进主线程通道(否则子代理的工具会被渲染成主会话自己的调用)。
+    expect(itemStarted).not.toHaveBeenCalled();
+
+    // 孙线程血缘已建立:它之后的通知直接走 descendant 通道,不再进缓冲。
+    descendantNotification.mockClear();
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't3', item: { id: 'i-3', type: 'webSearch' } },
+    });
+    expect(descendantNotification).toHaveBeenCalledTimes(1);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('resolves a deep buffered lineage chain from a single live thread/started', async () => {
+    // 三代逆序:曾孙 → 孙 全部先到,最后才到子线程对 root 的血缘。一次重建要沿链解开。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+    });
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'great-grandchild', parentThreadId: 'grandchild-thread' } },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'great-grandchild', turnId: 't9', item: { id: 'i-9', type: 'commandExecution' } },
+    });
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    // child + grandchild + great-grandchild 三代血缘全部建立,曾孙的工具通知补投到位。
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(3);
+    expect(descendantNotification.mock.calls).toEqual([
+      [
+        'great-grandchild',
+        'item/started',
+        { threadId: 'great-grandchild', turnId: 't9', item: { id: 'i-9', type: 'commandExecution' } },
+      ],
+    ]);
 
     await subscription.release();
     await host.shutdown();

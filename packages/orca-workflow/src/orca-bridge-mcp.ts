@@ -4,6 +4,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { isTerminalAgentErrorEvent, toSessionDispatchOutcome } from '@cindy/maker-core';
 import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 
 const MAX_CAPTURED_TEXT = 64 * 1024;
 
@@ -358,10 +362,10 @@ function captureSessionOutput(
     if (typeof result === 'string' && result.length > 0) {
       entry.finalText = result;
     }
-    entry.status = 'done';
+    if (isProductTurnDoneEvent(ev)) entry.status = 'done';
     return;
   }
-  if (isTerminalAgentErrorEvent(ev)) {
+  if (isTerminalAgentErrorEvent(ev) && !isTurnContinuationBoundaryEvent(ev)) {
     entry.status = 'error';
   }
 }
@@ -418,7 +422,9 @@ function attachSessionCapture(entry: CapturedSessionEntry): void {
   entry.captureDispose = entry.session.onEvent((ev) => {
     entry.eventSeq += 1;
     const eventSeq = entry.eventSeq;
-    const isTerminalEvent = ev.type === 'done' || isTerminalAgentErrorEvent(ev);
+    const isTerminalEvent =
+      isProductTurnDoneEvent(ev) ||
+      (isTerminalAgentErrorEvent(ev) && !isTurnContinuationBoundaryEvent(ev));
     captureSessionOutput(entry, ev);
     if (isTerminalEvent) {
       entry.terminalEventSeq = eventSeq;
@@ -459,7 +465,9 @@ async function ensureSessionFromMeta(
     agentKind: meta.agentKind,
     workingDir: meta.workingDir,
     model: meta.model,
-    providerId: meta.providerId ?? undefined,
+    // null 表示「清除显式来源，走 Cindy 默认路由」；不能塌缩成 undefined，后者会让
+    // Pi core 反查同名 BYOM provider。
+    providerId: meta.providerId,
     effort: meta.effort,
     permissionMode: meta.permissionMode,
     fastMode: meta.fastMode,
@@ -618,9 +626,19 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
   const leadCaptures = new CapturedSessionRegistry();
   return {
     name: 'orca_worker_bridge',
-    isEnabled: (ctx) => ctx.vendorOptions?.orcaRole === 'worker' || ctx.agentKind === 'codex',
+    // Global HTTP bridges (Codex and Pi) bind the real session only at request time.
+    // Keep the server registered when a dynamic context resolver exists; every tool
+    // call still fails closed in resolveWorkerLink against that runtime identity.
+    isEnabled: (ctx) =>
+      ctx.vendorOptions?.orcaRole === 'worker'
+      || ctx.agentKind === 'codex'
+      || typeof ctx.getSessionContext === 'function',
     toClaudeSdkConfig: (ctx) => {
-      if (ctx.vendorOptions?.orcaRole !== 'worker' && ctx.agentKind !== 'codex') return null;
+      if (
+        ctx.vendorOptions?.orcaRole !== 'worker'
+        && ctx.agentKind !== 'codex'
+        && typeof ctx.getSessionContext !== 'function'
+      ) return null;
       const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
 
       async function resolveLead(workerId?: string) {

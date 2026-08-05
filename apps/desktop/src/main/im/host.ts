@@ -45,6 +45,7 @@ import {
 } from './telegram/behaviorStore';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -144,6 +145,7 @@ const host: IMHost = {
   },
   secrets: ownerScopedImSecrets,
   ipc: {
+    throwIpcError,
     handle(channel, handler) {
       // IM 凭证/配置通道(set-config/get-status/disconnect 等)全部是敏感面:
       // 统一在适配器入口验可信 app renderer, 包侧 handler 拿不到 event 也

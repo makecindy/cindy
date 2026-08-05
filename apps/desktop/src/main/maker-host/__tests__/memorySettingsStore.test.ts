@@ -28,7 +28,7 @@ describe('memory-settings-store', () => {
     const { preserveLegacyMakerMemoryDisabled, readMemorySettings, readMemorySettingsState } =
       await import('../memory-settings-store.js');
 
-    expect(readMemorySettings()).toEqual({ maker: true, claudeCode: true, codex: true });
+    expect(readMemorySettings()).toEqual({ maker: true, claudeCode: true, codex: true, pi: true });
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState().customizedKeys).toEqual([]);
   });
@@ -40,7 +40,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(false).maker).toBe(false);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: false, claudeCode: true, codex: true },
+      value: { maker: false, claudeCode: true, codex: true, pi: true },
       customizedKeys: ['maker'],
     });
   });
@@ -68,7 +68,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: false, codex: false },
+      value: { maker: true, claudeCode: false, codex: false, pi: true },
       customizedKeys: ['claudeCode', 'codex'],
     });
   });
@@ -85,7 +85,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(null).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: false, codex: true },
+      value: { maker: true, claudeCode: false, codex: true, pi: true },
       customizedKeys: ['claudeCode'],
     });
   });
@@ -111,7 +111,7 @@ describe('memory-settings-store', () => {
 
     expect(preserveLegacyMakerMemoryDisabled(true).maker).toBe(true);
     expect(readMemorySettingsState()).toMatchObject({
-      value: { maker: true, claudeCode: true, codex: true },
+      value: { maker: true, claudeCode: true, codex: true, pi: true },
       customizedKeys: ['maker'],
     });
     expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'memory-settings.json'), 'utf8'))).toEqual({
@@ -130,5 +130,13 @@ describe('memory-settings-store', () => {
     expect(restored.isCustomized).toBe(false);
     expect(restored.customizedKeys).toEqual([]);
     expect(fs.existsSync(path.join(userDataDir, 'memory-settings.json'))).toBe(false);
+  });
+
+  it('persists the Pi auto-memory override independently', async () => {
+    const { readMemorySettings, writeMemorySetting } = await import('../memory-settings-store.js');
+    expect(writeMemorySetting('pi', false).value.pi).toBe(false);
+    expect(readMemorySettings().pi).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(userDataDir, 'memory-settings.json'), 'utf8')))
+      .toEqual({ pi: false });
   });
 });

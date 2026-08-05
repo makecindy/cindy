@@ -6,7 +6,38 @@ import { messages, sessions } from '../../schema';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
+  sqlite: null as Database.Database | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  cleanupStagedChatAttachments: vi.fn(async (_filePaths: readonly string[]) => undefined),
+  query: vi.fn(async (query: string): Promise<Array<{ content: string }>> => {
+    if (!h.sqlite) throw new Error('test sqlite not initialized');
+    return h.sqlite.prepare(query).all() as Array<{ content: string }>;
+  }),
+  tx: vi.fn(
+    async (
+      _name: string,
+      input: { sessionId: string; clientIds: string[] },
+    ): Promise<{ messages: Array<{ messageId: string; clientId: string }> }> => {
+      if (!h.sqlite) throw new Error('test sqlite not initialized');
+      const placeholders = input.clientIds.map(() => '?').join(', ');
+      const rows = h.sqlite
+        .prepare(
+          `SELECT id, client_id FROM messages WHERE session_id = ? AND client_id IN (${placeholders})`,
+        )
+        .all(input.sessionId, ...input.clientIds) as Array<{
+        id: string;
+        client_id: string;
+      }>;
+      h.sqlite
+        .prepare(
+          `DELETE FROM messages WHERE session_id = ? AND client_id IN (${placeholders})`,
+        )
+        .run(input.sessionId, ...input.clientIds);
+      return {
+        messages: rows.map((row) => ({ messageId: row.id, clientId: row.client_id })),
+      };
+    },
+  ),
 }));
 
 vi.mock('electron', () => ({
@@ -36,8 +67,30 @@ vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
   recordPrRefsForMessage: vi.fn(async () => undefined),
 }));
+vi.mock('../../../cindy-media/ledger', () => ({
+  removeRefs: vi.fn(async () => undefined),
+}));
+vi.mock('../../../cindy-media/chatAttachments', () => ({
+  commitMessageMediaRefs: vi.fn(async () => undefined),
+}));
+vi.mock('../../../file-browser/remote-file-cache', () => ({
+  cleanupStagedChatAttachments: h.cleanupStagedChatAttachments,
+  extractChatAttachmentPathsFromPersistedContent: (content: string): string[] => {
+    try {
+      const parsed = JSON.parse(content) as { files?: unknown };
+      if (!Array.isArray(parsed.files)) return [];
+      return parsed.files.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return [];
+        const candidate = (entry as { path?: unknown }).path;
+        return typeof candidate === 'string' ? [candidate] : [];
+      });
+    } catch {
+      return [];
+    }
+  },
+}));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
 }));
 
 import {
@@ -46,6 +99,9 @@ import {
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
+  commitMessageDeletion,
+  listDeletableSessionPersistedChatAttachmentPaths,
+  listPersistedChatAttachmentPaths,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -58,6 +114,7 @@ function createDb(): Database.Database {
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
       parent_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
       total_token_usage INTEGER NOT NULL DEFAULT 0
     );
@@ -75,6 +132,7 @@ function createDb(): Database.Database {
     );
   `);
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
+  h.sqlite = sqlite;
   return sqlite;
 }
 
@@ -127,6 +185,125 @@ function insertCostMessage(
     });
 }
 
+describe('staged chat attachment retention', () => {
+  it('keeps a shared staged path until the last non-deleted fork is deleted', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('parent', 'deleted');
+    sqlite
+      .prepare('INSERT INTO sessions (id, parent_session_id, status) VALUES (?, ?, ?)')
+      .run('fork', 'parent', 'active');
+
+    const sharedPath = 'C:\\chat-attachment-cache\\owner\\shared.bin';
+    const parentOnlyPath = 'C:\\chat-attachment-cache\\owner\\parent-only.bin';
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, created_at
+      ) VALUES (
+        @id, @id, @sessionId, 'user', @content, @createdAt
+      )
+    `);
+    insert.run({
+      id: 'parent-message',
+      sessionId: 'parent',
+      content: JSON.stringify({
+        files: [{ path: sharedPath }, { path: parentOnlyPath }],
+      }),
+      createdAt: 1,
+    });
+    insert.run({
+      id: 'fork-message',
+      sessionId: 'fork',
+      content: JSON.stringify({ files: [{ path: sharedPath }] }),
+      createdAt: 2,
+    });
+
+    await expect(listDeletableSessionPersistedChatAttachmentPaths('parent')).resolves.toEqual([
+      parentOnlyPath,
+    ]);
+
+    sqlite.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'fork'").run();
+    await expect(listDeletableSessionPersistedChatAttachmentPaths('parent')).resolves.toEqual([
+      sharedPath,
+      parentOnlyPath,
+    ]);
+  });
+
+  it('keeps a fork-referenced path when deleting a message from the parent session', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('parent', 'active');
+    sqlite
+      .prepare('INSERT INTO sessions (id, parent_session_id, status) VALUES (?, ?, ?)')
+      .run('fork', 'parent', 'active');
+
+    const sharedPath = 'C:\\chat-attachment-cache\\owner\\shared.bin';
+    const parentOnlyPath = 'C:\\chat-attachment-cache\\owner\\parent-only.bin';
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, created_at
+      ) VALUES (
+        @id, @clientId, @sessionId, 'user', @content, @createdAt
+      )
+    `);
+    insert.run({
+      id: 'parent-message',
+      clientId: 'parent-client',
+      sessionId: 'parent',
+      content: JSON.stringify({ files: [{ path: sharedPath }, { path: parentOnlyPath }] }),
+      createdAt: 1,
+    });
+    insert.run({
+      id: 'fork-message',
+      clientId: 'fork-client',
+      sessionId: 'fork',
+      content: JSON.stringify({ files: [{ path: sharedPath }] }),
+      createdAt: 2,
+    });
+
+    h.cleanupStagedChatAttachments.mockClear();
+    await commitMessageDeletion('parent', ['parent-client'], 'handoff');
+
+    expect(h.cleanupStagedChatAttachments).toHaveBeenCalledWith([parentOnlyPath]);
+  });
+
+  it('does not protect staged paths referenced only by deleted sessions', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('active', 'active');
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('archived', 'archived');
+
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, created_at
+      ) VALUES (
+        @id, @id, @sessionId, 'user', @content, @createdAt
+      )
+    `);
+    insert.run({
+      id: 'active-message',
+      sessionId: 'active',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\active.bin' }] }),
+      createdAt: 1,
+    });
+    insert.run({
+      id: 'deleted-message',
+      sessionId: 'deleted',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\deleted.bin' }] }),
+      createdAt: 2,
+    });
+    insert.run({
+      id: 'archived-message',
+      sessionId: 'archived',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\archived.bin' }] }),
+      createdAt: 3,
+    });
+
+    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
+      'C:\\chat-attachment-cache\\active.bin',
+      'C:\\chat-attachment-cache\\archived.bin',
+    ]);
+  });
+});
+
 describe('local-db:messages:list cursor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -152,6 +329,36 @@ describe('local-db:messages:list cursor', () => {
       'row-old',
     ]);
     expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([1, 4]);
+  });
+
+  it('lists only rows after a stable cursor, including same-timestamp inserts', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'row-z', createdAt: 1_000, content: 'cursor' });
+    insertMessage(sqlite, { id: 'row-a', createdAt: 1_000, content: 'same timestamp newer' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_001, content: 'newest' });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = await listHandler?.({}, 's1', { limit: 10, after: 'row-z' });
+
+    expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual([
+      'row-new',
+      'row-a',
+    ]);
+  });
+
+  it('falls back to the latest page when an after cursor is unknown', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = await listHandler?.({}, 's1', { limit: 1, after: 'missing' });
+
+    expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual(['row-new']);
   });
 
   it('keeps around windows stable for same timestamp rows', async () => {

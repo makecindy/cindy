@@ -3,17 +3,42 @@ import {
   humanizeRemoteError as humanizeRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
+import type { DeviceLinkConnectionIssueKind } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 
 export {
-  connectionIssueHint,
-  connectionIssueTitle,
   describeAgentAuthError,
   formatRemoteError,
   isPreconditionFailedRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@cindy/maker-shared/device-link-contract';
+
+const CONNECTION_ISSUE_COPY_KEYS: Record<
+  DeviceLinkConnectionIssueKind,
+  { title: string; hint: string }
+> = {
+  'auth-failed': { title: 'deviceLink.authFailedTitle', hint: 'deviceLink.authFailedHint' },
+  replaced: { title: 'deviceLink.replacedTitle', hint: 'deviceLink.replacedHint' },
+  'too-many-connections': {
+    title: 'deviceLink.tooManyConnectionsTitle',
+    hint: 'deviceLink.tooManyConnectionsHint',
+  },
+  'version-mismatch': {
+    title: 'deviceLink.versionMismatchTitle',
+    hint: 'deviceLink.versionMismatchHint',
+  },
+  unstable: { title: 'deviceLink.unstableTitle', hint: 'deviceLink.unstableHint' },
+};
+
+/** Mobile 连接问题标题/提示统一走 i18n,避免同一 banner 混用本地化与中文硬编码。 */
+export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): string {
+  return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].title);
+}
+
+export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string {
+  return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
+}
 
 /**
  * mobile 侧的 humanizeRemoteError / describeRemoteError:熔断快速失败

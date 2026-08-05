@@ -6,7 +6,7 @@
  * F-MSG-1: assistant message styling (left-aligned, no bubble)
  * F-MSG-2: Markdown rendering
  * message-actions V1.2: hover-revealed bar below the markdown body, left-aligned,
- *   order [copy][time]. Streaming messages do NOT mount the bar (per spec
+ *   order [copy][fork][more][time][cost]. Streaming messages do NOT mount the bar (per spec
  *   "流式期间不挂载"); 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
  *   时才挂载 —— 任务执行过程中的中间句没有操作行。The bar
  *   owns its own fade lifecycle (see MessageActionBar) so this component
@@ -228,7 +228,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   // fork-from-reply: 在 AI 回复上分叉 — 复制含本回复所在 turn 的全部上下文
   // 到新会话（语义在 main 侧 forkSessionAtMessage 按 role 分支）。capability /
   // remote gate 与 UserMessage 同款；assistant 分叉无可预填文本 → 不传 draftText。
-  const makerKind: MakerAgentKind = agentKind === 'codex' ? 'codex' : 'claude-code';
+  const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // deviceId 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,见该文件注释)。
   const sessionFileOrigin = useSessionFileOrigin();

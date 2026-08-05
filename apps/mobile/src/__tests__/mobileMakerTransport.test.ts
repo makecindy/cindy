@@ -68,6 +68,8 @@ describe('mobile maker transport', () => {
       'maker:goal:resume',
       'maker:goal:update',
       'maker:fork',
+      'maker:get-session-tree',
+      'maker:navigate-session-tree',
       'maker:rewind:preview',
       'maker:rewind:commit',
       'maker:message:delete',
@@ -398,16 +400,26 @@ describe('mobile maker transport', () => {
     ]);
   });
 
-  it('routes fork, rewind and delete actions through maker namespace', async () => {
+  it('routes fork, native tree, rewind and delete actions through maker namespace', async () => {
     const { calls, maker } = harness();
 
     await maker.fork('s1', 'm2');
+    await maker.getSessionTree('s1');
+    await maker.navigateSessionTree('s1', 'entry-2', {
+      summarize: true,
+      customInstructions: 'Keep the decision context',
+    });
     await maker.rewindPreview('s1', 'm2');
     await maker.rewindCommit('s1', 'm2');
     await maker.deleteMessage('s1', 'm2');
 
     expect(calls.map((call) => [call.channel, call.args])).toEqual([
       ['maker:fork', ['s1', 'm2']],
+      ['maker:get-session-tree', ['s1']],
+      ['maker:navigate-session-tree', ['s1', 'entry-2', {
+        summarize: true,
+        customInstructions: 'Keep the decision context',
+      }]],
       ['maker:rewind:preview', ['s1', 'm2']],
       ['maker:rewind:commit', ['s1', 'm2']],
       ['maker:message:delete', ['s1', 'm2']],

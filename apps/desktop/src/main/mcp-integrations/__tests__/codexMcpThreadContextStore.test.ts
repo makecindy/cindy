@@ -36,6 +36,20 @@ describe('createCodexMcpThreadContextStore', () => {
     expect(store.getContextForThreadId('thread-1')).toBeUndefined();
   });
 
+  it('ignores a stale unregister after the same thread id is rebound to a new session instance', () => {
+    const store = createCodexMcpThreadContextStore();
+    const oldContext = { ...ctx('session-1'), sessionInstanceId: 'instance-old' };
+    const newContext = { ...ctx('session-1'), sessionInstanceId: 'instance-new' };
+
+    store.registerThreadContext('thread-1', oldContext);
+    store.registerThreadContext('thread-1', newContext);
+    store.unregisterThreadContext('thread-1', 'instance-old');
+
+    expect(store.getContextForThreadId('thread-1')).toBe(newContext);
+    store.unregisterThreadContext('thread-1', 'instance-new');
+    expect(store.getContextForThreadId('thread-1')).toBeUndefined();
+  });
+
   it('preserves the vendorOptions object reference', () => {
     const store = createCodexMcpThreadContextStore();
     const vendorOptions = { orcaRole: 'lead' };

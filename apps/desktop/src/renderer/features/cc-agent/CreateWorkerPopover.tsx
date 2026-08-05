@@ -6,7 +6,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   modelSupportsFastMode,
   providerOffersModel,
 } from '@cindy/model-providers';
@@ -14,6 +14,7 @@ import {
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -43,15 +44,18 @@ interface WorkerAgentPrefs {
 }
 
 interface WorkerPrefs {
-  lastAgent: 'codex' | 'claude-code';
+  lastAgent: 'codex' | 'claude-code' | 'pi';
   codex: WorkerAgentPrefs;
   'claude-code': WorkerAgentPrefs;
+  pi: WorkerAgentPrefs;
 }
 
 const DEFAULT_PREFS: WorkerPrefs = {
   lastAgent: 'codex',
   codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
   'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
+  // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
+  pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
 };
 
 function readWorkerPrefs(): WorkerPrefs {
@@ -59,7 +63,7 @@ function readWorkerPrefs(): WorkerPrefs {
     const raw = window.localStorage.getItem(PREFS_KEY);
     if (!raw) return DEFAULT_PREFS;
     const parsed = JSON.parse(raw) as Partial<WorkerPrefs>;
-    const agentPrefs = (agent: 'codex' | 'claude-code'): WorkerAgentPrefs => {
+    const agentPrefs = (agent: 'codex' | 'claude-code' | 'pi'): WorkerAgentPrefs => {
       const p = parsed[agent];
       return {
         ...DEFAULT_PREFS[agent],
@@ -71,9 +75,11 @@ function readWorkerPrefs(): WorkerPrefs {
       };
     };
     return {
-      lastAgent: parsed.lastAgent === 'claude-code' ? 'claude-code' : 'codex',
+      lastAgent:
+        parsed.lastAgent === 'claude-code' ? 'claude-code' : parsed.lastAgent === 'pi' ? 'pi' : 'codex',
       codex: agentPrefs('codex'),
       'claude-code': agentPrefs('claude-code'),
+      pi: agentPrefs('pi'),
     };
   } catch {
     return DEFAULT_PREFS;
@@ -90,7 +96,7 @@ function writeWorkerPrefs(prefs: WorkerPrefs): void {
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex';
+  agent: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort?: Effort;
   fast?: boolean;
@@ -131,7 +137,7 @@ export function CreateWorkerPopover({
   const navigate = useNavigate();
   const [role, setRole] = useState('developer');
   const [customRole, setCustomRole] = useState('');
-  const [agent, setAgent] = useState<'claude-code' | 'codex'>('codex');
+  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_PREFS.codex.fast);
@@ -146,13 +152,14 @@ export function CreateWorkerPopover({
 
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
+  const piCaps = useAgentCapabilities('pi', deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
-  const activeCapabilitiesState = agent === 'codex' ? codexCaps : ccCaps;
+  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const activeModels = useMemo(() => {
     return selectWorkerModels({
@@ -162,6 +169,7 @@ export function CreateWorkerPopover({
       providers,
       providersLoading,
       providersError,
+      providersUnsupported: deviceId ? remoteProviders.unsupported : false,
       excludeSubscriptionDirect: sshRemote === true,
       excludeChatBridgedCodex: sshRemote === true,
       isVisible: deviceId
@@ -175,11 +183,18 @@ export function CreateWorkerPopover({
     providers,
     providersError,
     providersLoading,
+    remoteProviders.unsupported,
     sshRemote,
     visibilityVersion,
   ]);
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
+  const remoteModelListBlocked =
+    !!deviceId &&
+    (activeCapabilitiesState.loading ||
+      activeCapabilitiesState.error !== null ||
+      providersLoading ||
+      (!!providersError && !remoteProviders.unsupported));
 
   // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被**停用**」时有效;
   // 其余(断开/下架/停用/换了模型)收窄为 null 交回默认路由解析。停用判据 =
@@ -208,8 +223,7 @@ export function CreateWorkerPopover({
       // 停用(disabled)判据同上方 routableProviders 注:隐藏不再收窄(2026-07
       // 启用/显示双轴拆分),故不查 isModelEnabled——记忆来源被隐藏仍合法可路由。
       return catalogModel &&
-        catalogModel.disabled !== true &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? candidate
         : null;
     },
@@ -242,7 +256,7 @@ export function CreateWorkerPopover({
   // fast=true 清掉,回退默认来源支持 Fast 也不会恢复(codex review)。收窄后按
   // 「实际会生效的来源」口径判定,不经历 false 窗口。
   const currentModelSupportsFast = Boolean(
-    agent === 'codex' &&
+    (agent === 'codex' || agent === 'pi') &&
       activeCaps?.hasFastMode &&
       providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
@@ -345,9 +359,9 @@ export function CreateWorkerPopover({
     }
   }, [currentModel, currentModelSupportsFast, fast]);
 
-  const vendorKey = agent === 'codex' ? 'codex' : 'cc';
+  const vendorKey = agentKindToVendor(agent);
   const updateAgent = useCallback(
-    (nextAgent: 'claude-code' | 'codex') => {
+    (nextAgent: 'claude-code' | 'codex' | 'pi') => {
       if (nextAgent === agent) return;
       // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
       // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
@@ -548,6 +562,7 @@ export function CreateWorkerPopover({
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
     !customRoleError &&
+    !remoteModelListBlocked &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
@@ -619,7 +634,7 @@ export function CreateWorkerPopover({
   if (!open) return null;
 
   return (
-    <div className={cn('fixed inset-0 z-50 flex items-start justify-center pt-[10vh]', className)}>
+    <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
       <div className="absolute inset-0 bg-[var(--overlay-modal)]" onClick={onClose} />
       <div
         className="relative z-10 w-[500px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6"
@@ -677,85 +692,91 @@ export function CreateWorkerPopover({
           )}
         </div>
 
-        <div className="mb-4">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.agentLabel')}
-          </div>
-          {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
-              「不自建选择 UI」的组件复用原则)。 */}
-          <VendorSegmentedSwitcher
-            value={vendorKey}
-            width={220}
-            ariaLabel={t('orca.createWorker.agentLabel')}
-            onChange={(next) => updateAgent(next === 'codex' ? 'codex' : 'claude-code')}
-          />
-        </div>
-
-        <div className="mb-4">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.modelLabel')}
-          </div>
-          {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
-              处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
-              外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
-              精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
-              且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
-              外置 FastModeToggle,不能删。 */}
-          <div className="flex items-center gap-2">
-            {deviceId && currentModelSupportsFast && (
-              <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
-            )}
-            <ModelSelector
-              modelId={model}
-              effort={effort}
-              onModelChange={updateModel}
-              onEffortChange={updateEffort}
-              vendorKey={vendorKey}
-              deviceId={deviceId}
-              // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
-              // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
-              // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
-              excludeSubscriptionDirect={sshRemote === true}
-              excludeChatBridgedCodex={sshRemote === true}
-              popoverSide="bottom"
-              currentProviderId={
-                deviceId
-                  ? undefined
-                  : sshRemote === true
-                    ? narrowProviderSource(providerSource, model)
-                    : providerSource
+        <div className="mb-4 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <div className="min-w-0">
+            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.agentLabel')}
+            </div>
+            {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
+                「不自建选择 UI」的组件复用原则)。 */}
+            <VendorSegmentedSwitcher
+              value={vendorKey}
+              width={220}
+              ariaLabel={t('orca.createWorker.agentLabel')}
+              onChange={(next) =>
+                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
               }
-              onProviderChange={deviceId ? undefined : handleProviderChange}
-              // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
-              // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
-              // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
-              reselectEmitsChange
-              // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
-              // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
-              // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
-              onNavigateToProviders={
-                deviceId || isSidebarWindow()
-                  ? undefined
-                  : () => {
-                      onClose();
-                      navigate('/settings?tab=providers');
-                    }
-              }
-              modelMemory={modelMemory}
-              // worker 创建链的显式 Fast 派发目前仅 Codex(resolveWorkerConfig 只对
-              // codex 消费 input.fast):cc 不接线,面板就不显示 Fast 开关,避免
-              // 「开关能开、提交被丢」的名不副实(codex review)。
-              fastMode={deviceId || agent !== 'codex' ? undefined : fast}
-              onFastModeChange={deviceId || agent !== 'codex' ? undefined : updateFast}
             />
           </div>
-          {noAvailableLocalModels ? (
-            <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
-              {t('orca.createWorker.noAvailableModels', {
-                agent: agent === 'codex' ? 'Codex' : 'Claude Code',
-              })}
-            </p>
-          ) : null}
+
+          <div className="min-w-0">
+            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.modelLabel')}
+            </div>
+            {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
+                处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
+                外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
+                精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
+                且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
+                外置 FastModeToggle,不能删。 */}
+            <div className="flex min-w-0 items-center gap-2">
+              {deviceId && currentModelSupportsFast && (
+                <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
+              )}
+              <ModelSelector
+                modelId={model}
+                effort={effort}
+                onModelChange={updateModel}
+                onEffortChange={updateEffort}
+                vendorKey={vendorKey}
+                deviceId={deviceId}
+                // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
+                // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
+                // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
+                excludeSubscriptionDirect={sshRemote === true}
+                excludeChatBridgedCodex={sshRemote === true}
+                popoverSide="bottom"
+                currentProviderId={
+                  deviceId
+                    ? undefined
+                    : sshRemote === true
+                      ? narrowProviderSource(providerSource, model)
+                      : providerSource
+                }
+                onProviderChange={deviceId ? undefined : handleProviderChange}
+                // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
+                // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
+                // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
+                reselectEmitsChange
+                // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
+                // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
+                // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
+                onNavigateToProviders={
+                  deviceId || isSidebarWindow()
+                    ? undefined
+                    : () => {
+                        onClose();
+                        navigate('/settings?tab=providers');
+                      }
+                }
+                modelMemory={modelMemory}
+                // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
+                // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
+                // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
+                fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                onFastModeChange={
+                  deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                }
+              />
+            </div>
+            {noAvailableLocalModels ? (
+              <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
+                {t('orca.createWorker.noAvailableModels', {
+                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+                })}
+              </p>
+            ) : null}
+          </div>
         </div>
 
         <div className="mb-5">

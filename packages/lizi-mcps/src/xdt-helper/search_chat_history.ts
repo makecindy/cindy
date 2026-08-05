@@ -92,9 +92,9 @@ export function registerSearchChatHistoryTool(
       from: z.string().optional().describe('ISO 8601(含): 过滤 messages.createdAt >= from。'),
       to: z.string().optional().describe('ISO 8601(不含): 过滤 messages.createdAt < to。'),
       agent_kind: z
-        .enum(['cc', 'codex'])
+        .enum(['cc', 'codex', 'pi'])
         .optional()
-        .describe('按 session.agentKind 过滤; 不传 = 两者都搜。'),
+        .describe('按 session.agentKind 过滤; 不传 = 全部搜。'),
       roles: z
         .array(z.enum(ROLE_VALUES))
         .optional()

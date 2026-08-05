@@ -52,6 +52,12 @@ describe('sessionModelMirror', () => {
     });
     expect(acc.getFast('codex', 'xd', 'gpt-5.5')).toBe(true);
     expect(acc.getEffort('codex', 'xd', 'gpt-5.5')).toBe('medium'); // 增量不清旧值
+
+    applySessionModelPrefPush({
+      sessionId: 's1', agent: 'pi', providerId: 'openai', model: 'gpt-5.6', effort: 'high', fast: true,
+    });
+    expect(acc.getEffort('pi', 'openai', 'gpt-5.6')).toBe('high');
+    expect(acc.getFast('pi', 'openai', 'gpt-5.6')).toBe(true);
   });
 
   it('applySessionModelPrefPush:非法 payload 静默忽略', () => {

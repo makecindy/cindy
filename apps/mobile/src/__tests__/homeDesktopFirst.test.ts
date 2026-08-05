@@ -1,11 +1,49 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
+
+describe('mobile Home startup reads', () => {
+  it('returns the local value when the read settles in time', async () => {
+    const read = startBoundedStartupRead(Promise.resolve('cached'), 'fallback', 100);
+
+    await expect(read.initial).resolves.toEqual({ timedOut: false, value: 'cached' });
+  });
+
+  it('falls back on read failure', async () => {
+    const read = startBoundedStartupRead(Promise.reject(new Error('read failed')), 'fallback', 100);
+
+    await expect(
+      read.initial,
+    ).resolves.toEqual({ timedOut: false, value: 'fallback' });
+    await expect(read.completion).resolves.toEqual({ ok: false, value: 'fallback' });
+  });
+
+  it('falls back on timeout while preserving a late local value', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishRead: ((value: string) => void) | undefined;
+      const pendingRead = new Promise<string>((resolveRead) => {
+        finishRead = resolveRead;
+      });
+      const read = startBoundedStartupRead(pendingRead, 'fallback', 100);
+
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(read.initial).resolves.toEqual({ timedOut: true, value: 'fallback' });
+
+      finishRead?.('late-cache');
+      await Promise.resolve();
+      await expect(read.completion).resolves.toEqual({ ok: true, value: 'late-cache' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('mobile home desktop-first surface', () => {
   it('uses the desktop-sidebar Home as the authenticated root instead of a device picker route', () => {
@@ -122,8 +160,11 @@ describe('mobile home desktop-first surface', () => {
     // ——箭头统一后依赖图标区分 agent 类型的场景(创建自动化 chips / 侧栏混排)全部失效。
     expect(desktopVendorIconSource).toContain('ClaudeMark');
     expect(desktopVendorIconSource).toContain('CodexMark');
-    expect(desktopVendorIconSource).toContain("vendor === 'codex' ? <CodexMark size={size} /> : <ClaudeMark size={size} />");
-    expect(desktopVendorIconSource).toContain("vendor: 'cc' | 'codex'");
+    expect(desktopVendorIconSource).toContain("vendor === 'codex' ? (");
+    expect(desktopVendorIconSource).toContain('<CodexMark size={size} />');
+    expect(desktopVendorIconSource).toContain('<ClaudeMark size={size} />');
+    expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi'");
+    expect(desktopVendorIconSource).toContain('vendor: VendorIconKind;');
     expect(desktopVendorIconSource).toContain('session-status-breathing');
     expect(vendorIconSource).not.toContain('XD_SYMBOL_PATHS');
     expect(vendorIconSource).not.toContain('XD_INC_MARK_ASPECT_RATIO');
@@ -141,7 +182,7 @@ describe('mobile home desktop-first surface', () => {
     expect(providerMarkSource).not.toContain('CLAUDE_AGENT_PATH');
     expect(providerMarkSource).not.toContain('CODEX_AGENT_FLOWER_PATH');
     expect(vendorIconSource).toContain("import { MobileAgentMark } from './MobileAgentMark';");
-    expect(vendorIconSource).toContain("agentKind={vendor === 'codex' ? 'codex' : 'claude-code'}");
+    expect(vendorIconSource).toContain("agentKind={vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code'}");
     expect(vendorIconSource).not.toContain('viewBox="136 137 282 158"');
     expect(vendorIconSource).not.toContain('transform="translate(');
     expect(vendorIconSource).toContain('Easing.inOut(Easing.ease)');
@@ -156,7 +197,7 @@ describe('mobile home desktop-first surface', () => {
     expect(homeSource).toContain('width: iconSize.md');
     expect(homeSource).toContain('size={cindyList ? iconSize.sm : isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}');
     expect(homeSource).toContain("function isClaudeCodeAgentKind(agentKind: string): boolean");
-    expect(homeSource).toContain("return agentKind !== 'codex';");
+    expect(homeSource).toContain("return agentKind === 'cc' || agentKind === 'claude-code';");
     expect(homeSource).not.toContain('sessionAttentionDot: {\n    backgroundColor: colors.statusAccent,\n    borderColor: colors.surface');
     expect(homeSource).not.toContain('sessionAttentionDot: {\n    backgroundColor: colors.statusAccent,\n    borderRadius: 3,\n    borderWidth: 1');
   });
@@ -166,6 +207,8 @@ describe('mobile home desktop-first surface', () => {
     const scheduleIndexSource = readSource('src/session/scheduleIndex.ts');
 
     expect(source).toContain('const [scheduleIndex, setScheduleIndex]');
+    expect(source).toContain('useRemoteScheduleMirrorInvalidations()');
+    expect(source).toContain('invalidateRunningSessionScheduleEntries(current, sessionIds)');
     expect(source).toContain('const [deviceIdentityCacheReady, setDeviceIdentityCacheReady]');
     expect(source).toContain('loadDeviceIdentityCache()');
     expect(source).toContain('reconcileDeviceIdentities(');
@@ -246,7 +289,9 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'syncing');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
-    expect(source).toContain("const showConnectionRow = !!connectionError || status !== 'online';");
+    expect(source).toContain(
+      "const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';",
+    );
     expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
     expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
@@ -336,6 +381,10 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('app/devices/index.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
+    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
+    expect(source).toContain('await syncInFlightRef.current;');
+    expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
+    expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
     // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
     // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),

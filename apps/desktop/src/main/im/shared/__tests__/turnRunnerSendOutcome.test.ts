@@ -105,7 +105,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
+  toCoreAgentKind: (kind: string) =>
+    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({
@@ -544,6 +545,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.stringContaining('错误'),
       expect.anything(),
     );
+  });
+
+  it('passes persisted null Pi providerId through cold IM session creation', async () => {
+    // Pi core 将 null 解释为“清除显式来源”；undefined 会反查同名 BYOM provider。
+    mocks.findActiveSession.mockResolvedValue({
+      id: 'feishu-session', agentKind: 'pi', workingDir: 'F:\\XDMaker', model: 'gpt-5',
+      effort: 'high', permissionMode: 'auto', fastMode: false, sdkSessionId: null, providerId: null,
+    });
+    mocks.listProviders.mockResolvedValue([{ id: 'xd', name: 'XD', source: 'builtin', connected: true,
+      agents: ['pi'], models: { pi: [{ id: 'gpt-5' }] }, routing: { pi: { upstream: 'https://gateway.example/v1', authStrategy: 'gateway-key' } } }]);
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const maker = createMakerHarness(h.session);
+    mocks.getMaker.mockReturnValue(maker);
+
+    await runDefaultTurn();
+
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'pi', providerId: null }));
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {
@@ -1261,7 +1279,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       const { turnPromise } = await startDefaultTurn();
       await turnPromise;
 
-      h.emit({ type: 'text', data: { text: 'complete text only', isFinal: true } });
+      h.emit({
+        type: 'text',
+        data: {
+          text: 'complete text only\uE200cite\uE202turn17search1\uE202turn17search2\uE201',
+          isFinal: true,
+        },
+      });
       h.emit({ type: 'done', data: {} });
       await flushMicrotasks();
 

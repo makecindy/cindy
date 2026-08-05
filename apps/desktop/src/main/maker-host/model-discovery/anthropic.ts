@@ -32,7 +32,7 @@
  * 串行队列 + 原子 rename,保证登出删缓存不会被较早的 SDK 持久化反向覆盖。
  *
  * contextWindow 规则:
- *   HTTP 响应带 max_input_tokens 用之;否则读取当前 cindyModelMeta 的已知窗口；
+ *   HTTP 响应带 max_input_tokens 用之;否则读取当前 modelRegistry 的已知窗口；
  *   目录未知时默认 1M,仅 id 含 "haiku" 例外 200k。这样已知旧模型不会被错误提升到
  *   1M,未来新模型仍可在目录更新前按当代默认工作。
  *
@@ -290,7 +290,7 @@ function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort:
  * SDK `supportedModels()` 条目 → 映射结果。纯函数。
  * 只收 `claude` 开头的显式版本 id(规则 10:禁止 opus/sonnet 裸别名进目录)。
  * ModelInfo 的能力字段全部 optional:字段在场时 SDK 是能力权威(supportsEffort=false =
- * 不可调);**字段缺席 = 该字段未知**,按 cindyModelMeta 基线 / 确定性默认合成,
+ * 不可调);**字段缺席 = 该字段未知**,按 modelRegistry 基线 / 确定性默认合成,
  * 合并时保留该字段已精化的旧值——不能把「CLI 没填」解读成「不支持」而抹掉档位。
  */
 export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
@@ -419,7 +419,7 @@ function mergeCapabilitiesWithPrevious(
 /**
  * HTTP `GET /v1/models` 单页条目数组 → 映射结果。纯函数,对响应形状容错:
  * 能力字段(capabilities.efforts / fast_mode)是 Anthropic 侧未固化的扩展,逐字段识别；
- * effort 认不出时按 cindyModelMeta 能力基线合成,目录也没有才回落当代旗舰 5 档
+ * effort 认不出时按 modelRegistry 能力基线合成,目录也没有才回落当代旗舰 5 档
  * (low/medium/high/xhigh/max,默认 high),haiku 系例外 0 档。fastMode 未知时先为 false,
  * 合并阶段会保留已明确探测过的旧值。
  */

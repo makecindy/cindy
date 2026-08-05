@@ -1001,7 +1001,7 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 }
 
 interface TodaySpendChipProps {
-  vendorKey?: 'cc' | 'codex';
+  vendorKey?: 'cc' | 'codex' | 'pi';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
   /**
@@ -1074,13 +1074,21 @@ export function TodaySpendChip({
   const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
   const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
     && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const isClaudeSubscription = vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && (
-    providerId === 'anthropic'
-    || (providerId == null && (
-      observedClaudeRoute != null
-        ? observedClaudeRoute === 'subscription'
-        : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
-    ))
+  const isClaudeSubscription = !isDeviceLinkRemote && (
+    (
+      vendorKey === 'cc'
+      && !isRemoteClaudeSession
+      && (
+        providerId === 'anthropic'
+        || (providerId == null && (
+          observedClaudeRoute != null
+            ? observedClaudeRoute === 'subscription'
+            : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true
+        ))
+      )
+    )
+    // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
+    || (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')
   );
   // cc 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
   // 订阅额度,真实计费恒 0,gateway quota 与之无关):
@@ -1088,12 +1096,12 @@ export function TodaySpendChip({
   //   - xai/    → SuperGrok 无订阅窗口端点,尽力显示 bridge 抓到的限流头,否则仅价值估算。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
   const isChatgptBridge =
-    vendorKey === 'cc'
+    (vendorKey === 'cc' || vendorKey === 'pi')
     && (providerId == null || providerId === 'openai')
     && typeof modelId === 'string'
     && modelId.startsWith(CHATGPT_MODEL_PREFIX);
   const isXaiBridge =
-    vendorKey === 'cc'
+    (vendorKey === 'cc' || vendorKey === 'pi')
     && (providerId == null || providerId === 'xai')
     && typeof modelId === 'string'
     && modelId.startsWith(XAI_MODEL_PREFIX);
@@ -1120,6 +1128,14 @@ export function TodaySpendChip({
   );
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
+  const isPiGateway =
+    vendorKey === 'pi'
+    && !remoteHostId
+    && !isDeviceLinkRemote
+    && (providerId == null || providerId === 'xd')
+    && !isClaudeSubscription
+    && !isChatgptBridge
+    && !isXaiBridge;
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
@@ -1159,7 +1175,7 @@ export function TodaySpendChip({
         )
       )
     );
-  const usesGatewayQuota = isClaudeGateway || isCodexGateway;
+  const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
@@ -1170,7 +1186,7 @@ export function TodaySpendChip({
   );
   const sessionMoney = sessionUsage.totalMoney;
   const sessionTokens = useSessionTokens(
-    isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote
+    vendorKey === 'pi' || isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote
       ? sessionId
       : undefined,
     sessionInitialTokens,

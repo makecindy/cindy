@@ -17,18 +17,8 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import type {
-  AgentEvent,
-  Maker,
-  Session,
-  SessionSendResult,
-} from '@cindy/maker-core';
-import type {
-  FireContext,
-  Logger,
-  Notifier,
-  Schedule,
-} from '@cindy/maker-scheduler';
+import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
+import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -40,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   getSessionProvider: vi.fn(),
   setSessionProvider: vi.fn(),
   hydrateSessionProvider: vi.fn(),
+  setSessionFastMode: vi.fn(),
   isSessionInTurn: vi.fn(),
 }));
 
@@ -47,6 +38,10 @@ vi.mock('../../maker-host/session-provider-store.js', () => ({
   getSessionProvider: mocks.getSessionProvider,
   setSessionProvider: mocks.setSessionProvider,
   hydrateSessionProvider: mocks.hydrateSessionProvider,
+}));
+
+vi.mock('../../maker-host/session-effort-store.js', () => ({
+  setSessionFastMode: mocks.setSessionFastMode,
 }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -101,7 +96,9 @@ function createSessionHarness(): FakeSessionHarness {
   });
   // setModel 声明 string 入参(签名与真实 Session.setModel 一致),下面 mockImplementation 才能
   // 按 (m) 更新 session.model;测试可再用 mockRejectedValue / mockImplementation 覆盖。
-  const setModel = vi.fn(async (_m: string): Promise<void> => {});
+  const setModel = vi.fn(
+    async (_m: string, _opts?: { providerId?: string | null }): Promise<void> => {},
+  );
   const setEffort = vi.fn(async () => undefined);
   const session = {
     id: 'scheduler-session',
@@ -125,7 +122,7 @@ function createSessionHarness(): FakeSessionHarness {
   // session.model(而非 getSessionMeta 快照)确定复用会话实际在跑的模型,harness 必须同样更新。
   // 需要模拟"setModel 抛错"的用例用 mockRejectedValue 覆盖本实现(reject → 不更新 = Claude 语义);
   // 模拟 Codex"await 前先改 model 再抛"的用例用 mockImplementation 显式先改 model 再 throw。
-  setModel.mockImplementation(async (m: string) => {
+  setModel.mockImplementation(async (m: string, _opts?: { providerId?: string | null }) => {
     (session as { model: string }).model = m;
   });
 
@@ -185,15 +182,28 @@ interface RunnerHarness {
 
 function createRunnerHarness(
   h: FakeSessionHarness,
-  meta: { model?: string; effort?: string; workDir?: string; sdkSessionId?: string } | null = null,
+  meta: {
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
+    workDir?: string;
+    sdkSessionId?: string;
+  } | null = null,
   opts: {
     sessionAlive?: boolean;
     activeSessions?: Session[];
-    availableModels?: Array<{ id: string; efforts?: readonly string[]; defaultEffort?: string | null }>;
+    availableModels?: Array<{
+      id: string;
+      efforts?: readonly string[];
+      defaultEffort?: string | null;
+    }>;
     checkModelRoute?: ConstructorParameters<typeof MakerScheduleRunner>[0]['checkModelRoute'];
     resolveRouteCopyCapabilities?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveRouteCopyCapabilities'];
+    resolveDefaultModelRoute?: ConstructorParameters<
+      typeof MakerScheduleRunner
+    >[0]['resolveDefaultModelRoute'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -218,6 +228,7 @@ function createRunnerHarness(
     logger: createLogger(),
     checkModelRoute: opts.checkModelRoute,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
+    resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
   });
   return { runner, createSession, closeSession };
 }
@@ -242,6 +253,7 @@ describe('MakerScheduleRunner model selection', () => {
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/work' });
     mocks.getSessionProvider.mockReturnValue(null);
+    mocks.setSessionFastMode.mockReset();
     mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
   });
@@ -250,7 +262,9 @@ describe('MakerScheduleRunner model selection', () => {
     it('超额档(gpt-5.5 只到 xhigh + effort=max)→ createSession 收到 clamp 后的 xhigh', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, null, {
-        availableModels: [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }],
+        availableModels: [
+          { id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+        ],
       });
       const opts = await fireToCompletion(
         harness,
@@ -273,10 +287,16 @@ describe('MakerScheduleRunner model selection', () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, null, {
         availableModels: [
-          { id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+          {
+            id: 'gpt-5.5',
+            efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+            defaultEffort: 'high',
+          },
         ],
         checkModelRoute: vi.fn(async (_a, _m, providerId) =>
-          providerId ? { kind: 'pass' as const } : { kind: 'reroute' as const, providerId: 'anthropic' },
+          providerId
+            ? { kind: 'pass' as const }
+            : { kind: 'reroute' as const, providerId: 'anthropic' },
         ),
         resolveRouteCopyCapabilities: vi.fn(async () => ({
           efforts: ['low', 'medium', 'high'],
@@ -296,7 +316,11 @@ describe('MakerScheduleRunner model selection', () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, null, {
         availableModels: [
-          { id: 'gpt-5.6-sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' },
+          {
+            id: 'gpt-5.6-sol',
+            efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+            defaultEffort: 'high',
+          },
         ],
       });
       const opts = await fireToCompletion(
@@ -305,6 +329,54 @@ describe('MakerScheduleRunner model selection', () => {
         baseSchedule({ agentKind: 'codex', model: 'gpt-5.6-sol', effort: 'ultra' }),
       );
       expect(opts.effort).toBe('ultra');
+    });
+  });
+
+  describe('Pi 派发前路由重裁决', () => {
+    it('晚到 reroute 在 send 前同步 Pi 原生 provider-model，再更新 host store', async () => {
+      const checkModelRoute = vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'pass' as const })
+        .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' });
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+      const harness = createRunnerHarness(h, null, { checkModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-sol' }),
+      );
+
+      expect(checkModelRoute).toHaveBeenCalledTimes(2);
+      expect(h.setModel).toHaveBeenCalledWith('chatgpt/gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(h.setModel.mock.invocationCallOrder[0]).toBeLessThan(
+        h.send.mock.invocationCallOrder[0],
+      );
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'byom-b');
+    });
+
+    it('晚到 reroute 的 Pi 原生同步失败时不写 store，也不发送 prompt', async () => {
+      const checkModelRoute = vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'pass' as const })
+        .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' });
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+      h.setModel.mockRejectedValue(new Error('provider snapshot unavailable'));
+      const harness = createRunnerHarness(h, null, { checkModelRoute });
+
+      await expect(
+        harness.runner.fire(
+          baseSchedule({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-sol' }),
+          createFireContext(),
+        ),
+      ).rejects.toThrow('Session send failed before dispatch');
+      expect(h.setModel).toHaveBeenCalledWith('chatgpt/gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
     });
   });
 
@@ -331,15 +403,50 @@ describe('MakerScheduleRunner model selection', () => {
       expect(opts.model).toBe('gpt-5.5');
     });
 
+    it('Pi 空模型按同一已连接来源解析 model + providerId，不能落到 Cindy 的 Sonnet 路由', async () => {
+      const h = createSessionHarness();
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'byom/llama-4',
+        providerId: 'local-byom',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: undefined, providerId: 'local-byom' }),
+      );
+
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith('pi', 'local-byom');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKind: 'pi',
+          model: 'byom/llama-4',
+          providerId: 'local-byom',
+        }),
+      );
+    });
+
+    it('Pi 空模型且没有已连接来源时在创建会话前明确失败', async () => {
+      const h = createSessionHarness();
+      const resolveDefaultModelRoute = vi.fn(async () => null);
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await expect(
+        harness.runner.fire(
+          baseSchedule({ agentKind: 'pi', model: undefined, providerId: undefined }),
+          createFireContext(),
+        ),
+      ).rejects.toThrow('Pi has no connected model source');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
     it('schedule.model 显式设置时原样透传', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h);
 
-      const opts = await fireToCompletion(
-        harness,
-        h,
-        baseSchedule({ model: 'claude-sonnet-4-6' }),
-      );
+      const opts = await fireToCompletion(harness, h, baseSchedule({ model: 'claude-sonnet-4-6' }));
 
       expect(opts.model).toBe('claude-sonnet-4-6');
       expect(h.setModel).not.toHaveBeenCalled();
@@ -510,7 +617,11 @@ describe('MakerScheduleRunner model selection', () => {
       const harness = createRunnerHarness(h, HEARTBEAT_META, {
         sessionAlive: true,
         availableModels: [
-          { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+          {
+            id: 'claude-opus-4-7',
+            efforts: ['low', 'medium', 'high', 'xhigh'],
+            defaultEffort: 'high',
+          },
         ],
       });
 
@@ -542,7 +653,11 @@ describe('MakerScheduleRunner model selection', () => {
       const harness = createRunnerHarness(h, HEARTBEAT_META, {
         sessionAlive: true,
         availableModels: [
-          { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+          {
+            id: 'claude-opus-4-7',
+            efforts: ['low', 'medium', 'high', 'xhigh'],
+            defaultEffort: 'high',
+          },
         ],
       });
 
@@ -573,8 +688,16 @@ describe('MakerScheduleRunner model selection', () => {
         {
           sessionAlive: true,
           availableModels: [
-            { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
-            { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+            {
+              id: 'claude-opus-4-7',
+              efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'claude-opus-4-8',
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
           ],
         },
       );
@@ -582,7 +705,11 @@ describe('MakerScheduleRunner model selection', () => {
       await fireToCompletion(
         harness,
         h,
-        baseSchedule({ model: 'claude-opus-4-8', effort: 'max', targetSessionId: 'scheduler-session' }),
+        baseSchedule({
+          model: 'claude-opus-4-8',
+          effort: 'max',
+          targetSessionId: 'scheduler-session',
+        }),
       );
 
       expect(h.setModel).toHaveBeenCalledWith('claude-opus-4-8'); // 尝试切换(被拒)
@@ -609,8 +736,16 @@ describe('MakerScheduleRunner model selection', () => {
         {
           sessionAlive: true,
           availableModels: [
-            { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
-            { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+            {
+              id: 'claude-opus-4-7',
+              efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'claude-opus-4-8',
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
           ],
         },
       );
@@ -619,7 +754,11 @@ describe('MakerScheduleRunner model selection', () => {
         harness,
         h,
         // effort 显式留空 = follow;model 换到只到 xhigh 的新模型。
-        baseSchedule({ model: 'claude-opus-4-8', effort: undefined, targetSessionId: 'scheduler-session' }),
+        baseSchedule({
+          model: 'claude-opus-4-8',
+          effort: undefined,
+          targetSessionId: 'scheduler-session',
+        }),
       );
 
       expect(h.setModel).toHaveBeenCalledWith('claude-opus-4-8'); // 切换成功
@@ -647,8 +786,16 @@ describe('MakerScheduleRunner model selection', () => {
         {
           sessionAlive: true,
           availableModels: [
-            { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
-            { id: 'claude-sonnet-4-6', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+            {
+              id: 'claude-opus-4-7',
+              efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'claude-sonnet-4-6',
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
           ],
         },
       );
@@ -683,8 +830,16 @@ describe('MakerScheduleRunner model selection', () => {
         {
           sessionAlive: true,
           availableModels: [
-            { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
-            { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+            {
+              id: 'claude-opus-4-7',
+              efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'claude-opus-4-8',
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
           ],
         },
       );
@@ -692,7 +847,11 @@ describe('MakerScheduleRunner model selection', () => {
       await fireToCompletion(
         harness,
         h,
-        baseSchedule({ model: 'claude-opus-4-8', effort: 'max', targetSessionId: 'scheduler-session' }),
+        baseSchedule({
+          model: 'claude-opus-4-8',
+          effort: 'max',
+          targetSessionId: 'scheduler-session',
+        }),
       );
 
       expect(h.setModel).toHaveBeenCalledWith('claude-opus-4-8');
@@ -713,8 +872,16 @@ describe('MakerScheduleRunner model selection', () => {
         {
           sessionAlive: false, // 冷 resume(非复用)
           availableModels: [
-            { id: 'claude-opus-4-7', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
-            { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+            {
+              id: 'claude-opus-4-7',
+              efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'claude-opus-4-8',
+              efforts: ['low', 'medium', 'high', 'xhigh'],
+              defaultEffort: 'high',
+            },
           ],
         },
       );
@@ -723,7 +890,11 @@ describe('MakerScheduleRunner model selection', () => {
         harness,
         h,
         // follow-effort(留空)+ 换到只到 xhigh 的模型。
-        baseSchedule({ model: 'claude-opus-4-8', effort: undefined, targetSessionId: 'scheduler-session' }),
+        baseSchedule({
+          model: 'claude-opus-4-8',
+          effort: undefined,
+          targetSessionId: 'scheduler-session',
+        }),
       );
 
       // follow 的 max 按新模型 clamp 到 xhigh,经 setEffort 下发但失败。
@@ -900,16 +1071,86 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
+    it('heartbeat 复用 Pi 时即使模型不变也把 provider-model 原子同步到原生进程', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
+      mocks.getSessionProvider.mockReturnValue('byom-a');
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'gpt-5.6-sol';
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'gpt-5.6-sol',
+          workDir: '/work',
+          sdkSessionId: 'sdk-pi-1',
+        },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'pi',
+          model: 'gpt-5.6-sol',
+          providerId: 'byom-b',
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(h.setModel.mock.invocationCallOrder[0]).toBeLessThan(
+        h.send.mock.invocationCallOrder[0],
+      );
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'byom-b');
+    });
+
+    it('heartbeat 复用 Pi 的原生路由同步失败时在 send 前 fail-closed', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
+      mocks.getSessionProvider.mockReturnValue('byom-a');
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'gpt-5.6-sol';
+      h.setModel.mockRejectedValue(new Error('set_model rejected'));
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'gpt-5.6-sol',
+          workDir: '/work',
+          sdkSessionId: 'sdk-pi-1',
+        },
+        { sessionAlive: true },
+      );
+
+      await expect(
+        harness.runner.fire(
+          baseSchedule({
+            agentKind: 'pi',
+            model: 'gpt-5.6-sol',
+            providerId: 'byom-b',
+            targetSessionId: 'scheduler-session',
+          }),
+          createFireContext(),
+        ),
+      ).rejects.toThrow('schedule Pi route sync failed before dispatch');
+      expect(h.send).not.toHaveBeenCalled();
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    });
+
     it('heartbeat 复用本地 Codex 且跨 credential family → 先关闭再按新来源重建', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'xd' });
       const h = createSessionHarness();
       Object.defineProperty(h.session, 'agentKind', { value: 'codex' });
       Object.defineProperty(h.session, 'model', { value: 'codex/gpt-5.5' });
-      const harness = createRunnerHarness(h, {
-        model: 'codex/gpt-5.5',
-        workDir: '/work',
-        sdkSessionId: 'sdk-1',
-      }, { sessionAlive: true });
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'codex/gpt-5.5',
+          workDir: '/work',
+          sdkSessionId: 'sdk-1',
+        },
+        { sessionAlive: true },
+      );
 
       await fireToCompletion(
         harness,
@@ -923,8 +1164,9 @@ describe('MakerScheduleRunner model selection', () => {
       );
 
       expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
-      expect(harness.closeSession.mock.invocationCallOrder[0])
-        .toBeLessThan(harness.createSession.mock.invocationCallOrder[0]);
+      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0],
+      );
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: 'openai', model: 'gpt-5.4' }),
       );
@@ -948,11 +1190,15 @@ describe('MakerScheduleRunner model selection', () => {
         remoteHostId: null,
         isTurnRunning: () => true,
       } as unknown as Session;
-      const harness = createRunnerHarness(h, {
-        model: 'codex/gpt-5.5',
-        workDir: '/work',
-        sdkSessionId: 'sdk-1',
-      }, { sessionAlive: true, activeSessions: [h.session, busyCodexSession] });
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'codex/gpt-5.5',
+          workDir: '/work',
+          sdkSessionId: 'sdk-1',
+        },
+        { sessionAlive: true, activeSessions: [h.session, busyCodexSession] },
+      );
 
       const result = await harness.runner.fire(
         baseSchedule({
@@ -978,11 +1224,15 @@ describe('MakerScheduleRunner model selection', () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'xd' });
       const h = createSessionHarness();
       Object.defineProperty(h.session, 'model', { value: 'claude-sonnet-4-6' });
-      const harness = createRunnerHarness(h, {
-        model: 'claude-sonnet-4-6',
-        workDir: '/work',
-        sdkSessionId: 'sdk-1',
-      }, { sessionAlive: true });
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'claude-sonnet-4-6',
+          workDir: '/work',
+          sdkSessionId: 'sdk-1',
+        },
+        { sessionAlive: true },
+      );
 
       await fireToCompletion(
         harness,
@@ -995,8 +1245,9 @@ describe('MakerScheduleRunner model selection', () => {
       );
 
       expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
-      expect(harness.closeSession.mock.invocationCallOrder[0])
-        .toBeLessThan(harness.createSession.mock.invocationCallOrder[0]);
+      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0],
+      );
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: 'anthropic', model: 'claude-opus-4-8' }),
       );
@@ -1014,11 +1265,15 @@ describe('MakerScheduleRunner model selection', () => {
       const h = createSessionHarness();
       Object.defineProperty(h.session, 'model', { value: 'claude-sonnet-4-6' });
       Object.defineProperty(h.session, 'isTurnRunning', { value: () => true });
-      const harness = createRunnerHarness(h, {
-        model: 'claude-sonnet-4-6',
-        workDir: '/work',
-        sdkSessionId: 'sdk-1',
-      }, { sessionAlive: true });
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'claude-sonnet-4-6',
+          workDir: '/work',
+          sdkSessionId: 'sdk-1',
+        },
+        { sessionAlive: true },
+      );
 
       const result = await harness.runner.fire(
         baseSchedule({
@@ -1037,6 +1292,85 @@ describe('MakerScheduleRunner model selection', () => {
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Pi Fast bridge 状态同步', () => {
+    it('fresh Pi preserves the default-route null instead of enabling BYOM fallback', async () => {
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const harness = createRunnerHarness(h);
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol' }),
+      );
+
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: null }),
+      );
+    });
+
+    it('fresh Pi 首轮在 send 前写入 Fast=true', async () => {
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const harness = createRunnerHarness(h);
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: 'gpt-5.6-sol', fastMode: true }),
+      );
+
+      expect(mocks.setSessionFastMode).toHaveBeenCalledWith('scheduler-session', true);
+      expect(mocks.setSessionFastMode.mock.invocationCallOrder[0]).toBeLessThan(
+        h.send.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('复用 Pi 在 send 前写入 Fast=false，清掉旧 bridge 状态', async () => {
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      (h.session as { model: string }).model = 'gpt-5.6-sol';
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'gpt-5.6-sol',
+          fastMode: false,
+          workDir: '/work',
+          sdkSessionId: 'sdk-pi-1',
+        },
+        { sessionAlive: true },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'pi',
+          model: undefined,
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(mocks.setSessionFastMode).toHaveBeenCalledWith('scheduler-session', false);
+      expect(mocks.setSessionFastMode.mock.invocationCallOrder[0]).toBeLessThan(
+        h.send.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('Claude/Codex 不写 Pi bridge Fast store', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h);
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true }),
+      );
+
+      expect(mocks.setSessionFastMode).not.toHaveBeenCalled();
     });
   });
 });

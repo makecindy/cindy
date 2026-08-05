@@ -76,6 +76,8 @@ export interface Capabilities {
   /** Session 操作 */
   fork: CapabilityStatus;
   rewind: CapabilityStatus;
+  /** 同一 SDK session 内的原生分支树；与创建独立 Cindy 会话的 fork 正交。 */
+  sessionTree?: CapabilityStatus;
 
   /** 中断当前 turn */
   abort: CapabilityStatus;
@@ -101,6 +103,86 @@ export interface Capabilities {
    * UI 据此决定是否在 ChatInput 显示 ExtraDirsButton。
    */
   extraDirs: CapabilityStatus;
+  /**
+   * 会话导出为 HTML —— pi 原生 export_html RPC(自带 export-html 渲染器,离线、无网关)。
+   * 支持时 handle 实现 exportSessionHtml;UI 据此决定是否显示「导出 HTML」入口。
+   * CC/Codex 无对应能力(缺省视为不支持)。
+   */
+  sessionHtmlExport?: CapabilityStatus;
+  /**
+   * 手动压缩会话上下文 —— pi 原生 compact RPC(可带聚焦指令,调 LLM 生成摘要)。
+   * 支持时 handle 实现 compactSession;UI 据此决定是否显示「压缩会话」入口。
+   * CC/Codex 的 /compact 走各自 agent 内置斜杠命令,不经此能力(缺省视为不支持)。
+   */
+  manualCompact?: CapabilityStatus;
+}
+
+/** 手动压缩结果(数值可缺省:自定义压缩 handler 可能不上报)。 */
+export interface ManualCompactResult {
+  tokensBefore?: number;
+  estimatedTokensAfter?: number;
+  /**
+   * 良性空操作:上下文太小 / 无可压缩内容,agent 拒绝压缩但这不是错误。
+   * UI 应给信息性提示(「暂无可压缩内容」),而非「压缩失败」。
+   */
+  noop?: boolean;
+}
+
+export type SessionTreeEntryKind =
+  | 'message'
+  | 'compaction'
+  | 'branch_summary'
+  | 'model_change'
+  | 'thinking_level_change'
+  | 'label'
+  | 'custom'
+  | 'other';
+
+export interface SessionTreeNode {
+  id: string;
+  parentId: string | null;
+  kind: SessionTreeEntryKind;
+  role?: 'user' | 'assistant' | 'tool' | 'summary' | 'system';
+  preview: string;
+  timestamp?: string;
+  label?: string;
+  labelTimestamp?: string;
+  children: SessionTreeNode[];
+}
+
+/** 当前 SDK 会话的完整树；activePathIds 从根到当前活动 leaf。 */
+export interface SessionTreeSnapshot {
+  roots: SessionTreeNode[];
+  leafId: string | null;
+  activePathIds: string[];
+}
+
+/** 分支切换后供 host 重建可见聊天时间线的安全、harness-neutral 消息。 */
+export interface SessionTreeHistoryMessage {
+  clientId: string;
+  role: 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'thinking';
+  content: unknown;
+  toolUseId?: string;
+  createdAt: number;
+  agentMeta?: Record<string, unknown> | null;
+}
+
+export interface NavigateSessionTreeOptions {
+  summarize?: boolean;
+  customInstructions?: string;
+  label?: string;
+}
+
+export interface NavigateSessionTreeResult {
+  tree: SessionTreeSnapshot;
+  messages: SessionTreeHistoryMessage[];
+  /** 当前活动分支最后一次模型调用占用的上下文(input + cache read/write)。 */
+  contextTokens: number;
+  /** 当前活动分支模型的上下文窗口。 */
+  contextWindow: number;
+  /** 选中 user entry 时 Pi 回到其 parent，并把原 prompt 放回编辑器。 */
+  draftText?: string;
+  cancelled?: boolean;
 }
 
 /**
@@ -168,7 +250,7 @@ export interface ModelDescriptor {
    */
   sortOrder?: number;
   /**
-   * Gateway 原生 mode（issue #882，纯展示/判定元数据，源自目录 CatalogModel.mode）。
+  * Gateway 原生 mode（issue #882，纯展示/判定元数据，源自目录 CatalogModel.mode）。
    * availableModels 派生时已经过 isChatEligible 过滤，这里透传只是为了让下游（如
    * resolveSourceSwitch 之类按 model 二次判定分组的逻辑）拿到 mode 而不必回读目录——
    * 2026-07 review：ModelDescriptor 曾经丢弃 mode，下游对象只能靠 id/group 猜，
@@ -179,8 +261,15 @@ export interface ModelDescriptor {
    * 该模型在选择器里**默认是否可见**（源自目录 `defaultEnabled`，host 派生时透传；
    * 缺省 ⇒ 可见）。渲染层取种子默认模型时据它跳过默认收起的 legacy 模型 ——
    * 否则默认模型可能是用户在清单里根本看不到的那个。maker-core 运行时不读它。
-   */
+  */
   defaultEnabled?: boolean;
+  /**
+   * 模型计费($/1M tokens,源自目录/网关刷新,host 派生时透传)。pi 用它生成
+   * models.json 的 cost 让 pi 自行计价;缺省按 0 计(用量页不显示钱数)。
+   */
+  cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+  /** 最大输出 tokens(源自目录 maxOutput)。缺省时各 agent 用自身默认值。 */
+  maxOutputTokens?: number;
 }
 
 /**

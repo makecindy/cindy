@@ -63,6 +63,7 @@ export interface MakerUsageHandlerDeps {
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
+  readReferenceModelPricing(): ModelPricingMap;
   readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload>;
   emptyUsageHistory(): UsageHistoryPayload;
 }
@@ -127,9 +128,13 @@ export function registerMakerUsageHandlers(
     return toLegacyUsdModelPricing(await deps.readModelPricing());
   });
 
-  // Desktop renderer v2:provider-scoped、带币种和约值语义的完整价格目录。
+  // Desktop renderer v2:Cindy AI `/models` 的 XD 原生报价，不混入 Catalog。
   registry.handle(MAKER_INVOKE.USAGE_MODEL_PRICING_V2, async () => {
     return await deps.readModelPricing();
+  });
+
+  registry.handle(MAKER_INVOKE.USAGE_REFERENCE_MODEL_PRICING, async () => {
+    return deps.readReferenceModelPricing();
   });
 
   // 用量历史聚合 (首页仪表盘) — 查询型 handler, DB 出错回退空 payload 让

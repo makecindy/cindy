@@ -1,5 +1,5 @@
 /**
- * memory-settings-store —— 三个 memory 开关的 main 端持久化 source of truth。
+ * memory-settings-store —— memory 开关的 main 端持久化 source of truth。
  *
  * 背景:
  *  - Codex 的 enable 走 app-server in-memory enablement (重启即失效)
@@ -8,7 +8,7 @@
  *  三者都不持久化, 重启后用户上次设置丢失 → 这里收口落 JSON。
  *
  * 文件: <userData>/memory-settings.json
- *   { "maker": true, "claudeCode": true, "codex": true }
+ *   { "maker": true, "claudeCode": true, "codex": true, "pi": true }
  *
  * 默认值跟原 runtime-configs.ts / maker-memory-host.ts 的硬编码对齐:
  *  - maker      : true (默认开启，用户可以关闭)
@@ -35,12 +35,14 @@ export interface MemorySettings {
   maker: boolean;
   claudeCode: boolean;
   codex: boolean;
+  pi: boolean;
 }
 
 const DEFAULTS: MemorySettings = {
   maker: true,
   claudeCode: true,
   codex: true,
+  pi: true,
 };
 
 function settingsFilePath(rootPath?: string): string {
@@ -54,6 +56,7 @@ function normalize(raw: unknown): MemorySettings {
     maker: typeof r.maker === 'boolean' ? r.maker : DEFAULTS.maker,
     claudeCode: typeof r.claudeCode === 'boolean' ? r.claudeCode : DEFAULTS.claudeCode,
     codex: typeof r.codex === 'boolean' ? r.codex : DEFAULTS.codex,
+    pi: typeof r.pi === 'boolean' ? r.pi : DEFAULTS.pi,
   };
 }
 

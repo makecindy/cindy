@@ -11,6 +11,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   DeviceLinkError,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   type InvokeResultPayload,
@@ -28,8 +30,15 @@ vi.mock('electron', () => ({
   // (经 scheduler-host 传递性 import 被拉进来),补桩避免 collect 阶段报 mock 未定义
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
-vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+const deviceLinkSettings = vi.hoisted(() => ({
+  value: {
+    remoteControlEnabled: true,
+    revokedControllers: [] as string[],
+  },
+}));
+
+vi.mock('../settings-store', () => ({
+  readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
 import { __testing } from '../dispatch';
@@ -38,12 +47,17 @@ import * as subscriptions from '../subscriptions';
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
 function mkClient(
   over: Partial<{
+    getStatus: ReturnType<typeof vi.fn>;
     sendInvokeResult: ReturnType<typeof vi.fn>;
     sendPush: ReturnType<typeof vi.fn>;
   }> = {},
 ) {
   return {
+    getStatus: over.getStatus ?? vi.fn(() => 'online'),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
+    sendLinkAccept: vi.fn(),
+    closeLink: vi.fn(),
+    onFrame: vi.fn(),
     sendPush: over.sendPush ?? vi.fn(),
   };
 }
@@ -56,6 +70,10 @@ const invokeResultFrameBytes = (dst: string, requestId: string, payload: InvokeR
   );
 
 beforeEach(() => {
+  deviceLinkSettings.value = {
+    remoteControlEnabled: true,
+    revokedControllers: [],
+  };
   __testing.reset();
 });
 
@@ -469,20 +487,103 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(compact.__deviceLinkTruncated).toBe(true);
   });
 
-  it('多控制端:一个抛错不影响其它控制端收到转发', () => {
-    const sendPush = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw tooLarge();
-      })
-      .mockImplementation(() => {});
+  it('离线队列只记住原 topic 订阅者并按目标 topic 入队', () => {
+    const sendPush = vi.fn();
     const client = mkClient({ sendPush });
     __testing.setActiveClient(client as never);
-    subscriptions.subscribe('ctrl-1', ['session:s1']);
-    subscriptions.subscribe('ctrl-2', ['session:s1']);
+    subscriptions.subscribe('ctrl-sessions', ['sessions']);
+    subscriptions.subscribe('ctrl-s1', ['session:s1']);
+    subscriptions.clearController('ctrl-sessions');
+    subscriptions.clearController('ctrl-s1');
+    subscriptions.subscribe('live-s1', ['session:s1']);
+    __testing.setActiveClient(null);
+    subscriptions.clearController('live-s1');
+    __testing.setActiveClient(client as never);
 
-    expect(() => __testing.forwardPush('maker:event', { sessionId: 's1' })).not.toThrow();
-    // 两个控制端都尝试过(第一个抛错被接住,第二个正常)。
-    expect(sendPush).toHaveBeenCalledTimes(2);
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    expect(sendPush).not.toHaveBeenCalled();
+    expect(__testing.queuedPushesFor('ctrl-sessions')).toEqual([]);
+    expect(__testing.queuedPushesFor('ctrl-s1')).toEqual([
+      {
+        channel: 'local-db:messages:created',
+        topic: 'session:s1',
+        payload: { sessionId: 's1', id: 'm1' },
+      },
+    ]);
+  });
+
+
+  it('revoked link-open purges remembered routing and closes without accepting', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('ctrl-revoked', ['session:s1']);
+    subscriptions.clearController('ctrl-revoked');
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    deviceLinkSettings.value.revokedControllers = ['ctrl-revoked'];
+
+    __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
+
+    // 'inbound':撤权关的是对方对本机的控制方向,不得封死本机仍存续的主动控制。
+    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked', 'inbound');
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    expect(__testing.queuedPushesFor('ctrl-revoked')).toEqual([]);
+    expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
+  });
+
+  it('legacy link-open restores wildcard behavior and replays wildcard backlog', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('ctrl-legacy', ['*']);
+    subscriptions.clearController('ctrl-legacy');
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+
+    __testing.handleLinkOpen(client as never, 'ctrl-legacy', 'open-1', undefined);
+
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+    expect(client.sendPush).toHaveBeenCalledWith(
+      'ctrl-legacy',
+      'local-db:messages:created',
+      { sessionId: 's1', id: 'm1' },
+    );
+    expect(subscriptions.__testing.topicsOf('ctrl-legacy')).toEqual(['*']);
+  });
+
+  it('remembered modern link-open waits for an explicit subscribe frame', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe(
+      'ctrl-modern',
+      ['session:s1'],
+      'Desktop',
+      [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
+    );
+    subscriptions.clearController('ctrl-modern');
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+
+    __testing.handleLinkOpen(client as never, 'ctrl-modern', 'open-1', {
+      controllerName: 'Mobile',
+      protocolVersion: 1,
+      appVersion: '1.0.0',
+      capabilities: [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
+    });
+
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    expect(subscriptions.__testing.topicsOf('ctrl-modern')).toEqual([]);
+    expect(subscriptions.controllerSupports(
+      'ctrl-modern',
+      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+    )).toBe(true);
+
+    const result = __testing.handleSubscriptionFrame('ctrl-modern', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'] }],
+    });
+    expect(result).toEqual({ ok: true, result: { ok: true } });
+    expect(client.sendPush).toHaveBeenCalledWith(
+      'ctrl-modern',
+      'local-db:messages:created',
+      { sessionId: 's1', id: 'm1' },
+    );
   });
 });

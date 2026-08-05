@@ -14,6 +14,7 @@ import type { InstalledGhost } from '../../shared/ghost';
  *   await __cindyGhosts.spawn('<id>')         拉起沙箱(off/crashed → running)
  *   await __cindyGhosts.stopRun('<id>')       熄灯(→ off)
  *   await __cindyGhosts.crash('<id>')         强崩沙箱进程(验证崩溃隔离与熔断)
+ *   await __cindyGhosts.call('<id>', '<tool>', {})  经正式派发链调用工具
  *
  * 生产构建(import.meta.env.DEV = false)完全不挂载,零暴露。
  * 读写全部走 electronAPI.ghosts(main 侧 GhostManager 严格校验),
@@ -28,6 +29,7 @@ interface GhostDevToolsApi {
   spawn: (id: string) => Promise<string>;
   stopRun: (id: string) => Promise<string>;
   crash: (id: string) => Promise<string>;
+  call: (id: string, tool: string, args?: Record<string, unknown>) => Promise<unknown>;
 }
 
 declare global {
@@ -70,5 +72,7 @@ export function installGhostDevTools(): void {
       await window.electronAPI.ghosts.devRuntime('crash', id);
       return `已强崩 ${id} 的沙箱进程;稍后用 runtime() 查看 crashed/fused 状态`;
     },
+    call: (id: string, tool: string, args: Record<string, unknown> = {}) =>
+      window.electronAPI.ghosts.devCall(id, tool, args),
   };
 }

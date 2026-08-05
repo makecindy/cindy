@@ -261,13 +261,15 @@ describe('normalizeTaskSource', () => {
     fr.finish();
   });
 
+  // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
+  // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
   it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
 
     const keys = [
-      'telegram:group:bot:-900:42:9:g0',
+      'telegram:group:bot:-900:9:g0',
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
@@ -280,6 +282,7 @@ describe('normalizeTaskSource', () => {
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
   });
+
 });
 
 describe('dispatcher 核心语义', () => {
@@ -416,6 +419,41 @@ describe('dispatcher 核心语义', () => {
       status: 'ok',
       finalText: '搞定了',
     });
+  });
+
+  it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
+    // server 会把 thread 上下文拼进 prompt(Slack 的 injectThreadContext 一直
+    // 如此, X 也已接上)。按 prompt 前 24 字取标题的话, 整条 thread 派出来的
+    // 会话标题全是 `[Team-slack] <thread_context> [@alice…`, 既看不出任务是
+    // 什么, 同一 thread 里还条条雷同。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        prompt: '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
+        source: { im: 'x', userText: '你来解释下这个问题' },
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(fr.calls[0]).toMatchObject({ title: '[X] 你来解释下这个问题' });
+    // prompt 本身照旧整份交给 agent —— 上下文不能因为标题的取舍被砍掉
+    expect(fr.calls[0]?.prompt).toContain('<thread_context>');
+  });
+
+  it('source.userText 缺失或为空时回退 prompt(老 server / 纯 @ 无正文)', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x', userText: '   ' } }), c.send);
+    await tick();
+
+    expect(fr.calls[0]).toMatchObject({ title: '[X] 干活' });
   });
 
   it('同 key 第二次 dispatch 复用同一 session(铁律)', async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import '../themes/colors';
 import {
   bootstrapLocalThemesSync,
   buildCopyFromTheme,
@@ -7,6 +8,36 @@ import {
   refreshLocalThemes,
 } from '../themes/local-themes';
 import type { Theme } from '../themes/types';
+
+const COPY_SOURCE_COLORS = {
+  surface: '#ffffff',
+  'surface-on-card': '#f5f5f5',
+  'surface-hover': '#eeeeee',
+  'surface-secondary': '#e5e5e5',
+  'text-secondary': '#6b6b6b',
+};
+
+function copyAndLoadTheme(source: Theme): {
+  copied: ReturnType<typeof buildCopyFromTheme>['theme'];
+  loaded: Theme;
+} {
+  const copied = buildCopyFromTheme(source).theme;
+  const payload = {
+    success: true as const,
+    diagnostics: [],
+    themes: [{ ...copied, id: `${copied.id}-loaded` }],
+  };
+  vi.stubGlobal('window', {
+    electronAPI: {
+      localThemes: {
+        listSync: () => payload,
+      },
+    },
+  });
+
+  bootstrapLocalThemesSync();
+  return { copied, loaded: getLocalThemes()[0]! };
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -25,6 +56,38 @@ describe('local theme export', () => {
       icon: '/absolute/path/to/your-image-folder/icon-square-50x50px.png',
       logo: '/absolute/path/to/your-image-folder/logo-horizontal-110x37.5px.png',
     });
+  });
+
+  it('复制产生的 Switch registry 默认别名在加载时重新派生', () => {
+    const { copied, loaded } = copyAndLoadTheme({
+      id: 'copy-source',
+      name: 'Copy Source',
+      type: 'light',
+      colors: COPY_SOURCE_COLORS,
+    });
+
+    expect(copied.colors['switch-track-off']).toBe('var(--text-secondary)');
+    expect(copied.colors['switch-thumb-off']).toBe('var(--surface-on-card)');
+    expect(loaded.colors['switch-track-off']).toMatch(/^#[0-9a-f]{6}$/);
+    expect(loaded.colors['switch-thumb-off']).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it('复制后加载不覆盖显式 Switch override', () => {
+    const { copied, loaded } = copyAndLoadTheme({
+      id: 'explicit-source',
+      name: 'Explicit Source',
+      type: 'light',
+      colors: {
+        ...COPY_SOURCE_COLORS,
+        'switch-track-off': '#765432',
+        'switch-thumb-off': '#fedcba',
+      },
+    });
+
+    expect(copied.colors['switch-track-off']).toBe('#765432');
+    expect(copied.colors['switch-thumb-off']).toBe('#fedcba');
+    expect(loaded.colors['switch-track-off']).toBe('#765432');
+    expect(loaded.colors['switch-thumb-off']).toBe('#fedcba');
   });
 
   it('刷新同一配置时替换素材对象，并把文件版本加入图片 URL', async () => {

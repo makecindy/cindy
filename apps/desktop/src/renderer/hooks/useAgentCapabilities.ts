@@ -17,7 +17,12 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
 const log = createLogger('useAgentCapabilities');
 
-export type AgentKind = 'claude-code' | 'codex';
+export type AgentKind = 'claude-code' | 'codex' | 'pi';
+
+// capability 生命周期(预取 / 驱逐通知 / 本地快照刷新 / 启动预载)必须覆盖全部 agent，
+// 少一个就会让该 agent 的远程会话在断链或 provider revision 后收不到 loading 事件、
+// 也不再被重新预取，界面永久停在旧模型/能力快照(codex review)。新增 agent 只改这里。
+const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 
 // renderer 视角: id 全部是不透明 string, 渲染只读 displayName。
 // effort 的合法 id 集合 = capabilities.effortLevels 上每个项的 id。
@@ -87,6 +92,101 @@ export interface AgentCapabilities {
   fork?: CapabilityStatus;
   /** Session rewind — UserMessage 下方 Rewind icon 据此显示 / 隐藏。 */
   rewind?: CapabilityStatus;
+  /**
+   * 同会话跨引擎切换(Claude Code ↔ Codex)。host 级能力,两个 agent 的 capabilities
+   * 都带回同一个值;device-link 老被控端无此字段 → undefined = 不支持,控制端隐藏
+   * 模型选择器顶部的 Agent 分段(它同时也没收录切换 channel,点了必失败)。
+   */
+  supportsSessionAgentSwitch?: boolean;
+  /**
+   * 同引擎重选是否返回可供 SET_MODEL 二次校验的 CAS 修订号。首版切换 host 只有上面的
+   * 基础能力位；远程控制端必须同时看到本位才开放入口，避免旧 host 的清除回流先于 ack
+   * 到达时无法安全关联后续模型写入。
+   */
+  supportsSessionAgentSwitchCas?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean';
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isOptionalStringRecord(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isRecord(value) && Object.values(value).every((label) => typeof label === 'string'))
+  );
+}
+
+function isModelDescriptor(value: unknown): value is ModelDescriptor {
+  if (!isRecord(value)) return false;
+  const efforts = value.efforts;
+  const defaultEffort = value.defaultEffort;
+  return (
+    typeof value.id === 'string' &&
+    value.id.length > 0 &&
+    typeof value.displayName === 'string' &&
+    value.displayName.length > 0 &&
+    typeof value.contextWindow === 'number' &&
+    Number.isFinite(value.contextWindow) &&
+    value.contextWindow > 0 &&
+    isStringArray(efforts) &&
+    (defaultEffort === null ||
+      (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
+    isOptionalString(value.group) &&
+    isOptionalString(value.mode) &&
+    isOptionalString(value.description) &&
+    isOptionalStringRecord(value.effortDisplayNames) &&
+    isOptionalBoolean(value.supportsFastMode) &&
+    isOptionalFiniteNumber(value.sortOrder) &&
+    isOptionalBoolean(value.defaultEnabled)
+  );
+}
+
+function isNamedDescriptor(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    value.id.length > 0 &&
+    typeof value.displayName === 'string' &&
+    value.displayName.length > 0 &&
+    isOptionalString(value.description)
+  );
+}
+
+function parseAgentCapabilities(value: unknown): AgentCapabilities {
+  if (!isRecord(value)) {
+    throw new Error('Invalid agent capabilities response');
+  }
+  if (
+    !Array.isArray(value.availableModels) ||
+    !value.availableModels.every(isModelDescriptor) ||
+    typeof value.hasFastMode !== 'boolean' ||
+    !Array.isArray(value.effortLevels) ||
+    !value.effortLevels.every(isNamedDescriptor) ||
+    !Array.isArray(value.permissionModes) ||
+    !value.permissionModes.every(isNamedDescriptor) ||
+    !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
+    !isOptionalBoolean(value.supportsSessionAgentSwitchCas)
+  ) {
+    throw new Error('Invalid agent capabilities response');
+  }
+  return value as unknown as AgentCapabilities;
 }
 
 interface MakerApiShape {
@@ -197,7 +297,8 @@ async function fetchCapabilities(
     raw = api.getCapabilities(agentKind);
   }
   const p = raw
-    .then((caps) => {
+    .then((value) => {
+      const caps = parseAgentCapabilities(value);
       // 在途期间设备被驱逐(下线 / 断链)→ 丢弃结果,不回写 cache、不动 inflight。
       if (isCurrent()) {
         cache.set(key, caps);
@@ -237,33 +338,43 @@ export function useAgentCapabilities(
   agentKind: AgentKind | null | undefined,
   deviceId?: string,
 ): UseAgentCapabilitiesResult {
+  const selectedKey = agentKind ? cacheKey(agentKind, deviceId) : null;
+  const initialCapabilities = selectedKey ? cache.get(selectedKey) : undefined;
+  const [ownerKey, setOwnerKey] = useState<CacheKey | null>(
+    initialCapabilities ? selectedKey : null,
+  );
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(
-    agentKind ? (cache.get(cacheKey(agentKind, deviceId)) ?? null) : null,
+    initialCapabilities ?? null,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!agentKind) return undefined;
+    const key = cacheKey(agentKind, deviceId);
     const applyRemoteEvent = (event: DeviceCapabilitiesEvent): void => {
       if (event.status === 'loading') {
         // 保留上一份完整快照以避免空白帧，但显式标记为 stale，调用方不得据此改写选择。
+        setOwnerKey(key);
         setLoading(true);
         setError(null);
         return;
       }
       if (event.status === 'error') {
+        setOwnerKey(key);
         setCapabilities(null);
         setLoading(false);
         setError(event.error);
         return;
       }
+      setOwnerKey(key);
       setCapabilities(event.capabilities);
       setLoading(false);
       setError(null);
     };
     if (deviceId) return subscribeDeviceCapabilities(deviceId, agentKind, applyRemoteEvent);
     const applySnapshot = (caps: AgentCapabilities): void => {
+      setOwnerKey(key);
       setCapabilities(caps);
       setLoading(false);
       setError(null);
@@ -280,11 +391,16 @@ export function useAgentCapabilities(
 
   useEffect(() => {
     if (!agentKind) {
+      setOwnerKey(null);
       setCapabilities(null);
+      setLoading(false);
+      setError(null);
       return;
     }
-    const cached = cache.get(cacheKey(agentKind, deviceId));
+    const key = cacheKey(agentKind, deviceId);
+    const cached = cache.get(key);
     if (cached) {
+      setOwnerKey(key);
       setCapabilities(cached);
       // 缓存命中 = 数据已就绪,必须把上一目标遗留的 loading / error 一并清掉。
       // 漏了会卡死:从「能力还在加载」的设备切到已缓存的设备时走到这里直接 return,
@@ -297,6 +413,7 @@ export function useAgentCapabilities(
     let cancelled = false;
     // cache miss:先清掉上一设备 / 会话的能力,避免 fetch 解析前(失败则永远)UI 残留旧设备的
     // 模型 / effort 列表 → 远程会话误选目标端不支持的模型。
+    setOwnerKey(key);
     setCapabilities(null);
     setLoading(true);
     setError(null);
@@ -323,7 +440,12 @@ export function useAgentCapabilities(
     };
   }, [agentKind, deviceId]);
 
-  return { capabilities, loading, error };
+  const ownsSelection = ownerKey === selectedKey;
+  return {
+    capabilities: ownsSelection ? capabilities : null,
+    loading: selectedKey !== null && (!ownsSelection || loading),
+    error: ownsSelection ? error : null,
+  };
 }
 
 /**
@@ -343,10 +465,7 @@ export function getCachedCapabilities(
  * 模型下拉 / fast / effort 不为空、modelDefinitions 同步层已热。失败 swallow(轮询/打开会话会再取)。
  */
 export async function prefetchDeviceCapabilities(deviceId: string): Promise<void> {
-  await Promise.allSettled([
-    fetchCapabilities('claude-code', deviceId),
-    fetchCapabilities('codex', deviceId),
-  ]);
+  await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
@@ -358,7 +477,7 @@ export function evictDeviceCapabilities(deviceId: string): void {
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   // 已挂载 hook 必须同步知道旧快照已失效；否则 provider 新快照先到时会拿旧 capabilities
   // 计算 fallback，并永久覆盖用户原本保存的模型偏好。
-  for (const agentKind of ['claude-code', 'codex'] as const) {
+  for (const agentKind of ALL_AGENT_KINDS) {
     notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });
   }
 }
@@ -368,20 +487,31 @@ export type LocalCapabilitiesSnapshot = ReadonlyArray<readonly [AgentKind, Agent
 /** 开始一轮本地 capabilities 刷新，并作废所有更早的本地请求。 */
 export function beginLocalCapabilitiesRefresh(): number {
   localGen += 1;
-  for (const agent of ['claude-code', 'codex'] as const) {
+  for (const agent of ALL_AGENT_KINDS) {
     inflight.delete(cacheKey(agent));
   }
   return localGen;
 }
 
-/** 读取两种 agent 的完整能力快照；失败向上抛，不触碰现有缓存。 */
+/**
+ * 读取本地 agent 能力快照；核心 agent 失败向上抛，可选 Pi 的能力读取失败不阻断 provider 目录。
+ */
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  return Promise.all(
-    (['claude-code', 'codex'] as const).map(
-      async (agent) => [agent, await api.getCapabilities(agent)] as const,
-    ),
+  const entries = await Promise.all(
+    ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
+      try {
+        return [agent, await api.getCapabilities(agent)] as const;
+      } catch (error) {
+        if (agent !== 'pi') throw error;
+        log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
+        return null;
+      }
+    }),
+  );
+  return entries.filter(
+    (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );
 }
 
@@ -389,7 +519,7 @@ export function isLocalCapabilitiesRefreshCurrent(generation: number): boolean {
   return localGen === generation;
 }
 
-/** 仅提交当前代际的完整能力快照，并在提交后统一通知 mounted hooks。 */
+/** 仅提交当前代际的可用能力快照，并在提交后统一通知 mounted hooks。 */
 export function commitLocalCapabilitiesSnapshot(
   generation: number,
   entries: LocalCapabilitiesSnapshot,
@@ -403,8 +533,8 @@ export function commitLocalCapabilitiesSnapshot(
 }
 
 /**
- * Codex auth/discovery 广播后的本地热刷新。旧 cache 在两个 IPC 都成功前继续可读；完成后同时
- * 替换 cache 并通知 mounted hooks，避免 provider:list 已更新而 scheduler/selector 仍用旧能力。
+ * Codex auth/discovery 广播后的本地热刷新。旧 cache 在核心 IPC 都成功前继续可读；完成后
+ * 同时替换 cache 并通知 mounted hooks，避免 provider:list 已更新而 scheduler/selector 仍用旧能力。
  */
 export async function refreshLocalCapabilities(): Promise<void> {
   const generation = beginLocalCapabilitiesRefresh();
@@ -422,7 +552,7 @@ export async function refreshLocalCapabilities(): Promise<void> {
  * 让 modelDefinitions.ts 这种 sync 兼容层立刻有数据。
  */
 export async function preloadAllCapabilities(): Promise<void> {
-  const load = () => Promise.all([fetchCapabilities('claude-code'), fetchCapabilities('codex')]);
+  const load = () => Promise.all(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent)));
 
   // 防御性重试：EnvCheckGuard 已保证 handler 已注册，这里兜底瞬时 IPC 故障
   for (let attempt = 0; attempt < 3; attempt++) {

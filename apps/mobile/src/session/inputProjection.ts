@@ -102,7 +102,9 @@ export function buildQueuedTextMessage(
   const workingDir = session.workingDir || '';
   const effort = session.effort || '';
   const permissionMode = permissionModeOrAsk(session.permissionMode);
-  const agentKind = session.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
+    ? session.agentKind
+    : 'claude-code';
   const persistedContent = stringifyUserContent(
     trimmed,
     persistedImageRefs,

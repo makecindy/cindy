@@ -96,7 +96,7 @@ export interface HookContinuationWatchRequest {
   workingDir: string;
   /** 原任务的来源标注(决定 Telegram / Slack 的进度渲染差异)。 */
   source?: TaskSource;
-  /** 原任务的渠道形态; 与 run() 同判据地决定进度只发正文还是带过程区。 */
+  /** 原任务的渠道形态; 与 run() 同判据地决定群轮次是否取 turn lease。 */
   laneKind?: 'dm' | 'group';
   /**
    * "这个目录此刻还在本连接的工作目录映射内吗" —— 与 run() 的同名回调同语义, 用来
@@ -132,8 +132,8 @@ export interface HookRunRequest {
   sessionId: string;
   /**
    * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
-   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
-   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
+   * runner 据此决定群轮次是否取 turn lease(见 deriveLaneKind 的注释)。
+   * 缺省按 'dm' 保守处理。
    */
   laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
@@ -449,6 +449,13 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
  * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
  * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
  * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
+ *
+ * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
+ * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
+ * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
+ * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
+ * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
+ * 老 server 不下发时回退 prompt, 行为与此前一致。
  */
 export function buildHookSessionTitle(
   providerName: string,
@@ -501,8 +508,12 @@ interface PendingTask {
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
- * execute() 与续跑观察共用: 两边都要用它算 answerOnlyProgress, 判据分叉就会让
- * 续跑轮的进度渲染跟正常任务不一致(Telegram DM 冒出过程区 / 群里少了过程区)。
+ *
+ * **唯一用途**: 官方 Telegram 群轮次在 send 时取 session turn lease, 把
+ * 「前台 done → 后台任务续跑」这段空窗也算作本轮独占, 否则 Desktop 轮次会被
+ * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
+ * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
+ * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
   return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
@@ -1301,6 +1312,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let recreatedNotice: string | null = null;
 
     const laneKind = deriveLaneKind(payload.externalKey);
+
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -1514,6 +1526,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
     const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
+    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
+    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
+    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
+    const sourceUserText = payload.source?.userText ?? '';
+    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
     return {
       run: {
         sessionId,
@@ -1528,7 +1545,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
-          payload.prompt,
+          titleText,
           bareKey,
           payload.source?.teamName ??
             (payload.source?.im === 'telegram' || payload.source?.im === 'x'

@@ -47,15 +47,23 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
     expect(scope.skipProjectQuery).toBe(false);
   });
 
-  it('对话模式(无项目目录):不挂入口', () => {
-    // dialogue 会话在 main 侧也会拿到一个自动分配的运行目录,所以必须靠 workspaceKind
-    // 判定,不能从 workingDir 反推。
+  it('对话模式:可挂入口;已有目录交给 Main 区分托管目录与显式真实目录', () => {
+    // 已创建 dialogue 的 workingDir 可能是 app 托管目录,也可能是显式真实目录。
+    // Renderer 不持有受信任的 root,所以统一把目录交给 Main 查询:前者无项目配置时自然
+    // 回落全局,后者必须尊重项目覆盖,避免入口放行后才撞授权拒绝。
     expect(
       resolveCollabEntryPolicy({
         workspaceKind: 'dialogue',
         workingDir: '/Users/me/Library/.../dialogues/2026-07-31/s1',
-      }).eligible,
-    ).toBe(false);
+      }),
+    ).toEqual({ eligible: true, skipProjectQuery: false });
+    // 草稿还没创建 session,自然没有 main 分配的运行目录,入口同样应出现。
+    expect(
+      resolveCollabEntryPolicy({ workspaceKind: 'dialogue', workingDir: null }),
+    ).toEqual({ eligible: true, skipProjectQuery: true });
+  });
+
+  it('项目模式仍要求有效目录', () => {
     expect(
       resolveCollabEntryPolicy({ workspaceKind: 'project', workingDir: null }).eligible,
     ).toBe(false);
@@ -64,11 +72,38 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
     ).toBe(false);
   });
 
+  it('device-link 对话草稿:隧道到被控设备,并只查它的用户/全局级', () => {
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'dialogue',
+        workingDir: null,
+        deviceLinkDeviceId: 'dev-1',
+      }),
+    ).toEqual({ eligible: true, policyDeviceId: 'dev-1', skipProjectQuery: true });
+  });
+
+  it('device-link 已创建对话:把目录隧道到被控端查询', () => {
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'dialogue',
+        workingDir: '/Users/other/dialogues/2026-08-02/session-1',
+        deviceLinkDeviceId: 'dev-1',
+      }),
+    ).toEqual({ eligible: true, policyDeviceId: 'dev-1', skipProjectQuery: false });
+  });
+
   it('Orca Worker 子会话:不挂入口(worker 自己不能再开协同)', () => {
     expect(
       resolveCollabEntryPolicy({
         workspaceKind: 'project',
         workingDir: '/Users/me/proj',
+        orcaRole: 'worker',
+      }).eligible,
+    ).toBe(false);
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'dialogue',
+        workingDir: '/app-managed/dialogues/2026-08-02/worker-1',
         orcaRole: 'worker',
       }).eligible,
     ).toBe(false);
@@ -116,6 +151,7 @@ describe('drift 守卫:两个入口共用同一份判定', () => {
       const src = read(f);
       expect(src, f).toContain('resolveCollabEntryPolicy({');
       expect(src, f).toContain('collabEntry.eligible');
+      expect(src, f).toContain('workspaceKind: collabWorkspaceKind');
       // 内联判据的两个历史形态:草稿的 `effectiveDeviceLinkDeviceId == null`(把
       // device-link 整个排除掉)与会话页的 `orcaRole !== 'worker'` 链。
       expect(src, f).not.toContain('effectiveDeviceLinkDeviceId == null');

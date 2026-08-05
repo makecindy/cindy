@@ -5,6 +5,7 @@ import {
   findAgentTaskUpdate,
   isAgentTaskToolName,
   mergeAgentTaskUpdate,
+  PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
   normalizeWorkflowProgressEntries,
   type AgentTaskUpdate,
@@ -22,6 +23,19 @@ describe('isAgentTaskToolName', () => {
     expect(isAgentTaskToolName('TodoWrite')).toBe(false);
     expect(isAgentTaskToolName('')).toBe(false);
   });
+
+  it('matches the PI subagent tool so its card renders like Claude / Codex', () => {
+    // 这条判据是三家 harness 唯一的卡片入口:漏了 PI 的工具名,子代理调用会**静默**落进普通
+    // 工具组 —— 不报错、不缺数据,只是卡片不出现,极难从日志发现(review 要求补覆盖)。
+    expect(isAgentTaskToolName(PI_SUBAGENT_TOOL_NAME)).toBe(true);
+    // 用字面量再钉一次:常量与判据一起被改坏时,只断言常量的测试会一起变绿。
+    expect(isAgentTaskToolName('subagent')).toBe(true);
+    expect(PI_SUBAGENT_TOOL_NAME).toBe('subagent');
+    // 大小写与近似名不得误命中(pi 工具名是精确匹配,不是前缀/模糊)。
+    expect(isAgentTaskToolName('Subagent')).toBe(false);
+    expect(isAgentTaskToolName('subagents')).toBe(false);
+    expect(isAgentTaskToolName('sub-agent')).toBe(false);
+  });
 });
 
 describe('normalizeAgentTaskUpdate', () => {
@@ -34,6 +48,8 @@ describe('normalizeAgentTaskUpdate', () => {
   it('defaults status to running and infers provider from source', () => {
     const update = normalizeAgentTaskUpdate({ taskId: 't1', status: 'weird' }, 'codex');
     expect(update).toMatchObject({ taskId: 't1', status: 'running', provider: 'codex' });
+    expect(normalizeAgentTaskUpdate({ taskId: 't2' }, 'pi'))
+      .toMatchObject({ taskId: 't2', provider: 'pi' });
   });
 
   it('keeps an explicit provider over the source hint and shapes usage', () => {
@@ -294,5 +310,53 @@ describe('buildAgentTaskCardModel', () => {
     const model = buildAgentTaskCardModel({ toolName: 'Task', toolInput: { description: 'x' } });
     expect(model.status).toBe('running');
     expect(model.provider).toBe('claude-code');
+  });
+
+  it('surfaces the codex spawn receipt as structured spawnedAgentName, not raw summary', () => {
+    // translator 约定:collab:spawn 的 tool_result 只放 agentPath(= input.name)。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+    });
+    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('codex');
+  });
+
+  it('drops the spawn receipt once live subagent state exists (card parity with claude)', () => {
+    // 子线程送来 tokens / 工具数后,title + 运行状态已表达同样信息;再显示
+    // 「Subagent X 已启动」会让 codex 卡比 Claude 子代理卡多一行冗余文案。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+      update: {
+        provider: 'codex',
+        taskId: 'spawn-1',
+        status: 'running',
+        title: '/root/survey_startup',
+        usage: { totalTokens: 1200, toolUses: 3, durationMs: 4200 },
+      },
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    // 裸 agentPath 同样不许漏进 summary。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('running');
+    expect(model.totalTokens).toBe(1200);
+    expect(model.toolUses).toBe(3);
+    expect(model.durationMs).toBe(4200);
+  });
+
+  it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup' },
+      result: 'thread-2: done',
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    expect(model.summary).toBe('thread-2: done');
   });
 });

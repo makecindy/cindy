@@ -2,18 +2,18 @@
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；标题左侧保留与 SessionItem 同源的
- *   SessionStatusIcon（agent 标识 + running 呼吸 + attention 状态点 + 草稿铅笔），
- *   标题最多 2 行，摘要 / 最近消息随内容最多 1~3 行；底部 metadata 槽放短进度条、
- *   worktree 标识和时间。
+ * 视觉：白底 Card + 1px Board 圆角 12；标题最多 2 行且保持纯文字，摘要 / 最近消息
+ *   随内容最多 1~3 行；SessionStatusIcon（agent 标识 + running 呼吸 + attention
+ *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
- *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/复制ID/新窗口/Archive/Delete，
+ *   - 右键 coordinate-anchored DropdownMenu（Pin/Rename/移动到项目/复制任务链接/新窗口/导出/Archive/Delete，
  *     archived / draft 变体同款分支）
  *   - hover 右上角仅 More（⋮）快捷钮；存档收进 ⋮ / 右键展开菜单的 Archive 项
  *     （卡片不再出现独立的存档快捷钮）。已归档卡片保留"取消归档"快捷钮。
- *   - card / list 变体:标题左侧复用 SessionStatusIcon(含 agent 图标、运行呼吸、状态点、草稿铅笔)
+ *   - list 变体保留标题左侧 SessionStatusIcon / 自动化前缀；card 变体标题不带前缀，
+ *     状态 / Agent / 自动化图标留在底部 meta 行
  *   - remote 会话标识复用 RemoteProjectIcon,继续区分 device-link / ssh
  *   - matchIndices 模糊搜索高亮沿用 highlightSegments
  *
@@ -65,13 +65,20 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
+import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
 import type { SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
+import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionBoundSchedules, scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 
 const log = createLogger('SessionCard');
 
@@ -132,6 +139,28 @@ export function SessionCard({
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
+  // list 变体与文字模式共用右侧状态优先级:
+  // error > awaiting > running > done > time。远程会话由被控端活动镜像覆盖
+  // 本地 attention 链路，与 SessionItem 完全一致。
+  const attentionKind = useSessionAttentionKind(session.id);
+  const isUrgentFromContext = useSessionAttentionUrgency(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteRightStatus =
+    remoteActivity == null
+      ? null
+      : remoteActivity.phase === 'error'
+        ? ('error' as const)
+        : remoteActivity.phase === 'needs-interaction'
+          ? ('awaiting' as const)
+          : remoteActivity.phase === 'running'
+            ? ('running' as const)
+            : ('done' as const);
+  const rightStatusKind = remoteRightStatus ?? resolveSidebarRightStatus({
+    attentionKind,
+    isUrgentFromContext,
+    isRunning,
+    hasAttentionNotification,
+  });
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;
@@ -183,6 +212,7 @@ export function SessionCard({
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [archivePending, setArchivePending] = useState(false);
+  const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -217,9 +247,6 @@ export function SessionCard({
     const timer = setTimeout(() => setIsSettling(false), 900);
     return () => clearTimeout(timer);
   }, [isRunning]);
-  // muted:运行中整卡变灰(文字 0.5s 过渡回正常)。
-  const isMuted = isRunning && !isActive;
-
   // ── rename（与 SessionItem 同款防重复提交 ref） ──
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(displayTitle);
@@ -360,6 +387,12 @@ export function SessionCard({
     void window.electronAPI.maker.openSessionInNewWindow(session.id);
   }, [remoteWritesBlocked, session.id, t]);
 
+  // 「导出会话…」——打成 .cshare 分享给同事。空草稿、remote / orca / device-link 会话不显示此入口
+  // (转录在远端或协同关系不可移植，main 侧同样有双保险拒绝)。
+  const handleExportShareSelect = useCallback(() => {
+    setShareExportOpen(true);
+  }, []);
+
   const handleAutomationIconClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -391,6 +424,15 @@ export function SessionCard({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
+
+  const canExportShare =
+    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+
+  const exportShareMenuItem = canExportShare ? (
+    <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
+      {t('ccAgent.sidebar.sessionMenu.exportShare')}
+    </DropdownMenuItem>
+  ) : null;
 
   // 「移动到项目」子菜单(main 既有功能;本次侧栏重设保留)。
   const canMoveToProject =
@@ -430,6 +472,7 @@ export function SessionCard({
         isAttached={isAttached}
         hasAttentionNotification={hasAttentionNotification}
         isActive={isActive}
+        showAttentionDot={false}
       />
     </span>
   );
@@ -481,6 +524,11 @@ export function SessionCard({
       data-sidebar-session-row="true"
       role="button"
       tabIndex={0}
+      onPointerDown={(e) => {
+        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+          makerChatStore.ensureInitialMessages(session.id);
+        }
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
@@ -543,63 +591,66 @@ export function SessionCard({
             />
           )}
           <div className="flex items-center gap-1.5">
-            {isEditing ? (
-              <SessionRenameInput
-                sessionId={session.id}
-                value={editValue}
-                onValueChange={setEditValue}
-                onCommit={commitTitle}
-                onCancel={() => {
-                  // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
-                  // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
-                  committedRef.current = true;
-                  setIsEditing(false);
-                }}
-                containerClassName="min-w-0 flex-1"
-                inputClassName="h-6 text-13 font-semibold text-foreground"
-                activeForeground={isActive}
-              />
-            ) : (
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <span
-                  className={cn(
-                    'min-w-0 truncate',
-                    'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
-                    'transition-[color] duration-500',
-                    isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--cmd-palette-item-meta)]' : 'text-foreground',
+            {/* 标题槽固定沿用常态时间槽的 20px 高度。改名框本身是 24px，编辑时
+                绝对定位居中覆盖文字槽位，不参与布局计算，避免整条置顶任务被撑高。
+                状态 / Agent / 自动化图标始终留在文字槽左侧，编辑态也不改变标题起点。 */}
+            <div className="relative flex h-5 min-w-0 flex-1 items-center gap-0">
+              <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
+              {isEditing ? (
+                <SessionRenameInput
+                  sessionId={session.id}
+                  value={editValue}
+                  onValueChange={setEditValue}
+                  onCommit={commitTitle}
+                  onCancel={() => {
+                    // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
+                    // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
+                    committedRef.current = true;
+                    setIsEditing(false);
+                  }}
+                  containerClassName="relative min-w-0 flex-1 self-stretch"
+                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-13 font-semibold text-foreground"
+                  activeForeground={isActive}
+                />
+              ) : (
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <span
+                    className={cn(
+                      'min-w-0 truncate',
+                      'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
+                      isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                    )}
+                  >
+                    {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                      ? highlightSegments(session.title, matchIndices, {
+                          highlightClassName: cn(
+                            'bg-transparent font-semibold',
+                            isActive
+                              ? 'text-[var(--sidebar-item-active-foreground)]'
+                              : 'text-[var(--msg-assistant-text)]',
+                          ),
+                        })
+                      : displayTitle}
+                  </span>
+                  {remoteIconKind && (
+                    <RemoteProjectIcon
+                      kind={remoteIconKind}
+                      size={11}
+                      strokeWidth={1.8}
+                      connectionStatus={remoteIconConnectionStatus}
+                      className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
+                    />
                   )}
-                >
-                  {titlePrefixNode}
-                  {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                    ? highlightSegments(session.title, matchIndices, {
-                        highlightClassName: cn(
-                          'bg-transparent font-semibold',
-                          isActive
-                            ? 'text-[var(--sidebar-item-active-foreground)]'
-                            : 'text-[var(--msg-assistant-text)]',
-                        ),
-                      })
-                    : displayTitle}
-                </span>
-                {remoteIconKind && (
-                  <RemoteProjectIcon
-                    kind={remoteIconKind}
-                    size={11}
-                    strokeWidth={1.8}
-                    connectionStatus={remoteIconConnectionStatus}
-                    className={isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-tertiary)]'}
-                  />
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            </div>
 
-            {/* 时间槽位:hover/菜单打开让位给 More/Archive(逻辑同对话列表)。agent /
-                自动任务状态图标已移到本行左上角(标题左侧)。 */}
+            {/* 时间槽位:hover/菜单打开让位给 More/Archive(逻辑同对话列表)。
+                Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
                 sessionId={session.id}
                 activityIso={activityIso}
-                isMuted={isMuted}
                 isActive={isActive}
                 isArchived={isArchived}
                 canQuickArchive={canQuickArchive}
@@ -622,24 +673,29 @@ export function SessionCard({
 
           {/* 预览区——固定 1 行高度(标题 1 行 + 此 1 行 = 列表行统一两行高;运行 /
               非运行、内容长短都不变,始终渲染占位)。等待交互 TapTap 蓝高亮
-              (--card-status-awaiting),运行/空闲走 muted/次级色。 */}
+              (--card-status-awaiting),其余状态统一走次级色。 */}
           <p
             className={cn(
               'mt-1 overflow-hidden text-11 leading-[1.45]',
               '[display:-webkit-box] [-webkit-line-clamp:1] [-webkit-box-orient:vertical]',
-              'transition-[color] duration-500',
+              rightStatusKind !== 'time' && 'pr-5',
               awaitingText
                 ? isActive
                   ? 'text-[var(--sidebar-item-active-foreground)] font-medium'
                   : 'text-[var(--card-status-awaiting)] font-medium'
-                : isMuted
-                  ? 'text-[var(--text-disabled)]'
-                  : 'text-[var(--text-secondary)]',
+                : 'text-[var(--text-secondary)]',
             )}
             style={{ height: '1.45em' }}
           >
             {listPreview}
           </p>
+          {rightStatusKind !== 'time' && (
+            <SidebarRightStatusIndicator
+              kind={rightStatusKind}
+              isActive={isActive}
+              className="absolute right-2.5 bottom-2"
+            />
+          )}
         </div>
       ) : (
       <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
@@ -691,10 +747,10 @@ export function SessionCard({
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
             className={cn(
-              'absolute right-[6px] top-[6px] z-10 flex h-[22px] items-center justify-center rounded-full px-[9px]',
-              'text-11 font-semibold',
-              'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))]',
-              'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
+              'absolute right-[6px] top-[6px] z-20 flex h-[22px] w-max min-w-14 items-center justify-center rounded-full px-[9px]',
+              'whitespace-nowrap text-11 font-semibold',
+              'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
+              'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
               'transition-colors focus:outline-none',
             )}
             aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
@@ -703,42 +759,15 @@ export function SessionCard({
           </button>
         )}
 
-        {/* 第 1 行:状态 / 自动化前缀在 list 与 card 变体共用同一段 titlePrefixNode，
-            保证 SessionStatusIcon、Timer 与标题在不同模式下的横向间距和基线一致。 */}
-        {isEditing ? (
-          <div className="flex items-start gap-1.5">
-            <span className="mt-[2px] shrink-0">
-              <SessionStatusIcon
-                session={session}
-                isRunning={isRunning}
-                isAttached={isAttached}
-                hasAttentionNotification={hasAttentionNotification}
-                isActive={isActive}
-              />
-            </span>
-            <SessionRenameInput
-              sessionId={session.id}
-              value={editValue}
-              onValueChange={setEditValue}
-              onCommit={commitTitle}
-              onCancel={() => {
-                // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
-                // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
-                committedRef.current = true;
-                setIsEditing(false);
-              }}
-              containerClassName="min-w-0 flex-1"
-              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
-              activeForeground={isActive}
-            />
-          </div>
-        ) : (
+        {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
+            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+        <div className="relative">
           <div
             className={cn(
               'min-w-0 text-[12.5px] font-bold leading-[1.22] tracking-[-0.005em]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
-              'transition-[color] duration-500',
-              isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--cmd-palette-item-meta)]' : 'text-foreground',
+              isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+              isEditing && 'invisible',
             )}
             style={{ textIndent: 0, paddingLeft: 0 }}
           >
@@ -753,7 +782,24 @@ export function SessionCard({
                 })
               : displayTitle}
           </div>
-        )}
+          {isEditing && (
+            <SessionRenameInput
+              sessionId={session.id}
+              value={editValue}
+              onValueChange={setEditValue}
+              onCommit={commitTitle}
+              onCancel={() => {
+                // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
+                // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
+                committedRef.current = true;
+                setIsEditing(false);
+              }}
+              containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
+              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
+              activeForeground={isActive}
+            />
+          )}
+        </div>
 
         {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
             此处只放正文文字。 */}
@@ -762,9 +808,7 @@ export function SessionCard({
             className={cn(
               'mt-[4px] text-11 leading-[1.4]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-              'transition-[color] duration-500',
-              // 评审:等待决策不再额外多出一种黄色,与 running 同口径走 muted/次级色。
-              isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-secondary)]',
+              'text-[var(--text-secondary)]',
             )}
             style={{ WebkitLineClamp: cardPreviewLineClamp }}
           >
@@ -779,8 +823,7 @@ export function SessionCard({
           className={cn(
             'mt-[6px] flex items-center gap-1.5',
             'text-11 font-medium leading-none tabular-nums',
-            'transition-[color] duration-500',
-            isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-tertiary)]',
+            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
           <SessionStatusIcon
@@ -798,7 +841,7 @@ export function SessionCard({
               size={11}
               strokeWidth={1.8}
               connectionStatus={remoteIconConnectionStatus}
-              className={isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-tertiary)]'}
+              className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
             />
           )}
           <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
@@ -818,15 +861,13 @@ export function SessionCard({
           压过 hover 操作钮,pointer-events-none 不挡点击。前景色与时间同色系,
           kbd 内 text-current + currentColor 底自动跟随。编辑态让位给重命名
           输入框。 */}
-      {!isEditing && ordinalBadgeLabel != null && (
+      {!isEditing && !archivePending && ordinalBadgeLabel != null && (
         <span
           className={cn(
             'pointer-events-none absolute right-2 top-2 z-20 flex',
             isActive
               ? 'text-sidebar-item-active-foreground'
-              : isMuted
-                ? 'text-[var(--text-disabled)]'
-                : 'text-[var(--text-tertiary)]',
+              : 'text-[var(--text-tertiary)]',
           )}
         >
           <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
@@ -876,6 +917,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -931,6 +973,7 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
+                {exportShareMenuItem}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -951,18 +994,25 @@ export function SessionCard({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+
+      {shareExportOpen && (
+        <SessionShareExportDialog
+          open={shareExportOpen}
+          sessionId={session.id}
+          onOpenChange={setShareExportOpen}
+        />
+      )}
     </div>
   );
 }
 
 /** 右上角时间槽位——card / list 变体共用。默认显示 [worktree + 时间];hover/菜单打开
  *  时整组让位给操作按钮(More + Archive/Undo),archivePending 时显示红色二次确认胶囊。
- *  交互逻辑与对话列表(SessionItem)一致。agent / 运行 / 完成 / 草稿等状态由槽位左侧常驻
- *  的 SessionStatusIcon 承担(card 在标题左、list 在时间左),不在本组件内、不随 hover 淡出。 */
+ *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
+ *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
   sessionId,
   activityIso,
-  isMuted,
   isActive,
   isArchived,
   canQuickArchive,
@@ -978,7 +1028,6 @@ function TimeActionsSlot({
 }: {
   sessionId: string;
   activityIso: string;
-  isMuted: boolean;
   isActive: boolean;
   isArchived: boolean;
   canQuickArchive: boolean;
@@ -995,14 +1044,16 @@ function TimeActionsSlot({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="relative ml-auto flex h-5 shrink-0 items-center justify-end">
+    <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
       {/* 默认内容:worktree + 时间;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
           'flex items-center gap-1 transition-opacity duration-[120ms]',
-          !archivePending && 'group-hover/card:opacity-0',
-          (menuOpen || archivePending || yieldToOrdinalBadge) && 'opacity-0',
+          !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
+          (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
+          // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
+          archivePending && 'invisible opacity-0',
         )}
       >
         <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
@@ -1011,7 +1062,7 @@ function TimeActionsSlot({
           title={formatSidebarTimeAbsolute(activityIso)}
           className={cn(
             'text-[10.5px] font-medium leading-none tabular-nums',
-            isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-tertiary)]',
+            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
           {formatSidebarTime(activityIso, t)}
@@ -1030,10 +1081,10 @@ function TimeActionsSlot({
           onPointerDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
           className={cn(
-            'absolute right-0 top-1/2 flex h-[22px] -translate-y-1/2 items-center justify-center rounded-full px-[9px]',
-            'text-11 font-semibold',
-            'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))]',
-            'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
+            'absolute right-0 top-1/2 z-20 flex h-[22px] w-max min-w-14 -translate-y-1/2 items-center justify-center rounded-full px-[9px]',
+            'whitespace-nowrap text-11 font-semibold',
+            'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
+            'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
             'transition-colors focus:outline-none',
           )}
           aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
@@ -1051,22 +1102,34 @@ function TimeActionsSlot({
             'transition-opacity duration-[120ms]',
             menuOpen
               ? 'opacity-100'
-              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
           )}
         >
-          <CardAction label={t('ccAgent.sidebar.sessionMenu.moreActions')} onClick={onOpenMenu}>
-            <EllipsisVertical size={13} strokeWidth={2} />
+          <CardAction
+            variant="list"
+            isActive={isActive}
+            label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+            onClick={onOpenMenu}
+          >
+            <EllipsisVertical size={14} strokeWidth={2} />
           </CardAction>
           {isArchived && canUnarchive ? (
-            <CardAction label={t('ccAgent.sidebar.sessionMenu.unarchive')} onClick={() => onUnarchive()}>
-              <Undo size={13} strokeWidth={2} />
+            <CardAction
+              variant="list"
+              isActive={isActive}
+              label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+              onClick={() => onUnarchive()}
+            >
+              <Undo size={14} strokeWidth={2} />
             </CardAction>
           ) : canQuickArchive ? (
             <CardAction
+              variant="list"
+              isActive={isActive}
               label={t('ccAgent.sidebar.sessionMenu.archived')}
               onClick={() => setArchivePending(true)}
             >
-              <Archive size={13} strokeWidth={2} />
+              <Archive size={14} strokeWidth={2} />
             </CardAction>
           ) : null}
         </div>
@@ -1075,12 +1138,16 @@ function TimeActionsSlot({
   );
 }
 
-/** 卡片右上角 hover action 钮——白底小方钮，对照 redesign 稿 .xdtsb-act。 */
+/** 卡片右上角 hover action 钮；list 变体复用文字模式的轻量行内按钮。 */
 function CardAction({
+  variant = 'card',
+  isActive = false,
   label,
   onClick,
   children,
 }: {
+  variant?: 'card' | 'list';
+  isActive?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
@@ -1096,10 +1163,20 @@ function CardAction({
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       className={cn(
-        'flex size-6 items-center justify-center rounded-[7px]',
-        'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-        'border border-sidebar-border',
-        'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+        variant === 'list'
+          ? cn(
+              'shrink-0 size-5 flex items-center justify-center rounded-md',
+              'focus:outline-none',
+              isActive
+                ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            )
+          : cn(
+              'flex size-6 items-center justify-center rounded-[7px]',
+              'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+              'border border-sidebar-border',
+              'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+            ),
       )}
     >
       {children}

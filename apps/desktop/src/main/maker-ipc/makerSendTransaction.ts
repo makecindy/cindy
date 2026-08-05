@@ -1,9 +1,13 @@
-import type {
-  AgentKind,
-  SessionSendOptions,
-  SessionSendResult,
-  UserMessage,
+import {
+  CodexResumePreparationBlockedError,
+  type AgentKind,
+  type SessionSendOptions,
+  type SessionSendResult,
+  type UserMessage,
 } from '@cindy/maker-core';
+import {
+  CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
+} from '@cindy/maker-shared/agent-input-projection';
 
 import {
   createHostSendFailure,
@@ -15,20 +19,23 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
 
 type IpcUserMessage =
-  | string
-  | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+  string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
 
 type MakerSendOptions = {
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
+  /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
+  turnAttemptToken?: number;
   /**
    * Direct Continue fallback only: acknowledge the interrupted marker on the
    * executor after vendor dispatch is irreversible. The executor must own the
@@ -42,6 +49,14 @@ type MakerSendOptions = {
    * 打到 sess.send 的 origin(本轮 turnOrigin)并合进落库 user 消息 agentMeta.origin。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 手机来源(coordinator 从队列项透传;**main 构造,不是 wire 输入**——直连 maker:send
+   * 的客户端 sendOpts 在 sessionSendHandler 边界被剥掉,见那里的说明)。
+   *
+   * 必须认这一条:手机会话页所有发送都走 input:enqueue / input:steer,drain 派发时
+   * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
@@ -50,6 +65,11 @@ type MakerSendOptions = {
     shouldBroadcast?: unknown;
     onPersisting?: unknown;
     onPersisted?: unknown;
+    onPersistFailed?: unknown;
+    /** Main-owned clear token captured before the accepted persistence await. */
+    expectedClearBoundaryMs?: unknown;
+    /** Main-owned input generation captured before async preparation. */
+    expectedInputGeneration?: unknown;
     /**
      * 自动续跑标记(coordinator drain 透传,见 AgentInputQueuedMessage.autoResume)。
      * 合进落库 user 消息的 agentMeta.autoResume:renderer 据此隐藏气泡并渲染
@@ -58,7 +78,13 @@ type MakerSendOptions = {
     autoResume?: unknown;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
+    /** 队列自动来源(只写入 agentMeta,不传给 maker-core 的 turn origin)。 */
+    origin?: unknown;
   };
+  /** Main-owned clear token used by the final vendor fence. */
+  expectedClearBoundaryMs?: unknown;
+  /** Main-owned input generation used by the final vendor fence. */
+  expectedInputGeneration?: unknown;
 };
 
 export interface MakerSendTransactionSession {
@@ -66,6 +92,8 @@ export interface MakerSendTransactionSession {
   agentKind: AgentKind;
   workDir: string;
   remoteHostId: string | null;
+  /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   isTurnRunning(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
@@ -106,12 +134,28 @@ export interface MakerSendTransactionDeps {
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }>;
-  markOrcaRoleIfNeeded(sessionId: string, role: 'lead' | 'worker' | null | undefined): Promise<void>;
+  markOrcaRoleIfNeeded(
+    sessionId: string,
+    role: 'lead' | 'worker' | null | undefined,
+  ): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
-  prepareSendUserMessage(
+  prepareSendUserMessage(sessionId: string, message: unknown): Promise<IpcUserMessage>;
+  /**
+   * Direct device-link sends may carry OSS attachment references that need to
+   * become local paths before normalization. Keep this after the transaction's
+   * session/workdir preflight so rejected sends do not materialize local copies.
+   */
+  materializeDirectSendOssAttachments?: (
     sessionId: string,
     message: unknown,
-  ): Promise<IpcUserMessage>;
+    sendOpts: unknown,
+  ) => Promise<{
+    message: unknown;
+    sendOpts: unknown;
+    cleanupAfterAcceptance?: () => void;
+    cleanupBeforeAcceptance?: () => void | Promise<void>;
+    cleanupLocalMaterialization?: () => void | Promise<void>;
+  }>;
   createDbMessage(
     sessionId: string,
     message: {
@@ -121,9 +165,24 @@ export interface MakerSendTransactionDeps {
       agentMeta: Record<string, unknown>;
       createdAt?: number;
     },
-    opts?: { shouldBroadcast?: () => boolean },
+    opts?: {
+      shouldBroadcast?: () => boolean;
+      expectedClearBoundaryMs?: number | null;
+    },
   ): Promise<unknown>;
+  /** Hide a user row that lost a clear race after accepted persistence. */
+  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  /** Check the clear token captured at the start of this send. */
+  isClearBoundaryCurrent?: (
+    sessionId: string,
+    expected: number | null,
+    expectedGeneration?: number,
+  ) => boolean;
+  /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
+  linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  /** Synchronous final fence immediately before Session.send enters vendor code. */
+  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -131,7 +190,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -156,6 +215,18 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
+   *
+   * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
+   * newMakerWorktreePreferenceHandler 把 isDeviceLinkInvoke 做成 deps 的写法)。
+   *
+   * ⚠️ 判据里的平台值是**对端设备在 hello 帧自报**的(经 presence 广播进本机缓存),
+   * 本仓没有服务端校验 —— 一台改过的同账号已配对设备可以声称自己是手机。它的唯一
+   * 后果是多追加一段体验说明,所以够用;但不得据它放行权限或跳过任何校验。
+   * 完整可信度说明见 device-link/invoke-context.ts。
+   */
+  isMobileClientInvoke?(): boolean;
   log: MakerSendTransactionLog;
 }
 
@@ -179,9 +250,13 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
   autoResumeInfo?: Record<string, unknown>;
+  origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
   onPersisted?: () => void | Promise<void>;
+  onPersistFailed?: () => void;
+  expectedClearBoundaryMs?: number | null;
+  expectedInputGeneration?: number;
 } | null {
   const persist = sendOpts.persistUserMessage;
   if (!persist || typeof persist.clientId !== 'string') return null;
@@ -193,7 +268,12 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
       ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
       : {}),
-    ...(persist.delivery === 'turn' || persist.delivery === 'steer' ? { delivery: persist.delivery } : {}),
+    ...(persist.origin && typeof persist.origin === 'object' && !Array.isArray(persist.origin)
+      ? { origin: persist.origin as Record<string, unknown> }
+      : {}),
+    ...(persist.delivery === 'turn' || persist.delivery === 'steer'
+      ? { delivery: persist.delivery }
+      : {}),
     ...(typeof persist.shouldBroadcast === 'function'
       ? { shouldBroadcast: persist.shouldBroadcast as () => boolean }
       : {}),
@@ -203,7 +283,60 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(typeof persist.onPersisted === 'function'
       ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
       : {}),
+    ...(typeof persist.onPersistFailed === 'function'
+      ? { onPersistFailed: persist.onPersistFailed as () => void }
+      : {}),
+    ...(persist.expectedClearBoundaryMs === null ||
+    (typeof persist.expectedClearBoundaryMs === 'number' &&
+      Number.isFinite(persist.expectedClearBoundaryMs) &&
+      persist.expectedClearBoundaryMs >= 0)
+      ? { expectedClearBoundaryMs: persist.expectedClearBoundaryMs as number | null }
+      : {}),
+    ...(typeof persist.expectedInputGeneration === 'number' &&
+    Number.isSafeInteger(persist.expectedInputGeneration) &&
+    persist.expectedInputGeneration >= 0
+      ? { expectedInputGeneration: persist.expectedInputGeneration }
+      : {}),
   };
+}
+
+function normalizeExpectedClearBoundary(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  return undefined;
+}
+
+function normalizeExpectedInputGeneration(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+function containsManagedAttachment(value: unknown): boolean {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+    try {
+      return containsManagedAttachment(JSON.parse(trimmed) as unknown);
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => {
+      if (typeof item !== 'object' || item === null) return false;
+      const block = item as Record<string, unknown>;
+      return (
+        block.type === 'image' || block.type === 'file' || containsManagedAttachment(block.content)
+      );
+    });
+  }
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (Array.isArray(record.images) && record.images.length > 0) ||
+    (Array.isArray(record.files) && record.files.length > 0) ||
+    containsManagedAttachment(record.content)
+  );
 }
 
 /**
@@ -219,7 +352,11 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
  * return”的路径，除非同步更新 queue / bubble / DB / dispatch 状态协议。
  */
 export function createMakerSendTransaction(deps: MakerSendTransactionDeps): MakerSendTransaction {
-  async function loadExtraDirsIfNeeded(sessionId: string, opts: CreateOpts, source: 'lazy-create' | 'active-orca-rehydrate'): Promise<void> {
+  async function loadExtraDirsIfNeeded(
+    sessionId: string,
+    opts: CreateOpts,
+    source: 'lazy-create' | 'active-orca-rehydrate',
+  ): Promise<void> {
     if (opts.extraDirs !== undefined) return;
     try {
       const row = await deps.readSessionExtraDirsFromDb(sessionId);
@@ -286,7 +423,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       return {
         kind: 'failure',
         result: toCompatibleMakerSendResult(
-          createHostSendFailure('WORKDIR_MISSING', `working directory is missing for session ${sessionId}`),
+          createHostSendFailure(
+            'WORKDIR_MISSING',
+            `working directory is missing for session ${sessionId}`,
+          ),
         ),
       };
     }
@@ -295,7 +435,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
         // close 后重新 bootstrap，避免旧 SDK handle 缺 Orca MCP vendorOptions。
-        const { session: newSess, didInjectOrcaInstructions, didInjectProjectContext } = await deps.bootstrapSession(createOpts);
+        const {
+          session: newSess,
+          didInjectOrcaInstructions,
+          didInjectProjectContext,
+        } = await deps.bootstrapSession(createOpts);
         await deps.markOrcaRoleIfNeeded(newSess.id, createOpts.orcaRole);
         deps.log.info('send: rehydrate active Orca session with MCP vendorOptions', {
           sessionId,
@@ -322,10 +466,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         };
       }
+      if (err instanceof CodexResumePreparationBlockedError) {
+        deps.log.warn('send: Codex resume preparation blocked during rehydrate', {
+          sessionId,
+          error: err.message,
+        });
+        return {
+          kind: 'failure',
+          result: toCompatibleMakerSendResult(
+            createHostSendFailure('REHYDRATE_FAILED', CODEX_RESUME_NOT_READY_WIRE_MESSAGE),
+          ),
+        };
+      }
       return {
         kind: 'failure',
         result: toCompatibleMakerSendResult(
-          createHostSendFailure('REHYDRATE_FAILED', err instanceof Error ? err.message : 'rehydrate failed'),
+          createHostSendFailure(
+            'REHYDRATE_FAILED',
+            err instanceof Error ? err.message : 'rehydrate failed',
+          ),
         ),
       };
     }
@@ -340,14 +499,21 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       return {
         kind: 'failure',
         result: toCompatibleMakerSendResult(
-          createHostSendFailure('WORKDIR_MISSING', `working directory is missing for session ${sessionId}`),
+          createHostSendFailure(
+            'WORKDIR_MISSING',
+            `working directory is missing for session ${sessionId}`,
+          ),
         ),
       };
     }
     await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'lazy-create');
     try {
-      const { session: lazySess, didInjectOrcaInstructions, didInjectProjectContext } = await deps.bootstrapSession(createOpts);
+      const {
+        session: lazySess,
+        didInjectOrcaInstructions,
+        didInjectProjectContext,
+      } = await deps.bootstrapSession(createOpts);
       await deps.markOrcaRoleIfNeeded(lazySess.id, createOpts.orcaRole);
       deps.broadcastSessionCreated(lazySess.id);
       deps.log.info('send: lazy create-session', {
@@ -375,42 +541,83 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         };
       }
+      if (err instanceof CodexResumePreparationBlockedError) {
+        deps.log.warn('send: Codex resume preparation blocked during lazy create', {
+          sessionId,
+          error: err.message,
+        });
+        return {
+          kind: 'failure',
+          result: toCompatibleMakerSendResult(
+            createHostSendFailure('LAZY_CREATE_FAILED', CODEX_RESUME_NOT_READY_WIRE_MESSAGE),
+          ),
+        };
+      }
       return {
         kind: 'failure',
         result: toCompatibleMakerSendResult(
-          createHostSendFailure('LAZY_CREATE_FAILED', err instanceof Error ? err.message : 'lazy create failed'),
+          createHostSendFailure(
+            'LAZY_CREATE_FAILED',
+            err instanceof Error ? err.message : 'lazy create failed',
+          ),
         ),
       };
     }
   }
 
   return {
-    async sendToAgentAccepted(sessionId, message, createOpts, sendOpts): Promise<DesktopMakerSendResult> {
+    async sendToAgentAccepted(
+      sessionId,
+      message,
+      createOpts,
+      sendOpts,
+    ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
       let sess = deps.getSession(sessionId);
+      // Maker keeps a failed Session registered until its real handle cleanup
+      // succeeds. It is not a reusable send target: route it through the
+      // existing lazy bootstrap path so Maker.createSession() can retry close
+      // and rebuild the handle before dispatching the message.
+      if (sess?.getStatus?.() === 'error') {
+        deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
       if (sess?.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
-        const ok = await deps.checkWorkDirExists(sessionId, sess.workDir, sess.agentKind, sess.remoteHostId);
+        const ok = await deps.checkWorkDirExists(
+          sessionId,
+          sess.workDir,
+          sess.agentKind,
+          sess.remoteHostId,
+        );
         if (!ok) {
           return toCompatibleMakerSendResult(
-            createHostSendFailure('WORKDIR_MISSING', `working directory is missing for session ${sessionId}`),
+            createHostSendFailure(
+              'WORKDIR_MISSING',
+              `working directory is missing for session ${sessionId}`,
+            ),
           );
         }
         if (!deps.isOrcaMcpHydrated(sessionId) && createOpts) {
-          const co = deps.buildCreateOptsWithStderr({ ...(createOpts as CreateOpts), id: sessionId });
+          const co = deps.buildCreateOptsWithStderr({
+            ...(createOpts as CreateOpts),
+            id: sessionId,
+          });
           const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
           if (shouldHydrateOrcaMcp) {
             if (sess.isTurnRunning()) {
               // 仍交给下方统一 running guard 抛 SESSION_RUNNING，避免重复分支。
-              deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', { sessionId });
+              deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', {
+                sessionId,
+              });
             } else {
               const rehydrated = await rehydrateActiveOrcaSession(sessionId, co);
               if (rehydrated.kind === 'failure') return rehydrated.result;
@@ -421,7 +628,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
 
       if (!sess) {
-        if (!createOpts) throwIpcError('NOT_FOUND', `Session ${sessionId} not found and no createOpts provided`);
+        if (!createOpts)
+          throwIpcError('NOT_FOUND', `Session ${sessionId} not found and no createOpts provided`);
         const co = deps.buildCreateOptsWithStderr({ ...(createOpts as CreateOpts), id: sessionId });
         await deps.reconcileCreateOptsWithDb?.(sessionId, co);
         const lazy = await lazyCreateSession(sessionId, co);
@@ -432,22 +640,186 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const normalized = await deps.prepareSendUserMessage(sessionId, message);
-      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
-      // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
-      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      const outgoing = pendingHandoff
-        ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
-        : normalized;
-      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
-      const so = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       if (
-        so.ackInterruptedTurnOnDispatch !== undefined &&
-        typeof so.ackInterruptedTurnOnDispatch !== 'boolean'
+        requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
+        typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
       ) {
         throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
       }
-      const persistUserMessage = readPersistUserMessageOption(so);
+      let outgoingMessage = message;
+      let outgoingSendOpts = sendOpts;
+      let cleanupAfterAcceptance: (() => void) | undefined;
+      let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
+      let cleanupLocalMaterialization: (() => void | Promise<void>) | undefined;
+      // `Session.send()` may invoke onAccepted (and therefore persist the
+      // durable user row) before a later abort/stop makes it return
+      // `accepted:false`.  Keep local materialisation alive once that row
+      // exists; otherwise the pre-accept cleanup would delete the only media
+      // reference still used by the transcript.
+      let userMessagePersisted = false;
+      let sendAccepted = false;
+      if (deps.materializeDirectSendOssAttachments) {
+        const materialized = await deps.materializeDirectSendOssAttachments(
+          sessionId,
+          outgoingMessage,
+          outgoingSendOpts,
+        );
+        outgoingMessage = materialized.message;
+        // A materializer that has no sendOpts rewrite may omit the field. Keep
+        // the caller's persistence/dispatch options in that case; dropping
+        // them would silently turn a durable user send into a non-persisted
+        // direct vendor call.
+        if (materialized.sendOpts !== undefined) outgoingSendOpts = materialized.sendOpts;
+        cleanupAfterAcceptance = materialized.cleanupAfterAcceptance;
+        cleanupBeforeAcceptance = materialized.cleanupBeforeAcceptance;
+        cleanupLocalMaterialization = materialized.cleanupLocalMaterialization;
+      }
+      const cleanupRejectedMaterialization = async (): Promise<void> => {
+        if (userMessagePersisted) {
+          // The local file is now owned by the durable transcript row. The
+          // remote OSS object is still ephemeral and can be released even if
+          // the vendor later rejects or throws after onAccepted.
+          try {
+            cleanupAfterAcceptance?.();
+          } catch (err) {
+            deps.log.warn('send: direct OSS post-persist cleanup failed', {
+              sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return;
+        }
+        if (!cleanupBeforeAcceptance) return;
+        try {
+          await cleanupBeforeAcceptance();
+        } catch (err) {
+          deps.log.warn('send: direct OSS materialization cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      const cleanupAcceptedNonPersistedMaterialization = async (): Promise<void> => {
+        // Without a durable transcript row, no later lifecycle callback owns the
+        // local media refs. Accepted direct sends must release them here; a
+        // persisted send intentionally keeps them for transcript replay.
+        if (userMessagePersisted || !cleanupLocalMaterialization) return;
+        try {
+          await cleanupLocalMaterialization();
+        } catch (err) {
+          // Vendor dispatch is already irreversible; cleanup remains best effort.
+          deps.log.warn('send: accepted direct OSS local cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      let normalized: IpcUserMessage;
+      try {
+        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+      } catch (err) {
+        await cleanupRejectedMaterialization();
+        throw err;
+      }
+      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
+      // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
+      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
+      const withHandoff = pendingHandoff
+        ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
+        : normalized;
+      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
+      // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
+      // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
+      // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
+      // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
+      // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
+      const mobileClientNote =
+        deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
+          ? buildMobileClientPromptNote()
+          : null;
+      const outgoing = mobileClientNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
+        : withHandoff;
+      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
+      let persistUserMessage = readPersistUserMessageOption(so);
+      const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);
+      const topLevelInputGeneration = normalizeExpectedInputGeneration(so.expectedInputGeneration);
+      if (
+        persistUserMessage &&
+        ((persistUserMessage.expectedClearBoundaryMs === undefined &&
+          topLevelClearBoundary !== undefined) ||
+          (persistUserMessage.expectedInputGeneration === undefined &&
+            topLevelInputGeneration !== undefined))
+      ) {
+        persistUserMessage = {
+          ...persistUserMessage,
+          ...(persistUserMessage.expectedClearBoundaryMs === undefined &&
+          topLevelClearBoundary !== undefined
+            ? { expectedClearBoundaryMs: topLevelClearBoundary }
+            : {}),
+          ...(persistUserMessage.expectedInputGeneration === undefined &&
+          topLevelInputGeneration !== undefined
+            ? { expectedInputGeneration: topLevelInputGeneration }
+            : {}),
+        };
+      }
+      const finalFenceOverrides: Record<string, unknown> = {};
+      if (
+        topLevelClearBoundary === undefined &&
+        persistUserMessage?.expectedClearBoundaryMs !== undefined
+      ) {
+        finalFenceOverrides.expectedClearBoundaryMs = persistUserMessage.expectedClearBoundaryMs;
+      }
+      if (
+        topLevelInputGeneration === undefined &&
+        persistUserMessage?.expectedInputGeneration !== undefined
+      ) {
+        finalFenceOverrides.expectedInputGeneration = persistUserMessage.expectedInputGeneration;
+      }
+      const finalFenceSendOpts =
+        Object.keys(finalFenceOverrides).length > 0 &&
+        outgoingSendOpts &&
+        typeof outgoingSendOpts === 'object'
+          ? { ...(outgoingSendOpts as Record<string, unknown>), ...finalFenceOverrides }
+          : Object.keys(finalFenceOverrides).length > 0
+            ? finalFenceOverrides
+            : outgoingSendOpts;
+      let staleUserMessageRewound = false;
+      const rewindPersistedUserMessageAfterClearIfStale = async (): Promise<void> => {
+        const persistedUserMessage = persistUserMessage;
+        const expectedClearBoundaryMs = persistedUserMessage?.expectedClearBoundaryMs;
+        if (
+          !persistedUserMessage ||
+          !userMessagePersisted ||
+          staleUserMessageRewound ||
+          expectedClearBoundaryMs === undefined ||
+          !deps.isClearBoundaryCurrent ||
+          deps.isClearBoundaryCurrent(
+            sessionId,
+            expectedClearBoundaryMs,
+            persistedUserMessage.expectedInputGeneration,
+          )
+        ) {
+          return;
+        }
+        staleUserMessageRewound = true;
+        try {
+          await deps.rewindPersistedUserMessageAfterClear?.(
+            sessionId,
+            persistedUserMessage.clientId,
+          );
+        } catch (err) {
+          // The send is already stale; cleanup remains best-effort and must not
+          // turn a clear race into a duplicate retry prompt.
+          deps.log.warn('send: stale user row rewind after clear failed', {
+            sessionId,
+            clientId: persistedUserMessage.clientId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;
       let userPromptPreviewSessionId: string | null = null;
@@ -468,6 +840,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           messageUuid: so.messageUuid,
           userName: so.userName,
           throwOnStartFailure: so.throwOnStartFailure,
+          turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
@@ -478,6 +851,38 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(typeof (createOpts as { planMode?: unknown } | undefined)?.planMode === 'boolean'
             ? { planMode: (createOpts as { planMode: boolean }).planMode }
             : {}),
+          ...(sess.agentKind === 'pi' &&
+          persistUserMessage &&
+          containsManagedAttachment(persistUserMessage.content) &&
+          deps.linkPiUserEntry
+            ? {
+                onTranscriptUserEntry: async (piEntryId: string) => {
+                  try {
+                    const linked = await deps.linkPiUserEntry?.(
+                      sessionId,
+                      persistUserMessage.clientId,
+                      piEntryId,
+                    );
+                    if (linked === false) {
+                      deps.log.warn('send: Pi transcript entry target row missing', {
+                        sessionId,
+                        clientId: persistUserMessage.clientId,
+                        piEntryId,
+                      });
+                    }
+                  } catch (err) {
+                    // provider 已接受 prompt；关联补丁失败只能降级为 legacy 恢复，不能
+                    // 把发送结果翻成 rejected，避免 UI 重发同一条消息。
+                    deps.log.warn('send: Pi transcript entry link failed (non-fatal)', {
+                      sessionId,
+                      clientId: persistUserMessage.clientId,
+                      piEntryId,
+                      err: err instanceof Error ? err.message : String(err),
+                    });
+                  }
+                },
+              }
+            : {}),
           onAccepted: persistUserMessage
             ? async () => {
                 persistUserMessage.onPersisting?.();
@@ -487,38 +892,80 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 });
                 userPromptPreviewSessionId = sessionId;
                 userPromptPreviewClientId = persistUserMessage.clientId;
-                await deps.createDbMessage(sessionId, {
-                  clientId: persistUserMessage.clientId,
-                  role: 'user',
-                  content: persistUserMessage.content,
-                  agentMeta: {
-                    uuid: so.messageUuid,
-                    sdkSessionId: persistUserMessage.sdkSessionId,
-                    ...(persistUserMessage.delivery ? { delivery: persistUserMessage.delivery } : {}),
-                    // 自动补发的续跑指令:renderer 隐藏气泡 + 渲染「已重新连接」活动行,
-                    // 同时也是 host 跳过额度充值的判据(见 register 的 createDbMessage)。
-                    ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
-                    ...(persistUserMessage.autoResumeInfo
-                      ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
-                      : {}),
-                    // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
-                    // 对齐,renderer 据此渲染"由自动化任务发送"标签。
-                    ...(so.origin ? { origin: so.origin } : {}),
-                  },
-                }, persistUserMessage.shouldBroadcast
-                  ? { shouldBroadcast: persistUserMessage.shouldBroadcast }
-                  : undefined);
+                try {
+                  await deps.createDbMessage(
+                    sessionId,
+                    {
+                      clientId: persistUserMessage.clientId,
+                      role: 'user',
+                      content: persistUserMessage.content,
+                      agentMeta: {
+                        uuid: so.messageUuid,
+                        sdkSessionId: persistUserMessage.sdkSessionId,
+                        ...(persistUserMessage.delivery
+                          ? { delivery: persistUserMessage.delivery }
+                          : {}),
+                        // 自动补发的续跑指令:renderer 隐藏气泡 + 渲染「已重新连接」活动行,
+                        // 同时也是 host 跳过额度充值的判据(见 register 的 createDbMessage)。
+                        ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
+                        ...(persistUserMessage.autoResumeInfo
+                          ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
+                          : {}),
+                        ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
+                        // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
+                        // 对齐,renderer 据此渲染"由自动化任务发送"标签。
+                        ...(so.origin ? { origin: so.origin } : {}),
+                      },
+                    },
+                    persistUserMessage.shouldBroadcast ||
+                      persistUserMessage.expectedClearBoundaryMs !== undefined
+                      ? {
+                          ...(persistUserMessage.shouldBroadcast
+                            ? { shouldBroadcast: persistUserMessage.shouldBroadcast }
+                            : {}),
+                          ...(persistUserMessage.expectedClearBoundaryMs !== undefined
+                            ? {
+                                expectedClearBoundaryMs: persistUserMessage.expectedClearBoundaryMs,
+                              }
+                            : {}),
+                        }
+                      : undefined,
+                  );
+                } catch (err) {
+                  persistUserMessage.onPersistFailed?.();
+                  throw err;
+                }
+                userMessagePersisted = true;
+                await rewindPersistedUserMessageAfterClearIfStale();
                 // onPersisted 里可能挂着排队 orca 消息的 accepted 副作用(置 running /
                 // autoBridgePending), 必须 await 完再放行 turn(同直发路径语义)。
                 await persistUserMessage.onPersisted?.();
               }
             : undefined,
           onDispatching: () => {
+            if (persistUserMessage?.shouldBroadcast && !persistUserMessage.shouldBroadcast()) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded',
+              );
+            }
+            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });
+        sendAccepted = sendResult.accepted;
+        if (sendAccepted) {
+          cleanupAfterAcceptance?.();
+          await cleanupAcceptedNonPersistedMaterialization();
+        } else {
+          await rewindPersistedUserMessageAfterClearIfStale();
+          await cleanupRejectedMaterialization();
+        }
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
@@ -556,6 +1003,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           }),
         );
       } catch (err) {
+        if (!sendAccepted) {
+          await rewindPersistedUserMessageAfterClearIfStale();
+          await cleanupRejectedMaterialization();
+        }
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           deps.rollbackUserPromptPreview?.(
             userPromptPreviewSessionId,

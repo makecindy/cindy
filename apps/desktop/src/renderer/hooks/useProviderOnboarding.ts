@@ -34,8 +34,8 @@ import {
 // 连上又断开、期间从未回到首屏/会话视图时,dismiss 也必须被清,否则回到零连接后
 // 引导永远不再出现(Codex P1,2026-07-24)。与 hook 内 effect 并存:effect 覆盖
 // 挂载中的即时清理(含测试 mock 场景),此处覆盖未挂载窗口;reset 为幂等 no-op。
-const unsubscribeAutoReset = subscribeProvidersSnapshot((providers) => {
-  if (providers.some((p) => p.connected)) resetProviderOnboardingDismissal();
+const unsubscribeAutoReset = subscribeProvidersSnapshot((snapshot) => {
+  if (snapshot?.providers.some((p) => p.connected)) resetProviderOnboardingDismissal();
 });
 // HMR 下本模块会被重复执行:不 dispose 会累积 listener(reset 幂等,功能无害,
 // 但 dev 长跑会泄漏)。生产构建无 import.meta.hot,整段被摇树掉。

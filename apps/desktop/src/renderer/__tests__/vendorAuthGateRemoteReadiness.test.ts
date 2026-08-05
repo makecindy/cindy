@@ -14,8 +14,23 @@ import { VOICE_INPUT_ASR_PROFILES } from '../../shared/voiceInputAsrProfiles';
 import {
   deriveRemoteReadiness,
   pickVoiceInputDialogCopy,
+  resolveRemoteProviderProbe,
   sourceReadyFromProviderList,
 } from '@/hooks/useVendorAuthGate';
+import { readinessFromBinaryStatus } from '@/hooks/useVendorReadiness';
+
+describe('readinessFromBinaryStatus（本地运行时就绪推导）', () => {
+  it('Codex 与 Pi 缺少本地二进制时都返回 binary-missing', () => {
+    expect(readinessFromBinaryStatus('codex', false)).toBe('binary-missing');
+    expect(readinessFromBinaryStatus('pi', false)).toBe('binary-missing');
+  });
+
+  it('Claude 不依赖该二进制轴，已就绪时不产生覆盖状态', () => {
+    expect(readinessFromBinaryStatus('cc', false)).toBeNull();
+    expect(readinessFromBinaryStatus('codex', true)).toBeNull();
+    expect(readinessFromBinaryStatus('pi', true)).toBeNull();
+  });
+});
 
 describe('deriveRemoteReadiness（被控端就绪推导）', () => {
   it('sourceReady 可用时是唯一真相(cc / codex 同构),authReady 不参与', () => {
@@ -48,7 +63,7 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     ).toBe('unauthenticated');
   });
 
-  it('全部判定不可用 → ready(控制端不臆断,交给被控端权威校验)', () => {
+  it('两个 channel 都明确 unsupported 的旧端兼容路径 → ready', () => {
     expect(
       deriveRemoteReadiness('codex', { binaryReady: null, sourceReady: null, authReady: null }),
     ).toBe('ready');
@@ -64,6 +79,12 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     expect(
       deriveRemoteReadiness('codex', { binaryReady: null, sourceReady: true, authReady: null }),
     ).toBe('ready');
+  });
+
+  it('pi:binaryReady=false 报组件缺失,不伪装成未授权', () => {
+    expect(
+      deriveRemoteReadiness('pi', { binaryReady: false, sourceReady: true, authReady: true }),
+    ).toBe('binary-missing');
   });
 
   it('cc:binary 随包,binaryReady 不参与判定', () => {
@@ -84,6 +105,7 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
       name: 'P',
       agents: ['codex'],
       routing: { codex: {} },
+      models: { codex: [] },
       connected: true,
       ...over,
     }) as ProviderView;
@@ -102,6 +124,31 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
     expect(sourceReadyFromProviderList(null, 'codex')).toBe(null);
     expect(sourceReadyFromProviderList({}, 'codex')).toBe(null);
     expect(sourceReadyFromProviderList({ providers: 'oops' }, 'codex')).toBe(null);
+    expect(sourceReadyFromProviderList({ providers: [{ id: 'broken' }] }, 'codex')).toBe(null);
+  });
+
+  it('只有结构化 channel unsupported 才进入旧端回退，真实失败与畸形响应都 fail closed', () => {
+    expect(
+      resolveRemoteProviderProbe(
+        {
+          status: 'rejected',
+          reason: new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel not allowed remotely'),
+        },
+        'codex',
+      ),
+    ).toEqual({ status: 'unsupported', sourceReady: null });
+    expect(
+      resolveRemoteProviderProbe(
+        {
+          status: 'rejected',
+          reason: new Error('proxy policy: request not allowed remotely'),
+        },
+        'codex',
+      ),
+    ).toEqual({ status: 'error', sourceReady: null });
+    expect(
+      resolveRemoteProviderProbe({ status: 'fulfilled', value: { providers: [null] } }, 'codex'),
+    ).toEqual({ status: 'error', sourceReady: null });
   });
 });
 
@@ -118,6 +165,7 @@ describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
     'voice-direct-api-key-unauth': { title: 'direct-key', description: '', confirmText: '', cancelText: '', settingsTab: 'api-keys' },
     'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
+    'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
   };
 
   it('api-key + providers 使用 XD Gateway 文案', () => {

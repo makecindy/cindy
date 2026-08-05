@@ -37,6 +37,8 @@ const orcaLifecycleServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'or
 const orcaLifecycleServiceSource = readFileSync(orcaLifecycleServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useWorkersSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useWorkers.ts');
 const useWorkersSource = readFileSync(useWorkersSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const workerProjectionStoreSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'workerProjectionStore.ts');
+const workerProjectionStoreSource = readFileSync(workerProjectionStoreSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const preloadSourcePath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
 const preloadSource = readFileSync(preloadSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerSelection.ts');
@@ -119,6 +121,28 @@ describe('sendToSession ordering', () => {
     expectOrder(policyGuardBlock, 'leadRow?.workingDir', 'lead?.workDir');
     expect(policyGuardBlock).toContain(' : leadRow?.workspaceKind;');
     expectOrder(policyGuardBlock, 'const liveWorkspaceKind =', 'assertCollabProjectEnabled(');
+    expect(policyGuardBlock).toContain(
+      'matchDialogueWorkspacePath(workingDir, dialogueWorkspaceRootDir()) !== null',
+    );
+  });
+
+  it('uses the same trusted collab scope helper and acknowledges the accepted workspace kind', () => {
+    const pluginStateBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.PLUGINS_GET_STATE',
+      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+    );
+
+    expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
+    expect(pluginStateBlock).toContain("typeof workspaceKind === 'string' ? workspaceKind : null");
+    expect(pluginStateBlock).toContain(
+      'matchDialogueWorkspacePath(candidate, dialogueWorkspaceRootDir()) !== null',
+    );
+    expect(pluginStateBlock).toContain('getEnableState(id, policyWorkingDir)');
+    expect(pluginStateBlock).toContain(
+      "workspaceKind === 'project' || workspaceKind === 'dialogue'",
+    );
+    expect(pluginStateBlock).toContain('collabWorkspaceKind: acceptedWorkspaceKind');
   });
 
   it('keeps non-composer direct sends from inheriting armed plan mode', () => {
@@ -249,7 +273,7 @@ describe('sendToSession ordering', () => {
     );
     const liveBranch = extractBetween(
       block,
-      'const live = maker.getSession(targetSessionId);',
+      'live = maker.getSession(targetSessionId);',
       'try {\n        const createOpts = buildCreateOptsWithStderr({',
     );
     const resumedBranch = extractBetween(
@@ -360,12 +384,12 @@ describe('sendToSession ordering', () => {
     const anySessionInTurnBlock = extractBetween(
       source,
       'export function anySessionInTurn',
-      '/**\n * 把 desktop 版的 interaction listener',
+      'let goalClearObserver:',
     );
     const handlerBlock = extractBetween(
       source,
       'ipcMain.handle(MAKER_INVOKE.ANY_SESSION_IN_TURN',
-      'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
+      'ipcMain.handle(MAKER_INVOKE.SESSION_IN_TURN',
     );
 
     expect(anySessionInTurnBlock).toContain('maker?.listActiveSessions()');
@@ -388,11 +412,59 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain(
       'return withSendToSessionLock(sessionId, async () => {',
     );
+    expect(setModelBlock).toContain(
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
+    );
+    expect(setModelBlock).toContain('return { deferred: false, superseded: true };');
     expectOrder(
       setModelBlock,
       'return withSendToSessionLock(sessionId, async () => {',
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
+    );
+    expectOrder(
+      setModelBlock,
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
       'applySetModelThenCancelAgentSwitchIntent(',
     );
+    expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
+    expect(setModelBlock).toContain('if (atomicSelection) {');
+    expect(setModelBlock).toContain('effort: atomicSelection.effort as');
+    expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
+    expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
+    expect(setModelBlock).toContain('await sess.setEffort(');
+    expect(setModelBlock).toContain('await sess.setFastMode(atomicSelection.fastMode);');
+    expect(setModelBlock).toContain('if (isDeviceLinkInvoke() || atomicSelection) {');
+    expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
+    expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
+    expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
+    expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
+    expectOrder(
+      setModelBlock,
+      'applySetModelThenCancelAgentSwitchIntent(',
+      'setSessionEffort(sessionId, atomicSelection.effort);',
+    );
+    expectOrder(
+      setModelBlock,
+      'effort: atomicSelection.effort as',
+      'setSessionEffort(sessionId, atomicSelection.effort);',
+    );
+    expectOrder(
+      setModelBlock,
+      'setSessionFastMode(sessionId, atomicSelection.fastMode);',
+      'await persistSessionFields(sessionId, patch);',
+    );
+    expectOrder(
+      setModelBlock,
+      'await persistSessionFields(sessionId, patch);',
+      'return response;',
+    );
+    expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
+    expectOrder(
+      preloadSource,
+      'expectedAgentSwitchRevision,',
+      'selection,',
+    );
+    expect(source).toContain('withSessionLock: withSendToSessionLock,');
     expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
     expectOrder(
       directSendSwitchBlock,
@@ -400,6 +472,22 @@ describe('sendToSession ordering', () => {
       'applyPendingAgentSwitchIfIdle(',
     );
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'return release;');
+  });
+
+  it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
+    const setModelBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.SET_MODEL',
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+    );
+    expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
+    expect(setModelBlock).toContain('isDeviceLinkInvoke(),');
+    expect(setModelBlock).toContain(
+      'expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;',
+    );
+    expect(setModelBlock).toContain('selection = normalizedWireArgs.selection;');
+    expect(setModelBlock).toContain('expectedAgentSwitchRevision must be a non-negative integer');
+    expect(setModelBlock).toContain('selection must contain effort + fastMode');
   });
 
   it('publishes Agent Island prompt preview from send intent and wires commit rollback', () => {
@@ -417,8 +505,12 @@ describe('sendToSession ordering', () => {
     expect(makerSendCreateDbMessageBlock).toContain('const result = await enqueueDurableWrite');
     expect(makerSendCreateDbMessageBlock).not.toContain('notifyAgentIslandUserPrompt(');
     expect(makerSendPreviewHookBlock).toContain('previewUserPrompt: (session, content, options) => {');
-    expect(makerSendPreviewHookBlock).toContain('notifyAgentIslandUserPrompt(session, content, options);');
-    expect(makerSendPreviewHookBlock).toContain('dispatchUserPromptPreview: (sessionId) => {');
+    expect(makerSendPreviewHookBlock).toContain(
+      'const previewed = notifyAgentIslandUserPrompt(session, content, {',
+    );
+    expect(makerSendPreviewHookBlock).toContain(
+      'dispatchUserPromptPreview: (sessionId, clientId) => {',
+    );
     expect(makerSendPreviewHookBlock).toContain('dispatchAgentIslandUserPrompt(sessionId);');
     expect(makerSendPreviewHookBlock).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
     expect(makerSendPreviewHookBlock).toContain('rollbackUserPromptPreview: (sessionId, clientId, source) => {');
@@ -446,7 +538,7 @@ describe('sendToSession ordering', () => {
     expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
     const liveBranch = extractBetween(
       block,
-      'const live = maker.getSession(targetSessionId);',
+      'live = maker.getSession(targetSessionId);',
       'try {\n        const createOpts = buildCreateOptsWithStderr({',
     );
 
@@ -533,7 +625,12 @@ describe('sendToSession ordering', () => {
     expect(ipcCreateBlock).toContain("if (!label.ok) throwIpcError('INVALID_PARAMS', label.message);");
     expect(ipcCreateBlock).toContain('label: label.value,');
     expect(orcaWorkerCreationServiceSource).toContain('budgetModelRequiresApiKey(params.agent, resolved.model, deps.readClaudeApiKey() != null)');
-    expect(orcaWorkerCreationServiceSource).toContain("(input.agent === 'codex' && input.fast !== undefined)");
+    expect(orcaWorkerCreationServiceSource).toContain(
+      'agentConsumesExplicitFast(input.agent) && input.fast !== undefined',
+    );
+    expect(orcaWorkerCreationServiceSource).toContain(
+      "return agent === 'codex' || agent === 'pi';",
+    );
     expect(orcaLifecycleServiceSource).toContain('createWorkerInTeam({ ...params, teamId: team.id })');
   });
 
@@ -746,9 +843,10 @@ describe('sendToSession ordering', () => {
   });
 
   it('uses active slot occupancy for renderer worker-limit gating', () => {
-    expect(useWorkersSource).toContain('isActiveWorkerStatus');
+    expect(workerProjectionStoreSource).toContain('isActiveWorkerStatus');
     expect(useWorkersSource).not.toContain('isRunningWorkerStatus');
-    expect(useWorkersSource).toContain('const activeWorkerCount = workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
+    expect(useWorkersSource).toContain('const activeWorkerCount = getActiveWorkerCount(workers);');
+    expect(workerProjectionStoreSource).toContain('return workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
   });
 });
 

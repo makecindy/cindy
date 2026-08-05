@@ -7,7 +7,7 @@
  * **三个控件一律复用应用标准选择器,本文件不自建任何选择 UI**(2026-07 用户
  * 定稿: 这里曾私搭一套裸下拉, 露出 'claude-code' 原始 id、自己拼一遍可选模型
  * 清单、effort 直接显示未经 i18n 的 low/medium/high):
- *   - agent   -> VendorSegmentedSwitcher(品牌分段 pill, 与首页新建对话同一个)
+ *   - agent   -> AgentSelect(引擎下拉, 与首页新建对话工具条同一个)
  *   - 模型    -> ModelSelector 的 field trigger, **composer 同款全功能形态**(供应商
  *                分段/订阅来源/推理强度全开; 2026-07 用户定稿基准: 全软件一个模型
  *                选择面板, 处处同行为, 差异只有样式)。来源落本地
@@ -47,7 +47,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
   getProviderModelEffort,
@@ -111,6 +111,8 @@ export interface HookWorkspacePrefsState {
   retry: (() => void) | null;
   /** 桌面新会话默认设置(解析「当前生效默认值」的数据源; 未就绪为 null)。 */
   imDefaults: ImDefaultsLike | null;
+  /** 重新拉取 imDefaults(存量 global override 被清掉后刷新目录行的生效值)。 */
+  reloadImDefaults: () => Promise<void>;
   /** alsoProviderSource: 远端写成功后串联落本地来源(undefined = 不动来源)。 */
   applyPatch: (
     workspace: string,
@@ -156,6 +158,22 @@ export function useHookWorkspacePrefs(
   const [providerSources, setProviderSources] = useState<HookWorkspaceProviderSourceEntry[]>([]);
   // latest-wins 守卫(Copilot review): 快速连选/跨窗口广播时, 较慢的旧回复不得覆盖新状态。
   const providerSourceRevisionRef = useRef(0);
+  /**
+   * 拉一次「新会话默认设置」(目录行未显式设置字段的生效值解析源)。
+   * 单独抽出来是因为存量 global override 被清掉后要能立刻刷新生效值 —— 否则目录行
+   * 会继续显示已经不再生效的旧默认。
+   */
+  const fetchImDefaults = useCallback(async (): Promise<void> => {
+    try {
+      const state: ImDefaultSettingsState = await window.electronAPI.maker.imDefaultSettingsGet(
+        provider === 'slack' ? 'slack' : undefined,
+      );
+      setImDefaults({ agentKind: state.agentKind, agents: state.agents });
+    } catch {
+      /* 读不到就保持上一份(解析退回内置默认), 不影响目录行其它字段 */
+    }
+  }, [provider]);
+
   const neutral = isNeutralPrefsProvider(provider);
   const neutralView = neutral && hook !== null ? hook[provider as NeutralPrefsProvider] : null;
   const neutralBindingId =
@@ -241,16 +259,10 @@ export function useHookWorkspacePrefs(
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可。
     // **频道必须与派发侧同源**: session-runner 用
     // `readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined)` —— Slack 读
-    // channels.slack, Telegram 读 global, 两者各自独立归一化互不继承
-    // (im/defaultSettingsStore.ts; IM_DEFAULT_SETTINGS_CHANNELS 里根本没有 telegram)。
-    // 这里原先两个 provider 都写死 'slack', 于是 Telegram 卡片下的目录行显示的是
-    // Slack 频道的 agent/模型, 派发实际用 global —— 显示与实际不符(2026-07 实审发现)。
-    void window.electronAPI.maker
-      .imDefaultSettingsGet(provider === 'slack' ? 'slack' : undefined)
-      .then((state: ImDefaultSettingsState) => {
-        if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
-      })
-      .catch(() => {});
+    // channels.slack, 官方 Telegram 读 global；个人 Telegram Bot 才读
+    // channels.telegram。这里必须与官方派发侧同源，否则目录行会显示一套默认值、
+    // 实际会话却使用另一套。
+    void fetchImDefaults();
     // 初次拉取同样受 latest-wins 守卫(Copilot review): 回复未归时若已收到其它
     // 窗口的写入广播(revision 已前进), 旧快照不得回滚新状态。
     const initialSourcesRevision = providerSourceRevisionRef.current;
@@ -357,9 +369,7 @@ export function useHookWorkspacePrefs(
         })
         .catch((err: unknown) => {
           if (revision !== providerSourceRevisionRef.current) return;
-          toast.error(
-            extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'),
-          );
+          toast.error(extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'));
         });
     },
     [provider, multiTeam, selectedTeamId, t],
@@ -448,6 +458,7 @@ export function useHookWorkspacePrefs(
     hint,
     retry: loadError === 'unavailable' ? () => void fetchPrefs() : null,
     imDefaults,
+    reloadImDefaults: fetchImDefaults,
     applyPatch,
     teams,
     selectedTeamId,
@@ -474,9 +485,9 @@ function PrefsField({
   );
 }
 
-/** hook prefs 的 agentKind('claude-code' | 'codex')→ 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'cc';
+/** hook prefs 的 agentKind → 选择器的 vendor key。 */
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 
 /**
@@ -487,10 +498,10 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
  */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
+  if (vendor === 'pi') return 'pi';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
-
 
 /** 目录卡片内的偏好编辑行(agent / 模型 / 权限三字段)。alias 为该行当前生效别名。 */
 export function WorkspacePrefsEditor({
@@ -505,13 +516,15 @@ export function WorkspacePrefsEditor({
   const { t } = useTranslation();
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
+  const piCaps = useAgentCapabilities('pi');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
+        pi: piCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>
@@ -543,15 +556,29 @@ export function WorkspacePrefsEditor({
           caps 一起禁,当前 agent 能力请求瞬时失败就把整行钉死,用户连切到另一个
           (可用的)agent 都不行(codex review)。模型/权限字段仍按 caps 禁用 ——
           它们的选项列表真的来自 caps。 */}
-      <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
-        <VendorSegmentedSwitcher
+      {/* 引擎选择用与新建对话工具条同一个下拉(AgentSelect, #1350): 定宽分段器每
+          多一个引擎就窄一截(168px 三等分 = 每段 56px, Pi 已贴边), 而下拉只渲染
+          当前引擎, 引擎数量不再影响布局; 未选中项也不再因为置灰而看着像不可用。 */}
+      {/* 确定宽度是 field 形态的前提: PrefsField 只有 min-w-0 时, trigger 的 w-full
+          解析不到包含块宽度, 字段会缩到当前标签的固有宽度(选 Pi 时 trigger 与绑定
+          它的面板只有一个短标签宽, 选项行图标/文字/勾选被截断, codex review #1490)。
+          168px = 被替换的定宽分段器原宽度, 视觉落位不变。 */}
+      <PrefsField
+        label={t('settings.tina.prefs.agentLabel')}
+        className="w-[168px] shrink-0 basis-[168px]"
+      >
+        <AgentSelect
           value={vendorKey}
-          width={168}
-          // 可及名 = 本地化字段名 + 行别名:每行目录都有一个同样的分段,不带别名时
-          // 读屏听到的全部是同一个名字,行与行无法分辨(codex review)。
-          ariaLabel={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
+          // 设置字段形态: trigger 撑满字段、面板绑 trigger 实测宽度
+          // (DESIGN.md §4 Select & Dropdown 宽度铁则); dense 与同排 ModelSelector 齐高。
+          triggerVariant="field"
+          dense
+          side="bottom"
+          // 可及名带行别名:每行目录都有一个同样的选择器,不带别名时读屏听到的
+          // 全部是同一个名字,行与行无法分辨(codex review)。
+          ariaContext={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
           disabled={disabled}
-          // 当前段可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
+          // 当前值可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
           // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;
           // 显式同值由下方 nextAgent === prefs.agentKind 去重,不产生空写。
           reselectEmitsChange

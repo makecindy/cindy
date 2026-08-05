@@ -8,6 +8,7 @@ const brandLockupSource = readFileSync(resolve(__dirname, '..', 'components', 'b
 const chatInputSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'), 'utf8');
 const sendButtonSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'SendButton.tsx'), 'utf8');
 const vendorSwitcherSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'VendorSegmentedSwitcher.tsx'), 'utf8');
+const agentSelectSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'AgentSelect.tsx'), 'utf8');
 const permissionSelectorSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'PermissionSelector.tsx'), 'utf8');
 const modelSelectorSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ModelSelector.tsx'), 'utf8');
 const worktreeChipsRowSource = readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'WorktreeChipsRow.tsx'), 'utf8');
@@ -27,7 +28,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('data-testid="create-agent-quick-starts"');
     expect(source).toContain('createAgentQuickStarts.map');
     expect(source).toContain('<ChatInput');
-    expect(source).toContain('<VendorSegmentedSwitcher');
+    expect(source).toContain('<AgentSelect');
+    // 引擎切换在工具条上已由分段器换成下拉(定宽触发器,引擎数量不影响布局)
+    expect(source).not.toContain('<VendorSegmentedSwitcher');
     expect(source).toContain('middleToolbarSlot={');
     expect(source).not.toContain('<HomeUsageDashboard');
     expect(source).not.toContain('newChat.createAgent.more');
@@ -105,7 +108,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'onEffortDidChange={handleEffortDidChange}',
       'onPermissionModeDidChange={handlePermissionModeDidChange}',
       'onProviderDidChange={handleProviderDidChange}',
-      'vendorKey={draft.vendor ===',
+      'vendorKey={normalizeDbAgentKind(draft.vendor)}',
       // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
       // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
       'attachmentState={guardedAttachmentState}',
@@ -214,6 +217,17 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(vendorSwitcherSource).toContain('text-[var(--create-agent-segment-inactive-text)]');
     expect(vendorSwitcherSource).toContain('border-[var(--create-agent-control-border)]');
 
+    // 引擎下拉:trigger 是描边控件(与协同按钮同族,区别于裸态的权限/模型 trigger),
+    // 面板走 model dropdown 规格;定宽 h-30,引擎数量增加不改工具条布局。
+    expect(agentSelectSource).toContain("'h-[30px]'");
+    expect(agentSelectSource).toContain('border-[var(--create-agent-control-border)]');
+    expect(agentSelectSource).toContain('bg-[var(--create-agent-control-bg)]');
+    expect(agentSelectSource).toContain('text-[var(--model-item-text)]');
+    expect(agentSelectSource).toContain('text-[var(--model-section-label)]');
+    // 选项表来自单一来源,新增引擎不需要改控件;隐藏未注册引擎的语义与分段器一致
+    expect(agentSelectSource).toContain('visibleOptions.map');
+    expect(agentSelectSource).toContain('hiddenVendors');
+
     // 权限/模型 trigger 已统一为裸态无框(create-agent 与会话内共用同一套),不再用 create-agent-control 边框
     expect(permissionSelectorSource).not.toContain('border-[var(--create-agent-control-border)]');
     expect(permissionSelectorSource).toContain('border border-transparent bg-transparent');
@@ -287,7 +301,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
     expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');
     expect(chatInputSource).toContain(
-      'onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}',
+      'localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined',
     );
     expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(

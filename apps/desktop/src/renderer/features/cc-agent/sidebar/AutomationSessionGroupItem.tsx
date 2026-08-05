@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { Session } from '@/lib/ccAgent.types';
 import type { AutomationScheduleAction, AutomationSessionGroup } from '../lib/automationSidebarGrouping';
 import {
@@ -311,10 +311,14 @@ export function AutomationSessionGroupItem({
         <div
           onClick={openLatestSession}
           className={cn(
-            // rounded-full + 22px 缩进:与同列表的 SessionItem 行同款药丸形/缩进
-            // (2026-07 侧栏视觉统一)。
+            // list 组头与普通 SessionCard 共用 10px 内容边距；只有展开后的子任务
+            // 由下方 pl-3 容器额外缩进。text 模式继续沿用 SessionItem 的树形缩进。
             'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
-            indented ? 'pl-[22px] pr-2' : 'pl-3 pr-2',
+            sessionVariant === 'list'
+              ? 'px-2.5'
+              : indented
+                ? 'pl-[22px] pr-2'
+                : 'pl-3 pr-2',
             'text-left text-sm font-medium',
             hasActiveHidden
               ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
@@ -331,19 +335,25 @@ export function AutomationSessionGroupItem({
             disabled={!latestSession}
             className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"
           >
-            {/* 引擎 logo(vendor mark)——复用 SessionItem 左侧 15px 定宽槽与尺寸规则,
-                保证自动任务组头和普通会话的首图标落在同一列。分组 agentKind 取
+            {/* list 复用 SessionCard 的 12px 状态槽，text 复用 SessionItem 的 15px 槽；
+                这样首图标和标题都能落在各自模式的普通任务列上。分组 agentKind 取
                 最新一条 run(同一 schedule 所有 run 走同一 agent),缺失时退化为
                 'cc'。isRunning 只看最新那条,与其子行一致。 */}
-            <span className="flex w-[15px] shrink-0 items-center justify-center">
+            <span
+              className={cn(
+                'flex shrink-0 items-center justify-center',
+                sessionVariant === 'list' ? 'w-3' : 'w-[15px]',
+              )}
+            >
               <VendorIcon
-                vendor={latestSession?.agentKind === 'codex' ? 'codex' : 'cc'}
-                size={latestSession?.agentKind === 'codex' ? 12 : 13}
+                vendor={agentKindToVendor(latestSession?.agentKind)}
+                size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}
                 running={isRunning}
                 colorClassName={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
               />
             </span>
-            {/* 延续原 Clock 的紧凑节奏:vendor → Timer 与 Timer → 标题均留 6px。 */}
+            {/* text 延续 vendor → Timer → 标题；list 把 Timer 排到标题右侧，避免它
+                被误读成一层缩进，同时保留自动任务身份和点击入口。 */}
             <span className="flex min-w-0 items-center gap-1.5">
               {/* Timer 点击跳自动化页对应条目。宿主已是 title <button>,不能嵌套
                   button,用 span role="button" + stopPropagation 拦下行点击。 */}
@@ -361,7 +371,10 @@ export function AutomationSessionGroupItem({
                   );
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="relative inline-flex size-3 shrink-0 cursor-pointer items-center justify-center"
+                className={cn(
+                  'relative inline-flex size-3 shrink-0 cursor-pointer items-center justify-center',
+                  sessionVariant === 'list' && 'order-2',
+                )}
               >
                 {/* Timer 始终占同一个 12px 槽；暂停/过期只叠状态角标，不替换主图标。 */}
                 <AutomationTimerIcon

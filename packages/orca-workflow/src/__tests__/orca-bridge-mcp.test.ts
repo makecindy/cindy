@@ -49,7 +49,7 @@ interface CreateSessionOpts {
   parentSessionId?: string;
   resumeSessionId?: string;
   userPrompt?: string;
-  providerId?: string;
+  providerId?: string | null;
   vendorOptions?: Record<string, unknown>;
 }
 
@@ -435,6 +435,28 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(order).toEqual(['hydrate:lead-1:anthropic', 'create:lead-1:anthropic']);
   });
 
+  it('preserves a persisted null Pi providerId when cold rehydrating the lead', async () => {
+    const workerLink: OrcaWorkerLink = {
+      workerId: 'worker-1', workflowId: 'workflow-1', workerSessionId: 'worker-session-1', leadSessionId: 'lead-1',
+      leadSession: { sessionId: 'lead-1', agentKind: 'pi', workingDir: '/repo', model: 'gpt-5', providerId: null },
+    };
+    const { createSessionCalls, maker } = makeProvider({ workerLink });
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger() as never,
+      persistUserMessage: async () => {}, wireSession: () => {},
+      orcaTeamStore: { async getWorkerLink() { return workerLink; }, async updateWorkerStatus() {} },
+    });
+    const server = getServer(provider, {
+      agentKind: 'pi', workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker', orcaWorkerId: 'worker-1', orcaWorkerSessionId: 'worker-session-1' },
+    });
+
+    await server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'hello lead' });
+
+    expect(createSessionCalls).toHaveLength(1);
+    expect(createSessionCalls[0]).toMatchObject({ id: 'lead-1', agentKind: 'pi', providerId: null });
+  });
+
   it('carries lead remoteHostId into rehydration createSession (remote worker → inactive remote lead)', async () => {
     // codex-connector P1 回归:远端 worker send_to_lead 且 lead 不活跃 (关闭 /
     // app 重启) 时, 持久化快照必须把 remoteHostId 带进 createSession — 缺失
@@ -809,6 +831,55 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     expect(persisted).toHaveLength(1);
     expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+  });
+
+  it('read_lead and lead_status stay running across claim-bearing continuation boundaries', async () => {
+    const lead = makeSession('lead-1');
+    const { server } = makeWorkerBridgeLeadHarness(lead);
+
+    await server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: 'continue the lead turn',
+    });
+    lead.emit({
+      type: 'text',
+      data: { text: 'First segment', isFinal: false },
+    } as AgentEvent);
+    lead.emit({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+      turnContinuationId: 1,
+    } as AgentEvent);
+    lead.emit({
+      type: 'done',
+      data: { result: 'First segment result' },
+      turnContinuationId: 1,
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'running',
+      result: 'First segment result',
+    });
+    expect(parseToolJson(await server._registeredTools.lead_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ status: 'running' });
+
+    lead.emit({
+      type: 'done',
+      data: { result: 'Final lead result' },
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'done',
+      result: 'Final lead result',
+    });
+    expect(parseToolJson(await server._registeredTools.lead_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ status: 'done' });
   });
 
   it('send_to_lead accepted false does not persist success or mark done', async () => {

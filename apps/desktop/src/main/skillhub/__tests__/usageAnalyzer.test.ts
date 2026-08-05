@@ -284,6 +284,35 @@ describe('analyzeSkillUsageTranscript', () => {
     });
   });
 
+  it('does not mis-parse a Pi transcript as Codex (Pi is explicitly skipped, no exposures)', () => {
+    // Pi 原生转录格式与 Codex 不同;分析器不得把 agentKind:'pi' 回落到 Codex 解析器,
+    // 否则会静默产出错误归属的 exposure。喂一条 Codex 会识别为技能注入的行,agentKind
+    // 设为 pi → 必须 0 exposure(显式跳过,而非误当 Codex)。
+    const document = skillDocument('code-discipline', 'Use local patterns before editing.');
+    const result = analyzeSkillUsageTranscript({
+      agentKind: 'pi',
+      sessionId: 'pi-local',
+      sdkSessionId: '019ed673-c614-7ac1-8d22-c0ddc81f9cf0',
+      rawFilePath: '/agent-transcripts/pi/2026/06/18/skip.jsonl',
+      lines: [
+        codexLine({
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: codexSkillInjection('code-discipline', '/agent-skill-roots/pi/code-discipline', document),
+              },
+            ],
+          },
+        }),
+      ],
+    });
+    expect(result.exposures).toEqual([]);
+  });
+
   it('counts repeated tool calls only inside the active exposure window', () => {
     const firstDocument = skillDocument('code-discipline', 'Use local patterns before editing.');
     const secondDocument = skillDocument('systematic-debugging', 'Find the root cause first.');

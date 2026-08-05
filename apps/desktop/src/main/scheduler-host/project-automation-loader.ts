@@ -47,7 +47,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  agentKind?: 'claude-code' | 'codex';
+  agentKind?: 'claude-code' | 'codex' | 'pi';
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
@@ -597,7 +597,7 @@ function optionalNumber(value: unknown): boolean {
 }
 
 function optionalAgentKind(value: unknown): boolean {
-  return value === undefined || value === 'claude-code' || value === 'codex';
+  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi';
 }
 
 function optionalNotify(value: unknown): boolean {

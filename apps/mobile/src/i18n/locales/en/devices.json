@@ -249,6 +249,7 @@
       },
       "useWorktree": "Use worktree",
       "modelPlaceholderBound": "Follow session",
+      "modelPlaceholderPiDefault": "Leave blank for default model",
       "fastMode": "Fast Mode",
       "notifyDesktop": "Desktop Notifications",
       "notifyFeishu": "Feishu Notifications",

@@ -50,6 +50,7 @@ vi.mock('@/lib/imageRef', () => ({
 
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
   plainTextToTiptapDoc: (s: string) => ({
     type: 'doc',
     content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
@@ -78,6 +79,30 @@ import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/ma
 import type { SessionChatState } from '@/lib/makerChatStore';
 
 describe('makerChatStore agent task updates', () => {
+  it('preserves Pi as the task provider for explicit and source-derived updates', () => {
+    const explicit = handleStreamEvent(
+      { ...EMPTY_SESSION_STATE, messages: [], taskUpdates: new Map() },
+      {
+        sessionId: 's1',
+        type: 'agent_task_update',
+        source: 'pi',
+        data: { provider: 'pi', taskId: 'pi-explicit', status: 'running' },
+      } as CCAgentStreamEvent,
+    );
+    const derived = handleStreamEvent(
+      explicit,
+      {
+        sessionId: 's1',
+        type: 'agent_task_update',
+        source: 'pi',
+        data: { taskId: 'pi-derived', status: 'running' },
+      } as CCAgentStreamEvent,
+    );
+
+    expect(derived.taskUpdates?.get('pi-explicit')?.provider).toBe('pi');
+    expect(derived.taskUpdates?.get('pi-derived')?.provider).toBe('pi');
+  });
+
   it('keeps taskId and parentToolUseId aliases synchronized when later updates only carry taskId', () => {
     const started = handleStreamEvent(
       { ...EMPTY_SESSION_STATE, messages: [], taskUpdates: new Map() },

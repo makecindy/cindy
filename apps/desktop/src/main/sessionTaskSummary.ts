@@ -26,7 +26,7 @@ import { and, count, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm'
 
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
-import { requestUtilityText } from './utility-model/oneShotCandidates.js';
+import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText } from './localDb/latestMessageText.js';
 import { messages, sessions } from './localDb/schema.js';
@@ -144,7 +144,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     const inactiveMs = Date.now() - (session.userSendAt ?? session.updatedAt);
     const tier = pickTier({ inactiveMs, messageCount, isScheduled });
 
-    const agentKind = session.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind = session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'claude-code';
     const prompt = SUMMARY_PROMPT(session.title, userMsg, assistantMsg, tier);
     // 模型走系统统一配置:优先用"轻量任务模型链"(utility-model,与起标题同源,
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
@@ -155,9 +155,12 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     });
     // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发
     // (摘要 best-effort,直接放弃本轮,PR #744 review)。
+    // oneShot 能力轴:Pi 未实现 oneShot(继承 BaseAgent 的 not-implemented),对 Pi 会话
+    // 走该兜底会抛错、外层 catch 静默把摘要留空。此处摘要绑定会话自身 agent,不像 help
+    // 那样跨 agent 兜底 —— 会话 agent 不支持 oneShot 时直接跳过兜底(仅靠 utility-model)。
     const text = utility.ok
       ? utility.text
-      : (await isAgentOneShotRouteDisabled(agentKind))
+      : (!agentSupportsOneShot(agentKind) || (await isAgentOneShotRouteDisabled(agentKind)))
         ? ''
         : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
     const summary = sanitize(text, maxCharsForTier(tier));

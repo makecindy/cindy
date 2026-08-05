@@ -26,6 +26,16 @@ import {
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import type {
+  ModelPriceOverrideDesiredQuote,
+  ModelPriceOverrideTarget,
+  ModelPriceOverrideView,
+} from '../../shared/modelPriceOverride.js';
+import type { MoneyCurrency } from '../../shared/regionalMoney.js';
+import {
+  MAX_PROVIDER_ORDER_ID_LENGTH,
+  MAX_PROVIDER_ORDER_ITEMS,
+} from '../../shared/providerOrder.js';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
@@ -47,6 +57,11 @@ import {
   updateCustomProvider,
   validateCustomProviderConfig,
 } from '../maker-host/custom-provider-store.js';
+import {
+  CUSTOM_PROVIDER_RUNTIME_AGENTS,
+  splitCustomProviderHeaders,
+  type CustomProviderHeaderSecrets,
+} from '../maker-host/custom-provider-header-secrets.js';
 import type { ProviderProbeSpec, ProviderTestInput, ProviderTestResult } from '../maker-host/provider-diagnostics.js';
 import type {
   ProviderModelsFetchResult,
@@ -57,7 +72,7 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const log = createLogger('maker-ipc:provider');
 
-const VALID_AGENTS: readonly string[] = ['claude-code', 'codex'];
+const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -163,6 +178,19 @@ function oauthDescriptorSignature(config: CustomProviderConfig | null): string |
       });
 }
 
+/** Never expose runtime header credentials to WebViews or synthetic remote events. */
+function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView {
+  if (!provider.routing) return provider;
+  const routing = Object.fromEntries(
+    Object.entries(provider.routing).map(([agent, descriptor]) => {
+      if (!descriptor) return [agent, descriptor];
+      const { headerOverride: _secretHeaders, ...safeDescriptor } = descriptor;
+      return [agent, safeDescriptor];
+    }),
+  ) as ProviderView['routing'];
+  return { ...provider, routing };
+}
+
 export interface ProviderHandlerDeps {
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
@@ -171,7 +199,9 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: {
+    allowSideEffects?: boolean;
+  }): Promise<ProviderView[]>;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -187,6 +217,12 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /** Current selectable catalog ids, used to validate visible provider order entries. */
+  listProviderIds(): string[];
+  /** Merge the currently visible order into the persisted observed-provider order. */
+  setProviderOrder(providerIds: readonly string[]): boolean;
+  /** Persisted Settings display order, returned as metadata without reordering ProviderView[]. */
+  getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
@@ -247,6 +283,30 @@ export interface ProviderHandlerDeps {
     providerId: string,
     agent: AgentKind,
   ): { success: boolean; error?: string };
+  /** Main-only encrypted runtime header blobs, transacted with config + API keys. */
+  readCustomProviderHeadersForMutation(
+    providerId: string,
+    agent: AgentKind,
+  ): Record<string, string> | null;
+  storeCustomProviderHeaders(
+    providerId: string,
+    agent: AgentKind,
+    headers: Record<string, string>,
+  ): boolean;
+  removeCustomProviderHeaders(
+    providerId: string,
+    agent: AgentKind,
+  ): { success: boolean; error?: string };
+  /**
+   * 读取已存自定义供应商在该 agent 下的**请求目标端点**(baseUrl + 可选 modelsUrl),
+   * 来自 active-catalog 的 routing。models-fetch 用它把 savedProviderId 请求的目标钉回
+   * 已存端点,确保 main-only 密文头只可能发往该供应商自己的端点——不存在 / 无该 runtime
+   * 返回 null(此时不合并密文头)。安全边界在 main:renderer 传的 baseUrl/modelsUrl 不可信。
+   */
+  readSavedProviderRoute(
+    providerId: string,
+    agent: AgentKind,
+  ): { baseUrl: string; modelsUrl: string | null } | null;
   /**
    * 本机 agent CLI 安装 / 登录态扫描(生产 = scanLocalCliAuth(createLocalCliScanDeps());
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
@@ -272,13 +332,22 @@ export interface ProviderHandlerDeps {
    */
   stageClearProviderDisableOverrides?(providerId: string): () => boolean;
   /**
-   * 当前数据归属账号 id(生产 = getCurrentDataOwnerId)。停用写入是 owner-scoped
-   * 持久化(model-disable-prefs.json 按账号分目录),而 handler 内有异步窗口(串行
-   * 队列排队 + 目录校验的 listProviders await)—— 期间切了账号,写入会落进**新**账号
-   * 的偏好文件。在入口捕获、持久化前复核,变了就拒(PR #744 review 第七轮)。
+   * 当前数据归属会话(生产 = getActiveAppSession)。provider handler 内有异步窗口
+   * (串行队列排队 + 目录读取 await),必须同时比较 owner id 与单调 generation；只比 id
+   * 会漏掉 A→B→A 往返，让旧操作在第二个 A 会话里继续返回或落盘。
    * 可选:未注入(单测最小桩)= 不做归属校验。
    */
-  currentOwnerId?(): string | null;
+  currentOwnerSession?(): { dataOwnerId: string | null; generation: number };
+  /** Active account ledger currency; used to reject unsupported reverse-FX overrides. */
+  getLedgerCurrency(): MoneyCurrency;
+  readModelPriceOverride(target: ModelPriceOverrideTarget): ModelPriceOverrideView;
+  writeModelPriceOverride(
+    target: ModelPriceOverrideTarget,
+    desired: ModelPriceOverrideDesiredQuote,
+  ): void;
+  clearModelPriceOverride(target: ModelPriceOverrideTarget): void;
+  stageClearProviderModelPriceOverrides?(providerId: string): () => boolean;
+  broadcastPricingChanged(): void;
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
@@ -381,6 +450,9 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
     if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
   }
+  if (spec.savedProviderId !== undefined) {
+    if (typeof spec.savedProviderId !== 'string' || !/^[a-z0-9_-]+$/.test(spec.savedProviderId)) return null;
+  }
   return {
     agent: spec.agent as AgentKind,
     baseUrl: spec.baseUrl,
@@ -388,6 +460,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
+    ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
     ...(typeof spec.wireProtocol === 'string'
       ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
       : {}),
@@ -599,6 +672,180 @@ export function registerProviderHandlers(
       throw error;
     }
   };
+  type HeaderSnapshot = {
+    agent: AgentKind;
+    previous: Record<string, string> | null;
+  };
+  type HeaderMutation = {
+    agent: AgentKind;
+    replacement: Record<string, string> | null;
+  };
+  const restoreProviderHeaders = (
+    providerId: string,
+    snapshots: readonly HeaderSnapshot[],
+  ): boolean => {
+    let restored = true;
+    for (const { agent, previous } of [...snapshots].reverse()) {
+      if (previous) {
+        if (!deps.storeCustomProviderHeaders(providerId, agent, previous)) restored = false;
+      } else if (!deps.removeCustomProviderHeaders(providerId, agent).success) {
+        restored = false;
+      }
+    }
+    return restored;
+  };
+  // update 时:runtime 仍在、apiKey 鉴权、未带 headers 的“保留”分支只在**端点未变**时成立。
+  // 若 baseUrl/modelsUrl 改到了另一端点,旧密文头绑定的是原端点,保留会把长期凭证 hydrate 到
+  // 新主机(codex review P1)。用**权威的 previous 配置**逐 agent 比对端点,变了就清除、要求重填。
+  const endpointChangedForAgent = (
+    config: CustomProviderConfig,
+    previous: CustomProviderConfig | null | undefined,
+    agent: AgentKind,
+  ): boolean => {
+    const prevRt = previous?.runtimes[agent];
+    const nextRt = config.runtimes[agent];
+    if (!prevRt || !nextRt) return false; // 新增 runtime 无旧端点/旧头可漏;runtime 移除已单独清
+    const norm = (u: string | null | undefined): string => (u ?? '').trim();
+    return norm(prevRt.baseUrl) !== norm(nextRt.baseUrl)
+      || norm(prevRt.modelsUrl) !== norm(nextRt.modelsUrl);
+  };
+  const planProviderHeaderMutations = (
+    config: CustomProviderConfig,
+    headers: CustomProviderHeaderSecrets,
+    mode: 'create' | 'update' | 'delete',
+    previous?: CustomProviderConfig | null,
+  ): HeaderMutation[] => {
+    // 头凭证在 auth='none'/'oauth' 下不该继续留存(与 planProviderKeyMutations 的
+    // usesApiKey 同口径):这两种模式不经存储的鉴权请求头路由。
+    const usesApiKey = !config.auth || config.auth.method === 'apiKey';
+    const mutations: HeaderMutation[] = [];
+    for (const agent of CUSTOM_PROVIDER_RUNTIME_AGENTS) {
+      const replacement = headers[agent];
+      if (mode === 'create') {
+        if (config.runtimes[agent] && replacement) mutations.push({ agent, replacement });
+        continue;
+      }
+      if (mode === 'delete') {
+        mutations.push({ agent, replacement: null });
+        continue;
+      }
+      // update:头凭证是 main-only 密文,不回读进 renderer 表单。因此“该 runtime 仍在、
+      // 但配置里没带 headers”= 用户没动请求头 → 保留旧值(不生成 mutation),不能当作
+      // 删除,否则仅改名称/模型也会清掉鉴权头使 provider 失效(codex review)。
+      //   - runtime 被移除(config 里没有该 agent)→ 清掉其残留头。
+      //   - 显式带了 headers(含用户新填)→ 覆盖为新值。
+      //   - 切到 none/oauth(!usesApiKey)且未带头 → 清除残留凭证头,不保留,否则用户
+      //     显式关掉鉴权后,旧 Authorization 仍会被 hydrate 并可能发往新 baseUrl(codex review)。
+      if (!config.runtimes[agent]) {
+        mutations.push({ agent, replacement: null });
+      } else if (replacement) {
+        mutations.push({ agent, replacement });
+      } else if (!usesApiKey) {
+        mutations.push({ agent, replacement: null });
+      } else if (endpointChangedForAgent(config, previous, agent)) {
+        // runtime 存在 + apiKey + 未提供 headers,但端点改到了新主机 → 清除旧密文头,
+        // 不把绑定原端点的长期凭证发往新端点(用户需在新端点显式重填,codex review P1)。
+        mutations.push({ agent, replacement: null });
+      }
+      // else: runtime 存在 + apiKey 鉴权 + 未提供 headers + 端点未变 → 保留,跳过。
+    }
+    return mutations;
+  };
+  const stageProviderHeaders = (
+    providerId: string,
+    mutations: readonly HeaderMutation[],
+  ): HeaderSnapshot[] => {
+    const snapshots: HeaderSnapshot[] = [];
+    try {
+      for (const { agent, replacement } of mutations) {
+        let previous: Record<string, string> | null;
+        try {
+          previous = deps.readCustomProviderHeadersForMutation(providerId, agent);
+        } catch {
+          throwIpcError('INTERNAL', `failed to read existing ${agent} provider headers`);
+        }
+        snapshots.push({ agent, previous });
+        const succeeded = replacement
+          ? deps.storeCustomProviderHeaders(providerId, agent, replacement)
+          : deps.removeCustomProviderHeaders(providerId, agent).success;
+        if (!succeeded) {
+          throwIpcError('INTERNAL', `failed to update ${agent} provider headers`);
+        }
+      }
+      return snapshots;
+    } catch (error) {
+      if (!restoreProviderHeaders(providerId, snapshots)) {
+        throwIpcError('INTERNAL', 'provider header update failed and could not be rolled back');
+      }
+      throw error;
+    }
+  };
+  const stageProviderCredentials = (
+    providerId: string,
+    keyMutations: readonly KeyMutation[],
+    headerMutations: readonly HeaderMutation[],
+  ): { keySnapshots: KeySnapshot[]; headerSnapshots: HeaderSnapshot[] } => {
+    const keySnapshots = stageProviderKeys(providerId, keyMutations);
+    try {
+      return {
+        keySnapshots,
+        headerSnapshots: stageProviderHeaders(providerId, headerMutations),
+      };
+    } catch (error) {
+      if (!restoreProviderKeys(providerId, keySnapshots)) {
+        throwIpcError('INTERNAL', 'provider credential update failed and could not be rolled back');
+      }
+      throw error;
+    }
+  };
+  const restoreProviderCredentials = (
+    providerId: string,
+    snapshots: { keySnapshots: readonly KeySnapshot[]; headerSnapshots: readonly HeaderSnapshot[] },
+  ): boolean => {
+    // Always attempt both restorations; a failed header rollback must not leave
+    // an API key at its staged replacement (or vice versa).
+    const headersRestored = restoreProviderHeaders(providerId, snapshots.headerSnapshots);
+    const keysRestored = restoreProviderKeys(providerId, snapshots.keySnapshots);
+    return headersRestored && keysRestored;
+  };
+
+  // Owner-scoped provider reads and writes must stay bound to the account that was active at
+  // ingress. Several provider operations cross async boundaries; reject instead of mixing an
+  // earlier catalog snapshot with a later owner's preferences or persisting into that owner.
+  const captureProviderOwnerSession = () => deps.currentOwnerSession?.();
+  const providerMutationOwnerMatches = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+  ): boolean => {
+    if (!deps.currentOwnerSession || !ownerAtIngress) return true;
+    const current = deps.currentOwnerSession();
+    return (
+      current.dataOwnerId === ownerAtIngress.dataOwnerId
+      && current.generation === ownerAtIngress.generation
+    );
+  };
+  const assertProviderMutationOwner = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+    message = 'active account changed during provider mutation',
+  ): void => {
+    if (!providerMutationOwnerMatches(ownerAtIngress)) {
+      throwIpcError('INTERNAL', message);
+    }
+  };
+  const assertRequestedProviderOwner = (
+    requestedDataOwnerId: string | null,
+    requestedOwnerGeneration: number,
+  ): void => {
+    const current = deps.currentOwnerSession?.();
+    if (
+      current
+      && (
+        current.dataOwnerId !== requestedDataOwnerId
+        || current.generation !== requestedOwnerGeneration
+      )
+    ) {
+      throwIpcError('INTERNAL', 'active account changed during provider mutation');
+    }
+  };
 
   // 只读聚合：loadCatalog 永不抛（最差回退内置目录），故无需 throwIpcError 包裹。
   registry.handle(
@@ -606,14 +853,33 @@ export function registerProviderHandlers(
     async (
       event,
     ): Promise<{
+      dataOwnerId: string | null;
+      ownerGeneration: number;
       providers: ProviderView[];
+      providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
-      const allowSideEffects = deps.isTrustedSender?.(event) === true;
-      const providers = await deps.listProviders({ allowSideEffects });
-      return { providers, modelVisibilityOverrides: deps.getModelVisibilityOverrides() };
+      const ownerAtIngress = captureProviderOwnerSession();
+      const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
+      const trusted = deps.isTrustedSender?.(event) === true;
+      const providers = await deps.listProviders({
+        allowSideEffects: trusted,
+      });
+      assertProviderMutationOwner(ownerAtIngress);
+      const providerOrder = deps.getProviderOrder();
+      // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
+      // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
+      // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
+      // 请求头,update 由 main 侧保留旧值(planProviderHeaderMutations 'update' 分支)。
+      return {
+        dataOwnerId,
+        ownerGeneration: ownerAtIngress?.generation ?? 0,
+        providers: providers.map(withoutProviderHeaderCredentials),
+        providerOrder,
+        modelVisibilityOverrides: deps.getModelVisibilityOverrides(),
+      };
     },
   );
 
@@ -668,6 +934,58 @@ export function registerProviderHandlers(
     }
     deps.assertTrustedSender(event);
   }
+
+  // 供应商显示顺序是 owner-scoped 设置。Renderer 只提交当前左栏可见项；store 会
+  // 保留曾出现但当前隐藏的项，并把第一次出现的项追加到末尾。
+  registry.handle(MAKER_INVOKE.PROVIDER_ORDER_SET, (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'invalid provider order input');
+    }
+    const value = input as Record<string, unknown>;
+    const keys = Object.keys(value);
+    const requestedDataOwnerId = value.dataOwnerId;
+    const requestedOwnerGeneration = value.ownerGeneration;
+    const ids = value.providerIds;
+    if (
+      keys.length !== 3 ||
+      (requestedDataOwnerId !== null && typeof requestedDataOwnerId !== 'string') ||
+      typeof requestedOwnerGeneration !== 'number' ||
+      !Number.isSafeInteger(requestedOwnerGeneration) ||
+      requestedOwnerGeneration < 0 ||
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAX_PROVIDER_ORDER_ITEMS ||
+      ids.some(
+        (id) =>
+          typeof id !== 'string' ||
+          id.length === 0 ||
+          id.length > MAX_PROVIDER_ORDER_ID_LENGTH,
+      ) ||
+      new Set(ids).size !== ids.length
+    ) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
+    }
+    assertRequestedProviderOwner(
+      requestedDataOwnerId as string | null,
+      requestedOwnerGeneration,
+    );
+    const catalogIds = new Set(deps.listProviderIds());
+    const requestedIds = ids as string[];
+    if (requestedIds.some((id) => !catalogIds.has(id))) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must belong to the current provider catalog');
+    }
+    try {
+      const changed = deps.setProviderOrder(requestedIds);
+      if (changed) deps.broadcastChanged();
+    } catch (err) {
+      log.warn('provider display order persist failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to persist provider order');
+    }
+    return { ok: true };
+  });
 
   // 「模型 / 供应商停用」override 写入。设置类写操作:仅本机主页面可调(device-link
   // 合成 event 与不受信 frame 一律拒绝 —— 远程改被控端全局设置越权);守卫缺席按拒绝
@@ -752,11 +1070,12 @@ export function registerProviderHandlers(
     // 归属捕获:store 路径按账号分目录且在 run() 执行时才解析,队列排队 + 目录校验
     // 的 await 窗口内切账号会把 A 的点击写进 B 的偏好 —— 持久化前复核,变了就拒
     // (PR #744 review 第七轮)。
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     const assertSameOwner = (): void => {
-      if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-        throwIpcError('INTERNAL', 'active account changed before persisting model disable override');
-      }
+      assertProviderMutationOwner(
+        ownerAtIngress,
+        'active account changed before persisting model disable override',
+      );
     };
     const run = async () => {
       if (i.kind === 'reset') {
@@ -802,6 +1121,148 @@ export function registerProviderHandlers(
     return enqueueDisableWrite(run);
   });
 
+  const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', 'price override target must be an object');
+    }
+    const target = value as Record<string, unknown>;
+    if (
+      typeof target.providerId !== 'string' ||
+      target.providerId.length === 0 ||
+      target.providerId.length > MAX_DISABLE_ID_LENGTH ||
+      !VALID_AGENTS.includes(String(target.agent)) ||
+      typeof target.modelId !== 'string' ||
+      target.modelId.length === 0 ||
+      target.modelId.length > MAX_DISABLE_ID_LENGTH
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid price override target');
+    }
+    return {
+      providerId: target.providerId,
+      agent: target.agent as AgentKind,
+      modelId: target.modelId,
+    };
+  };
+  const parseDesiredPrice = (value: unknown): ModelPriceOverrideDesiredQuote => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', 'price override quote must be an object');
+    }
+    const quote = value as Record<string, unknown>;
+    const validNumber = (candidate: unknown): candidate is number =>
+      typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0;
+    const validNullableNumber = (candidate: unknown): boolean =>
+      candidate === undefined || candidate === null || validNumber(candidate);
+    if (
+      (quote.currency !== 'USD' && quote.currency !== 'CNY') ||
+      !validNumber(quote.inputPerMtok) ||
+      !validNumber(quote.outputPerMtok) ||
+      !validNullableNumber(quote.cacheReadPerMtok) ||
+      !validNullableNumber(quote.cacheCreatePerMtok)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid price override quote');
+    }
+    return {
+      currency: quote.currency,
+      inputPerMtok: quote.inputPerMtok,
+      outputPerMtok: quote.outputPerMtok,
+      ...(quote.cacheReadPerMtok === null || validNumber(quote.cacheReadPerMtok)
+        ? { cacheReadPerMtok: quote.cacheReadPerMtok }
+        : {}),
+      ...(quote.cacheCreatePerMtok === null || validNumber(quote.cacheCreatePerMtok)
+        ? { cacheCreatePerMtok: quote.cacheCreatePerMtok }
+        : {}),
+    };
+  };
+  const requirePriceTargetModel = async (
+    target: ModelPriceOverrideTarget,
+  ): Promise<ProviderView> => {
+    const provider = (await deps.listProviders({ allowSideEffects: false }))
+      .find((candidate) => candidate.id === target.providerId);
+    const known = provider?.models[target.agent]?.some((model) => model.id === target.modelId);
+    if (!provider || !known) {
+      throwIpcError('INVALID_PARAMS', 'price override target is not in the active catalog');
+    }
+    return provider;
+  };
+  let priceMutationTail: Promise<unknown> = Promise.resolve();
+  const enqueuePriceMutation = <T,>(run: () => T | Promise<T>): Promise<T> => {
+    const result = priceMutationTail.catch(() => undefined).then(run);
+    priceMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(input);
+    await requirePriceTargetModel(target);
+    return deps.readModelPriceOverride(target);
+  });
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, async (event, targetInput: unknown, quoteInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(targetInput);
+    const desired = parseDesiredPrice(quoteInput);
+    if (target.providerId === 'xd') {
+      throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway pricing is server-controlled');
+    }
+    if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
+      throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
+    }
+    const ownerAtIngress = captureProviderOwnerSession();
+    return withProviderConfigMutation(target.providerId, () =>
+      enqueuePriceMutation(async () => {
+        await requirePriceTargetModel(target);
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before persisting price override',
+        );
+        try {
+          deps.writeModelPriceOverride(target, desired);
+        } catch (err) {
+          log.warn('model price override persist failed', {
+            providerId: target.providerId,
+            agent: target.agent,
+            modelId: target.modelId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError('INTERNAL', 'failed to persist model price override');
+        }
+        deps.broadcastPricingChanged();
+        return deps.readModelPriceOverride(target);
+      }),
+    );
+  });
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(input);
+    const ownerAtIngress = captureProviderOwnerSession();
+    return withProviderConfigMutation(target.providerId, () =>
+      enqueuePriceMutation(async () => {
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before resetting price override',
+        );
+        try {
+          deps.clearModelPriceOverride(target);
+        } catch (err) {
+          log.warn('model price override reset failed', {
+            providerId: target.providerId,
+            agent: target.agent,
+            modelId: target.modelId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError('INTERNAL', 'failed to reset model price override');
+        }
+        deps.broadcastPricingChanged();
+        return deps.readModelPriceOverride(target);
+      }),
+    );
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (event, input: unknown, keyInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input);
@@ -809,18 +1270,27 @@ export function registerProviderHandlers(
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
+    const separated = splitCustomProviderHeaders(config);
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
+      assertProviderMutationOwner(ownerAtIngress);
       if (await customProviderExists(config.id)) {
         throwIpcError('ALREADY_EXISTS', `custom provider '${config.id}' already exists`);
       }
-      const keySnapshots = stageProviderKeys(
+      // 前面的异步存在性查询期间可能换号；写 key/header 前复核。
+      assertProviderMutationOwner(ownerAtIngress);
+      const credentialSnapshots = stageProviderCredentials(
         config.id,
         planProviderKeyMutations(config, keys, 'create'),
+        planProviderHeaderMutations(config, separated.headers, 'create'),
       );
       try {
-        await createCustomProvider(config);
+        await createCustomProvider(separated.config);
+        assertProviderMutationOwner(ownerAtIngress);
       } catch (error) {
-        if (!restoreProviderKeys(config.id, keySnapshots)) {
+        // 换号后不在 B 的 secret store 执行 A 的回滚。
+        assertProviderMutationOwner(ownerAtIngress);
+        if (!restoreProviderCredentials(config.id, credentialSnapshots)) {
           throwIpcError(
             'INTERNAL',
             'provider creation failed and credentials could not be rolled back',
@@ -828,7 +1298,9 @@ export function registerProviderHandlers(
         }
         throw error;
       }
+      assertProviderMutationOwner(ownerAtIngress);
       await afterChange();
+      assertProviderMutationOwner(ownerAtIngress);
       return { ok: true };
     });
   });
@@ -840,10 +1312,15 @@ export function registerProviderHandlers(
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
+    const separated = splitCustomProviderHeaders(config);
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
       let generation: symbol | null = null;
       try {
+        // per-provider 队列等待结束后才读取该 owner 的 DB / secrets。
+        assertProviderMutationOwner(ownerAtIngress);
         const previous = await getCustomProvider(config.id);
+        assertProviderMutationOwner(ownerAtIngress);
         if (!previous) throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
         // 即便 OAuth 描述符没变，runtime / model 编辑也必须让旧登录尾部的自动发现失效，
         // 否则旧 endpoint 的迟到结果可能合并进刚保存的新配置。
@@ -853,9 +1330,12 @@ export function registerProviderHandlers(
           || oauthDescriptorSignature(previous) !== oauthDescriptorSignature(config);
         // API key 的写 / 删与配置更新处于同一 main 队列；若后续 OAuth 清理或 DB 写失败，
         // 用原值回滚，确保并发窗口不能把另一份配置和密钥拼在一起。
-        const keySnapshots = stageProviderKeys(
+        // key/header 的 storage key 按当前 owner 动态解析，写入前必须仍是发起方。
+        assertProviderMutationOwner(ownerAtIngress);
+        const credentialSnapshots = stageProviderCredentials(
           config.id,
           planProviderKeyMutations(config, keys, 'update'),
+          planProviderHeaderMutations(config, separated.headers, 'update', previous),
         );
         // 先阻止在途 flow 写回，再改描述符；否则旧 flow 可能在 clear 后迟到落一枚旧 token。
         if (shouldResetOAuth) deps.oauthCancel(config.id);
@@ -866,16 +1346,20 @@ export function registerProviderHandlers(
         let updated: CustomProviderConfig | null;
         try {
           if (shouldResetOAuth) {
+            assertProviderMutationOwner(ownerAtIngress);
             restoreOAuthCredentials = deps.removeOAuthCredentials(config.id);
             if (!restoreOAuthCredentials) {
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
             }
           }
-          updated = await updateCustomProvider(config.id, config);
+          updated = await updateCustomProvider(config.id, separated.config);
+          assertProviderMutationOwner(ownerAtIngress);
         } catch (err) {
+          // 若 DB 写入 await 期间换号，不能把 A 的凭证补偿写入 B。
+          assertProviderMutationOwner(ownerAtIngress);
           const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-          const keysRestored = restoreProviderKeys(config.id, keySnapshots);
-          if (!oauthRestored || !keysRestored) {
+          const credentialsRestored = restoreProviderCredentials(config.id, credentialSnapshots);
+          if (!oauthRestored || !credentialsRestored) {
             throwIpcError(
               'INTERNAL',
               'provider update failed and existing credentials could not be restored',
@@ -884,9 +1368,10 @@ export function registerProviderHandlers(
           throw err;
         }
         if (!updated) {
+          assertProviderMutationOwner(ownerAtIngress);
           const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-          const keysRestored = restoreProviderKeys(config.id, keySnapshots);
-          if (!oauthRestored || !keysRestored) {
+          const credentialsRestored = restoreProviderCredentials(config.id, credentialSnapshots);
+          if (!oauthRestored || !credentialsRestored) {
             throwIpcError(
               'INTERNAL',
               'provider disappeared during update and existing credentials could not be restored',
@@ -894,7 +1379,9 @@ export function registerProviderHandlers(
           }
           throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
         }
+        assertProviderMutationOwner(ownerAtIngress);
         await afterChange();
+        assertProviderMutationOwner(ownerAtIngress);
         return { ok: true };
       } finally {
         if (generation !== null) finishOAuthMutation(config.id, generation);
@@ -907,20 +1394,29 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async () => {
+      // 同类 delete 也会在 per-provider 队列后写 owner-scoped 凭证。
+      assertProviderMutationOwner(ownerAtIngress);
       const generation = beginOAuthMutation(providerId);
       try {
         deps.oauthCancel(providerId);
-        const keySnapshots = stageProviderKeys(
+        const credentialSnapshots = stageProviderCredentials(
           providerId,
           (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
             agent,
             replacement: null,
           })),
+          planProviderHeaderMutations(
+            { id: providerId, name: providerId, runtimes: {} },
+            {},
+            'delete',
+          ),
         );
         // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
         let restoreOAuthCredentials: (() => boolean) | null = null;
         let restoreDisableOverrides: (() => boolean) | null = null;
+        let restorePriceOverrides: (() => boolean) | null = null;
         // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
         // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
         // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
@@ -929,22 +1425,33 @@ export function registerProviderHandlers(
         // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
         // 清理与恢复都直接调用。
         await enqueueDisableWrite(async () => {
+          // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+          assertProviderMutationOwner(ownerAtIngress);
           try {
             // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
             // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
             // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
             restoreDisableOverrides =
               deps.stageClearProviderDisableOverrides?.(providerId) ?? null;
+            restorePriceOverrides =
+              deps.stageClearProviderModelPriceOverrides?.(providerId) ?? null;
+            assertProviderMutationOwner(ownerAtIngress);
             restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
             if (!restoreOAuthCredentials) {
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
             }
             await deleteCustomProvider(providerId);
+            assertProviderMutationOwner(ownerAtIngress);
           } catch (err) {
+            assertProviderMutationOwner(ownerAtIngress);
             const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
+            const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
             const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-            const keysRestored = restoreProviderKeys(providerId, keySnapshots);
-            if (!oauthRestored || !keysRestored || !overridesRestored) {
+            const credentialsRestored = restoreProviderCredentials(
+              providerId,
+              credentialSnapshots,
+            );
+            if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored) {
               throwIpcError(
                 'INTERNAL',
                 'provider deletion failed and existing credentials could not be restored',
@@ -955,7 +1462,10 @@ export function registerProviderHandlers(
           // 刷目录也在队列内:队列释放的那一刻 listProviders() 必须已看不到该
           // provider。afterChange 失败时配置已删,凭证/override 不回写(与改动前
           // 语义一致 —— 恢复只覆盖删除本身失败的场景)。
+          assertProviderMutationOwner(ownerAtIngress);
           await afterChange();
+          assertProviderMutationOwner(ownerAtIngress);
+          deps.broadcastPricingChanged();
         });
         return { ok: true };
       } finally {
@@ -991,6 +1501,34 @@ export function registerProviderHandlers(
     assertTrustedProviderMutationSender(event);
     const parsed = parseModelsFetchInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid models-fetch input');
+    // 已保存供应商:main 侧按 (id, agent) 并入 main-only 鉴权请求头,无需 renderer 回读
+    // 明文头。安全边界在 main —— renderer 传的 baseUrl/modelsUrl **不可信**(被注入 / 误用
+    // 的顶层 Renderer 只要提交一个已知 savedProviderId + 攻击者控制的 baseUrl,就能把
+    // Authorization 等厂商私密头越过 main-only 边界发到任意地址)。因此先按 savedProviderId
+    // 读已存端点,把请求目标**钉回已存 baseUrl/modelsUrl**(完全从已存配置构造目标),
+    // 再合并密文头;已存路由不存在(供应商已删 / 无该 runtime)则不合并密文头,按无头降级。
+    if (parsed.savedProviderId) {
+      let savedRoute: { baseUrl: string; modelsUrl: string | null } | null = null;
+      try {
+        savedRoute = deps.readSavedProviderRoute(parsed.savedProviderId, parsed.agent);
+      } catch {
+        savedRoute = null;
+      }
+      if (savedRoute) {
+        parsed.baseUrl = savedRoute.baseUrl;
+        parsed.modelsUrl = savedRoute.modelsUrl;
+        let storedHeaders: Record<string, string> | null = null;
+        try {
+          storedHeaders = deps.readCustomProviderHeadersForMutation(parsed.savedProviderId, parsed.agent);
+        } catch {
+          storedHeaders = null;
+        }
+        if (storedHeaders && Object.keys(storedHeaders).length > 0) {
+          // renderer 显式头(现状不传)优先于已存头;目标已钉回已存端点,密文头不会外泄。
+          parsed.headers = { ...storedHeaders, ...parsed.headers };
+        }
+      }
+    }
     return deps.fetchModels(parsed);
   });
 

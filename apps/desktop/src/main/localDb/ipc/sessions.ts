@@ -11,16 +11,14 @@ import path from 'node:path';
 import { ipcMain, app, BrowserWindow } from 'electron';
 import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
-import {
-  DEFAULT_DRAFT_SESSION_TITLE,
-  normalizeAutoTitle,
-} from '@cindy/maker-shared/session-title';
+import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
+import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
   sessionCreateToRow,
@@ -40,7 +38,7 @@ import { createLogger } from '../../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
-import { tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
+import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
@@ -52,20 +50,77 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import {
+  dismissErrorMessage,
+  listDeletableSessionPersistedChatAttachmentPaths,
+  rebroadcastAgentSwitchBoundary,
+} from './messages';
+import { cleanupStagedChatAttachments } from '../../file-browser/remote-file-cache';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const initialSessionListLogged = new Set<string>();
+const SLOW_SESSION_LIST_MS = 250;
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
+
+function captureOwnerScope(): OwnerScope {
+  try {
+    const capture = broadcastTap.captureDataOwnerBroadcastScope;
+    return capture ? capture() : null;
+  } catch {
+    // Narrow unit-test mocks may intentionally expose only the legacy tap API.
+    return null;
+  }
+}
+
+function isOwnerScopeCurrent(scope: OwnerScope): boolean {
+  if (scope === null) return true;
+  try {
+    const isCurrent = broadcastTap.isDataOwnerBroadcastScopeCurrent;
+    return isCurrent ? isCurrent(scope) : true;
+  } catch {
+    return true;
+  }
+}
+
+function getSafeOwnerPushStamp(): ReturnType<typeof broadcastTap.getSafeDataOwnerPushStamp> {
+  try {
+    return broadcastTap.getSafeDataOwnerPushStamp?.();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 广播 sessions:patched 到本机所有窗口 + device-link tap。tap 让该 patch 经 topic 路由
  * 转发给订阅了 `sessions` 的控制端(push 驱动:控制端 applyPatch 即时镜像,无需重拉)。
  */
-export function broadcastSessionPatched(sessionId: string, patch: Record<string, unknown>): void {
-  tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+export function broadcastSessionPatched(
+  sessionId: string,
+  patch: Record<string, unknown>,
+  ownerScope?: OwnerScope,
+): void {
+  if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  if (hasCapturedScope) {
+    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+  } else if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+  } else {
+    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+  }
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('local-db:sessions:patched', { sessionId, patch });
+    if (!w.isDestroyed()) {
+      if (hasCapturedScope) {
+        w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+      } else if (ownerStamp === undefined) {
+        w.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      } else {
+        w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+      }
+    }
   }
 }
 
@@ -128,6 +183,12 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
       broadcastWorktreeChanged(sessionId);
     });
 }
+
+// shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
+// 即时清理:覆盖导入等流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复,
+// status 触发的 ref 删除与这类回滚天然竞态(删了就不可逆)。孤儿 ref 隐藏且
+// 极小,统一由启动期 reconcileSavepointRefsForDeletedSessions() 清理——启动期
+// 不存在进行中的瞬态软删流程。
 
 /**
  * 会话 status 变化的订阅槽①旁路通知(archived → did-session-archived)。
@@ -192,7 +253,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
 export async function applyAgentSwitchToSessionRow(
   sessionId: string,
   patch: {
-    agentKind: 'cc' | 'codex';
+    agentKind: 'cc' | 'codex' | 'pi';
     model: string;
     providerId: string | null | undefined;
     sdkSessionId?: string | null;
@@ -201,6 +262,7 @@ export async function applyAgentSwitchToSessionRow(
     fastMode?: boolean;
   },
 ): Promise<void> {
+  const ownerScope = captureOwnerScope();
   const db = getDbClient().drizzle;
   const nextSdkSessionId = patch.sdkSessionId ?? null;
   const setObj: Partial<typeof sessions.$inferInsert> = {
@@ -217,14 +279,19 @@ export async function applyAgentSwitchToSessionRow(
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  broadcastSessionPatched(sessionId, {
-    agentKind: patch.agentKind,
-    model: patch.model,
-    sdkSessionId: nextSdkSessionId,
-    ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-    ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
-    ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
-  });
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  broadcastSessionPatched(
+    sessionId,
+    {
+      agentKind: patch.agentKind,
+      model: patch.model,
+      sdkSessionId: nextSdkSessionId,
+      ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+      ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+      ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+    },
+    ownerScope,
+  );
 }
 
 /** resume 停泊失败的原子 DB 回落,提交成功后再把 session 与边界新状态广播。 */
@@ -233,6 +300,7 @@ export async function applyAgentSwitchResumeFallbackAtomically(
   boundaryClientId: string,
   content: unknown,
 ): Promise<void> {
+  const ownerScope = captureOwnerScope();
   let boundaryContent: string;
   try {
     boundaryContent = JSON.stringify(content);
@@ -245,8 +313,9 @@ export async function applyAgentSwitchResumeFallbackAtomically(
     boundaryContent,
     updatedAt: Date.now(),
   });
-  broadcastSessionPatched(sessionId, { sdkSessionId: null });
-  await rebroadcastAgentSwitchBoundary(sessionId, boundaryClientId).catch((err) => {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  broadcastSessionPatched(sessionId, { sdkSessionId: null }, ownerScope);
+  await rebroadcastAgentSwitchBoundary(sessionId, boundaryClientId, ownerScope).catch((err) => {
     // DB 事务已提交，广播失败不能让上层误判为“原子回落失败”并重复事务。
     log.warn('agent-switch fallback boundary broadcast failed', {
       sessionId,
@@ -263,6 +332,7 @@ export async function applyAgentSwitchResumeFallbackAtomically(
  * 返回 true = 写库后(或并发用户恰好也切到 ask 时)持久态已是 'ask'。
  */
 export async function persistSessionPermissionModeIfAuto(sessionId: string): Promise<boolean> {
+  const ownerScope = captureOwnerScope();
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
@@ -274,7 +344,9 @@ export async function persistSessionPermissionModeIfAuto(sessionId: string): Pro
     .where(eq(sessions.id, sessionId))
     .get();
   const applied = row?.permissionMode === 'ask';
-  if (applied) broadcastSessionPatched(sessionId, { permissionMode: 'ask' });
+  if (applied && isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(sessionId, { permissionMode: 'ask' }, ownerScope);
+  }
   return applied;
 }
 
@@ -282,6 +354,7 @@ export async function persistSessionFields(
   sessionId: string,
   patch: Record<string, unknown>,
 ): Promise<void> {
+  const ownerScope = captureOwnerScope();
   const clean: Record<string, unknown> = {};
   for (const k of Object.keys(patch)) {
     if (REMOTE_PERSIST_FIELDS.has(k)) clean[k] = patch[k];
@@ -292,7 +365,7 @@ export async function persistSessionFields(
     bumpUpdatedAt: false,
   });
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  broadcastSessionPatched(sessionId, clean);
+  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
 }
 
 const MAX_LIMIT = 1000;
@@ -401,7 +474,7 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
   };
 }
 
-export async function getSessionRowSnapshot(id: string): Promise<{
+export interface SessionRowSnapshot {
   status: string;
   title: string | null;
   userSendAt: number | null;
@@ -414,27 +487,47 @@ export async function getSessionRowSnapshot(id: string): Promise<{
   orcaRole?: 'lead' | 'worker' | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
-} | null> {
+  /** Authoritative `/clear` visibility boundary (unix ms). */
+  clearedAt?: number | null;
+}
+
+async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({
+      status: sessions.status,
+      title: sessions.title,
+      userSendAt: sessions.userSendAt,
+      workingDir: sessions.workingDir,
+      workspaceKind: sessions.workspaceKind,
+      // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
+      // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
+      providerId: sessions.providerId,
+      clearedAt: sessions.clearedAt,
+      remoteHostId: sessions.remoteHostId,
+      orcaRole: sessions.orcaRole,
+      agentKind: sessions.agentKind,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * 严格读取发送前的 session 行。
+ *
+ * 远控输入必须区分「明确不存在」和「数据库暂时不可读」：前者是可恢复之外的
+ * 终态拒绝,后者则应让 renderer 保留草稿并稍后重试。普通 scheduler / 展示路径
+ * 继续使用下面的 swallow 版本,避免扩大既有错误语义。
+ */
+export async function getSessionRowSnapshotStrict(id: string): Promise<SessionRowSnapshot | null> {
+  return selectSessionRowSnapshot(id);
+}
+
+export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
   try {
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({
-        status: sessions.status,
-        title: sessions.title,
-        userSendAt: sessions.userSendAt,
-        workingDir: sessions.workingDir,
-        workspaceKind: sessions.workspaceKind,
-        // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
-        // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
-        providerId: sessions.providerId,
-        remoteHostId: sessions.remoteHostId,
-        orcaRole: sessions.orcaRole,
-        agentKind: sessions.agentKind,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .limit(1);
-    return row ?? null;
+    return await selectSessionRowSnapshot(id);
   } catch (err) {
     log.warn('getSessionRowSnapshot failed', {
       sessionId: id,
@@ -446,8 +539,8 @@ export async function getSessionRowSnapshot(id: string): Promise<{
 
 /**
  * 按 session id 查 fs 槽(意识写文件)守门要看的会话快照:workdir 位置、
- * permission 模式(claude / codex 共用这一列,codex 的 approval/sandbox 由
- * 它映射派生)、plan 开关、远程工作区标记。失败 swallow 返 null(调用方按
+ * permission 模式(claude / codex / pi 共用这一列,codex 的 approval/sandbox
+ * 由它映射派生)、plan 开关、远程工作区标记。失败 swallow 返 null(调用方按
  * 「会话不存在」拒绝写入,不抛)。
  */
 export async function getSessionFsSnapshot(id: string): Promise<{
@@ -486,6 +579,7 @@ export async function getSessionFsSnapshot(id: string): Promise<{
  * 状态机同源，否则 retry / rollback 时会出现 DB 已 bump 但输入没有被接受的分裂。
  */
 export async function touchUserSendInDb(id: string, atMs?: number): Promise<void> {
+  const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
   const db = getDbClient().drizzle;
@@ -524,10 +618,16 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   //     renderer 不会乐观更新 —— 没有这条广播,被控端 sidebar 会把控制端新建的远程会话一直
   //     当草稿挂在项目外。经 device-link tap 同时把权威 userSendAt 推给控制端,两端收敛。
   // userSendAt 按 renderer 约定用 ISO 字符串(与 sessionToCamel 的 msToIso 对齐)。
-  broadcastSessionPatched(id, {
-    userSendAt: new Date(updated[0].userSendAt!).toISOString(),
-    updatedAt: new Date(updated[0].updatedAt).toISOString(),
-  });
+  if (isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(
+      id,
+      {
+        userSendAt: new Date(updated[0].userSendAt!).toISOString(),
+        updatedAt: new Date(updated[0].updatedAt).toISOString(),
+      },
+      ownerScope,
+    );
+  }
 }
 
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
@@ -579,7 +679,7 @@ export interface OverwritableAutoTitleTarget {
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
    */
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -594,7 +694,8 @@ export async function getOverwritableAutoTitle(
   const db = getDbClient().drizzle;
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
-  const agentKind = row.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind =
+    row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -631,6 +732,7 @@ export async function persistSessionTitleIfStillDraft(
   title: string,
   expectedTitle: string = DEFAULT_DRAFT_SESSION_TITLE,
 ): Promise<boolean> {
+  const ownerScope = captureOwnerScope();
   const cleanTitle = normalizeAutoTitle(title);
   if (!cleanTitle || cleanTitle === DEFAULT_DRAFT_SESSION_TITLE) return false;
 
@@ -659,7 +761,9 @@ export async function persistSessionTitleIfStillDraft(
     workingDir: updated.workingDir,
     workspaceKind: updated.workspaceKind,
   });
-  broadcastSessionPatched(sessionId, { title: cleanTitle });
+  if (isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(sessionId, { title: cleanTitle }, ownerScope);
+  }
   return true;
 }
 
@@ -671,34 +775,64 @@ export async function persistSessionTitleIfStillDraft(
  * 补这一步。广播让被控端窗口和控制端镜像都收敛到同一个 clearedAt 边界。
  */
 export async function clearSessionContextInDb(sessionId: string, atMs?: number): Promise<void> {
+  const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
-    .set({ sdkSessionId: null, clearedAt: ts, updatedAt: ts })
+    .set({
+      sdkSessionId: null,
+      // Concurrent /clear calls may finish their DB awaits out of order. Keep
+      // both persisted boundaries monotonic so the older completion cannot
+      // make pre-clear history visible again or invalidate a newer input token.
+      clearedAt: sql<number>`MAX(COALESCE(${sessions.clearedAt}, 0), ${ts})`,
+      updatedAt: sql<number>`MAX(COALESCE(${sessions.updatedAt}, 0), ${ts})`,
+    })
     .where(eq(sessions.id, sessionId));
+  const [updated] = await db
+    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const effectiveClearedAt = updated?.clearedAt ?? ts;
+  const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
-  broadcastSessionPatched(sessionId, {
-    sdkSessionId: null,
-    clearedAt: new Date(ts).toISOString(),
-    updatedAt: new Date(ts).toISOString(),
-  });
+  if (isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(
+      sessionId,
+      {
+        sdkSessionId: null,
+        clearedAt: new Date(effectiveClearedAt).toISOString(),
+        updatedAt: new Date(effectiveUpdatedAt).toISOString(),
+      },
+      ownerScope,
+    );
+  }
 }
 
-export function registerSessionIpc(): void {
+export function registerSessionIpc(
+  readSessionListLogScope: () => string | null = () => null,
+): void {
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
   // 是在 turn 飞行中或「done → ended 落库」空窗里取的(startedAt > endedAt),此前
   // 只有「忽略」ack 会广播,正常收尾静默写导致快照永不纠正,任务正常结束后切回
   // 会话仍弹「应用退出中断」。注入而非让 sessionActiveTurn 直接 import,避免
   // 反向依赖成环(本文件已 import sessionActiveTurn)。
-  setOnSessionTurnEndedPersisted((sid, endedAt) =>
-    broadcastSessionPatched(sid, { lastTurnEndedAt: endedAt }),
+  setOnSessionTurnEndedPersisted(
+    (sid, endedAt, capturedOwnerScope) =>
+      broadcastSessionPatched(
+        sid,
+        { lastTurnEndedAt: endedAt },
+        capturedOwnerScope as OwnerScope | undefined,
+      ),
+    captureOwnerScope,
   );
   ipcMain.handle(
     'local-db:sessions:list',
     async (_e, limit: unknown, status: unknown, options: unknown) => {
+      const startedAt = performance.now();
       const db = getDbClient().drizzle;
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
@@ -730,7 +864,8 @@ export function registerSessionIpc(): void {
         mergedRows = mergeSessionListRows(rows, pinnedRows);
       }
 
-      return mergedRows.map((r) =>
+      const queryFinishedAt = performance.now();
+      const result = mergedRows.map((r) =>
         sessionToCamel({
           ...r.session,
           messageCount: r.messageCount,
@@ -738,6 +873,28 @@ export function registerSessionIpc(): void {
           latestMessageRole: r.latestMessageRole,
         }),
       );
+      const finishedAt = performance.now();
+      const filter = statusFilter ?? 'all';
+      const elapsedMs = Math.round(finishedAt - startedAt);
+      const fields = JSON.stringify({
+        event: 'localDb.sessions.list.done',
+        filter,
+        cap,
+        includePinned,
+        rows: result.length,
+        queryElapsedMs: Math.round(queryFinishedAt - startedAt),
+        mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
+        elapsedMs,
+      });
+      const logScope = readSessionListLogScope() ?? 'unscoped';
+      const logKey = `${logScope}:${filter}:${includePinned ? 'pinned' : 'plain'}`;
+      if (!initialSessionListLogged.has(logKey) || elapsedMs >= SLOW_SESSION_LIST_MS) {
+        initialSessionListLogged.add(logKey);
+        log.info(fields);
+      } else {
+        log.debug(fields);
+      }
+      return result;
     },
   );
 
@@ -748,7 +905,7 @@ export function registerSessionIpc(): void {
     const id = resolveBusinessSessionId(bodyObj.id);
     const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
@@ -961,7 +1118,7 @@ export function registerSessionIpc(): void {
         state: row.status === 'deleted' ? 'deleted' : 'available',
         status: row.status,
         title: row.title,
-        agentKind: row.agentKind === 'codex' ? 'codex' : 'cc',
+        agentKind: normalizeDbAgentKind(row.agentKind),
       };
     });
   });
@@ -975,6 +1132,7 @@ export function registerSessionIpc(): void {
     'local-db:sessions:restore-if-archived',
     async (_e, id: unknown, expected: unknown) => {
       const sid = requireString(id, 'id');
+      const ownerScope = captureOwnerScope();
       const identity = requireObject(expected, 'expected');
       const expectedWorkingDir = identity.workingDir;
       const expectedWorkspaceKind = identity.workspaceKind;
@@ -1029,7 +1187,9 @@ export function registerSessionIpc(): void {
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
       });
-      broadcastSessionPatched(sid, { status: 'active' });
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, { status: 'active' }, ownerScope);
+      }
       scheduleWorktreeRecycleForStatusChange(sid, 'active');
       notifyGhostSessionStatusChange(sid, 'active', updated.workingDir);
       return updated;
@@ -1038,6 +1198,7 @@ export function registerSessionIpc(): void {
 
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
+    const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
     const db = getDbClient().drizzle;
     if (p.workspaceKind !== undefined) {
@@ -1113,7 +1274,9 @@ export function registerSessionIpc(): void {
       // 广播 summary:null,让已挂载的 sidebar 立即清掉旧摘要(codex review)——renderer 的
       // clearSession 乐观 patch 只带 sdkSessionId/clearedAt、不含 summary,本 update handler
       // 也不另发 patched;不广播则卡片/rail 会继续显示 clear 前摘要直到一次全量 refresh。
-      broadcastSessionPatched(sid, { summary: null });
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, { summary: null }, ownerScope);
+      }
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
@@ -1142,6 +1305,15 @@ export function registerSessionIpc(): void {
     }
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    const updated = sessionToCamel(row);
+    const broadcastPatch =
+      p.pinnedAt === undefined
+        ? p
+        : {
+            ...p,
+            pinnedAt: updated.pinnedAt,
+            ...(updated.pinnedAt === null ? {} : { status: updated.status }),
+          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1153,18 +1325,19 @@ export function registerSessionIpc(): void {
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
-    if (projectTargetChanged || settingsChanged || titleChanged) {
-      broadcastSessionPatched(sid, p);
+    if (projectTargetChanged || settingsChanged || titleChanged || p.pinnedAt !== undefined) {
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+      }
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
     // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
     // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
-    if (p.pinnedAt != null) {
+    if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
       void import('../../sessionTaskSummary.js').then((m) =>
         m.maybeGenerateSessionTaskSummary(sid),
       );
     }
-    const updated = sessionToCamel(row);
     notifyAgentIslandSessionPatch(updated.id, {
       status: updated.status,
       title: updated.title,
@@ -1216,6 +1389,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
+  const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
@@ -1273,6 +1447,14 @@ export async function patchSessionMetaInDb(
         err: err instanceof Error ? err.message : String(err),
       });
     });
+    void listDeletableSessionPersistedChatAttachmentPaths(sessionId)
+      .then((filePaths) => cleanupStagedChatAttachments(filePaths))
+      .catch((err) => {
+        log.warn('staged chat attachment cleanup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
   removeHookAttachmentDir(sessionId, patch.status);
   scheduleWorktreeRecycleForStatusChange(sessionId, patch.status);
@@ -1281,7 +1463,7 @@ export async function patchSessionMetaInDb(
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
   //   - CCAgentSessionView.onPatched → 合并进 serverSession。
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
-  broadcastSessionPatched(sessionId, patch);
+  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, patch, ownerScope);
   return updated;
 }
 
@@ -1305,6 +1487,7 @@ export async function renameSessionTitlesInDb(
   dryRun: boolean,
 ): Promise<RenameSessionMetaItem[]> {
   if (changes.length === 0) return [];
+  const ownerScope = captureOwnerScope();
 
   const db = getDbClient().drizzle;
   const ids = changes.map((change) => change.sessionId);
@@ -1359,12 +1542,13 @@ export async function renameSessionTitlesInDb(
       throw err;
     });
 
+  if (!isOwnerScopeCurrent(ownerScope)) return applied;
   for (const item of applied) {
     notifyAgentIslandSessionPatch(item.sessionId, {
       title: item.newTitle,
       workingDir: item.workingDir,
     });
-    broadcastSessionPatched(item.sessionId, { title: item.newTitle });
+    broadcastSessionPatched(item.sessionId, { title: item.newTitle }, ownerScope);
   }
   return applied;
 }
@@ -1391,6 +1575,7 @@ export async function setSessionsStatusInDb(
   status: 'active' | 'archived',
 ): Promise<SessionStatusChangeRow[]> {
   if (sessionIds.length === 0) return [];
+  const ownerScope = captureOwnerScope();
   const applied = await getDbClient()
     .tx('sessions.setStatus', { sessionIds, status })
     .catch((err) => {
@@ -1401,6 +1586,13 @@ export async function setSessionsStatusInDb(
       }
       throw err;
     });
+  if (!isOwnerScopeCurrent(ownerScope))
+    return applied.map((item) => ({
+      sessionId: item.sessionId,
+      title: item.title,
+      workingDir: item.workingDir,
+      status: item.status,
+    }));
   for (const item of applied) {
     notifyAgentIslandSessionPatch(item.sessionId, {
       status: item.status,
@@ -1408,7 +1600,7 @@ export async function setSessionsStatusInDb(
       workingDir: item.workingDir,
       workspaceKind: item.workspaceKind,
     });
-    broadcastSessionPatched(item.sessionId, { status: item.status });
+    broadcastSessionPatched(item.sessionId, { status: item.status }, ownerScope);
     scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status);
     notifyGhostSessionStatusChange(item.sessionId, item.status, item.workingDir);
     removeHookAttachmentDir(item.sessionId, item.status);
@@ -1611,7 +1803,10 @@ export async function setSessionProviderIdInDb(
 }
 
 /** Persist the provider-facing source for a newly-created shared IM session. */
-export async function setSessionSourceInDb(sessionId: string, source: 'telegram' | 'x'): Promise<void> {
+export async function setSessionSourceInDb(
+  sessionId: string,
+  source: 'telegram' | 'x',
+): Promise<void> {
   try {
     const db = getDbClient().drizzle;
     await db.update(sessions).set({ source }).where(eq(sessions.id, sessionId));

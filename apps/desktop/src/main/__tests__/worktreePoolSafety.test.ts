@@ -8,6 +8,8 @@ import type { WorktreeMeta } from '../worktree/types';
 
 const gitExecMock = vi.fn();
 const isWorktreeDirtyMock = vi.fn();
+const resolveAvailableWorktreeNameMock = vi.fn();
+const createWorktreeMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
 const liveSessionRows: Array<{
   id: string;
@@ -35,7 +37,9 @@ vi.mock('../worktree/worktreeStore', () => ({
 
 vi.mock('../worktree/WorktreeManager', () => ({
   copyClaudeSiviDirs: vi.fn(),
-  createWorktree: vi.fn(),
+  createWorktree: (...args: unknown[]) => createWorktreeMock(...args),
+  resolveAvailableWorktreeName: (...args: unknown[]) =>
+    resolveAvailableWorktreeNameMock(...args),
 }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -89,6 +93,10 @@ describe('WorktreePool safety', () => {
     liveSessionQueryCount = 0;
     gitExecMock.mockReset();
     isWorktreeDirtyMock.mockReset().mockResolvedValue(false);
+    resolveAvailableWorktreeNameMock
+      .mockReset()
+      .mockImplementation(async (_baseRepo: string, requestedName: string) => requestedName);
+    createWorktreeMock.mockReset();
     rmSpy = vi.spyOn(fs, 'rm');
 
     pool = await import('../worktree/WorktreePool');
@@ -195,6 +203,142 @@ describe('WorktreePool safety', () => {
 
     expect(rmSpy).not.toHaveBeenCalled();
     expect(storeMap.has(meta.sessionId)).toBe(true);
+  });
+
+  it('bounds the pool-reuse fetch for origin/* sources (real timeout + no terminal prompt)', async () => {
+    const meta = {
+      ...makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z'),
+      sourceBranch: 'origin/main',
+    };
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+
+    const res = await pool.acquireWorktree({
+      sessionId: 'session-2',
+      name: 'reuse-1',
+      baseRepo,
+      sourceBranch: 'origin/main',
+      ephemeral: true,
+    });
+    expect(res.ok).toBe(true);
+    const fetchCall = gitExecMock.mock.calls.find((c) => (c[0] as string[])[0] === 'fetch');
+    expect(fetchCall).toBeTruthy();
+    const opts = fetchCall?.[2] as
+      { timeoutMs?: number; extraEnv?: Record<string, string> } | undefined;
+    expect(opts?.timeoutMs).toBeGreaterThan(0);
+    expect(opts?.extraEnv?.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
+  it('skips the pool-reuse fetch when caller already attempted the source fetch (even a failed one)', async () => {
+    const meta = {
+      ...makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z'),
+      sourceBranch: 'origin/main',
+    };
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+
+    const res = await pool.acquireWorktree(
+      {
+        sessionId: 'session-2',
+        name: 'reuse-1',
+        baseRepo,
+        sourceBranch: 'origin/main',
+        ephemeral: true,
+      },
+      { sourceFetchAlreadyAttempted: true },
+    );
+    expect(res.ok).toBe(true);
+    expect(gitExecMock.mock.calls.some((c) => (c[0] as string[])[0] === 'fetch')).toBe(false);
+  });
+
+  it('reuses a legacy pooled worktree on a new cindy/* branch', async () => {
+    const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+
+    const res = await pool.acquireWorktree({
+      sessionId: 'session-2',
+      name: 'reuse-1',
+      baseRepo,
+      sourceBranch: 'main',
+      ephemeral: true,
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      meta: { name: 'reuse-1', branch: 'cindy/reuse-1' },
+    });
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['checkout', '--no-track', '-b', 'cindy/reuse-1', 'main'],
+      meta.path,
+    );
+    expect(
+      gitExecMock.mock.calls.some((call) => (call[0] as string[]).includes('-B')),
+    ).toBe(false);
+  });
+
+  it('uses the Manager-reserved name when reusing a pooled worktree', async () => {
+    const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+    resolveAvailableWorktreeNameMock.mockResolvedValue('reuse-1-2');
+
+    const res = await pool.acquireWorktree({
+      sessionId: 'session-2',
+      name: 'reuse-1',
+      baseRepo,
+      sourceBranch: 'main',
+      ephemeral: true,
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      meta: { name: 'reuse-1-2', branch: 'cindy/reuse-1-2' },
+    });
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['checkout', '--no-track', '-b', 'cindy/reuse-1-2', 'main'],
+      meta.path,
+    );
+  });
+
+  it('falls back without reset or clean when branch creation loses a collision race', async () => {
+    const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('pooled');
+    gitExecMock.mockClear();
+    const fallback = {
+      ok: false as const,
+      error: { kind: 'unknown' as const, message: 'fresh create failed' },
+    };
+    createWorktreeMock.mockResolvedValue(fallback);
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'checkout') throw new Error('branch already exists');
+      return { stdout: '', stderr: '' };
+    });
+
+    const req = {
+      sessionId: 'session-2',
+      name: 'reuse-1',
+      baseRepo,
+      sourceBranch: 'main',
+      ephemeral: true,
+    };
+    await expect(pool.acquireWorktree(req)).resolves.toBe(fallback);
+
+    const commands = gitExecMock.mock.calls.map((call) => call[0] as string[]);
+    expect(commands.some((args) => args[0] === 'reset')).toBe(false);
+    expect(commands.some((args) => args[0] === 'clean')).toBe(false);
+    expect(commands.some((args) => args.includes('-B'))).toBe(false);
+    expect(createWorktreeMock).toHaveBeenCalledWith(req);
   });
 
   it('preserves dirty worktrees instead of auto-stashing them into the pool', async () => {

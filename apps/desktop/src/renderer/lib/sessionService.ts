@@ -14,7 +14,7 @@ import { extractIpcError } from '@/utils/ipcError';
 // 与 makerTransport 互相 import 形成循环依赖,但双方都只在函数体内(运行时)调用对方导出,
 // 模块顶层不调用 → ESM 下安全(无 TDZ)。
 import { makerApiFor } from '@/lib/makerTransport';
-import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { SessionReference } from '../../shared/sessionReference';
 
 /**
@@ -39,6 +39,11 @@ function wrap<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+// Session metadata is read by both the session view and the message bootstrap
+// path during a task switch. Share only requests that are currently in flight:
+// settled rows must not become a stale renderer cache.
+const getInFlight = new Map<string, Promise<Session>>();
+
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
@@ -56,7 +61,7 @@ export async function create(body?: {
   fastMode?: boolean;
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
-  agentKind?: 'cc' | 'codex';
+  agentKind?: 'cc' | 'codex' | 'pi';
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];
@@ -73,8 +78,23 @@ export async function create(body?: {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
 
-export async function get(id: string): Promise<Session> {
-  return wrap(window.electronAPI.localDb.sessions.get(id));
+export function get(id: string): Promise<Session> {
+  const existing = getInFlight.get(id);
+  if (existing) return existing;
+
+  const request = wrap(window.electronAPI.localDb.sessions.get(id));
+  getInFlight.set(id, request);
+  // Use both fulfillment and rejection handlers so the cleanup promise cannot
+  // become an unhandled rejection when the IPC request fails.
+  void request.then(
+    () => {
+      if (getInFlight.get(id) === request) getInFlight.delete(id);
+    },
+    () => {
+      if (getInFlight.get(id) === request) getInFlight.delete(id);
+    },
+  );
+  return request;
 }
 
 /** Resolve scheduler-held ids against live, archived, deleted, and missing rows. */
@@ -143,7 +163,10 @@ export async function patchMeta(
   sessionId: string,
   patch: { status?: SessionStatus; title?: string; pinnedAt?: string | null },
 ): Promise<Session> {
-  const deviceId = getSessionDeviceId(sessionId);
+  // Metadata writes must stay pinned to the last known device while the
+  // relay's session mirror is being rebuilt. Otherwise an archived remote
+  // task's auto-unarchive can fall through to the controller's local DB.
+  const deviceId = getStickySessionDeviceId(sessionId);
   if (deviceId) {
     return wrap(
       window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [

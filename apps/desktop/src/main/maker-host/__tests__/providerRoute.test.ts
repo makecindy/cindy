@@ -8,7 +8,13 @@ vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: mockGetAppCapabilities,
 }));
 
-import { BUNDLED_CATALOG, buildUserProvider, type AgentKind, type RoutingDescriptor } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  buildRegistry,
+  buildUserProvider,
+  type AgentKind,
+  type RoutingDescriptor,
+} from '@cindy/model-providers';
 
 import {
   beginProviderRouteMutation,
@@ -17,15 +23,23 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
   setProviderOAuthTokenReader,
+  setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
 } from '../provider-route.js';
-import { setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import {
+  getActiveCatalog,
+  setAnthropicDiscoveredModels,
+  setCustomProviders,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+} from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
 
@@ -62,6 +76,32 @@ afterEach(() => {
   clearSessionProvider('s-anthropic-codex');
   clearSessionProvider('s-xd-model-wire');
   setXdGatewayModels([]);
+  setAnthropicDiscoveredModels([]);
+  setProviderViewsReader(async () => []);
+});
+
+describe('implicit local bridge resume routing', () => {
+  it('keeps the connected source when a running session model becomes retired', async () => {
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-retired-live',
+        name: 'Claude Retired Live',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'retired',
+      },
+    ]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { anthropic: true }, {}),
+    );
+
+    await expect(resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex')).resolves
+      .toMatchObject({
+        providerId: 'anthropic',
+        routing: { wireProtocol: 'anthropic-messages' },
+      });
+  });
 });
 
 describe('local mode Cindy gateway gate', () => {
@@ -145,6 +185,37 @@ describe('codex: buildRouteDecision no-break 基线', () => {
         authorization: 'Bearer claude-subscription-token',
       },
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+});
+
+describe('pi: provider-aware Anthropic wire routing', () => {
+  afterEach(() => {
+    clearSessionProvider('s-pi');
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('XD uses both Anthropic auth headers so the Pi client never leaks its placeholder', () => {
+    expect(buildRouteDecision(descriptor('xd', 'pi'), KEY, 'pi')).toEqual({
+      headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
+    });
+  });
+
+  it('Anthropic injects the host OAuth token and required OAuth beta headers', async () => {
+    setSessionProvider('s-pi', 'anthropic');
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('claude-live-token') : null,
+    );
+    await expect(
+      Promise.resolve(resolveSessionRouteDecision('s-pi', 'pi', KEY, 'claude-opus-5')),
+    ).resolves.toEqual({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20',
+        authorization: 'Bearer claude-live-token',
+      },
+      headerDelete: ['x-api-key'],
     });
   });
 });

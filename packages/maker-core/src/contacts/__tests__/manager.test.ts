@@ -4,8 +4,19 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
+
+// 本文件每个用例都在 os.tmpdir() 里真开 better-sqlite3 落库(建目录 → 建表 → v1→v2 迁移
+// → FTS5 重建 → 删目录)。Windows CI 上两个分片并跑,叠上 Defender 对新建文件的实时扫描,
+// 这些**同步** IO 会超过 vitest 默认的 5s —— 于是这个纯正确性用例以「Test timed out in
+// 5000ms」把 main 打红(2026-08-04 实测:manager.test.ts 的 v1→v2 迁移用例;此前值班日志
+// 也记过同一文件 4 个用例同时 5s 超时)。
+// packages/maker-core 没有自己的 vitest 配置,拿不到 apps/desktop 那份
+// `testTimeout: win32 ? 20_000 : 5_000`,所以在这里按仓内既有写法(git-integration 系列
+// 用例的 vi.setConfig)单独放宽。**只放宽时间,不放宽任何断言** —— 它测的是迁移正确性,
+// 从来不是"迁移够快"。
+vi.setConfig({ testTimeout: process.platform === 'win32' ? 30_000 : 5_000 });
 
 import { MakerContactsManager } from '../manager.js';
 import type { Logger } from '../../interfaces/logger.js';

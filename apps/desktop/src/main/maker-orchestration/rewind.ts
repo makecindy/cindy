@@ -36,14 +36,28 @@ import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import {
   buildCodexFileRewindPlan,
   CodexFileRewindPlanError,
+  type CodexFileRestorePlan,
   type CodexRewindPlan,
+  type CodexRewindSavepoint,
   type CodexRewindUserMessage,
 } from '../git-snapshot/codexFileRewindPlanner';
 import {
   executeCodexFileRewindPlanWithThreadRollback,
 } from '../git-snapshot/codexFileRewindExecutor';
+import {
+  executeCodexFileRestorePlanWithThreadRollback,
+} from '../git-snapshot/codexFileRestoreExecutor';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
-import { getCurrentBranch, getHead, listSnapshots } from '../git-snapshot/gitSnapshotService';
+import {
+  chunkPathspecArgs,
+  getCurrentBranch,
+  getHead,
+  listShadowSavepoints,
+  listSnapshots,
+  listUnprotectedPaths,
+  writeWorktreeTreeForPaths,
+  type SnapshotEntry,
+} from '../git-snapshot/gitSnapshotService';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { gitExec } from '../worktree/gitExec';
 import {
@@ -137,13 +151,13 @@ interface RewindContext {
   targetCreatedAt: number;
   targetMessageId: string;
   targetClientId: string;
-  /** 当前 agent kind；Claude / Codex 的 rewind 机制不同。 */
-  agentKind: 'claude-code' | 'codex';
+  /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /** prior assistant uuid（Claude 必填）——SDK resumeSessionAt 用。 */
   assistantUuid?: string;
   /** target user 消息的 SDK uuid——仅 preview 的 rewindFiles dryRun 用，老消息可能 NULL。 */
   userUuid?: string;
-  /** Codex thread/rollback 从尾部裁剪的完整 turn 数。 */
+  /** Codex thread/rollback 或 Pi fork(entryId) 从尾部裁剪的完整 turn 数。 */
   tailTurnsToDrop?: number;
   codexUserMessages?: CodexRewindUserMessage[];
   /** DB 事务保留用 uuid；旧数据里可能是 synthetic block uuid，和 SDK anchor 不同。 */
@@ -170,7 +184,11 @@ async function loadRewindContext(
   if (makerSession.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
   }
-  const agentKind = makerSession.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind = makerSession.agentKind === 'codex'
+    ? 'codex'
+    : makerSession.agentKind === 'pi'
+      ? 'pi'
+      : 'claude-code';
 
   // 2. 取 target user 消息
   const [target] = await db
@@ -227,7 +245,7 @@ async function loadRewindContext(
     );
   }
 
-  if (agentKind === 'codex') {
+  if (agentKind === 'codex' || agentKind === 'pi') {
     const tailTurns = await db
       .select({
         rowid: messageRowid,
@@ -250,11 +268,11 @@ async function loadRewindContext(
       .orderBy(asc(messages.createdAt), asc(messageRowid));
     const targetStillVisible = tailTurns.some((row) => row.rowid === target.rowid);
     if (!targetStillVisible) {
-      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 Codex turn 时间线`);
+      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 agent turn 时间线`);
     }
     const codexUserMessages = tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt }));
     log.debug(
-      `[rewind] codex sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} tailTurnsToDrop=${tailTurns.length}`,
+      `[rewind] ${agentKind} sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} tailTurnsToDrop=${tailTurns.length}`,
     );
     return {
       targetCreatedAt: target.createdAt,
@@ -358,7 +376,7 @@ export async function previewRewindAtMessage(
   if (!makerSession) {
     throw rewindError('NO_LIVE_QUERY', '会话未激活');
   }
-  if (ctx.agentKind === 'codex') {
+  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     return previewCodexFileRewindPlan(await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession));
   }
   if (!ctx.userUuid) {
@@ -376,6 +394,7 @@ export async function previewRewindAtMessage(
 }
 
 async function previewCodexFileRewindPlan(plan: CodexRewindPlan): Promise<RewindFilesResult> {
+  if (plan.mode === 'file-restore') return previewCodexFileRestorePlan(plan);
   if (plan.mode !== 'file-rewind') return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
   const files = new Set<string>(); let insertions = 0; let deletions = 0;
   for (const commit of plan.revertCommitsNewestFirst) {
@@ -389,13 +408,76 @@ async function previewCodexFileRewindPlan(plan: CodexRewindPlan): Promise<Rewind
   return { canRewind: true, filesChanged: [...files], insertions, deletions };
 }
 
+/**
+ * Restore preview: diff 当前工作区(受影响文件子集写成临时 tree)→ 目标基线树。
+ * 方向就是 rewind 将执行的方向,数字无需对调;经临时 tree 而非 commit-vs-worktree
+ * 的 diff,是为了把 untracked 新建文件的删除也计入。
+ */
+async function previewCodexFileRestorePlan(plan: CodexFileRestorePlan): Promise<RewindFilesResult> {
+  return enqueueGitRepoWrite(plan.repoRoot, async () => {
+    const affectedPaths = await collectRestoreAffectedPaths(plan);
+    if (affectedPaths.length === 0) {
+      return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    }
+    // 与执行侧同款的安全过滤前置:受影响文件当前若处于过滤范围(敏感/超限/
+    // 嵌套仓库),预览直接报不可回退,不把这些字节写进 Git 对象库(下面的
+    // 临时 worktree 树会 hash 受影响路径的当前内容)。null = status 溢出、
+    // 脏文件视图未知,同样失败关闭。
+    const unprotected = await listUnprotectedPaths(plan.repoRoot, affectedPaths);
+    if (unprotected === null) {
+      return {
+        canRewind: false,
+        error: '仓库脏文件过多,无法核实回退安全性(git status 输出超限),请先清理或提交部分改动',
+      };
+    }
+    if (unprotected.length > 0) {
+      return {
+        canRewind: false,
+        error: `受影响文件 ${unprotected.slice(0, 3).join('、')}${unprotected.length > 3 ? ' 等' : ''} 当前处于安全过滤范围(敏感路径/超大文件/嵌套仓库),回退前快照无法完整保护其内容,请先手动备份或移出这些文件`,
+      };
+    }
+    const affectedPathspecs = affectedPaths.map((p) => `:(literal)${p}`);
+    const worktreeTree = await writeWorktreeTreeForPaths(plan.repoRoot, affectedPaths);
+    const files = new Set<string>(); let insertions = 0; let deletions = 0;
+    for (const chunk of chunkPathspecArgs(affectedPathspecs)) {
+      const { stdout } = await gitExec(
+        ['diff', '--numstat', '--no-renames', '-z', worktreeTree, plan.baselineCommit, '--', ...chunk],
+        plan.repoRoot,
+      );
+      for (const record of stdout.split('\0')) {
+        const [added, deleted, file] = record.split('\t');
+        if (!file) continue;
+        files.add(file); insertions += parseNumstat(added); deletions += parseNumstat(deleted);
+      }
+    }
+    return { canRewind: true, filesChanged: [...files], insertions, deletions };
+  });
+}
+
+async function collectRestoreAffectedPaths(plan: CodexFileRestorePlan): Promise<string[]> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of plan.restoreCommitsNewestFirst) {
+    const { stdout } = await gitExec(
+      ['diff', '--name-only', '--no-renames', '-z', entry.baselineCommit, entry.commit],
+      plan.repoRoot,
+    );
+    for (const rawPath of stdout.split('\0')) {
+      if (!rawPath || seen.has(rawPath)) continue;
+      seen.add(rawPath);
+      out.push(rawPath);
+    }
+  }
+  return out;
+}
+
 function parseNumstat(value: string): number {
   const n = Number.parseInt(value, 10); return Number.isFinite(n) ? n : 0;
 }
 
 async function buildCodexFilePlanForSession(sessionId: string, targetMessageClientId: string, userMessages: readonly CodexRewindUserMessage[], makerSession: { workDir: string; remoteHostId?: string | null }) {
   try {
-    return buildCodexFileRewindPlan({ sessionId, targetMessageClientId, userMessages, repo: await loadCodexFileRewindRepoContext(makerSession) });
+    return buildCodexFileRewindPlan({ sessionId, targetMessageClientId, userMessages, repo: await loadCodexFileRewindRepoContext(makerSession, sessionId) });
   } catch (err) {
     if (err instanceof CodexFileRewindPlanError) {
       if (err.code === 'MESSAGE_NOT_FOUND') throw rewindError('MESSAGE_NOT_FOUND', err.message);
@@ -405,24 +487,54 @@ async function buildCodexFilePlanForSession(sessionId: string, targetMessageClie
   }
 }
 
-async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; remoteHostId?: string | null }) {
+function toPlannerSavepoint(snapshot: SnapshotEntry): CodexRewindSavepoint {
+  return {
+    commit: snapshot.commit,
+    sessionId: snapshot.sessionId,
+    kind: snapshot.kind,
+    source: snapshot.source === 'cindy' ? 'shadow' : 'legacy',
+    branch: snapshot.branch ?? '',
+    parentCount: snapshot.parentCount,
+    ...(snapshot.anchor ? { anchor: snapshot.anchor } : {}),
+    ...(snapshot.label ? { label: snapshot.label } : {}),
+    ...(snapshot.baselineCommit ? { baselineCommit: snapshot.baselineCommit } : {}),
+  };
+}
+
+async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; remoteHostId?: string | null }, sessionId: string) {
   if (makerSession.remoteHostId) return { kind: 'remote-session' as const };
   const cwd = await detectCwd(makerSession.workDir);
   if (!cwd.gitInstalled || !cwd.isGitRepo || !cwd.repoRoot || cwd.isInsideWorktree) return { kind: 'non-git-workdir' as const };
 
   const repoRoot = cwd.repoRoot;
   return enqueueGitRepoWrite(repoRoot, async () => {
-    const snapshots = await listSnapshots(repoRoot);
-    if (snapshots.length === 0) return { kind: 'local-git' as const, repoRoot, currentHead: '', currentBranch: '', savepointsNewestFirst: [] };
+    // 两个来源:隐藏引用链上的 shadow savepoint(新)+ 分支历史里的 legacy
+    // savepoint(旧版本写进用户分支的,升级后仍要可回退)。planner 分桶处理,
+    // 不要求两者之间有全局时间序。
+    const [shadowResult, legacySnapshots] = await Promise.all([
+      listShadowSavepoints(repoRoot, sessionId),
+      listSnapshots(repoRoot),
+    ]);
+    const savepointsNewestFirst = [
+      ...shadowResult.entries.map(toPlannerSavepoint),
+      ...legacySnapshots.map(toPlannerSavepoint),
+    ];
+    if (savepointsNewestFirst.length === 0 && !shadowResult.truncated) return { kind: 'local-git' as const, repoRoot, currentHead: '', currentBranch: '', savepointsNewestFirst: [] };
 
-    const [currentHead, currentBranch] = await Promise.all([getHead(repoRoot), getCurrentBranch(repoRoot)]);
+    // unborn HEAD(空仓库首轮)下 shadow 链可能已存在;HEAD/branch 只影响 legacy
+    // 桶的过滤与展示,取不到就退化为空串。
+    const [currentHead, currentBranch] = await Promise.all([
+      getHead(repoRoot).catch(() => ''),
+      getCurrentBranch(repoRoot).catch(() => ''),
+    ]);
 
     return {
       kind: 'local-git' as const,
       repoRoot,
       currentHead,
       currentBranch,
-      savepointsNewestFirst: snapshots.map((snapshot) => ({ commit: snapshot.commit, sessionId: snapshot.sessionId, kind: snapshot.kind, branch: snapshot.branch ?? '', parentCount: snapshot.parentCount, ...(snapshot.anchor ? { anchor: snapshot.anchor } : {}), ...(snapshot.label ? { label: snapshot.label } : {}) })),
+      savepointsNewestFirst,
+      ...(shadowResult.truncated ? { shadowSavepointsTruncated: true } : {}),
     };
   });
 }
@@ -462,19 +574,31 @@ export async function commitRewindAtMessage(
   // userUuid 缺失 (老消息) 时跳 SDK 文件回滚, 直接进 DB 段; ctx.assistantUuid 设进
   // pendingRewindTo, 下次 send 仍走三件套 (forkSession=true CLI 端兜底回滚)。
   let rewindResult: Awaited<ReturnType<typeof makerSession.commitRewindFiles>> | undefined;
-  if (ctx.agentKind === 'codex') {
+  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
-    const result = await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
-      commitThreadRollback: () =>
-        makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop }),
-      onCompensationError: (compErr, execution) => {
-        log.error('[rewind commit] codex file rewind compensation failed', {
-          sessionId,
-          rollbackCommit: execution.rollbackCommit,
-          error: compErr instanceof Error ? compErr.message : String(compErr),
-        });
-      },
-    });
+    const commitThreadRollback = () =>
+      makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop });
+    const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
+      log.error(`[rewind commit] ${ctx.agentKind} file rewind compensation failed`, {
+        sessionId,
+        rollbackCommit,
+        error: compErr instanceof Error ? compErr.message : String(compErr),
+      });
+    };
+    // shadow 保存点走文件恢复执行器,legacy 保存点走原 revert 执行器;
+    // conversation-only 计划两个执行器都会直接透传 thread rollback。
+    const result =
+      filePlan.mode === 'file-restore'
+        ? await executeCodexFileRestorePlanWithThreadRollback(filePlan, sessionId, {
+            commitThreadRollback,
+            onCompensationError: (compErr, execution) =>
+              logCompensationError(compErr, execution.rollbackCommit),
+          })
+        : await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
+            commitThreadRollback,
+            onCompensationError: (compErr, execution) =>
+              logCompensationError(compErr, execution.rollbackCommit),
+          });
     rewindResult = result.threadRollback;
   } else if (ctx.userUuid) {
     rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);

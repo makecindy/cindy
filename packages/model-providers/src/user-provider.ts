@@ -18,6 +18,7 @@ import type {
   Effort,
   Provider,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
   RoutingDescriptor,
 } from './types.js';
 import { isLoopbackProviderUrl } from './provider-url.js';
@@ -41,7 +42,7 @@ const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex'];
+const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -49,7 +50,17 @@ function toCatalogModel(
   providerId: string,
   agent: AgentKind,
 ): CatalogModel {
-  const efforts = CUSTOM_EFFORTS[agent] ?? [];
+  // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
+  // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
+  const efforts: Effort[] =
+    agent === 'pi'
+      ? m.reasoning === true
+        ? [...(m.reasoningEfforts ?? [])]
+        : []
+      : (CUSTOM_EFFORTS[agent] ?? []);
+  const defaultEffort = efforts.includes(DEFAULT_CUSTOM_EFFORT)
+    ? DEFAULT_CUSTOM_EFFORT
+    : (efforts[0] ?? null);
   return {
     id: m.id,
     name: m.name,
@@ -61,16 +72,23 @@ function toCatalogModel(
     // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
     ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),
     efforts,
-    defaultEffort: efforts.length > 0 ? DEFAULT_CUSTOM_EFFORT : null,
+    defaultEffort,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
     group: `custom:${providerId}`,
     // 手填模型保持历史默认可见；刷新发现的模型可显式声明默认隐藏。
     defaultEnabled: m.defaultEnabled ?? true,
+    // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
+    ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
   };
 }
 
-function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' {
-  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
+  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
+  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
+  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'pi') return 'openai-chat';
+  return 'openai-responses';
 }
 
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */

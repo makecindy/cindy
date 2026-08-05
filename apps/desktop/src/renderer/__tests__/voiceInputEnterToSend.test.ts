@@ -19,8 +19,8 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const handleKeyUp = (event: KeyboardEvent) => {',
     );
 
-    expect(chatInputSource).toContain(
-      'const voiceInputStopAndSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(() => {});',
+    expect(chatInputSource).toMatch(
+      /const voiceInputStopAndSendRef\s*=\s*useRef<\s*\(deliveryMode\?: MessageDeliveryMode\)\s*=>\s*void\s*\|\s*Promise<void>\s*>\(\(\)\s*=>\s*\{\}\);/,
     );
     expect(chatInputSource).toContain('const voiceInputCanStopAndSendRef = useRef(false);');
     expect(chatInputSource).toContain('voiceInputStopAndSendRef.current = handleClickSend;');
@@ -28,14 +28,16 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(keydownBlock).toContain("currentState === 'listening'");
     expect(keydownBlock).toContain('voiceInputCanStopAndSendRef.current');
     expect(keydownBlock).toContain('isVoiceInputEnterTarget(event.target)');
-    expect(keydownBlock).toContain("event.key === 'Enter'");
+    expect(keydownBlock).toContain('resolveComposerEnterIntent(');
+    expect(keydownBlock).toContain('getComposerSendShortcutPreference()');
+    expect(keydownBlock).toContain('const platform = window.electronAPI?.platform;');
+    expect(keydownBlock).toContain('turnRunning: showStopButtonRef.current');
+    expect(keydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(keydownBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
-    expect(keydownBlock).toContain(
-      "(event.metaKey || event.ctrlKey) &&\n          showStopButtonRef.current &&\n          composerCanSubmitRef.current\n            ? 'steer'\n            : 'queue'",
-    );
     expect(keydownBlock).toContain('event.preventDefault();');
     expect(keydownBlock).toContain('event.stopPropagation();');
-    expect(keydownBlock).toContain('void voiceInputStopAndSendRef.current(deliveryMode);');
+    expect(keydownBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(keydownBlock).not.toContain('composerCanSubmitRef.current');
   });
 
   it('allows voice Enter-to-send only when the event target itself falls back to the document body', () => {
@@ -45,7 +47,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const handleKeyDown = (event: KeyboardEvent) => {',
     );
 
-    expect(keydownSetupBlock).toContain('const isVoiceInputEnterTarget = (target: EventTarget | null) => {');
+    expect(keydownSetupBlock).toContain(
+      'const isVoiceInputEnterTarget = (target: EventTarget | null) => {',
+    );
     expect(keydownSetupBlock).toContain('if (isComposerEnterTarget(target)) return true;');
     expect(keydownSetupBlock).toContain('target === document.body');
     expect(keydownSetupBlock).toContain('target === document.documentElement');
@@ -66,46 +70,68 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     const enterBlock = extractBetween(
       tiptapKeydownBlock,
-      "if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {",
-      'const wantsSteer =',
+      '// Resolve the configurable send shortcut after structured list handling.',
+      'void voiceInputStopAndSendRef.current(enterIntent);',
     );
 
+    expect(enterBlock).toContain("if (enterIntent === 'queue' || enterIntent === 'steer') {");
     expect(enterBlock).toContain("voiceInputStateRef.current === 'listening'");
     expect(enterBlock).toContain('voiceInputCanStopAndSendRef.current');
-    expect(enterBlock).toContain('const isEditorEnterTarget = event.target instanceof Node && view.dom.contains(event.target);');
+    expect(enterBlock).toMatch(
+      /const isEditorEnterTarget\s*=\s*event\.target instanceof Node\s*&&\s*view\.dom\.contains\(event\.target\);/,
+    );
     expect(enterBlock).toContain('isEditorEnterTarget');
     expect(enterBlock).not.toContain('isComposerEnterTarget(event.target)');
     expect(enterBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
-    expect(enterBlock).toContain(
-      "(event.metaKey || event.ctrlKey) &&\n              showStopButtonRef.current &&\n              composerCanSubmitRef.current\n                ? 'steer'\n                : 'queue'",
-    );
-    expect(enterBlock).toContain('!event.altKey');
-    expect(enterBlock).toContain('!event.repeat');
-    expect(enterBlock).toContain('!event.isComposing');
+    expect(enterBlock).toContain('resolveComposerEnterIntent(');
+    expect(enterBlock).toContain('getComposerSendShortcutPreference()');
+    expect(enterBlock).toContain('platform: window.electronAPI?.platform');
+    expect(enterBlock).toContain('turnRunning: showStopButtonRef.current');
     expect(enterBlock).toContain('event.stopPropagation();');
-    expect(enterBlock).toContain('void voiceInputStopAndSendRef.current(deliveryMode);');
+    expect(chatInputSource).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
   });
 
-  it('shows Enter shortcuts in the same label-dot-shortcut tooltip style as the voice input button', () => {
-    expect(chatInputSource).toContain("`${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`");
-    expect(chatInputSource).toContain("`${t('newChat.sendButton.send')} · Enter`");
+  it('uses the configured composer shortcut in send and voice tooltips', () => {
+    expect(chatInputSource).toContain(
+      'const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();',
+    );
+    expect(chatInputSource).toContain(
+      'const composerSendShortcutLabel = getComposerSendShortcutLabel(',
+    );
+    expect(chatInputSource).toContain('window.electronAPI?.platform');
+    expect(chatInputSource).toContain(
+      "`${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`",
+    );
+    expect(chatInputSource).toContain(
+      "`${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`",
+    );
+    expect(chatInputSource).toContain("t('newChat.sendButton.queueTooltipSendMode', {");
+    expect(chatInputSource).toContain('shortcut: composerSendShortcutLabel');
+    expect(chatInputSource).not.toContain(
+      "`${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`",
+    );
+    expect(chatInputSource).not.toContain("`${t('newChat.sendButton.send')} · Enter`");
   });
 
   it('allows release-to-send while listening before ASR draft arrives', () => {
-    expect(chatInputSource).toContain(
-      'const canReleaseVoiceToSend = Boolean(!disabled && (voiceInput.isListening || canSend || hasVoiceDraftText));',
+    expect(chatInputSource).toMatch(
+      /const canReleaseVoiceToSend\s*=\s*Boolean\(\s*!disabled\s*&&\s*\(voiceInput\.isListening\s*\|\|\s*canSend\s*\|\|\s*hasVoiceDraftText\),?\s*\);/,
     );
   });
 
   it('keeps stop/refine/send alive when the active conversation changes', () => {
     const handleClickSendBlock = extractBetween(
       chatInputSource,
-      "const handleClickSend = useCallback(async (deliveryMode: MessageDeliveryMode = 'queue') => {",
-      'useEffect(() => {\n    voiceInputStopAndSendRef.current = handleClickSend;',
+      'const handleClickSend = useCallback(',
+      'voiceInputStopAndSendRef.current = handleClickSend;',
     );
     expect(handleClickSendBlock).toContain('voiceInput.isBusy');
-    expect(handleClickSendBlock).toContain('voiceInputStopAndSendPromiseRef.current = stopAndSend;');
-    expect(handleClickSendBlock).toContain("await handleVoiceInputStop({ waitForRefinement: true });");
+    expect(handleClickSendBlock).toContain(
+      'voiceInputStopAndSendPromiseRef.current = stopAndSend;',
+    );
+    expect(handleClickSendBlock).toContain(
+      'await handleVoiceInputStop({ waitForRefinement: true });',
+    );
     expect(handleClickSendBlock).toContain('Do not send the pre-existing draft/attachments');
     expect(handleClickSendBlock).toContain('catch {\n            // Voice stop failures');
     expect(handleClickSendBlock).toContain('await dispatchSend(deliveryMode);');
@@ -117,11 +143,14 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       "// storageKey actually changed — swap the editor's content.",
     );
     expect(restoreEffectBlock).toContain('await pendingStopAndSend;');
-    expect(restoreEffectBlock).toContain("await voiceInputStopRef.current({ waitForRefinement: true });");
+    expect(restoreEffectBlock).toContain(
+      'await voiceInputStopRef.current({ waitForRefinement: true });',
+    );
     expect(restoreEffectBlock).toContain('if (isCurrentTransition()) {');
     expect(restoreEffectBlock).toContain('restoreNextDraft();');
-    expect(chatInputSource).toContain('}, [editor, storageKey, voiceInput.isBusy]);');
-    expect(chatInputSource).not.toContain('}, [editor, handleVoiceInputStop, storageKey, voiceInput.isBusy]);');
+    expect(restoreEffectBlock).toContain('pendingStopAndSend || voiceInputBusyRef.current');
+    expect(chatInputSource).toContain('}, [editor, storageKey]);');
+    expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
   });
 
   it('keeps storageKey hydration and stop completion safe across switch races', () => {
@@ -138,7 +167,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const transitionSeq = storageKeyTransitionSeqRef.current + 1;',
       "// storageKey actually changed — swap the editor's content.",
     );
-    expect(chatInputSource).toContain('const latestStorageKeyRef = useRef<string | undefined>(storageKey);');
+    expect(chatInputSource).toContain(
+      'const latestStorageKeyRef = useRef<string | undefined>(storageKey);',
+    );
     expect(restoreEffectBlock).toContain('if (!hasHydratedRef.current) return;');
     expect(restoreEffectBlock).toContain('let cancelled = false;');
     expect(restoreEffectBlock).toContain('!cancelled');
@@ -153,9 +184,15 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const stop = useCallback(async (options?: VoiceInputStopOptions) => {',
     );
     expect(voiceInputSource).toContain('type StopCompletionWaiter = {');
-    expect(voiceInputSource).toContain('const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);');
-    expect(waitForBusyCompletionBlock).toContain('stopCompletionWaitersRef.current = [...stopCompletionWaitersRef.current, waiter];');
-    expect(waitForBusyCompletionBlock).toContain('stopCompletionWaitersRef.current.filter((item) => item !== waiter)');
+    expect(voiceInputSource).toContain(
+      'const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);',
+    );
+    expect(waitForBusyCompletionBlock).toContain(
+      'stopCompletionWaitersRef.current = [...stopCompletionWaitersRef.current, waiter];',
+    );
+    expect(waitForBusyCompletionBlock).toContain(
+      'stopCompletionWaitersRef.current.filter((item) => item !== waiter)',
+    );
 
     const resolveStopCompletionBlock = extractBetween(
       voiceInputSource,
@@ -172,9 +209,15 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     expect(stopBlock).toContain("if (stateRef.current === 'error')");
     expect(stopBlock).toContain("throw new Error(lastErrorRef.current ?? 'Voice input failed.')");
-    expect(stopBlock).toContain('const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {');
-    expect(stopBlock).toContain('if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;');
-    expect(voiceInputSource).toContain('const stopInFlightPromiseRef = useRef<Promise<void> | null>(null);');
+    expect(stopBlock).toContain(
+      'const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {',
+    );
+    expect(stopBlock).toContain(
+      'if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;',
+    );
+    expect(voiceInputSource).toContain(
+      'const stopInFlightPromiseRef = useRef<Promise<void> | null>(null);',
+    );
     expect(stopBlock).toContain('throw new Error(startResult.error);');
     const startFailureBlock = extractBetween(
       stopBlock,
@@ -191,15 +234,31 @@ describe('ChatInput voice input Enter-to-send contract', () => {
   });
 
   it('waits for refinement before finishing a plain voice stop', () => {
-    expect(chatInputSource).toContain('const handleVoiceInputPlainStop = useCallback(() => (');
+    expect(chatInputSource).toMatch(
+      /const handleVoiceInputPlainStop\s*=\s*useCallback\(\s*\(\)\s*=>\s*handleVoiceInputStop\(\{ waitForRefinement: true \}\)\.catch\(\(\)\s*=>\s*undefined\)/,
+    );
     expect(chatInputSource).toContain('handleVoiceInputStop({ waitForRefinement: true })');
-    expect(chatInputSource).toContain('handleVoiceInputStop({ waitForRefinement: true }).catch(() => undefined)');
-    expect(chatInputSource).toContain('const handleVoiceInputStopWithRefinement = useCallback((options?: { waitForRefinement?: boolean }) => (');
-    expect(chatInputSource).toContain('handleVoiceInputStop({ waitForRefinement: options?.waitForRefinement ?? true })');
-    expect(chatInputSource).toContain('handleVoiceInputStop({ waitForRefinement: options?.waitForRefinement ?? true }).catch(() => undefined)');
-    expect(chatInputSource).toContain('const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);');
-    expect(chatInputSource).toContain('voiceInputStopRef.current = handleVoiceInputStopWithRefinement;');
-    expect(chatInputSource).toContain('await voiceInputStopRef.current({ waitForRefinement: true });');
+    expect(chatInputSource).toMatch(
+      /handleVoiceInputStop\(\{ waitForRefinement: true \}\)\.catch\(\(\)\s*=>\s*undefined\)/,
+    );
+    expect(chatInputSource).toMatch(
+      /const handleVoiceInputStopWithRefinement\s*=\s*useCallback\(\s*\(options\?: \{ waitForRefinement\?: boolean \}\)\s*=>/,
+    );
+    expect(chatInputSource).toContain(
+      'handleVoiceInputStop({ waitForRefinement: options?.waitForRefinement ?? true })',
+    );
+    expect(chatInputSource).toMatch(
+      /handleVoiceInputStop\(\{ waitForRefinement: options\?\.waitForRefinement \?\? true \}\)\.catch\(\s*\(\)\s*=>\s*undefined,?\s*\)/,
+    );
+    expect(chatInputSource).toContain(
+      'const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);',
+    );
+    expect(chatInputSource).toContain(
+      'voiceInputStopRef.current = handleVoiceInputStopWithRefinement;',
+    );
+    expect(chatInputSource).toContain(
+      'await voiceInputStopRef.current({ waitForRefinement: true });',
+    );
     expect(chatInputSource).toContain('onStop={handleVoiceInputPlainStop}');
   });
 

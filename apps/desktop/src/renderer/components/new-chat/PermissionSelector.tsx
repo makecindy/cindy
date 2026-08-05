@@ -24,7 +24,7 @@ import type { PermissionMode } from '@/lib/userPreferences.types';
 interface PermissionSelectorProps {
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
-  vendorKey?: 'cc' | 'codex';
+  vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id;非空 = 权限档从被控端读(本地会话 undefined,行为不变)。 */
   deviceId?: string;
   /** 禁用 trigger。用于断线远程会话等只读 composer 状态。 */
@@ -64,8 +64,10 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
   bypassPermissions: TriangleAlert,
 };
 
-function vendorKeyToAgentKind(v: 'cc' | 'codex'): AgentKind {
-  return v === 'codex' ? 'codex' : 'claude-code';
+function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
+  if (v === 'codex') return 'codex';
+  if (v === 'pi') return 'pi';
+  return 'claude-code';
 }
 
 /** Codex 不支持 acceptEdits/plan, 落到 ask 兜底 */

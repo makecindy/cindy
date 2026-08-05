@@ -58,7 +58,7 @@ export interface GhostErrandRunnerDeps {
   createSession(params: {
     ghostId: string;
     title: string | null;
-    agentKind?: 'cc' | 'codex';
+    agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
     fastMode?: boolean;
@@ -69,7 +69,7 @@ export interface GhostErrandRunnerDeps {
   /** 该插件的展示名(errand 会话默认标题用)。 */
   getGhostName(ghostId: string): string | null;
   /** 缺省选型来源:New Maker 草稿偏好快照(与 Orca worker 同源)。 */
-  getDraftDefaults(vendor: 'claude-code' | 'codex'): {
+  getDraftDefaults(vendor: 'claude-code' | 'codex' | 'pi'): {
     model?: string;
     effort?: string;
     fastMode?: boolean;
@@ -184,7 +184,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     if (!sessionId) {
       // 缺省选型跟随 New Maker 草稿偏好(与 Orca worker / workspace 槽同源);
       // 配置项逐字段覆盖。model/effort 缺省最终由 mapper 兜底,这里不硬编码。
-      const vendor = cfg.agentKind === 'codex' ? 'codex' : 'claude-code';
+      const vendor = cfg.agentKind === 'codex' ? 'codex' : cfg.agentKind === 'pi' ? 'pi' : 'claude-code';
       const draft = deps.getDraftDefaults(vendor);
       const ghostName = deps.getGhostName(request.ghostId);
       try {
@@ -252,7 +252,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       return failure('SESSION_UNAVAILABLE', 'errand 会话进程不可用,请稍后再试');
     }
     const observer = observeHookTurn(session, {
-      answerOnlyProgress: true,
+      // 不传 onProgress: errand 只取终态结果, 不向任何渠道发过程快照。
       onSilentStopSettled: deps.onSilentStopSettled,
       log: { warn: (msg) => deps.log.warn(msg) },
     });

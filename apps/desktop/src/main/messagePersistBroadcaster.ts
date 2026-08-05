@@ -39,11 +39,13 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
 const log = createLogger('messagePersistBroadcaster');
@@ -73,6 +75,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
 }
 
 type CreateDbMessageBody = Parameters<typeof createDbMessage>[1];
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /**
  * session-agent-switch:每会话当前 agent 引擎('cc'/'codex'),由 register.ts
@@ -81,13 +84,13 @@ type CreateDbMessageBody = Parameters<typeof createDbMessage>[1];
  * session.agent_kind 只代表"当前引擎",历史行的 agent_meta 必须按写入时引擎解析。
  * clearSessionPersistState 时清理。
  */
-const dbAgentKindBySession = new Map<string, 'cc' | 'codex'>();
+const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
 
-export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex'): void {
+export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
-export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | null {
+export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
   return dbAgentKindBySession.get(sessionId) ?? null;
 }
 
@@ -97,18 +100,24 @@ function withAgentKindStamp(sessionId: string, body: CreateDbMessageBody): Creat
   return kind ? { ...body, agentKind: kind } : body;
 }
 
-function createVisibleDbMessage(sessionId: string, body: CreateDbMessageBody): ReturnType<typeof createDbMessage> {
+function createVisibleDbMessage(
+  sessionId: string,
+  body: CreateDbMessageBody,
+  ownerScope: OwnerScope,
+): ReturnType<typeof createDbMessage> {
   const createdAt = typeof body.createdAt === 'number' && Number.isFinite(body.createdAt)
     ? body.createdAt
     : undefined;
-  if (createdAt === undefined) {
-    return createDbMessage(sessionId, body);
-  }
   return createDbMessage(sessionId, body, {
-    shouldBroadcast: () => {
-      const latestBoundary = clearBoundaryBySession.get(sessionId);
-      return latestBoundary === undefined || createdAt > latestBoundary;
-    },
+    ...(createdAt === undefined
+      ? {}
+      : {
+          shouldBroadcast: () => {
+            const latestBoundary = clearBoundaryBySession.get(sessionId);
+            return latestBoundary === undefined || createdAt > latestBoundary;
+          },
+        }),
+    broadcastOwnerScope: ownerScope,
   });
 }
 
@@ -211,15 +220,43 @@ function notePersistedMessage(sessionId: string, role: string, persistId: string
  * 每会话"本 turn 最后一条已入队落库的 assistant 文本"的 persistId。turn 结束(done)
  * 时由 register.ts 经 consumeLastAssistantPersistId 取走,用于把 per-turn 费用挂到该
  * 条消息的 agent_meta 上。consume 即清(get + delete):纯 tool 轮取到 undefined 不挂;
- * terminal error 结束的轮也 consume 丢弃,防 persistId 串到下一轮。
+ * terminal error 调用方用同一 id 写失败边界，并可交接给稍后的 paired done。
  */
 const lastAssistantPersistIdBySession = new Map<string, string>();
+/**
+ * 标题 turn seal 必须落在最后一条顶层 Assistant；Subagent 行会被标题选择器过滤，
+ * 若 seal 写到它上面，顶层施工播报仍会退回 legacy final。
+ */
+const lastTopLevelAssistantPersistIdBySession = new Map<string, string>();
+const EMPTY_TOOL_USE_IDS: ReadonlySet<string> = new Set<string>();
 
 /** 取出并清除本 turn 最后一条 assistant 的 persistId(没有则 undefined)。 */
 export function consumeLastAssistantPersistId(sessionId: string): string | undefined {
   const id = lastAssistantPersistIdBySession.get(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   return id;
+}
+
+/** 取出并清除本 turn 最后一条顶层 Assistant 的 persistId。 */
+export function consumeLastTopLevelAssistantPersistId(sessionId: string): string | undefined {
+  const id = lastTopLevelAssistantPersistIdBySession.get(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+  return id;
+}
+
+function markAssistantTurnBoundary(
+  sessionId: string,
+  clientId: string | undefined,
+  completed: boolean,
+): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async (ownerScope) => {
+    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+      turnCompleted: completed,
+    });
+    if (!patched) return false;
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
+  });
 }
 
 /**
@@ -231,14 +268,18 @@ export function markAssistantTurnCompleted(
   sessionId: string,
   clientId: string | undefined,
 ): Promise<boolean> {
-  if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`turn-completed:${sessionId}:${clientId}`, async () => {
-    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
-      turnCompleted: true,
-    });
-    if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
-  });
+  return markAssistantTurnBoundary(sessionId, clientId, true);
+}
+
+/**
+ * Terminal error 没有可选作正式答复的 Assistant，但仍需留下现代 turn 边界，
+ * 防止后续成功轮次出现后把失败轮的最后一条施工播报误当成 legacy final。
+ */
+export function markAssistantTurnFailed(
+  sessionId: string,
+  clientId: string | undefined,
+): Promise<boolean> {
+  return markAssistantTurnBoundary(sessionId, clientId, false);
 }
 
 /**
@@ -257,12 +298,12 @@ export function markAutoResumeOutcome(
   outcome: 'succeeded' | 'failed',
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`auto-resume-outcome:${sessionId}:${clientId}`, async () => {
+  return enqueueDurableWrite(`auto-resume-outcome:${sessionId}:${clientId}`, async (ownerScope) => {
     const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
       autoResumeOutcome: outcome,
     });
     if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
   });
 }
 
@@ -271,9 +312,42 @@ export function markAutoResumeOutcome(
  * 序列化(sqlite 本就单写者)。每个 link 单独 catch,失败只 warn、不打断后续写。
  */
 let writeChain: Promise<unknown> = Promise.resolve();
-function enqueueWrite(label: string, fn: () => Promise<unknown>): void {
+const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
+
+function captureOwnerScope(): ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(
+  scope: ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null,
+): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
+function ownerScopeSupersededError(): Error & { code: string } {
+  return Object.assign(new Error('durable write superseded by an app-session boundary'), {
+    code: OWNER_SCOPE_SUPERSEDED,
+  });
+}
+
+function isOwnerScopeSupersededError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === OWNER_SCOPE_SUPERSEDED
+  );
+}
+
+function enqueueWrite(label: string, fn: (ownerScope: OwnerScope) => Promise<unknown>): void {
+  const ownerScope = captureOwnerScope();
   writeChain = writeChain
-    .then(fn)
+    .then(() => {
+      if (!isOwnerScopeCurrent(ownerScope)) {
+        log.debug('message persist skipped after app-session boundary', { label });
+        return;
+      }
+      return fn(ownerScope);
+    })
     .catch((err) => {
       log.warn('message persist failed', {
         label,
@@ -289,7 +363,7 @@ function enqueueVisibleDbMessage(
   body: CreateDbMessageBody,
 ): void {
   const stamped = withAgentKindStamp(sessionId, body);
-  enqueueWrite(label, () => createVisibleDbMessage(sessionId, stamped));
+  enqueueWrite(label, (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope));
 }
 
 /**
@@ -302,18 +376,33 @@ function enqueueVisibleDbMessage(
  * `fn` 在 microtask 里跑, 内部用 sync drizzle write OK; reject 透传给调用方, 单
  * 个 link reject 不打断后续 chain (跟 enqueueWrite 的吞错语义对齐, log.warn 即可)。
  */
-export function enqueueDurableWrite<T>(label: string, fn: () => Promise<T> | T): Promise<T> {
+export function enqueueDurableWrite<T>(
+  label: string,
+  fn: (ownerScope: OwnerScope) => Promise<T> | T,
+): Promise<T> {
+  const ownerScope = captureOwnerScope();
   return new Promise<T>((resolve, reject) => {
     writeChain = writeChain
       .then(async () => {
+        if (!isOwnerScopeCurrent(ownerScope)) {
+          reject(ownerScopeSupersededError());
+          return;
+        }
         try {
-          const value = await fn();
+          const value = await fn(ownerScope);
+          // The durable side effect may have committed just before an app
+          // session boundary becomes observable.  Keep that commit's result:
+          // callers must not retry or compensate a row/ledger write merely
+          // because its owner-scoped broadcast is now stale.  Each fn owns
+          // suppressing its old-owner broadcast via ownerScope.
           resolve(value);
         } catch (err) {
-          log.warn('durable write failed', {
-            label,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          if (!isOwnerScopeSupersededError(err)) {
+            log.warn('durable write failed', {
+              label,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
           reject(err);
         }
       })
@@ -357,6 +446,14 @@ function enqueuePersistAssistant(
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
+  if (
+    isTopLevelTitleAssistant(
+      agentMeta as Record<string, unknown> | null,
+      knownToolUseIdsBySession.get(sessionId) ?? EMPTY_TOOL_USE_IDS,
+    )
+  ) {
+    lastTopLevelAssistantPersistIdBySession.set(sessionId, clientId);
+  }
 }
 
 /**
@@ -915,6 +1012,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
 
 /**
@@ -1067,6 +1165,7 @@ export function onTurnErrorEvent(
 ): string | undefined {
   const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
   if (!message) return undefined;
+  const ownerScope = captureOwnerScope();
   const capturedAt = Date.now();
   const recordedTurnStartedAt =
     _turnStartedAtBySession.get(sessionId) ??
@@ -1111,6 +1210,14 @@ export function onTurnErrorEvent(
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
+  // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
+  // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
+  // 不足(或反向丢失充值入口)。在入队前取值,写队列延迟消费不影响快照语义。
+  // null(未显式选择,走默认路由)时不写字段:来源不明确的错误行,读侧一律不启用
+  // 余额分类(fail-closed),与 live 路径「显式 providerId 才分类」同一判据。
+  const providerIdAtError = getSessionProvider(sessionId);
+  if (providerIdAtError) content.providerId = providerIdAtError;
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
   enqueueWrite(`turn_error:${sessionId}:${persistId}`, async () => {
@@ -1155,16 +1262,26 @@ export function onTurnErrorEvent(
       },
       { shouldBroadcast: () => false },
     );
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
       try {
-        win.webContents.send('local-db:session:error-persisted', { sessionId });
+        if (ownerScope === null) {
+          win.webContents.send('local-db:session:error-persisted', { sessionId });
+        } else {
+          win.webContents.send('local-db:session:error-persisted', { sessionId }, ownerStamp);
+        }
       } catch {
         /* swallow per-window broadcast failures */
       }
     }
     // device-link:把脏信号也转发给远控端,让已加载该会话历史的控制端窗口同样失效。
-    tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+    if (ownerScope === null) {
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId });
+    } else {
+      broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId }, ownerStamp);
+    }
   });
   notePersistedMessage(sessionId, 'error', persistId);
   return persistId;
@@ -1183,6 +1300,7 @@ export function clearSessionPersistState(sessionId: string): void {
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);

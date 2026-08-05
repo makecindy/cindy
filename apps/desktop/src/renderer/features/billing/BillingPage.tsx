@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowRight,
   Check,
   ChevronDown,
+  ChevronRight,
+  ChevronUp,
   CircleDollarSign,
   CreditCard,
   ExternalLink,
@@ -12,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -31,11 +34,11 @@ import type {
   BillingCatalogOffer,
   BillingCatalogOfferUnavailableReason,
   BillingCatalogProduct,
+  BillingPaymentOrder,
   BillingPendingPlanChange,
   BillingPurchaseOption,
   BillingSubscription,
 } from '../../../shared/billing';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import type {
   ModelAccessBalance,
   ModelAccessCreditPoolUsage,
@@ -45,19 +48,25 @@ import type {
 import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
-import { formatBillingAmount as formatMoney } from './money';
+import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { useBillingCheckout } from './useBillingCheckout';
+import { phaseForOrder, useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 
 type CatalogOfferEntry = {
   product: BillingCatalogProduct;
   offer: BillingCatalogOffer;
   purchaseOptions: SupportedPurchaseOption[];
+};
+
+type SubscriptionProductEntry = {
+  product: BillingCatalogProduct;
+  offers: CatalogOfferEntry[];
+  defaultOffer: CatalogOfferEntry;
 };
 
 type SupportedBillingProvider = 'alipay' | 'stripe';
@@ -98,6 +107,46 @@ const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] =
 const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
+
+/**
+ * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
+ * 不是账目导出 —— 更早的记录没有分页器可翻,服务端还有下一页时只用一条提示条说明。
+ */
+const ORDER_HISTORY_LIMIT = 10;
+
+/**
+ * 订单状态 chip 的文案 key。刻意复用 checkout 的 `phaseForOrder` 而不是自己再写一套
+ * status→文案映射:同一个 `CREATED`,支付弹窗说「等待支付」、列表说别的,是用户直接
+ * 可见的不一致。两处必须由同一个判据推导。
+ */
+function orderStatusLabelKey(order: BillingPaymentOrder): string {
+  switch (phaseForOrder(order)) {
+    case 'COMPLETED':
+      return 'billing.orders.states.completed';
+    case 'CANCELED':
+      return 'billing.orders.states.canceled';
+    case 'EXPIRED':
+      return 'billing.orders.states.expired';
+    case 'FAILED':
+      return 'billing.orders.states.failed';
+    default:
+      // phaseForOrder 对未终态一律返 AWAITING_PAYMENT(CREATED / PENDING)。
+      return 'billing.orders.states.awaitingPayment';
+  }
+}
+
+/** 「待支付」是这组里唯一可能还需要用户处理的状态,给它主文本色;其余保持二级色。 */
+function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
+  return phaseForOrder(order) === 'AWAITING_PAYMENT';
+}
+
+/**
+ * 订单号在界面上只做「认得出是哪一单」用,全长展示会把左列挤没 —— 截断展示、完整值
+ * 挂 title。截断取头部:服务端订单号带随机前缀,头 8 位已足够区分。
+ */
+function shortOrderId(orderId: string): string {
+  return orderId.length > 8 ? orderId.slice(0, 8) : orderId;
+}
 
 function decimalParts(value: string): { value: bigint; scale: number } | null {
   const match = /^(0|[1-9]\d{0,14})(?:\.(\d{1,9}))?$/.exec(value.trim());
@@ -182,6 +231,34 @@ function isCatalogOfferPurchasable(entry: CatalogOfferEntry): boolean {
   return entry.offer.purchasable === true && entry.purchaseOptions.length > 0;
 }
 
+function isSubscriptionOfferSelectable(
+  entry: CatalogOfferEntry,
+  currentSubscriptionOfferCode: string | null,
+): boolean {
+  return isCatalogOfferPurchasable(entry) && entry.offer.code !== currentSubscriptionOfferCode;
+}
+
+function groupSubscriptionProducts(
+  entries: CatalogOfferEntry[],
+  currentSubscriptionOfferCode: string | null,
+): SubscriptionProductEntry[] {
+  const groups = new Map<string, { product: BillingCatalogProduct; offers: CatalogOfferEntry[] }>();
+  for (const entry of entries) {
+    const group = groups.get(entry.product.code);
+    if (group) {
+      group.offers.push(entry);
+    } else {
+      groups.set(entry.product.code, { product: entry.product, offers: [entry] });
+    }
+  }
+  return Array.from(groups.values()).flatMap(({ product, offers }) => {
+    const defaultOffer =
+      offers.find((entry) => isSubscriptionOfferSelectable(entry, currentSubscriptionOfferCode)) ??
+      offers[0];
+    return defaultOffer ? [{ product, offers, defaultOffer }] : [];
+  });
+}
+
 function catalogOfferUnavailableReason(
   entry: CatalogOfferEntry,
 ): BillingCatalogOfferUnavailableReason | null {
@@ -248,9 +325,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [usageDetailsUnavailable, setUsageDetailsUnavailable] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(true);
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
+  // 订单记录按账号天然隔离:BillingPage 用 `billing:<dataOwnerId>` 做 key,换账号会整段
+  // 重挂,这份 state 连同缓存一起重建,不会把上一个账号的订单渲染给新账号。
+  const [orders, setOrders] = useState<BillingPaymentOrder[]>([]);
+  const [moreOrdersAvailable, setMoreOrdersAvailable] = useState(false);
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
+  const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
   const [selectedPurchaseOptionId, setSelectedPurchaseOptionId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState('');
@@ -282,6 +364,28 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setCustomAmount('');
   }, []);
 
+  const resetSubscriptionSelection = useCallback(() => {
+    setSelectedProductCode(null);
+    resetSelection();
+  }, [resetSelection]);
+
+  /**
+   * 深链 `?tab=billing&intent=topup` —— 别处（供应商设置页的账户资产模块）想触发
+   * 充值时唯一的入口。充值弹窗依赖本 section 的目录 / 选项 / checkout 会话状态，
+   * 跨 feature 直接复用会把这一大摊状态拉到调用方，所以外部只投递意图、由这里
+   * 打开弹窗。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与
+   * ProvidersSection 的 `?connect` 同款契约。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'topup') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    resetSelection();
+    setTopupDialogOpen(true);
+  }, [resetSelection, searchParams, setSearchParams]);
+
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
     setBalanceError(null);
@@ -301,6 +405,20 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }
     } finally {
       setLoadingBalance(false);
+    }
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    try {
+      const list = await billingApi.listOrders(ORDER_HISTORY_LIMIT);
+      setOrders(list.orders);
+      // nextCursor 是「服务端还有更早的记录」的唯一实证;这一组不做分页器,只据此出提示条。
+      setMoreOrdersAvailable(list.nextCursor !== null);
+    } catch {
+      // 订单记录是补充叙事(钱是怎么来的),拿不到就整组不渲染 —— 余额 / 用量 / 赠送
+      // 三组都不受影响,也不为它加一个空错误壳占版面。
+      setOrders([]);
+      setMoreOrdersAvailable(false);
     }
   }, []);
 
@@ -339,8 +457,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         .finally(() => setLoadingCatalog(false)),
       loadSubscription(),
       loadBalance(),
+      // 进页面拉一次,「刷新」也跟着重拉;不加轮询 —— 订单只在用户自己发起支付时变化,
+      // 而那条路径由 checkout 弹窗自己轮询。
+      loadOrders(),
     ]);
-  }, [loadBalance, loadSubscription]);
+  }, [loadBalance, loadOrders, loadSubscription]);
 
   useEffect(() => {
     void loadBillingState();
@@ -370,11 +491,27 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setCurrentSubscription(null);
       void loadSubscription();
     }
-  }, [checkout, loadSubscription]);
+    // 关弹窗也刷一次订单:用户可能在 AWAITING_PAYMENT 中途放弃 —— 那笔「待支付」
+    // 此刻就该出现在订单记录里,而不是等他手动点「刷新」才知道它还挂着。
+    void loadOrders();
+  }, [checkout, loadOrders, loadSubscription]);
 
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
+    if (previousPhase === checkout.state.phase) return;
+    // 订单记录跟着订单生命周期的每一次落位刷新,不只 COMPLETED:订单一创建(进入
+    // AWAITING_PAYMENT)就已经是一条「待支付」记录;轮询落到 FAILED / EXPIRED /
+    // CANCELED 时列表里那行的状态也变了。只刷 COMPLETED 会让其余终态全靠手动刷新。
+    if (
+      checkout.state.phase === 'AWAITING_PAYMENT' ||
+      checkout.state.phase === 'COMPLETED' ||
+      checkout.state.phase === 'FAILED' ||
+      checkout.state.phase === 'EXPIRED' ||
+      checkout.state.phase === 'CANCELED'
+    ) {
+      void loadOrders();
+    }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
       if (checkout.state.kind === 'SUBSCRIPTION') {
@@ -386,6 +523,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     checkout.state.phase,
     checkout.state.subscription,
     loadBalance,
+    loadOrders,
     loadSubscription,
   ]);
 
@@ -432,37 +570,75 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const currentSubscriptionOfferCode = subscriptionPurchaseBlocked
     ? (currentSubscription.effectivePlan?.offer.code ?? null)
     : null;
-  const selected = useMemo(
-    () =>
-      offers.find(
-        (entry) =>
-          entry.offer.code === selectedOfferCode &&
-          isCatalogOfferPurchasable(entry) &&
-          !(
-            entry.product.kind === 'SUBSCRIPTION' &&
-            entry.offer.code === currentSubscriptionOfferCode
-          ),
-      ) ?? null,
-    [currentSubscriptionOfferCode, offers, selectedOfferCode],
+  const subscriptionProducts = useMemo(
+    () => groupSubscriptionProducts(subscriptionOffers, currentSubscriptionOfferCode),
+    [currentSubscriptionOfferCode, subscriptionOffers],
   );
+  const selected = useMemo(() => {
+    const entry = offers.find((candidate) => candidate.offer.code === selectedOfferCode) ?? null;
+    if (!entry) return null;
+    if (entry.product.kind === 'SUBSCRIPTION') {
+      return entry.product.code === selectedProductCode ? entry : null;
+    }
+    return isCatalogOfferPurchasable(entry) ? entry : null;
+  }, [offers, selectedOfferCode, selectedProductCode]);
   const selectedOption = useMemo(
     () =>
       selected?.purchaseOptions.find((option) => option.id === selectedPurchaseOptionId) ?? null,
     [selected, selectedPurchaseOptionId],
   );
 
+  const selectSubscriptionOffer = useCallback((entry: CatalogOfferEntry) => {
+    setSelectedOfferCode(entry.offer.code);
+    setSelectedPurchaseOptionId((currentOptionId) =>
+      entry.purchaseOptions.some((option) => option.id === currentOptionId)
+        ? currentOptionId
+        : (entry.purchaseOptions[0]?.id ?? null),
+    );
+    setCustomAmount('');
+  }, []);
+
   useEffect(() => {
+    if (selectedProductCode) {
+      const selectedProduct = subscriptionProducts.find(
+        (product) => product.product.code === selectedProductCode,
+      );
+      if (!selectedProduct) {
+        resetSubscriptionSelection();
+        return;
+      }
+      const selectedEntry = selectedProduct.offers.find(
+        (entry) => entry.offer.code === selectedOfferCode,
+      );
+      if (
+        !selectedEntry ||
+        (!isSubscriptionOfferSelectable(selectedEntry, currentSubscriptionOfferCode) &&
+          selectedEntry.offer.code !== selectedProduct.defaultOffer.offer.code)
+      ) {
+        selectSubscriptionOffer(selectedProduct.defaultOffer);
+      }
+      return;
+    }
+
     if (!selectedOfferCode) return;
     const selectedEntry = offers.find(({ offer }) => offer.code === selectedOfferCode);
     if (
       !selectedEntry ||
-      !isCatalogOfferPurchasable(selectedEntry) ||
-      (selectedEntry.product.kind === 'SUBSCRIPTION' &&
-        selectedEntry.offer.code === currentSubscriptionOfferCode)
+      selectedEntry.product.kind !== 'CREDIT_TOPUP' ||
+      !isCatalogOfferPurchasable(selectedEntry)
     ) {
       resetSelection();
     }
-  }, [currentSubscriptionOfferCode, offers, resetSelection, selectedOfferCode]);
+  }, [
+    currentSubscriptionOfferCode,
+    offers,
+    resetSelection,
+    resetSubscriptionSelection,
+    selectSubscriptionOffer,
+    selectedOfferCode,
+    selectedProductCode,
+    subscriptionProducts,
+  ]);
 
   useEffect(() => {
     if (!selectedPurchaseOptionId) return;
@@ -499,6 +675,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const canCheckout =
     selected !== null &&
+    isCatalogOfferPurchasable(selected) &&
     selectedOption !== null &&
     !(
       selected.product.kind === 'SUBSCRIPTION' &&
@@ -654,11 +831,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   // targets.
   const planChangeCandidates = useMemo<PlanChangeCandidate[]>(() => {
     if (!showPlanChangeEntry || !currentPlan || !currentProvider) return [];
-    const directionRank: Record<Exclude<PlanChangeCandidate['direction'], null>, number> = {
-      UPGRADE: 0,
-      SAME_LEVEL: 1,
-      DOWNGRADE: 2,
-    };
     return subscriptionOffers
       .filter(
         (entry) =>
@@ -679,21 +851,25 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               : product.level < currentPlan.product.level
                 ? ('DOWNGRADE' as const)
                 : ('SAME_LEVEL' as const),
-      }))
-      .sort(
-        (left, right) =>
-          (left.direction === null ? 3 : directionRank[left.direction]) -
-            (right.direction === null ? 3 : directionRank[right.direction]) ||
-          left.product.sortOrder - right.product.sortOrder ||
-          left.offer.code.localeCompare(right.offer.code),
-      );
+      }));
   }, [subscriptionOffers, showPlanChangeEntry, currentPlan, currentProvider]);
 
   const openPurchaseDialog = (kind: PurchaseKind) => {
     resetSelection();
     if (kind === 'SUBSCRIPTION') {
+      const defaultProduct =
+        subscriptionProducts.find((product) =>
+          isSubscriptionOfferSelectable(product.defaultOffer, currentSubscriptionOfferCode),
+        ) ??
+        subscriptionProducts[0] ??
+        null;
+      setSelectedProductCode(defaultProduct?.product.code ?? null);
+      if (defaultProduct) {
+        selectSubscriptionOffer(defaultProduct.defaultOffer);
+      }
       setSubscriptionDialogOpen(true);
     } else {
+      setSelectedProductCode(null);
       setTopupDialogOpen(true);
     }
   };
@@ -701,19 +877,26 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const selectOffer = (offerCode: string) => {
     if (selectedOfferCode === offerCode) return;
     const entry = offers.find(({ offer }) => offer.code === offerCode);
-    if (
-      !entry ||
-      !isCatalogOfferPurchasable(entry) ||
-      (entry.product.kind === 'SUBSCRIPTION' && entry.offer.code === currentSubscriptionOfferCode)
-    ) {
+    if (!entry) return;
+    if (entry.product.kind === 'SUBSCRIPTION') {
+      if (entry.product.code !== selectedProductCode) return;
+      selectSubscriptionOffer(entry);
       return;
     }
+    if (!isCatalogOfferPurchasable(entry)) return;
     setSelectedOfferCode(offerCode);
     // 只有一种支付方式时默认选中,免去一次多余点击。
     setSelectedPurchaseOptionId(
       entry.purchaseOptions.length === 1 ? entry.purchaseOptions[0].id : null,
     );
     setCustomAmount('');
+  };
+
+  const selectSubscriptionProduct = (productCode: string) => {
+    const product = subscriptionProducts.find((entry) => entry.product.code === productCode);
+    if (!product) return;
+    setSelectedProductCode(productCode);
+    selectSubscriptionOffer(product.defaultOffer);
   };
 
   const submit = () => {
@@ -736,7 +919,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const closeSubscriptionDialog = () => {
     setSubscriptionDialogOpen(false);
-    resetSelection();
+    resetSubscriptionSelection();
   };
   const closeTopupDialog = () => {
     setTopupDialogOpen(false);
@@ -873,6 +1056,22 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               <PromotionalGrantsCard usage={creditUsage} />
             </BillingGroup>
           )}
+
+          {/* 空态(没有任何订单 / 拉不到)整组不渲染:页面保持现状,不加空壳 —— 从没在
+              Cindy 内付过钱的用户不需要一个写着「暂无订单」的框告诉他这件事。 */}
+          {orders.length > 0 && (
+            <BillingGroup
+              title={t('billing.orders.title')}
+              description={t('billing.orders.description')}
+              badge={
+                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                  {t('billing.orders.count', { count: orders.length })}
+                </span>
+              }
+            >
+              <OrderHistoryCard orders={orders} hasMore={moreOrdersAvailable} />
+            </BillingGroup>
+          )}
         </div>
       </div>
 
@@ -880,6 +1079,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         open={subscriptionDialogOpen}
         kind="SUBSCRIPTION"
         offers={subscriptionOffers}
+        subscriptionProducts={subscriptionProducts}
+        selectedProductCode={selectedProductCode}
         loading={loadingCatalog}
         catalogError={catalogError}
         selected={selected?.product.kind === 'SUBSCRIPTION' ? selected : null}
@@ -891,6 +1092,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         canCheckout={canCheckout}
         onClose={closeSubscriptionDialog}
         onRetry={() => void loadBillingState()}
+        onSelectProduct={selectSubscriptionProduct}
         onSelectOffer={selectOffer}
         onSelectPurchaseOption={setSelectedPurchaseOptionId}
         onCustomAmountChange={setCustomAmount}
@@ -901,6 +1103,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         open={topupDialogOpen}
         kind="CREDIT_TOPUP"
         offers={topupOffers}
+        subscriptionProducts={[]}
+        selectedProductCode={null}
         loading={loadingCatalog}
         catalogError={catalogError}
         selected={selected?.product.kind === 'CREDIT_TOPUP' ? selected : null}
@@ -912,6 +1116,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         canCheckout={canCheckout}
         onClose={closeTopupDialog}
         onRetry={() => void loadBillingState()}
+        onSelectProduct={() => undefined}
         onSelectOffer={selectOffer}
         onSelectPurchaseOption={setSelectedPurchaseOptionId}
         onCustomAmountChange={setCustomAmount}
@@ -1175,8 +1380,6 @@ function PendingPlanChangeBanner({
     </div>
   );
 }
-
-const BILLING_CURRENCY = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
 
 function BillingGroup({
   title,
@@ -1457,6 +1660,93 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
   );
 }
 
+/**
+ * 订单记录卡。行结构与 PromotionalGrantsCard 同一套(12px 容器 + 1px 分隔行 + 左列双行
+ * 加右侧数列),因为它们在同一页里是同一类东西:一条条只读流水。
+ */
+function OrderHistoryCard({
+  orders,
+  hasMore,
+}: {
+  orders: readonly BillingPaymentOrder[];
+  hasMore: boolean;
+}) {
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  /**
+   * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
+   * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
+   * 拿不到时**整列不出**,免得留下一列破折号;有一单拿得到就保留该列并给缺的那些占位。
+   */
+  const showPaymentMethod = orders.some((order) => order.paymentAction !== null);
+  return (
+    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      {hasMore && (
+        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+          {t('billing.orders.incomplete', { count: orders.length })}
+        </p>
+      )}
+      {/* 不像赠送明细那样封高 + 内滚:那边的行数由服务端历史决定(可达上百条),这边行数
+          由 ORDER_HISTORY_LIMIT 封死在 10,再套一层内滚只会凭空造出嵌套滚动区。 */}
+      <div className="divide-y divide-[var(--border-default)]" role="list">
+        {orders.map((order) => (
+          <div
+            key={order.orderId}
+            role="listitem"
+            className={cn(
+              'grid gap-x-3 gap-y-2 px-5 py-3.5 lg:items-center',
+              showPaymentMethod
+                ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_minmax(76px,0.6fr)]'
+                : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(76px,0.6fr)]',
+            )}
+          >
+            <div
+              className={cn(
+                'min-w-0 lg:col-span-1',
+                showPaymentMethod ? 'col-span-3' : 'col-span-2',
+              )}
+            >
+              <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                {formatLedgerTimestamp(order.createdAt, billingLocale)}
+              </p>
+              {/* 订单号只用来对单,截断展示、完整值挂 title(客服场景要能复制全长)。 */}
+              <p
+                title={order.orderId}
+                className="mt-1 truncate font-mono text-10 text-[var(--text-tertiary)]"
+              >
+                {t('billing.orders.orderId', { id: shortOrderId(order.orderId) })}
+              </p>
+            </div>
+            <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
+              {formatMoney(order.amount, order.currency, billingLocale)}
+            </p>
+            {showPaymentMethod && (
+              <p className="min-w-0 truncate text-11 text-[var(--text-secondary)]">
+                {order.paymentAction
+                  ? t(`billing.paymentActions.${order.paymentAction.type}`)
+                  : '—'}
+              </p>
+            )}
+            <div className="flex min-w-0 justify-end">
+              <span
+                className={cn(
+                  'shrink-0 whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2.5 py-1',
+                  'text-10 font-medium leading-[1.2]',
+                  isAwaitingPaymentOrder(order)
+                    ? 'text-[var(--text-primary)]'
+                    : 'text-[var(--text-secondary)]',
+                )}
+              >
+                {t(orderStatusLabelKey(order))}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1474,6 +1764,8 @@ function BillingOfferDialog({
   open,
   kind,
   offers,
+  subscriptionProducts,
+  selectedProductCode,
   loading,
   catalogError,
   selected,
@@ -1485,6 +1777,7 @@ function BillingOfferDialog({
   canCheckout,
   onClose,
   onRetry,
+  onSelectProduct,
   onSelectOffer,
   onSelectPurchaseOption,
   onCustomAmountChange,
@@ -1493,6 +1786,8 @@ function BillingOfferDialog({
   open: boolean;
   kind: PurchaseKind;
   offers: CatalogOfferEntry[];
+  subscriptionProducts: SubscriptionProductEntry[];
+  selectedProductCode: string | null;
   loading: boolean;
   catalogError: boolean;
   selected: CatalogOfferEntry | null;
@@ -1504,6 +1799,7 @@ function BillingOfferDialog({
   canCheckout: boolean;
   onClose: () => void;
   onRetry: () => void;
+  onSelectProduct: (productCode: string) => void;
   onSelectOffer: (offerCode: string) => void;
   onSelectPurchaseOption: (optionId: string) => void;
   onCustomAmountChange: (amount: string) => void;
@@ -1515,6 +1811,22 @@ function BillingOfferDialog({
     kind === 'SUBSCRIPTION'
       ? t('billing.dialogs.subscription.title')
       : t('billing.dialogs.topup.title');
+  const selectedSubscriptionProduct =
+    kind === 'SUBSCRIPTION'
+      ? (subscriptionProducts.find((product) => product.product.code === selectedProductCode) ??
+        null)
+      : null;
+  const displayedOffers = selectedSubscriptionProduct?.offers ?? offers;
+  const initialTopupOfferCode =
+    kind === 'CREDIT_TOPUP'
+      ? (displayedOffers.find(isCatalogOfferPurchasable)?.offer.code ?? null)
+      : null;
+  const selectedOfferCanChooseChannel =
+    selected !== null &&
+    isCatalogOfferPurchasable(selected) &&
+    !(kind === 'SUBSCRIPTION' && selected.offer.code === currentSubscriptionOfferCode);
+  const primaryFocusRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
@@ -1528,11 +1840,18 @@ function BillingOfferDialog({
             'overflow-hidden rounded-xl border border-[var(--border-default)]',
             'bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
           )}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (primaryFocusRef.current ?? closeButtonRef.current)?.focus();
+          }}
         >
           <div className="flex items-center justify-between gap-4 px-6 pb-4 pt-5">
-            <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">{title}</Dialog.Title>
+            <Dialog.Title className="truncate text-16 font-medium tracking-[-0.01em]">
+              {title}
+            </Dialog.Title>
             <Dialog.Close asChild>
               <button
+                ref={closeButtonRef}
                 type="button"
                 className="grid size-8 shrink-0 place-items-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]"
                 aria-label={t('billing.actions.close')}
@@ -1552,6 +1871,7 @@ function BillingOfferDialog({
                 description={t('billing.catalog.errorDescription')}
                 action={
                   <button
+                    ref={primaryFocusRef}
                     type="button"
                     onClick={onRetry}
                     className="mt-4 h-9 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium hover:bg-[var(--surface-hover-soft)]"
@@ -1561,167 +1881,186 @@ function BillingOfferDialog({
                 }
               />
             ) : offers.length === 0 ? (
-              <StateCard
-                icon={<PackageOpen size={22} />}
-                title={t('billing.catalog.emptyTitle')}
-              />
+              <StateCard icon={<PackageOpen size={22} />} title={t('billing.catalog.emptyTitle')} />
             ) : (
               <>
-                <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-                  {offers.map((entry) => {
-                    const { product, offer } = entry;
-                    const active = selected?.offer.code === offer.code;
-                    const unavailableReason = catalogOfferUnavailableReason(entry);
-                    const currentPlan =
-                      kind === 'SUBSCRIPTION' && offer.code === currentSubscriptionOfferCode;
-                    return (
-                      <button
-                        key={offer.code}
-                        type="button"
-                        onClick={() => onSelectOffer(offer.code)}
-                        disabled={currentPlan || unavailableReason !== null}
-                        aria-pressed={active}
-                        aria-current={currentPlan ? 'true' : undefined}
-                        className={cn(
-                          'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
-                          'focus-visible:ring-[var(--text-primary)]',
-                          'disabled:cursor-not-allowed disabled:hover:bg-transparent',
-                          currentPlan
-                            ? 'bg-[var(--surface-chip)]'
-                            : unavailableReason
-                              ? 'opacity-55'
-                              : active
-                                ? 'bg-[var(--surface-chip)]'
-                                : 'hover:bg-[var(--surface-hover-soft)]',
-                        )}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div
+                {kind === 'SUBSCRIPTION' && (
+                  <SubscriptionProductAccordion
+                    products={subscriptionProducts}
+                    selectedProductCode={selectedProductCode}
+                    selectedOfferCode={selected?.offer.code ?? null}
+                    currentSubscriptionOfferCode={currentSubscriptionOfferCode}
+                    billingLocale={billingLocale}
+                    initialFocusRef={primaryFocusRef}
+                    onSelectProduct={onSelectProduct}
+                    onSelectOffer={onSelectOffer}
+                  />
+                )}
+
+                <div className={kind === 'SUBSCRIPTION' ? 'mt-4' : undefined}>
+                  {kind !== 'SUBSCRIPTION' && (
+                    <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+                      {displayedOffers.map((entry) => {
+                        const { product, offer } = entry;
+                        const active = selected?.offer.code === offer.code;
+                        const unavailableReason = catalogOfferUnavailableReason(entry);
+                        const currentPlan = false;
+                        return (
+                          <button
+                            key={offer.code}
+                            ref={
+                              offer.code === initialTopupOfferCode ? primaryFocusRef : undefined
+                            }
+                            type="button"
+                            onClick={() => onSelectOffer(offer.code)}
+                            disabled={currentPlan || unavailableReason !== null}
+                            aria-pressed={active}
+                            aria-current={currentPlan ? 'true' : undefined}
                             className={cn(
-                              'grid items-center gap-2',
-                              currentPlan || unavailableReason
-                                ? 'grid-cols-[6rem_minmax(0,1fr)]'
-                                : 'grid-cols-[minmax(0,1fr)]',
+                              'flex min-h-[52px] w-full items-center justify-between gap-4 px-4 py-3',
+                              'text-left transition-colors',
+                              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                              'focus-visible:ring-[var(--focus-ring)]',
+                              'disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                              currentPlan
+                                ? 'bg-[var(--surface-chip)]'
+                                : unavailableReason
+                                  ? 'bg-[var(--surface-elevated)] opacity-55'
+                                  : active
+                                    ? 'bg-[var(--surface-hover-soft)]'
+                                    : 'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
                             )}
                           >
-                            <p className="truncate text-13 font-medium text-[var(--text-primary)]">
-                              {product.name}
-                            </p>
-                            {(currentPlan || unavailableReason) && (
-                              <div className="min-w-0">
-                                {currentPlan && (
-                                  <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                    {t('billing.catalog.currentPlan')}
-                                  </span>
+                            <div className="min-w-0 flex-1">
+                              <div
+                                className={cn(
+                                  'grid items-center gap-2',
+                                  currentPlan || unavailableReason
+                                    ? 'grid-cols-[6rem_minmax(0,1fr)]'
+                                    : 'grid-cols-[minmax(0,1fr)]',
                                 )}
-                                {unavailableReason && (
-                                  <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                    {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
-                                  </span>
+                              >
+                                <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                                  {product.name}
+                                </p>
+                                {(currentPlan || unavailableReason) && (
+                                  <div className="min-w-0">
+                                    {currentPlan && (
+                                      <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                        {t('billing.catalog.currentPlan')}
+                                      </span>
+                                    )}
+                                    {unavailableReason && (
+                                      <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                        {t(
+                                          `billing.catalog.unavailableReasons.${unavailableReason}`,
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-3">
-                          <div className="text-right">
-                            <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">
-                              {offer.amount
-                                ? formatMoney(offer.amount, offer.currency, billingLocale)
-                                : t('billing.amount.custom')}
-                              {offer.interval && (
-                                <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
-                                  / {t(`billing.intervals.${offer.interval}`)}
-                                </span>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-3">
+                              <div className="text-right">
+                                <p className="text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                                  {offer.amount
+                                    ? formatMoney(offer.amount, offer.currency, billingLocale)
+                                    : t('billing.amount.custom')}
+                                  {offer.interval && (
+                                    <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
+                                      / {t(`billing.intervals.${offer.interval}`)}
+                                    </span>
+                                  )}
+                                </p>
+                                {offer.creditAmount && (
+                                  <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
+                                    {t('billing.credits', {
+                                      amount: formatMoney(
+                                        offer.creditAmount,
+                                        offer.currency,
+                                        billingLocale,
+                                      ),
+                                    })}
+                                  </p>
+                                )}
+                              </div>
+                              {!currentPlan && unavailableReason === null && (
+                                <SelectionMark active={active} />
                               )}
-                            </p>
-                            {offer.creditAmount && (
-                              <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                                {t('billing.credits', {
-                                  amount: formatMoney(
-                                    offer.creditAmount,
-                                    offer.currency,
-                                    billingLocale,
-                                  ),
-                                })}
-                              </p>
-                            )}
-                          </div>
-                          {!currentPlan && unavailableReason === null && (
-                            <SelectionMark active={active} />
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {selected && (
-                  <div className="mt-5">
-                    <h3 className="text-13 font-medium text-[var(--text-primary)]">
-                      {t('billing.steps.channel.title')}
-                    </h3>
-                    <div className="mt-3 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-                      {selected.purchaseOptions.map((option) => (
-                        <PaymentOptionRow
-                          key={option.id}
-                          option={option}
-                          active={selectedPurchaseOptionId === option.id}
-                          onSelect={() => onSelectPurchaseOption(option.id)}
-                        />
-                      ))}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
+                  )}
 
-                    {kind === 'CREDIT_TOPUP' && isCustomTopup(selected.offer) && (
-                      <label className="mt-5 block">
-                        <span className="text-13 font-medium text-[var(--text-primary)]">
-                          {t('billing.amount.label')}
-                        </span>
-                        <div className="mt-2 flex h-10 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-4 focus-within:border-[var(--text-primary)]">
-                          <span className="mr-2 text-13 text-[var(--text-tertiary)]">
-                            {selected.offer.currency.toUpperCase()}
-                          </span>
-                          <input
-                            value={customAmount}
-                            onChange={(event) => onCustomAmountChange(event.target.value)}
-                            inputMode="decimal"
-                            placeholder={t('billing.amount.placeholder')}
-                            className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
+                  {selectedOfferCanChooseChannel && (
+                    <div className="mt-5">
+                      <h3 className="text-13 font-medium text-[var(--text-primary)]">
+                        {t('billing.steps.channel.title')}
+                      </h3>
+                      <div className="mt-3 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+                        {selected!.purchaseOptions.map((option) => (
+                          <PaymentOptionRow
+                            key={option.id}
+                            option={option}
+                            active={selectedPurchaseOptionId === option.id}
+                            onSelect={() => onSelectPurchaseOption(option.id)}
                           />
-                        </div>
-                        <p
-                          className={cn(
-                            'mt-2 text-11',
-                            amountError
-                              ? 'text-[var(--text-primary)]'
-                              : 'text-[var(--text-tertiary)]',
-                          )}
-                        >
-                          {amountError ??
-                            t('billing.amount.rangeHint', {
-                              min: formatMoney(
-                                selected.offer.minAmount!,
-                                selected.offer.currency,
-                                billingLocale,
-                              ),
-                              max: formatMoney(
-                                selected.offer.maxAmount!,
-                                selected.offer.currency,
-                                billingLocale,
-                              ),
-                            })}
-                        </p>
-                      </label>
-                    )}
+                        ))}
+                      </div>
 
-                    {kind === 'SUBSCRIPTION' && subscriptionPurchaseBlocked && (
-                      <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
-                        {t('billing.currentSubscription.purchaseBlocked')}
-                      </p>
-                    )}
-                  </div>
-                )}
+                      {kind === 'CREDIT_TOPUP' && isCustomTopup(selected!.offer) && (
+                        <label className="mt-5 block">
+                          <span className="text-13 font-medium text-[var(--text-primary)]">
+                            {t('billing.amount.label')}
+                          </span>
+                          <div className="mt-2 flex h-10 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-4 focus-within:border-[var(--text-primary)]">
+                            <span className="mr-2 text-13 text-[var(--text-tertiary)]">
+                              {selected!.offer.currency.toUpperCase()}
+                            </span>
+                            <input
+                              value={customAmount}
+                              onChange={(event) => onCustomAmountChange(event.target.value)}
+                              inputMode="decimal"
+                              placeholder={t('billing.amount.placeholder')}
+                              className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
+                            />
+                          </div>
+                          <p
+                            className={cn(
+                              'mt-2 text-11',
+                              amountError
+                                ? 'text-[var(--text-primary)]'
+                                : 'text-[var(--text-tertiary)]',
+                            )}
+                          >
+                            {amountError ??
+                              t('billing.amount.rangeHint', {
+                                min: formatMoney(
+                                  selected!.offer.minAmount!,
+                                  selected!.offer.currency,
+                                  billingLocale,
+                                ),
+                                max: formatMoney(
+                                  selected!.offer.maxAmount!,
+                                  selected!.offer.currency,
+                                  billingLocale,
+                                ),
+                              })}
+                          </p>
+                        </label>
+                      )}
+                    </div>
+                  )}
+
+                  {kind === 'SUBSCRIPTION' && selected && subscriptionPurchaseBlocked && (
+                    <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
+                      {t('billing.currentSubscription.purchaseBlocked')}
+                    </p>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -1731,7 +2070,7 @@ function BillingOfferDialog({
               type="button"
               onClick={onSubmit}
               disabled={!canCheckout}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--text-primary)] px-5 text-13 font-medium text-[var(--surface)] transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] disabled:cursor-not-allowed disabled:opacity-35"
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-5 text-13 font-medium text-[var(--accent-pure-cta-fg)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35 disabled:active:scale-100"
             >
               {t('billing.actions.pay')}
               <ArrowRight size={15} />
@@ -1740,6 +2079,266 @@ function BillingOfferDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+function SubscriptionProductAccordion({
+  products,
+  selectedProductCode,
+  selectedOfferCode,
+  currentSubscriptionOfferCode,
+  billingLocale,
+  initialFocusRef,
+  onSelectProduct,
+  onSelectOffer,
+}: {
+  products: SubscriptionProductEntry[];
+  selectedProductCode: string | null;
+  selectedOfferCode: string | null;
+  currentSubscriptionOfferCode: string | null;
+  billingLocale: string;
+  initialFocusRef: RefObject<HTMLButtonElement | null>;
+  onSelectProduct: (productCode: string) => void;
+  onSelectOffer: (offerCode: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
+      {products.map((productEntry, productIndex) => {
+        const productActive = productEntry.product.code === selectedProductCode;
+        const offerRegionId = `billing-product-${productEntry.product.code}-offers`;
+        const singleOfferEntry = productEntry.offers.length === 1 ? productEntry.offers[0] : null;
+        const singleOfferCurrentPlan =
+          singleOfferEntry?.offer.code === currentSubscriptionOfferCode;
+        const singleOfferUnavailableReason = singleOfferEntry
+          ? catalogOfferUnavailableReason(singleOfferEntry)
+          : null;
+        const priceOffer = productEntry.defaultOffer.offer;
+        const price = priceOffer.amount
+          ? formatMoney(priceOffer.amount, priceOffer.currency, billingLocale)
+          : t('billing.amount.custom');
+        const interval = priceOffer.interval ? t(`billing.intervals.${priceOffer.interval}`) : null;
+        return (
+          <section
+            key={productEntry.product.code}
+            className={cn(productIndex > 0 && 'border-t border-[var(--border-default)]')}
+          >
+            {singleOfferEntry ? (
+              <button
+                ref={
+                  productActive &&
+                  !singleOfferCurrentPlan &&
+                  singleOfferUnavailableReason === null
+                    ? initialFocusRef
+                    : undefined
+                }
+                type="button"
+                onClick={() => onSelectProduct(productEntry.product.code)}
+                disabled={singleOfferCurrentPlan || singleOfferUnavailableReason !== null}
+                aria-pressed={productActive}
+                aria-current={singleOfferCurrentPlan ? 'true' : undefined}
+                className={cn(
+                  'flex min-h-[72px] w-full items-center justify-between gap-5 px-4 py-3 text-left transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                  'focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed',
+                  singleOfferCurrentPlan
+                    ? 'bg-[var(--surface-chip)]'
+                    : singleOfferUnavailableReason !== null
+                      ? 'bg-[var(--surface-elevated)] opacity-55'
+                      : productActive
+                        ? 'bg-[var(--surface-hover-soft)]'
+                        : 'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+                    {productEntry.product.name}
+                  </span>
+                  {(singleOfferCurrentPlan || singleOfferUnavailableReason !== null) && (
+                    <span className="shrink-0 rounded-full bg-[var(--surface-elevated)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                      {singleOfferCurrentPlan
+                        ? t('billing.catalog.currentPlan')
+                        : t(`billing.catalog.unavailableReasons.${singleOfferUnavailableReason}`)}
+                    </span>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex flex-col items-end gap-0.5">
+                    <p className="text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                      {price}
+                      {interval && (
+                        <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
+                          / {interval}
+                        </span>
+                      )}
+                    </p>
+                    {priceOffer.creditAmount && (
+                      <p className="text-12 text-[var(--text-secondary)]">
+                        {t('billing.credits', {
+                          amount: formatMoney(
+                            priceOffer.creditAmount,
+                            priceOffer.currency,
+                            billingLocale,
+                          ),
+                        })}
+                      </p>
+                    )}
+                  </div>
+                  {!singleOfferCurrentPlan && singleOfferUnavailableReason === null ? (
+                    <SelectionMark active={productActive} />
+                  ) : (
+                    <span className="size-5 shrink-0" aria-hidden />
+                  )}
+                </div>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSelectProduct(productEntry.product.code)}
+                aria-pressed={productActive}
+                aria-expanded={productActive}
+                aria-controls={offerRegionId}
+                className={cn(
+                  'flex min-h-[52px] w-full items-center justify-between gap-3 px-4 text-left transition-colors',
+                  'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                  'focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  {productActive ? (
+                    <ChevronUp size={16} className="shrink-0 text-[var(--text-secondary)]" />
+                  ) : (
+                    <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" />
+                  )}
+                  <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
+                    {productEntry.product.name}
+                  </span>
+                </div>
+                {!productActive && (
+                  <div className="flex flex-col items-end gap-0.5">
+                    <p className="text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                      {price}
+                      {interval && (
+                        <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
+                          / {interval}
+                        </span>
+                      )}
+                    </p>
+                    {priceOffer.creditAmount && (
+                      <p className="text-12 text-[var(--text-secondary)]">
+                        {t('billing.credits', {
+                          amount: formatMoney(
+                            priceOffer.creditAmount,
+                            priceOffer.currency,
+                            billingLocale,
+                          ),
+                        })}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </button>
+            )}
+
+            {!singleOfferEntry && productActive && (
+              <div
+                id={offerRegionId}
+                className="divide-y divide-[var(--border-default)] border-t border-[var(--border-default)]"
+              >
+                {productEntry.offers.map((entry) => {
+                  const { offer } = entry;
+                  const offerName = offer.name?.trim();
+                  const unavailableReason = catalogOfferUnavailableReason(entry);
+                  const currentPlan = offer.code === currentSubscriptionOfferCode;
+                  const unavailable = unavailableReason !== null;
+                  const offerActive = offer.code === selectedOfferCode;
+                  return (
+                    <button
+                      key={offer.code}
+                      ref={
+                        offerActive && !currentPlan && !unavailable
+                          ? initialFocusRef
+                          : undefined
+                      }
+                      type="button"
+                      onClick={() => onSelectOffer(offer.code)}
+                      disabled={currentPlan || unavailable}
+                      aria-pressed={offerActive}
+                      aria-current={currentPlan ? 'true' : undefined}
+                      className={cn(
+                        'flex min-h-[72px] w-full items-center justify-between gap-5 py-3 pl-10 pr-4 text-left transition-colors',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                        'focus-visible:ring-[var(--focus-ring)]',
+                        'disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                        currentPlan
+                          ? 'bg-[var(--surface-chip)]'
+                          : unavailable
+                            ? 'bg-[var(--surface-elevated)] opacity-55'
+                            : offerActive
+                              ? 'bg-[var(--surface-hover-soft)]'
+                              : 'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
+                      )}
+                    >
+                      <div className="flex min-w-0 items-center">
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {offerName && (
+                              <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                                {offerName}
+                              </p>
+                            )}
+                            {(currentPlan || unavailable) && (
+                              <span className="shrink-0 rounded-full bg-[var(--surface-elevated)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                {currentPlan
+                                  ? t('billing.catalog.currentPlan')
+                                  : t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-3">
+                        <div className="flex flex-col items-end gap-0.5">
+                          <p className="text-12 font-medium tabular-nums text-[var(--text-primary)]">
+                            {offer.amount
+                              ? formatMoney(offer.amount, offer.currency, billingLocale)
+                              : t('billing.amount.custom')}
+                            {offer.interval && (
+                              <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
+                                / {t(`billing.intervals.${offer.interval}`)}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-12 text-[var(--text-secondary)]">
+                            {offer.creditAmount
+                              ? t('billing.credits', {
+                                  amount: formatMoney(
+                                    offer.creditAmount,
+                                    offer.currency,
+                                    billingLocale,
+                                  ),
+                                })
+                              : null}
+                          </p>
+                        </div>
+                        {!currentPlan && !unavailable ? (
+                          <SelectionMark active={offerActive} />
+                        ) : (
+                          <span className="size-5 shrink-0" aria-hidden />
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1801,8 +2400,10 @@ function PaymentOptionRow({
       className={cn(
         'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
-        'focus-visible:ring-[var(--text-primary)]',
-        active ? 'bg-[var(--surface-chip)]' : 'hover:bg-[var(--surface-hover-soft)]',
+        'focus-visible:ring-[var(--focus-ring)]',
+        active
+          ? 'bg-[var(--surface-hover-soft)]'
+          : 'bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover-soft)]',
       )}
     >
       {option.provider === 'alipay' ? (

@@ -1,12 +1,24 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Loader2,
+  Power,
+  PowerOff,
+  Trash2,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { useTelegramBot } from '@/hooks/useTelegramBot';
+import { describeTelegramStatusFailure, useTelegramBot } from '@/hooks/useTelegramBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { TelegramRemoteDevices } from './TelegramRemoteDevices';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
@@ -20,8 +32,21 @@ const statusKey: Record<TelegramBotTransportStatus['kind'], string> = {
   connecting: 'settings.telegramBot.status.connecting',
   connected: 'settings.telegramBot.status.connected',
   conflict: 'settings.telegramBot.status.conflict',
+  offline: 'settings.telegramBot.status.offline',
   error: 'settings.telegramBot.status.error',
 };
+
+/** 已有绑定的三档 —— 都带 appId(bot 数字 id), 卡片可直接展示。 */
+type TelegramBoundStatus = Extract<TelegramBotTransportStatus, { appId: string }>;
+
+/**
+ * 有凭证的三档(已连接 / 被另一台占用 / 主动下线)都走已连接卡: 它们都不该
+ * 显示 token 表单 —— 尤其 conflict, 落表单会让"被另一台设备占用"看起来像
+ * "还没配置"。error(token 无效)与 connecting 仍走表单。
+ */
+function hasBinding(s: TelegramBotTransportStatus): s is TelegramBoundStatus {
+  return s.kind === 'connected' || s.kind === 'offline' || s.kind === 'conflict';
+}
 
 function statusColor(s: TelegramBotTransportStatus): string {
   switch (s.kind) {
@@ -30,6 +55,9 @@ function statusColor(s: TelegramBotTransportStatus): string {
     case 'connecting':
     case 'conflict':
       return 'var(--settings-badge-saved)';
+    // 主动下线是用户自己选的正常状态, 不是故障 —— 中性灰, 不用告警色。
+    case 'offline':
+      return 'var(--settings-badge-needs-config)';
     case 'connected':
       return 'var(--settings-badge-connected)';
     case 'error':
@@ -59,9 +87,11 @@ export function TelegramBotSection({
     validationError,
     isSaving,
     isDisconnecting,
+    isTogglingOnline,
     canConnect,
     connect,
     disconnect,
+    setOnline,
   } = useTelegramBot();
 
   const [showToken, setShowToken] = useState(false);
@@ -153,12 +183,16 @@ export function TelegramBotSection({
       <div className="h-px w-full bg-[var(--border-default)]" />
       <TelegramGroupActivationSettings />
       <div className="h-px w-full bg-[var(--border-default)]" />
-      {status.kind === 'connected' ? (
+      {hasBinding(status) ? (
         <ConnectedCard
+          status={status}
           botLabel={botUsername ? `@${botUsername}` : status.appId}
           ownerUserId={ownerUserId}
           isDisconnecting={isDisconnecting}
+          isTogglingOnline={isTogglingOnline}
           onDisconnect={() => void handleDisconnectClick()}
+          onToggleOnline={() => void setOnline(status.kind === 'offline')}
+          remoteDevices={<TelegramRemoteDevices selfAppId={status.appId} />}
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -229,7 +263,7 @@ export function TelegramBotSection({
                 </p>
               ) : status.kind === 'error' ? (
                 <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {status.reason}
+                  {describeTelegramStatusFailure(status, t)}
                 </p>
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">
@@ -324,14 +358,34 @@ export function TelegramBotSection({
   );
 }
 
-/** 已连接状态卡 —— 结构对齐 DiscordBotSection 的 ConnectedCard。 */
+/** 已绑定状态卡(已连接 / 已下线 / 被占用三档共用) —— 结构对齐 DiscordBotSection。 */
 function ConnectedCard(props: {
+  status: TelegramBoundStatus;
   botLabel: string;
   ownerUserId: string;
   isDisconnecting: boolean;
+  isTogglingOnline: boolean;
   onDisconnect: () => void;
+  onToggleOnline: () => void;
+  /** 「我的其他设备」区块;无其他设备时组件自身渲染 null。 */
+  remoteDevices: React.ReactNode;
 }) {
   const { t } = useTranslation();
+  const kind = props.status.kind;
+  const isOffline = kind === 'offline';
+  const busy = props.isDisconnecting || props.isTogglingOnline;
+  const headingKey =
+    kind === 'offline'
+      ? 'settings.telegramBot.connected.headingOffline'
+      : kind === 'conflict'
+        ? 'settings.telegramBot.connected.headingConflict'
+        : 'settings.telegramBot.connected.heading';
+  const noteKey =
+    kind === 'offline'
+      ? 'settings.telegramBot.connected.noteOffline'
+      : kind === 'conflict'
+        ? 'settings.telegramBot.connected.noteConflict'
+        : 'settings.telegramBot.connected.note';
   return (
     <div
       className={cn(
@@ -341,15 +395,27 @@ function ConnectedCard(props: {
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-[var(--settings-badge-connected)]">
-          <Check size={16} />
+        <div
+          className={cn(
+            'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
+            'border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)]',
+          )}
+          style={{ color: statusColor(props.status) }}
+        >
+          {kind === 'offline' ? (
+            <PowerOff size={16} />
+          ) : kind === 'conflict' ? (
+            <AlertTriangle size={16} />
+          ) : (
+            <Check size={16} />
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('settings.telegramBot.connected.heading')}
+            {t(headingKey)}
           </div>
           <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-            {t('settings.telegramBot.connected.note')}
+            {t(noteKey)}
           </div>
         </div>
       </div>
@@ -368,15 +434,44 @@ function ConnectedCard(props: {
         </div>
       </div>
       <div className="flex gap-2 pt-1">
+        {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
         <button
           type="button"
-          onClick={props.onDisconnect}
-          disabled={props.isDisconnecting}
+          onClick={props.onToggleOnline}
+          disabled={busy}
           className={cn(
             'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
             'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
             'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-            props.isDisconnecting && 'cursor-not-allowed opacity-40',
+            busy && 'cursor-not-allowed opacity-40',
+          )}
+        >
+          {props.isTogglingOnline ? (
+            <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
+              <Loader2 size={13} />
+            </span>
+          ) : isOffline ? (
+            <Power size={13} />
+          ) : (
+            <PowerOff size={13} />
+          )}
+          {props.isTogglingOnline
+            ? t(
+                isOffline
+                  ? 'settings.telegramBot.goingOnlineAction'
+                  : 'settings.telegramBot.goingOfflineAction',
+              )
+            : t(isOffline ? 'settings.telegramBot.goOnline' : 'settings.telegramBot.goOffline')}
+        </button>
+        <button
+          type="button"
+          onClick={props.onDisconnect}
+          disabled={busy}
+          className={cn(
+            'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
+            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
+            'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
+            busy && 'cursor-not-allowed opacity-40',
           )}
         >
           {props.isDisconnecting ? (
@@ -391,6 +486,7 @@ function ConnectedCard(props: {
             : t('settings.telegramBot.disconnect')}
         </button>
       </div>
+      {props.remoteDevices}
     </div>
   );
 }

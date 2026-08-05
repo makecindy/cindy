@@ -116,6 +116,10 @@ describe('validateManifest', () => {
     expect('futureField' in manifest).toBe(false);
   });
 
+  it('accepts Pi manifests without relabeling the agent', () => {
+    expect(validateManifest({ ...validManifest(), agentKind: 'pi' }).agentKind).toBe('pi');
+  });
+
   it('rejects minReaderVersion above this reader', () => {
     try {
       validateManifest({ ...validManifest(), minReaderVersion: 999 });

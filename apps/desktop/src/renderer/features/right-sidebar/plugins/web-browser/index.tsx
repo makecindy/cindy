@@ -38,6 +38,9 @@ export interface WebBrowserState {
    *  应当回到静默态,因为 webview 会重新加载),但运行时仍然写进 state 走 patchState
    *  统一通道,UI 通过 state 拿。 */
   isAudible: boolean;
+  /** Runtime-only id of a Chromium-created popup adopted by main. Hydration
+   * intentionally drops it because native surfaces do not survive restart. */
+  nativePopupSurfaceId?: string;
 }
 
 const DEFAULT_STATE: WebBrowserState = {

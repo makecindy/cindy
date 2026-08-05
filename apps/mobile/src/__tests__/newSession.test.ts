@@ -4,6 +4,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   DEFAULT_NEW_SESSION_DRAFT,
+  NEW_SESSION_AGENT_OPTIONS,
+  availableNewSessionAgentOptions,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
@@ -436,6 +438,46 @@ describe('new session model', () => {
       permissionMode: 'auto',
       fastMode: false,
     });
+  });
+
+  it('exposes Pi as a first-class agent and preserves Fast for Pi sessions', () => {
+    expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
+      'claude-code', 'codex', 'pi',
+    ]);
+    const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
+    expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });
+    expect(buildRemoteCreateSessionOptions({
+      ...pi,
+      workingDir: '/repo/xdt-maker',
+      firstMessage: 'hello',
+    })).toMatchObject({ agentKind: 'pi', fastMode: true });
+  });
+
+  it('filters the new-session agent options by the controlled device runtime-registered set', () => {
+    // null(未拉到)→ fail-open,全部保留。
+    expect(availableNewSessionAgentOptions(null).map((o) => o.kind)).toEqual([
+      'claude-code', 'codex', 'pi',
+    ]);
+    // 被控端无 Pi(二进制缺失)→ 隐藏 Pi,避免建出 requireAgent 报 not-registered 的会话。
+    expect(
+      availableNewSessionAgentOptions(new Set(['claude-code', 'codex'])).map((o) => o.kind),
+    ).toEqual(['claude-code', 'codex']);
+    // 只有 Pi 注册(理论)→ 只留 Pi。
+    expect(availableNewSessionAgentOptions(new Set(['pi'])).map((o) => o.kind)).toEqual(['pi']);
+    // 空集(被控端异常)→ 退回至少 Claude,不把入口清空到无法创建。
+    expect(availableNewSessionAgentOptions(new Set()).map((o) => o.kind)).toEqual(['claude-code']);
+  });
+
+  it('wires the new-session screen to gate agents by list-available-agents and coerce off unavailable', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    // 拉被控端 runtime 注册集合,渲染按可用集过滤,选中不可用时 coerce。
+    expect(newSource).toContain('maker.listAvailableAgents()');
+    expect(newSource).toContain('availableNewSessionAgentOptions(availableAgentKinds).map');
+    expect(newSource).toMatch(/availableAgentKinds\.has\(draft\.agentKind\)/);
+    // 传输层 passthrough 到 allowlisted channel。
+    const transportSource = readTextLf(
+      resolve(process.cwd(), 'src/device-link/mobileMakerTransport.ts'), 'utf8');
+    expect(transportSource).toContain("listAvailableAgents: () => call('maker:list-available-agents', [])");
   });
 
   it('uses safe per-agent permission defaults for new interactive sessions', () => {

@@ -378,6 +378,93 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
+  it('上下文超限终止错误带 context-overflow reason(#1429): 原样重试必败, renderer 靠它换恢复动作', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message:
+          '400 Bad Request: {"error": {"message": "Your input exceeds the context window of this model.", "code": "context_length_exceeded"}}',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      reason: 'context-overflow',
+      isTerminal: true,
+    });
+  });
+
+  it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The request cannot be processed.',
+        codexErrorInfo: 'contextWindowExceeded',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      codexErrorInfo: 'contextWindowExceeded',
+      reason: 'context-overflow',
+      isTerminal: true,
+    });
+  });
+
+  it('serverOverloaded tag 优先于文案里的上下文超限信号', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'Your input exceeds the context window of this model.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q,
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      codexErrorInfo: 'serverOverloaded',
+      reason: 'upstream-overload',
+      isTerminal: true,
+    });
+  });
+
+  it('终态 429 被 agent 接管时透成非终止限流进度且不冒充过载', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'exceeded retry limit, last status: 429 Too Many Requests',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverTerminalRateLimit: () => ({ attempt: 1, maxAttempts: 2 }),
+      },
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({
+      errorStatus: 429,
+      isTerminal: false,
+      willRetry: true,
+      reason: 'terminal-rate-limit-retry',
+    });
+    expect((events[0]!.data as { message: string }).message).toContain(
+      'rate-limit-retry 1/2',
+    );
+    expect((events[0]!.data as { message: string }).message).not.toContain('auto-retry');
+  });
+
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
     // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
     // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到
@@ -1065,6 +1152,84 @@ describe('translateItemNotification collabAgentToolCall', () => {
   });
 });
 
+describe('translateItemNotification subAgentActivity', () => {
+  function activityParams(kind: string, id = 'spawn-1') {
+    return {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'subAgentActivity',
+        id,
+        kind,
+        agentThreadId: 'thread-2',
+        agentPath: '/root/survey_startup',
+      },
+    };
+  }
+
+  it('renders a running spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('started', activityParams('started'), q, ctx);
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+      'agent_task_update',
+    ]);
+    expect(events[0].data).toMatchObject({
+      toolUseId: 'spawn-1',
+      toolName: 'collab:spawn',
+      input: { name: '/root/survey_startup', agentThreadId: 'thread-2' },
+    });
+    // fullText 是纯数据(agentPath 原文),本地化句子由 renderer 组装,不持久化英文。
+    expect(events[1].data).toMatchObject({
+      toolUseId: 'spawn-1',
+      fullText: '/root/survey_startup',
+      isError: false,
+    });
+    // tool_result 就地收口(不留悬空工具调用),卡片状态由 update 主导 → 仍显示运行中,
+    // 后续 tokens / 工具数 / 终态由子线程通知按同一 taskId 增量刷新。
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'spawn-1',
+      parentToolUseId: 'spawn-1',
+      status: 'running',
+      title: '/root/survey_startup',
+    });
+  });
+
+  it('dedupes the started/completed phase pair and releases the dedupe entry', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('started', activityParams('started'), q, ctx);
+    translateItemNotification('completed', activityParams('started'), q, ctx);
+
+    const events = await collect(q);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    // completed 清理去重登记,长会话大量 spawn 不留内存增长(review r3698551514)。
+    expect(rt.emittedToolUse.has('spawn-1')).toBe(false);
+  });
+
+  it('stays silent for interacted/interrupted kinds', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('completed', activityParams('interacted', 'act-1'), q, ctx);
+    translateItemNotification('completed', activityParams('interrupted', 'act-2'), q, ctx);
+
+    const events = await collect(q);
+    expect(events).toEqual([]);
+  });
+});
+
 describe('translateItemNotification plan', () => {
   it('emits update_plan on started and completed, with result only on completed', async () => {
     const rt = newCodexRuntimeState();
@@ -1232,7 +1397,7 @@ describe('extractRolloutUpdatePlanFunctionCallEvent', () => {
   });
 });
 
-describe('codex file citation 归一化 (#785)', () => {
+describe('codex internal citation 归一化 (#785)', () => {
   it('normalizeCodexFileCitations 把标记换成行内代码路径,畸形标记整个剥掉', async () => {
     const { normalizeCodexFileCitations } = await import('./translator.js');
     expect(
@@ -1337,6 +1502,50 @@ describe('codex file citation 归一化 (#785)', () => {
     expect(stableCitationBoundary(braceInQuote)).toBe(4);
     const braceComplete = 'abc :codex-file-citation{path="/tmp/a{b}.md"}';
     expect(stableCitationBoundary(braceComplete)).toBe(braceComplete.length);
+  });
+
+  it('Web Search 引用标记被剥离,普通 cite 文本与相邻标点不变', async () => {
+    const { finalizeCodexCitationText } = await import('./translator.js');
+    const one = '\uE200cite\uE202turn17search1\uE201';
+    const many = '\uE200cite\uE202turn17search1\uE202turn17search2\uE201';
+    expect(finalizeCodexCitationText(`结论。${one}`)).toBe('结论。');
+    expect(finalizeCodexCitationText(`A ${one}；B ${many}。`)).toBe('A ；B 。');
+    expect(finalizeCodexCitationText('Please cite the source.')).toBe('Please cite the source.');
+  });
+
+  it('Web Search 引用跨 update 到达时不进入 delta,completed 截断残尾也不泄漏', async () => {
+    const { newCodexRuntimeState } = await import('./translator.js');
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const push = (phase: 'started' | 'updated' | 'completed', text: string): void => {
+      translateItemNotification(
+        phase,
+        {
+          threadId: 'thread-web-citation',
+          turnId: 'turn-web-citation',
+          item: { type: 'agentMessage', id: 'msg-web-citation', text },
+        },
+        q,
+        makeCtx(rt),
+      );
+    };
+
+    push('started', '结论。');
+    push('updated', '结论。 \uE200ci');
+    push('updated', '结论。 \uE200cite\uE202turn17search1');
+    push('updated', '结论。 \uE200cite\uE202turn17search1\uE201 后续');
+    push('completed', '结论。 \uE200cite\uE202turn17search1\uE201 后续。\uE200cite\uE202turn18sea');
+
+    const events = await collect(q);
+    const deltas = events
+      .filter((event) => event.type === 'text' && !(event.data as { isFinal: boolean }).isFinal)
+      .map((event) => (event.data as { text: string }).text);
+    expect(deltas.join('')).toBe('结论。  后续');
+    expect(deltas.join('')).not.toContain('\uE200');
+    const final = events.find(
+      (event) => event.type === 'text' && (event.data as { isFinal: boolean }).isFinal,
+    );
+    expect((final?.data as { text: string }).text).toBe('结论。  后续。');
   });
 
   it('路径本身含标记开头字面量:完整标记结构化消费,不被误认成新的未闭合开头', async () => {

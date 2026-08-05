@@ -24,6 +24,8 @@ import { useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { MachineSwitcherMenu } from '@/features/cc-agent/sidebar/MachineSwitcherMenu';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
@@ -45,6 +47,9 @@ export function SidebarTopNav(): React.ReactElement {
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
+  // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
+  // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
+  const hasGhostUnread = useAnyGhostUnread();
 
   // 通用「新建」入口:只 navigate 到草稿页,不清空 newMakerDraft。
   // 之前这里会把 workingDir / remoteHostId / extraDirs 清成默认,导致用户在草稿页
@@ -110,6 +115,7 @@ export function SidebarTopNav(): React.ReactElement {
           )}
         />
         <span className="leading-none">{t('sidebar.tabs.plugins')}</span>
+        {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
       </button>
 
       {/* 4. 搜索 —— 静息态与上面三行同款;hover / 聚焦就地展开成搜索框 */}

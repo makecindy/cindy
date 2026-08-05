@@ -25,6 +25,17 @@ describe('maker auth IPC handlers', () => {
     expect(getAgentAuthState).toHaveBeenCalledWith('codex');
   });
 
+  it('accepts Pi at the auth IPC boundary exposed by preload', async () => {
+    const harness = new IpcHarness();
+    const getAgentAuthState = vi.fn().mockResolvedValue({ authenticated: true });
+    registerMakerAuthHandlers(harness, createMakerStub({ getAgentAuthState }), vi.fn(), () => null);
+
+    await expect(harness.invoke(MAKER_INVOKE.AUTH_GET_STATE, 'pi')).resolves.toEqual({
+      authenticated: true,
+    });
+    expect(getAgentAuthState).toHaveBeenCalledWith('pi');
+  });
+
   it('normalizes login progress and broadcasts final auth state', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
@@ -1183,6 +1194,7 @@ describe('maker usage IPC handlers', () => {
       readClaudeAccountUsageSnapshot: vi.fn(),
       triggerClaudeAccountUsageRefresh: vi.fn(),
       readModelPricing: vi.fn(),
+      readReferenceModelPricing: vi.fn(() => ({})),
       readUsageHistory: vi.fn().mockResolvedValue(emptyHistory),
       emptyUsageHistory: vi.fn(() => emptyHistory),
       ...over,
@@ -1256,6 +1268,36 @@ describe('maker usage IPC handlers', () => {
     });
     await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING_V2)).resolves.toEqual(pricing);
     expect(readModelPricing).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves non-XD reference prices on a channel independent from XD pricing', async () => {
+    const harness = new IpcHarness();
+    const referencePricing = {
+      anthropic: {
+        'claude-sonnet-4-6': {
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-6',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+        },
+      },
+    };
+    const readReferenceModelPricing = vi.fn(() => referencePricing);
+    const readModelPricing = vi.fn();
+
+    registerMakerUsageHandlers(
+      harness,
+      makeUsageDeps({ readReferenceModelPricing, readModelPricing }),
+    );
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_REFERENCE_MODEL_PRICING)).resolves.toEqual(
+      referencePricing,
+    );
+    expect(readReferenceModelPricing).toHaveBeenCalledOnce();
+    expect(readModelPricing).not.toHaveBeenCalled();
   });
 
   it('reads Codex reset credits and consumes only a UUID offer key', async () => {

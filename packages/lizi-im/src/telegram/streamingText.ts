@@ -1,5 +1,10 @@
 /**
  * telegram/streamingText.ts — 流式文本 handle(sendMessage + editMessageText)。
+ *
+ * DM 与群/topic 共用这一条路径 —— 呈现不按聊天类型分叉。私聊曾另走
+ * sendMessageDraft 草稿通道(原生 Thinking 占位动画), 但草稿只能承载一行纯
+ * 文本, 于是工具调用的过程时间线在私聊里整体看不到, 与群聊形成两套体验
+ * (Chris 2026-08 点名)。现已统一回 send + edit。
  * ---------------------------------------------------------------------------
  * 与 discord/streamingText.ts 同一节流模型: 首条 send 建消息, 中间态按
  * 1.5s 尾随节流 editMessageText 覆盖, finalize 渲染终稿(超长部分追发新消息,
@@ -10,23 +15,17 @@
  *     (对齐 turnRunner 的 CARD_PATCH_THROTTLE_MS, 双层节流冗余但无害);
  *   - "message is not modified" 错误静默吞掉(内容未变的重复编辑);
  *   - 中间态超过单条上限后停止编辑(终稿由 finalize 分段补发), 与 Discord
- *     的 INTERMEDIATE_EDIT_LIMIT 行为一致。
+ *     的 INTERMEDIATE_EDIT_LIMIT 行为一致;
+ *   - **终稿的原位编辑必须有兜底**: 长轮次会对同一条消息累计上百次编辑, 撞
+ *     flood 时最后那次(携带答案)最容易失败。finalize 因此在编辑失败后把答案
+ *     新发一条消息承载, 见 finalizeInPlaceOrRepost。
  */
 
 import type { StreamingTextHandle } from '../types.js';
 
 export const TELEGRAM_UPDATE_THROTTLE_MS = 1500;
-/** draft 更新节流 — draft 不产生消息、不推通知, 可以比 edit 更勤。 */
-export const TELEGRAM_DRAFT_THROTTLE_MS = 900;
 /** 中间态渲染后 HTML 超过该长度就不再编辑(接近 4096 上限时停手)。 */
 const INTERMEDIATE_EDIT_LIMIT = 3800;
-/** draft 中间态文本上限(4096 硬顶留余量); 超出截断尾部展示。 */
-const DRAFT_PREVIEW_LIMIT = 3800;
-/**
- * draft 是 30 秒临时预览(Bot API 语义) — 长工具静默期没有新文本时按此间隔
- * 重推同一 draft_id 保活, 否则 "Thinking…" 会在用户眼前凭空消失。
- */
-const DRAFT_KEEPALIVE_MS = 20_000;
 const IMAGE_ONLY_PLACEHOLDER = '🖼️';
 /**
  * 自主判断沉默哨兵(全响应群的 ambient turn): 模型整条回复只有它时,
@@ -41,6 +40,17 @@ function isNoReply(text: string): boolean {
 export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
+  /**
+   * 终稿补送专用的发送(见 finalizeInPlaceOrRepost)。与 send 有两点不同, 都由实现方
+   * (index.ts)负责, 本模块只负责在编辑失败时调用它:
+   *   1. 沿用**本轮原始的回挂目标** —— 补送替换的是那条已经消耗掉目标的过程消息,
+   *      重新领取只会拿到空目标, 群里的答案就此脱离提问脉络;
+   *   2. 先核验**本轮身份仍然有效**(配置世代/api 客户端/主人未变、未被取消)。补送是
+   *      一次全新的出站, 会按"当前"状态取连接 —— 换主人之后旧回合的答案绝不能照发。
+   * 身份失效时本函数应当抛错: finalize 会据此抛回原始编辑错误并放弃整个收口, 后续
+   * 分段与图片一并不发。未提供时回落 send。
+   */
+  repost?: (markdown: string) => Promise<string>;
   /** 用 markdown 渲染结果覆盖既有消息。 */
   edit: (messageId: string, markdown: string) => Promise<void>;
   /** 终稿里的受管图片旁路上传(sendPhoto)。 */
@@ -50,24 +60,12 @@ export interface TelegramStreamingDeps {
   /** 提取 markdown 里的受管图片 URL(渲染由 send/edit 内部完成)。 */
   extractImageUrls: (markdown: string) => string[];
   /**
-   * DM 原生流式草稿(sendMessageDraft, 仅私聊可用)。提供即启用 draft 模式:
-   * 中间态推 draft(空文本 = 客户端原生 "Thinking…" 占位动画), 定稿才发真消息。
-   * 任何一次 draft 调用失败都永久 latch 回 send+edit 经典路径(本 handle 内)。
-   */
-  sendDraft?: (plainText: string) => Promise<void>;
-  /**
-   * Rich 定稿(sendRichMessage): 整段 markdown 一条到底(32768 上限), 表格/
-   * 标题/LaTeX 原生渲染。返回 null = 本条不可用(方法缺失/内容解析不过/
-   * 网络失败), 调用方回落 chunk+send 经典定稿。仅 draft 模式消费。
-   */
-  sendFinal?: (markdown: string) => Promise<string | null>;
-  /**
-   * 经典路径的 rich 原地定稿(editMessageText + rich_message): 把流式占位
-   * 消息一步升级成 rich 渲染(群与降级档 DM 共用)。返回 false = 本条不可用,
-   * 调用方回落 HTML edit 分段定稿。
+   * rich 原地定稿(editMessageText + rich_message): 把流式占位消息一步升级成
+   * rich 渲染(DM 与群共用)。返回 false = 本条不可用, 调用方回落 HTML edit
+   * 分段定稿。
    */
   editFinal?: (messageId: string, markdown: string) => Promise<boolean>;
-  /** NO_REPLY 静默时删除流式占位消息(经典路径)。 */
+  /** NO_REPLY 静默时删除流式占位消息。 */
   deleteMessage?: (messageId: string) => Promise<void>;
 }
 
@@ -75,9 +73,6 @@ export function startTelegramStreaming(
   deps: TelegramStreamingDeps,
   initial?: string,
 ): Promise<StreamingTextHandle> {
-  if (deps.sendDraft) {
-    return Promise.resolve(new TelegramDraftStreamingHandle(deps, initial));
-  }
   return TelegramStreamingTextHandle.create(deps, initial);
 }
 
@@ -187,14 +182,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       const upgraded = await this.deps.editFinal(this.messageIdValue, finalText);
       if (upgraded) return;
     }
-    if (firstChunk.trim().length > 0 && this.flushed !== firstChunk) {
-      await this.deps.edit(this.messageIdValue, firstChunk);
-    } else if (
-      firstChunk.trim().length === 0 &&
-      (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
-      this.flushed !== IMAGE_ONLY_PLACEHOLDER
-    ) {
-      await this.deps.edit(this.messageIdValue, IMAGE_ONLY_PLACEHOLDER);
+    // 原位定稿的目标文本(有正文用首段; 纯图轮次用占位符); null = 消息已是终态。
+    const inPlaceText =
+      firstChunk.trim().length > 0 && this.flushed !== firstChunk
+        ? firstChunk
+        : firstChunk.trim().length === 0 &&
+            (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0) &&
+            this.flushed !== IMAGE_ONLY_PLACEHOLDER
+          ? IMAGE_ONLY_PLACEHOLDER
+          : null;
+    if (inPlaceText !== null) {
+      await this.finalizeInPlaceOrRepost(inPlaceText);
     }
     for (const chunk of chunks.slice(1)) {
       await this.deps.send(chunk);
@@ -205,6 +203,50 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       ...imageUrls,
       ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
     ]);
+  }
+
+  /**
+   * 原位定稿(editMessageText 覆盖流式那条消息); 编辑失败则把终稿**新发**一条
+   * 消息承载, 落地后再撤掉停在过程态的旧消息。
+   *
+   * 为什么需要这条兜底: 过程区每 5s 重渲染一次(时长在变), 长轮次会对同一条
+   * 消息累计上百次 editMessageText, 迟早撞 Telegram 的编辑 flood。而携带答案
+   * 的这一次编辑排在整轮最后, 最容易被撞 —— 实测 2026-08-04 一个 11 分钟的
+   * 群轮次就是这样丢掉了整条终稿(`429 retry after 26`), 上游只会记一条
+   * non-fatal 警告, 聊天里只剩一条停在"⚙️ 工作中 · 10m44s"的僵尸消息。
+   *
+   * 顺序固定"先发新、后删旧", 不可对调:
+   *   - 先删旧: 一旦新发也失败, 答案与过程记录一起消失, 比现状更糟;
+   *   - 先删再发还会让客户端滚动跳位(与 openclaw 同一条纪律)。
+   * 删除是 best-effort —— 删不掉只是多留一条过程消息, 答案已经到了。
+   *
+   * 补送走 deps.repost(而非 send): 它替换的是那条已经消耗掉本轮回挂目标的过程
+   * 消息, 必须沿用同一个 reply 目标, 否则群里的答案会脱离提问脉络。
+   *
+   * repost 抛错(含"本轮身份已失效"——被取消/换主人/换代)一律按**放弃收口**处理:
+   * 抛回原始编辑错误, 且因为本函数抛出, finalize 后面的分段补发与图片上传都不会
+   * 执行 —— 它们同属这个已经作废的回合。生命周期取消不能被当成普通编辑失败。
+   */
+  private async finalizeInPlaceOrRepost(text: string): Promise<void> {
+    const staleMessageId = this.messageIdValue;
+    try {
+      await this.deps.edit(staleMessageId, text);
+      return;
+    } catch (editErr) {
+      // 新发失败就把原始编辑错误抛回上游(与改动前同语义), 不掩盖真实原因。
+      const repost = this.deps.repost ?? this.deps.send;
+      try {
+        this.messageIdValue = await repost(text);
+      } catch {
+        throw editErr;
+      }
+      this.flushed = text;
+    }
+    try {
+      await this.deps.deleteMessage?.(staleMessageId);
+    } catch {
+      /* 删不掉(权限/已删)就留着, 不影响已送达的答案 */
+    }
   }
 
   private scheduleFlush(): void {
@@ -251,194 +293,5 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     if (!this.pending) return;
     clearTimeout(this.pending);
     this.pending = null;
-  }
-}
-
-/**
- * DM 原生草稿流式 handle(Bot API sendMessageDraft)。
- *
- * 与经典 handle 的差异:
- *   - 中间态不产生真实消息 —— 推 draft(同 draft_id 连续更新, 客户端原生动画;
- *     空文本 = "Thinking…" 占位), 30s 预览窗口靠 keepalive 重推兜住;
- *   - finalize 直接发正式消息(分段全走 send), 客户端用真消息替换掉 draft;
- *   - draft 调用失败 → 永久 latch 到经典 send+edit handle, 后续调用全部转发,
- *     旧客户端/异常场景体验 = 现状, 不劣化;
- *   - messageId 是合成占位(编排层只用 replace/finalize/close, 不读它;
- *     finalize 后图片上传用第一条真实消息的 id)。
- */
-class TelegramDraftStreamingHandle implements StreamingTextHandle {
-  readonly messageId: string;
-
-  private buffer: string;
-  private flushed = '';
-  private pending: ReturnType<typeof setTimeout> | null = null;
-  private keepalive: ReturnType<typeof setTimeout> | null = null;
-  private inFlight: Promise<void> | null = null;
-  private done = false;
-  private extraImageAbsPaths: string[] = [];
-  private fallback: Promise<TelegramStreamingTextHandle> | null = null;
-
-  constructor(
-    private readonly deps: TelegramStreamingDeps,
-    initial?: string,
-  ) {
-    this.messageId = `draft:${Date.now().toString(36)}`;
-    // 立即推空 draft → 原生 Thinking 占位; 初始文案(如有)随首个节流窗刷出。
-    this.buffer = initial && initial !== '…' ? initial : '';
-    void this.pushDraft(this.buffer);
-    if (this.buffer) this.scheduleFlush();
-  }
-
-  append(delta: string): void {
-    if (this.done) return;
-    if (this.fallback) {
-      void this.fallback.then((h) => h.append(delta), () => {});
-      return;
-    }
-    this.buffer += delta;
-    this.scheduleFlush();
-  }
-
-  replace(fullText: string): void {
-    if (this.done) return;
-    if (this.fallback) {
-      void this.fallback.then((h) => h.replace(fullText), () => {});
-      return;
-    }
-    this.buffer = fullText;
-    this.scheduleFlush();
-  }
-
-  addExtraImageAbsPath(absPath: string): void {
-    if (this.done || !absPath || this.extraImageAbsPaths.includes(absPath)) return;
-    if (this.fallback) {
-      void this.fallback.then((h) => h.addExtraImageAbsPath(absPath), () => {});
-      return;
-    }
-    this.extraImageAbsPaths.push(absPath);
-  }
-
-  close(): void {
-    this.done = true;
-    this.clearTimers();
-    if (this.fallback) void this.fallback.then((h) => h.close(), () => {});
-    // 无 fallback 时不做事: draft 是临时预览, ≤30s 自然消失。
-  }
-
-  async finalize(finalText: string): Promise<void> {
-    if (this.done) return;
-    this.done = true;
-    this.clearTimers();
-    if (this.fallback) {
-      const h = await this.fallback;
-      for (const absPath of this.extraImageAbsPaths) h.addExtraImageAbsPath(absPath);
-      await h.finalize(finalText);
-      return;
-    }
-    if (this.inFlight) {
-      try {
-        await this.inFlight;
-      } catch {
-        /* swallow */
-      }
-    }
-
-    if (isNoReply(finalText)) return; // 沉默: draft 30s 内自然蒸发, 不发正式消息
-    const imageUrls = this.deps.extractImageUrls(finalText);
-    // 无受管图片时优先 rich 定稿(一条到底); 带图回落经典分段 + sendPhoto 旁路,
-    // 避免 rich markdown 里的受管 URL 变成死链。
-    if (this.deps.sendFinal && imageUrls.length === 0 && this.extraImageAbsPaths.length === 0) {
-      const richId = await this.deps.sendFinal(finalText);
-      if (richId) return;
-    }
-    const chunks = this.deps.chunk(finalText);
-    let anchorMessageId: string | null = null;
-    for (const chunk of chunks) {
-      if (chunk.trim().length === 0) continue;
-      const id = await this.deps.send(chunk);
-      if (!anchorMessageId) anchorMessageId = id;
-    }
-    if (!anchorMessageId && (imageUrls.length > 0 || this.extraImageAbsPaths.length > 0)) {
-      anchorMessageId = await this.deps.send(IMAGE_ONLY_PLACEHOLDER);
-    }
-    if (anchorMessageId) {
-      await this.deps.uploadImages(anchorMessageId, [
-        ...imageUrls,
-        ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
-      ]);
-    }
-  }
-
-  private scheduleFlush(): void {
-    if (this.pending || this.done || this.fallback) return;
-    this.pending = setTimeout(() => {
-      this.pending = null;
-      void this.flushDraft();
-    }, TELEGRAM_DRAFT_THROTTLE_MS);
-  }
-
-  private async flushDraft(): Promise<void> {
-    if (this.inFlight) {
-      try {
-        await this.inFlight;
-      } catch {
-        /* swallow */
-      }
-    }
-    if (this.done || this.fallback || this.buffer === this.flushed) return;
-    if (isNoReply(this.buffer)) return;
-    await this.pushDraft(this.buffer);
-  }
-
-  private pushDraft(text: string): Promise<void> {
-    const preview =
-      text.length > DRAFT_PREVIEW_LIMIT ? `${text.slice(0, DRAFT_PREVIEW_LIMIT)}…` : text;
-    this.inFlight = (async () => {
-      try {
-        await this.deps.sendDraft!(preview);
-        this.flushed = text;
-        this.armKeepalive();
-      } catch {
-        this.latchToFallback();
-      } finally {
-        this.inFlight = null;
-      }
-    })();
-    return this.inFlight;
-  }
-
-  /** 静默期保活: 距上次成功推送 20s 无新内容时重推同一 draft, 防 30s 过期消失。 */
-  private armKeepalive(): void {
-    if (this.keepalive) clearTimeout(this.keepalive);
-    this.keepalive = setTimeout(() => {
-      this.keepalive = null;
-      if (this.done || this.fallback) return;
-      void this.pushDraft(this.flushed);
-    }, DRAFT_KEEPALIVE_MS);
-  }
-
-  /** draft 通道坏了(限流/客户端不支持等) → 本 handle 永久转发到经典路径。 */
-  private latchToFallback(): void {
-    if (this.fallback || this.done) return;
-    this.clearTimers();
-    const pendingText = this.buffer;
-    this.fallback = TelegramStreamingTextHandle.create(
-      this.deps,
-      pendingText.trim().length > 0 ? pendingText : undefined,
-    );
-    this.fallback.catch(() => {
-      /* create 失败时后续转发调用各自兜底; finalize 会把错误抛给编排层重试 */
-    });
-  }
-
-  private clearTimers(): void {
-    if (this.pending) {
-      clearTimeout(this.pending);
-      this.pending = null;
-    }
-    if (this.keepalive) {
-      clearTimeout(this.keepalive);
-      this.keepalive = null;
-    }
   }
 }

@@ -42,9 +42,11 @@ const getState = vi.fn<() => Promise<DeviceLinkState>>(async () => ({
   keepAwake: false,
   linkStatus: 'online',
   connectionIssue: null,
+  standby: false,
   controlledBy: [],
   revokedControllers: [],
   disabledControlDeviceIds: [],
+  unresponsiveDeviceIds: [],
 }));
 const listDevices = vi.fn(async () => ({
   devices: [
@@ -462,9 +464,11 @@ describe('MobileDownloadDialog', () => {
       keepAwake: false,
       linkStatus: 'connecting' as const,
       connectionIssue: null,
+      standby: false,
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
+      unresponsiveDeviceIds: [],
     };
     getState
       .mockImplementationOnce(

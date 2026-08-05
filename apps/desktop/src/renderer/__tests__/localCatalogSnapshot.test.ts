@@ -65,6 +65,22 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.warn).toHaveBeenCalledOnce();
   });
 
+  it('does not commit capabilities when the provider snapshot owner is stale', async () => {
+    const providers = {
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
+      providers: [{ id: 'owner-b-provider' }],
+      providerOrder: ['owner-b-provider'],
+    };
+    mocks.loadProviders.mockResolvedValueOnce(providers);
+    mocks.loadCapabilities.mockResolvedValueOnce([]);
+    mocks.providersCurrent.mockImplementation((_token, snapshot) => snapshot !== providers);
+
+    await expect(refreshLocalCatalogSnapshot()).resolves.toBe(false);
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+    expect(mocks.commitCapabilities).not.toHaveBeenCalled();
+  });
+
   it('drops an older refresh that finishes after a newer generation', async () => {
     const oldProviders = deferred<unknown[]>();
     const oldCapabilities = deferred<unknown[]>();

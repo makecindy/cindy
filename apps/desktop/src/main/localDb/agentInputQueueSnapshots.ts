@@ -7,8 +7,8 @@
  * sessionActiveTurn 的 chainWrite),避免"后发先至"让旧快照覆盖新快照。
  *
  * 体量守卫:payload 超过 MAX_PAYLOAD_BYTES 时先剥离 files[].base64(剪贴板
- * 图片的内联兜底,路径型附件不受影响)重试;仍超限则放弃本次写入并保留旧
- * 快照(宁可恢复到稍旧的队列,不写入截断的坏数据)。
+ * 图片的内联兜底,路径型附件不受影响)重试;仍超限则显式失败并保留旧快照
+ * (宁可让上层保留可重试的输入,不把未持久化误报成成功)。
  */
 
 import { eq } from 'drizzle-orm';
@@ -28,15 +28,70 @@ const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
+/** 当前 session 最近一次写操作的真实结果(保留 reject 供 durable boundary 等待者观察)。 */
+const _latestWriteResults = new Map<string, Promise<void>>();
+
+/**
+ * A queue snapshot that cannot fit in the durable row is not a successful
+ * persistence operation.  Callers use this distinction to retain remote OSS
+ * objects and retry instead of treating the in-memory queue as crash-safe.
+ */
+export class AgentInputQueueSnapshotTooLargeError extends Error {
+  readonly code = 'AGENT_INPUT_QUEUE_SNAPSHOT_TOO_LARGE';
+
+  constructor(
+    readonly sessionId: string,
+    readonly itemCount: number,
+    readonly payloadBytes: number,
+  ) {
+    super(
+      `agent input queue snapshot exceeds ${MAX_PAYLOAD_BYTES} bytes after sanitization ` +
+        `(session=${sessionId}, items=${itemCount}, bytes=${payloadBytes})`,
+    );
+    this.name = 'AgentInputQueueSnapshotTooLargeError';
+  }
+}
 
 function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();
   const opResult = prev.then(op);
+  // The operation promise is returned to the caller and may be intentionally
+  // observed later through awaitAgentInputQueueSnapshotPersistence(). Attach a
+  // no-op rejection observer now so a fire-and-forget caller cannot create an
+  // unhandled-rejection warning while the durable waiter still sees the error.
+  void opResult.catch(() => undefined);
   const chainNext = opResult.catch(() => undefined).finally(() => {
     if (_writeChains.get(sessionId) === chainNext) _writeChains.delete(sessionId);
   });
+  // Keep a settled failure visible to the next durable-boundary waiter until
+  // a later successful write replaces it.  Treating a rejected write as
+  // "nothing pending" would let attachment ownership advance past a snapshot
+  // that never became crash-recoverable.
+  void opResult.then(
+    () => {
+      if (_latestWriteResults.get(sessionId) === opResult) {
+        _latestWriteResults.delete(sessionId);
+      }
+    },
+    () => undefined,
+  );
   _writeChains.set(sessionId, chainNext);
+  _latestWriteResults.set(sessionId, opResult);
   return opResult;
+}
+
+/**
+ * Wait for the snapshot write(s) already queued for a session at call time.
+ *
+ * `saveAgentInputQueueSnapshot` remains non-blocking for the coordinator, but
+ * remote attachment cleanup needs a durable boundary before deleting the
+ * controller's OSS object.  The input handler calls this immediately after
+ * accepting an item, so the returned promise covers that acceptance snapshot;
+ * later writes are chained after it and are not silently skipped.  A session
+ * with no pending write is already at the latest known durable boundary.
+ */
+export function awaitAgentInputQueueSnapshotPersistence(sessionId: string): Promise<void> {
+  return _latestWriteResults.get(sessionId) ?? Promise.resolve();
 }
 
 function stripInlineBase64(items: AgentInputQueuedMessage[]): AgentInputQueuedMessage[] {
@@ -86,7 +141,7 @@ export function saveAgentInputQueueSnapshot(
             items: items.length,
             bytes: payload.length,
           });
-          return;
+          throw new AgentInputQueueSnapshotTooLargeError(sessionId, items.length, payload.length);
         }
         log.warn('queue snapshot stripped inline base64 attachments to fit size cap', {
           sessionId,
@@ -124,7 +179,7 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
   return rows.map((r) => r.payload);
 }
 
-function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {
+export function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {
   if (!value || typeof value !== 'object') return false;
   const msg = value as AgentInputQueuedMessage;
   return (
@@ -133,7 +188,9 @@ function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMes
     typeof msg.persistedContent === 'string' &&
     !!msg.chatMessage && typeof msg.chatMessage === 'object' &&
     !!msg.createOpts && typeof msg.createOpts === 'object' &&
-    (msg.createOpts.agentKind === 'claude-code' || msg.createOpts.agentKind === 'codex')
+    (msg.createOpts.agentKind === 'claude-code' ||
+      msg.createOpts.agentKind === 'codex' ||
+      msg.createOpts.agentKind === 'pi')
   );
 }
 

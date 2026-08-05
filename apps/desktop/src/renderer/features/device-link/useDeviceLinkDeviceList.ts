@@ -19,9 +19,16 @@ import { useSyncExternalStore } from 'react';
 let devices: DeviceLinkDeviceView[] | null = null;
 const subs = new Set<() => void>();
 let started = false;
+export type DeviceLinkDeviceListStatus = 'loading' | 'ready' | 'error';
+export interface DeviceLinkDeviceListRequestState {
+  status: DeviceLinkDeviceListStatus;
+  error: string | null;
+}
+let requestState: DeviceLinkDeviceListRequestState = { status: 'loading', error: null };
+let refreshImpl: (() => void) | null = null;
 /**
  * 设备目录是否已进入终态 —— 上层(shouldWaitForRemoteSessionBootstrap)据此决定还要不要等。
- * 两种终态:最新一次 listDevices 已 resolve / reject(见 setDevices / markInitialRequestSettled),
+ * 两种终态:最新一次 listDevices 已 resolve / reject(见 setDevices / markRequestFailed),
  * 或 relay 已停(登出 / 本地模式,见 clearDevices)。false 必须意味着「还有结果会来」。
  */
 let initialRequestSettled = false;
@@ -35,6 +42,35 @@ let initialRequestSettled = false;
  * refresh 发起前自增并抓代次,resolve 时代次变了就丢弃。
  */
 let loadGeneration = 0;
+
+/** 更新设备目录请求态但不通知，便于与列表快照合并成一次发布。 */
+function setRequestState(status: DeviceLinkDeviceListStatus, error: string | null): boolean {
+  if (requestState.status === status && requestState.error === error) return false;
+  requestState = { status, error };
+  return true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isDeviceLinkDeviceView(value: unknown): value is DeviceLinkDeviceView {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.deviceId === 'string' &&
+    value.deviceId.length > 0 &&
+    typeof value.name === 'string' &&
+    isNullableString(value.platform) &&
+    typeof value.online === 'boolean' &&
+    typeof value.remoteControlEnabled === 'boolean' &&
+    typeof value.controlEnabled === 'boolean' &&
+    typeof value.isSelf === 'boolean'
+  );
+}
 
 /** 仅比较切换栏关心的字段(忽略 busy / lastSeenAt 等高频字段,避免无谓重渲染)。 */
 function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView[]): boolean {
@@ -82,7 +118,8 @@ function setDevices(next: DeviceLinkDeviceView[]): void {
   const sorted = [...next].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
   const devicesChanged = !relevantEqual(devices, sorted);
   const settledChanged = !initialRequestSettled;
-  if (!devicesChanged && !settledChanged) return;
+  const requestChanged = setRequestState('ready', null);
+  if (!devicesChanged && !settledChanged && !requestChanged) return;
   devices = sorted;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
@@ -101,15 +138,20 @@ function setDevices(next: DeviceLinkDeviceView[]): void {
  */
 function clearDevices(): void {
   loadGeneration += 1; // 作废所有在途 listDevices 响应(见 loadGeneration 注释)。
-  const changed = devices !== null || !initialRequestSettled;
+  const requestChanged = setRequestState('ready', null);
+  const changed = devices !== null || !initialRequestSettled || requestChanged;
   if (!changed) return;
   devices = null;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
 }
 
-function markInitialRequestSettled(): void {
-  if (initialRequestSettled) return;
+function markRequestFailed(error: unknown): void {
+  const requestChanged = setRequestState(
+    'error',
+    error instanceof Error ? error.message : String(error),
+  );
+  if (initialRequestSettled && !requestChanged) return;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
 }
@@ -132,36 +174,74 @@ export function renameDeviceLinkDevice(deviceId: string, name: string): void {
 function ensureStarted(): void {
   if (started) return;
   started = true;
-  const refresh = (): void => {
-    // 上一轮在尚无设备快照时失败只代表「该次请求已结算」。online / push 触发了新的
-    // 有意义重试后要重新进入 loading，直到这次请求成功或失败；否则失败后重连期间会
-    // 把 devices=null + settled=true 误当成权威空列表。
-    if (devices === null && initialRequestSettled) {
-      initialRequestSettled = false;
-      subs.forEach((fn) => fn());
-    }
-    loadGeneration += 1; // 本次为最新一次拉取,作废所有更早的在途响应(见 loadGeneration 注释)。
-    const gen = loadGeneration;
-    window.electronAPI.deviceLink
-      .listDevices()
-      .then(({ devices: list }) => {
-        // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
-        if (gen !== loadGeneration) return;
-        setDevices(list);
-      })
-      .catch(() => {
-        // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
-        if (gen !== loadGeneration) return;
-        markInitialRequestSettled();
-        // 瞬态拉取失败(relay 重连中等)保持当前快照;登出 / relay 停止由下面的 'stopped'
-        // 状态事件显式清空,不靠这里的失败兜底(避免一次网络抖动就清掉、闪烁)。但把请求
-        // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
-      });
+  let linkStatus: 'stopped' | 'connecting' | 'online' | null = null;
+  let linkStatusRevision = 0;
+
+  const enterLoading = (): void => {
+    // 上一轮在尚无设备快照时失败只代表「该次请求已结算」。新的有效拉取开始后要重新
+    // 进入 loading，直到本轮成功或失败；已有快照则保留，requestState 单独表达正在刷新。
+    const settledChanged = devices === null && initialRequestSettled;
+    if (settledChanged) initialRequestSettled = false;
+    const requestChanged = setRequestState('loading', null);
+    if (settledChanged || requestChanged) subs.forEach((fn) => fn());
   };
-  refresh();
+
+  const runRefresh = async (probeState: boolean): Promise<void> => {
+    // getState 与 listDevices 共用同一个 operation generation。stop、状态 push、手动重试或
+    // 更晚的 refresh 都会令旧操作失效，迟到的状态快照和目录快照都不得落地。
+    loadGeneration += 1;
+    const gen = loadGeneration;
+    const statusRevisionAtStart = linkStatusRevision;
+    enterLoading();
+
+    if (probeState || linkStatus === null) {
+      try {
+        const state = await window.electronAPI.deviceLink.getState();
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        linkStatus = state.linkStatus;
+      } catch {
+        if (gen !== loadGeneration || statusRevisionAtStart !== linkStatusRevision) return;
+        // getState 本身失败时保留既有 status 判断；未知 / 在线态仍尝试目录请求，让真正的
+        // listDevices 结果决定 ready/error。已知 stopped 则不能误打成远程连接失败。
+      }
+    }
+
+    // 未登录 / 本地模式 / Device Link 停服不是「远程目录读取失败」：此刻远端能力
+    // 不在产品作用域内，目录应结算为 ready + null。手动重试也不能把 stopped 重新
+    // 打成 error；只有 online / connecting 下真实发出的 listDevices 失败才是连接错误。
+    if (linkStatus === 'stopped') {
+      clearDevices();
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.deviceLink.listDevices();
+      // 期间发生过清空(stop / 登出)或更晚的 refresh → 本次响应已陈旧,丢弃。
+      if (gen !== loadGeneration) return;
+      const list = result?.devices;
+      if (!Array.isArray(list) || !list.every(isDeviceLinkDeviceView)) {
+        throw new Error('Invalid device list response');
+      }
+      setDevices(list);
+    } catch (error) {
+      // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
+      if (gen !== loadGeneration) return;
+      markRequestFailed(error);
+      // 瞬态拉取失败(relay 重连中等)保持当前快照;登出 / relay 停止由下面的 'stopped'
+      // 状态事件显式清空,不靠这里的失败兜底(避免一次网络抖动就清掉、闪烁)。但把请求
+      // 标成已结算，避免远端 sidebar bootstrap 因 devices 仍为 null 永久显示加载态。
+    }
+  };
+
+  const refresh = (probeState = false): void => {
+    void runRefresh(probeState);
+  };
+  refreshImpl = () => refresh(true);
   // app 生命周期常驻(侧边栏始终有订阅者),不解绑监听。
   window.electronAPI.deviceLink.onPresenceChanged(() => refresh());
   window.electronAPI.deviceLink.onStatusChanged((p) => {
+    linkStatusRevision += 1;
+    linkStatus = p.status;
     if (p.status === 'stopped') {
       // 登出 / relay 停止:清掉缓存设备。否则登出后(或同进程换账号)上一账号的远程机器会
       // 一直留在切换栏里被当成可选 / 连接中(listDevices 此时多半失败,catch 又保留旧快照)。
@@ -169,12 +249,17 @@ function ensureStarted(): void {
       clearDevices();
       return;
     }
-    // 'online' 重连成功 → 重拉;'connecting' 瞬态保持当前快照(remoteProjectsStore 标记断线,chip 转「连接中」)。
-    if (p.status === 'online') refresh();
+    // online / connecting 都是远端目录仍在作用域内的状态：开始新一轮读取。connecting 下
+    // 若 REST 仍可达可直接拿到目录；不可达则明确落 error，而不是误装成空列表。
+    refresh();
   });
   // 关掉「我控制它」(本地 opt-out)只广播 control-target-changed、不发 presence;listDevices 的
   // controlEnabled 已据 disabledControlDeviceIds 计算,故重拉即可让被 opt-out 的设备立刻退出切换栏。
   window.electronAPI.deviceLink.onControlTargetChanged(() => refresh());
+
+  // 监听必须先挂，再读初值：否则 hook 挂载前 relay 已 stopped，或 getState 在 push 后迟到，
+  // 都可能把本地/未登录态误报成 listDevices 失败。revision + generation 保证 push 永远胜出。
+  refresh(true);
 }
 
 function subscribe(fn: () => void): () => void {
@@ -201,4 +286,22 @@ function getInitialRequestSettledSnapshot(): boolean {
 /** 首次设备清单请求是否已结算；失败也算结算，后续 push / online 事件仍会继续 refresh。 */
 export function useDeviceLinkDeviceListSettled(): boolean {
   return useSyncExternalStore(subscribe, getInitialRequestSettledSnapshot);
+}
+
+function getRequestStateSnapshot(): DeviceLinkDeviceListRequestState {
+  return requestState;
+}
+
+/** 设备目录的 loading / ready / error 状态；只有 ready + [] 才是权威空目录。 */
+export function useDeviceLinkDeviceListRequestState(): DeviceLinkDeviceListRequestState {
+  return useSyncExternalStore(subscribe, getRequestStateSnapshot);
+}
+
+/** 用户可见错误态的手动重试入口。 */
+export function retryDeviceLinkDeviceList(): void {
+  if (!started) {
+    ensureStarted();
+    return;
+  }
+  refreshImpl?.();
 }
