@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
@@ -16,6 +16,14 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveSessionMessageText: vi.fn(async () => 'Target message\nfull text'),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -142,6 +150,30 @@ describe('sidebar-embedded session navigation boundary', () => {
       ),
     );
     expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+  });
+
+  it('cancels pending split-pane link navigation after the source pane unmounts', async () => {
+    const pendingRoute = deferred<string>();
+    mocks.resolveSessionRoute.mockReturnValueOnce(pendingRoute.promise);
+    const onSessionNavigate = vi.fn();
+    const view = render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/session-target" label="Session target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', null);
+    view.unmount();
+
+    await act(async () => {
+      pendingRoute.resolve('/cc-agent/session-target');
+      await pendingRoute.promise;
+    });
+
+    expect(onSessionNavigate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('shows the persisted reference range summary without changing the link label', () => {

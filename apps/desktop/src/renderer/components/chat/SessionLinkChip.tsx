@@ -15,7 +15,7 @@
  * inline-flex 不打断文本流;不硬编码颜色(规则 16)。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CornerDownRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -62,10 +62,18 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
   const remoteSessions = useRemoteProjectSessions();
   const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
   const [messageText, setMessageText] = useState<string | null>(null);
+  const navigationRequestVersionRef = useRef(0);
 
   const sessionId = target?.sessionId ?? null;
   const messageClientId = target?.messageClientId ?? null;
   const explicitLabel = label?.trim() || null;
+
+  useEffect(
+    () => () => {
+      navigationRequestVersionRef.current += 1;
+    },
+    [sessionId, messageClientId, navigationMode],
+  );
 
   useEffect(() => {
     // 先清旧值:同一实例被复用渲染另一个 href(虚拟列表 / 消息 patch)时,
@@ -108,10 +116,12 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
   const remoteSession = remoteSessions.find((s) => s.id === sessionId) ?? null;
   const remoteTitle = fetchedTitle ? null : remoteSession?.title?.trim() || null;
   const handleClick = () => {
+    const navigationRequestVersion = ++navigationRequestVersionRef.current;
     // device-link 远程会话本地无 row,resolveSessionRoute 内部的 sessionService.get
     // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
     // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
     void resolveSessionRoute(sessionId, remoteSession).then((route) => {
+      if (navigationRequestVersionRef.current !== navigationRequestVersion) return;
       reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
       navigate(
         route,
