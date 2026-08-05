@@ -336,6 +336,8 @@ describe('maker:event hot path ordering', () => {
     expectOrder(boundaryBlock, 'consumeLastAssistantPersistId(session.id);', 'consumeLastTopLevelAssistantPersistId(session.id);');
     expectOrder(boundaryBlock, 'consumeLastTopLevelAssistantPersistId(session.id);', 'flushOrphanToolResults(session.id, eventAgentMeta);');
     expect(boundaryBlock).toContain("event.type === 'done'");
+    expect(boundaryBlock).toContain("event.source !== 'codex'");
+    expect(boundaryBlock).toContain('isSuccessfulCodexDoneEventData(event.data)');
     expect(boundaryBlock).toContain('markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId)');
     expect(boundaryBlock).toContain('markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)');
     expect(boundaryBlock).toContain('pendingFailedTurnAssistantPersistId.get(session.id)');
@@ -344,6 +346,11 @@ describe('maker:event hot path ordering', () => {
       boundaryBlock,
       'isPairedFailedTurnDone = true',
       "else if (!isPairedFailedTurnDone)",
+    );
+    expectOrder(
+      boundaryBlock,
+      'isSuccessfulCodexDoneEventData(event.data)',
+      'markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId)',
     );
   });
 

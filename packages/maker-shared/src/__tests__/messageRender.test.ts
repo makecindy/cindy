@@ -899,6 +899,23 @@ describe('message render todo grouping', () => {
     });
   });
 
+  it('keeps a historical Codex plan open at an interrupted turn boundary', () => {
+    const plan = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Wait for user', status: 'in_progress' }],
+    });
+    const interruptedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'partial-answer-1',
+      content: 'Partial work before the user stopped the turn.',
+      createdAt: at(8),
+      turnCompleted: false,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, interruptedBoundary])).toMatchObject({
+      todos: [{ content: 'Wait for user', status: 'in_progress' }],
+    });
+  });
+
   it('does not use a later turn completion to close an earlier open Codex plan', () => {
     const plan = tool('plan1', 'update_plan', {
       plan: [{ step: 'Wait for user', status: 'in_progress' }],

@@ -285,6 +285,20 @@ export function markAssistantTurnFailed(
 }
 
 /**
+ * Codex emits `done` for every terminal turn, including user interruption and
+ * failure. Only the successful variant may create a persisted completion seal;
+ * otherwise historical plan recovery would later treat partial work as done.
+ */
+export function isSuccessfulCodexDoneEventData(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const done = data as { cancelled?: unknown; raw?: unknown };
+  if (done.cancelled === true) return false;
+  if (!done.raw || typeof done.raw !== 'object' || Array.isArray(done.raw)) return false;
+  const status = (done.raw as { status?: unknown }).status;
+  return status === 'completed';
+}
+
+/**
  * 给一条自动续跑（中断自愈）的 user 消息补上**结果**。
  *
  * 为什么必须有这一步:那条消息在「续跑指令发出去」的瞬间就落库了,而那时还完全不知道

@@ -66,6 +66,7 @@ import {
   onThinkingEvent,
   flushAssistantBlock,
   flushOrphanToolResults,
+  isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
   resetTurnPersistState,
   clearSessionPersistState,
@@ -88,6 +89,16 @@ const SUMMARY = 'tool finished';
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
+
+describe('Codex done completion boundary', () => {
+  it('only treats successful terminal data as a completed turn', () => {
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'completed' } })).toBe(true);
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'interrupted' } })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'failed' } })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ cancelled: true })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ raw: { id: 'legacy-turn' } })).toBe(false);
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

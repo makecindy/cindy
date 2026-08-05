@@ -568,7 +568,8 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
  * persisted. A successful assistant seal before the next normal user turn is
  * the durable proof that this Codex plan's ownership window ended. Steer
  * messages remain inside the same product turn and therefore do not cut the
- * search window.
+ * search window. Interrupted and failed Codex turns persist `turnCompleted:
+ * false`, so they are deliberately ignored here.
  */
 function findPersistedCodexCompletionBoundary<
   TMessage extends MessageRenderSourceMessageLike,

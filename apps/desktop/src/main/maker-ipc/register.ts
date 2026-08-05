@@ -309,6 +309,7 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  isSuccessfulCodexDoneEventData,
   markAssistantTurnCompleted,
   markAssistantTurnFailed,
   noteAgentMeta,
@@ -3676,7 +3677,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
           // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
           // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
-          if (event.type !== 'done') {
+          // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
+          // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+          const isSuccessfulDone =
+            event.type === 'done' &&
+            (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
+          if (!isSuccessfulDone) {
             void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
           } else if (!isPairedFailedTurnDone) {
             void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
