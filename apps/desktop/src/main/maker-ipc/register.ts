@@ -5735,7 +5735,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       model: row.model,
       effort: row.effort as CreateOpts['effort'],
       fastMode: !!row.fastMode,
-      permissionMode: row.permissionMode as CreateOpts['permissionMode'],
+      permissionMode: permissionModeOrAsk(row.permissionMode),
       title: row.title,
       resumeSessionId: row.sdkSessionId ?? undefined,
       orcaRole: row.orcaRole as 'worker' | null,
