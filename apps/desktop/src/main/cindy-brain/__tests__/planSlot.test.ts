@@ -64,8 +64,9 @@ describe('GhostPlanSlot', () => {
   });
 
   it.each([
-    [{ type: 'plan-update' }, 'plan 必须是非空数组'],
-    [{ type: 'plan-update', plan: [] }, 'plan 必须是非空数组'],
+    [{ type: 'plan-update' }, 'plan 必须是数组'],
+    [{ type: 'plan-update', plan: [{ step: '', status: 'pending' }] }, 'step 不能为空'],
+    [{ type: 'plan-update', plan: [{ step: '   ', status: 'pending' }] }, 'step 不能为空'],
     [{ type: 'plan-update', plan: [{ step: '实现', status: 'running' }] }, 'status'],
   ])('拒绝非法 payload %#', async (payload, message) => {
     const { slot, projector } = harness();
@@ -73,6 +74,13 @@ describe('GhostPlanSlot', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     if (!result.ok) expect(result.message).toContain(message);
     expect(projector).not.toHaveBeenCalled();
+  });
+
+  it('接受零任务完整快照并原样投影', async () => {
+    const { slot, projector } = harness();
+    const empty = { type: 'plan-update', plan: [] } as const;
+    await expect(slot.handleUpdate('planner', empty)).resolves.toEqual({ ok: true });
+    expect(projector).toHaveBeenCalledWith(trustedContext, { plan: [] });
   });
 
   it('未声明 plan capability 时拒绝', async () => {

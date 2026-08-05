@@ -1170,7 +1170,7 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
 可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`plan\`(把调用方维护的完整
-Codex Plan 快照单向投影到当前可信任务,不提供读取、清空或生命周期控制,见 §4)、
+Codex Plan 快照单向投影到当前可信任务,允许零任务完整快照,但不提供读取、独立清空命令或生命周期控制,见 §4)、
 \`pick\`(请主机弹系统选文件夹窗口,
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
 预览标签,见 §4.15)、\`skill\`(捆绑 Agent Skills:随包 SKILL.md 技能,启用后
@@ -1463,7 +1463,8 @@ cindy.send({
 
 // 当前任务 Plan 单向投影(需在 slots 独立声明 "plan"):
 // - 形状完整复用 Codex update_plan；每次提交完整 plan,不支持增量 patch;
-// - plan 必须非空；status 只用 pending / in_progress / completed;
+// - plan 必须是数组且可以为空；空数组表示调用方当前完整 Plan 为零任务；
+// - 非空 plan 的 step 必须含可见文字；status 只用 pending / in_progress / completed;
 // - 在处理收到的 tool-call 期间、发送 tool-result 之前同步；目标由主机给这次
 //   ghost_call 铸造的任务 incarnation 绑定。不要传 sessionId；没有在途可信上下文，
 //   或同一插件正并发处理多个不同任务而无法唯一解析时返回 NO_SESSION_CONTEXT；

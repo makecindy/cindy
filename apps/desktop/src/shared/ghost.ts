@@ -93,7 +93,8 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * (workdir 不在本机)时 workdir_is_local=false,插件不得把它当本机路径用。
  * 'plan' = 当前任务 Plan 投影(2026-08-05):插件可提交一份完整的 Codex
  * update_plan 形状快照,由主机校验后投影到当前可信任务的 Plan UI。插件不能
- * 指定 sessionId、不能读回或清空 Plan,也不会因此获得启动 Agent 回合的能力。
+ * 指定 sessionId、不能读回 Plan 或调用独立清空命令,也不会因此获得启动 Agent
+ * 回合的能力；完整快照允许用 [] 表示零任务。
  * 'pick' = 目录选择(2026-07-23):插件经管子申请主机弹**系统级**选文件夹窗口,
  * 用户亲手选中即授权(与浏览器文件选择同一哲学:决定权在用户的点击上)。
  * 返回票据(dir_deposit,同 ghost_call dir 通道);声明了 node 槽的插件额外
@@ -4514,7 +4515,7 @@ export const GHOST_PLAN_MAX_EXPLANATION_CHARS = 4_000;
 export const GHOST_PLAN_MAX_STEP_CHARS = 4_000;
 export const GHOST_PLAN_MAX_TOTAL_TEXT_CHARS = 64_000;
 
-/** 运行期精确 schema 校验；拒绝增量 patch、空 Plan 与所有未声明字段。 */
+/** 运行期精确 schema 校验；拒绝增量 patch 与未声明字段，允许零任务完整快照。 */
 export function validateGhostPlanUpdatePayload(payload: unknown): GhostPlanPayloadValidation {
   if (!isPlainObject(payload)) return { ok: false, message: 'plan-update 载荷必须是对象' };
   const allowedRootKeys = new Set(['type', 'explanation', 'plan']);
@@ -4535,8 +4536,8 @@ export function validateGhostPlanUpdatePayload(payload: unknown): GhostPlanPaylo
   ) {
     return { ok: false, message: `explanation 最多 ${GHOST_PLAN_MAX_EXPLANATION_CHARS} 个字符` };
   }
-  if (!Array.isArray(payload.plan) || payload.plan.length === 0) {
-    return { ok: false, message: 'plan 必须是非空数组' };
+  if (!Array.isArray(payload.plan)) {
+    return { ok: false, message: 'plan 必须是数组' };
   }
   if (payload.plan.length > GHOST_PLAN_MAX_ITEMS) {
     return { ok: false, message: `plan 最多包含 ${GHOST_PLAN_MAX_ITEMS} 项` };
@@ -4553,6 +4554,9 @@ export function validateGhostPlanUpdatePayload(payload: unknown): GhostPlanPaylo
     }
     if (typeof item.step !== 'string') {
       return { ok: false, message: `plan[${index}].step 必须是字符串` };
+    }
+    if (item.step.trim().length === 0) {
+      return { ok: false, message: `plan[${index}].step 不能为空` };
     }
     if (item.step.length > GHOST_PLAN_MAX_STEP_CHARS) {
       return {

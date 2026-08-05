@@ -141,17 +141,18 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
     expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
   });
 
-  it('允许空白 step，由既有 Plan UI 按调用方快照语义过滤显示', () => {
+  it('允许零任务完整快照', () => {
     const payload = {
       type: 'plan-update',
-      plan: [{ step: '   ', status: 'completed' }],
+      plan: [],
     };
     expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
   });
 
   it.each([
-    [{ type: 'plan-update' }, '非空数组'],
-    [{ type: 'plan-update', plan: [] }, '非空数组'],
+    [{ type: 'plan-update' }, '必须是数组'],
+    [{ type: 'plan-update', plan: [{ step: '', status: 'pending' }] }, 'step 不能为空'],
+    [{ type: 'plan-update', plan: [{ step: '   ', status: 'pending' }] }, 'step 不能为空'],
     [{ type: 'plan-update', plan: [{ step: '实现', status: 'running' }] }, 'status'],
     [
       { type: 'plan-update', plan: [{ step: '实现', status: 'pending', activeForm: '实现中' }] },

@@ -2,7 +2,8 @@
  * planSlot.ts — Ghost 当前任务 Plan 投影槽。
  *
  * 插件只提交完整 Codex update_plan 快照；目标任务来自 Host 当前可信上下文。
- * 本槽不保存 Plan、不做推理，也不提供读取、清空或任意 session 控制能力。
+ * 本槽不保存 Plan、不做推理，也不提供读取、独立清空命令或任意 session 控制能力；
+ * 零任务数组仍是一份合法的完整快照。
  */
 
 import {

@@ -3460,7 +3460,7 @@
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
         "plan": "Can update the current task's Plan",
-        "planDetail": "It can only submit a complete Plan for projection into the current task. It cannot target another task, read or clear the Plan, start an Agent turn, or modify the authoritative plan source.",
+        "planDetail": "It can only submit a complete Plan, including a zero-task snapshot, for projection into the current task. It cannot target another task, read the Plan, invoke a separate clear command, start an Agent turn, or modify the authoritative plan source.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
