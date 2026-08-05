@@ -152,7 +152,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
       cachedState = {
         ownerUserId: canonicalOwnerUserId,
         status: result.status,
-        lifecycleAnnouncement,
+        lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement,
       };
       if (result.saveErrorStatus?.kind === 'error' || result.status.kind === 'error') {
         toast.error(t('logic.toasts.discordBotConnectFailed'));
@@ -182,7 +182,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
       cachedState = {
         ownerUserId: '',
         status: result.status,
-        lifecycleAnnouncement,
+        lifecycleAnnouncement: cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement,
       };
       toast.success(t('logic.toasts.discordBotDisconnected'));
     } catch (err) {

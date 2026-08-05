@@ -27,6 +27,16 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function installDiscordApi(
   status: DiscordBotTransportStatus = { kind: 'idle' },
   lifecycleAnnouncement = true,
@@ -220,6 +230,77 @@ describe('useDiscordBot', () => {
     expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(false);
     current.unmount();
 
+    api.getStatus.mockImplementationOnce(() => new Promise(() => {}));
+    const remounted = renderHook(() => useDiscordBot());
+    expect(remounted.result.current.lifecycleAnnouncement).toBe(false);
+  });
+
+  it('preserves a newer lifecycle toggle in cache after an in-flight connect resolves', async () => {
+    const api = installDiscordApi();
+    const connectResult = deferred<{
+      status: DiscordBotTransportStatus;
+      saveErrorStatus: DiscordBotTransportStatus | undefined;
+      ownerUserId: string;
+      payload: { token: string; ownerUserId: string };
+    }>();
+    api.setConfig.mockReturnValueOnce(connectResult.promise);
+    const current = renderHook(() => useDiscordBot());
+
+    await waitFor(() => expect(current.result.current.ownerUserId).toBe('12345678901234567'));
+    act(() => {
+      current.result.current.setToken('bot-token');
+    });
+
+    let pendingConnect!: Promise<boolean>;
+    act(() => {
+      pendingConnect = current.result.current.connect();
+    });
+    await waitFor(() => expect(api.setConfig).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      current.result.current.setLifecycleAnnouncement(false);
+    });
+
+    await act(async () => {
+      connectResult.resolve({
+        status: { kind: 'connected', appId: 'MakerBot#1234' },
+        saveErrorStatus: undefined,
+        ownerUserId: '12345678901234567',
+        payload: { token: 'bot-token', ownerUserId: '12345678901234567' },
+      });
+      await pendingConnect;
+    });
+
+    current.unmount();
+    api.getStatus.mockImplementationOnce(() => new Promise(() => {}));
+    const remounted = renderHook(() => useDiscordBot());
+    expect(remounted.result.current.lifecycleAnnouncement).toBe(false);
+  });
+
+  it('preserves a newer lifecycle toggle in cache after an in-flight disconnect resolves', async () => {
+    const api = installDiscordApi({ kind: 'connected', appId: 'MakerBot#1234' });
+    const disconnectResult = deferred<{ status: DiscordBotTransportStatus }>();
+    api.disconnect.mockReturnValueOnce(disconnectResult.promise);
+    const current = renderHook(() => useDiscordBot());
+
+    await waitFor(() => expect(current.result.current.status.kind).toBe('connected'));
+
+    let pendingDisconnect!: Promise<void>;
+    act(() => {
+      pendingDisconnect = current.result.current.disconnect();
+    });
+    await waitFor(() => expect(api.disconnect).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      current.result.current.setLifecycleAnnouncement(false);
+    });
+
+    await act(async () => {
+      disconnectResult.resolve({ status: { kind: 'idle' } });
+      await pendingDisconnect;
+    });
+
+    current.unmount();
     api.getStatus.mockImplementationOnce(() => new Promise(() => {}));
     const remounted = renderHook(() => useDiscordBot());
     expect(remounted.result.current.lifecycleAnnouncement).toBe(false);
