@@ -141,6 +141,14 @@ describe('ghost · plan-update 协议与 plan 权限槽', () => {
     expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
   });
 
+  it('允许空白 step，由既有 Plan UI 按调用方快照语义过滤显示', () => {
+    const payload = {
+      type: 'plan-update',
+      plan: [{ step: '   ', status: 'completed' }],
+    };
+    expect(validateGhostPlanUpdatePayload(payload)).toEqual({ ok: true, value: payload });
+  });
+
   it.each([
     [{ type: 'plan-update' }, '非空数组'],
     [{ type: 'plan-update', plan: [] }, '非空数组'],

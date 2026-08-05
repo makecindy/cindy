@@ -324,6 +324,7 @@ import {
   onToolUseEvent,
   markAutoResumeOutcome,
   onTurnErrorEvent,
+  prepareDurableSyntheticToolUseEventForBroadcast,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
@@ -7051,9 +7052,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setGhostPlanLiveSessionValidator((context) =>
     maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
   );
-  setGhostPlanProjector((context, update) => {
-    broadcastSyntheticToolEvent(context.sessionId, buildGhostPlanProjectionEvent(update));
-  });
+  setGhostPlanProjector((context, update) =>
+    broadcastDurableSyntheticToolUseEvent(
+      context.sessionId,
+      buildGhostPlanProjectionEvent(update),
+    ),
+  );
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -12120,6 +12124,23 @@ function broadcastSyntheticToolEvent(
     event,
     persistId: prepared.persistId,
     resolvedContent: prepared.resolvedContent,
+  });
+}
+
+/** Ghost Plan 的 ok:true 必须晚于持久化成功，避免只在当前 Renderer 暂时可见。 */
+async function broadcastDurableSyntheticToolUseEvent(
+  sessionId: string,
+  event: AgentEvent & { type: 'tool_use' },
+): Promise<void> {
+  const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
+    sessionId,
+    { type: event.type, data: event.data },
+    (event.agentMeta as AgentMeta | null | undefined) ?? null,
+  );
+  broadcastToAllWindows(MAKER_PUSH.EVENT, {
+    sessionId,
+    event,
+    persistId: prepared.persistId,
   });
 }
 

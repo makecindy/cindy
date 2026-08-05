@@ -4,7 +4,7 @@ import { extractPlanTodos } from '@cindy/maker-shared/message-render';
 
 import {
   buildGhostPlanProjectionEvent,
-  GHOST_PLAN_TOOL_USE_ID,
+  GHOST_PLAN_TOOL_USE_ID_PREFIX,
 } from '../ghostPlanProjection';
 
 describe('Ghost Plan → Codex Plan UI projection', () => {
@@ -22,7 +22,7 @@ describe('Ghost Plan → Codex Plan UI projection', () => {
       type: 'tool_use',
       source: 'codex',
       data: {
-        toolUseId: GHOST_PLAN_TOOL_USE_ID,
+        toolUseId: expect.stringMatching(/^ghost-plan:/),
         toolName: 'update_plan',
         input: update,
       },
@@ -34,16 +34,18 @@ describe('Ghost Plan → Codex Plan UI projection', () => {
     ]);
   });
 
-  it('多次完整同步复用同一 session-scoped toolUseId，后一次覆盖且支持完成态', () => {
+  it('多次完整同步使用新 toolUseId，使后一次按消息顺序成为当前 Plan', () => {
     const first = buildGhostPlanProjectionEvent({
       plan: [{ step: '实现', status: 'in_progress' }],
     });
     const second = buildGhostPlanProjectionEvent({
       plan: [{ step: '实现', status: 'completed' }],
     });
-    expect(first.data).toMatchObject({ toolUseId: GHOST_PLAN_TOOL_USE_ID });
+    expect(first.data.toolUseId).toMatch(new RegExp(`^${GHOST_PLAN_TOOL_USE_ID_PREFIX}`));
+    expect(second.data.toolUseId).toMatch(new RegExp(`^${GHOST_PLAN_TOOL_USE_ID_PREFIX}`));
+    expect(second.data.toolUseId).not.toBe(first.data.toolUseId);
     expect(second.data).toEqual({
-      toolUseId: GHOST_PLAN_TOOL_USE_ID,
+      toolUseId: second.data.toolUseId,
       toolName: 'update_plan',
       input: { plan: [{ step: '实现', status: 'completed' }] },
     });

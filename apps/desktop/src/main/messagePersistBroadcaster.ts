@@ -614,6 +614,54 @@ export function prepareSyntheticToolEventForBroadcast(
 }
 
 /**
+ * 需要把“已接受”绑定到落库成功的合成 tool_use 专用入口。
+ *
+ * 与热路径 helper 不同，本函数等待同一 writeChain 上此前写入和本次 create 完成，
+ * 并把 owner scope 失效或数据库错误透传给调用方；调用方只应在 resolve 后广播。
+ */
+export async function prepareDurableSyntheticToolUseEventForBroadcast(
+  sessionId: string,
+  event: { type: 'tool_use'; data: unknown },
+  agentMeta: AgentMeta | null,
+): Promise<{ persistId: string }> {
+  if (agentMeta) noteAgentMeta(sessionId, agentMeta);
+  flushAssistantBlock(sessionId, agentMeta);
+
+  const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown };
+  const createdAt = Date.now();
+  const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
+  const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+  const persistId = createId();
+  const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
+  noteAssistantTranscriptUuid(sessionId, meta);
+  const body = withAgentKindStamp(sessionId, {
+    clientId: persistId,
+    role: 'tool_use',
+    content: { toolUseId, toolName, input: data.input },
+    toolUseId: toolUseId || undefined,
+    agentMeta: meta,
+    createdAt,
+  });
+
+  await enqueueDurableWrite(`synthetic_tool_use:${sessionId}:${persistId}`, (ownerScope) =>
+    createVisibleDbMessage(sessionId, body, ownerScope),
+  );
+
+  if (toolUseId) {
+    rememberToolUseId(sessionId, toolUseId, createdAt);
+    getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {
+      toolName,
+      input: data.input,
+    });
+    if (isUpdatableToolUse(toolName)) {
+      rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
+    }
+  }
+  notePersistedMessage(sessionId, 'tool_use', persistId);
+  return { persistId };
+}
+
+/**
  * 处理 thinking 事件,在 final / redacted 阶段落库(write-once)。clientId 用 SDK 稳定
  * 的 blockId(本就跨窗幂等,renderer 也用 data.blockId 当气泡 id,main/renderer 同源,
  * 无需 persistId 回传)。start / delta 阶段不落库(纯 UI 流式)。

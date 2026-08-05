@@ -57,6 +57,7 @@ import {
   onToolUseEvent,
   onToolResultEvent,
   onToolResultFullEvent,
+  prepareDurableSyntheticToolUseEventForBroadcast,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
   onInteractionMessage,
@@ -380,6 +381,43 @@ describe('eager-create:tool_use 已到,tool_result_full 早于摘要', () => {
 });
 
 describe('synthetic tool events:本地合成事件也返回 renderer 展示所需 payload', () => {
+  it('durable tool_use 等落库成功后才 resolve', async () => {
+    const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
+      SESSION,
+      {
+        type: 'tool_use',
+        data: { toolUseId: 'ghost-plan:1', toolName: 'update_plan', input: { plan: [] } },
+      },
+      null,
+    );
+
+    expect(prepared).toEqual({ persistId: expect.any(String) });
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: prepared.persistId,
+        role: 'tool_use',
+        toolUseId: 'ghost-plan:1',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('durable tool_use 把数据库失败透传给调用方', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('db unavailable'));
+
+    await expect(
+      prepareDurableSyntheticToolUseEventForBroadcast(
+        SESSION,
+        {
+          type: 'tool_use',
+          data: { toolUseId: 'ghost-plan:2', toolName: 'update_plan', input: { plan: [] } },
+        },
+        null,
+      ),
+    ).rejects.toThrow('db unavailable');
+  });
+
   it('Codex imageGeneration 合成 imagegen 三联事件时带 persistId/resolvedContent', async () => {
     const toolUse = prepareSyntheticToolEventForBroadcast(
       SESSION,
