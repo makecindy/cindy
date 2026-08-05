@@ -556,6 +556,7 @@ import {
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
+  findModelRegistryRoute,
   isModelSelectableForNewRoute,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -7843,7 +7844,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async () => {
-      const views = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+      const catalog = getDesktopSelectableCatalog();
+      const views = await getDesktopProviderService().listProviders({
+        allowSideEffects: true,
+        catalog,
+      });
+      const modelRegistry = catalog.modelRegistry;
       // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
       // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
       // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
@@ -7864,10 +7870,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const availabilityFor = (agent: AgentKind) =>
         connectedProvidersForAgent(views, agent).map((provider) => {
           const models = routableModels(provider, agent);
+          const registryIdentityByModel = Object.fromEntries(
+            models.flatMap((model) => {
+              const matched = findModelRegistryRoute(
+                modelRegistry,
+                provider.id,
+                model.id,
+                agent === 'pi' ? undefined : agent,
+              );
+              return matched ? [[model.id, matched.entry.id]] : [];
+            }),
+          );
           return {
             id: provider.id,
             name: provider.name,
             models: models.map((model) => model.id),
+            registryIdentityByModel,
             // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
             fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
             // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。

@@ -106,6 +106,12 @@ interface Props {
   initialWorkingDir?: string | null;
   /** 编辑 project schedule 时为 true，保存走 schedules.json upsert。 */
   editProjectSchedule?: boolean;
+  /**
+   * 本次新建面板是由哪个插件请求打开的（agent 槽 schedule 加档）。非空时在标题下
+   * 显示来源标注，让用户看清是谁请求建这条任务 —— 预填内容来自插件，用户必须知道
+   * 自己在替谁保存。仅展示，不影响提交内容。
+   */
+  requestedByGhostName?: string | null;
 }
 
 export function ScheduleFormDialog({
@@ -117,6 +123,7 @@ export function ScheduleFormDialog({
   onSubmit,
   initialWorkingDir = null,
   editProjectSchedule = false,
+  requestedByGhostName = null,
 }: Props) {
   const { t } = useTranslation();
   const formApi = useScheduleForm(initial);
@@ -556,7 +563,11 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.titleCreate')}
               </Dialog.Title>
               <p className="text-sm leading-[1.43] text-[var(--cmd-palette-item-meta)]">
-                {t('scheduler.editor.promptDialog.subtitle')}
+                {requestedByGhostName
+                  ? t('scheduler.editor.promptDialog.subtitleFromGhost', {
+                      name: requestedByGhostName,
+                    })
+                  : t('scheduler.editor.promptDialog.subtitle')}
               </p>
             </div>
             {!isEdit && !isProjectAutomationMode && (

@@ -36,6 +36,10 @@ export function buildDiscordAdapter(
       sessionIdFor: (appId, userId) => `discord_${appId}_${userId}`,
       defaultTitle: (userId) => `Discord · ${userId.slice(-6)}`,
       generatedTitlePrefix: 'Discord · ',
+      // Discord personal DMs use Cindy-managed working directories just like
+      // Feishu/Telegram DMs. Keep them in the global "dialogue" bucket instead
+      // of making `discord-{appId}` look like a user project.
+      workspaceKind: 'dialogue',
       ensureWorkingDir,
       extraInsertColumns: (appId, userId) => ({
         imBotContextId: appId,
