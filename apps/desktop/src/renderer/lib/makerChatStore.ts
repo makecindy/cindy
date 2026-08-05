@@ -3418,7 +3418,13 @@ function isCodexUserActionableRetryError(data: unknown): boolean {
   const root = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   const message = typeof root.message === 'string' ? root.message : '';
   const sdkError = typeof root.sdkError === 'string' ? root.sdkError : '';
-  const status = root.errorStatus ?? root.status;
+  const rawStatus = root.errorStatus ?? root.status;
+  const status =
+    typeof rawStatus === 'number'
+      ? rawStatus
+      : typeof rawStatus === 'string' && rawStatus.trim() !== ''
+        ? Number(rawStatus)
+        : null;
   const authError =
     sdkError === 'authentication_failed' ||
     sdkError === 'authentication_error' ||

@@ -625,6 +625,18 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
       false,
     );
     expect(usageNext.recoverableError).toContain('rate limit');
+
+    const stringStatusNext = handleStreamEvent(EMPTY_SESSION_STATE, {
+      ...reconnectEvent('Reconnecting... 1/5', false),
+      data: {
+        ...reconnectEvent('Reconnecting... 1/5', false).data,
+        status: '401',
+      },
+    });
+    expect(
+      stringStatusNext.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(false);
+    expect(stringStatusNext.recoverableError).toContain('Reconnecting');
   });
 
   it('已有 Cindy 接管活动行时,随后到达的终态 maker:event 不再点亮红 banner', () => {
