@@ -66,7 +66,7 @@ export function useDiscordBot(): UseDiscordBotReturn {
           status: state.status,
           lifecycleAnnouncement: lifecycleReadIsCurrent
             ? nextLifecycleAnnouncement
-            : (cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement),
+            : (cachedState?.lifecycleAnnouncement ?? true),
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

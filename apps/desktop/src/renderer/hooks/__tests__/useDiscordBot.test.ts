@@ -179,7 +179,7 @@ describe('useDiscordBot', () => {
     expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(true);
   });
 
-  it('does not let an in-flight status read overwrite a newer lifecycle toggle', async () => {
+  it('preserves a newer lifecycle toggle in cache after an in-flight status read resolves', async () => {
     let resolveStatus!: (value: {
       status: DiscordBotTransportStatus;
       ownerUserId: string | null;
@@ -192,29 +192,36 @@ describe('useDiscordBot', () => {
     }>((resolve) => {
       resolveStatus = resolve;
     });
-    const api = installDiscordApi(
-      { kind: 'connected', appId: 'MakerBot#1234' },
-      false,
-      () => statusPromise,
-    );
-    const { result } = renderHook(() => useDiscordBot());
+    const api = installDiscordApi();
+    const hydrated = renderHook(() => useDiscordBot());
 
-    await waitFor(() => expect(api.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(hydrated.result.current.ownerUserId).toBe('12345678901234567'));
+    hydrated.unmount();
+
+    api.getStatus.mockReturnValueOnce(statusPromise);
+    const current = renderHook(() => useDiscordBot());
+
+    await waitFor(() => expect(api.getStatus).toHaveBeenCalledTimes(2));
     act(() => {
-      result.current.setLifecycleAnnouncement(true);
+      current.result.current.setLifecycleAnnouncement(false);
     });
 
     await act(async () => {
       resolveStatus({
         status: { kind: 'connected', appId: 'MakerBot#1234' },
         ownerUserId: '12345678901234567',
-        lifecycleAnnouncement: false,
+        lifecycleAnnouncement: true,
       });
       await statusPromise;
       await Promise.resolve();
     });
 
-    expect(result.current.lifecycleAnnouncement).toBe(true);
-    expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(true);
+    expect(current.result.current.lifecycleAnnouncement).toBe(false);
+    expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(false);
+    current.unmount();
+
+    api.getStatus.mockImplementationOnce(() => new Promise(() => {}));
+    const remounted = renderHook(() => useDiscordBot());
+    expect(remounted.result.current.lifecycleAnnouncement).toBe(false);
   });
 });
