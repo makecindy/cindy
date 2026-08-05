@@ -5151,9 +5151,7 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
-      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
+      "sourceTooltip": "worktree 소스 브랜치"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",

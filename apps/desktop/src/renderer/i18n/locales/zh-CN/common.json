@@ -5151,9 +5151,7 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支",
-      "worktreeHint": "选择其他分支将以 worktree 隔离启动",
-      "exitWorktreeHint": "选择当前分支将退出 worktree，直接在当前分支上启动"
+      "sourceTooltip": "worktree 源分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
