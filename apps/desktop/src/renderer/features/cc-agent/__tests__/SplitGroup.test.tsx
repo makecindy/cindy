@@ -7,8 +7,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { SplitGroup } from '../SplitGroup';
 import { splitGroupStore } from '../splitGroupStore';
 
-const { resolveSessionRouteMock } = vi.hoisted(() => ({
+const { resolveSessionRouteMock, routeActionMock } = vi.hoisted(() => ({
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
+  routeActionMock: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -46,7 +47,11 @@ vi.mock('../CCAgentSessionView', () => ({
       data-sidebar-target-session-id={sidebarTargetSessionId}
       onDragOver={(event) => event.stopPropagation()}
       onDrop={(event) => event.stopPropagation()}
-    />
+    >
+      <button type="button" data-testid={`route-action-${sessionIdProp}`} onClick={routeActionMock}>
+        Route action
+      </button>
+    </div>
   ),
 }));
 
@@ -64,6 +69,7 @@ describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
     resolveSessionRouteMock.mockClear();
+    routeActionMock.mockClear();
     splitGroupStore.__resetForTest();
   });
 
@@ -147,6 +153,24 @@ describe('SplitGroup', () => {
 
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(0);
     expect(screen.getByTestId('route-outlet')).toBeTruthy();
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+  });
+
+  it('pane 内子路由操作不会被焦点切换导航覆盖', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    renderSplitGroup('session-a');
+    const sessionAView = screen.getByTestId('session-view-session-a');
+    const routeAction = screen.getByTestId('route-action-session-b');
+
+    act(() => {
+      fireEvent.focus(routeAction, { relatedTarget: sessionAView });
+      fireEvent.pointerDown(routeAction, { button: 0 });
+      fireEvent.click(routeAction);
+    });
+
+    expect(routeActionMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 

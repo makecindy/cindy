@@ -47,6 +47,13 @@ import {
 const GUTTER_PX = 6;
 const KEYBOARD_RESIZE_STEP = 0.05;
 
+function isSplitPaneChildActionTarget(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  return Boolean(element?.closest(
+    '[data-split-pane-no-focus], button, a, [role="button"], [role="link"]',
+  ));
+}
+
 interface SplitGroupProps {
   children: ReactNode;
   /** 仅 `/cc-agent/:sessionId` 传值；其它功能路由保持原样，不展示持久分屏。 */
@@ -360,18 +367,17 @@ function SplitPaneView({
           if (
             isOwner ||
             event.button !== 0 ||
-            (event.target as HTMLElement).closest('[data-split-pane-no-focus]')
+            isSplitPaneChildActionTarget(event.target)
           ) {
             return;
           }
           focusSession(viewSessionId);
         }}
         onFocusCapture={(event) => {
-          const target = event.target instanceof Element ? event.target : null;
           if (
             isOwner ||
             event.currentTarget.contains(event.relatedTarget as Node | null) ||
-            target?.closest('[data-split-pane-no-focus]')
+            isSplitPaneChildActionTarget(event.target)
           ) {
             return;
           }
