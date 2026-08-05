@@ -4043,10 +4043,12 @@ export function CCAgentSessionView({
         mode={navigationMode}
         onSessionNavigate={onSessionNavigate}
         sidebarTargetSessionId={sidebarTargetSessionId}
-        // 只有声明右栏在场的路由主实例(ownsRoute)才是面板宿主:右栏当前显示的
-        // 就是它的 bucket。内嵌实例(worker 面板 / 文件浏览窄 rail / Orca split)
-        // 传 undefined → 面板类入口自行降级,见 useSidebarPanelReachable。
-        sidebarPanelHostSessionId={ownsRoute ? sessionId : undefined}
+        // 路由主实例的 bucket 当前可见；可见 split pane 会在点击前先接管路由，
+        // 因而自己的 bucket 对本次面板动作同样可达。其它内嵌实例(worker 面板 /
+        // 文件浏览窄 rail / Orca split)仍传 undefined，让入口安全降级。
+        sidebarPanelHostSessionId={
+          ownsRoute || navigationMode === 'split-pane' ? sessionId : undefined
+        }
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
           <TopRightChipStackProvider>{content}</TopRightChipStackProvider>

@@ -25,8 +25,9 @@ export function SessionNavigationModeProvider({
   /** 内嵌内容触发 RSB 动作时使用的可见 bucket；不传则沿用内容 session。 */
   sidebarTargetSessionId?: string;
   /**
-   * 右栏面板此刻真正显示的那个会话（= 声明了右栏在场的聊天实例的 session）。
-   * 只有它的 bucket 打开后用户看得见；内嵌实例不传，表示「本视图里打不开面板」。
+   * 当前子树的面板动作可以到达的会话 bucket。路由主实例的 bucket 已在场；可见
+   * split pane 会在点击前接管路由，因此自己的 bucket 也可达。其它内嵌实例不传，
+   * 表示「本视图里打不开该面板」。
    */
   sidebarPanelHostSessionId?: string;
   children: ReactNode;
@@ -68,13 +69,14 @@ export function useSidebarTargetSessionId(contentSessionId?: string): string | u
 }
 
 /**
- * 「该会话自己的右栏面板此刻打开后用户看得见吗」——面板类入口（后台任务面板等）
+ * 「该会话自己的右栏面板通过当前交互能否到达」——面板类入口（后台任务面板等）
  * 的 affordance 判据。
  *
  * 面板按 session 分桶，而右栏一次只显示一个桶：显示哪个桶由「声明了右栏在场的
- * 那个聊天实例」决定（CCAgentSessionView 的 ownsRoute）。内嵌实例（协同 worker
- * 面板、workdir-browse 窄 rail、Orca split 双栏）都不声明在场，往它们自己的桶里
- * 写 tab 只会写进一个用户到不了的桶，点击必然无响应 —— 不给假 affordance
+ * 那个聊天实例」决定。路由主实例当前可达；可见 split pane 会先接管路由再显示
+ * 自己的 bucket。其它内嵌实例（协同 worker 面板、workdir-browse 窄 rail、Orca
+ * split 双栏）都不可达，往它们自己的桶里写 tab 只会写进用户到不了的桶，点击
+ * 必然无响应 —— 不给假 affordance
  * （与 BackgroundTasksBody 里非 workflow 行的 isSidebarWindow 守卫同款口径）。
  */
 export function useSidebarPanelReachable(contentSessionId?: string): boolean {

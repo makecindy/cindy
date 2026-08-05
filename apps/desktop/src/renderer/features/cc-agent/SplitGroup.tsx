@@ -8,6 +8,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -213,7 +214,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     [activeSessionId, navigate, sessionsById],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pendingFocusSessionId = pendingFocusSessionIdRef.current;
     const activeSessionChanged = observedActiveSessionIdRef.current !== activeSessionId;
     observedActiveSessionIdRef.current = activeSessionId;

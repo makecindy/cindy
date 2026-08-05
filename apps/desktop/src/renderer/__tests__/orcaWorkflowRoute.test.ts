@@ -413,6 +413,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain(
       "const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';",
     );
+    expect(sessionViewSource).toMatch(
+      /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
+    );
     expect(sessionViewSource).toContain(
       'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
     );

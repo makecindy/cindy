@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { ApiError } from '@/lib/httpClient';
 import { SplitGroup } from '../SplitGroup';
-import { splitGroupStore } from '../splitGroupStore';
+import { getSplitPanes, splitGroupStore } from '../splitGroupStore';
 
 const {
   navigateMock,
@@ -252,6 +253,51 @@ describe('SplitGroup', () => {
     expect(sessionBView.dataset.routeOwner).toBe('true');
     expect(sessionAView.dataset.sidebarTargetSessionId).toBe('session-a');
     expect(sessionBView.dataset.sidebarTargetSessionId).toBe('session-b');
+  });
+
+  it('在父级 layout 阶段运行前同步新路由任务到 pane 树', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const originalOwnerPane = getSplitPanes(splitGroupStore.getSnapshot().root).find(
+      (pane) => pane.sessionId === 'session-a',
+    );
+    const layoutSnapshots: Array<Array<{ key: string; sessionId: string }>> = [];
+
+    function LayoutProbe({ activeSessionId }: { activeSessionId: string }) {
+      useLayoutEffect(() => {
+        layoutSnapshots.push(
+          getSplitPanes(splitGroupStore.getSnapshot().root).map(({ key, sessionId }) => ({
+            key,
+            sessionId,
+          })),
+        );
+      }, [activeSessionId]);
+      return (
+        <SplitGroup activeSessionId={activeSessionId}>
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      );
+    }
+
+    const view = render(
+      <MemoryRouter>
+        <LayoutProbe activeSessionId="session-a" />
+      </MemoryRouter>,
+    );
+    layoutSnapshots.length = 0;
+
+    view.rerender(
+      <MemoryRouter>
+        <LayoutProbe activeSessionId="session-c" />
+      </MemoryRouter>,
+    );
+
+    expect(layoutSnapshots).toHaveLength(1);
+    expect(layoutSnapshots[0]?.map((pane) => pane.sessionId)).toEqual(['session-c', 'session-b']);
+    expect(layoutSnapshots[0]?.find((pane) => pane.sessionId === 'session-c')?.key).toBe(
+      originalOwnerPane?.key,
+    );
   });
 
   it('键盘焦点进入非活动 pane 时切换该 pane 的路由主权', async () => {
