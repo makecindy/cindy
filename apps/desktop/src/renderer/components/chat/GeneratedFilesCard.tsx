@@ -19,9 +19,10 @@
  * unknown(断链 / 限流)保持乐观——与正文 chip 的远程点亮不变量同策。
  *
  * source==='command' 的候选(从 Bash/exec 命令文本启发式提取,见 generatedFiles.ts)
- * 额外要求 mtime 不早于本轮开始(turnStartMs):命令里出现的既有输入文件 mtime 早于
- * 本轮,被此闸门滤掉。turnStartMs 不可得或远程会话(无法 stat)时 command 候选一律
- * 不出——宁缺毋滥。
+ * 额外要求文件时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内:命令里出现的
+ * 既有输入文件早于下界被滤掉;后续 turn 才创建/改写同一路径时晚于上界,旧卡也
+ * 不会被新的 stat 结果误点亮。尾部当前 turn 无上界,只查下界。时间窗不可得或
+ * 远程会话(无法 stat)时 command 候选一律不出——宁缺毋滥。
  */
 
 import { useEffect, useState } from 'react';
@@ -148,9 +149,11 @@ const MAX_VISIBLE_FILES = 6;
 export function GeneratedFilesCard({
   files,
   turnStartMs,
+  turnEndMs,
 }: {
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
+  turnEndMs: number | null;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -197,7 +200,13 @@ export function GeneratedFilesCard({
             // 编辑文件不会让 chip 消失。
             const ts =
               typeof r.birthtimeMs === 'number' && r.birthtimeMs > 0 ? r.birthtimeMs : r.mtimeMs;
-            return typeof ts === 'number' && ts >= turnStartMs - TURN_START_SLACK_MS;
+            return (
+              typeof ts === 'number' &&
+              ts >= turnStartMs - TURN_START_SLACK_MS &&
+              // 历史 turn 有下一条 user 边界:文件时间戳必须严格早于边界。
+              // 上界不加 slack——边界后的文件无论时钟抖动都不属于上一轮。
+              (turnEndMs === null || ts < turnEndMs)
+            );
           } catch {
             return false;
           }
@@ -208,7 +217,7 @@ export function GeneratedFilesCard({
     return () => {
       cancelled = true;
     };
-  }, [files, remoteOrigin, turnStartMs, fileCtx.workingDir]);
+  }, [files, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir]);
 
   if (!existing || existing.length === 0) return null;
 

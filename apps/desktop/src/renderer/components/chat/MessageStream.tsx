@@ -322,8 +322,10 @@ type GeneratedFilesRenderItem = {
   type: 'generated_files';
   key: string;
   files: GeneratedFileRef[];
-  /** 本轮首条消息时间(unix ms);command 候选的 mtime 下界校验用,不可得为 null。 */
+  /** 本轮首条消息时间(unix ms);command 候选的时间窗下界校验用,不可得为 null。 */
   turnStartMs: number | null;
+  /** 下一条 user 边界时间(unix ms);已结束 turn 的 command 候选时间窗上界。 */
+  turnEndMs: number | null;
 };
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
@@ -1057,19 +1059,24 @@ export function buildRenderItems(
     const slice = messages.slice(lo, hi);
     const files = collectGeneratedFiles(slice, workingDir);
     if (files.length === 0) return;
-    // 本轮时间下界:切片内最早的可解析 createdAt。command 候选靠它过滤
-    // 「命令只是读到的既有文件」(mtime 早于本轮开始 → 非本轮产物)。
+    // 本轮时间窗:下界取切片内最早 createdAt;上界取 hi 处的下一条 user
+    // 边界。历史 command 候选必须同时落在这个窗口内,否则后续 turn 在同一路径
+    // 创建/改写文件时,旧卡会被当前 stat 的新时间戳错误点亮(PR #1835 review)。
     let turnStartMs: number | null = null;
     for (const m of slice) {
       const ts = m.createdAt ? Date.parse(m.createdAt) : NaN;
       if (Number.isFinite(ts) && (turnStartMs === null || ts < turnStartMs)) turnStartMs = ts;
     }
+    const boundaryCreatedAt = hi < messages.length ? messages[hi]?.createdAt : undefined;
+    const parsedTurnEndMs = boundaryCreatedAt ? Date.parse(boundaryCreatedAt) : NaN;
+    const turnEndMs = Number.isFinite(parsedTurnEndMs) ? parsedTurnEndMs : null;
     // key 锚定该 turn 首条消息 clientId,窗口滚动 / 流式增量下稳定。
     items.push({
       type: 'generated_files',
       key: `genfiles-${messages[lo].clientId}`,
       files,
       turnStartMs,
+      turnEndMs,
     });
   };
 
@@ -3714,6 +3721,7 @@ export function MessageStream({
                           key={item.key}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
+                          turnEndMs={item.turnEndMs}
                         />
                       );
                     }
