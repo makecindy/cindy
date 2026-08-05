@@ -116,9 +116,7 @@ function buildRemoteSetModelArgs(args: SetModelArgs): unknown[] {
     wireArgs.push(providerId === undefined ? null : providerId);
   }
   if (expectedAgentSwitchRevision !== undefined || selection !== undefined) {
-    wireArgs.push(
-      expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision,
-    );
+    wireArgs.push(expectedAgentSwitchRevision === undefined ? null : expectedAgentSwitchRevision);
   }
   if (selection !== undefined) wireArgs.push(selection);
   return wireArgs;
@@ -134,7 +132,11 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
-      invokeRemote(deviceId, 'maker:set-model', buildRemoteSetModelArgs(args))) as FullMaker['setModel'],
+      invokeRemote(
+        deviceId,
+        'maker:set-model',
+        buildRemoteSetModelArgs(args),
+      )) as FullMaker['setModel'],
     switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
     getSessionAgentSwitchIntent: t(
       'maker:get-session-agent-switch-intent',
@@ -237,7 +239,7 @@ export function isRemoteSessionSticky(sessionId: string): boolean {
  * 老被控端无此 channel 时 invoke 以 CHANNEL_NOT_ALLOWED 拒绝,调用方按生成失败提示。
  */
 export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: string | null }> {
-  const deviceId = getSessionDeviceId(sessionId);
+  const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.regenerateSessionTitle(sessionId);
   return invokeRemote(deviceId, 'maker:regenerate-title', [{ sessionId }]) as Promise<{
     title: string | null;
