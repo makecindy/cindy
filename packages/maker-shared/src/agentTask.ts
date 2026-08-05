@@ -382,7 +382,7 @@ export function subagentSpawnResultIndicatesRunning(
 ): boolean {
   if (toolName !== 'collab:spawnAgent') return false;
   return (result ?? '').split(/\r?\n/).some((line) =>
-    /^[^:\n]+:\s*running\s*$/i.test(line.trim()),
+    /^[^:\n]+:\s*(?:running|in[_-]?progress|started|active)\s*$/i.test(line.trim()),
   );
 }
 

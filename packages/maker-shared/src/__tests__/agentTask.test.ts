@@ -308,6 +308,24 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.status).toBe('running');
   });
 
+  it.each(['in_progress', 'in-progress', 'started', 'active'])(
+    'keeps a V1 spawn running for the %s state summary',
+    (state) => {
+      const model = buildAgentTaskCardModel({
+        toolName: 'collab:spawnAgent',
+        result: `child-thread: ${state}`,
+        update: {
+          provider: 'codex',
+          taskId: 'collab-1',
+          parentToolUseId: 'collab-1',
+          status: 'running',
+        },
+      });
+
+      expect(model.status).toBe('running');
+    },
+  );
+
   it('preserves explicit failed and stopped terminal states when a result is present', () => {
     const input = {
       toolName: 'collab:spawnAgent',
