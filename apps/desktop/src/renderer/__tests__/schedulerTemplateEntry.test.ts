@@ -11,8 +11,16 @@ import {
   systemTimeZone,
   usageLimitScheduleNavigationState,
 } from '@/features/scheduler/lib/usageLimitScheduleCreateIntent';
+import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 
 const createSchedule = vi.fn();
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
+vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 const localStorageData = new Map<string, string>();
 const routerMocks = vi.hoisted(() => ({
   location: {
@@ -145,6 +153,15 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
         {
           id: 'claude-sonnet-4-6',
           displayName: 'Claude Sonnet 4.6',
+          efforts: ['medium', 'high'],
+          defaultEffort: 'medium',
+        },
+        // 第二个模型专供「所见即所存」那条用例:它需要一个**不等于 fallback**
+        // (claude-sonnet-4-6)、又确实在可用目录里的模型 —— 否则要么测不出问题,
+        // 要么被 isExplicitScheduleModelUnavailable 拦在提交前。
+        {
+          id: 'claude-opus-4-9',
+          displayName: 'Claude Opus 4.9',
           efforts: ['medium', 'high'],
           defaultEffort: 'medium',
         },
@@ -302,5 +319,135 @@ describe('Scheduler template entry', () => {
     expect(screen.getByTestId('cron-expr').textContent).toBe('');
     expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
     expect(createSchedule).not.toHaveBeenCalled();
+  });
+
+  it('插件请求打开预填的创建表单,但不创建任务', async () => {
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-1',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: 'Codex 重置提醒',
+      prompt: '检查本机 Codex 重置时间,快到了就提醒我。',
+      intervalMs: 3_600_000,
+    });
+
+    render(createElement(SchedulerPage));
+
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    expect(screen.getByDisplayValue('Codex 重置提醒')).toBeTruthy();
+    expect(screen.getByDisplayValue('检查本机 Codex 重置时间,快到了就提醒我。')).toBeTruthy();
+    // 插件永远不能直接建任务:落库只发生在用户点保存之后。
+    expect(createSchedule).not.toHaveBeenCalled();
+    // 一次性意图用完即清,重进自动化页不会再弹。
+    expect(routerMocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled', {
+      replace: true,
+      state: null,
+    });
+  });
+
+  /**
+   * #1715 review Codex P2 的回归:表单已打开且用户改过内容时,新到的插件请求
+   * **绝不能静默 reset 掉它**(ScheduleFormDialog 的 reset effect 依赖 initialValues,
+   * 守卫只有 `if (!open) return`)。语义是"拒绝 + 提示",用户输入一个字都不能丢。
+   */
+  it('表单已打开且已修改时,新的插件请求不覆盖用户输入,只提示', async () => {
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-first',
+      ghostId: 'sign-board',
+      ghostName: '签字门看板',
+      name: '插件预填的名字',
+      prompt: '第一次请求的提示词。',
+    });
+
+    const view = render(createElement(SchedulerPage));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+
+    // 用户在表单里改了名称 —— 这就是绝不能丢的内容。
+    const nameInput = screen.getByDisplayValue('插件预填的名字');
+    fireEvent.change(nameInput, { target: { value: '用户自己改的名字' } });
+    expect(screen.getByDisplayValue('用户自己改的名字')).toBeTruthy();
+
+    // 第二个插件请求到来(不同 requestId,否则会被去重挡掉)。
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-req-second',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: '第二次请求的名字',
+      prompt: '第二次请求的提示词。',
+    });
+    view.rerender(createElement(SchedulerPage));
+
+    // 用户输入原样保留,没有被第二次请求的预填顶掉。
+    await waitFor(() =>
+      expect(toastMocks.warning).toHaveBeenCalledWith(
+        'scheduler.toast.pluginDraftIgnoredFormOpen',
+      ),
+    );
+    expect(screen.getByDisplayValue('用户自己改的名字')).toBeTruthy();
+    expect(screen.queryByDisplayValue('第二次请求的名字')).toBeNull();
+    expect(screen.queryByDisplayValue('第二次请求的提示词。')).toBeNull();
+    expect(createSchedule).not.toHaveBeenCalled();
+  });
+
+  /**
+   * review #1715 的回归:**所见即所存**。
+   *
+   * 插件请求的任务是「用户不改模型、直接点保存」的高频路径(插件把内容都预填好了,
+   * 用户只是确认一下),所以模型默认值这条链路对它尤其值得钉死:一旦"显示的模型"与
+   * "落库的模型"漂移,用户就会以为在用 A、实际每次跑 B(2026-06 真踩过)。
+   *
+   * 本用例钉的是**端到端结果**而非某条实现路径:当前由 ScheduleFormDialog 的
+   * "form.model 为空时回填默认模型" effect 保证;将来若有人改成从 intent 直接给值,
+   * 或反过来删掉那个 effect,只要最终"显示 === 落库"成立就仍然通过 —— 用户可见的
+   * 正确性才是契约。
+   *
+   * 这里刻意把「记忆的模型」设成**不同于 fallback**(claude-sonnet-4-6)的值,
+   * 否则两者恰好相等时这个 bug 根本测不出来。
+   */
+  it('插件请求:用户不碰模型 chip 直接保存,存下的模型与表单显示的一致', async () => {
+    const REMEMBERED = 'claude-opus-4-9';
+    expect(REMEMBERED).not.toBe('claude-sonnet-4-6'); // 必须区别于 fallback,否则测不出问题
+    localStorageData.set(
+      'xdt:scheduleFormPrefs:v1',
+      JSON.stringify({
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        workingDir: '',
+        useWorktree: false,
+        lastByAgent: {
+          'claude-code': { model: REMEMBERED, providerId: '', effort: '', fastMode: false },
+        },
+      }),
+    );
+
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-model-default',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: 'Codex 重置提醒',
+      prompt: '检查重置时间,快到了提醒我。',
+      intervalMs: 3_600_000,
+    });
+
+    render(createElement(SchedulerPage));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+
+    // 表单显示的就是记忆值(不是空、也不是 fallback)。
+    expect(screen.getByTestId('model-value').textContent).toBe(REMEMBERED);
+
+    // 用户什么都不改,直接保存。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }),
+    );
+
+    // 存下去的模型 === 表单上显示的那个,不省略、不回退。
+    await waitFor(() => expect(createSchedule).toHaveBeenCalled());
+    expect(createSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ model: REMEMBERED, agentKind: 'claude-code' }),
+    );
   });
 });

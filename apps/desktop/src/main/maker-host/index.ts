@@ -1021,6 +1021,7 @@ export function getMaker(): Maker {
             getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
           cindyBrowserEnabled,
           codexBrowserUseAvailable: connectedCodexBrowserUse,
+          codexBrowserUseProvisioned,
           remoteHostId,
         });
       },
