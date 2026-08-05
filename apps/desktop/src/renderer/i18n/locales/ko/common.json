@@ -5951,7 +5951,6 @@
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
       "openWith": "앱으로 열기",
-      "chooseOtherApp": "다른 앱 선택…",
       "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",
       "openInBrowser": "브라우저에서 열기",

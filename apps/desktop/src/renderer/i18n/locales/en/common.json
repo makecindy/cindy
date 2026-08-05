@@ -5953,7 +5953,6 @@
       "copyFile": "Copy",
       "copyFilePath": "Copy file path",
       "openWith": "Open with",
-      "chooseOtherApp": "Choose another app…",
       "openWithAppFailed": "Couldn't open with the selected app",
       "revealFile": "Reveal in folder",
       "openInBrowser": "Open in browser",

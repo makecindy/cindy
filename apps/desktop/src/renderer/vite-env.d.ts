@@ -2523,8 +2523,6 @@ interface ElectronAPI {
   }>;
   /** 用 listOpenWithApps 返回的 appId 指定应用打开文件;失败以 IPC 错误抛出。 */
   openFileWithApp: (params: { filePath: string; appId: string }) => Promise<void>;
-  /** 唤起系统「打开方式」选择(Windows OpenAs 对话框 / macOS 选 .app)。 */
-  chooseOpenWithApp: (params: { filePath: string }) => Promise<{ canceled: boolean }>;
 
   /** Copy a dangerous local attachment into the controlled inert cache. */
   stageChatAttachment: (params: { sourcePath: string; suggestedName: string }) => Promise<

@@ -57,14 +57,11 @@ export interface OpenWithDeps {
   getAppIcon(exePath: string): Promise<string | null>;
   /** detached + unref 起进程;不回传输出。 */
   spawnDetached(command: string, args: string[]): void;
-  /** macOS:系统对话框选一个 .app,取消回 null。 */
-  showOpenAppDialog(): Promise<string | null>;
 }
 
 export interface OpenWithHandlers {
   list(params: { filePath: string }): Promise<ListOpenWithAppsResult>;
   open(params: { filePath: string; appId: string }): Promise<void>;
-  choose(params: { filePath: string }): Promise<{ canceled: boolean }>;
 }
 
 /** 单次枚举的应用数上限:图标提取按个计价,列表长尾对用户也没有意义。 */
@@ -275,23 +272,6 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
       if (!exePath) throwIpcError('NOT_FOUND', '应用引用已失效,请重新打开菜单');
       if (!deps.fileExists(exePath)) throwIpcError('NOT_FOUND', '应用不存在');
       deps.spawnDetached(exePath, [filePath]);
-    },
-
-    async choose({ filePath }) {
-      assertOpenableFile(filePath);
-      if (deps.platform === 'win32') {
-        deps.spawnDetached('rundll32.exe', ['shell32.dll,OpenAs_RunDLL', filePath]);
-        return { canceled: false };
-      }
-      const appPath = await deps.showOpenAppDialog();
-      if (!appPath) return { canceled: true };
-      if (deps.platform === 'darwin') {
-        deps.spawnDetached('open', ['-a', appPath, filePath]);
-        return { canceled: false };
-      }
-      // Linux 无 `open -a` 等价物;对话框选出的可执行体直接带文件参数执行。
-      deps.spawnDetached(appPath, [filePath]);
-      return { canceled: false };
     },
   };
 }

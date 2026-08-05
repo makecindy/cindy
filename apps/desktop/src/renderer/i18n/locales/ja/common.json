@@ -5951,7 +5951,6 @@
       "copyFile": "コピー",
       "copyFilePath": "ファイルパスをコピー",
       "openWith": "アプリで開く",
-      "chooseOtherApp": "ほかのアプリを選択…",
       "openWithAppFailed": "選択したアプリで開けませんでした",
       "revealFile": "ファイルの場所を開く",
       "openInBrowser": "ブラウザで開く",

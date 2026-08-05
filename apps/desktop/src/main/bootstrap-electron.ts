@@ -5167,19 +5167,6 @@ const registerIpcHandlers = () => {
       spawnDetached: (command, args) => {
         spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false }).unref();
       },
-      showOpenAppDialog: async () => {
-        const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
-        const opts: Electron.OpenDialogOptions = {
-          properties: ['openFile'],
-          ...(process.platform === 'darwin'
-            ? { defaultPath: '/Applications', filters: [{ name: 'Applications', extensions: ['app'] }] }
-            : {}),
-        };
-        const result = targetWin
-          ? await dialog.showOpenDialog(targetWin, opts)
-          : await dialog.showOpenDialog(opts);
-        return result.canceled ? null : (result.filePaths[0] ?? null);
-      },
     });
     ipcMain.handle('open-with:list', (event, params: { filePath: string }) => {
       assertTrustedAppRendererEvent(event);
@@ -5188,10 +5175,6 @@ const registerIpcHandlers = () => {
     ipcMain.handle('open-with:open', (event, params: { filePath: string; appId: string }) => {
       assertTrustedAppRendererEvent(event);
       return openWith.open(params);
-    });
-    ipcMain.handle('open-with:choose', (event, params: { filePath: string }) => {
-      assertTrustedAppRendererEvent(event);
-      return openWith.choose(params);
     });
   }
 

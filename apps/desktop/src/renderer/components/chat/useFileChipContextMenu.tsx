@@ -10,9 +10,10 @@
  * Menu items:
  *   0. 在侧边栏文件浏览器中打开 → select/reveal the file in the RSB file browser
  *   1. 在侧边栏浏览器中打开(可选,sidebarOpenSessionId 提供时;html chip 用)
- *   2. 打开方式 ▸        →(文件 + 本地会话)默认应用 / 枚举出的可用应用
- *                          (Windows 注册表,见 main/openWithApps.ts)/ 选择
- *                          其他应用…。应用列表在子菜单展开时懒加载。
+ *   2. 打开方式 ▸        →(文件 + 本地会话)默认应用 + 枚举出的可用应用
+ *                          (Windows 注册表,见 main/openWithApps.ts)。应用
+ *                          列表在子菜单展开时懒加载。不提供「选择其他应用…」
+ *                          (系统 OpenAs 对话框实测起不来,且与 Codex 形态不符)。
  *   3. 复制              → copy the file itself as a clipboard file reference
  *                          (pasteable into Explorer / Finder / chat apps)
  *   4. 复制文件路径      → copy the absolute path string
@@ -39,7 +40,6 @@ import {
   FolderOpen,
   FolderTree,
   Globe,
-  MousePointerClick,
   PanelRight,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -256,23 +256,6 @@ export function useFileChipContextMenu({
     }
   }
 
-  async function handleChooseOtherApp(): Promise<void> {
-    setMenuPos(null);
-    const abs = await getAbsPath();
-    try {
-      await window.electronAPI.chooseOpenWithApp({ filePath: abs });
-    } catch (error) {
-      toast.error(
-        t(
-          mapIpcErrorToI18nKey(error, {
-            namespace: 'chat.markdownRenderer',
-            fallback: 'chat.markdownRenderer.openWithAppFailed',
-          }),
-        ),
-      );
-    }
-  }
-
   const openAt = (x: number, y: number): void => {
     setMenuPos({ x, y });
   };
@@ -369,11 +352,6 @@ export function useFileChipContextMenu({
                   ))}
                 </>
               ) : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleChooseOtherApp}>
-                <MousePointerClick className="mr-2 h-4 w-4" />
-                {t('chat.markdownRenderer.chooseOtherApp')}
-              </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : null}

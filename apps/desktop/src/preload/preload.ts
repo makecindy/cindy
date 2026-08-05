@@ -3134,8 +3134,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }> => ipcRenderer.invoke('open-with:list', params),
   openFileWithApp: (params: { filePath: string; appId: string }): Promise<void> =>
     ipcRenderer.invoke('open-with:open', params),
-  chooseOpenWithApp: (params: { filePath: string }): Promise<{ canceled: boolean }> =>
-    ipcRenderer.invoke('open-with:choose', params),
 
   // 危险本地附件入托盘前先复制成受控缓存里的 `.bin` 副本。显示名仍由
   // renderer 单独保留，后续只能经“另存为”恢复原始扩展名。

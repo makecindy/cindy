@@ -90,7 +90,6 @@ function makeDeps(overrides: Partial<OpenWithDeps> = {}): OpenWithDeps & {
     regQuery: async (keyPath: string) => registry[keyPath] ?? '',
     getAppIcon: async () => null,
     spawnDetached,
-    showOpenAppDialog: async () => null,
   };
   return { ...base, ...overrides, spawnDetached };
 }
@@ -157,38 +156,11 @@ describe('createOpenWithHandlers.open', () => {
   });
 });
 
-describe('createOpenWithHandlers.choose', () => {
-  it('opens the Windows OpenAs dialog via rundll32', async () => {
-    const deps = makeDeps();
-    const handlers = createOpenWithHandlers(deps);
-    const res = await handlers.choose({ filePath: FILE });
-    expect(res).toEqual({ canceled: false });
-    expect(deps.spawnDetached).toHaveBeenCalledWith('rundll32.exe', [
-      'shell32.dll,OpenAs_RunDLL',
-      FILE,
-    ]);
-  });
-
-  it('reports canceled when the macOS app picker is dismissed', async () => {
-    const deps = makeDeps({ platform: 'darwin', showOpenAppDialog: async () => null });
-    const handlers = createOpenWithHandlers(deps);
-    const res = await handlers.choose({ filePath: '/tmp/a.xlsx' });
-    expect(res).toEqual({ canceled: true });
-    expect(deps.spawnDetached).not.toHaveBeenCalled();
-  });
-
-  it('opens with the picked macOS app via `open -a`', async () => {
-    const deps = makeDeps({
-      platform: 'darwin',
-      showOpenAppDialog: async () => '/Applications/Numbers.app',
-    });
-    const handlers = createOpenWithHandlers(deps);
-    const res = await handlers.choose({ filePath: '/tmp/a.xlsx' });
-    expect(res).toEqual({ canceled: false });
-    expect(deps.spawnDetached).toHaveBeenCalledWith('open', [
-      '-a',
-      '/Applications/Numbers.app',
-      '/tmp/a.xlsx',
-    ]);
+describe('createOpenWithHandlers surface', () => {
+  it('exposes only list/open — no system OpenAs dialog escape hatch', () => {
+    // 「选择其他应用…」已下线(系统 OpenAs 对话框实测起不来,且与 Codex 形态
+    // 不符),对应的 choose handler 与 showOpenAppDialog 依赖一并移除。
+    const handlers = createOpenWithHandlers(makeDeps());
+    expect(Object.keys(handlers).sort()).toEqual(['list', 'open']);
   });
 });

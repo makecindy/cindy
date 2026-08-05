@@ -5951,7 +5951,6 @@
       "copyFile": "复制",
       "copyFilePath": "复制文件路径",
       "openWith": "打开方式",
-      "chooseOtherApp": "选择其他应用…",
       "openWithAppFailed": "无法用所选应用打开",
       "revealFile": "打开文件所在目录",
       "openInBrowser": "在浏览器中查看",
