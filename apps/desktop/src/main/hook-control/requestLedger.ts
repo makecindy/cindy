@@ -8,6 +8,8 @@
  * same request without invoking the agent again.
  */
 
+import { Buffer } from 'node:buffer';
+
 import {
   HOOK_PROTOCOL_VERSION,
   parseHookMessage,
@@ -20,9 +22,9 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFil
 const FILE_VERSION = 1;
 const DEFAULT_MAX_ENTRIES = 2_000;
 /** Terminal text and identifiers are bounded so the main-thread JSON store stays small. */
-const MAX_ENTRY_CHARS = 8_000_000;
+const MAX_ENTRY_BYTES = 8_000_000;
 /** Bound synchronous read/write work on Electron's main thread. */
-const DEFAULT_MAX_FILE_CHARS = 32_000_000;
+const DEFAULT_MAX_FILE_BYTES = 32_000_000;
 
 export interface HookTerminalRecord {
   connectionId: string;
@@ -114,14 +116,18 @@ function sameRequest(
   return entry.connectionId === connectionId && entry.requestId === requestId;
 }
 
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
 export function createHookRequestLedger(deps: {
   filePath: string;
   log: { warn(msg: string): void };
   maxEntries?: number;
-  maxFileChars?: number;
+  maxFileBytes?: number;
 }): HookRequestLedger {
   const maxEntries = Math.max(1, Math.floor(deps.maxEntries ?? DEFAULT_MAX_ENTRIES));
-  const maxFileChars = Math.max(1_024, Math.floor(deps.maxFileChars ?? DEFAULT_MAX_FILE_CHARS));
+  const maxFileBytes = Math.max(1_024, Math.floor(deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES));
   let cachedEntries: HookTerminalRecord[] | undefined;
 
   function readEntries(): HookTerminalRecord[] | null {
@@ -137,7 +143,7 @@ export function createHookRequestLedger(deps: {
       cachedEntries = [];
       return cachedEntries;
     }
-    if (raw.length > maxFileChars) {
+    if (utf8ByteLength(raw) > maxFileBytes) {
       deps.log.warn('read hook request ledger failed (file-too-large)');
       cachedEntries = [];
       return cachedEntries;
@@ -166,7 +172,8 @@ export function createHookRequestLedger(deps: {
     }
     const entries = readEntries();
     if (entries === null) return false;
-    if (JSON.stringify(record).length > MAX_ENTRY_CHARS) {
+    const recordSerialized = JSON.stringify(record);
+    if (utf8ByteLength(recordSerialized) > MAX_ENTRY_BYTES) {
       deps.log.warn('write hook request ledger skipped (record-too-large)');
       return false;
     }
@@ -177,7 +184,7 @@ export function createHookRequestLedger(deps: {
     next.push(record);
     let data: LedgerFile = { version: FILE_VERSION, entries: next };
     let serialized = JSON.stringify(data);
-    while (next.length > maxEntries || serialized.length > maxFileChars) {
+    while (next.length > maxEntries || utf8ByteLength(serialized) > maxFileBytes) {
       // Never evict an undelivered outbox entry to make room. Remove the
       // oldest sent result first; if pending entries alone exceed the bound,
       // fail this write and let the dispatcher retain its in-memory fallback.

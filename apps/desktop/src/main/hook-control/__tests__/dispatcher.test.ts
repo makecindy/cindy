@@ -1246,7 +1246,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('回归: 完成后重建 dispatcher 再收到同 requestId -> 只回放 ack, 不重跑', async () => {
+  it('回归: 完成后重建 dispatcher 再收到同 requestId -> 回放终态, 不重跑', async () => {
     const terminalLedger = memoryTerminalLedger();
     const firstRunner = fakeRunner();
     const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
@@ -1265,12 +1265,15 @@ describe('dispatcher 核心语义', () => {
     await tick();
 
     expect(secondRunner.calls).toHaveLength(0);
-    expect(secondCollector.sent.map((message) => message.type)).toEqual(['task.ack']);
+    expect(secondCollector.sent.map((message) => message.type)).toEqual(['task.ack', 'turn.end']);
     expect(secondCollector.last('task.ack')?.payload).toMatchObject({
       requestId: 'req-1',
       result: 'accepted',
     });
-    expect(secondCollector.last('turn.end')).toBeNull();
+    expect(secondCollector.last('turn.end')?.payload).toMatchObject({
+      requestId: 'req-1',
+      finalText: '只执行一次',
+    });
   });
 
   it('durable outbox 仍 pending 时重投 -> 回放 ACK + turn.end 并标记 sent', async () => {
@@ -1330,7 +1333,7 @@ describe('dispatcher 核心语义', () => {
     await tick();
   });
 
-  it('排队任务取消后跨 dispatcher 重投 -> 只回放 queued ack, 不重跑', async () => {
+  it('排队任务取消后跨 dispatcher 重投 -> 回放 queued ack + cancelled 终态, 不重跑', async () => {
     const terminalLedger = memoryTerminalLedger();
     const firstRunner = fakeRunner();
     const first = makeDispatcher({ runner: firstRunner.runner, terminalLedger });
@@ -1355,7 +1358,10 @@ describe('dispatcher 核心语义', () => {
       result: 'queued',
       queuePosition: 0,
     });
-    expect(secondCollector.last('turn.end')).toBeNull();
+    expect(secondCollector.last('turn.end')?.payload).toMatchObject({
+      requestId: 'queued',
+      status: 'cancelled',
+    });
     firstRunner.finish();
     await tick();
   });
@@ -1505,6 +1511,46 @@ describe('dispatcher 核心语义', () => {
 
     expect(reconnected.ofType('turn.end')).toHaveLength(1);
     expect(reconnected.last('turn.end')?.payload.finalText).toBe('只补发一次');
+  });
+
+  it('durable outbox 补发后 markSent 失败时, 回退写入 sent 状态', async () => {
+    const fr = fakeRunner();
+    const stored = memoryTerminalLedger();
+    const terminalLedger: HookRequestLedger = {
+      get: stored.get,
+      listPending: stored.listPending,
+      set: stored.set,
+      markSent: () => false,
+    };
+    stored.set({
+      connectionId: 'conn-1',
+      requestId: 'durable-retry',
+      ack: {
+        requestId: 'durable-retry',
+        result: 'accepted',
+        reason: null,
+        sessionId: 'session-durable-retry',
+        queuePosition: null,
+      },
+      turnEnd: {
+        requestId: 'durable-retry',
+        externalKey: 'slack:C1:durable-retry',
+        sessionId: 'session-durable-retry',
+        status: 'ok',
+        finalText: 'durable retry',
+        errorMessage: null,
+        usage: { durationMs: 1 },
+      },
+      delivery: 'pending',
+      completedAt: Date.now(),
+    });
+
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+
+    expect(c.ofType('turn.end')).toHaveLength(1);
+    expect(stored.records[0]?.delivery).toBe('sent');
   });
 });
 

@@ -83,7 +83,7 @@ describe('hook request ledger', () => {
       filePath: filePath(),
       log,
       maxEntries: 10,
-      maxFileChars: 1_024,
+      maxFileBytes: 1_024,
     });
     const first = record('req-1');
     first.turnEnd!.finalText = 'a'.repeat(400);
@@ -97,8 +97,8 @@ describe('hook request ledger', () => {
   });
 
   it('读取超大账本按空账本降级, 避免主线程解析异常大文件', () => {
-    fs.writeFileSync(filePath(), 'x'.repeat(1_100), 'utf8');
-    const ledger = createHookRequestLedger({ filePath: filePath(), log, maxFileChars: 1_024 });
+    fs.writeFileSync(filePath(), '🙂'.repeat(600), 'utf8');
+    const ledger = createHookRequestLedger({ filePath: filePath(), log, maxFileBytes: 1_024 });
 
     expect(ledger.get('conn-1', 'missing')).toBeNull();
     expect(warnings).toContain('read hook request ledger failed (file-too-large)');

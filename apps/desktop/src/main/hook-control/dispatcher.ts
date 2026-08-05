@@ -1650,10 +1650,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
     // Durable terminal replay comes first: an auto-update restarts the process
     // and clears ackHistory, while the server may still redeliver a completed
-    // requestId. Replaying its recorded ACK closes that gap without invoking
-    // the runner again. A terminal payload is replayed only while it is still
-    // pending in the durable outbox; once the transport accepted it, this
-    // follows the protocol's ACK-only duplicate semantics.
+    // requestId. Replaying its recorded ACK and terminal payload closes that
+    // gap without invoking the runner again. The server owns requestId
+    // idempotency, so replaying a persisted terminal frame is safe even when
+    // the local transport had already accepted an earlier attempt.
     const rKey = ackKey(connectionId, payload.requestId);
     let terminalReplay: HookTerminalRecord | null = null;
     try {
@@ -1666,11 +1666,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const ackDelivered = send(makeTaskAck(terminalReplay.ack));
       if (
         ackDelivered &&
-        terminalReplay.delivery === 'pending' &&
         terminalReplay.turnEnd &&
         send(makeTurnEnd(terminalReplay.turnEnd))
       ) {
-        markTerminalSent(connectionId, payload.requestId);
+        if (terminalReplay.delivery === 'pending') {
+          markTerminalSent(connectionId, payload.requestId);
+        }
       }
       return;
     }
@@ -2085,7 +2086,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // durable frame during the same reconnect attempt.
         if (flushedRequestIds.has(pending.requestId)) continue;
         if (!pending.turnEnd || !send(makeTurnEnd(pending.turnEnd))) return;
-        markTerminalSent(connectionId, pending.requestId);
+        if (!markTerminalSent(connectionId, pending.requestId)) {
+          persistTerminal({ ...pending, delivery: 'sent' });
+        }
       }
     },
   };
