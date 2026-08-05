@@ -1,3 +1,4 @@
+import { GHOST_OAUTH_SCOPES_MAX } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -605,17 +606,17 @@ export interface GhostSecretExchangeDecl {
 
 /**
  * OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。
- * 32→48(2026-08):原值按当时最大存量顶格(xd-feishu 老登录链全集 32 条),
- * xd-feishu 补审批/表情/导入等能力到 41 条后,上限随最大存量演进。注意本校验
- * 取值级"严出"(plugin-security-and-authoring.md §7):超 32 条的包在旧版客户端
- * 拒装,插件市场铺开须等携带本值的客户端先行发布。
+ * 数值正本在 cindy-protocol 的 plugin-protocol(manifest.ts,发布服务端同读),
+ * 客户端只 re-export 不再手抄副本;调整上限一律改协议仓再 bump submodule。
+ * 本校验取值级"严出"(plugin-security-and-authoring.md §7):超上限的包在旧版
+ * 客户端拒装,插件市场铺开须等携带新上限的客户端先行发布。
  *
  * 涨过 64 前必须同步两处只留了防御余量的 64 上限,否则会拒绝合法的缺权上报
  * /静默判废 assessment:insufficient-scopes 端点的整包条数上限
  * (runtime/ghostOauthEndpoint.ts)与 cindy-tools 的 SETUP_REAUTH_SCOPE_MAX
  * (ghost/mcpServer.ts,包依赖方向不允许直接引用本常量)。
  */
-export const GHOST_OAUTH_SCOPES_MAX = 48;
+export { GHOST_OAUTH_SCOPES_MAX };
 /** OAuth broker 模式可声明的备用 clientId 上限(默认 clientId 不计入)。 */
 export const GHOST_OAUTH_CLIENT_ID_ALTERNATIVES_MAX = 8;
 /** OAuth 凭证:extraAuthorizeParams 条数上限。 */
