@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -232,10 +234,9 @@ describe('sidebar-embedded session navigation boundary', () => {
     fireEvent.click(screen.getByRole('button'));
 
     await waitFor(() =>
-      expect(mocks.navigate).toHaveBeenCalledWith(
-        '/cc-agent/lead-target?worker=worker-target',
-        { state: undefined },
-      ),
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lead-target?worker=worker-target', {
+        state: undefined,
+      }),
     );
     expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
   });
@@ -260,16 +261,58 @@ describe('sidebar-embedded session navigation boundary', () => {
 
   it('consumes /jump-session without resolving or navigating in embedded mode', async () => {
     const t = ((key: string) => key) as never;
+    const onSessionNavigate = vi.fn();
 
     await expect(
       tryHandleNavigationCommand('/jump-session session-c', {
         navigate: mocks.navigate,
         t,
         allowNavigation: false,
+        onSessionNavigate,
       }),
     ).resolves.toBe(true);
     expect(mocks.getSession).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
+    expect(onSessionNavigate).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('reports /jump-session replacement before navigating from a split pane', async () => {
+    const t = ((key: string) => key) as never;
+    const onSessionNavigate = vi.fn();
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+
+    await expect(
+      tryHandleNavigationCommand('/jump-session worker-target', {
+        navigate: mocks.navigate,
+        t,
+        allowNavigation: true,
+        onSessionNavigate,
+      }),
+    ).resolves.toBe(true);
+
+    expect(mocks.getSession).toHaveBeenCalledWith('worker-target');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith(
+      'worker-target',
+      expect.objectContaining({ id: 'worker-target' }),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lead-target?worker=worker-target');
+    expect(onSessionNavigate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.navigate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('wires split-pane /jump-session handling through the pane navigation reporter', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', '..', '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain('allowNavigation: canNavigateSession');
+    expect(source).toContain(
+      "onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined",
+    );
   });
 
   it('keeps route-owner session links interactive', async () => {
@@ -366,6 +409,10 @@ describe('sidebar-embedded session navigation boundary', () => {
     ).resolves.toBe(true);
 
     expect(mocks.getSession).toHaveBeenCalledWith('session-f');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith(
+      'session-f',
+      expect.objectContaining({ id: 'session-f' }),
+    );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-f');
   });
 });

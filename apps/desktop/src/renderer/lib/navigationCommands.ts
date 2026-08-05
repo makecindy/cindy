@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 
 const log = createLogger('NavigationCommands');
 const SLASH_COMMAND_REGEX = /^\/(\S+)(?:\s+(.*))?$/s;
@@ -23,8 +24,10 @@ export async function tryHandleNavigationCommand(
   deps: {
     navigate: (to: string) => void;
     t: TFunction;
-    /** embedded 内容视图消费命令但不解析/改变窗口路由。 */
+    /** sidebar-embedded 内容视图消费命令但不解析/改变窗口路由。 */
     allowNavigation?: boolean;
+    /** split-pane 在改变窗口路由前报告来源 pane 的替换意图。 */
+    onSessionNavigate?: (targetSessionId: string, routeOwnerSessionId?: string) => void;
   },
 ): Promise<boolean> {
   const slashMatch = message.match(SLASH_COMMAND_REGEX);
@@ -49,12 +52,16 @@ export async function tryHandleNavigationCommand(
       toast.error(deps.t('ccAgent.jumpSession.notFound'));
       return true;
     }
+    const route = await resolveSessionRoute(sessionId, session);
+    deps.onSessionNavigate?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
+    deps.navigate(route);
   } catch (err) {
-    log.warn('[jump-session] session lookup failed', { sessionId, error: String(err) });
+    log.warn('[jump-session] navigation target resolution failed', {
+      sessionId,
+      error: String(err),
+    });
     toast.error(deps.t('ccAgent.jumpSession.notFound'));
     return true;
   }
-
-  deps.navigate(`/cc-agent/${sessionId}`);
   return true;
 }

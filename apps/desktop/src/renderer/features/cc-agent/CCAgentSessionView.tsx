@@ -2463,7 +2463,8 @@ export function CCAgentSessionView({
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,
-          allowNavigation: ownsWindowRoute,
+          allowNavigation: canNavigateSession,
+          onSessionNavigate: navigationMode === 'split-pane' ? onSessionNavigate : undefined,
         }))
       ) {
         return;
@@ -2600,7 +2601,9 @@ export function CCAgentSessionView({
       maybeShowContextUsage,
       folderPickerOpen,
       isCodex,
-      ownsWindowRoute,
+      canNavigateSession,
+      navigationMode,
+      onSessionNavigate,
       patchLocalSession,
       sendMessage,
       steerMessage,
