@@ -2168,7 +2168,7 @@ function bearerToken(headers: Readonly<Record<string, string>>): string {
   const raw = headerValue(headers, 'authorization');
   if (!raw) return '';
   const m = /^bearer\s+(.+)$/i.exec(raw);
-  return m ? m[1].trim() : raw;
+  return m ? m[1].trim() : '';
 }
 
 /** 外部分支统一的 OpenAI 错误信封(localHandler 完全接管,不转发上游)。 */
