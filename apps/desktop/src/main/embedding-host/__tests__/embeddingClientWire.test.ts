@@ -438,9 +438,13 @@ describe('EmbeddingClient · 非法响应不入缓存', () => {
 });
 
 describe('EmbeddingClient · 维度自检覆盖批内每一条', () => {
-  it('首条对、后续某条错 → 抛 INVALID_MODEL 并指出位置,不入缓存', async () => {
+  it('首条对、后续某条错 → 归主机(SERVER_ERROR)并指出位置,不入缓存', async () => {
     // 只看首条的实现会放它过去:整批被缓存并交付,上层按首条填 dim,调方拿到一批
     // "声称同维度"其实不等长的向量。
+    //
+    // 错误码归主机而不是调方(review 第十三轮):首条**等于**请求的 2,说明这个型号
+    // 明显吃得下 dimensions=2,是这一批响应畸形。报 INVALID_MODEL(→ INVALID_PARAMS)
+    // 会让插件按手册去"改一个没问题的请求",可能永久降到另一个维度。
     const fetchImpl = respond({
       model: 'text-embedding-3-small',
       data: [
@@ -451,8 +455,8 @@ describe('EmbeddingClient · 维度自检覆盖批内每一条', () => {
     });
     const client = clientWith(fetchImpl);
     const req = { texts: ['a', 'b'], model: 'text-embedding-3-small' as const, dimensions: 2 };
-    await expect(client.embed(req)).rejects.toMatchObject({ code: 'INVALID_MODEL' });
-    await expect(client.embed(req)).rejects.toThrow(/index 1/);
+    await expect(client.embed(req)).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    await expect(client.embed(req)).rejects.toThrow(/index 1.*requested dimensions=2/);
     expect(fetchImpl).toHaveBeenCalledTimes(2); // 第二次仍出网 = 首次一条都没入缓存
   });
 
@@ -705,11 +709,30 @@ describe('EmbeddingClient · 缓存命中与新取回混合时的自洽', () => 
 
 describe('EmbeddingClient · 错误归属与重取的预算', () => {
   /**
-   * 错误码要分清是谁错了(PR #1707 review 第八轮):slot 层把 INVALID_MODEL 译成
-   * INVALID_PARAMS、SERVER_ERROR 译成 INTERNAL。默认维度请求本来完全合法,若也报
-   * INVALID_MODEL,插件会被告知去改一个没有问题的请求。
+   * 错误码要分清是谁错了(PR #1707 review 第八轮 + 第十三轮):slot 层把 INVALID_MODEL
+   * 译成 INVALID_PARAMS、SERVER_ERROR 译成 INTERNAL。三种坏法归属不同 ——
+   *   1. 显式传了维度、整批**一致地**不等于它 = 型号不吃这个维度 → INVALID_MODEL;
+   *   2. 显式传了维度、批内**自相矛盾** = 型号吃得下(有条对上了),这批响应畸形 →
+   *      SERVER_ERROR。第八轮只按"有没有传 dimensions"分,把这种也判成调方的错;
+   *   3. 没传维度、批内不等长 = 上游响应畸形 → SERVER_ERROR。
+   * 判错的代价不是多一行日志:手册说 INVALID_PARAMS "原样重试永远失败",插件会据此
+   * 按一个假诊断重建索引。
    */
-  it('显式维度不符 → INVALID_MODEL;默认维度批内不等长 → SERVER_ERROR', async () => {
+  it('三种坏法的错误归属:一致地不符归调方,批内矛盾与默认路径都归主机', async () => {
+    // ① 整批一致地不是请求的 4 维 → 型号静默回了自己的默认 → 调方改参数才有救
+    await expect(
+      clientWith(
+        respond({
+          model: 'voyage/voyage-4',
+          data: [
+            { object: 'embedding', index: 0, embedding: [1, 2] },
+            { object: 'embedding', index: 1, embedding: [3, 4] },
+          ],
+          usage: { prompt_tokens: 2 },
+        }),
+      ).embed({ texts: ['a', 'b'], model: 'voyage/voyage-4', dimensions: 4 }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+
     const ragged = () =>
       respond({
         model: 'voyage/voyage-4',
@@ -719,13 +742,15 @@ describe('EmbeddingClient · 错误归属与重取的预算', () => {
         ],
         usage: { prompt_tokens: 2 },
       });
+    // ② 显式传了 4、首条正是 4 而次条是 2 → 型号吃得下,这批畸形 → 归主机
     await expect(
       clientWith(ragged()).embed({
         texts: ['a', 'b'],
         model: 'voyage/voyage-4',
         dimensions: 4,
       }),
-    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+    ).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    // ③ 没传维度、批内不等长 → 归主机
     await expect(
       clientWith(ragged()).embed({ texts: ['a', 'b'], model: 'voyage/voyage-4' }),
     ).rejects.toMatchObject({ code: 'SERVER_ERROR' });

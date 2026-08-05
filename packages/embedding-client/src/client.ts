@@ -269,6 +269,17 @@ function positionLabel(mode: 'flat' | 'grouped', group: number, chunk: number): 
  *    并让 slot 回一个 `dim: 0` 给插件 —— 插件把空向量写进索引, 之后的缓存命中继续
  *    "成功"。默认维度允许变, 但合法 embedding 的长度必须为正, 这条与维度无关。
  *
+ * 4. **"是谁错了"要看整批, 不能看到第一条不一致就下结论**(同 review 第十三轮):
+ *    显式传了 dimensions 时有两种坏法, 结论相反 ——
+ *      - 整批**一致地**不等于请求值 = 这个型号根本不吃这个维度(静默回了它的默认),
+ *        调方改参数才有救 → `INVALID_MODEL`(slot 译成 `INVALID_PARAMS`);
+ *      - 批内**自相矛盾**(有的等于请求值、有的不等) = 型号明显吃得下这个维度,
+ *        是这一批响应畸形, 调方的请求完全合法 → `SERVER_ERROR`(slot 译成 `INTERNAL`)。
+ *    第二种若也报 INVALID_MODEL, 手册会让插件"改一个没问题的请求、原样重试永远失败",
+ *    于是它可能永久降到另一个维度或型号 —— 按一个假诊断重建索引。
+ *    区分不了的原因是时机: 扫到第一条不一致时还不知道后面有没有等于请求值的, 所以
+ *    先收齐全批长度再分类。
+ *
  * 上游对不支持的维度行为不统一(可能 400, 也可能静默回默认长度), 这里是最后一道
  * 能看见长度的地方; 也是**每条向量进缓存前的唯一关口**(见 embed() 的调用位置)。
  *
@@ -281,46 +292,45 @@ function assertBatchDimensions(
   dimensions: number | undefined,
   mode: 'flat' | 'grouped',
 ): void {
-  // 缺省时以首条为基准 —— 校验的是"整批自洽",不是"符合某个记在客户端里的常量"。
-  let expected = dimensions;
+  // 先收齐全批的长度与位置。空向量在这一趟里就地拒掉(它与"请求了什么维度"无关),
+  // 长度的**归属判定**留到收齐之后 —— 见文档注释第 4 条。
+  const seen: Array<{ length: number; at: string }> = [];
   for (let d = 0; d < grouped.length; d++) {
     const group = grouped[d];
     for (let c = 0; c < group.length; c++) {
       const got = group[c]?.length;
       if (got === undefined) continue;
-      // 空向量:没有任何维度约定能让它合法。先判它, 否则缺省路径上首条为空时
-      // expected 会被定成 0, 整批"自洽通过"。
       if (got === 0) {
         throw new EmbeddingError(
           `model '${model}' returned an empty embedding at ${positionLabel(mode, d, c)}`,
           'SERVER_ERROR',
         );
       }
-      if (expected === undefined) {
-        expected = got;
-        continue;
-      }
-      if (got !== expected) {
-        // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
-        const at = positionLabel(mode, d, c);
-        // 错误码要分清**是谁错了**(PR #1707 review 第八轮):
-        //   - 显式传了 dimensions 而上游给了别的长度 = 这个型号不支持你要的维度,
-        //     调方改参数才有救 → INVALID_MODEL(slot 层译成 INVALID_PARAMS);
-        //   - 没传 dimensions(走默认)却回来一批不等长的 = 上游响应畸形,调方的请求
-        //     本来完全合法 → SERVER_ERROR(slot 层译成 INTERNAL)。
-        // 这里若一律用 INVALID_MODEL,插件会被告知去改一个没有问题的请求。
-        if (dimensions === undefined) {
-          throw new EmbeddingError(
-            `model '${model}' returned mixed vector lengths (${expected} then ${got}) at ${at}`,
-            'SERVER_ERROR',
-          );
-        }
-        throw new EmbeddingError(
-          `requested dimensions=${dimensions} but model '${model}' returned ${got} at ${at}`,
-          'INVALID_MODEL',
-        );
-      }
+      seen.push({ length: got, at: positionLabel(mode, d, c) });
     }
+  }
+  if (seen.length === 0) return;
+
+  // 批内自洽:基准取首条 —— 校验的是"整批一致",不是"符合某个记在客户端里的常量"。
+  const baseline = seen[0].length;
+  const ragged = seen.find((v) => v.length !== baseline);
+  if (ragged) {
+    // 位置信息带上:一批 32 条里第 17 条错,没有下标就只能靠猜。
+    // 不等长**一律**归主机:显式传了 dimensions 时它意味着"型号吃得下这个维度,只是
+    // 这批响应畸形"(否则不会有任何一条对上),调方的请求本身没问题。
+    const suffix = dimensions === undefined ? '' : ` (requested dimensions=${dimensions})`;
+    throw new EmbeddingError(
+      `model '${model}' returned mixed vector lengths (${baseline} then ${ragged.length}) at ${ragged.at}${suffix}`,
+      'SERVER_ERROR',
+    );
+  }
+  // 走到这里全批等长。只有"一致地不等于请求值"才是参数问题 —— 型号静默回了它自己的
+  // 默认维度,调方改参数(或换型号)才有救。
+  if (dimensions !== undefined && baseline !== dimensions) {
+    throw new EmbeddingError(
+      `requested dimensions=${dimensions} but model '${model}' returned ${baseline} at ${seen[0].at}`,
+      'INVALID_MODEL',
+    );
   }
 }
 
