@@ -213,6 +213,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'text-tertiary-hsl': { light: '222.0 4.6% 42.7%', dark: '216.0 4.1% 75.9%' },
   'text-disabled': { light: '#686B72', dark: '#BFC1C4' },
   'text-disabled-tertiary': { light: '#686B72', dark: '#BFC1C4' },
+  'switch-track-off': { light: '#828282', dark: '#858585' }, // 用户裁决 2026-08-05:恢复 PR #1464 初版中灰轨道;text-disabled 引用在 dark 过亮,开/关状态肉眼难分
   'caret-accent': { light: '#417CDD', dark: '#417CDD' }, // 用户改稿 2026-07-18:光标撤红改回蓝
   'accent-cta-bg': { light: '#3C3F43', dark: '#EEEEEE' }, // E1D
   'accent-cta-bg-pure': { light: '#3C3F43', dark: '#EEEEEE' }, // E1D
