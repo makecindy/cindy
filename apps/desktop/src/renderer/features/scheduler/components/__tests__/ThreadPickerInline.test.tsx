@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -35,10 +35,12 @@ describe('ThreadPickerInline 会话引用状态', () => {
       />,
     );
 
-    await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('option', { selected: true }).textContent).toBe(
-      'scheduler.editor.thread.deletedBinding',
-    );
+    await screen.findByRole('option', {
+      name: 'scheduler.editor.thread.deletedBinding',
+      selected: true,
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByRole('button', { name: 'scheduler.editor.runSession.card.open' }),
     ).toBeNull();

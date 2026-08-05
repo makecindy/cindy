@@ -3388,6 +3388,8 @@
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的任务，可能产生模型费用。",
         "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
         "agentErrandDetail": "这些代办会在这个插件的专属任务里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
+        "agentSchedule": "可以请你新建自动化",
+        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -3922,6 +3924,21 @@
       "processingCopy": "等待期已结束，Cindy 登录账号正在删除。",
       "completedCopy": "Cindy 登录账号已删除。",
       "dismissButton": "我知道了"
+    }
+  },
+  "credentialStore": {
+    "banner": {
+      "message": "系统凭证存储不可用，登录状态无法维持",
+      "viewHelp": "查看解决方法",
+      "dismiss": "关闭提示"
+    },
+    "dialog": {
+      "title": "系统凭证存储不可用",
+      "intro": "Cindy 无法通过系统凭证存储读取登录凭证，登录状态和相关集成会持续失效。可尝试以下步骤恢复：",
+      "stepMacKeychain": "退出 Cindy，打开「钥匙串访问」，搜索「Cindy Safe Storage」并检查其访问控制；必要时删除该条目（已保存的集成凭证会失效，需要重新连接）",
+      "stepRestart": "重新启动 Cindy",
+      "stepRelogin": "如果仍未恢复，退出登录后重新登录",
+      "confirm": "知道了"
     }
   },
   "localDbGate": {
@@ -5259,9 +5276,24 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
-        "description": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+        "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
+        "items": {
+          "files": {
+            "title": "文件与文件夹",
+            "description": "读取和修改工作区外的文件"
+          },
+          "commands": {
+            "title": "终端命令",
+            "description": "直接执行终端命令与脚本"
+          },
+          "network": {
+            "title": "网络访问",
+            "description": "执行联网命令、访问网络资源"
+          }
+        },
+        "note": "内置高风险操作仍会要求确认。",
         "confirm": "开启 Full access",
-        "cancel": "保留当前权限"
+        "cancel": "取消"
       },
       "attachmentRejection": {
         "dismiss": "关闭"
@@ -7043,6 +7075,7 @@
         "titleProjectCreate": "新建项目自动化",
         "titleProjectEdit": "编辑项目自动化",
         "subtitle": "用 Claude 或 Codex 按计划运行 Prompt。",
+        "subtitleFromGhost": "「{{name}}」请你新建一个自动化。选好模型后保存即可生效。",
         "save": "保存",
         "create": "创建",
         "saveAria": "保存自动化",
@@ -7263,7 +7296,8 @@
       "actionFailed": "操作失败：{{error}}",
       "renameFailed": "重命名失败：{{error}}",
       "deleteFailed": "删除失败：{{error}}",
-      "restartFailed": "重启失败：{{error}}"
+      "restartFailed": "重启失败：{{error}}",
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。"
     },
     "deleteDialog": {
       "title": "删除自动化「{{name}}」？",

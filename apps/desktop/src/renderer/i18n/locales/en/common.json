@@ -3389,6 +3389,8 @@
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
         "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
+        "agentSchedule": "Can ask you to create an automation",
+        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -3924,6 +3926,21 @@
       "processingCopy": "The waiting period ended. Your Cindy sign-in account is being removed.",
       "completedCopy": "Your Cindy sign-in account has been removed.",
       "dismissButton": "Got it"
+    }
+  },
+  "credentialStore": {
+    "banner": {
+      "message": "System credential storage is unavailable; your signed-in state cannot be maintained",
+      "viewHelp": "View solutions",
+      "dismiss": "Dismiss"
+    },
+    "dialog": {
+      "title": "System credential storage unavailable",
+      "intro": "Cindy cannot read its sign-in credentials from the system credential storage, so the signed-in state and related integrations will keep failing. Try the following steps to recover:",
+      "stepMacKeychain": "Quit Cindy, open Keychain Access, search for \"Cindy Safe Storage\" and check its access control; delete the entry if necessary (saved integration credentials will be invalidated and need to be reconnected)",
+      "stepRestart": "Restart Cindy",
+      "stepRelogin": "If it still does not recover, sign out and sign in again",
+      "confirm": "OK"
     }
   },
   "localDbGate": {
@@ -5261,9 +5278,24 @@
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
-        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
+        "items": {
+          "files": {
+            "title": "Files and Folders",
+            "description": "Read and modify files outside the workspace"
+          },
+          "commands": {
+            "title": "Terminal Commands",
+            "description": "Run terminal commands and scripts directly"
+          },
+          "network": {
+            "title": "Network Access",
+            "description": "Run network commands and access the internet"
+          }
+        },
+        "note": "Built-in high-risk operations will still require confirmation.",
         "confirm": "Enable Full access",
-        "cancel": "Keep current permissions"
+        "cancel": "Cancel"
       },
       "attachmentRejection": {
         "dismiss": "Dismiss"
@@ -7054,6 +7086,7 @@
         "titleProjectCreate": "New project automation",
         "titleProjectEdit": "Edit project automation",
         "subtitle": "Run a prompt on a schedule with Claude or Codex.",
+        "subtitleFromGhost": "\"{{name}}\" is asking you to create an automation. Pick a model and save to enable it.",
         "save": "Save",
         "create": "Create",
         "saveAria": "Save automation",
@@ -7274,7 +7307,8 @@
       "actionFailed": "Action failed: {{error}}",
       "renameFailed": "Rename failed: {{error}}",
       "deleteFailed": "Failed to delete: {{error}}",
-      "restartFailed": "Failed to restart: {{error}}"
+      "restartFailed": "Failed to restart: {{error}}",
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\" asked to create an automation, but a form is already open. Your edits were kept — save or close it, then trigger the request again."
     },
     "deleteDialog": {
       "title": "Delete automation \"{{name}}\"?",
