@@ -106,6 +106,23 @@ describe('SplitGroup', () => {
     expect(sessionBView.dataset.sidebarTargetSessionId).toBe('session-b');
   });
 
+  it('键盘焦点进入非活动 pane 时切换该 pane 的路由主权', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    renderSplitGroup('session-a');
+    const sessionAView = screen.getByTestId('session-view-session-a');
+    const sessionBView = screen.getByTestId('session-view-session-b');
+
+    await act(async () => {
+      fireEvent.focus(sessionBView, { relatedTarget: sessionAView });
+      await Promise.resolve();
+    });
+
+    expect(resolveSessionRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveSessionRouteMock).toHaveBeenCalledWith('session-b', null);
+  });
+
   it('递归渲染左一右二与左二右二混合布局', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');

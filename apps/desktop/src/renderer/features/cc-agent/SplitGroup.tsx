@@ -366,6 +366,10 @@ function SplitPaneView({
           }
           focusSession(viewSessionId);
         }}
+        onFocusCapture={(event) => {
+          if (isOwner || event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          focusSession(viewSessionId);
+        }}
       >
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/40 px-2">
           <button
