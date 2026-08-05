@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 import {
   isValidPluginResourceId,
+  type PluginRemovalNotice,
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
@@ -25,6 +26,7 @@ import type {
   PluginMarketInstallResult,
   PluginMarketItem,
   PluginMarketSnapshot,
+  PluginRemovalUserNotice,
 } from '../../shared/pluginMarket.js';
 import {
   customMarketPluginId,
@@ -282,12 +284,21 @@ interface LocalInstallSnapshot {
 }
 
 /**
+ * 清理通告 pending 汇总的 owner 隔离键。**故意不含 generation**：同一 owner
+ * 重新登录（换代）后，未消费的通知仍应展示，不随会话代际作废。
+ */
+function removalNoticeKey(owner: ActiveAppSession): string {
+  return `${owner.mode}:${owner.dataOwnerId}`;
+}
+
+/**
  * Plugin 市场的 main 端协调器。远程不可用时不碰本地目录；安装写路径必须依次
  * 通过 protocol parser、下载大小/SHA 校验、Ghost runtime validator 和原子换目录。
  */
 export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
   private ledgerMutation: Promise<void> = Promise.resolve();
+  private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
 
   constructor(
     private readonly api = new PluginMarketApi(),
@@ -335,8 +346,11 @@ export class PluginMarketService {
       };
     }
     let plugins: VisiblePluginSummary[];
+    let removals: PluginRemovalNotice[];
     try {
-      plugins = visiblePluginsForOwner(owner, await this.api.listAll());
+      const catalog = await this.api.listAll();
+      plugins = visiblePluginsForOwner(owner, catalog.plugins);
+      removals = catalog.removals;
     } catch (error) {
       log.warn('market list unavailable', {
         error: error instanceof Error ? error.message : String(error),
@@ -361,6 +375,7 @@ export class PluginMarketService {
     await this.adoptLegacyInstallations(plugins, ledger, owner);
     await this.migrateMarketManifestDigests(plugins, ledger, owner);
     await this.reconcileRemovedInstallations(ledger, owner);
+    await this.applyServerRemovals(removals, owner, ledger);
     // 自定义目录不完整(某来源暂时不可读)时跳过全部默认安装:此刻的合并冲突
     // 集合缺了坏来源声明的 ghostId,自动安装会在它恢复前抢占所有权。
     if (customComplete) {
@@ -382,6 +397,23 @@ export class PluginMarketService {
       unavailableReason: null,
       customSourceNames,
     };
+  }
+
+  /** 按当前 owner 消费一次清理汇总，避免组织插件名跨账号泄露。 */
+  consumeRemovalNotice(): PluginRemovalUserNotice | null {
+    const key = removalNoticeKey(captureMarketOwner());
+    const notice = this.pendingRemovalNotices.get(key) ?? null;
+    if (notice) this.pendingRemovalNotices.delete(key);
+    return notice;
+  }
+
+  hasPendingRemovalNotice(): boolean {
+    if (this.pendingRemovalNotices.size === 0) return false;
+    try {
+      return this.pendingRemovalNotices.has(removalNoticeKey(captureMarketOwner()));
+    } catch {
+      return false;
+    }
   }
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
@@ -436,7 +468,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
-      const catalog = visiblePluginsForOwner(owner, await this.api.listAll());
+      const catalog = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
       requireSameMarketOwner(owner);
       const selected = catalog.find((plugin) => plugin.id === pluginId);
       if (!selected) {
@@ -683,7 +715,7 @@ export class PluginMarketService {
     let serverKnown = knownServerPlugins !== undefined;
     if (!serverKnown && getClientEndpoint('pluginApiBaseUrl')) {
       try {
-        serverPlugins = visiblePluginsForOwner(owner, await this.api.listAll());
+        serverPlugins = visiblePluginsForOwner(owner, (await this.api.listAll()).plugins);
         serverKnown = true;
       } catch (error) {
         log.warn('market catalog unavailable while recomputing cross-source duplicates', {
@@ -1423,6 +1455,109 @@ export class PluginMarketService {
         if (!stillInstalled) ledger.markRemoved(record.ghostId, installSubject);
       });
     }
+  }
+
+  private async applyServerRemovals(
+    removals: readonly PluginRemovalNotice[],
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+  ): Promise<void> {
+    if (removals.length === 0) return;
+    const skip = (removal: PluginRemovalNotice, reason: string): undefined => {
+      log.info('server plugin removal skipped', {
+        pluginId: removal.pluginId,
+        ghostId: removal.ghostId,
+        reason,
+      });
+      return undefined;
+    };
+    // 五道闸的账本侧判定。锁外先用一次性快照预筛(绝大多数通告在这里就被
+    // 挡下,不必为它们各自重读账本/进互斥段);幸存候选进锁后**必须**用
+    // installationForGhost 即时复检——快照在等锁期间可能过时,权威判定只认锁内。
+    const ledgerGateReason = (
+      record: PluginMarketInstallationRecord | null | undefined,
+      removal: PluginRemovalNotice,
+    ): string | null => {
+      if (!record) return 'ledger-record-missing';
+      if (record.pluginId !== removal.pluginId) return 'plugin-id-mismatch';
+      if (record.source !== 'market' && record.source !== 'legacy-adopted') {
+        return 'non-server-source';
+      }
+      if (!record.installed) return 'already-not-installed';
+      if (record.scope !== 'organization') return 'non-organization-scope';
+      return null;
+    };
+    const snapshot = ledger.read().installations;
+    // runtime 在场判定与取名共用一次目录扫描(list 会读每个包的 manifest 与
+    // 图标),首个幸存候选时才建;清理会改目录,但每条清理都在自己的互斥段里
+    // 由账本复检把关,这张表只回答"清理前它在不在场、叫什么"。
+    let ghostsById: Map<string, InstalledGhost> | null = null;
+    const removedNames: Array<string | null> = [];
+    for (const removal of removals) {
+      if (removal.action !== 'purge') {
+        skip(removal, 'unsupported-action');
+        continue;
+      }
+      const prefilterReason = ledgerGateReason(snapshot[removal.ghostId], removal);
+      if (prefilterReason) {
+        skip(removal, prefilterReason);
+        continue;
+      }
+      try {
+        const removed = await this.withMutation(removal.pluginId, async () => {
+          requireSameMarketOwner(owner);
+          const record = ledger.installationForGhost(removal.ghostId);
+          const reason = ledgerGateReason(record, removal);
+          if (reason) return skip(removal, reason);
+
+          ghostsById ??= new Map(
+            getGhostManager().list().map((ghost) => [ghost.manifest.id, ghost]),
+          );
+          const installed = ghostsById.get(removal.ghostId);
+          if (!installed) return skip(removal, 'runtime-not-installed');
+          // 溯源摘要闸:账本记录只证明"市场装过这个 ghostId",不证明现在占位的
+          // 还是那份包——本地 .cindy 可原位替换,替换不写市场账本。摘要对不上
+          // (含 ghost.json 读不出)即视为非服务端安装,不删,与更新路径/连接授权
+          // 的 fail-closed 判据同口径。缺摘要的存量记录放行:被下架的插件已不在
+          // 目录里,digest 迁移永远补不上,fail-closed 会让老安装的合法清理永久失效。
+          if (
+            record?.manifestDigest != null &&
+            installedGhostRawManifestDigest(installed.dir) !== record.manifestDigest
+          ) {
+            return skip(removal, 'manifest-digest-mismatch');
+          }
+
+          await uninstallGhostAndCleanup(removal.ghostId, { skipMarketLedger: true });
+          await this.withCapturedLedgerMutation(ledger, () => {
+            // userId=null 即不写退订(拍板:purge 对 defaultInstallOptOuts 只读,
+            // 不写也不清;重新上架后按用户既有退订状态决定是否自动装回)。
+            ledger.markRemoved(removal.ghostId, null);
+          });
+          log.info('server plugin removal applied', {
+            pluginId: removal.pluginId,
+            ghostId: removal.ghostId,
+          });
+          return {
+            name: stripDirectionalControls(installed.manifest.name) || null,
+          };
+        });
+        if (removed) removedNames.push(removed.name);
+      } catch (error) {
+        log.error('server plugin removal failed', {
+          pluginId: removal.pluginId,
+          ghostId: removal.ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (removedNames.length === 0) return;
+    const key = removalNoticeKey(owner);
+    const count =
+      (this.pendingRemovalNotices.get(key)?.count ?? 0) + removedNames.length;
+    this.pendingRemovalNotices.set(key, {
+      count,
+      name: count === 1 ? (removedNames[0] ?? null) : null,
+    });
   }
 
   private async applyDefaultInstalls(

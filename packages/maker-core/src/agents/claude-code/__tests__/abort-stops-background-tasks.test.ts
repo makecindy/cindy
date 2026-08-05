@@ -144,7 +144,10 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(queryOpts?: { omitStopTask?: boolean }) {
+async function startSessionWithStream(
+  queryOpts?: { omitStopTask?: boolean },
+  opts?: { autoCollect?: boolean },
+) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -172,11 +175,13 @@ async function startSessionWithStream(queryOpts?: { omitStopTask?: boolean }) {
   });
 
   const events: AgentEvent[] = [];
-  const collected = (async () => {
-    for await (const ev of handle.events()) {
-      events.push(ev);
-    }
-  })();
+  const collected = opts?.autoCollect === false
+    ? Promise.resolve()
+    : (async () => {
+        for await (const ev of handle.events()) {
+          events.push(ev);
+        }
+      })();
 
   return { agent, handle, stream, fakeQuery, events, collected };
 }
@@ -198,6 +203,26 @@ function taskNotification(taskId: string, status: 'completed' | 'failed' | 'stop
     subtype: 'task_notification',
     task_id: taskId,
     status,
+  };
+}
+
+function turnResult(result = 'ok'): Record<string, unknown> {
+  return {
+    type: 'result',
+    subtype: 'success',
+    result,
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  };
+}
+
+function assistantText(text: string): Record<string, unknown> {
+  return {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+    },
   };
 }
 
@@ -226,6 +251,269 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent abort stops background wake tasks', () => {
+  it('只给会触发 SDK 自动续 turn 的 wake 任务对应 done 附 continuation claim', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background bash' });
+    stream.emit(taskStarted('task-bash', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'bash task observed');
+    stream.emit(turnResult('bash continues without auto turn'));
+    await waitFor(() => events.filter((event) => event.type === 'done').length >= 1, 'bash turn done');
+    expect(events.filter((event) => event.type === 'done')[0]?.turnContinuationId).toBeUndefined();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.send({ type: 'user', content: 'spawn background agent' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 2, 'agent task observed');
+
+    // 后续无 task_type 的补丁不能把已锁存的 wake 属性降级。
+    stream.emit({
+      type: 'system',
+      subtype: 'task_updated',
+      task_id: 'task-agent',
+      patch: { status: 'pending' },
+    });
+    await waitFor(() => taskEvents(events).length >= 3, 'agent patch observed');
+    stream.emit(turnResult('waiting for agent'));
+    await waitFor(() => events.filter((event) => event.type === 'done').length >= 2, 'agent turn done');
+    const continuationId = events.filter((event) => event.type === 'done')[1]?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    const secondDoneIndex = events.findIndex(
+      (event, index) => event.type === 'done' && index > events.findIndex((candidate) => candidate.type === 'done'),
+    );
+    const pairedStatus = [...events.slice(0, secondDoneIndex)]
+      .reverse()
+      .find((event) => event.type === 'status' && (event.data as { status?: unknown } | null)?.status === 'Done');
+    expect(pairedStatus?.turnContinuationId).toBe(continuationId);
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 4, 'agent completion observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('父 turn done 后 wake task stopped 会发出 cancelled，而不是等待不存在的第二个 done', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+
+    stream.emit(turnResult('waiting for background task'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    const changes: string[] = [];
+    const off = handle.onTurnContinuationChange?.((id, state) => {
+      if (id === continuationId) changes.push(state);
+    });
+    stream.emit(taskNotification('task-agent', 'stopped'));
+    await waitFor(() => changes.includes('cancelled'), 'continuation cancellation observed');
+    await waitFor(
+      () => events.filter((event) => event.type === 'done').length >= 2,
+      'synthetic cancellation done observed',
+    );
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(changes).toContain('cancelled');
+    const firstDoneIndex = events.findIndex((event) => event.type === 'done');
+    const stoppedIndex = events.findIndex(
+      (event) =>
+        event.type === 'agent_task_update' &&
+        (event.data as { status?: unknown } | null | undefined)?.status === 'stopped',
+    );
+    const cancellationDoneIndex = events.findIndex(
+      (event) =>
+        event.type === 'done' &&
+        (event.data as { reason?: unknown } | null | undefined)?.reason ===
+          'turn_continuation_cancelled',
+    );
+    expect(firstDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(stoppedIndex).toBeGreaterThan(firstDoneIndex);
+    expect(cancellationDoneIndex).toBeGreaterThan(stoppedIndex);
+    expect(events[cancellationDoneIndex]?.turnContinuationId).toBeUndefined();
+    off?.();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('多个 wake task 中只要一个 completed，另一个 stopped 仍保留 continuation', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn parallel background work' });
+    stream.emit(taskStarted('task-agent-1', 'local_agent'));
+    stream.emit(taskStarted('task-agent-2', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 2, 'parallel wake tasks observed');
+
+    stream.emit(turnResult('waiting for parallel background tasks'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    const changes: string[] = [];
+    const off = handle.onTurnContinuationChange?.((id, state) => {
+      if (id === continuationId) changes.push(state);
+    });
+    stream.emit(taskNotification('task-agent-1', 'completed'));
+    stream.emit(taskNotification('task-agent-2', 'stopped'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(changes).not.toContain('cancelled');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+    off?.();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('done 入队后 task completion 先到，boundary claim 仍保持 awaiting', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+    const done = events.find((event) => event.type === 'done');
+    const continuationId = done?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    // Host 尚未消费 done 时，provider 已经处理紧随其后的 completion。
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('result-only 自动续 turn 会把旧 claim 标成 active，并由第二个 done 正常收口', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.filter((event) => event.type === 'done').length >= 1, 'foreground done observed');
+    const firstDone = events.find((event) => event.type === 'done');
+    const continuationId = firstDone?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    const changes: string[] = [];
+    const off = handle.onTurnContinuationChange?.((id, state) => {
+      if (id === continuationId) changes.push(state);
+    });
+
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+    // No assistant/stream_event: the automatic wake turn ends immediately.
+    stream.emit(turnResult(''));
+    await waitFor(
+      () => events.filter((event) => event.type === 'done').length >= 2,
+      'result-only continuation done observed',
+    );
+
+    expect(changes).toContain('active');
+    const doneEvents = events.filter((event) => event.type === 'done');
+    expect(doneEvents[1]?.turnContinuationId).toBeUndefined();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    off?.();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'active continuation 期间另一 wake task %s 会让当前 done 继续携带新 claim',
+    async (status) => {
+      const { handle, stream, events } = await startSessionWithStream();
+
+      await handle.send({ type: 'user', content: 'spawn parallel background work' });
+      stream.emit(taskStarted('task-agent-1', 'local_agent'));
+      stream.emit(taskStarted('task-agent-2', 'local_agent'));
+      await waitFor(() => taskEvents(events).length >= 2, 'parallel wake tasks observed');
+
+      stream.emit(turnResult('waiting for parallel tasks'));
+      await waitFor(
+        () => events.filter((event) => event.type === 'done').length >= 1,
+        'foreground done observed',
+      );
+      const firstContinuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(firstContinuationId).toBeTypeOf('number');
+
+      stream.emit(taskNotification('task-agent-1', 'completed'));
+      await waitFor(() => taskEvents(events).length >= 3, 'first task completion observed');
+      stream.emit(assistantText('first continuation is active'));
+      await waitFor(
+        () => events.some((event) => event.type === 'text'),
+        'first continuation assistant activity observed',
+      );
+
+      stream.emit(taskNotification('task-agent-2', status));
+      await waitFor(() => taskEvents(events).length >= 4, 'second task terminal observed');
+      stream.emit(turnResult('first continuation result'));
+      await waitFor(
+        () => events.filter((event) => event.type === 'done').length >= 2,
+        'first continuation done observed',
+      );
+
+      const doneEvents = events.filter((event) => event.type === 'done');
+      const secondContinuationId = doneEvents[1]?.turnContinuationId;
+      expect(secondContinuationId).toBeTypeOf('number');
+      expect(secondContinuationId).not.toBe(firstContinuationId);
+      expect(handle.beginTurnContinuationWait?.(secondContinuationId)).toBe('awaiting');
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      stream.emit(assistantText('second continuation is active'));
+      stream.emit(turnResult('second continuation result'));
+      await waitFor(
+        () => events.filter((event) => event.type === 'done').length >= 3,
+        'second continuation done observed',
+      );
+      expect(events.filter((event) => event.type === 'done')[2]?.turnContinuationId).toBeUndefined();
+      expect(handle.isTurnRunning?.()).toBe(false);
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    },
+  );
+
+  it('active continuation 期间另一 wake task stopped 不会制造后续 claim', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn parallel background work' });
+    stream.emit(taskStarted('task-agent-1', 'local_agent'));
+    stream.emit(taskStarted('task-agent-2', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 2, 'parallel wake tasks observed');
+    stream.emit(turnResult('waiting for parallel tasks'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+
+    stream.emit(taskNotification('task-agent-1', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 3, 'first task completion observed');
+    stream.emit(assistantText('continuation is active'));
+    await waitFor(() => events.some((event) => event.type === 'text'), 'continuation activity observed');
+    stream.emit(taskNotification('task-agent-2', 'stopped'));
+    await waitFor(() => taskEvents(events).length >= 4, 'second task stopped observed');
+    stream.emit(turnResult('continuation result'));
+    await waitFor(
+      () => events.filter((event) => event.type === 'done').length >= 2,
+      'continuation done observed',
+    );
+
+    expect(events.filter((event) => event.type === 'done')[1]?.turnContinuationId).toBeUndefined();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('stops running wake tasks (local_agent / local_workflow) and still interrupts; bash tasks are spared', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
@@ -290,12 +578,20 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.send({ type: 'user', content: 'spawn background work' });
     stream.emit(taskStarted('task-1', 'local_agent'));
     await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    stream.emit(turnResult('waiting for task'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
 
     fakeQuery.stopTask!.mockRejectedValueOnce(new Error('task already finished'));
     await expect(handle.abort()).resolves.toBeUndefined();
     expect(fakeQuery.interrupt).toHaveBeenCalledTimes(1);
     // fire-and-forget 的 rejection 被 catch 消化 —— 给微任务一拍确认无 unhandled。
     await new Promise((r) => setTimeout(r, 20));
+    // RPC 失败时不能先猜任务已经停下；claim 继续保持 busy，等待真实的
+    // task_notification / 自动续 turn 终态。
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+    expect(handle.isTurnRunning?.()).toBe(true);
 
     stream.end();
     await handle.close().catch(() => undefined);
@@ -316,6 +612,95 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 
     stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopBackgroundTask success closes an awaiting continuation without a task notification', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    stream.emit(turnResult('waiting for task'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'foreground done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    await handle.stopBackgroundTask!('task-agent');
+    expect(fakeQuery.stopTask!.mock.calls.map((call) => call[0])).toEqual(['task-agent']);
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === 'done' &&
+            (event.data as { reason?: unknown } | null | undefined)?.reason ===
+              'turn_continuation_cancelled',
+        ),
+      'synthetic cancellation done observed',
+    );
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // A late provider echo is idempotent and must not append another terminal.
+    stream.emit(taskNotification('task-agent', 'stopped'));
+    await waitFor(() => taskEvents(events).length >= 2, 'late stopped notification observed');
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'done' &&
+          (event.data as { reason?: unknown } | null | undefined)?.reason ===
+            'turn_continuation_cancelled',
+      ),
+    ).toHaveLength(1);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('keeps the handle busy until the synthetic cancellation done is consumed', async () => {
+    const { handle, stream } = await startSessionWithStream(undefined, { autoCollect: false });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const nextMatching = async (predicate: (event: AgentEvent) => boolean): Promise<AgentEvent> => {
+      for (;;) {
+        const result = await iterator.next();
+        if (result.done) throw new Error('event stream ended before the expected event');
+        if (predicate(result.value)) return result.value;
+      }
+    };
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await nextMatching(
+      (event) =>
+        event.type === 'agent_task_update' &&
+        (event.data as { status?: unknown } | null | undefined)?.status === 'running',
+    );
+    stream.emit(turnResult('waiting for task'));
+    const foregroundDone = await nextMatching((event) => event.type === 'done');
+    expect(foregroundDone.turnContinuationId).toBeTypeOf('number');
+
+    const stoppedEvent = nextMatching(
+      (event) =>
+        event.type === 'agent_task_update' &&
+        (event.data as { status?: unknown } | null | undefined)?.status === 'stopped',
+    );
+    stream.emit(taskNotification('task-agent', 'stopped'));
+    await stoppedEvent;
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    const cancellationDone = await nextMatching(
+      (event) =>
+        event.type === 'done' &&
+        (event.data as { reason?: unknown } | null | undefined)?.reason ===
+          'turn_continuation_cancelled',
+    );
+    expect(cancellationDone.turnContinuationId).toBeUndefined();
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // Asking for the next item acknowledges the yielded terminal boundary.
+    const drain = iterator.next();
+    await waitFor(() => handle.isTurnRunning?.() === false, 'cancellation done consumed');
+    stream.end();
+    await drain;
     await handle.close().catch(() => undefined);
   });
 

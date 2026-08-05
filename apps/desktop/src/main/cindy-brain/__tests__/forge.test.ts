@@ -748,6 +748,17 @@ describe('FORGE_GUIDE', () => {
       'oneshot_text',
       'NO_CANDIDATE',
       'expectJson',
+      // 2026-08-04 文本转向量(cindy.embed.text):作者最容易踩的是"换模型 =
+      // 换向量空间",手册必须讲到 model + dim 要跟向量一起存。
+      'embed_text',
+      "\"embed\": [\"text\"]",
+      'inputType',
+      'dimensions',
+      // 上下文化(voyage-context-*):二维 documents 与三层 documentEmbeddings 是
+      // 作者最容易写错的两处,手册必须给出可照抄的形态。
+      'documents',
+      'documentEmbeddings',
+      'voyage/voyage-context-4',
       '4.11.1',
       'cindy.agent.errand',
       'queryErrand',

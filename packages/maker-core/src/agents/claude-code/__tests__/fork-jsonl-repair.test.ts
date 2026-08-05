@@ -360,3 +360,44 @@ describe('repairForkedClaudeSessionJsonl', () => {
     expect(result.clearedInvalidPreservedSegmentRefCount).toBe(3);
   });
 });
+
+describe('repairForkedClaudeSessionJsonl 权限保留(Copilot review)', () => {
+  it('备份沿用源转录 mode,0600 不被放宽为 0644', async () => {
+    const fsPromises = await import('node:fs/promises');
+    const projectsRoot = await makeTempDir();
+    const workingDir = path.join(projectsRoot, 'repo');
+    const projectDir = path.join(projectsRoot, workingDir.replace(/[^a-zA-Z0-9]/g, '-'));
+    const sessionId = '99999999-9999-4999-8999-999999999998';
+    const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
+    await fs.mkdir(projectDir, { recursive: true });
+    // 构造一个带 compact boundary 需要修复的转录
+    const oldUuid = '11111111-1111-4111-8111-111111111112';
+    const newUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8';
+    await fs.writeFile(
+      jsonlPath,
+      [
+        JSON.stringify({
+          type: 'system',
+          subtype: 'compact_boundary',
+          uuid: newUuid,
+          sessionId,
+          compactMetadata: {
+            postTokens: 100,
+            preservedSegment: { headUuid: oldUuid, anchorUuid: oldUuid, tailUuid: oldUuid },
+          },
+        }),
+        line({ type: 'user', uuid: newUuid, sessionId }),
+      ].join('\n') + '\n',
+      { encoding: 'utf8', mode: 0o600 },
+    );
+    const beforeMode = (await fsPromises.stat(jsonlPath)).mode & 0o777;
+
+    const result = await repairForkedClaudeSessionJsonl({ sessionId, workingDir, projectsRoot });
+    expect(result.changed).toBe(true);
+    expect(result.backupPath).toBeDefined();
+    // 不变量:备份与修复后文件权限与原文一致(Windows 恒 0o666 → 恒等;
+    // POSIX 0600 不被放宽)。
+    const bakMode = (await fsPromises.stat(result.backupPath!)).mode & 0o777;
+    expect(bakMode).toBe(beforeMode);
+  });
+});

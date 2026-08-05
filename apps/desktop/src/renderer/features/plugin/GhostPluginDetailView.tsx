@@ -11,6 +11,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
+  AlertTriangle,
   ArrowUp,
   Bot,
   ChevronDown,
@@ -164,8 +165,7 @@ export function GhostPluginDetailView({
   const primaryEnabled =
     enabled && (primaryAction === 'panel' || (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
-  const hasConfiguration =
-    detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
+  const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
@@ -179,6 +179,7 @@ export function GhostPluginDetailView({
    * 普通第三方插件不受影响。
    */
   const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.id);
+  const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
 
   useLayoutEffect(() => {
     setDescriptionExpanded(false);
@@ -367,7 +368,9 @@ export function GhostPluginDetailView({
                       {t('settings.ghosts.detail.exportPackage')}
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                  {hasAdditionalActions ? (
+                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                  ) : null}
                   <DropdownMenuItem
                     onSelect={onUninstall}
                     className="h-10 gap-2.5 rounded-lg px-3 text-13 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
@@ -416,11 +419,14 @@ export function GhostPluginDetailView({
             <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-3')}>
               {detail.hasSettingsUi ? (
                 ghost ? (
-                  <GhostSettingsWebview
-                    ghost={ghost}
-                    title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
-                    appearance="plugin"
-                  />
+                  <>
+                    {ghost.oauthScopeStale ? <OauthScopeStaleBadge /> : null}
+                    <GhostSettingsWebview
+                      ghost={ghost}
+                      title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
+                      appearance="plugin"
+                    />
+                  </>
                 ) : (
                   <div
                     className={cn(
@@ -465,6 +471,20 @@ export function GhostPluginDetailView({
         <DetailsSection detail={detail} panelStatus={panelStatus} />
       </article>
     </main>
+  );
+}
+
+/** 宿主侧非阻塞角标；重新连接动作继续复用插件设置区已有入口。 */
+export function OauthScopeStaleBadge() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-[var(--warning-bg-soft)] px-3 py-1.5 text-12 leading-5 text-[var(--text-secondary)]"
+    >
+      <AlertTriangle size={13} className="shrink-0 text-[var(--warning-fg)]" aria-hidden="true" />
+      <span>{t('settings.ghosts.detail.oauthScopeStale')}</span>
+    </div>
   );
 }
 

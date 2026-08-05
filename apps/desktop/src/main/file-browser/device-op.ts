@@ -56,6 +56,7 @@ import {
   FILE_BROWSER_EVENT_CHANNEL,
   FILE_BROWSER_REMOTE_OP_CHANNEL,
   parseFsWatchTopic,
+  type PushOwnerStamp,
 } from '@cindy/device-link';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
 
@@ -71,6 +72,7 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
@@ -645,15 +647,38 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
  *    fileTree 事件从 daemon 流入 onHostEvent → 同一推送出口。
  * 幂等:重复 onSubscribed 忽略;onReleased 清理对应资源。
  */
-const localWatch = new WorkdirWatchManager((event) => {
-  pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, event);
-});
+/**
+ * Keep the source owner on the watcher instance rather than reading the active
+ * owner when an fs event eventually arrives. A watcher can outlive a logout or
+ * account switch, and the delayed event must remain attributable to the owner
+ * that created the watcher.
+ */
+interface LocalWatchHandle {
+  manager: WorkdirWatchManager;
+  ownerStamp?: PushOwnerStamp;
+}
+
+const localWatchHandles = new Map<string, LocalWatchHandle>();
 const localWatchWorkdirs = new Set<string>();
 const sshWatchOffs = new Map<string, () => void>();
 /** 最新订阅意图；release / 立即重订阅时由正在启动的同一任务收敛到最新状态。 */
 const fsWatchDesired = new Set<string>();
 /** 启动窗口占位:dedup 判定与首个 await 之间的 TOCTOU 防护(见下)。 */
 const fsWatchStarting = new Map<string, symbol>();
+
+function isSameOwnerStamp(
+  left: PushOwnerStamp | undefined,
+  right: PushOwnerStamp | undefined,
+): boolean {
+  return (
+    left?.dataOwnerId === right?.dataOwnerId &&
+    left?.ownerGeneration === right?.ownerGeneration
+  );
+}
+
+function isOwnerStampCurrent(ownerStamp: PushOwnerStamp | undefined): boolean {
+  return isSameOwnerStamp(ownerStamp, getSafeDataOwnerPushStamp());
+}
 
 async function onFsWatchSubscribed(workdir: string): Promise<void> {
   fsWatchDesired.add(workdir);
@@ -713,17 +738,41 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
+  // Freeze the owner immediately before creating the watcher. The event source,
+  // not the eventual delivery time, defines the data boundary.
+  const ownerStamp = getSafeDataOwnerPushStamp();
   if (exec.kind === 'local') {
+    let localWatch = localWatchHandles.get(workdir);
+    if (!localWatch) {
+      const manager = new WorkdirWatchManager((event) => {
+        if (!fsWatchDesired.has(workdir)) return;
+        pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, event, ownerStamp);
+      });
+      localWatch = { manager, ownerStamp };
+      localWatchHandles.set(workdir, localWatch);
+    }
+    const activeLocalWatch = localWatch;
     try {
-      await localWatch.start(workdir, { hideMetaFiles: true });
-      if (!isFsWatchStartCurrent(workdir, token)) {
-        localWatch.stop(workdir);
+      await activeLocalWatch.manager.start(workdir, { hideMetaFiles: true });
+      if (
+        !isFsWatchStartCurrent(workdir, token) ||
+        localWatchHandles.get(workdir) !== activeLocalWatch ||
+        !isOwnerStampCurrent(activeLocalWatch.ownerStamp)
+      ) {
+        activeLocalWatch.manager.stop(workdir);
+        if (localWatchHandles.get(workdir) === activeLocalWatch) {
+          localWatchHandles.delete(workdir);
+        }
+        if (fsWatchDesired.has(workdir)) scheduleFsWatchReconcile(workdir);
         return;
       }
       localWatchWorkdirs.add(workdir);
       log.info('device fs-watch started (local)', { workdir });
     } catch (err) {
       localWatchWorkdirs.delete(workdir);
+      if (localWatchHandles.get(workdir) === activeLocalWatch) {
+        localWatchHandles.delete(workdir);
+      }
       log.warn('device fs-watch start failed', { workdir, error: String(err) });
     }
     return;
@@ -735,12 +784,11 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     if (evt.event !== 'fileTree') return;
     const data = evt.data as { workdir: string };
     if (data.workdir !== workdir) return;
-    pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data);
-  });
-  const offReconnect = mgr.onHostConnected(hostId, () => {
-    void mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true }).catch(() => undefined);
+    if (!fsWatchDesired.has(workdir)) return;
+    pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data, ownerStamp);
   });
   let listenersDisposed = false;
+  let offReconnect = (): void => undefined;
   const disposeListeners = (): void => {
     if (listenersDisposed) return;
     listenersDisposed = true;
@@ -751,34 +799,60 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     disposeListeners();
     void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
   };
-  sshWatchOffs.set(workdir, stopWatch);
-  try {
-    await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
-    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
-    if (!isFsWatchStartCurrent(workdir, token) || !isRegistered) {
-      if (isRegistered) sshWatchOffs.delete(workdir);
-      // release 可能已在 watchStart 完成前发过 stop；完成后再发一次，保证
-      // daemon 不会留下刚启动成功的 watcher。
+  const isRegistered = (): boolean => sshWatchOffs.get(workdir) === stopWatch;
+  const disposeStaleWatch = (): void => {
+    const registeredStop = sshWatchOffs.get(workdir);
+    if (registeredStop === stopWatch) {
+      sshWatchOffs.delete(workdir);
+      // A watchStart may already be in flight. stopWatch is intentionally safe
+      // to call again after it settles so a late successful daemon watch is removed.
       stopWatch();
-      // release 后若已立即重新订阅，旧启动先完成清理，再从全新监听器和
-      // watchStart 开始；setTimeout 确保外层 finally 已移除旧 token。
-      if (fsWatchDesired.has(workdir)) {
-        scheduleFsWatchReconcile(workdir);
-      }
-      return;
+    } else if (registeredStop) {
+      // A newer registration owns this workdir. Only detach the stale closure:
+      // watchStop is keyed by workdir and could stop the replacement watcher too.
+      disposeListeners();
+    } else {
+      // release removed this registration while its request was in flight.
+      stopWatch();
     }
+    if (fsWatchDesired.has(workdir)) scheduleFsWatchReconcile(workdir);
+  };
+  const startSshWatch = async (requireStartupToken: boolean): Promise<boolean> => {
+    const isCurrent = (): boolean =>
+      fsWatchDesired.has(workdir) &&
+      isRegistered() &&
+      isOwnerStampCurrent(ownerStamp) &&
+      (!requireStartupToken || isFsWatchStartCurrent(workdir, token));
+    if (!isCurrent()) {
+      disposeStaleWatch();
+      return false;
+    }
+    try {
+      await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+    } catch (err) {
+      if (!isCurrent()) disposeStaleWatch();
+      throw err;
+    }
+    if (!isCurrent()) {
+      disposeStaleWatch();
+      return false;
+    }
+    return true;
+  };
+  sshWatchOffs.set(workdir, stopWatch);
+  offReconnect = mgr.onHostConnected(hostId, () => {
+    void startSshWatch(false).catch((err) => {
+      log.warn('device fs-watch ssh reconnect failed', {
+        workdir,
+        hostId,
+        error: String(err),
+      });
+    });
+  });
+  try {
+    if (!(await startSshWatch(true))) return;
     log.info('device fs-watch started (ssh nested)', { workdir, hostId });
   } catch (err) {
-    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
-    const isCurrent = isFsWatchStartCurrent(workdir, token);
-    if (!isCurrent || !isRegistered) {
-      if (isRegistered) sshWatchOffs.delete(workdir);
-      disposeListeners();
-      // release 后立即重订阅时，旧 watchStart 的失败不能吞掉新的订阅意图。
-      if (fsWatchDesired.has(workdir)) {
-        scheduleFsWatchReconcile(workdir);
-      }
-    }
     // 当前订阅的初次启动失败时保留 stop/reconnect 监听；host 下次连接会
     // 通过 offReconnect 对应回调重试 watchStart。
     log.warn('device fs-watch ssh start failed', { workdir, hostId, error: String(err) });
@@ -789,8 +863,17 @@ function onFsWatchReleased(workdir: string): void {
   // guard / DB lookup / watchStart 任一 await 结束后都读取最新订阅意图；
   // 保留启动 token 可串行吸收紧随 release 到来的重订阅，避免同路径双启动。
   fsWatchDesired.delete(workdir);
+  const localWatch = localWatchHandles.get(workdir);
+  // If the manager has already entered the active set, stop it even while the
+  // outer start token is being finalized. Only an in-flight start is left alone
+  // so an immediate resubscribe can converge on that same startup.
+  if (localWatchWorkdirs.has(workdir) || !fsWatchStarting.has(workdir)) {
+    if (localWatch) {
+      localWatchHandles.delete(workdir);
+      localWatch.manager.stop(workdir);
+    }
+  }
   if (localWatchWorkdirs.delete(workdir)) {
-    localWatch.stop(workdir);
     log.info('device fs-watch stopped (local)', { workdir });
   }
   const offSsh = sshWatchOffs.get(workdir);

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -282,7 +283,6 @@ describe('normalizeTaskSource', () => {
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
   });
-
 });
 
 describe('dispatcher 核心语义', () => {
@@ -433,7 +433,8 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch(
       'conn-1',
       dispatch({
-        prompt: '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
+        prompt:
+          '<thread_context>\n[@alice] 为啥大厂都自研 agent\n</thread_context>\n\n以上仅供参考\n\n你来解释下这个问题',
         source: { im: 'x', userText: '你来解释下这个问题' },
       }),
       c.send,
@@ -1237,6 +1238,101 @@ describe('dispatcher 核心语义', () => {
     const c2 = collector();
     d.onConnected('conn-1', c2.send);
     expect(c2.last('turn.end')?.payload).toMatchObject({ finalText: '离线结果' });
+  });
+
+  it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '等待接管' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+      expect(c.ofType('turn.end')[1]).toEqual(c.ofType('turn.end')[0]);
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'accepted',
+        attempt: 0,
+        retryAt: null,
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ACK server 断线期间完成的 turn.end 在重连后进入 ACK 缓冲，retrying 也视为已接管', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const first = collector();
+    const second = collector();
+    try {
+      d.onConnected('conn-1', first.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), first.send);
+      await tick();
+      d.onDisconnected('conn-1');
+      fr.finish({ finalText: '离线完成' });
+      await tick();
+      expect(first.ofType('turn.end')).toHaveLength(0);
+
+      d.onConnected('conn-1', second.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      expect(second.ofType('turn.end')).toHaveLength(1);
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'retrying',
+        attempt: 1,
+        retryAt: Date.now() + 60_000,
+        error: { code: 'X_UNAVAILABLE', message: 'retrying', retryable: true },
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(second.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['delivered', 'failed'] as const)('终态 %s 也会释放待重放正文', async (state) => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '终态确认' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state,
+        attempt: 1,
+        retryAt: null,
+        error:
+          state === 'failed'
+            ? { code: 'X_REQUEST_REJECTED', message: 'rejected', retryable: false }
+            : null,
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
   });
 });
 

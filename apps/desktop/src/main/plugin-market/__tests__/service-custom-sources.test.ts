@@ -180,7 +180,7 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     });
   }
   const api = {
-    listAll: vi.fn(async () => items),
+    listAll: vi.fn(async () => ({ plugins: items, removals: [] })),
     detail: vi.fn(),
     download: vi.fn(),
   };
@@ -352,7 +352,7 @@ describe('PluginMarketService 自定义市场 snapshot 账户作用域', () => {
     // 而不是把 user-1 的自定义插件聚合进 user-2 的快照。
     h.api.listAll.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
-      return [];
+      return { plugins: [], removals: [] };
     });
     await expect(h.service.snapshot()).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
@@ -475,7 +475,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 不得把 user-1 审阅的插件装进 user-2 的运行时。
     h.api.listAll.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
-      return [];
+      return { plugins: [], removals: [] };
     });
     // 打包前的 discover/校验按 user-1 完成;在 install 入口后切换会话。
     const installPromise = h.service.install(customMarketPluginId('team-lib', 'alpha'), {

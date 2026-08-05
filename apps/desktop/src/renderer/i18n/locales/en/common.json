@@ -1854,6 +1854,11 @@
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
+      "lifecycleAnnouncement": {
+        "label": "Online/Offline Notifications",
+        "cellLabel": "Message Notifications",
+        "hint": "Have the Discord Bot send a message when this device goes online or offline"
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",
@@ -3179,6 +3184,8 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
+        "installedExpand": "Show all {{count}} installed plugins",
+        "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
@@ -3218,13 +3225,21 @@
         },
         "install": "Install",
         "details": "Details",
+        "detailsAria": "View details for {{name}}",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
-        "conflict": "Plugin ID conflict",
+        "conflict": "Unavailable",
+        "conflictAria": "{{name}} has a plugin ID conflict",
+        "conflictDescription": "This plugin ID is already in use, so this plugin can't be installed.",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "removalNotice": {
+          "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
+          "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
+          "multiple_other": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
+        },
         "errors": {
           "generic": "The plugin market operation failed. Please try again.",
           "invalidRequest": "The plugin request is invalid.",
@@ -3404,12 +3419,16 @@
         "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
+        "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
         "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
+        "agentSchedule": "Can ask you to create an automation",
+        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -3523,7 +3542,8 @@
             "image.edit": "Image editing",
             "video.generate": "Video generation",
             "video.edit": "Image-to-video",
-            "text.oneshot": "Quick answer (text)"
+            "text.oneshot": "Quick answer (text)",
+            "embed.text": "Text to vector"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
@@ -3557,6 +3577,7 @@
         "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
+        "oauthScopeStale": "This authorization does not include newly added permissions. Reconnect to grant them.",
         "configurationTitle": "Configuration",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
@@ -3946,6 +3967,21 @@
       "dismissButton": "Got it"
     }
   },
+  "credentialStore": {
+    "banner": {
+      "message": "System credential storage is unavailable; your signed-in state cannot be maintained",
+      "viewHelp": "View solutions",
+      "dismiss": "Dismiss"
+    },
+    "dialog": {
+      "title": "System credential storage unavailable",
+      "intro": "Cindy cannot read its sign-in credentials from the system credential storage, so the signed-in state and related integrations will keep failing. Try the following steps to recover:",
+      "stepMacKeychain": "Quit Cindy, open Keychain Access, search for \"Cindy Safe Storage\" and check its access control; delete the entry if necessary (saved integration credentials will be invalidated and need to be reconnected)",
+      "stepRestart": "Restart Cindy",
+      "stepRelogin": "If it still does not recover, sign out and sign in again",
+      "confirm": "OK"
+    }
+  },
   "localDbGate": {
     "title": "Local data could not be opened",
     "description": "Retry, or return to the sign-in choices and select a mode again.",
@@ -4178,6 +4214,29 @@
       "latestTurnTitle": "Latest turn",
       "latestUserTurnTitle": "Latest user-turn total"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5 hours",
+    "weeklyLabel": "Weekly",
+    "modelWeeklyLabel": "{{model}} weekly",
+    "windowsRegionLabel": "Quota Windows",
+    "usedPercent": "Used {{percent}}%",
+    "resetAt": "Resets {{at}}",
+    "noWindows": "No quota window data available",
+    "limitRejected": "Plan limit reached; requests may be rejected",
+    "limitWarning": "Approaching plan limit",
+    "extraUsageEnabled": "Extra usage enabled",
+    "costLine": "Cost this message: {{cost}}",
+    "valueLine": "Token value this message: {{cost}}",
+    "noBilledCost": "Cost unavailable for this message; showing usage only",
+    "latestMessageTitle": "Latest message total",
+    "turnCostUnavailable": "Cost unavailable for this message",
+    "tokenLabel": "Tokens",
+    "tokenBreakdown": "(input {{input}} · output {{output}})",
+    "cacheLabel": "Cache",
+    "modelLabel": "Model",
+    "staleData": "Data updated {{minutes}} minutes ago",
+    "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
     "costLine": "Cost this turn: {{cost}}",
@@ -5156,9 +5215,7 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch",
-      "worktreeHint": "Picking another branch starts this chat in an isolated worktree",
-      "exitWorktreeHint": "Picking the current branch leaves worktree and starts directly on it"
+      "sourceTooltip": "Worktree source branch"
     },
     "folderPicker": {
       "selectFolder": "Select folder",
@@ -5281,9 +5338,24 @@
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
-        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+        "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
+        "items": {
+          "files": {
+            "title": "Files and Folders",
+            "description": "Read and modify files outside the workspace"
+          },
+          "commands": {
+            "title": "Terminal Commands",
+            "description": "Run terminal commands and scripts directly"
+          },
+          "network": {
+            "title": "Network Access",
+            "description": "Run network commands and access the internet"
+          }
+        },
+        "note": "Built-in high-risk operations will still require confirmation.",
         "confirm": "Enable Full access",
-        "cancel": "Keep current permissions"
+        "cancel": "Cancel"
       },
       "attachmentRejection": {
         "dismiss": "Dismiss"
@@ -7074,6 +7146,7 @@
         "titleProjectCreate": "New project automation",
         "titleProjectEdit": "Edit project automation",
         "subtitle": "Run a prompt on a schedule with Claude or Codex.",
+        "subtitleFromGhost": "\"{{name}}\" is asking you to create an automation. Pick a model and save to enable it.",
         "save": "Save",
         "create": "Create",
         "saveAria": "Save automation",
@@ -7294,7 +7367,8 @@
       "actionFailed": "Action failed: {{error}}",
       "renameFailed": "Rename failed: {{error}}",
       "deleteFailed": "Failed to delete: {{error}}",
-      "restartFailed": "Failed to restart: {{error}}"
+      "restartFailed": "Failed to restart: {{error}}",
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\" asked to create an automation, but a form is already open. Your edits were kept — save or close it, then trigger the request again."
     },
     "deleteDialog": {
       "title": "Delete automation \"{{name}}\"?",
@@ -8305,6 +8379,8 @@
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
+      "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
       "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
     },
     "validation": {

@@ -792,6 +792,25 @@ describe('DeviceLinkClient', () => {
     // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
     const sentBefore = firstSocket.sent.length;
     await establishInboundReliableLink(h, 'inbound-timeout-stream');
+    // 模拟真实接收端:重放帧已写入 socket FIFO 后立即回 ACK(见 client.ts
+    // sendTransportAck 的交付即确认语义)。不 ACK 的话,重放后 retryTimer
+    // 会在 Windows 低精度计时器(≈12ms>配置 5ms)下把同一帧再发一遍,慢 CI
+    // runner 上断言窗口跨过该周期时会把「重试重发」误判成「重放两次」。
+    const justReplayed = firstSocket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ));
+    if (justReplayed.length > 0) {
+      const meta = parseTransportPayload(justReplayed[0].payload)!.meta;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        },
+      });
+    }
     const replayed = firstSocket.sent.slice(sentBefore);
     const replays = replayed.filter((env) => (
       env.kind === 'invoke-result' && parseTransportPayload(env.payload)

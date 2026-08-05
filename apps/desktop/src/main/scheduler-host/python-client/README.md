@@ -30,8 +30,8 @@ spawn 你的脚本;脚本通过 stdin/stdout 的 JSONL 协议(`cindy-script/1`)�
 | 能力 | 方法 | 说明 |
 |---|---|---|
 | (免授权) | `host_capabilities()` | 自省:返回本任务已授予的能力与完整方法目录,脚本先 list 再决定怎么 call |
-| `jira.read` | `jira_issue_get(key, fields?)` / `jira_issues_search_jql(jql, fields, max_results, next_page_token?)` | 读 Jira(走已连接的 Atlassian 账号;**需要 XD Atlassian 意识装入且唤醒**) |
-| `jira.comment` | `jira_issue_add_comment(key, body_text)` | 写 Jira 评论(同上) |
+| `jira.read` | `jira_issue_get(key, fields?, out_file?)` / `jira_issues_search_jql(jql, fields?, max_results?, next_page_token?, out_file?)` | 读 Jira(走已连接的 Atlassian 账号;**需要 XD Atlassian 意识装入且唤醒**);`out_file` = 大结果整包落盘到任务工作目录的相对路径,返回 `saved_to` 后从自己 cwd 读回 |
+| `jira.comment` | `jira_issue_add_comment(key, body_text=…, body_adf=…)` | 写 Jira 评论(同上);`body_text` 纯文本与 `body_adf`(ADF 文档对象,支持真实 @mention)恰好二选一 |
 | `feishu.read` | `feishu_recent_chats(count≤50)` / `feishu_recent_messages(chat_id, count≤50, start_time?)` | 按活跃倒序列最近会话;拉指定会话最近消息(新→旧,含 sender_name,`start_time` 做增量游标)。走应用内飞书登录态,token 不下发脚本 |
 | `sessions.dispatch` | `sessions_dispatch(message, title?, target_session_id?)` | 创建或唤醒 Cindy 会话并投递消息;新会话配置继承任务本身(agent/model/目录),脚本无法伪造 |
 
@@ -45,9 +45,12 @@ spawn 你的脚本;脚本通过 stdin/stdout 的 JSONL 协议(`cindy-script/1`)�
 - **错误码是结构化的**:`MakerClientError.code` 可能是 `CAPABILITY_DENIED`(没勾
   能力)/ `METHOD_NOT_FOUND` / `INVALID_ARGS` / `HOST_NOT_READY` / `GHOST_ASLEEP`
   (意识沉睡)/ `AUTH_EXPIRED`(登录态过期)等,按需分支处理。
-- **大结果集要分页**:宿主对单次响应有体积上限,`jira_issues_search_jql` 用
-  `next_page_token` 翻页(参考 auto-jira-dispatch 的 `_search_all_issues`:
-  截断时减半页重试)。
+- **大结果集两条路**:宿主对单次响应有体积上限——`jira_issues_search_jql` 可以
+  用 `next_page_token` 翻页(参考 auto-jira-dispatch 的 `_search_all_issues`:
+  截断时减半页重试),也可以传 `out_file` 让意识把整包落盘到任务工作目录
+  (如 `out_file="reports/jira.json"`,返回 `saved_to` 相对路径,脚本从自己
+  cwd 读回);`jira_issue_get` 同样支持。落盘路径由宿主校验,必须是工作目录内
+  的相对路径。
 - 环境变量经过白名单过滤(PATH/HOME 等基础项保留,凭证类一律不透传);任务可配
   整轮超时,超时杀整棵进程树。
 

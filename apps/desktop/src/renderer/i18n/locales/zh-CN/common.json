@@ -1853,6 +1853,11 @@
         "confirm": "解绑",
         "cancel": "取消"
       },
+      "lifecycleAnnouncement": {
+        "label": "上下线通知",
+        "cellLabel": "消息通知",
+        "hint": "上下线时由 Discord Bot 发送通知消息"
+      },
       "ownerNotice": {
         "linked": "✅ 关联好啦，直接开聊就行~",
         "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
@@ -3178,6 +3183,8 @@
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "installedSection": "已安装",
+        "installedExpand": "展开全部 {{count}} 个已安装插件",
+        "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
@@ -3217,13 +3224,21 @@
         },
         "install": "安装",
         "details": "详情",
+        "detailsAria": "查看 {{name}} 的详情",
         "update": "从市场更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
-        "conflict": "插件标识冲突",
+        "conflict": "暂不可用",
+        "conflictAria": "{{name}} 存在插件标识冲突",
+        "conflictDescription": "插件标识已被占用，当前无法安装",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "removalNotice": {
+          "single": "插件“{{name}}”已被组织移除，本机副本与数据已清理",
+          "multiple_one": "{{count}} 个插件已被组织移除，本机副本与数据已清理",
+          "multiple_other": "{{count}} 个插件已被组织移除，本机副本与数据已清理"
+        },
         "errors": {
           "generic": "插件市场操作失败，请重试。",
           "invalidRequest": "插件请求无效。",
@@ -3403,12 +3418,16 @@
         "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
+        "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
+        "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的任务，可能产生模型费用。",
         "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
         "agentErrandDetail": "这些代办会在这个插件的专属任务里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
+        "agentSchedule": "可以请你新建自动化",
+        "agentScheduleDetail": "它只能为你打开新建自动化的面板并把内容填好，是否创建由你在面板上选好模型后亲手保存决定。创建后由 Cindy 按你设定的时间运行，可能产生模型费用。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -3522,7 +3541,8 @@
             "image.edit": "改图",
             "video.generate": "生成视频",
             "video.edit": "图生视频",
-            "text.oneshot": "快问快答(文字)"
+            "text.oneshot": "快问快答(文字)",
+            "embed.text": "文本转向量"
           },
           "defaultOption": "{{model}}(默认)",
           "noModels": "暂无可用模型"
@@ -3556,6 +3576,7 @@
         "exportFileType": "Cindy 插件",
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
+        "oauthScopeStale": "当前授权未包含插件新增权限，请重新连接补齐授权。",
         "configurationTitle": "配置",
         "openTool": "查看 Tool {{name}} 的详情",
         "noToolDescription": "该 Tool 暂无描述。",
@@ -3944,6 +3965,21 @@
       "dismissButton": "我知道了"
     }
   },
+  "credentialStore": {
+    "banner": {
+      "message": "系统凭证存储不可用，登录状态无法维持",
+      "viewHelp": "查看解决方法",
+      "dismiss": "关闭提示"
+    },
+    "dialog": {
+      "title": "系统凭证存储不可用",
+      "intro": "Cindy 无法通过系统凭证存储读取登录凭证，登录状态和相关集成会持续失效。可尝试以下步骤恢复：",
+      "stepMacKeychain": "退出 Cindy，打开「钥匙串访问」，搜索「Cindy Safe Storage」并检查其访问控制；必要时删除该条目（已保存的集成凭证会失效，需要重新连接）",
+      "stepRestart": "重新启动 Cindy",
+      "stepRelogin": "如果仍未恢复，退出登录后重新登录",
+      "confirm": "知道了"
+    }
+  },
   "localDbGate": {
     "title": "本地数据暂时无法打开",
     "description": "可以重试，或返回登录方式后重新选择使用模式。",
@@ -4176,6 +4212,29 @@
       "latestTurnTitle": "最近一轮",
       "latestUserTurnTitle": "最近一轮用户请求累计"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5 小时",
+    "weeklyLabel": "周限",
+    "modelWeeklyLabel": "{{model}} 周限",
+    "windowsRegionLabel": "配额窗口列表",
+    "usedPercent": "已用 {{percent}}%",
+    "resetAt": "{{at}} 重置",
+    "noWindows": "暂无配额窗口数据",
+    "limitRejected": "已触发套餐限额，请求可能被拒绝",
+    "limitWarning": "接近套餐限额",
+    "extraUsageEnabled": "额外用量已启用",
+    "costLine": "本轮消耗：{{cost}}",
+    "valueLine": "本轮 token 价值：{{cost}}",
+    "noBilledCost": "本轮费用暂不可用，仅显示用量",
+    "latestMessageTitle": "最近一轮用户请求累计",
+    "turnCostUnavailable": "本轮费用暂无法估算",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
+    "cacheLabel": "缓存",
+    "modelLabel": "模型",
+    "staleData": "数据更新于 {{minutes}} 分钟前",
+    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
     "costLine": "本轮消耗：{{cost}}",
@@ -5154,9 +5213,7 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支",
-      "worktreeHint": "选择其他分支将以 worktree 隔离启动",
-      "exitWorktreeHint": "选择当前分支将退出 worktree，直接在当前分支上启动"
+      "sourceTooltip": "worktree 源分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
@@ -5279,9 +5336,24 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
-        "description": "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+        "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
+        "items": {
+          "files": {
+            "title": "文件与文件夹",
+            "description": "读取和修改工作区外的文件"
+          },
+          "commands": {
+            "title": "终端命令",
+            "description": "直接执行终端命令与脚本"
+          },
+          "network": {
+            "title": "网络访问",
+            "description": "执行联网命令、访问网络资源"
+          }
+        },
+        "note": "内置高风险操作仍会要求确认。",
         "confirm": "开启 Full access",
-        "cancel": "保留当前权限"
+        "cancel": "取消"
       },
       "attachmentRejection": {
         "dismiss": "关闭"
@@ -7063,6 +7135,7 @@
         "titleProjectCreate": "新建项目自动化",
         "titleProjectEdit": "编辑项目自动化",
         "subtitle": "用 Claude 或 Codex 按计划运行 Prompt。",
+        "subtitleFromGhost": "「{{name}}」请你新建一个自动化。选好模型后保存即可生效。",
         "save": "保存",
         "create": "创建",
         "saveAria": "保存自动化",
@@ -7283,7 +7356,8 @@
       "actionFailed": "操作失败：{{error}}",
       "renameFailed": "重命名失败：{{error}}",
       "deleteFailed": "删除失败：{{error}}",
-      "restartFailed": "重启失败：{{error}}"
+      "restartFailed": "重启失败：{{error}}",
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。"
     },
     "deleteDialog": {
       "title": "删除自动化「{{name}}」？",
@@ -8293,6 +8367,8 @@
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
+      "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
+      "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
       "turnNoEventTimeout": "本轮长时间没有任何进展（模型、工具与后台进程都没有动静），已自动中断以免无限等待。可以直接发下一条消息继续。"
     },
     "validation": {

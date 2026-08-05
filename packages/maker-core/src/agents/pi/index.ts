@@ -103,6 +103,7 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
+const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
@@ -176,6 +177,34 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     '[::1]',
   ])).join(',');
   delete env.no_proxy;
+}
+
+/**
+ * 把 host 已校验的 rg 复制到本会话私有 bin。
+ *
+ * Pi 上游 grep 会先从 PI_CODING_AGENT_DIR/bin 解析工具并返回该绝对路径；find bridge
+ * 也直接 spawn 同一路径。不能只改 PATH：Windows executable lookup 会先看 cwd，仓库里的
+ * rg.exe 便可劫持自动放行的只读工具并继承 Pi 父进程凭证。
+ */
+async function stageManagedRipgrep(
+  configHome: string,
+  sourcePath: string | undefined,
+): Promise<string | undefined> {
+  if (!sourcePath) return undefined;
+  if (!path.isAbsolute(sourcePath)) {
+    throw new Error('pi: managed ripgrep path must be absolute');
+  }
+  const sourceStat = await fs.stat(sourcePath);
+  if (!sourceStat.isFile()) {
+    throw new Error('pi: managed ripgrep path must point to a file');
+  }
+
+  const binDir = path.join(configHome, 'bin');
+  const targetPath = path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.copyFile(sourcePath, targetPath);
+  if (process.platform !== 'win32') await fs.chmod(targetPath, 0o755);
+  return targetPath;
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
@@ -1102,6 +1131,10 @@ export class PiAgent extends BaseAgent {
       if (firstError) throw firstError;
     };
     try {
+      const managedRipgrepPath = await stageManagedRipgrep(
+        configHome,
+        this.deps.runtimeConfig.managedExecutablePaths?.ripgrep,
+      );
       if (opts.sessionId && this.deps.registerPiProxySession) {
         const disposer = this.deps.registerPiProxySession(opts.sessionId, proxySessionToken);
         if (typeof disposer === 'function') disposeProxySession = disposer;
@@ -1123,6 +1156,8 @@ export class PiAgent extends BaseAgent {
         // 只从 bash/模型工具的 spawn 边界剥离;子代理自己的 spawn 不走 bridge 的 bash 钩子,
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
+        // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
+        ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
       const spawnEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -1154,6 +1189,12 @@ export class PiAgent extends BaseAgent {
           ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) }
           : {}),
       };
+      // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
+      // 所有 casing 再写入 host 校验并 stage 后的唯一绝对路径。
+      for (const key of Object.keys(spawnEnv)) {
+        if (key.toLowerCase() === PI_MANAGED_RG_PATH_ENV.toLowerCase()) delete spawnEnv[key];
+      }
+      if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
       mergeLoopbackNoProxy(spawnEnv);
       proc = new PiRpcProcess({
         binaryPath: this.deps.binaryPath,

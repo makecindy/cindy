@@ -24,7 +24,7 @@ import { sql } from 'drizzle-orm';
 import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
 import { createLogger } from './logger';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
   addRegionalMoney,
   legacyUsdMoney,
@@ -68,6 +68,16 @@ export interface SessionContextPayload {
   contextWindow: number;
 }
 
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
+
+function captureOwnerScope(): OwnerScope | null {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(scope: OwnerScope | null): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
 /**
  * 给 session 累加一笔 turn delta：UPDATE sessions SET total_cost_usd += delta，
  * 然后回读最新值并广播。
@@ -79,6 +89,7 @@ export async function recordSessionTurnSpend(
   money: RegionalMoney,
 ): Promise<void> {
   if (!sessionId) return;
+  const ownerScope = captureOwnerScope();
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return;
   // 只接受本账号的结算币种。基准取 currentLedgerCurrency() 而不是构建区域 —— 结算币种
@@ -129,24 +140,37 @@ export async function recordSessionTurnSpend(
           ? addRegionalMoney([legacy, current])
           : current
         : (current ?? legacy);
-    broadcast({
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    broadcast(
+      {
       sessionId,
       totalMoney,
       ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
-    });
+      },
+      ownerScope,
+    );
   } catch (err) {
     log.warn('recordSessionTurnSpend failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
-function broadcast(payload: SessionSpendPayload): void {
+function broadcast(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
+  const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
   // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的
   // $ 永远不更新)。
-  tapWindowBroadcast(USAGE_SESSION_SPEND_CHANGED, payload);
+  if (ownerScope === null) {
+    broadcastTap.tapWindowBroadcast(USAGE_SESSION_SPEND_CHANGED, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(USAGE_SESSION_SPEND_CHANGED, payload, ownerStamp);
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_SESSION_SPEND_CHANGED, payload);
+      if (ownerScope === null) {
+        win.webContents.send(USAGE_SESSION_SPEND_CHANGED, payload);
+      } else {
+        win.webContents.send(USAGE_SESSION_SPEND_CHANGED, payload, ownerStamp);
+      }
     }
   }
 }
@@ -158,6 +182,7 @@ export async function recordSessionTurnTokens(
 ): Promise<void> {
   if (!sessionId) return;
   if (!Number.isFinite(tokenDelta) || tokenDelta <= 0) return;
+  const ownerScope = captureOwnerScope();
   try {
     const db = getDbClient().drizzle;
     await db
@@ -170,17 +195,27 @@ export async function recordSessionTurnTokens(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 });
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
-function broadcastTokens(payload: SessionTokensPayload): void {
-  tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);
+function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
+  const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
+  if (ownerScope === null) {
+    broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload, ownerStamp);
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_SESSION_TOKENS_CHANGED, payload);
+      if (ownerScope === null) {
+        win.webContents.send(USAGE_SESSION_TOKENS_CHANGED, payload);
+      } else {
+        win.webContents.send(USAGE_SESSION_TOKENS_CHANGED, payload, ownerStamp);
+      }
     }
   }
 }
@@ -205,6 +240,7 @@ export async function recordSessionContextSnapshot(
   if (!sessionId) return;
   if (!Number.isFinite(contextTokens) || contextTokens < 0) return;
   if (contextTokens === 0 && (!Number.isFinite(contextWindow) || contextWindow <= 0)) return;
+  const ownerScope = captureOwnerScope();
   try {
     const db = getDbClient().drizzle;
     const updates: { contextTokens: number; contextWindow?: number } = {
@@ -227,11 +263,15 @@ export async function recordSessionContextSnapshot(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    broadcastContext({
-      sessionId,
-      contextTokens: row?.contextTokens ?? 0,
-      contextWindow: row?.contextWindow ?? 0,
-    });
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    broadcastContext(
+      {
+        sessionId,
+        contextTokens: row?.contextTokens ?? 0,
+        contextWindow: row?.contextWindow ?? 0,
+      },
+      ownerScope,
+    );
   } catch (err) {
     log.warn(
       'recordSessionContextSnapshot failed:',
@@ -240,10 +280,15 @@ export async function recordSessionContextSnapshot(
   }
 }
 
-function broadcastContext(payload: SessionContextPayload): void {
+function broadcastContext(payload: SessionContextPayload, ownerScope: OwnerScope | null = null): void {
+  const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_SESSION_CONTEXT_CHANGED, payload);
+      if (ownerScope === null) {
+        win.webContents.send(USAGE_SESSION_CONTEXT_CHANGED, payload);
+      } else {
+        win.webContents.send(USAGE_SESSION_CONTEXT_CHANGED, payload, ownerStamp);
+      }
     }
   }
 }

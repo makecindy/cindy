@@ -66,6 +66,7 @@ import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { getBranchName } from '../../../shared/managedWorktreeBranches';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -174,6 +175,7 @@ import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import { extractIpcError } from '@/utils/ipcError';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -1232,8 +1234,9 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
     const vendorSlot = capabilityAgentKind === 'claude-code' ? 'claudeCode' : capabilityAgentKind;
-    return window.electronAPI.deviceLink.onRemotePush((push) => {
+    return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (push.deviceId !== effectiveDeviceLinkDeviceId) return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (push.channel !== 'maker:new-maker-draft:changed') return;
       const payload = push.payload as Record<string, RemoteDraftDefaults | undefined> | null;
       const next = payload?.[vendorSlot] ?? null;
@@ -2115,17 +2118,12 @@ export function NewMakerDraftRoute() {
     [handleWorkingDirChange],
   );
 
-  // 用户切换 worktree(2026-07-29 实测后第二版):
-  //  - source='chip'(点 checkbox 本体)→ 写穿「工作端勾选记忆」——本地草稿写本地
-  //    newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
-  //    控制端只是远程操作器,与手机端同语义);
-  //  - source='branch-pick'(分支选择的双向联动)→ 仅本次草稿的 UI 态,不落记忆
-  //    ——分支选择表达"这一次从哪启动",不改全局默认。
-  // 系统/环境路径没有任何入口能触达这里(不变量)。
+  // 用户点击 checkbox 切换 worktree:写穿「工作端勾选记忆」——本地草稿写本地
+  // newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
+  // 控制端只是远程操作器,与手机端同语义)。分支选择不会隐式改动这个状态。
   const handleWtEnabledChange = useCallback(
-    (enabled: boolean, source: 'chip' | 'branch-pick') => {
+    (enabled: boolean) => {
       setWtEnabled(enabled);
-      if (source !== 'chip') return;
       if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
         remoteDraftRevisionRef.current += 1;
         window.electronAPI.deviceLink
@@ -2629,7 +2627,7 @@ export function NewMakerDraftRoute() {
             }
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
 
-            const branchName = `xdt/${name}`;
+            let branchName = getBranchName(name);
             const newSession = await createSession({
               id: sessionId,
               agentKind: persistedAgentKind,
@@ -2727,6 +2725,13 @@ export function NewMakerDraftRoute() {
                   return;
                 }
 
+                // Main 会在创建时再做一次分支/路径冲突避让，因此回包里的
+                // meta.branch 才是权威名字。立即替换预估值，避免 UI 继续显示未实际创建的分支。
+                branchName = resp.meta.branch;
+                worktreeCreationStore.set(newSession.id, {
+                  status: 'creating',
+                  name: branchName,
+                });
                 const newDir = resp.meta.path;
                 const latestSession = await sessionService.get(newSession.id).catch((err) => {
                   log.warn('[draft worktree send] get latest session failed', err);

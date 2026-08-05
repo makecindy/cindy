@@ -78,6 +78,7 @@ const slotOverrides = {
   'accent-soft': BLUE_SOFT,
   'accent-hover': BLUE_DEEP,
   'accent-pure-cta-fg': SURFACE_BG,
+  'switch-track-on': BLUE_PRIMARY,
 } as const;
 
 const singletonOverrides = {

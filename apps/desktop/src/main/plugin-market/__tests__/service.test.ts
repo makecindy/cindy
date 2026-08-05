@@ -57,11 +57,19 @@ vi.mock('../download.js', () => ({
   downloadVerifiedPlugin: vi.fn(async () => undefined),
 }));
 
-import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
+import type {
+  PluginRemovalNotice,
+  VisiblePluginDetail,
+  VisiblePluginSummary,
+} from '@cindy/plugin-protocol';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
 import { GhostPackagePermissionReviewRequiredError } from '../../cindy-brain/packagePermissionReview';
-import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
+import {
+  PluginMarketLedger,
+  ghostManifestDigest,
+  type PluginMarketInstallationRecord,
+} from '../ledger';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
 
@@ -145,12 +153,29 @@ function detail(item = summary(), slots: ['notify'] | ['notify', 'fs'] = ['notif
   };
 }
 
-function harness(items: VisiblePluginSummary[]) {
+function removal(
+  overrides: Partial<PluginRemovalNotice> = {},
+): PluginRemovalNotice {
+  return {
+    pluginId: PLUGIN_ID,
+    ghostId: 'cindy-test',
+    scope: 'organization',
+    organizationId: 'org-1',
+    action: 'purge',
+    removedAt: '2026-08-03T08:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function harness(
+  items: VisiblePluginSummary[],
+  removals: PluginRemovalNotice[] = [],
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-service-'));
   roots.push(root);
   const ledger = new PluginMarketLedger(path.join(root, 'ledger.json'));
   const api = {
-    listAll: vi.fn(async () => items),
+    listAll: vi.fn(async () => ({ plugins: items, removals })),
     detail: vi.fn(async (pluginId: string) => {
       const item = items.find((candidate) => candidate.id === pluginId);
       if (!item) throw new Error('not found');
@@ -168,6 +193,33 @@ function harness(items: VisiblePluginSummary[]) {
     ledger,
     service: new PluginMarketService(api as unknown as PluginMarketApi, ledger),
   };
+}
+
+/** 清理通告测试的组织安装记录（统一账本 factory 的 organization 视图）。 */
+function removalRecord(
+  overrides: Partial<PluginMarketInstallationRecord> = {},
+): PluginMarketInstallationRecord {
+  return recordForTest(
+    summary({ scope: 'organization', organizationId: 'org-1' }),
+    overrides,
+  );
+}
+
+/** 清理通告测试的运行时 Ghost 目录项。 */
+function ghostEntry(id: string, name?: string) {
+  return {
+    manifest: name === undefined ? manifest(id) : { ...manifest(id), name },
+    dir: `/userData/cindy-brain/${id}`,
+    enabled: true,
+  };
+}
+
+/** uninstall mock 真的把 Ghost 从运行时目录拿走；failFor 指定的那条抛错。 */
+function mockUninstallDropsGhost(failFor?: string): void {
+  runtime.uninstall.mockImplementation(async (ghostId: string) => {
+    if (ghostId === failFor) throw new Error('cleanup failed');
+    runtime.ghosts = runtime.ghosts.filter((ghost) => ghost.manifest.id !== ghostId);
+  });
 }
 
 describe('PluginMarketService migration and defaultInstall', () => {
@@ -890,6 +942,251 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.service.prepareLocalUninstallTracking('cindy-test')).toBeNull();
   });
 
+  it.each(['market', 'legacy-adopted'] as const)(
+    'purges an installed organization plugin owned by the %s source without opting out',
+    async (source) => {
+      const notice = removal();
+      const h = harness([], [notice]);
+      runtime.ghosts = [ghostEntry(notice.ghostId)];
+      mockUninstallDropsGhost();
+      h.ledger.upsertInstallation(removalRecord({ source }));
+
+      await expect(h.service.snapshot()).resolves.toMatchObject({
+        unavailableReason: null,
+      });
+
+      expect(runtime.uninstall).toHaveBeenCalledWith(notice.ghostId, {
+        skipMarketLedger: true,
+      });
+      expect(h.ledger.installationForGhost(notice.ghostId)?.installed).toBe(false);
+      expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(false);
+      expect(h.service.consumeRemovalNotice()).toEqual({
+        count: 1,
+        name: 'Test Plugin',
+      });
+    },
+  );
+
+  it('purges when the ledger provenance digest matches the installed package', async () => {
+    const notice = removal();
+    const h = harness([], [notice]);
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.ghosts = [{ ...ghostEntry(notice.ghostId), dir: installDir }];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(
+      removalRecord({ manifestDigest: ghostManifestDigest(manifest()) }),
+    );
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      unavailableReason: null,
+    });
+
+    expect(runtime.uninstall).toHaveBeenCalledWith(notice.ghostId, {
+      skipMarketLedger: true,
+    });
+    expect(h.ledger.installationForGhost(notice.ghostId)?.installed).toBe(false);
+    expect(h.service.consumeRemovalNotice()).toEqual({
+      count: 1,
+      name: 'Test Plugin',
+    });
+  });
+
+  it.each([
+    ['missing ledger record', null],
+    ['different pluginId', removalRecord({ pluginId: `c${'b'.repeat(24)}` })],
+    [
+      'git marketplace source',
+      removalRecord({ source: 'git-market', sourceKey: '["git","repo"]' }),
+    ],
+    [
+      'local marketplace source',
+      removalRecord({ source: 'local-market', sourceKey: '["local","dir"]' }),
+    ],
+    ['already removed record', removalRecord({ installed: false })],
+    ['public scope record', removalRecord({ scope: 'public', organizationId: null })],
+    // 记录带溯源摘要但运行时包对不上(此处 ghost.json 不可读=摘要 null):占位的
+    // 已不是市场装的那份包,按 fail-closed 口径不删。
+    ['stale manifest digest', removalRecord({ manifestDigest: 'f'.repeat(64) })],
+  ] as const)(
+    'skips a server removal with %s without touching the ledger',
+    async (_label, record) => {
+      const notice = removal();
+      const h = harness([], [notice]);
+      runtime.ghosts = [ghostEntry(notice.ghostId)];
+      if (record) h.ledger.upsertInstallation(record);
+      const before = h.ledger.read();
+
+      await expect(h.service.snapshot()).resolves.toMatchObject({
+        unavailableReason: null,
+      });
+
+      expect(runtime.uninstall).not.toHaveBeenCalled();
+      expect(h.ledger.read()).toEqual(before);
+      expect(h.service.consumeRemovalNotice()).toBeNull();
+    },
+  );
+
+  it('skips a removal whose action is not purge without touching the ledger', async () => {
+    // 协议层已滤掉未知 action;这里锁的是 service 兜底(验收点 6):万一有
+    // 非 purge 通告穿透,零卸载、零账本写入、零通知。
+    const notice = removal({
+      action: 'quarantine' as unknown as PluginRemovalNotice['action'],
+    });
+    const h = harness([], [notice]);
+    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    h.ledger.upsertInstallation(removalRecord());
+    const before = h.ledger.read();
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      unavailableReason: null,
+    });
+
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.read()).toEqual(before);
+    expect(h.service.consumeRemovalNotice()).toBeNull();
+  });
+
+  it('keeps an existing default-install opt-out when a repeated purge is skipped', async () => {
+    const notice = removal();
+    const h = harness([], [notice]);
+    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.markRemoved(notice.ghostId, 'user-1');
+
+    await h.service.snapshot();
+
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(true);
+    expect(h.service.consumeRemovalNotice()).toBeNull();
+  });
+
+  it('keeps a pre-existing opt-out intact after a successful purge', async () => {
+    // 退订只读的另一半(不清):早先手动卸载写过退订、之后又重新安装的用户,
+    // purge 成功后退订必须原样保留,穿越重新上架周期继续生效。
+    const notice = removal();
+    const h = harness([], [notice]);
+    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.markRemoved(notice.ghostId, 'user-1');
+    h.ledger.upsertInstallation(removalRecord());
+
+    await h.service.snapshot();
+
+    expect(runtime.uninstall).toHaveBeenCalledTimes(1);
+    expect(h.ledger.installationForGhost(notice.ghostId)?.installed).toBe(false);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(true);
+    expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: 'Test Plugin' });
+  });
+
+  it('applies a repeated removal only once across snapshots', async () => {
+    const notice = removal();
+    const h = harness([], [notice]);
+    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(removalRecord());
+
+    await h.service.snapshot();
+    expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: 'Test Plugin' });
+    await h.service.snapshot();
+
+    expect(runtime.uninstall).toHaveBeenCalledTimes(1);
+    expect(h.service.consumeRemovalNotice()).toBeNull();
+  });
+
+  it('purges a batch and exposes one combined user notice', async () => {
+    const secondPluginId = `c${'b'.repeat(24)}`;
+    const notices = [
+      removal(),
+      removal({ pluginId: secondPluginId, ghostId: 'cindy-second' }),
+    ];
+    const h = harness([], notices);
+    runtime.ghosts = [
+      ghostEntry('cindy-test'),
+      ghostEntry('cindy-second', 'Second Plugin'),
+    ];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.upsertInstallation(
+      removalRecord({ pluginId: secondPluginId, ghostId: 'cindy-second' }),
+    );
+
+    await h.service.snapshot();
+
+    expect(runtime.uninstall).toHaveBeenCalledTimes(2);
+    expect(h.service.consumeRemovalNotice()).toEqual({ count: 2, name: null });
+  });
+
+  it('keeps a pending removal notice isolated to the owner that was cleaned', async () => {
+    const notice = removal();
+    const h = harness([], [notice]);
+    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(removalRecord());
+
+    await h.service.snapshot();
+    runtime.session = {
+      mode: 'cloud',
+      dataOwnerId: 'user-2',
+      generation: 2,
+    };
+    expect(h.service.consumeRemovalNotice()).toBeNull();
+    runtime.session = {
+      mode: 'cloud',
+      dataOwnerId: 'user-1',
+      generation: 3,
+    };
+    expect(h.service.consumeRemovalNotice()).toEqual({
+      count: 1,
+      name: 'Test Plugin',
+    });
+    // 一次即清:同 owner 紧接着再取必须为空,不会重复弹窗。
+    expect(h.service.consumeRemovalNotice()).toBeNull();
+  });
+
+  it('still counts a successful removal when the safe display name becomes empty', async () => {
+    const notice = removal();
+    const h = harness([], [notice]);
+    runtime.ghosts = [ghostEntry(notice.ghostId, '\u202e')];
+    mockUninstallDropsGhost();
+    h.ledger.upsertInstallation(removalRecord());
+
+    await h.service.snapshot();
+
+    expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: null });
+  });
+
+  it('continues the snapshot and later removals when one purge fails', async () => {
+    const secondPluginId = `c${'b'.repeat(24)}`;
+    const notices = [
+      removal(),
+      removal({ pluginId: secondPluginId, ghostId: 'cindy-second' }),
+    ];
+    const h = harness([], notices);
+    runtime.ghosts = [
+      ghostEntry('cindy-test'),
+      ghostEntry('cindy-second', 'Second Plugin'),
+    ];
+    mockUninstallDropsGhost('cindy-test');
+    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.upsertInstallation(
+      removalRecord({ pluginId: secondPluginId, ghostId: 'cindy-second' }),
+    );
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      unavailableReason: null,
+    });
+
+    expect(runtime.uninstall).toHaveBeenCalledTimes(2);
+    expect(h.ledger.installationForGhost('cindy-test')?.installed).toBe(true);
+    expect(h.ledger.installationForGhost('cindy-second')?.installed).toBe(false);
+    expect(h.service.consumeRemovalNotice()).toEqual({
+      count: 1,
+      name: 'Second Plugin',
+    });
+  });
+
   it('does not restore a bundled default after the user removed it', async () => {
     const item = summary({ defaultInstall: true });
     runtime.builtinRemoved.add(item.ghostId);
@@ -1145,7 +1442,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
         dataOwnerId: 'user-2',
         generation: 2,
       };
-      return [item];
+      return { plugins: [item], removals: [] };
     });
 
     await expect(h.service.install(item.id, { expectedReleaseId: item.currentRelease.id })).rejects.toThrow('[PRECONDITION_FAILED]');
@@ -1210,7 +1507,10 @@ describe('PluginMarketService migration and defaultInstall', () => {
   });
 });
 
-function recordForTest(item: VisiblePluginSummary) {
+function recordForTest(
+  item: VisiblePluginSummary,
+  overrides: Partial<PluginMarketInstallationRecord> = {},
+): PluginMarketInstallationRecord {
   return {
     pluginId: item.id,
     ghostId: item.ghostId,
@@ -1219,8 +1519,9 @@ function recordForTest(item: VisiblePluginSummary) {
     sha256: item.currentRelease.sha256,
     scope: item.scope,
     organizationId: item.organizationId,
-    source: 'market' as const,
+    source: 'market',
     installed: true,
     updatedAt: '2026-07-23T00:00:00.000Z',
+    ...overrides,
   };
 }

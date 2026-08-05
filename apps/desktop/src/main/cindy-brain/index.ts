@@ -28,6 +28,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -36,6 +37,7 @@ import type { PluginMarketPackageReview } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   activeOwnerScopeKey,
+  getActiveDataOwnerPushStamp,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
@@ -88,6 +90,7 @@ import {
 import {
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
+  parseOauthConnectSecretKey,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
@@ -98,6 +101,10 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import {
+  appendReadyGhostOauthReauthSuggest,
+  findGhostOauthReauthSuggest,
+} from './ghostOauthScopeStaleness.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
@@ -147,7 +154,11 @@ import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
-import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
+import {
+  deriveCindyMediaConfig,
+  type CindyCapabilityKind,
+  type CindyMediaCatalogConfig,
+} from './cindyMediaCatalog.js';
 import {
   GhostCindySlot,
   type CindyImageCapabilities,
@@ -161,6 +172,7 @@ import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
+import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
@@ -230,8 +242,10 @@ import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
+import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import {
   CINDY_CAPABILITY_KEYS,
+  cindyCapabilityValueDomain,
   readGhostCindyOverrides,
   readGhostCindyInflightLimit,
   writeGhostCindyOverride,
@@ -286,6 +300,10 @@ import {
   createLegacyGhostRecoveryIpcHandlers,
 } from './legacyGhostRecoveryIpc.js';
 import type { LegacyGhostRecoveryStatus } from '../../shared/legacyGhostRecovery.js';
+import {
+  isDataOwnerPushStamp,
+  type DataOwnerPushStamp,
+} from '../../shared/dataOwnerPush.js';
 
 /**
  * 意识仓库的进程级单例 + IPC 注册。
@@ -302,6 +320,76 @@ import type { LegacyGhostRecoveryStatus } from '../../shared/legacyGhostRecovery
  */
 
 const log = createLogger('brain');
+
+/** Attach the main-owned data-owner boundary to ghost UI pushes. */
+function getGhostOwnerPushStamp(): DataOwnerPushStamp | undefined {
+  try {
+    return getActiveDataOwnerPushStamp();
+  } catch {
+    // Tests and very early bootstrap may not have an app-session store yet.
+    return undefined;
+  }
+}
+
+function isSameGhostOwnerStamp(
+  a: DataOwnerPushStamp,
+  b: DataOwnerPushStamp,
+): boolean {
+  return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+function isGhostOwnerStampCurrent(ownerStamp: DataOwnerPushStamp | undefined): boolean {
+  if (ownerStamp === undefined) return true;
+  const current = getGhostOwnerPushStamp();
+  return current !== undefined && isSameGhostOwnerStamp(ownerStamp, current);
+}
+
+function sendGhostWindowPush(
+  window: BrowserWindow,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  sendGhostContentsPush(window.webContents, channel, payload, ownerStamp);
+}
+
+function sendGhostContentsPush(
+  contents: WebContents,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
+  const stamp = ownerStamp ?? getGhostOwnerPushStamp();
+  // The initial pre-auth bootstrap has no meaningful boundary yet. Keep the
+  // old Electron call shape there; every committed owner carries a stamp.
+  if (stamp === undefined || (stamp.dataOwnerId === null && stamp.ownerGeneration === 0)) {
+    contents.send(channel, payload);
+  } else {
+    contents.send(channel, payload, stamp);
+  }
+}
+
+function broadcastGhostWindowPush(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) sendGhostWindowPush(window, channel, payload, ownerStamp);
+  }
+}
+
+function sendGhostTrustedWindowPush(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || !isTrustedAppRendererWindow(window)) continue;
+    sendGhostWindowPush(window, channel, payload, ownerStamp);
+  }
+}
 
 /**
  * 电子脑管子与 settingsHtml `/app-context` 共用,避免 region / locale 两条口径漂移。
@@ -593,6 +681,30 @@ function availableGhosts(): InstalledGhost[] {
   return getGhostManager().list().filter((ghost) =>
     isGhostAvailableForActiveSession(ghost.manifest.id),
   );
+}
+
+function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
+  try {
+    const suggest = getGhostOauthReauthSuggest(withRuntimeFiloGoogleClient(ghost.manifest));
+    return {
+      ...ghost,
+      ...(suggest
+        ? {
+            oauthScopeStale: {
+              secretKey: suggest.secretKey,
+              missingScopeCount: suggest.missingScopeCount,
+            },
+          }
+        : {}),
+    };
+  } catch (error) {
+    // 详情页角标是提示面，保险库异常不能让插件清单整体消失。
+    log.warn('ghost oauth scope stale projection omitted', {
+      ghostId: ghost.manifest.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return ghost;
+  }
 }
 
 function findAvailableGhost(id: string): InstalledGhost | null {
@@ -1043,10 +1155,7 @@ export function getGhostSessionActivityTracker(): GhostSessionActivityTracker {
   if (!sessionActivityTrackerSingleton) {
     sessionActivityTrackerSingleton = new GhostSessionActivityTracker({
       broadcast: (sessionId, busy) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_SESSION_ACTIVITY_CHANNEL, { sessionId, busy });
-        });
+        broadcastGhostWindowPush(GHOST_SESSION_ACTIVITY_CHANNEL, { sessionId, busy });
       },
       log,
     });
@@ -1070,10 +1179,7 @@ export function getGhostCardService(): GhostCardService {
       sanitize: sanitizeGhostCardHtml,
       persist: (row) => upsertGhostCard(row),
       broadcast: (payload) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_CARD_UPDATED_CHANNEL, payload);
-        });
+        broadcastGhostWindowPush(GHOST_CARD_UPDATED_CHANNEL, payload);
       },
       // 重开态(card-action 后台干活)的供片驱动会话呼吸:working/未声明续期,
       // done 熄灭(TTL 兜底在跟踪器内)。
@@ -1159,14 +1265,11 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
         }
       },
       now: () => Date.now(),
-      onHookFused: (ghost) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_HOOK_FUSED_CHANNEL, {
-            ghostId: ghost.manifest.id,
-            name: ghost.manifest.name,
-          });
-        });
+      onHookFused: (ghost, ownerStamp) => {
+        broadcastGhostWindowPush(GHOST_HOOK_FUSED_CHANNEL, {
+          ghostId: ghost.manifest.id,
+          name: ghost.manifest.name,
+        }, isDataOwnerPushStamp(ownerStamp) ? ownerStamp : undefined);
       },
       log,
     });
@@ -1366,7 +1469,14 @@ export function createGhostSessionTap(sessionId: string): {
       if (state === 'ineligible') return;
       pending.push({
         type: 'event',
-        event: { type: ev.type, data: ev.data, source: ev.source },
+        event: {
+          type: ev.type,
+          data: ev.data,
+          source: ev.source,
+          ...(ev.turnContinuationId !== undefined
+            ? { turnContinuationId: ev.turnContinuationId }
+            : {}),
+        },
       });
       kickResolve();
     },
@@ -1444,13 +1554,18 @@ export async function screenGhostUserMessage(
   sessionId: string,
   text: string,
 ): Promise<GhostScreenResult> {
+  const ownerStamp = getGhostOwnerPushStamp();
   try {
     const hasHookGhost = availableGhosts()
       .some((g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'));
     if (!hasHookGhost) return { action: 'allow' };
     // retry(DB 未就绪)也放行:拦截是尽力而为的旁路,fail-open 不挡发送。
     if ((await isGhostEligibleSession(sessionId)).outcome !== 'eligible') return { action: 'allow' };
-    return await getGhostSubscriptionGateway().screenUserMessage({ sessionId, text });
+    const result = await getGhostSubscriptionGateway().screenUserMessage(
+      { sessionId, text },
+      ownerStamp,
+    );
+    return isGhostOwnerStampCurrent(ownerStamp) ? result : { action: 'allow' };
   } catch (err) {
     log.warn('ghost screen failed (fail-open)', {
       error: err instanceof Error ? err.message : String(err),
@@ -1471,10 +1586,7 @@ export function broadcastGhostMessageBlocked(payload: {
   reason: string;
   text: string;
 }): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_MESSAGE_BLOCKED_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_MESSAGE_BLOCKED_CHANNEL, payload);
 }
 
 /** 改写通知广播(register.ts 的 onUserMessageRewritten 依赖真身)。
@@ -1489,10 +1601,7 @@ export function broadcastGhostMessageRewritten(payload: {
   text: string;
   originalText: string;
 }): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_MESSAGE_REWRITTEN_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_MESSAGE_REWRITTEN_CHANNEL, payload);
 }
 
 /** 是否有启用的意识声明了 will-assistant-message(出口钩子快路径同步守卫)。 */
@@ -1508,19 +1617,22 @@ function broadcastGhostAssistantRewritten(payload: {
   ghostId: string;
   ghostName: string;
   text: string;
-}): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_ASSISTANT_REWRITTEN_CHANNEL, payload);
-  });
+}, ownerStamp?: DataOwnerPushStamp): void {
+  broadcastGhostWindowPush(GHOST_ASSISTANT_REWRITTEN_CHANNEL, payload, ownerStamp);
 }
 
 /** 广播:出口钩子后台处理中/完成的轻指示。 */
-function broadcastGhostAssistantPending(sessionId: string, clientId: string, pending: boolean): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_ASSISTANT_PENDING_CHANNEL, { sessionId, clientId, pending });
-  });
+function broadcastGhostAssistantPending(
+  sessionId: string,
+  clientId: string,
+  pending: boolean,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
+  broadcastGhostWindowPush(
+    GHOST_ASSISTANT_PENDING_CHANNEL,
+    { sessionId, clientId, pending },
+    ownerStamp,
+  );
 }
 
 /**
@@ -1532,7 +1644,9 @@ async function applyGhostAssistantRenderCard(
   sessionId: string,
   clientId: string,
   card: { ghostId: string; ghostName: string; html: string; height?: number },
+  ownerStamp?: DataOwnerPushStamp,
 ): Promise<void> {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
   const sanitized = sanitizeGhostCardHtml(card.html);
   if (!sanitized.ok) {
     log.warn('ghost assistant render card rejected by sanitizer', { sessionId, reason: sanitized.reason });
@@ -1559,9 +1673,10 @@ async function applyGhostAssistantRenderCard(
       error: err instanceof Error ? err.message : String(err),
     });
   });
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_CARD_UPDATED_CHANNEL, {
+  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
+  broadcastGhostWindowPush(
+    GHOST_CARD_UPDATED_CHANNEL,
+    {
       callId: clientId,
       ghostId: card.ghostId,
       toolUseId: null,
@@ -1573,8 +1688,9 @@ async function applyGhostAssistantRenderCard(
       // clientId 直取),**不进 liveCards 锚定池**——否则 toolUseId:null 的条目会
       // 被同意识进行中 ghost_call 的启发式锚定抢走(review P1,2026-07-13)。
       turnCard: true,
-    });
-  });
+    },
+    ownerStamp,
+  );
 }
 
 /**
@@ -1584,17 +1700,31 @@ async function applyGhostAssistantRenderCard(
  * clientId = 本轮 assistant 消息持久化 id(consumeLastAssistantPersistId 取得)。
  */
 export function runGhostAssistantReplyHook(sessionId: string, clientId: string, text: string): void {
+  const ownerStamp = getGhostOwnerPushStamp();
+  const isCurrent = () => isGhostOwnerStampCurrent(ownerStamp);
   void runAssistantReplyHook(
     {
+      isCurrent,
       hasHook: hasEnabledGhostAssistantHook,
-      isEligible: async (sid) => (await isGhostEligibleSession(sid)).outcome === 'eligible',
-      screen: (sid, t) => getGhostSubscriptionGateway().screenAssistantMessage({ sessionId: sid, text: t }),
+      isEligible: async (sid) => isCurrent() && (await isGhostEligibleSession(sid)).outcome === 'eligible',
+      screen: async (sid, t) => {
+        if (!isCurrent()) return { action: 'allow' as const };
+        const result = await getGhostSubscriptionGateway().screenAssistantMessage(
+          { sessionId: sid, text: t },
+          ownerStamp,
+        );
+        return isCurrent() ? result : { action: 'allow' as const };
+      },
       persistRewrite: async (sid, cid, t) => {
+        if (!isCurrent()) return;
         await updateMessageContent(sid, cid, t);
       },
-      applyRenderCard: (sid, cid, cardArg) => applyGhostAssistantRenderCard(sid, cid, cardArg),
-      broadcastRewritten: broadcastGhostAssistantRewritten,
-      setPending: broadcastGhostAssistantPending,
+      applyRenderCard: (sid, cid, cardArg) =>
+        applyGhostAssistantRenderCard(sid, cid, cardArg, ownerStamp),
+      broadcastRewritten: (payload) =>
+        broadcastGhostAssistantRewritten(payload, ownerStamp),
+      setPending: (sid, cid, pending) =>
+        broadcastGhostAssistantPending(sid, cid, pending, ownerStamp),
       log,
     },
     sessionId,
@@ -1781,10 +1911,7 @@ export function broadcastGhostHostNotice(
     textKey: notice.textKey,
     ...(textArgs ? { textArgs } : {}),
   };
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send(GHOST_NOTIFY_CHANNEL, payload);
-  });
+  broadcastGhostWindowPush(GHOST_NOTIFY_CHANNEL, payload);
   log.info('ghost host notice shown', { ghostId, textKey: notice.textKey });
 }
 
@@ -1797,10 +1924,7 @@ export function getGhostNotifySlot(): GhostNotifySlot {
     notifySlotSingleton = new GhostNotifySlot({
       getGhost: findAvailableGhost,
       broadcast: (payload) => {
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(GHOST_NOTIFY_CHANNEL, payload);
-        });
+        broadcastGhostWindowPush(GHOST_NOTIFY_CHANNEL, payload);
       },
       log,
     });
@@ -1828,12 +1952,8 @@ export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
  * 出站推送与入站 IPC 是同一道授权边界,不能只守一边(codex review)。
  * 判据复用 `isTrustedAppRendererWindow`,与 `ghosts:unread` 同步读那道闸同源。
  */
-function sendToTrustedAppWindows(channel: string, payload: unknown): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    if (!isTrustedAppRendererWindow(window)) return;
-    window.webContents.send(channel, payload);
-  });
+export function sendToTrustedAppWindows(channel: string, payload: unknown): void {
+  sendGhostTrustedWindowPush(channel, payload);
 }
 
 function broadcastGhostBadge(payload: { ghostId: string; unread: boolean; summary?: string; at?: number }): void {
@@ -2012,7 +2132,7 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
         sendToWindow: (payload) => {
           const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
           if (!win || win.isDestroyed()) return false;
-          win.webContents.send(GHOST_CONFIRM_CHANNEL, payload);
+          sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
           return true;
         },
         log,
@@ -2170,7 +2290,7 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
       broadcast: (payload) => {
         const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
         windows.forEach((window) => {
-          window.webContents.send(GHOST_PREVIEW_OPEN_CHANNEL, payload);
+          sendGhostWindowPush(window, GHOST_PREVIEW_OPEN_CHANNEL, payload);
         });
         return windows.length > 0;
       },
@@ -2178,6 +2298,58 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
     });
   }
   return previewSlotSingleton;
+}
+
+let scheduleSlotSingleton: GhostScheduleSlot | null = null;
+
+/** 插件自动化草稿通道(main → **单个**窗口;renderer 开自动化创建面板并预填)。 */
+export const GHOST_SCHEDULE_DRAFT_CHANNEL = 'ghosts:schedule-draft';
+
+/**
+ * 自动化草稿槽单例(agent 槽的 schedule 加档):资格审/净化/频率钳制/限速在
+ * GhostScheduleSlot,这里只组装"投给哪个窗口"。
+ *
+ * 只投**一个**窗口(focused ?? 第一个),与 confirm / pick 同纪律,**不像 notify /
+ * preview 那样广播**:本操作是打断式的 —— renderer 收到会把该窗口导航到自动化页
+ * 并弹出创建面板。"在新窗口打开"的会话副窗同样挂载完整 MainLayout、各自持有独立
+ * 的 requestId 去重状态,所以广播会让主窗与每个副窗同时跳页弹表单:打断其它窗口
+ * 里没保存的内容,还让同一份草稿被重复保存成多条自动化(#1715 review:Greptile P1 /
+ * Codex P2 / Copilot 同根因)。状态同步类事件(notify / badge / preview 开标签)才
+ * 适合广播,打断式的模态入口一律单投。
+ *
+ * 没有可投窗口(全部销毁 / 一个都没有)→ 返回 false → 槽回 HOST_NOT_READY,
+ * 插件收到明确失败而不是静默丢弃。
+ *
+ * ⚠️ deps 里**刻意不注入任何建任务的能力** —— 本槽只能开面板,任务必须由用户
+ * 在面板上选模型后亲手保存。别为了"省一步"给它接 schedule storage。
+ */
+export function getGhostScheduleSlot(): GhostScheduleSlot {
+  if (!scheduleSlotSingleton) {
+    scheduleSlotSingleton = new GhostScheduleSlot({
+      getGhost: findAvailableGhost,
+      sendToWindow: (payload) => {
+        // 候选只取**挂了完整主壳**的窗口:独立的插件面板窗 / 右侧栏窗与 MainLayout
+        // 平级,没有这个订阅也去不了自动化页(判据见 isMainShellWindowUrl)。
+        // isDestroyed 两路都兜:getFocusedWindow 理论上不返回已销毁的窗,但窗口关闭
+        // 与本次投递之间存在时序窗口。
+        const candidates = BrowserWindow.getAllWindows().filter(
+          (window) => !window.isDestroyed() && isMainShellWindowUrl(window.webContents.getURL()),
+        );
+        const focused = BrowserWindow.getFocusedWindow();
+        // 用户正在插件面板独立窗里点「提醒我」时 focused 不在候选里 —— 回落到第一个
+        // 主壳窗(通常就是主窗口),用户会在那里看到弹出的创建面板,而不是什么都没发生。
+        const win =
+          focused && !focused.isDestroyed() && candidates.includes(focused)
+            ? focused
+            : candidates[0];
+        if (!win) return false;
+        win.webContents.send(GHOST_SCHEDULE_DRAFT_CHANNEL, payload);
+        return true;
+      },
+      log,
+    });
+  }
+  return scheduleSlotSingleton;
 }
 
 /**
@@ -2197,7 +2369,7 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
  * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
  * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig {
+function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConfig {
   try {
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
@@ -2211,12 +2383,23 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
-        isModelDisabled(access, providerId, modelId),
+        isModelDisabled(access, providerId, modelId) ||
+        // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
+        // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
+        // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
+        // 变成 INTERNAL。UI 先宣称可用、下单才失败是最难排查的一种坏体验
+        // (PR #1707 review)。滤掉后按既有语义降级:被滤条目不占 first-wins,
+        // 目录默认指向它时回落清单首项;整份清单都不认识才是空清单 → NO_CANDIDATE。
+        // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
+        (kind === 'embed' && !isKnownEmbeddingModel(modelId)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
       // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
       // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
       // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
       // (2026-07 review:与图像的就绪语义对齐)。
+      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求网关能力在场
+      // (本地模式没有网关 key,embedSync 必然 AUTH_FAILED —— 那种型号不该出现在
+      // 清单里让用户钉选)。
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
         : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
@@ -2235,6 +2418,7 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
 
 const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image');
 const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video');
+const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('embed');
 
 /**
  * 派发前重查(PR #744 review 第二十轮):cindySlot 从白名单校验到实际下单之间隔着
@@ -2557,6 +2741,55 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       getImageConfig: getCatalogImageConfig,
       getVideoConfig: getCatalogVideoConfig,
+      getEmbedConfig: getCatalogEmbedConfig,
+      // 文本转向量(embed.text):走主机统一 embedding 通道(与聊天历史语义检索
+      // 同一条付费链路)。只生成不存储 —— embedSync 明确不入队、不写 vec 表,
+      // 向量原样返回给意识自己保管。
+      //
+      // 动态 import 同 oneshotText,且**只对 embedding-host 一家**:它的传递依赖会
+      // 拽起 localDb → runtime-configs,静态引入会让所有 import 本模块的单测炸在
+      // electron mock 上(PR #1707 review 实测:collabSendOutcome.test.ts 报
+      // app.getAppPath is not a function)。@cindy/embedding-client 是零运行依赖的
+      // 纯包,已改为顶层静态 import,不必陪着动态化。
+      embedText: async ({ texts, model, inputType, dimensions, timeoutMs }) => {
+        // ensureEmbeddingServiceForPluginVector 而不是 getEmbeddingService:host 的启停
+        // 不归「聊天嵌入」开关独占 —— 那个开关关着时 host 不启动,直接取 service 必抛
+        // not-started,已授权的 embed_text 全变 INTERNAL(PR #1707 review)。这里打标
+        // 成"插件向量 consumer 在用"并按需懒启动。
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
+        // 白名单已在 slot 层校验过,这里是纵深防御:目录里出现了 embedding catalog
+        // 不认识的 id(两边不同步)时早失败,而不是把不认识的 id 发去网关。
+        if (!isKnownEmbeddingModel(model)) {
+          throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
+        }
+        const res = await ensureEmbeddingServiceForPluginVector().embedSync(texts, {
+          modelId: model,
+          ...(inputType !== undefined ? { inputType } : {}),
+          ...(dimensions !== undefined ? { dimensions } : {}),
+          // slot 层给的时间预算必须原样递到 client —— 中间任何一层吞掉它,
+          // 插件那侧就又变成"网关不返数据即永久挂住一格在途额度"。
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        });
+        return { embeddings: res.embeddings, modelUsed: res.modelUsed };
+      },
+      // 上下文化嵌入(voyage-context-* 索引侧):同上,只是 input 按文档分组。
+      embedDocuments: async ({ documents, model, inputType, dimensions, timeoutMs }) => {
+        const { ensureEmbeddingServiceForPluginVector } = await import(
+          '../embedding-host/index.js'
+        );
+        if (!isKnownEmbeddingModel(model)) {
+          throw new Error(`未知的向量模型 ${model}(不在 embedding catalog 内)`);
+        }
+        const res = await ensureEmbeddingServiceForPluginVector().embedDocumentsSync(documents, {
+          modelId: model,
+          ...(inputType !== undefined ? { inputType } : {}),
+          ...(dimensions !== undefined ? { dimensions } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        });
+        return { embeddings: res.embeddings, modelUsed: res.modelUsed };
+      },
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
@@ -2772,6 +3005,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth' });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
         broadcastGhostHostNotice(
           ghostId,
           label
@@ -2784,6 +3018,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           source: 'oauth',
           ref: secretKey,
         });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       isConnectTargetCurrent: (ghostId, secretKey, decl) => {
         const ghost = findAvailableGhost(ghostId);
@@ -2822,6 +3057,14 @@ function getGhostConnectionManager(): GhostConnectionManager {
 
 let ghostSetupKvStore: GhostKvStore | null = null;
 
+/** 默认 OAuth 账号的授权面陈旧建议；只返回首个凭证槽，保持 envelope 有界。 */
+function getGhostOauthReauthSuggest(runtimeManifest: GhostManifest): GhostSetupReauthSuggest | undefined {
+  const oauthManager = getGhostOauthAccountManager();
+  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) =>
+    oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl),
+  );
+}
+
 /**
  * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
  * Unlike the legacy plugin-page projection this path is strict: storage or
@@ -2836,7 +3079,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const oauthManager = getGhostOauthAccountManager();
   const connectionManager = getGhostConnectionManager();
   let kvSnapshot: Record<string, unknown> | null = null;
-  return evaluateGhostSetupAssessment(
+  const assessment = evaluateGhostSetupAssessment(
     runtimeManifest,
     {
       secretSaved: (key) => ghostSecretSaved(ghostId, key),
@@ -2864,6 +3107,13 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       }),
     },
   );
+  // 性能短路:required 时建议注定被丢弃,不再为它读保险库。
+  // "required 绝不带建议"的契约不变量仍由 appendReadyGhostOauthReauthSuggest 守着。
+  if (assessment.state !== 'ready') return assessment;
+  return appendReadyGhostOauthReauthSuggest(
+    assessment,
+    getGhostOauthReauthSuggest(runtimeManifest),
+  );
 }
 
 /**
@@ -2885,11 +3135,10 @@ export async function executeGhostSetupAction(args: {
     };
   }
   if (args.action.kind === 'oauth_connect') {
-    const prefix = 'oauth_connect:secret:';
-    if (!args.action.id.startsWith(prefix)) {
+    const secretKey = parseOauthConnectSecretKey(args.action.id);
+    if (!secretKey) {
       return { ok: false, errorCode: 'ACTION_STALE', message: '授权动作已失效' };
     }
-    const secretKey = args.action.id.slice(prefix.length);
     const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
     const decl = runtimeManifest.network?.secrets?.find(
       (secret) => secret.key === secretKey && secret.source === 'oauth',
@@ -3109,6 +3358,9 @@ export function getGhostFsSlot(): GhostFsSlot {
       // callId → 归属/会话反查:与卡片供片同一本账(ghost_call 派单时
       // cardService.registerCall 登记),不信意识自报。
       callInfo: (callId) => getGhostCardService().callInfoOf(callId),
+      // 严格在途反查:脚本通道(无会话)的 workdir 写盘授权走它——交卷即失效,
+      // 不享宽限窗(目录授权上下文用完即废,与 workspace 槽同一判据)。
+      inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       getSessionSnapshot: (sessionId) => getSessionFsSnapshot(sessionId),
       requestWriteConfirm: async (sessionId, payload) => {
         const bridge = getGhostGrantConfirmBridge();
@@ -3735,6 +3987,7 @@ export function registerGhostIpc(): void {
       ghostId,
       onChanged: (secretKey) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
+        broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
       },
       log,
     });
@@ -4133,6 +4386,12 @@ export function registerGhostIpc(): void {
     if (type === 'preview-request') {
       return getGhostPreviewSlot().handleRequest(id, payload);
     }
+    // schedule-request = 打开自动化创建面板并预填(agent 槽的 schedule 加档):
+    // 只开面板,任务由用户选模型后亲手保存才落库——本槽全程不碰 schedule storage。
+    // 资格审/净化/频率钳制/限速在 scheduleSlot,落地在 renderer。
+    if (type === 'schedule-request') {
+      return getGhostScheduleSlot().handleRequest(id, payload);
+    }
     if (type === 'card-update') {
       // 卡槽③供片:校验链(归属/卡槽/限速/净化)在 cardService,拒绝原因
       // 只进日志,恒回 { ok: true }(与 tool-result 同纪律,不给沙箱探测面)。
@@ -4248,7 +4507,7 @@ export function registerGhostIpc(): void {
   });
 
   ipcMain.on('ghosts:list', (event) => {
-    event.returnValue = { ghosts: availableGhosts() };
+    event.returnValue = { ghosts: availableGhosts().map(projectGhostForRenderer) };
   });
 
   // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入
@@ -4419,6 +4678,8 @@ export function registerGhostIpc(): void {
         defaultModel:
           textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
       },
+      // 向量类与图像/视频同源(都走目录派生),不同于文本类的轻量链档位。
+      embed: byKind(getCatalogEmbedConfig()),
     };
   });
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
@@ -4461,10 +4722,22 @@ export function registerGhostIpc(): void {
     if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
       throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
     }
-    // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
-    const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    const isEditCap = capability === 'image.edit';
-    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
+    // 白名单按能力键的**取值域**取,映射由 cindyCapabilityValueDomain 穷举
+    // (漏一个类目 = 该类目的下拉界面上能选、一选就被别人的白名单拒掉、回滚成
+    // 一句通用 toast;PR #1707 review)。text.oneshot 的取值是轻量链档位键,
+    // 不在任何媒体目录里,必须对着 pin 选项校验。
+    const capKey = capability as CindyCapabilityKey;
+    const domain = cindyCapabilityValueDomain(capKey);
+    const allowed: ReadonlyArray<{ id: string; supportsEdit?: boolean }> =
+      domain === 'utilityChain'
+        ? utilityModelPinOptions()
+        : domain === 'video'
+          ? getCatalogVideoConfig().models
+          : domain === 'embed'
+            ? getCatalogEmbedConfig().models
+            : getCatalogImageConfig().models;
+    const isEditCap = capKey === 'image.edit';
+    if (model !== null && !allowed.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(
@@ -4898,7 +5171,11 @@ export function handleGhostPreviewNavigation(
         return;
       }
       if (hostContents.isDestroyed()) return;
-      hostContents.send(GHOST_PREVIEW_MEDIA_CHANNEL, { ghostId, src: outcome.src, kind: outcome.kind });
+      sendGhostContentsPush(hostContents, GHOST_PREVIEW_MEDIA_CHANNEL, {
+        ghostId,
+        src: outcome.src,
+        kind: outcome.kind,
+      });
     })
     .catch((err) => {
       log.warn('ghost preview failed', {
@@ -4980,10 +5257,7 @@ export function resolveGhostWebviewAttach(partition: unknown, src: unknown): Ins
 
 /** 播种进行中提示广播(renderer 显示/收起非阻塞胶囊;与退出 overlay 同款视觉)。 */
 function broadcastGhostProvisioning(active: boolean): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:provisioning', { active });
-  });
+  broadcastGhostWindowPush('ghosts:provisioning', { active });
 }
 
 /**
@@ -4995,14 +5269,23 @@ function broadcastGhostProvisioning(active: boolean): void {
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,
+  opts?: {
+    /**
+     * true = 花名册没变,只是 renderer 投影字段(OAuth 陈旧角标)需要刷新。
+     * 跳过清单指纹、未读扫尾与 skill 链接对账这些只对装/卸/启停/换版有
+     * 意义的花名册侧效应,OAuth 账号操作不再连带两趟全量磁盘扫描。
+     */
+    projectionOnly?: boolean;
+  },
 ): void {
-  getGhostSetupManifestTracker().note(ghosts);
-  sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
-  const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:changed', { ghosts: visible });
-  });
+  if (!opts?.projectionOnly) {
+    getGhostSetupManifestTracker().note(ghosts);
+    sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
+  }
+  const visible = ghosts
+    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id))
+    .map(projectGhostForRenderer);
+  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
   // 与 renderer 同一份可见清单喂给观察者(独立窗口 controller reconcile 等);
   // 观察者异常不拖垮广播本体。
   if (ghostsChangedObserver) {
@@ -5017,7 +5300,7 @@ function broadcastGhostsChanged(
   // skill 槽共享链接对账:装/卸/启停/换版全走本广播,一处挂接全覆盖。
   // 异步合并执行,不阻塞广播;用全量 list() 而非 per-session 过滤后的 visible
   // (链接对账关心"装了什么",与当前会话可见性无关)。
-  scheduleGhostSkillReconcile();
+  if (!opts?.projectionOnly) scheduleGhostSkillReconcile();
 }
 
 // —— skill 槽链接对账调度:合并突发广播(in-flight + pending 双标志),
@@ -5090,17 +5373,11 @@ export function refreshGhostLocalization(): void {
 
 /** Plugin 顶部快捷行的 host-owned MRU 快照，多窗口同步。 */
 function broadcastGhostRecentUsageChanged(ids: string[]): void {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:recent-usage-changed', { ids });
-  });
+  broadcastGhostWindowPush('ghosts:recent-usage-changed', { ids });
 }
 
 /** 运行时状态广播(→ 意识面板的错误接管态:crashed / fused 原地显示)。 */
 function broadcastGhostRuntimeStates(): void {
   const states = runtimeSingleton?.listStates() ?? {};
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (window.isDestroyed()) return;
-    window.webContents.send('ghosts:runtime-changed', { states });
-  });
+  broadcastGhostWindowPush('ghosts:runtime-changed', { states });
 }

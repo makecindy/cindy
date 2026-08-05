@@ -44,9 +44,15 @@ import {
   DAILY_SOFT_LIMIT_FACTOR,
   formatCompactMoney,
   formatCompactTokens,
+  formatModelShort,
   formatTurnCostMoney,
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
@@ -74,7 +80,6 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '@/hooks/useClaudeSubscriptionUsage';
 import {
-  hasAlertingClaudeSessionWindow,
   isClaudeSubscriptionAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
@@ -83,7 +88,10 @@ import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
-import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
+import {
+  buildTurnUsageTooltipLines,
+  getTurnUsageSuggestion,
+} from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   DEFAULT_USAGE_CURRENCY,
@@ -97,6 +105,11 @@ import {
   useQuotaResetRollup,
   type ChipWindowSlot,
 } from './quotaResetRollup';
+import {
+  QuotaHoverCard,
+  type QuotaHoverCardSessionUsage,
+  type QuotaHoverCardTurnUsage,
+} from './QuotaHoverCard';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -117,6 +130,8 @@ type MetricKey = (typeof METRIC_KEYS)[number];
 // 按账号所属租户二选一下发, 两组互斥, 同一形态下不会都占位。
 const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const QUOTA_POPOVER_OPEN_DELAY_MS = 300;
+const QUOTA_POPOVER_CLOSE_GRACE_MS = 200;
 const DEFAULT_MONEY_SYMBOL = DEFAULT_USAGE_CURRENCY === 'CNY' ? '¥' : '$';
 const DEFAULT_MONEY_PLACEHOLDER = `${DEFAULT_MONEY_SYMBOL}—`;
 
@@ -586,37 +601,7 @@ function buildCodexTooltipNode(
 
 // ── Claude 订阅 (Anthropic OAuth) 形态 ───────────────────────────────────────
 // 主 chip 方案 B: 5h 剩余% · 当前模型周限剩余% (weekly_scoped 按模型家族匹配, 匹配
-// 不到回退总周限并标注口径) · 本会话价值 $。tooltip 列全量窗口 (含非当前模型的
-// scoped 条目) + 套餐 + extra usage。utilization 语义 = 已用百分比 (0-100)。
-
-/**
- * Claude 窗口 → tooltip 行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。
- * tooltip 的窗口行不做逐行高亮 (纯文本 tooltip), 告警只体现在 chip 配色与末尾的
- * 「接近限额」行 —— 故这里不带 alerting 标记。
- */
-interface ClaudeWindowUsage {
-  label: string;
-  used: string;
-  remaining: string;
-  /** tooltip 用的精确 reset 时间点;无数据 → null。 */
-  resetAt: string | null;
-}
-
-function toClaudeWindowUsage(
-  label: string,
-  window: ClaudeUsageWindow | null | undefined,
-): ClaudeWindowUsage | null {
-  if (!window || typeof window.utilization !== 'number' || !Number.isFinite(window.utilization)) {
-    return null;
-  }
-  const usedPercent = clampPercent(window.utilization);
-  return {
-    label,
-    used: formatPercent(usedPercent),
-    remaining: formatPercent(100 - usedPercent),
-    resetAt: formatResetAt(window.resetsAt),
-  };
-}
+// 不到回退总周限并标注口径) · 本会话价值 $。utilization 语义 = 已用百分比 (0-100)。
 
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
@@ -692,82 +677,8 @@ function getClaudeChipWindows(
 }
 
 // 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
-// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
-// hasAlertingClaudeSessionWindow / isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
-// tooltip 不逐行高亮, 它比 chip 宽一档的那一档在 buildClaudeSubscriptionTooltipNode 里
-// (整体 status 的 allowed_warning 也出「接近限额」行)。
-
-function buildClaudeSubscriptionTooltipNode(
-  snapshot: ClaudeSubscriptionUsageSnapshot | null,
-  modelId: string | null | undefined,
-  sessionUsage: SessionUsageMoney,
-  t: TFunction,
-  usageDashboardLabel: string | null,
-  latestTurnUsage: LatestTurnUsageSummary | null,
-): React.ReactNode {
-  const lines: string[] = [];
-  pushSessionUsageLines(lines, sessionUsage, null, t);
-  if (!snapshot) {
-    lines.push(t('todaySpend.claude.waitingDetail'));
-    appendLatestTurnUsageLines(lines, latestTurnUsage, t);
-    pushDashboardLinkLine(lines, usageDashboardLabel);
-    return buildTooltipNode(lines);
-  }
-
-  const planLabel = formatPlanType(snapshot.subscriptionType);
-  if (planLabel) {
-    lines.push(t('todaySpend.claude.planLine', { plan: planLabel }));
-  }
-  // 窗口明细: 5h → 总周限 → 全部分模型周限 (含非当前模型, 用户能看到谁先见底)。
-  // tooltip 保留精确 reset 时间点 (chip 上是倒计时, 两层信息互补)。
-  const windows: ClaudeWindowUsage[] = [];
-  const fiveHour = toClaudeWindowUsage('5h', snapshot.fiveHour);
-  if (fiveHour) windows.push(fiveHour);
-  const sevenDay = toClaudeWindowUsage(t('todaySpend.claude.weeklyLabel'), snapshot.sevenDay);
-  if (sevenDay) windows.push(sevenDay);
-  for (const scoped of snapshot.scoped ?? []) {
-    const usage = toClaudeWindowUsage(
-      t('todaySpend.claude.modelWeeklyLabel', { model: scoped.modelDisplayName }),
-      scoped,
-    );
-    if (usage) windows.push(usage);
-  }
-  for (const window of windows) {
-    const base = t('todaySpend.claude.windowLine', {
-      label: window.label,
-      remaining: window.remaining,
-      used: window.used,
-    });
-    lines.push(window.resetAt
-      ? `${base} · ${t('todaySpend.claude.resetAt', { at: window.resetAt })}`
-      : base,
-    );
-  }
-
-  // tooltip 比 chip 宽一档: allowed_warning (服务端综合全部窗口的模糊信号) 也提示 ——
-  // 上面刚列完全量窗口, 用户能自己看出是哪个窗口吃紧; chip 颜色不吃这个信号 (见
-  // isClaudeSubscriptionAlerting)。
-  const status = snapshot.rateLimitStatus?.trim().toLowerCase();
-  if (status === 'rejected') {
-    lines.push(t('todaySpend.claude.limitRejected'));
-  } else if (status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)) {
-    lines.push(t('todaySpend.claude.limitWarning'));
-  }
-
-  if (snapshot.extraUsage?.isEnabled) {
-    // extra_usage 的 used_credits / monthly_limit 单位未文档化且本地暂无实样账号,
-    // 不能假设 cents 并渲染美元金额。这里只展示启用状态;数值原样保留在 snapshot,
-    // 等拿到 live response 后再补准确单位展示。
-    lines.push(t('todaySpend.claude.extraUsageEnabledLine'));
-  }
-
-  if (lines.length === 0) {
-    lines.push(t('todaySpend.claude.waitingDetail'));
-  }
-  appendLatestTurnUsageLines(lines, latestTurnUsage, t);
-  pushDashboardLinkLine(lines, usageDashboardLabel);
-  return buildTooltipNode(lines);
-}
+// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts 的
+// isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
@@ -781,6 +692,111 @@ interface LatestTurnUsageSummary {
   details: TurnUsageDetails;
 }
 
+function formatTurnUsagePercent(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  const percent = Math.min(100, Math.max(0, value * 100));
+  if (Math.abs(percent - Math.round(percent)) < 0.05) return `${Math.round(percent)}%`;
+  return `${percent.toFixed(1).replace(/\.0$/, '')}%`;
+}
+
+function formatQuotaCacheLine(details: TurnUsageDetails, t: TFunction): string {
+  const read = formatCompactTokens(Math.max(0, Math.floor(details.cacheReadTokens)));
+  const create = formatCompactTokens(Math.max(0, Math.floor(details.cacheCreateTokens)));
+  const rate = formatTurnUsagePercent(details.cacheHitRate);
+  const localized = t(rate ? 'usageDetails.cacheLine' : 'usageDetails.cacheLineNoRate', {
+    read,
+    create,
+    rate: rate ?? '',
+  });
+
+  // 卡片左列已有“缓存”标题，复用既有 i18n 后去掉重复前缀；中文再收成示意稿的短标签。
+  return localized
+    .replace(/^[^:：]+[:：]\s*/, '')
+    .replace(/^读取\s/, '读 ')
+    .replace(' · 写入 ', ' · 写 ')
+    .replace(' · 命中率 ', ' · 命中 ');
+}
+
+function quotaTurnModel(details: TurnUsageDetails, t: TFunction): string | null {
+  if (details.model) return details.model;
+  if (details.models?.length === 1) return details.models[0];
+  if (details.models && details.models.length > 1) {
+    return t('usageDetails.multipleModels', { count: details.models.length });
+  }
+  return null;
+}
+
+function toQuotaHoverCardTurnUsage(
+  summary: LatestTurnUsageSummary | null,
+  t: TFunction,
+): QuotaHoverCardTurnUsage | null {
+  if (!summary) return null;
+  const { details } = summary;
+  const costText = summary.money
+    ? formatTurnCostMoney(summary.money)
+    : summary.costUsd != null
+      ? formatTurnCostUsd(summary.costUsd)
+      : null;
+  const finalSegmentCostText = summary.segmentMoney
+    ? formatTurnCostMoney(summary.segmentMoney)
+    : summary.segmentCostUsd != null
+      ? formatTurnCostUsd(summary.segmentCostUsd)
+      : null;
+
+  return {
+    costText,
+    costIsEstimate: summary.isEstimate,
+    isUserTurnTotal: summary.isUserTurnTotal,
+    // userTurnMoney 是用户轮累计，而 turnUsageDetails 始终只描述收尾 SDK 分段。
+    // 两笔金额可能因前段无报价而恰好相等，不能用金额相等反推只有一个分段。
+    ...(summary.isUserTurnTotal
+      ? {
+          finalSegment: {
+            costText: finalSegmentCostText,
+            costIsEstimate: summary.segmentIsEstimate,
+          },
+        }
+      : {}),
+    totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
+    inputTokensText: formatCompactTokens(details.inputTokens),
+    outputTokensText: formatCompactTokens(details.outputTokens),
+    cacheLineText: formatQuotaCacheLine(details, t),
+    model: quotaTurnModel(details, t),
+    ...(details.perModelCost
+      ? {
+          perModelCost: details.perModelCost.map((entry) => ({
+            model: formatModelShort(entry.model),
+            costText: formatTurnCostMoney(entry.money),
+          })),
+        }
+      : {}),
+    suggestionText: getTurnUsageSuggestion(details, t),
+  };
+}
+
+/** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
+function toQuotaHoverCardSessionUsage(
+  sessionUsage: SessionUsageMoney,
+): QuotaHoverCardSessionUsage | null {
+  const { actualMoney, estimatedValueMoney, totalMoney } = sessionUsage;
+  if (!totalMoney?.amount) return null;
+
+  return {
+    costText: formatTurnCostMoney(totalMoney),
+    // approximate 只说明金额精度，不能把第三方参考价的实际费用改成订阅价值语义。
+    // 纯价值估算优先信任 kind；兼容旧投影时再以唯一存在的估值分量兜底。
+    costIsEstimate:
+      totalMoney.kind === 'value-estimate'
+      || Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
+    ...(actualMoney?.amount
+      ? { actualCostText: formatTurnCostMoney(actualMoney) }
+      : {}),
+    ...(estimatedValueMoney?.amount
+      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      : {}),
+  };
+}
+
 function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSummary | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -792,6 +808,7 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
     const userTurnCostUsd = typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
       ? message.userTurnCostUsd
       : undefined;
+    const displayedMoney = userTurnMoney ?? message.turnMoney;
     return {
       ...(userTurnMoney
         ? { money: userTurnMoney }
@@ -804,11 +821,16 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
         : {}),
       ...((userTurnMoney || userTurnCostUsd != null
         ? message.userTurnCostIsEstimate
-        : message.turnCostIsEstimate) === true ? { isEstimate: true } : {}),
+        : message.turnCostIsEstimate) === true
+        || displayedMoney?.kind === 'value-estimate'
+        ? { isEstimate: true }
+        : {}),
       ...((userTurnMoney || userTurnCostUsd != null) && message.turnMoney?.amount
         ? {
             segmentMoney: message.turnMoney,
-            segmentIsEstimate: message.turnCostIsEstimate === true,
+            segmentIsEstimate:
+              message.turnCostIsEstimate === true
+              || message.turnMoney.kind === 'value-estimate',
           }
         : userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
         ? {
@@ -1139,6 +1161,7 @@ export function TodaySpendChip({
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
+  const usesClaudeSubscriptionPopover = isClaudeSubscription && !isSubscriptionBridge;
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 用
   // deviceLinkDeviceId 判(两者互斥,任一非空即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
@@ -1221,6 +1244,118 @@ export function TodaySpendChip({
     isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
   );
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
+  const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage);
+  const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
+  const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
+  const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
+  const quotaPopoverPointerInsideRef = React.useRef(false);
+  const quotaPopoverFocusInsideRef = React.useRef(false);
+  const quotaPopoverOpenSourceRef = React.useRef<'hover' | 'focus' | null>(null);
+  const quotaPopoverFocusTakenRef = React.useRef(false);
+  const quotaPopoverRestoringFocusRef = React.useRef(false);
+  const quotaPopoverTriggerRef = React.useRef<HTMLElement>(null);
+  const quotaPopoverDashboardButtonRef = React.useRef<HTMLButtonElement>(null);
+  const setQuotaPopoverFocusTarget = React.useCallback((node: HTMLElement | null) => {
+    quotaPopoverTriggerRef.current = node;
+  }, []);
+
+  const clearQuotaPopoverOpenTimer = React.useCallback(() => {
+    if (quotaPopoverOpenTimerRef.current === null) return;
+    window.clearTimeout(quotaPopoverOpenTimerRef.current);
+    quotaPopoverOpenTimerRef.current = null;
+  }, []);
+  const clearQuotaPopoverCloseTimer = React.useCallback(() => {
+    if (quotaPopoverCloseTimerRef.current === null) return;
+    window.clearTimeout(quotaPopoverCloseTimerRef.current);
+    quotaPopoverCloseTimerRef.current = null;
+  }, []);
+  const keepQuotaPopoverOpen = React.useCallback(() => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  const restoreQuotaPopoverFocus = React.useCallback(() => {
+    const shouldRestoreFocus = quotaPopoverFocusTakenRef.current;
+    quotaPopoverFocusTakenRef.current = false;
+    quotaPopoverOpenSourceRef.current = null;
+    if (!shouldRestoreFocus) return;
+    quotaPopoverRestoringFocusRef.current = true;
+    quotaPopoverTriggerRef.current?.focus({ preventScroll: true });
+    quotaPopoverRestoringFocusRef.current = false;
+  }, []);
+  const openQuotaPopoverImmediately = React.useCallback(() => {
+    keepQuotaPopoverOpen();
+    quotaPopoverOpenSourceRef.current = 'focus';
+    setQuotaPopoverOpen(true);
+  }, [keepQuotaPopoverOpen]);
+  const closeQuotaPopoverImmediately = React.useCallback(() => {
+    keepQuotaPopoverOpen();
+    setQuotaPopoverOpen(false);
+    // 受控关闭不保证 Radix 在内容卸载前触发 close-autofocus，先归还已接管的焦点。
+    restoreQuotaPopoverFocus();
+  }, [keepQuotaPopoverOpen, restoreQuotaPopoverFocus]);
+  const scheduleQuotaPopoverOpen = React.useCallback(() => {
+    clearQuotaPopoverCloseTimer();
+    clearQuotaPopoverOpenTimer();
+    quotaPopoverOpenTimerRef.current = window.setTimeout(() => {
+      quotaPopoverOpenTimerRef.current = null;
+      quotaPopoverOpenSourceRef.current = 'hover';
+      setQuotaPopoverOpen(true);
+    }, QUOTA_POPOVER_OPEN_DELAY_MS);
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  const scheduleQuotaPopoverClose = React.useCallback(() => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+    quotaPopoverCloseTimerRef.current = window.setTimeout(() => {
+      quotaPopoverCloseTimerRef.current = null;
+      setQuotaPopoverOpen(false);
+      restoreQuotaPopoverFocus();
+    }, QUOTA_POPOVER_CLOSE_GRACE_MS);
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer, restoreQuotaPopoverFocus]);
+  const handleQuotaPopoverMouseEnter = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = true;
+    keepQuotaPopoverOpen();
+  }, [keepQuotaPopoverOpen]);
+  const scheduleQuotaPopoverCloseIfOutside = React.useCallback(() => {
+    if (quotaPopoverPointerInsideRef.current || quotaPopoverFocusInsideRef.current) return;
+    scheduleQuotaPopoverClose();
+  }, [scheduleQuotaPopoverClose]);
+  const handleQuotaPopoverMouseLeave = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = false;
+    // 鼠标离开不能抢走卡片内的键盘焦点；只有指针与焦点都在外部才走 hover 关闭。
+    scheduleQuotaPopoverCloseIfOutside();
+  }, [scheduleQuotaPopoverCloseIfOutside]);
+  const handleQuotaPopoverTriggerMouseEnter = React.useCallback(() => {
+    quotaPopoverPointerInsideRef.current = true;
+    scheduleQuotaPopoverOpen();
+  }, [scheduleQuotaPopoverOpen]);
+
+  const quotaPopoverContextRef = React.useRef({
+    enabled: usesClaudeSubscriptionPopover,
+    sessionId,
+  });
+  React.useLayoutEffect(() => {
+    const previousContext = quotaPopoverContextRef.current;
+    const contextInvalidated = previousContext.enabled
+      && (!usesClaudeSubscriptionPopover || previousContext.sessionId !== sessionId);
+    quotaPopoverContextRef.current = {
+      enabled: usesClaudeSubscriptionPopover,
+      sessionId,
+    };
+    if (!contextInvalidated) return;
+
+    // provider / model 或任务切换会原地复用组件；在新 chip 节点挂载后同步收口旧弹窗，
+    // 清掉 hover / focus 残态与悬空 timer，并把卡片接管的键盘焦点交还给当前 chip。
+    quotaPopoverPointerInsideRef.current = false;
+    quotaPopoverFocusInsideRef.current = false;
+    closeQuotaPopoverImmediately();
+  }, [closeQuotaPopoverImmediately, sessionId, usesClaudeSubscriptionPopover]);
+
+  React.useEffect(() => () => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+
   const sessionSegment = sessionMoney?.amount
     ? t('todaySpend.sessionCostLabel', {
         cost: formatTurnCostMoney(sessionMoney),
@@ -1336,7 +1471,6 @@ export function TodaySpendChip({
   const resetsAtSignature = chipWindows.map((window) => window.resetsAtMs ?? 'na').join(',');
   const chipResetsAtMsList = React.useMemo(
     () => chipWindows.map((window) => window.resetsAtMs),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetsAtSignature 是 chipWindows reset 时点的值签名
     [resetsAtSignature],
   );
 
@@ -1422,20 +1556,12 @@ export function TodaySpendChip({
     );
   } else if (isClaudeSubscription) {
     // Claude 订阅形态 (方案 B): chip 显示「剩余时长 剩余%」倒计时段 + 本会话合计,
-    // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒); tooltip 保留精确时间。
+    // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒)。
     const chipSegments = [...windowSegments];
     if (sessionSegment) chipSegments.push(sessionSegment);
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
-    tooltipNode = buildClaudeSubscriptionTooltipNode(
-      claudeSubscriptionUsage,
-      modelId,
-      sessionUsage,
-      t,
-      usageDashboardLabel,
-      latestTurnUsage,
-    );
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
@@ -1537,22 +1663,131 @@ export function TodaySpendChip({
       onMouseEnter={refreshCodexRateLimits}
       onFocusCapture={refreshCodexRateLimits}
     >
-      <Tip text={tooltipNode}>
-        {isDashboardClickable ? (
-          <button
-            type="button"
-            onClick={handleClick}
-            className={buttonClass}
-            aria-label={usageDashboardLabel ?? undefined}
+      {usesClaudeSubscriptionPopover ? (
+        <Popover
+          open={quotaPopoverOpen}
+          onOpenChange={(open) => {
+            // 打开只由 hover / focus 驱动；Radix 的 outside / Escape 仍可请求关闭。
+            if (!open) closeQuotaPopoverImmediately();
+          }}
+          modal={false}
+        >
+          <PopoverTrigger asChild>
+            {isDashboardClickable ? (
+              <button
+                ref={setQuotaPopoverFocusTarget}
+                type="button"
+                onClick={(event) => {
+                  // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
+                  event.preventDefault();
+                  handleClick();
+                }}
+                onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
+                onMouseLeave={handleQuotaPopoverMouseLeave}
+                onFocus={() => {
+                  if (quotaPopoverRestoringFocusRef.current) return;
+                  quotaPopoverFocusInsideRef.current = true;
+                  openQuotaPopoverImmediately();
+                }}
+                onBlur={() => {
+                  quotaPopoverFocusInsideRef.current = false;
+                  scheduleQuotaPopoverClose();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape') return;
+                  event.preventDefault();
+                  closeQuotaPopoverImmediately();
+                }}
+                className={buttonClass}
+                aria-label={usageDashboardLabel ?? undefined}
+              >
+                {labelNode}
+              </button>
+            ) : (
+              <span
+                ref={setQuotaPopoverFocusTarget}
+                tabIndex={-1}
+                className={cn(buttonClass, 'cursor-default')}
+                onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
+                onMouseLeave={handleQuotaPopoverMouseLeave}
+              >
+                {labelNode}
+              </span>
+            )}
+          </PopoverTrigger>
+          <PopoverContent
+            side="top"
+            align="end"
+            sideOffset={8}
+            collisionPadding={8}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              if (quotaPopoverOpenSourceRef.current !== 'focus') return;
+              const dashboardButton = quotaPopoverDashboardButtonRef.current;
+              dashboardButton?.focus({ preventScroll: true });
+              quotaPopoverFocusTakenRef.current = document.activeElement === dashboardButton;
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              restoreQuotaPopoverFocus();
+            }}
+            onEscapeKeyDown={closeQuotaPopoverImmediately}
+            onMouseEnter={handleQuotaPopoverMouseEnter}
+            onMouseLeave={handleQuotaPopoverMouseLeave}
+            onFocusCapture={() => {
+              quotaPopoverFocusInsideRef.current = true;
+              // 内容无论因键盘还是鼠标获得焦点，都算卡片已接管焦点；关闭时统一归还 trigger。
+              quotaPopoverFocusTakenRef.current = true;
+              keepQuotaPopoverOpen();
+            }}
+            onBlurCapture={(event) => {
+              const nextTarget = event.relatedTarget;
+              if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+              if (quotaPopoverRestoringFocusRef.current) return;
+              // Tab 已将焦点交给卡片外的控件；自然离开只关闭卡片，
+              // 不让延时器或 close-autofocus 再把焦点抢回 trigger。
+              quotaPopoverFocusInsideRef.current = false;
+              quotaPopoverFocusTakenRef.current = false;
+              quotaPopoverOpenSourceRef.current = null;
+              scheduleQuotaPopoverClose();
+            }}
+            className="w-[340px] border-0 bg-transparent p-0 shadow-none"
           >
-            {labelNode}
-          </button>
-        ) : (
-          // 网关 / 托管账号暂无看板可跳(见 usageDashboardUrl):渲染为非交互文本,
-          // 点击无反应、不显示手型 / hover 态;用量指标与 tooltip 仍照常展示。
-          <span className={cn(buttonClass, 'cursor-default')}>{labelNode}</span>
-        )}
-      </Tip>
+            <QuotaHoverCard
+              snapshot={claudeSubscriptionUsage}
+              sessionUsage={quotaCardSessionUsage}
+              turnUsage={quotaCardTurnUsage}
+              dashboardLabel={usageDashboardLabel}
+              onOpenDashboard={handleClick}
+              dashboardButtonRef={quotaPopoverDashboardButtonRef}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <Tip text={tooltipNode}>
+          {isDashboardClickable ? (
+            <button
+              ref={setQuotaPopoverFocusTarget}
+              type="button"
+              onClick={handleClick}
+              className={buttonClass}
+              aria-label={usageDashboardLabel ?? undefined}
+            >
+              {labelNode}
+            </button>
+          ) : (
+            // 网关 / 托管账号暂无看板可跳(见 usageDashboardUrl):渲染为非交互文本,
+            // 点击无反应、不显示手型 / hover 态;用量指标与 tooltip 仍照常展示。
+            <span
+              ref={setQuotaPopoverFocusTarget}
+              tabIndex={-1}
+              className={cn(buttonClass, 'cursor-default')}
+            >
+              {labelNode}
+            </span>
+          )}
+        </Tip>
+      )}
       {confettiBurst && (
         <QuotaResetConfetti
           key={confettiBurst.nonce}

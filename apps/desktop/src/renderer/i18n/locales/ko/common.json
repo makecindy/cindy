@@ -1853,6 +1853,11 @@
         "confirm": "연동 해제",
         "cancel": "취소"
       },
+      "lifecycleAnnouncement": {
+        "label": "온라인/오프라인 알림",
+        "cellLabel": "메시지 알림",
+        "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
@@ -3178,6 +3183,8 @@
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
         "installedSection": "설치됨",
+        "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
+        "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
@@ -3217,13 +3224,21 @@
         },
         "install": "설치",
         "details": "상세",
+        "detailsAria": "{{name}} 상세 보기",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
-        "conflict": "플러그인 ID 충돌",
+        "conflict": "사용할 수 없음",
+        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
+        "conflictDescription": "이 플러그인 ID는 이미 사용 중이어서 설치할 수 없습니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "removalNotice": {
+          "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
+          "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
+          "multiple_other": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다."
+        },
         "errors": {
           "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
           "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
@@ -3403,12 +3418,16 @@
         "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
+        "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
         "agentBackgroundDetail": "매번 클릭할 필요는 없지만, 이전에 이 플러그인과 연결한 세션에서만 사용할 수 있습니다. 모델 비용이 발생할 수 있습니다.",
         "agentErrand": "Cindy Agent에게 작업을 맡기고 결과를 받아올 수 있음",
         "agentErrandDetail": "작업은 이 플러그인 전용 세션에서 실행되며, 사이드바에서 언제든 확인하고 중단할 수 있습니다. 기본은 읽기 전용이며, 권한 상향은 플러그인 설정에서 직접 해야 합니다. 모델 비용이 발생할 수 있습니다.",
+        "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
+        "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다.",
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험:사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
@@ -3522,7 +3541,8 @@
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
             "video.edit": "이미지로 영상",
-            "text.oneshot": "빠른 답변(텍스트)"
+            "text.oneshot": "빠른 답변(텍스트)",
+            "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
@@ -3556,6 +3576,7 @@
         "exportFileType": "Cindy 플러그인",
         "settingsTitle": "{{name}} 설정",
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
+        "oauthScopeStale": "현재 인증에 새로 추가된 권한이 포함되어 있지 않습니다. 다시 연결해 권한을 받으세요.",
         "configurationTitle": "설정",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
@@ -3944,6 +3965,21 @@
       "dismissButton": "확인"
     }
   },
+  "credentialStore": {
+    "banner": {
+      "message": "시스템 자격 증명 저장소를 사용할 수 없어 로그인 상태를 유지할 수 없습니다",
+      "viewHelp": "해결 방법 보기",
+      "dismiss": "닫기"
+    },
+    "dialog": {
+      "title": "시스템 자격 증명 저장소를 사용할 수 없음",
+      "intro": "Cindy가 시스템 자격 증명 저장소에서 로그인 자격 증명을 읽을 수 없어 로그인 상태와 관련 연동이 계속 실패합니다. 다음 단계를 시도해 보세요:",
+      "stepMacKeychain": "Cindy를 종료하고 '키체인 접근'을 열어 'Cindy Safe Storage'를 검색한 뒤 접근 제어를 확인하세요. 필요하면 해당 항목을 삭제하세요(저장된 연동 자격 증명은 무효화되어 다시 연결해야 합니다)",
+      "stepRestart": "Cindy 다시 시작",
+      "stepRelogin": "여전히 복구되지 않으면 로그아웃 후 다시 로그인하세요",
+      "confirm": "확인"
+    }
+  },
   "localDbGate": {
     "title": "로컬 데이터를 열 수 없습니다",
     "description": "다시 시도하거나 로그인 방식으로 돌아가 모드를 다시 선택하세요.",
@@ -4176,6 +4212,29 @@
       "latestTurnTitle": "최근 턴",
       "latestUserTurnTitle": "최근 사용자 턴 합계"
     }
+  },
+  "quotaCard": {
+    "fiveHourLabel": "5시간",
+    "weeklyLabel": "주간",
+    "modelWeeklyLabel": "{{model}} 주간",
+    "windowsRegionLabel": "할당량 구간 목록",
+    "usedPercent": "사용 {{percent}}%",
+    "resetAt": "{{at}} 재설정",
+    "noWindows": "할당량 구간 데이터가 없습니다",
+    "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
+    "limitWarning": "플랜 한도에 근접했습니다",
+    "extraUsageEnabled": "추가 사용량 활성화됨",
+    "costLine": "이번 메시지 비용: {{cost}}",
+    "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
+    "latestMessageTitle": "최근 메시지 합계",
+    "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
+    "cacheLabel": "캐시",
+    "modelLabel": "모델",
+    "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
     "costLine": "이번 턴 비용: {{cost}}",
@@ -5154,9 +5213,7 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
-      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
+      "sourceTooltip": "worktree 소스 브랜치"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -5279,9 +5336,24 @@
       "permissionSwitchFailed": "권한 모드 변경에 실패해 이전 설정을 유지했습니다",
       "fullAccessConfirmation": {
         "title": "Full access를 활성화할까요?",
-        "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
+        "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy는 확인 없이 다음 작업을 할 수 있습니다:",
+        "items": {
+          "files": {
+            "title": "파일 및 폴더",
+            "description": "작업 공간 밖의 파일 읽기 및 수정"
+          },
+          "commands": {
+            "title": "터미널 명령",
+            "description": "터미널 명령과 스크립트를 직접 실행"
+          },
+          "network": {
+            "title": "네트워크 액세스",
+            "description": "네트워크 명령 실행 및 인터넷 접근"
+          }
+        },
+        "note": "기본 제공 고위험 작업은 계속 확인을 요청합니다.",
         "confirm": "Full access 활성화",
-        "cancel": "현재 권한 유지"
+        "cancel": "취소"
       },
       "attachmentRejection": {
         "dismiss": "닫기"
@@ -7063,6 +7135,7 @@
         "titleProjectCreate": "새 프로젝트 자동화",
         "titleProjectEdit": "프로젝트 자동화 편집",
         "subtitle": "Claude 또는 Codex로 프롬프트를 일정에 따라 실행합니다.",
+        "subtitleFromGhost": "\"{{name}}\"에서 자동화 만들기를 요청했습니다. 모델을 고르고 저장하면 적용됩니다.",
         "save": "저장",
         "create": "만들기",
         "saveAria": "자동화 저장",
@@ -7283,7 +7356,8 @@
       "actionFailed": "작업 실패: {{error}}",
       "renameFailed": "이름 변경 실패: {{error}}",
       "deleteFailed": "삭제 실패: {{error}}",
-      "restartFailed": "재시작 실패: {{error}}"
+      "restartFailed": "재시작 실패: {{error}}",
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\"에서 자동화 만들기를 요청했지만 편집 중인 양식이 열려 있습니다. 입력한 내용은 그대로 유지했습니다. 저장하거나 닫은 뒤 다시 요청하세요."
     },
     "deleteDialog": {
       "title": "자동화 \"{{name}}\"을(를) 삭제하시겠습니까?",
@@ -8293,6 +8367,8 @@
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
+      "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
+      "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
       "turnNoEventTimeout": "이번 턴에서 오랫동안 아무런 진행이 없어(모델·도구·백그라운드 프로세스 모두 무응답) 무한 대기를 막기 위해 자동으로 중단했습니다. 다음 메시지를 보내 계속할 수 있습니다."
     },
     "validation": {

@@ -1,4 +1,3 @@
-import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type { ClientEndpointRegion } from '@cindy/maker-shared/client-endpoints';
@@ -10,6 +9,7 @@ import {
   getMobileEndpointForRealm,
   loadMobileEndpointsForRealm,
 } from '@/config/env';
+import Notifications from './nativeNotifications';
 import { buildPushTokenRegistrationBody } from './pushRegistrationModel';
 
 /**
@@ -19,7 +19,8 @@ import { buildPushTokenRegistrationBody } from './pushRegistrationModel';
  * - 注册目标是 device-link server 的 PUT /push-token(Bearer 鉴权与 WS 同源);
  *   关闭开关 / 登出 / 换账号或区域时注销(DELETE,幂等)。
  * - 仅 iOS(APNs):Android 需 FCM / 国内厂商通道,二期接入(server 侧已预留
- *   provider='fcm' 字段)。
+ *   provider='fcm' 字段)。原生模块只在 iOS 存在,所有调用一律经
+ *   `./nativeNotifications`(Android 由平台扩展顶成空实现,原因见该文件)。
  * - App 在前台时压掉系统横幅(WS 活着,会话本来就在实时刷新)。
  */
 

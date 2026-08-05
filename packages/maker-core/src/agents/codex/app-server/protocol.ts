@@ -139,6 +139,18 @@ export interface CodexModelListParams {
   includeHidden?: boolean | null;
 }
 
+/** Minimal subset of `mcpServerStatus/list` used for post-start capability gates. */
+export interface CodexMcpServerStatus {
+  name: string;
+  tools: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface CodexMcpServerStatusListResponse {
+  data: CodexMcpServerStatus[];
+  nextCursor: string | null;
+}
+
 export interface CodexModelListResponse {
   data: CodexModelListItem[];
   nextCursor: string | null;
@@ -1164,6 +1176,7 @@ export type ServerNotification =
 export const Method = {
   Initialize: 'initialize',
   ModelList: 'model/list',
+  McpServerStatusList: 'mcpServerStatus/list',
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',

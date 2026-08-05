@@ -23,6 +23,7 @@ vi.mock('../../logger.js', () => ({
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: vi.fn(),
 }));
 

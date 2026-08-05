@@ -42,7 +42,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/lib/authService', () => ({ createAuthService: () => svc.service }));
-vi.mock('@/lib/makerChatStore', () => ({ setCurrentUserName: vi.fn() }));
+vi.mock('@/lib/makerChatStore', () => ({
+  cancelRemoteOptimisticSendsForDataOwnerBoundary: vi.fn(),
+  setCurrentUserName: vi.fn(),
+}));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { reset: vi.fn() } }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({ clearWorkersCache: vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({

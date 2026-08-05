@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 export function useSessionTokens(
   sessionId: string | undefined,
@@ -21,7 +22,8 @@ export function useSessionTokens(
 
   useEffect(() => {
     if (!sessionId) return;
-    const unsubscribe = window.electronAPI.onUsageSessionTokensChanged?.((res) => {
+    const unsubscribe = window.electronAPI.onUsageSessionTokensChanged?.((res, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       if (res.sessionId === sessionId) {
         setTokens(res.totalTokens);
       }

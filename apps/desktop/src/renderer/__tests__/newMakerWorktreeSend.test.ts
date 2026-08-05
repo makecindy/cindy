@@ -58,6 +58,18 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(source).not.toContain("sourceBranch: wt.sourceBranch.trim() || 'main'");
   });
 
+  it('uses the shared Cindy branch helper and adopts the authoritative created branch', () => {
+    const previewBranch = source.indexOf('let branchName = getBranchName(name);');
+    const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate', previewBranch);
+    const authoritativeBranch = source.indexOf('branchName = resp.meta.branch;', worktreeCreate);
+    const creatingStateRefresh = source.indexOf("status: 'creating'", authoritativeBranch);
+
+    expect(source).not.toContain('`xdt/${name}`');
+    expect(previewBranch).toBeGreaterThan(-1);
+    expect(authoritativeBranch).toBeGreaterThan(worktreeCreate);
+    expect(creatingStateRefresh).toBeGreaterThan(authoritativeBranch);
+  });
+
   it('treats remote session creation as committed before the shared non-blocking handoff', () => {
     const remoteSessionId = source.search(/const remoteSessionId\s*=\s*presetSessionId/);
     const commitPoint = source.indexOf('remoteSessionId 到手就是**提交点**', remoteSessionId);
