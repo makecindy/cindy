@@ -1823,6 +1823,63 @@ describe('dispatcher 核心语义', () => {
       vi.useRealTimers();
     }
   });
+
+  it('ACK 模式重投终态 -> 回放经 ACK 缓冲退避重发, 账本保持 pending 直到回执', async () => {
+    vi.useFakeTimers();
+    const terminalLedger = memoryTerminalLedger();
+    terminalLedger.set({
+      connectionId: 'conn-1',
+      requestId: 'req-1',
+      ack: {
+        requestId: 'req-1',
+        result: 'accepted',
+        reason: null,
+        sessionId: 'session-ack-replay',
+        queuePosition: null,
+      },
+      turnEnd: {
+        requestId: 'req-1',
+        externalKey: 'team-slack:C1:ack-replay',
+        sessionId: 'session-ack-replay',
+        status: 'ok',
+        finalText: '重投回放结果',
+        errorMessage: null,
+        usage: { durationMs: 1 },
+      },
+      delivery: 'sent',
+      completedAt: 123_456,
+    });
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      expect(fr.calls).toHaveLength(0);
+      expect(c.ofType('task.ack')).toHaveLength(1);
+      expect(c.ofType('turn.end')).toHaveLength(1);
+      // server 重投说明它没有持久收据: 即使旧记录是 sent 也降回 pending。
+      expect(terminalLedger.records[0]?.delivery).toBe('pending');
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+
+      d.handleTurnDelivery('conn-1', {
+        requestId: 'req-1',
+        state: 'accepted',
+        attempt: 0,
+        retryAt: null,
+        error: null,
+      });
+      expect(terminalLedger.records[0]?.delivery).toBe('sent');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(c.ofType('turn.end')).toHaveLength(2);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('worktree 并发隔离(prepareWorktree)', () => {

@@ -1761,6 +1761,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       cacheAck(connectionId, terminalReplay.ack);
       const ackDelivered = send(makeTaskAck(terminalReplay.ack));
       if (!terminalReplay.turnEnd) return;
+      if (supportsDeliveryAck(connectionId)) {
+        // ACK 模式的重放帧与 sendOrBuffer 同语义: 经 ACK 缓冲重发, 账本保持
+        // pending 直到 turn.delivery 回执收口(handleTurnDelivery)。server 既然
+        // 重投了这个 requestId, 就说明它没有该结果的持久收据。
+        if (terminalReplay.delivery === 'sent') {
+          persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
+        }
+        trackPendingDelivery(connectionId, makeTurnEnd(terminalReplay.turnEnd));
+        return;
+      }
       if (!ackDelivered) {
         persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
         return;
