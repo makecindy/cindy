@@ -14127,6 +14127,92 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('registers buffered spawn lineage before slow turn reconciliation and replays child terminal state', async () => {
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-subagent-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+
+    // 第一轮失败只用于武装既有的 pre-turn 对账路径。
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+
+    // 第二轮的 started 与 spawn item 都先于 turn/start response。spawn 的卡片处理
+    // 仍应排队,但 child 血缘必须立刻登记,不能等可能超过 5s 的对账完成。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-buffered-spawn' } });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-buffered-spawn',
+      item: {
+        id: 'spawn-buffered-v2',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-buffered-v2',
+        agentPath: '/root/slow-child',
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'child-buffered-v2',
+      'start-thread-id',
+    );
+    expect(events.some((event) => event.type === 'agent_task_update')).toBe(false);
+
+    // child 用量与终态在父 spawn 重放前到达:tracker 先缓冲,对账后必须和 spawn
+    // 同批重放,最终卡片直接收口 completed 而不是永久 running。
+    handlers.descendantNotification?.('child-buffered-v2', 'thread/tokenUsage/updated', {
+      threadId: 'child-buffered-v2',
+      tokenUsage: { total: { totalTokens: 7_777 } },
+    });
+    handlers.descendantNotification?.('child-buffered-v2', 'turn/completed', {
+      threadId: 'child-buffered-v2',
+      turn: { id: 'child-turn-buffered', status: 'completed' },
+    });
+
+    secondStart.resolve({ turn: { id: 'turn-buffered-spawn' } });
+    await send2;
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as {
+          taskId?: string;
+          status?: string;
+          usage?: { totalTokens?: number };
+        })
+        .filter((update) => update.taskId === 'spawn-buffered-v2')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.totalTokens).toBe(7_777);
+    });
+
+    await handle.close();
+  });
+
   it('holds a buffered turn approval request and declines it once the response proves the turn an orphan (codex R12 P1)', async () => {
     // 孤儿 turn 在对账前发审批请求: 请求挂起不上 UI; 响应证明孤儿 →
     // 按 decline 释放 — 用户不能为隐藏 turn 批准操作。

@@ -3364,6 +3364,22 @@ export class CodexAgent extends BaseAgent {
       this.deps.registerCodexChildThreadForParent?.({ parentThreadId, childThreadId });
     };
 
+    /**
+     * 只登记 spawn item 暴露的血缘,不建卡、不发帧。
+     *
+     * pre-turn / turn-start 对账会把 item handler 整体排队;若连血缘也等到重放才登记,
+     * child 通知会在 AppServerHost 的 5s TTL 内过期。这里允许在归属尚未对账时先做
+     * 幂等路由登记,卡片 tracker 与 translator 仍严格留在原队列顺序里处理。
+     */
+    const registerSubagentSpawnLineage = (item: unknown): boolean => {
+      const registration = readCodexSubagentSpawnRegistration(item);
+      if (!registration) return false;
+      for (const childThreadId of registration.childThreadIds) {
+        registerDescendantThreadRouting(childThreadId, threadId);
+      }
+      return true;
+    };
+
     const handleDescendantNotification = (
       childThreadId: string,
       method: string,
@@ -3404,14 +3420,10 @@ export class CodexAgent extends BaseAgent {
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
     const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
-      const registration = readCodexSubagentSpawnRegistration(item);
-      if (!registration) return null;
+      if (!registerSubagentSpawnLineage(item)) return null;
       // 先接 host 路由再进 tracker:registerDescendantLineage 会把子线程 TTL 缓冲里的
       // 早到通知同步补投进 handleDescendantNotification(tracker 缓冲),随后
       // noteSpawnItem 建卡时统一重放,首帧就带上真实用量。
-      for (const childThreadId of registration.childThreadIds) {
-        registerDescendantThreadRouting(childThreadId, threadId);
-      }
       const replayed = subagentLiveCards.noteSpawnItem(item);
       if (!replayed) return null;
       return () => emitSubagentCardUpdate(replayed);
@@ -7688,6 +7700,9 @@ export class CodexAgent extends BaseAgent {
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
+        // 血缘不能跟着 turn 对账队列一起迟到:AppServerHost 只为未知 child 缓冲 5s。
+        // 卡片/翻译仍在队列内,这里只做幂等路由登记。
+        registerSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
         })) return;
@@ -7710,6 +7725,7 @@ export class CodexAgent extends BaseAgent {
         emitReplayedSubagentUpdate?.();
       },
       itemUpdated: (params) => {
+        registerSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
         })) return;
@@ -7731,6 +7747,7 @@ export class CodexAgent extends BaseAgent {
         emitReplayedSubagentUpdateOnUpdated?.();
       },
       itemCompleted: (params) => {
+        registerSubagentSpawnLineage(params.item);
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
           modelWork: itemRepresentsModelWork(params.item),
         })) return;
