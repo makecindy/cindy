@@ -95,6 +95,48 @@ function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView
   return true;
 }
 
+/** platform 在目录里可为 null、在 presence 里是字符串;比较前归一化,空值等价。 */
+function normalizePlatform(value: string | null | undefined): string {
+  return (value ?? '').trim();
+}
+
+/**
+ * 这条 presence 是否可能改变切换栏关心的字段 —— 不可能就别重拉整份目录(纯函数,可单测)。
+ *
+ * relay 把 presence-changed 广播给同账号所有连接、**含本机**(dispatch.ts 写明这是控制端崩溃 /
+ * 拔网后回收僵尸订阅的兜底信号,刻意保留)。而本机每开始 / 跑完一轮任务都会翻转 busy 并上报,
+ * 于是自己的 busy 绕一圈回来就触发一次全量 listDevices —— 开跑一次、跑完一次,纯浪费(issue #1726)。
+ *
+ * 判据与 `relevantEqual` 同源:只有切换栏真正消费的字段变化才值得重拉。`busy` / `lastSeenAt` /
+ * `appVersion` / `deviceInfo` 虽然在 `DeviceLinkDeviceView` 里,但 `relevantEqual` 刻意不比较
+ * 它们(「忽略 busy / lastSeenAt 等高频字段,避免无谓重渲染」)—— 既然它们变了也不会让快照替换,
+ * 为它们重拉一整份目录就纯是浪费。
+ *
+ * 刻意**不**比较 `controlEnabled`:它由本地 opt-out 决定、不在 presence 里,其改动走
+ * `control-target-changed` 事件的既有刷新路径。
+ *
+ * `isSelf` 直接跳过是安全的:`switcherDevices.ts` 明确「本机(isSelf)排除」,本机行的
+ * online / remoteControlEnabled 不参与列表内容。
+ */
+export function shouldRefreshForPresence(
+  current: readonly DeviceLinkDeviceView[] | null,
+  snap: DeviceLinkPresenceSnapshot,
+): boolean {
+  // 还没有首份目录 → 照常拉(这条 presence 可能正是「终于连上了」的信号)。
+  if (current === null) return true;
+  const row = current.find((d) => d.deviceId === snap.deviceId);
+  // 目录里没有这台设备 → 它是新出现的,必须重拉才能进列表。
+  if (row === undefined) return true;
+  // 自 presence 自回声:本机不进切换栏,重拉不会改变任何可见内容。
+  if (row.isSelf) return false;
+  return (
+    row.online !== snap.online ||
+    row.remoteControlEnabled !== snap.remoteControlEnabled ||
+    normalizePlatform(row.platform) !== normalizePlatform(snap.platform) ||
+    row.name.trim() !== snap.deviceName.trim()
+  );
+}
+
 /**
  * 就地改名(纯函数,可单测):返回把 `deviceId` 的 name 改成 `name`(trim 后)的新数组;
  * 无需改动(空名 / null 列表 / 设备不在列表 / 名字未变)时**返回原引用**,调用方可用 `===` 判定 no-op。
@@ -238,7 +280,12 @@ function ensureStarted(): void {
   };
   refreshImpl = () => refresh(true);
   // app 生命周期常驻(侧边栏始终有订阅者),不解绑监听。
-  window.electronAPI.deviceLink.onPresenceChanged(() => refresh());
+  // 只有相关 presence 才重拉目录(见 shouldRefreshForPresence):本机 busy 自回声与对端的
+  // busy / lastSeenAt 心跳都不改变切换栏内容,却各触发一次全量 listDevices(issue #1726)。
+  window.electronAPI.deviceLink.onPresenceChanged((snap) => {
+    if (!shouldRefreshForPresence(devices, snap)) return;
+    refresh();
+  });
   window.electronAPI.deviceLink.onStatusChanged((p) => {
     linkStatusRevision += 1;
     linkStatus = p.status;
