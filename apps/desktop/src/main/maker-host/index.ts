@@ -19,6 +19,7 @@ import {
 } from '@cindy/maker-core';
 import {
   getActiveCatalog,
+  getCatalogModelContextWindow,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
 } from './active-catalog.js';
@@ -795,6 +796,10 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveClaudeModelContextWindow: (providerId, modelId) =>
+        providerId
+          ? getCatalogModelContextWindow(providerId, 'claude-code', modelId)
+          : null,
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
