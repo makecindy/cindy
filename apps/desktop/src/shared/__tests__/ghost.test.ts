@@ -744,7 +744,83 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent 详单必须与槽成对，且只接受 background / errand 两项加档', () => {
+  it('agent.schedule 加档:单列一档权限,可与 background / errand 并存(2026-08-04)', () => {
+    const sched = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { schedule: true },
+    });
+    expect(sched.ok).toBe(true);
+    if (!sched.ok) return;
+    expect(sched.manifest.agent).toEqual({ schedule: true });
+    expect(ghostPermissionItems(sched.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:schedule',
+          kind: 'agent',
+          labelKey: 'agentSchedule',
+          detailKey: 'agentScheduleDetail',
+        }),
+      ]),
+    );
+
+    const all = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { background: true, errand: true, schedule: true },
+    });
+    expect(all.ok).toBe(true);
+    if (!all.ok) return;
+    expect(all.manifest.agent).toEqual({ background: true, errand: true, schedule: true });
+
+    // 扩权复核必须看得见它:只加 schedule 的更新,added 恰好是这一项。
+    const userActionOnly = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+    });
+    expect(userActionOnly.ok).toBe(true);
+    if (!userActionOnly.ok) return;
+    const diff = diffGhostPermissionItems(userActionOnly.manifest, sched.manifest);
+    expect(diff.added.map((item) => item.key)).toEqual(['agent:schedule']);
+    expect(diff.removed).toHaveLength(0);
+
+    // schedule: false 且其余非 true = 详单没意义,拒(应省略字段)。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { schedule: false },
+      }).ok,
+    ).toBe(false);
+    // schedule 非布尔 → 拒。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { schedule: 'yes' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('存量兼容红线:不声明 agent.schedule 的清单,权限项与内容键逐字不变', () => {
+    // 这条钉的是仓规红线(plugin-security-and-authoring.md §5):用户升级客户端后
+    // 什么都不做,已装插件必须照旧可用 —— 不能因为新增了 schedule 加档,就让任何
+    // 老清单多出/少掉一项权限或内容键(那会触发扩权复核、要求用户重新确认)。
+    for (const agentNeeds of [undefined, { background: true }, { errand: true }]) {
+      const result = validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        ...(agentNeeds ? { agent: agentNeeds } : {}),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const keys = ghostPermissionItems(result.manifest).map((item) => item.key);
+      expect(keys).not.toContain('agent:schedule');
+      expect(ghostContentKeys(result.manifest)).not.toContain('slotSchedule');
+    }
+  });
+
+  it('agent 详单必须与槽成对，且只接受 background / errand / schedule 三项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),

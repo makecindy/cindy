@@ -419,6 +419,20 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`feishu sessions workspaceKind backfill failed (non-fatal): ${msg}`);
   }
+  // Discord personal DM sessions use the same managed dialogue bucket as
+  // Feishu/Telegram. Older Discord rows were created before the adapter
+  // declared workspaceKind='dialogue' and otherwise remain grouped under the
+  // synthetic `discord-{appId}` working directory. Idempotent and deliberately
+  // does not bump updatedAt, so the migration does not reorder the sidebar.
+  try {
+    await getDbClient()
+      .drizzle.update(sessions)
+      .set({ workspaceKind: 'dialogue' })
+      .where(and(eq(sessions.source, 'discord'), ne(sessions.workspaceKind, 'dialogue')));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
+  }
   // 存量 feishu 会话的旧默认标题 `飞书 · {后6位}` 迁到新风格 `[飞书·DM] {后6位}`。
   try {
     await getDbClient()

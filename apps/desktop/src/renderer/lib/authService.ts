@@ -43,6 +43,8 @@ export interface AuthState {
   deviceId: string;
   hasAccountDeletionReceipt: boolean;
   accountDeletionRestored: boolean;
+  /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);恢复后自动回 false。 */
+  credentialStoreUnavailable: boolean;
 }
 
 export interface AuthService {
@@ -77,6 +79,7 @@ export function createAuthService(): AuthService {
       deviceId: rawState.deviceId,
       hasAccountDeletionReceipt: rawState.hasAccountDeletionReceipt === true,
       accountDeletionRestored: rawState.accountDeletionRestored === true,
+      credentialStoreUnavailable: rawState.credentialStoreUnavailable === true,
     };
     listeners.forEach((listener) => listener(normalized));
   });
@@ -95,6 +98,7 @@ export function createAuthService(): AuthService {
         deviceId: raw.deviceId,
         hasAccountDeletionReceipt: raw.hasAccountDeletionReceipt === true,
         accountDeletionRestored: raw.accountDeletionRestored === true,
+        credentialStoreUnavailable: raw.credentialStoreUnavailable === true,
       };
     },
 
