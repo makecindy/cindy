@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 
 import {
   APPEARANCE_LIMITS,
@@ -8,6 +8,10 @@ import {
   type AppearanceOverrides,
   type AppearanceSettings,
 } from '../shared/appearanceSettings.js';
+import {
+  isTrustedAppearanceSettingsReadEvent,
+  isTrustedAppearanceSettingsReadWindow,
+} from './appearance-settings-reader.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
@@ -23,8 +27,6 @@ export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
 export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
 
-type AppearanceEvent = IpcMainEvent | IpcMainInvokeEvent;
-
 let registered = false;
 
 export function registerAppearanceSettingsIpc(): void {
@@ -34,7 +36,9 @@ export function registerAppearanceSettingsIpc(): void {
   // Must be registered before BrowserWindow creation: preload reads this on
   // the first synchronous bootstrap frame.
   ipcMain.on('appearance-settings:get-sync', (event) => {
-    event.returnValue = isTrustedEvent(event) ? readAppearanceSettings() : null;
+    event.returnValue = isTrustedAppearanceSettingsReadEvent(event)
+      ? readAppearanceSettings()
+      : null;
   });
 
   ipcMain.handle('appearance-settings:get', (event) => {
@@ -93,21 +97,12 @@ export async function updatePersistedWindowZoom(
 
 function broadcast(settings: AppearanceSettings): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || !isAppContentWindow(win)) continue;
+    if (!isTrustedAppearanceSettingsReadWindow(win)) continue;
     try {
       win.webContents.send(APPEARANCE_SETTINGS_CHANGED_CHANNEL, settings);
     } catch {
       // A window may be torn down between enumeration and send.
     }
-  }
-}
-
-function isTrustedEvent(event: AppearanceEvent): boolean {
-  try {
-    assertTrustedAppRendererEvent(event);
-    return true;
-  } catch {
-    return false;
   }
 }
 
