@@ -28,6 +28,19 @@ interface ToolUseLike {
   toolInput?: unknown;
 }
 
+/**
+ * 去重 key。**只对 Windows 路径形态**(盘符前缀或含反斜杠)做大小写不敏感折叠——
+ * NTFS 上 `A.txt` 与 `a.txt` 是同一文件;POSIX 路径(Linux 本地会话 / 远程 Linux
+ * workdir)必须保留原大小写,否则会把两个真实不同的文件错误合并、丢掉一个
+ * (PR #1835 review)。macOS 虽默认大小写不敏感,但无法从纯 POSIX 路径形态区分
+ * macOS 与 Linux;两害相权取轻:宁可 macOS 偶尔多出一个重复 chip,也不能在 Linux
+ * 上丢文件。
+ */
+function dedupeKeyForPath(abs: string): string {
+  const isWindowsShape = /^[a-zA-Z]:[\\/]/.test(abs) || abs.includes('\\');
+  return isWindowsShape ? abs.toLowerCase() : abs;
+}
+
 /** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。 */
 function createdPathsFromToolUse(toolName: string, input: unknown): string[] {
   const descriptor = describeToolUse(toolName, input);
@@ -59,7 +72,7 @@ export function collectGeneratedFiles(
     if (!toolName) continue;
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
       const abs = resolveToolFilePath(rawPath, workingDir);
-      const key = abs.toLowerCase();
+      const key = dedupeKeyForPath(abs);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ path: abs, name: basename(abs) });

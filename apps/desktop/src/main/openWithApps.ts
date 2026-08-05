@@ -247,13 +247,17 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
       try {
         const resolved = await listWindowsApps(ext);
         const idMap = new Map<string, string>();
-        const apps: OpenWithApp[] = [];
-        for (const [i, r] of resolved.entries()) {
-          const id = `owa-${i}-${path.basename(r.exePath).toLowerCase()}`;
-          idMap.set(id, r.exePath);
-          const iconDataUrl = (await deps.getAppIcon(r.exePath)) ?? undefined;
-          apps.push({ id, label: r.label, ...(iconDataUrl ? { iconDataUrl } : {}) });
-        }
+        // 图标提取彼此独立且每个自带 4s 超时:串行会把子菜单懒加载放大到
+        // MAX_APPS * 4s(最坏 48s)。并行(至多 MAX_APPS=12 并发)取,顺序仍按
+        // resolved 保持稳定(PR #1835 review)。
+        const apps: OpenWithApp[] = await Promise.all(
+          resolved.map(async (r, i) => {
+            const id = `owa-${i}-${path.basename(r.exePath).toLowerCase()}`;
+            idMap.set(id, r.exePath);
+            const iconDataUrl = (await deps.getAppIcon(r.exePath)) ?? undefined;
+            return { id, label: r.label, ...(iconDataUrl ? { iconDataUrl } : {}) };
+          }),
+        );
         appCacheByExt.set(ext, idMap);
         return { success: true, apps };
       } catch (err) {

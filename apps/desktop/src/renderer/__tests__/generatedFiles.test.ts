@@ -62,6 +62,28 @@ describe('collectGeneratedFiles', () => {
     expect(files.map((f) => f.name)).toEqual(['dup.md', 'other.md']);
   });
 
+  it('folds case only for Windows-shaped paths, keeps POSIX case-sensitive', () => {
+    // Windows 绝对路径:大小写不敏感,C:/A.md 与 c:/a.md 视为同一文件。
+    const win = collectGeneratedFiles(
+      [
+        toolUse('Write', { file_path: 'C:/work/A.md', content: '1' }),
+        toolUse('Write', { file_path: 'c:/work/a.md', content: '2' }),
+      ],
+      'C:/work',
+    );
+    expect(win).toHaveLength(1);
+
+    // POSIX 绝对路径:大小写敏感,/w/A.txt 与 /w/a.txt 是两个不同文件,不合并。
+    const posix = collectGeneratedFiles(
+      [
+        toolUse('write', { path: '/w/A.txt', content: '1' }),
+        toolUse('write', { path: '/w/a.txt', content: '2' }),
+      ],
+      '/w',
+    );
+    expect(posix.map((f) => f.name).sort()).toEqual(['A.txt', 'a.txt']);
+  });
+
   it('ignores non-tool_use messages', () => {
     const files = collectGeneratedFiles(
       [
