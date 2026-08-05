@@ -2920,6 +2920,16 @@ let goalIdleObserver: ((sessionId: string) => void) | null = null;
 export function setGoalIdleObserver(observer: ((sessionId: string) => void) | null): void {
   goalIdleObserver = observer;
 }
+
+/**
+ * Shared Goal wake-up boundary after the desktop turn tracker is idle.
+ * Normal terminal events and authoritative reconciliation both pass through
+ * here; the Goal controller coalesces duplicate or late terminal tails.
+ */
+function notifyGoalIdleAfterTurnSettled(sessionId: string): void {
+  goalIdleObserver?.(sessionId);
+}
+
 let goalStopObserver: ((sessionId: string) => void | Promise<void>) | null = null;
 export function setGoalStopObserver(
   observer: ((sessionId: string) => void | Promise<void>) | null,
@@ -3575,7 +3585,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);
         // #9 idle 兜底:正常 done、终止型 error（含 abort）统一在 tracker 已置 idle 后
         // 唤醒 Goal controller。无 goal / 非 active / 已取消的 deferred Resume 均为 no-op。
-        goalIdleObserver?.(session.id);
+        notifyGoalIdleAfterTurnSettled(session.id);
         // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
         // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
         noteClaudeSessionTurnState(session.id, false);
@@ -8858,6 +8868,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     }
     sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
+    // 与正常 product-terminal 事件共享同一条 Goal idle 唤醒语义。direct abort
+    // 与 coordinator 的 authoritative-idle 都从本 reconciliation 成功出口经过；
+    // 迟到终态或重复尾巴由 Goal controller 的 deferred intent 防抖幂等收敛。
+    notifyGoalIdleAfterTurnSettled(sessionId);
     try {
       // The marker write is best-effort and ordered behind pending message
       // persistence. It may retry/settle after an owner boundary is available.

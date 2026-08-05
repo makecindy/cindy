@@ -1859,9 +1859,10 @@ describe('GoalController', () => {
         });
       }
       sessionInTurn = false;
-      // Production wires every product-terminal event to this observer. Duplicate terminal tails
-      // (for example error followed by paired done) must still coalesce into one resumed turn.
+      // Production wires reconciliation and every product-terminal event to this observer.
+      // Reconciliation followed by a late error + paired done must still coalesce into one turn.
       await Promise.all([
+        local.controller.maybeContinueActiveGoal('s1'),
         local.controller.maybeContinueActiveGoal('s1'),
         local.controller.maybeContinueActiveGoal('s1'),
       ]);
