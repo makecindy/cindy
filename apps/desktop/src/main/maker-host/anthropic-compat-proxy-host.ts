@@ -471,19 +471,20 @@ export function createModelRoutingTransform(): RoutingTransform {
       return null;
     }
     // 有界拒绝(P1):对外访问开启时,这个端口被公布给外部 CLI。走到这里的请求既没有可用
-    // x-api-key(上面已判)、又没有可解析 session、又不带 authorization bearer、又不带
-    // x-claude-code-session-id 头 —— 它不是 Cindy 自家 cc 子进程(oauth-spawn 必带 OAuth
-    // bearer;任何 cc 子进程都带 x-claude-code-session-id;gateway-spawn 带可用 x-api-key 已在
-    // 上面 return),而是本机某个直接打这个对外端口、连对外 token 都省了的匿名客户端。放行会让它
-    // 经 gatewayDefaultRouteDecision 白嫖 Cindy 的网关 key。故 401,不落默认路由。
-    // ⚠ 有界修复:存心伪造一个假 authorization bearer / 会话头的本机进程仍能溜过(loopback 非鉴权
-    //   边界);彻底隔离需把对外监听与内部子进程代理拆到不同端口。未开启对外访问时不启用此闸,内部
-    //   流量字节级不变。
+    // x-api-key(上面已判)、又没有可解析 session、又不带 x-claude-code-session-id 头 —— 它不是
+    // Cindy 自家 cc 子进程(任何 cc 子进程,含注册时序窗口内会话反解不出的 oauth-spawn,都带
+    // x-claude-code-session-id;gateway-spawn 带可用 x-api-key 已在上面 return),而是本机某个直接
+    // 打这个对外端口、连对外 token 都省了的匿名客户端。放行会让它经 gatewayDefaultRouteDecision
+    // 白嫖 Cindy 的网关 key。故 401,不落默认路由。
+    // ⚠ 不以 authorization 头作豁免:内部子进程靠 x-claude-code-session-id 头(而非是否带 bearer)
+    //   与外部区分;若把「带 authorization」当豁免,本机进程随手伪造一个 `Bearer anything`(既无
+    //   x-api-key 也无会话头)即可跳过此闸,落到 gatewayDefaultRouteDecision 白嫖网关 key —— 假
+    //   bearer 绝不能绕过对外 token 要求(#1666 review)。loopback 本身仍不是鉴权边界,彻底隔离需
+    //   把对外监听与内部子进程代理拆到不同端口;未开启对外访问时不启用此闸,内部流量字节级不变。
     if (
       isExternalAccessEnabled()
       && sessionId === null
       && !sdkSessionId
-      && headerValue(ctx.headers, 'authorization') === null
     ) {
       return externalErrorDecision(
         401,

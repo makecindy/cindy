@@ -276,6 +276,20 @@ describe('cc routingTransform 有界拒绝 (P1: 匿名客户端不得白嫖网�
     expect(body?.error?.code).toBe('external_token_required');
   });
 
+  it('伪造 authorization bearer + 无 x-api-key + 无会话头 → 仍 401(假 bearer 不得绕过 #1666)', async () => {
+    externalAuthMock.externalEnabled = true;
+    // 本机进程随手编一个 Bearer:既没有可用 x-api-key,也没有 x-claude-code-session-id 会话头。
+    // 修复前「带 authorization 即豁免」会放它落到 gatewayDefaultRouteDecision 白嫖网关 key;
+    // 修复后 authorization 不再作豁免,仍按匿名客户端拒绝。
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      { model: 'claude-opus-4-8' },
+      ctxWith({ authorization: 'Bearer anything' }),
+    ));
+    const { status, body } = await drainLocalHandler(decision);
+    expect(status).toBe(401);
+    expect(body?.error?.code).toBe('external_token_required');
+  });
+
   it('内部 oauth-spawn 子进程(带 authorization bearer + 会话头)不被有界拒绝命中', async () => {
     externalAuthMock.externalEnabled = true;
     // 带 x-claude-code-session-id(任何 cc 子进程都带)+ OAuth bearer,但会话解析不出(注册时序窗口)。

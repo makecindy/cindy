@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -182,5 +182,27 @@ describe('codex-external-config-writer — write（非破坏性 merge）', () =>
     expect(res.success).toBe(true);
     const parsed = parseToml(readFileSync(configPath(), 'utf8')) as Record<string, unknown>;
     expect(parsed.model_provider).toBe('cindy_external');
+  });
+
+  // POSIX 权限保护(#1666):temp+rename 不得把密文配置放宽成世界可读。Windows 无 POSIX mode 位,跳过。
+  const posixIt = process.platform === 'win32' ? it.skip : it;
+
+  posixIt('已有 0600 的配置被改写后仍是 0600(不被 rename 放宽成 0644)', () => {
+    writeFileSync(configPath(), 'model = "gpt-5"\n', 'utf8');
+    chmodSync(configPath(), 0o600);
+    expect(writeCodexConfig(URL).success).toBe(true);
+    expect(statSync(configPath()).mode & 0o777).toBe(0o600);
+  });
+
+  posixIt('已有 0644 的配置沿用其原有 mode(保权限,不擅自收紧也不放宽)', () => {
+    writeFileSync(configPath(), 'model = "gpt-5"\n', 'utf8');
+    chmodSync(configPath(), 0o644);
+    expect(writeCodexConfig(URL).success).toBe(true);
+    expect(statSync(configPath()).mode & 0o777).toBe(0o644);
+  });
+
+  posixIt('新建文件默认收紧到 0600', () => {
+    expect(writeCodexConfig(URL).success).toBe(true);
+    expect(statSync(configPath()).mode & 0o777).toBe(0o600);
   });
 });

@@ -161,9 +161,20 @@ export function writeCodexConfig(
     const nextRoot = mergeConfig(root, codexUrl);
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
+    // 保权限:codex config.toml 常含 provider 凭证,可能本就是 0600。temp+rename 若用
+    // Node 默认 `0666 & umask`(常见 022 → 0644)落位,会把一个 0600 的密文配置 rename 成
+    // 世界可读,泄漏同机其它用户可读的凭证。故:文件已存在 → 沿用其原有 mode(绝不放宽);
+    // 新建 → 收紧到 0600。Windows(NTFS)不吃 POSIX mode 位,跳过 chmod。(#1666 review)
+    let targetMode = 0o600;
+    try {
+      targetMode = fs.statSync(filePath).mode & 0o777;
+    } catch { /* 文件不存在 → 用默认 0600 */ }
     const tmpPath = `${filePath}.${process.pid}-${Date.now()}.tmp`;
     try {
       fs.writeFileSync(tmpPath, `${stringifyToml(nextRoot)}\n`, 'utf8');
+      if (process.platform !== 'win32') {
+        fs.chmodSync(tmpPath, targetMode);
+      }
       fs.renameSync(tmpPath, filePath);
     } catch (writeErr) {
       try { fs.unlinkSync(tmpPath); } catch { /* best-effort 清理 */ }
