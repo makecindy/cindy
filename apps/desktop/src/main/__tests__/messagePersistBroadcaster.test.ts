@@ -336,6 +336,47 @@ describe('background tool_result persistence', () => {
       broadcastGuard(),
     );
   });
+
+  it('drops a late background result whose parent tool_use predates session clear', async () => {
+    const toolUseAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateResultAt = Date.parse('2026-06-20T10:05:10.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(toolUseAt);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', toolName: 'collab:spawnAgent', input: {} },
+      { uuid: 'old-turn' },
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    vi.clearAllMocks();
+    noteSessionClearBoundary(SESSION, clearAt);
+    nowSpy.mockReturnValue(lateResultAt);
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-cleared-child'] },
+      null,
+      'background',
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(result).toBeNull();
+    expect(fullResult).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('tool_result 顺序:先 tool_result_full(全文)后 tool_result(摘要)', () => {

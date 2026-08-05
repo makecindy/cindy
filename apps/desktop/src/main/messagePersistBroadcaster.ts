@@ -546,6 +546,19 @@ function backgroundStateForToolUse(
   return null;
 }
 
+function backgroundResultPredatesSessionClear(
+  sessionId: string,
+  state: BackgroundTurnPersistState,
+  toolUseIds: string[],
+): boolean {
+  const clearBoundary = clearBoundaryBySession.get(sessionId);
+  if (clearBoundary === undefined) return false;
+  return toolUseIds.some((toolUseId) => {
+    const toolUseCreatedAt = state.toolUseCreatedAt.get(toolUseId);
+    return toolUseCreatedAt !== undefined && toolUseCreatedAt <= clearBoundary;
+  });
+}
+
 function releaseBackgroundStateForToolUses(
   sessionId: string,
   state: BackgroundTurnPersistState,
@@ -801,6 +814,10 @@ export function onToolResultEvent(
     ? backgroundStateForToolUse(sessionId, ids)
     : null;
   if (scope === 'background' && !backgroundState) return null;
+  if (backgroundState && backgroundResultPredatesSessionClear(sessionId, backgroundState, ids)) {
+    releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
+    return null;
+  }
   const idMap = backgroundState?.toolResultIdByToolUseId ??
     getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
   const pending = backgroundState?.pendingFullTextByToolUseId ??
@@ -892,6 +909,10 @@ export function onToolResultFullEvent(
     ? backgroundStateForToolUse(sessionId, [toolUseId])
     : null;
   if (scope === 'background' && !backgroundState) return null;
+  if (backgroundState && backgroundResultPredatesSessionClear(sessionId, backgroundState, [toolUseId])) {
+    releaseBackgroundStateForToolUses(sessionId, backgroundState, [toolUseId]);
+    return null;
+  }
   const idMap = backgroundState?.toolResultIdByToolUseId ??
     getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
   const pending = backgroundState?.pendingFullTextByToolUseId ??
