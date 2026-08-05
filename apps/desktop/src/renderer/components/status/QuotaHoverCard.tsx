@@ -218,7 +218,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
   ) => (
     <div className="text-sm font-medium text-[var(--text-primary)]">
       {costText != null
-        ? t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', { cost: costText })
+        ? t(isEstimate ? 'quotaCard.valueLine' : 'quotaCard.costLine', { cost: costText })
         : t(unavailableKey)}
     </div>
   );
@@ -227,7 +227,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
     <section data-testid="quota-turn-usage" className="px-4 pb-1 pt-2">
       {turnUsage.isUserTurnTotal ? (
         <div className="mb-[3px] text-xs font-medium text-[var(--text-secondary)]">
-          {t('todaySpend.tooltip.latestUserTurnTitle')}
+          {t('quotaCard.latestMessageTitle')}
         </div>
       ) : null}
       <div className="tabular-nums">
@@ -247,7 +247,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
             {renderCostLine(
               turnUsage.finalSegment.costText,
               turnUsage.finalSegment.costIsEstimate,
-              'usageDetails.noBilledCost',
+              'quotaCard.noBilledCost',
             )}
           </div>
         </div>

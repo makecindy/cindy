@@ -23,13 +23,13 @@ vi.mock('react-i18next', () => ({
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
-      if (key === 'usageDetails.costLine') return `本轮消耗：${options.cost}`;
-      if (key === 'usageDetails.valueLine') return `本轮 token 价值：${options.cost}`;
-      if (key === 'usageDetails.noBilledCost') return '本轮费用暂不可用，仅显示用量';
+      if (key === 'quotaCard.costLine') return `本轮消耗：${options.cost}`;
+      if (key === 'quotaCard.valueLine') return `本轮 token 价值：${options.cost}`;
+      if (key === 'quotaCard.noBilledCost') return '本轮费用暂不可用，仅显示用量';
       if (key === 'usageDetails.costBreakdownHeader') return '按模型拆分：';
       if (key === 'usageDetails.modelCostLine') return `· ${options.model} ${options.cost}`;
       if (key === 'quotaCard.turnCostUnavailable') return '本轮费用暂无法估算';
-      if (key === 'todaySpend.tooltip.latestUserTurnTitle') return '最近一轮用户请求累计';
+      if (key === 'quotaCard.latestMessageTitle') return '最近一轮用户请求累计';
       if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '最后一个 SDK 分段';
       if (key === 'quotaCard.staleData') return `quotaCard.staleData:${options.minutes}`;
       return key;
