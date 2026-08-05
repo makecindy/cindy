@@ -1,5 +1,6 @@
 import {
   isPublicHttpResourceUrl,
+  type BrowserControlErrorCode,
   type BrowserControlRequest,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
@@ -77,6 +78,7 @@ const ACTIONS = [
   'snapshot',
   'screenshot',
   'navigate',
+  'previewLocalHtml',
   'console',
   'pdf',
   'upload',
@@ -193,7 +195,11 @@ function resultText(value: unknown): string {
 }
 
 /** Build an MCP error response for an MCP-only action (recipe/siteguide/extract). */
-function errorResult(action: string, message: string): {
+function errorResult(
+  action: string,
+  message: string,
+  errorCode: BrowserControlErrorCode = 'BROWSER_RUNTIME_INVALID_REQUEST',
+): {
   content: Array<{ type: 'text'; text: string }>;
   isError: true;
 } {
@@ -201,7 +207,7 @@ function errorResult(action: string, message: string): {
     content: [
       {
         type: 'text',
-        text: resultText({ ok: false, action, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST', message }),
+        text: resultText({ ok: false, action, errorCode, message }),
       },
     ],
     isError: true,
@@ -217,6 +223,88 @@ function toRuntimeRequest(args: Record<string, unknown>): BrowserControlRequest 
     if (value !== undefined) out[key] = value;
   }
   return out as unknown as BrowserControlRequest;
+}
+
+/**
+ * previewLocalHtml: sandboxed preview of a workspace-local HTML file.
+ *
+ * The L2 layer only validates the tool contract and delegates the URL issuance
+ * to the host's `createLocalPreviewUrl` helper (loopback + capability token;
+ * the workspace path boundary runs host-side against the session workingDir).
+ * The returned URL is then opened through the ordinary runtime `open`/`navigate`
+ * path, so every later snapshot/screenshot/act works unchanged. `file://` and
+ * localhost-wide navigation stay blocked — only the one preview origin is ever
+ * handed to the runtime.
+ */
+async function handlePreviewLocalHtml(
+  args: Record<string, unknown>,
+  deps: BrowserMcpDeps,
+): Promise<{ content: Array<{ type: 'text'; text: string }>; isError: boolean }> {
+  const localPath = args.localPath;
+  if (typeof localPath !== 'string' || localPath.trim() === '') {
+    return errorResult(
+      'previewLocalHtml',
+      'localPath 必填: 要预览的本地 HTML 文件(相对当前会话 workingDir)',
+    );
+  }
+  const session = deps.getSessionContext?.();
+  const workingDir = session?.workingDir;
+  if (!workingDir) {
+    return errorResult(
+      'previewLocalHtml',
+      '当前会话无 workingDir,无法定位本地文件(本地预览需要会话工作目录)',
+      'BROWSER_RUNTIME_LOCAL_PREVIEW_NO_WORKDIR',
+    );
+  }
+  if (!deps.createLocalPreviewUrl) {
+    return errorResult(
+      'previewLocalHtml',
+      '当前主机未启用本地 HTML 预览能力(createLocalPreviewUrl 未注入)',
+      'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE',
+    );
+  }
+  let url: string;
+  try {
+    ({ url } = await deps.createLocalPreviewUrl({
+      workingDir,
+      localPath,
+      sessionId: session?.sessionId,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const code = message.includes('PATH_NOT_ALLOWED')
+      ? 'BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED'
+      : 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE';
+    return errorResult('previewLocalHtml', `本地预览创建失败: ${message}`, code);
+  }
+  const runtime = getRuntime(deps);
+  const targetId = typeof args.targetId === 'string' && args.targetId ? args.targetId : undefined;
+  const res = await runtime.call(
+    targetId
+      ? { action: 'navigate', url, targetId }
+      : { action: 'open', url },
+  );
+  if (!res.ok) {
+    return errorResult(
+      'previewLocalHtml',
+      `打开预览失败: ${res.message ?? JSON.stringify(res.data)}`,
+      res.errorCode ?? 'BROWSER_RUNTIME_ACTION_FAILED',
+    );
+  }
+  return {
+    content: [
+      {
+        type: 'text',
+        text: resultText({
+          ok: true,
+          action: 'previewLocalHtml',
+          url,
+          ...(res.data as Record<string, unknown> | undefined),
+        }),
+      },
+    ],
+    isError: false,
+  };
 }
 
 export function registerBrowserTools(registry: BrowserToolRegistry, deps: BrowserMcpDeps): void {
@@ -237,6 +325,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       targetUrl: z.string().optional(),
       url: z.string().optional().describe('navigate/open/wait 等操作使用的 URL'),
       targetId: z.string().optional().describe('tab 引用;优先使用 tabs/open 返回的 suggestedTargetId/tabId/label'),
+      localPath: z.string().optional().describe('action=previewLocalHtml: 要预览的工作区内本地 HTML 文件(相对 workingDir 或绝对路径;仅支持 .html/.htm;同目录相对资源可加载)'),
       label: z.string().optional().describe('tab label'),
       limit: z.number().int().positive().optional(),
       maxChars: z.number().int().nonnegative().optional(),
@@ -347,6 +436,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               `url 必须是 http(s);不支持 file:// / chrome:// / data: 等协议(收到 "${u}")`,
             );
           }
+        }
+        if (args.action === 'previewLocalHtml') {
+          return handlePreviewLocalHtml(args, deps);
         }
         if (
           args.action === 'act'

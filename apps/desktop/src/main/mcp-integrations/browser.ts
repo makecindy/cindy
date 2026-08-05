@@ -11,6 +11,7 @@ import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   createBrowserControlRuntime,
+  setBrowserControlRuntimeConfig,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
@@ -39,6 +40,7 @@ import {
 } from '../rsb-browser-bridge/active-session.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import { createLocalPreviewServer } from './local-html-preview-server.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
@@ -95,6 +97,17 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
     },
   }),
 );
+
+// Sandboxed local HTML preview: serves workspace-local HTML over a tokenized
+// loopback origin. The origin is granted to the SSRF policy ONLY after the
+// listener is up; any listener error/close revokes it immediately (see
+// local-html-preview-server.ts) so a freed port is never trusted by policy.
+const localPreviewServer = createLocalPreviewServer({
+  logger,
+  applyPreviewOrigins: (previewOrigins) => {
+    setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
+  },
+});
 
 const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
 
@@ -256,6 +269,11 @@ export function getBrowserMcpDeps(): {
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  createLocalPreviewUrl(input: {
+    workingDir: string;
+    localPath: string;
+    sessionId?: string;
+  }): Promise<{ url: string }>;
 } {
   return {
     // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
@@ -267,6 +285,7 @@ export function getBrowserMcpDeps(): {
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
     getRuntime: () => backendController,
+    createLocalPreviewUrl: (input) => localPreviewServer.createPreviewUrl(input),
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
@@ -428,6 +447,9 @@ export async function openBrowserForLogin(): Promise<void> {
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
 export function disposeBrowserRuntime(): Promise<void> {
+  // Revoke the preview origin + close its listener first, so the SSRF policy
+  // never outlives the port it trusts.
+  localPreviewServer.dispose();
   // Always stop the vendored Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If

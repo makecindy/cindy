@@ -139,6 +139,9 @@ export function createLiziMcpProviders(
           name: 'cindy_browser',
           instance: createBrowserMcpServer({
             ...baseDeps,
+            // Lazy accessor: resolves the real session ctx (incl. workingDir)
+            // at tool-call time, not at factory time (Codex bridge caveat above).
+            getSessionContext: () => resolveLiziMcpSessionContext(ctx),
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
               return {

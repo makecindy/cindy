@@ -26,6 +26,7 @@ export {
   redactSensitiveText,
   resolveExistingPathsWithinRoot,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
   root,

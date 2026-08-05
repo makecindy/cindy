@@ -8,6 +8,7 @@
 
 - **公开静态页 / JSON API / RSS / 文档**:优先用宿主的网页抓取工具(WebFetch / web_search 类)或 Bash `curl`——无 tab、无登录态依赖、最省 token。**不要**为"读一篇公开文章"开浏览器 tab。
 - **需要 JS 渲染、页面交互、或站点登录态(已在本浏览器里登录过)**:用本工具。
+- **需要验证工作区里本地生成的 HTML(截图确认渲染效果)**:用 `action: "previewLocalHtml"`(见「本地 HTML 预览」)——**不要**尝试 `file://` 导航(策略拒绝),也**不要**通过 shell 裸跑 Chrome 截图(脱离护栏后可能误伤用户浏览器)。
 - **内容依赖用户本人在系统浏览器(Chrome / Safari)里的登录态**(公司内网 SSO、用户私人账号页):本工具的浏览器是**独立环境,拿不到那些登录态**。两条路二选一,如实告诉用户:
   1. 请用户把该 URL 复制到**自己的系统浏览器**打开、自行查看/操作(你无法代看);
   2. 或请用户在本工具的浏览器里**重新登录一次**该站点(登录态此后持久保留),你再继续自动化。
@@ -52,6 +53,15 @@
 4. **要精确字段 / 干净 JSON 才用 `extract`**:snapshot 不够精准(要取某属性、按子选择器拆字段)时,用 `action: "extract"` 一次性提结构化记录(`from` + `multiple` 提列表)。**关键:`fields` 的简写 string 是纯 CSS 选择器(取 textContent);取属性用 `{selector,attr}`,取链接用 `{selector,type:"href"}`——别把属性拼进选择器(`"h3 a@title"` 非法)、别写自然语言。** 不确定选择器就先 scoped snapshot 看结构再写。
 5. **慎用 screenshot**:只有需要视觉确认(布局 / 图像内容)时才 `action: "screenshot"`;链接要看真实 URL 时 snapshot 带 `urls: true`,元素位置重要时才 `labels: true`。
 
+#### 本地 HTML 预览(验证工作区里的网页)
+
+需要"亲眼看一下自己生成的 HTML 渲染效果"时,用 `action: "previewLocalHtml"` + `localPath`(相对当前会话工作目录,或工作区内的绝对路径):
+
+- 返回受管预览 `url` + `targetId`,之后照常用 `snapshot` / `screenshot` 验证。
+- 只支持 `.html` / `.htm` 入口;入口同目录下的相对 CSS / JS / 图片 / 字体资源可以加载。
+- **不要**尝试 `file://` 导航(策略拒绝),也**不要**通过 shell 裸跑 Chrome 截图——受管浏览器有护栏,裸跑会失去一切保护(历史上曾因此误杀用户浏览器)。
+- 预览页禁止向外网发数据(`connect-src 'self'`);依赖外网 fetch / WebSocket 的页面需把资源放到本地再预览。
+
 #### 两种浏览器模式(先认环境,再谈登录)
 
 宿主用两种后端之一承接本工具,**顶层 action 集合一致**(两边都支持 snapshot / act 各 kind / requests / upload / dialog 等),差别在两处:少数参数级能力只有侧边栏模式有,以及"页面呈现在哪里"。判别依据是 `action: "status"` 返回结果里的 **`data.backend`**(工具结果的外层是 `{ ok, action, status, data }`,`status` 是数字状态码——**别去读 `status.backend`**,那是 undefined):
@@ -86,6 +96,7 @@
 | `profiles` | 看 profile 列表(**不含**按站点登录态信号) |
 | `tabs` / `open` / `focus` / `close` | 标签页:列 / 开(带 label)/ 切 / 关 |
 | `navigate` | 当前或指定 tab 导航到 URL |
+| `previewLocalHtml` | 验证工作区本地 HTML:受管预览 url + targetId(相对资源可加载;勿用 file:// 或裸跑 Chrome) |
 | `snapshot` | 读页面结构 + 拿 ref(交互前定位元素用) |
 | `act` | 执行 click/type/fill/press/select/hover/drag/wait/evaluate(见 `request.kind`) |
 | `extract` | 按字段 schema 从 DOM 提结构化数据(列表/详情,优于全页 snapshot) |

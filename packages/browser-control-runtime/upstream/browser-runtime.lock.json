@@ -21,10 +21,38 @@
     {
       "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "preserve exact-origin preview allowlist (allowedOrigins) from the host config for the sandboxed local HTML preview server"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "exact-origin allowlist must also unblock the resolver early-return"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
+      "desc": "exact-origin allowlist must reach the resolved policy object"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin's hostname; redirects/subframes re-evaluate with their own URL)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed"
+    },
+    {
+      "file": "extension/src/infra/net/ssrf.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
+    },
+    {
+      "file": "extension/src/sdk-security-runtime.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries"
     }
   ],
   "fileCount": 335,
-  "contentHash": "1bc2c6ddddf76824846b6e14ce5bf27e3b222b3283c9fbf2beda1d4283d3040a",
+  "contentHash": "add63d986255d6b001c6b752534b957de5c014ce761c059f11873111d37e0a7c",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

@@ -8,6 +8,7 @@ export {
   SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   type LookupFn,
   type SsrFPolicy,
 } from "../../sdk-security-runtime.js";

@@ -55,7 +55,14 @@ function resolveRef(repoSlug, ref) {
   }).trim();
 }
 function shHide(cmd) {
-  execFileSync('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
+  // Windows (msys) compatibility: GNU tar treats `C:\` drive letters as remote
+  // hosts and does not glob by default, so quoted Windows paths are converted
+  // to /c/... and tar gets --wildcards. No-op on POSIX paths / Linux.
+  const toMsys = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
+  const posix = cmd
+    .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
+    .replace(/(^|\s)tar(\s)/g, '$1tar --wildcards$2');
+  execFileSync('sh', ['-c', posix], { stdio: ['ignore', 'ignore', 'inherit'] });
 }
 
 /**
@@ -126,7 +133,9 @@ function computeLeafClosure(repoTmp) {
     }
   }
   for (const s of SEEDS) walk(path.join(repoTmp, s));
-  return [...visited].map((f) => path.relative(repoTmp, f)).sort();
+  // Normalize separators: on win32 path.relative emits '\', and the 'src/'
+  // prefix filter below is POSIX-separator based.
+  return [...visited].map((f) => path.relative(repoTmp, f).split(path.sep).join('/')).sort();
 }
 
 /** Rewrite all bare/aliased imports for a generated file at `genRelFromGenRoot`. */
@@ -292,6 +301,106 @@ const LOCAL_PATCHES = {
         '          ),\n' +
         '        );',
     },
+    {
+      desc: 'preserve exact-origin preview allowlist (allowedOrigins) from the host config for the sandboxed local HTML preview server',
+      find: '  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);',
+      replace:
+        '  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): preserve the exact-origin allowlist\n' +
+        '  // used by the sandboxed local HTML preview server. Vendored SsrFPolicy\n' +
+        '  // supports allowedOrigins (promote only the matching request origin\'s\n' +
+        '  // hostname), but the resolver must not drop it on the floor.\n' +
+        '  const allowedOrigins = normalizeStringList(rawPolicy?.allowedOrigins);',
+    },
+    {
+      desc: 'exact-origin allowlist must also unblock the resolver early-return',
+      find: '    !hostnameAllowlist\n  ) {',
+      replace: '    !hostnameAllowlist &&\n    !allowedOrigins\n  ) {',
+    },
+    {
+      desc: 'exact-origin allowlist must reach the resolved policy object',
+      find: '    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),\n  };',
+      replace:
+        '    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),\n' +
+        '    ...(allowedOrigins ? { allowedOrigins } : {}),\n' +
+        '  };',
+    },
+  ],
+  'extension/src/browser/navigation-guard.ts': [
+    {
+      desc: 'resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin\'s hostname; redirects/subframes re-evaluate with their own URL)',
+      find:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+      replace:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+    },
+    {
+      desc: 'apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed',
+      find:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+      replace:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): promote exact-origin allowlist entries\n' +
+        '  // (scheme+host+port) into the hostname allowlist for THIS request URL only.\n' +
+        '  // Redirect chains and subframe navigations re-enter this function with their\n' +
+        '  // own URL, so the origin-scoped trust cannot leak to other ports or hosts.\n' +
+        '  opts.ssrfPolicy = resolveSsrFPolicyForUrl(parsed, opts.ssrfPolicy);\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+    },
+  ],
+  'extension/src/infra/net/ssrf.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)',
+      find:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+      replace:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+    },
+  ],
+  'extension/src/sdk-security-runtime.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries',
+      find: '  resolvePinnedHostnameWithPolicy,\n',
+      replace: '  resolvePinnedHostnameWithPolicy,\n  resolveSsrFPolicyForUrl,\n',
+    },
   ],
 };
 
@@ -319,6 +428,10 @@ function applyLocalPatches(relDest, raw) {
 }
 
 function writeGen(relDest, raw, srcLabel, hashes, appliedPatches) {
+  // Normalize to POSIX separators: LOCAL_PATCHES keys and the lock's patch
+  // records use '/', but path.join on win32 emits '\' — without this the
+  // patches silently never match on Windows.
+  relDest = relDest.replace(/\\/g, '/');
   const { patched, applied } = applyLocalPatches(relDest, raw);
   if (appliedPatches) appliedPatches.push(...applied);
   const dest = path.join(genRoot, relDest);

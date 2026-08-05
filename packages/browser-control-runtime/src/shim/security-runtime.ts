@@ -33,6 +33,7 @@ export {
   isPrivateNetworkAllowedByPolicy,
   matchesHostnameAllowlist,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   type LookupFn,
   type SsrFPolicy,
 } from '../_generated/leaf/src/infra/net/ssrf.js';
