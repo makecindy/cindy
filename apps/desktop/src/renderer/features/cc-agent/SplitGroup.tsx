@@ -49,7 +49,9 @@ const KEYBOARD_RESIZE_STEP = 0.05;
 
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
-  return Boolean(element?.closest('[data-split-pane-no-focus]'));
+  return Boolean(
+    element?.closest('[data-split-pane-no-focus], [data-split-pane-route-action]'),
+  );
 }
 
 interface SplitGroupProps {

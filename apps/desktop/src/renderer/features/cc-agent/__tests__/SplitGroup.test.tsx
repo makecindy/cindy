@@ -181,7 +181,7 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 
-  it('pane 内子路由操作先尝试切换 pane，再由子操作接管目标路由', () => {
+  it('pane 内显式子路由操作直接接管目标路由，不额外切换来源 pane', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
     });
@@ -196,7 +196,7 @@ describe('SplitGroup', () => {
     });
 
     expect(routeActionMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
