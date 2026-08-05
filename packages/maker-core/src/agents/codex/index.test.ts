@@ -17989,6 +17989,71 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  it('迟到的 background terminal 不重置新 turn 的 reconnect deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-late-background-terminal',
+      );
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('后续 2/5、3/5 只更新进度，不延长首次提示建立的总 deadline', async () => {
     vi.useFakeTimers();
     try {
