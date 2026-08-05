@@ -38,6 +38,9 @@ describe('validateTitleOutput', () => {
     ['Concise title!', 'English echo with exclamation'],
     ['簡潔なタイトル。', 'Japanese echo with period'],
     ['간결한 제목.', 'Korean echo with period'],
+    ['"Generate a concise title".', 'quoted English echo with outside period'],
+    ['「生成简洁中文标题」。', 'quoted Chinese echo with outside period'],
+    ['『簡潔なタイトル』！', 'quoted Japanese echo with outside exclamation'],
   ])('rejects instruction echo %s (%s)', (value) => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });

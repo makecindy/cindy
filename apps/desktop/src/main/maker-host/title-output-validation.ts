@@ -64,7 +64,7 @@ export function validateTitleOutput(
   if (!title || title.includes('```')) return null;
   if (/^#{1,6}\s/u.test(title)) return null;
   if (ROLE_LABEL_RE.test(title) || META_PREFIX_RE.test(title)) return null;
-  const echoProbe = title.replace(TRAILING_SENTENCE_PUNCT_RE, '');
+  const echoProbe = stripWrappingQuotes(title.replace(TRAILING_SENTENCE_PUNCT_RE, ''));
   if (INSTRUCTION_ECHO_RES.some((re) => re.test(echoProbe))) return null;
   if (exceedsUnicodeCodePointLimit(title, maxChars)) return null;
   return title;
