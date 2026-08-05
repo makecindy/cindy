@@ -145,7 +145,10 @@ test("macOS WebAuthn provisioning profile is validated before it is embedded", (
           assert.deepEqual(args.slice(0, 4), ["-extract", args[1], args[2], "-o"]);
           assert.equal(args[4], "-");
           assert.equal(args[5], "--");
-          assert.match(args[6], /\/cindy-webauthn-profile-[^/]+\/decoded\.plist$/);
+          assert.match(
+            args[6].replaceAll("\\", "/"),
+            /\/cindy-webauthn-profile-[^/]+\/decoded\.plist$/,
+          );
           if (args[1] === "TeamIdentifier") {
             assert.equal(args[2], "json");
             return { status: 0, stdout: JSON.stringify(["TEAM123456"]), stderr: "" };
