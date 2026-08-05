@@ -55,7 +55,14 @@ function resolveRef(repoSlug, ref) {
   }).trim();
 }
 function shHide(cmd) {
-  execFileSync('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
+  // Windows (msys) compatibility: GNU tar treats `C:\` drive letters as remote
+  // hosts and does not glob by default, so quoted Windows paths are converted
+  // to /c/... and tar gets --wildcards. No-op on POSIX paths / Linux.
+  const toMsys = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
+  const posix = cmd
+    .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
+    .replace(/(^|\s)tar(\s)/g, '$1tar --wildcards$2');
+  execFileSync('sh', ['-c', posix], { stdio: ['ignore', 'ignore', 'inherit'] });
 }
 
 /**
@@ -126,7 +133,9 @@ function computeLeafClosure(repoTmp) {
     }
   }
   for (const s of SEEDS) walk(path.join(repoTmp, s));
-  return [...visited].map((f) => path.relative(repoTmp, f)).sort();
+  // Normalize separators: on win32 path.relative emits '\', and the 'src/'
+  // prefix filter below is POSIX-separator based.
+  return [...visited].map((f) => path.relative(repoTmp, f).split(path.sep).join('/')).sort();
 }
 
 /** Rewrite all bare/aliased imports for a generated file at `genRelFromGenRoot`. */
@@ -319,6 +328,10 @@ function applyLocalPatches(relDest, raw) {
 }
 
 function writeGen(relDest, raw, srcLabel, hashes, appliedPatches) {
+  // Normalize to POSIX separators: LOCAL_PATCHES keys and the lock's patch
+  // records use '/', but path.join on win32 emits '\' — without this the
+  // patches silently never match on Windows.
+  relDest = relDest.replace(/\\/g, '/');
   const { patched, applied } = applyLocalPatches(relDest, raw);
   if (appliedPatches) appliedPatches.push(...applied);
   const dest = path.join(genRoot, relDest);
