@@ -237,6 +237,12 @@ describe('CreateWorkerPopover', () => {
     expect(initialTask.className).toContain('h-[96px]');
   });
 
+  it('does not claim Auto-review for a device-link worker controlled by an older peer', () => {
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+
+    expect(screen.queryByTestId('worker-permission-mode')).toBeNull();
+  });
+
   it('disables immediately and collapses repeated click events into one request', async () => {
     let finishCreate!: () => void;
     const onCreate = vi.fn(
