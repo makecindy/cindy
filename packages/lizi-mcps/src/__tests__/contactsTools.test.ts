@@ -423,8 +423,8 @@ describe('cindy_contacts tools', () => {
     expect(vcfExport.count).toBe(1);
   });
 
-  it('系统回写: group 超 200 条时按 host 单批上限分批执行, 不整批被拒', async () => {
-    // 回归: group 路径条数不受 zod cap 约束, 曾把 >200 的 plans 整批传给
+  it('系统回写: group 超单批上限时按批上限分批执行, 不整批被拒', async () => {
+    // 回归: group 路径条数不受 zod cap 约束, 曾把超单批上限的 plans 整批传给
     // writeSystemContacts(host 上限 200 直接拒绝) — dry_run 能过, 真执行全军覆没
     const store = manager.getStore();
     const g = parseResult(await registry.call('contacts_create_group', { name: '大组' })).data as {
