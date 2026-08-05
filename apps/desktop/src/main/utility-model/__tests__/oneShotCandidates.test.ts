@@ -183,6 +183,32 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('chat-completions 的 content 为 parts 数组时拼接文本段(思考模型形态)', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: [{ type: 'text', text: '答' }, { type: 'text', text: '案' }] } }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: true, text: '答案' });
+  });
+
+  it('思考烧光预算只留下 reasoning_content(content 空)→ 如实 empty_response,不拿思维链冒充答案', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '', reasoning_content: '在想…' }, finish_reason: 'length' }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
+  });
+
   it('pinnedProfileId 钉住某一档时只用它,绕开默认链', async () => {
     // 默认链(mock)是 codex-mini + litellm-mini;钉 deepseek 应当完全绕开它们,
     // 只解析出 deepseek 这一个候选(取自真实档位表,不受链 mock 影响)。

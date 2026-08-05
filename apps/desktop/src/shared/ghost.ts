@@ -5483,11 +5483,12 @@ export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
  * ── oneshot_text 政策参数(2026-07-31 开闸)────────────────────────────
  * 快问快答走轻量任务模型链,秒级到几十秒,只有同步形态(没有 submit 档:
  * 一单等不起的文本问答本身就是用错了通道)。上限对齐 agent-request 的
- * 消息量级;回答预算钳在小额度——这是"快问快答",不是长文生成通道。
+ * 消息量级;插件可显式传 maxTokens 自我约束(≤ MAX),缺省不钳——思考
+ * 模型的思考链也吃输出预算,默认上限曾把 content 烧空(empty_response)
+ * 或把 JSON 截断(BAD_MODEL_OUTPUT),失控兜底由 60s 超时承担。
  */
 export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
 export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 4096;
-export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 

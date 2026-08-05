@@ -828,11 +828,14 @@ async function requestLiteLlmText(input: {
     const parsed = await response.json() as {
       choices?: Array<{ message?: { content?: unknown } }>;
     };
-    const text = parsed.choices
-      ?.map((choice) => typeof choice.message?.content === 'string' ? choice.message.content : '')
+    const text = (parsed.choices ?? [])
+      .map((choice) => chatCompletionContentText(choice.message?.content))
       .join('')
-      .trim() ?? '';
-    if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      .trim();
+    if (!text) {
+      log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
+      throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
     return text;
   } catch (error) {
     if (error instanceof UtilityTextExecutionError) throw error;
@@ -988,7 +991,16 @@ async function requestProviderHttpText(input: {
       : input.wire === 'anthropic-messages'
         ? parseAnthropicResponseText(raw)
         : parseChatCompletionText(raw);
-    if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    if (!text) {
+      if (input.wire === 'chat-completions') {
+        try {
+          log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(JSON.parse(raw)));
+        } catch {
+          // 指纹尽力而为,解析不了就不记。
+        }
+      }
+      throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
     return text;
   } catch (error) {
     if (error instanceof UtilityTextExecutionError) throw error;
@@ -1005,12 +1017,61 @@ function parseChatCompletionText(raw: string): string {
   try {
     const json = JSON.parse(raw) as { choices?: Array<{ message?: { content?: unknown } }> };
     return (json.choices ?? [])
-      .map((choice) => typeof choice.message?.content === 'string' ? choice.message.content : '')
+      .map((choice) => chatCompletionContentText(choice.message?.content))
       .join('')
       .trim();
   } catch {
     return '';
   }
+}
+
+/**
+ * chat-completions 的 message.content 归一:字符串直取;思考模型的 content 可能是
+ * parts 数组([{type:'text',text:…}]),拼文本段。reasoning_content 是思维链
+ * 不是答案,刻意不取——结构化调用方(expectJson)拿思维链必挂,不如如实判空。
+ */
+function chatCompletionContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part !== 'object' || part === null) return '';
+        const text = (part as { text?: unknown }).text;
+        return typeof text === 'string' ? text : '';
+      })
+      .join('');
+  }
+  return '';
+}
+
+/**
+ * 2xx 但取不到正文时的结构指纹:只记形状(content 类型/finish_reason/字段名),
+ * 不记内容——错误响应体可能回显请求元数据,模型正文不落盘全文。
+ * (2026-08-05 实证:deepseek-v4-flash 这类思考模型 200 空 content → empty_response,
+ * 没有指纹时无从区分"思考烧光预算"与"返回结构不认"。)
+ */
+function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown> {
+  if (typeof parsed !== 'object' || parsed === null) return { shape: 'non-object' };
+  const choices = (parsed as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return { shape: 'no-choices', topKeys: Object.keys(parsed).slice(0, 8) };
+  }
+  const first = choices[0] as { message?: unknown; finish_reason?: unknown };
+  const message = (
+    typeof first?.message === 'object' && first.message !== null ? first.message : {}
+  ) as Record<string, unknown>;
+  const content = message.content;
+  return {
+    contentType: Array.isArray(content) ? 'array' : content === null ? 'null' : typeof content,
+    contentPartTypes: Array.isArray(content)
+      ? content
+          .slice(0, 6)
+          .map((part) => (typeof part === 'object' && part !== null ? (part as { type?: unknown }).type : typeof part))
+      : undefined,
+    hasReasoningContent: typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0,
+    finishReason: first?.finish_reason,
+    messageKeys: Object.keys(message).slice(0, 8),
+  };
 }
 
 /** Direct request for a user provider runtime selected by the schedule. */

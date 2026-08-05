@@ -57,7 +57,6 @@ import {
   GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
-  GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
   GHOST_ONESHOT_TEXT_MAX_TOKENS,
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
@@ -294,7 +293,8 @@ export interface CindySlotDeps {
    */
   oneshotText?(params: {
     prompt: string;
-    maxTokens: number;
+    /** 插件显式给的输出上限;undefined = 不钳(失控兜底是 timeoutMs)。 */
+    maxTokens?: number;
     timeoutMs: number;
     /**
      * 本次快问快答的路由(用户钉档或身份卡声明偏好解析出的终态,见
@@ -1517,7 +1517,10 @@ export class GhostCindySlot {
       }
       const outcome = await oneshot({
         prompt,
-        maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
+        // 插件没传 maxTokens 就不设默认上限:思考模型的思考链也吃输出预算,
+        // 默认上限会把 content 烧空(判 empty_response)或截断 JSON(判
+        // BAD_MODEL_OUTPUT)。失控兜底是下面的 60s 超时,不是 token 钳。
+        maxTokens: p.maxTokens as number | undefined,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
         route,
       });
@@ -1542,6 +1545,13 @@ export class GhostCindySlot {
           JSON.parse(cleaned);
           text = cleaned;
         } catch {
+          // 不落原始输出(内容敏感度);长度足够让插件侧 fallback_detail 与
+          // 日志对得上同一次调用。
+          this.deps.log?.warn('ghost cindy-request oneshot_text bad json', {
+            ghostId,
+            callId,
+            chars: text.length,
+          });
           return {
             ok: false,
             errorCode: 'BAD_MODEL_OUTPUT',
