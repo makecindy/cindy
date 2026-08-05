@@ -268,6 +268,10 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   const handleClosePane = useCallback(
     (pane: SplitPaneNode, isOwner: boolean) => {
+      if (pendingFocusSessionIdRef.current === pane.sessionId) {
+        pendingFocusSessionIdRef.current = null;
+        focusRequestSequenceRef.current += 1;
+      }
       if (isOwner) {
         const paneIndex = panes.findIndex((candidate) => candidate.key === pane.key);
         const targetPane = panes[paneIndex + 1] ?? panes[paneIndex - 1];

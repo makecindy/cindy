@@ -358,6 +358,44 @@ describe('SplitGroup', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('关闭 pane 时会取消该 pane 仍在解析的焦点请求', async () => {
+    let resolveClosedPaneRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveClosedPaneRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+    });
+    const sessionBPane = view.container.querySelector('[data-split-pane-session-id="session-b"]');
+    const closeButton = sessionBPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-b close button missing');
+
+    act(() => {
+      fireEvent.click(closeButton);
+    });
+
+    expect(screen.queryByTestId('session-view-session-b')).toBeNull();
+    expect(screen.getByTestId('session-view-session-a')).toBeTruthy();
+    expect(screen.getByTestId('session-view-session-c')).toBeTruthy();
+
+    await act(async () => {
+      resolveClosedPaneRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('session-view-session-b')).toBeNull();
+  });
+
   it('pane 内普通 composer 按钮会先切换 pane 主权', async () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
