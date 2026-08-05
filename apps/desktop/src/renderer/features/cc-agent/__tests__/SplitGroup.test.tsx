@@ -4,17 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+import { ApiError } from '@/lib/httpClient';
 import { SplitGroup } from '../SplitGroup';
 import { splitGroupStore } from '../splitGroupStore';
 
-const { navigateMock, resolveSessionRouteMock, routeActionMock, useCCSessionsMock } = vi.hoisted(
-  () => ({
-    navigateMock: vi.fn(),
-    resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
-    routeActionMock: vi.fn(),
-    useCCSessionsMock: vi.fn(),
-  }),
-);
+const {
+  navigateMock,
+  resolveSessionRouteMock,
+  routeActionMock,
+  sessionGetMock,
+  useCCSessionsMock,
+} = vi.hoisted(() => ({
+  navigateMock: vi.fn(),
+  resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
+  routeActionMock: vi.fn(),
+  sessionGetMock: vi.fn(),
+  useCCSessionsMock: vi.fn(),
+}));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -39,6 +45,10 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 
 vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: resolveSessionRouteMock,
+}));
+
+vi.mock('@/lib/makerTransport', () => ({
+  getSessionFor: sessionGetMock,
 }));
 
 vi.mock('../CCAgentSessionView', () => ({
@@ -109,6 +119,7 @@ describe('SplitGroup', () => {
     navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
+    sessionGetMock.mockReset();
     useCCSessionsMock.mockReset();
     useCCSessionsMock.mockReturnValue({ sessions: [], isLoading: true, error: null });
     splitGroupStore.__resetForTest();
@@ -132,8 +143,62 @@ describe('SplitGroup', () => {
       isLoading: false,
       error: null,
     });
+    sessionGetMock.mockResolvedValue({ id: 'session-deleted', status: 'deleted' });
     act(() => {
       splitGroupStore.addSession('session-deleted', 'session-a', 'right');
+    });
+
+    renderSplitGroup('session-a');
+
+    await waitFor(() => expect(splitGroupStore.getSnapshot().root).toBeNull());
+    expect(screen.getByTestId('route-outlet')).toBeTruthy();
+  });
+
+  it('目录刷新期间会权威核验并保留刚创建的 session pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'session-new', status: 'active' });
+    act(() => {
+      splitGroupStore.addSession('session-new', 'session-a', 'right');
+    });
+
+    renderSplitGroup('session-new');
+
+    await waitFor(() => expect(sessionGetMock).toHaveBeenCalledWith('session-new'));
+    expect(splitGroupStore.isActive()).toBe(true);
+    expect(screen.getByTestId('session-view-session-new')).toBeTruthy();
+  });
+
+  it('权威核验遇到瞬时错误时保留 session pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockRejectedValue(new ApiError('UNKNOWN', 0, 'temporary failure'));
+    act(() => {
+      splitGroupStore.addSession('session-unavailable', 'session-a', 'right');
+    });
+
+    renderSplitGroup('session-a');
+
+    await waitFor(() => expect(sessionGetMock).toHaveBeenCalledWith('session-unavailable'));
+    expect(splitGroupStore.isActive()).toBe(true);
+    expect(screen.getByTestId('session-view-session-unavailable')).toBeTruthy();
+  });
+
+  it('权威核验确认 session 不存在时清理持久化 pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockRejectedValue(new ApiError('NOT_FOUND', 0, 'missing'));
+    act(() => {
+      splitGroupStore.addSession('session-missing', 'session-a', 'right');
     });
 
     renderSplitGroup('session-a');
@@ -258,6 +323,32 @@ describe('SplitGroup', () => {
         </SplitGroup>
       </MemoryRouter>,
     );
+
+    await act(async () => {
+      resolveStaleRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('分屏卸载后会取消仍在解析的 pane 焦点请求', async () => {
+    let resolveStaleRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStaleRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+    });
+    view.unmount();
 
     await act(async () => {
       resolveStaleRoute?.('/cc-agent/session-b');

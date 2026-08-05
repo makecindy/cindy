@@ -28,7 +28,10 @@ import {
   useRemoteBootstrapLoadingDeviceIds,
   useRemoteProjectSessions,
 } from '@/features/device-link/remoteProjectsStore';
+import { ApiError } from '@/lib/httpClient';
+import { getSessionFor } from '@/lib/makerTransport';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
@@ -142,10 +145,46 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   useEffect(() => {
     if (!sessionsCatalogReady) return;
-    for (const pane of panes) {
-      if (!sessionsById.has(pane.sessionId)) splitGroupStore.removeSession(pane.sessionId);
-    }
+    const missingSessionIds = panes
+      .map((pane) => pane.sessionId)
+      .filter((sessionId) => !sessionsById.has(sessionId));
+    if (missingSessionIds.length === 0) return;
+    let cancelled = false;
+
+    // The merged catalog is eventually consistent while local refreshes and
+    // device-link mirrors rebuild. Only prune after the session's owning side
+    // confirms deletion or absence; getSessionFor preserves remote routing.
+    void Promise.all(
+      missingSessionIds.map(async (sessionId) => {
+        try {
+          const session = await getSessionFor(sessionId);
+          return session.status === 'deleted' ? sessionId : null;
+        } catch (error) {
+          const errorCode = error instanceof ApiError ? error.code : extractIpcError(error)?.code;
+          return errorCode === 'NOT_FOUND' ? sessionId : null;
+        }
+      }),
+    ).then((staleSessionIds) => {
+      if (cancelled) return;
+      for (const sessionId of staleSessionIds) {
+        if (sessionId && !sessionsById.has(sessionId)) {
+          splitGroupStore.removeSession(sessionId);
+        }
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [panes, sessionsById, sessionsCatalogReady]);
+
+  useEffect(
+    () => () => {
+      focusRequestSequenceRef.current += 1;
+      pendingFocusSessionIdRef.current = null;
+    },
+    [],
+  );
 
   const focusSession = useCallback(
     (sessionId: string) => {
