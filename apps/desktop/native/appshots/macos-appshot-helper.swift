@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -8,6 +9,7 @@ import UniformTypeIdentifiers
 
 private let secureTextFieldRole = "AXSecureTextField"
 private let maximumCaptureDimension = 8_192
+private let outputDirectoryPrefix = "cindy-appshot-"
 
 enum AppshotError: Error {
   case invalidOutput
@@ -105,6 +107,7 @@ private func serializeTree<Node>(
   root: Node?,
   limits: SerializationLimits,
   deadlineReached: (Int) -> Bool,
+  prepareNode: (Node) -> Void = { _ in },
   readNode: (Node) -> TreeNodeSnapshot<Node>?
 ) -> AXSerialization {
   guard let root else { return AXSerialization(text: nil, truncated: false, unavailableReason: nil) }
@@ -118,6 +121,7 @@ private func serializeTree<Node>(
       truncated = true
       break
     }
+    prepareNode(node)
     guard let snapshot = readNode(node) else { continue }
     visited += 1
 
@@ -152,12 +156,14 @@ private func serializeTree<Node>(
 private func serializeFixture(
   _ root: FixtureNode,
   limits: SerializationLimits,
-  deadlineNode: Int? = nil
+  deadlineNode: Int? = nil,
+  prepareNode: (FixtureNode) -> Void = { _ in }
 ) -> AXSerialization {
   serializeTree(
     root: root,
     limits: limits,
     deadlineReached: { visited in deadlineNode.map { visited >= $0 } ?? false },
+    prepareNode: prepareNode,
     readNode: { node in
       if node.role == secureTextFieldRole {
         return TreeNodeSnapshot(
@@ -182,10 +188,29 @@ private func copyAXAttribute(_ element: AXUIElement, _ attribute: CFString) -> C
   return AXUIElementCopyAttributeValue(element, attribute, &value) == .success ? value : nil
 }
 
+private func copyAXAttribute(
+  _ element: AXUIElement,
+  _ attribute: CFString,
+  beforeDeadline: () -> Bool
+) -> CFTypeRef? {
+  guard beforeDeadline() else { return nil }
+  return copyAXAttribute(element, attribute)
+}
+
 private func safeAXString(_ element: AXUIElement, _ attribute: CFString) -> String? {
   guard let value = copyAXAttribute(element, attribute), CFGetTypeID(value) == CFStringGetTypeID() else {
     return nil
   }
+  return value as? String
+}
+
+private func safeAXString(
+  _ element: AXUIElement,
+  _ attribute: CFString,
+  beforeDeadline: () -> Bool
+) -> String? {
+  guard let value = copyAXAttribute(element, attribute, beforeDeadline: beforeDeadline),
+        CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
   return value as? String
 }
 
@@ -203,8 +228,32 @@ private func safeAXPrimitive(_ element: AXUIElement, _ attribute: CFString) -> S
   return nil
 }
 
+private func safeAXPrimitive(
+  _ element: AXUIElement,
+  _ attribute: CFString,
+  beforeDeadline: () -> Bool
+) -> String? {
+  guard let value = copyAXAttribute(element, attribute, beforeDeadline: beforeDeadline) else { return nil }
+  if CFGetTypeID(value) == CFStringGetTypeID() { return value as? String }
+  if CFGetTypeID(value) == CFBooleanGetTypeID() {
+    return CFBooleanGetValue((value as! CFBoolean)) ? "true" : "false"
+  }
+  if CFGetTypeID(value) == CFNumberGetTypeID(), let number = value as? NSNumber {
+    return number.stringValue
+  }
+  return nil
+}
+
 private func axChildren(_ element: AXUIElement) -> [AXUIElement] {
   copyAXAttribute(element, kAXChildrenAttribute as CFString) as? [AXUIElement] ?? []
+}
+
+private func axChildren(_ element: AXUIElement, beforeDeadline: () -> Bool) -> [AXUIElement] {
+  copyAXAttribute(
+    element,
+    kAXChildrenAttribute as CFString,
+    beforeDeadline: beforeDeadline
+  ) as? [AXUIElement] ?? []
 }
 
 func serializeAccessibilityWindow(
@@ -216,11 +265,6 @@ func serializeAccessibilityWindow(
   }
   guard let window else {
     return AXSerialization(text: nil, truncated: false, unavailableReason: "unsupported")
-  }
-
-  var pid: pid_t = 0
-  if AXUIElementGetPid(window, &pid) == .success {
-    AXUIElementSetMessagingTimeout(AXUIElementCreateApplication(pid), 0.1)
   }
 
   let clock = ContinuousClock()
@@ -235,12 +279,14 @@ func serializeAccessibilityWindow(
     root: window,
     limits: SerializationLimits(maxNodes: 2_000, maxDepth: 16, maxBytes: 512 * 1_024),
     deadlineReached: deadlineReached,
+    prepareNode: { AXUIElementSetMessagingTimeout($0, 0.1) },
     readNode: { element in
       let identity = CFHash(element)
       guard seen.insert(identity).inserted else { return nil }
       if deadlineReached(0) { return nil }
 
-      let role = safeAXString(element, kAXRoleAttribute as CFString)
+      let beforeDeadline = { !deadlineReached(0) }
+      let role = safeAXString(element, kAXRoleAttribute as CFString, beforeDeadline: beforeDeadline)
       if role == secureTextFieldRole {
         return TreeNodeSnapshot(
           fields: [("role", "Secure text field"), ("label", "Secure text field")],
@@ -254,14 +300,17 @@ func serializeAccessibilityWindow(
         fields.append((name, value))
       }
       add("role", role)
-      add("label", safeAXString(element, kAXDescriptionAttribute as CFString))
-      add("title", safeAXString(element, kAXTitleAttribute as CFString))
-      add("value", safeAXPrimitive(element, kAXValueAttribute as CFString))
-      add("description", safeAXString(element, kAXHelpAttribute as CFString))
-      add("enabled", safeAXPrimitive(element, kAXEnabledAttribute as CFString))
-      add("selected", safeAXPrimitive(element, kAXSelectedAttribute as CFString))
-      add("focused", safeAXPrimitive(element, kAXFocusedAttribute as CFString))
-      return TreeNodeSnapshot(fields: fields, children: deadlineReached(0) ? [] : axChildren(element))
+      add("label", safeAXString(element, kAXDescriptionAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("title", safeAXString(element, kAXTitleAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("value", safeAXPrimitive(element, kAXValueAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("description", safeAXString(element, kAXHelpAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("enabled", safeAXPrimitive(element, kAXEnabledAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("selected", safeAXPrimitive(element, kAXSelectedAttribute as CFString, beforeDeadline: beforeDeadline))
+      add("focused", safeAXPrimitive(element, kAXFocusedAttribute as CFString, beforeDeadline: beforeDeadline))
+      return TreeNodeSnapshot(
+        fields: fields,
+        children: axChildren(element, beforeDeadline: beforeDeadline)
+      )
     }
   )
 
@@ -406,9 +455,91 @@ private func pngData(for image: CGImage) throws -> Data {
   return data as Data
 }
 
+private func openValidatedOutputDirectory(_ argument: String) throws -> (url: URL, fileDescriptor: Int32) {
+  guard argument.hasPrefix("/") else { throw AppshotError.invalidOutput }
+  let directory = URL(fileURLWithPath: argument, isDirectory: true).standardizedFileURL
+  let lexicalTemporaryRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    .standardizedFileURL
+  let temporaryRoot = lexicalTemporaryRoot.resolvingSymlinksInPath()
+  let resolvedDirectory = directory.resolvingSymlinksInPath()
+  let suppliedParent = directory.deletingLastPathComponent().path
+  guard directory.path == argument,
+        suppliedParent == lexicalTemporaryRoot.path || suppliedParent == temporaryRoot.path,
+        resolvedDirectory.deletingLastPathComponent().path == temporaryRoot.path,
+        resolvedDirectory.lastPathComponent.hasPrefix(outputDirectoryPrefix) else {
+    throw AppshotError.invalidOutput
+  }
+
+  var pathStatus = stat()
+  guard lstat(argument, &pathStatus) == 0,
+        (pathStatus.st_mode & S_IFMT) == S_IFDIR,
+        (pathStatus.st_mode & 0o777) == 0o700,
+        pathStatus.st_uid == geteuid() else { throw AppshotError.invalidOutput }
+
+  let directoryFD = open(argument, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+  guard directoryFD >= 0 else { throw AppshotError.invalidOutput }
+  var openedStatus = stat()
+  guard fstat(directoryFD, &openedStatus) == 0,
+        (openedStatus.st_mode & S_IFMT) == S_IFDIR,
+        (openedStatus.st_mode & 0o777) == 0o700,
+        openedStatus.st_uid == geteuid(),
+        openedStatus.st_dev == pathStatus.st_dev,
+        openedStatus.st_ino == pathStatus.st_ino else {
+    close(directoryFD)
+    throw AppshotError.invalidOutput
+  }
+  var outputStatus = stat()
+  guard fstatat(directoryFD, "appshot.png", &outputStatus, AT_SYMLINK_NOFOLLOW) != 0,
+        errno == ENOENT else {
+    close(directoryFD)
+    throw AppshotError.invalidOutput
+  }
+  return (directory, directoryFD)
+}
+
+private func writePNG(_ data: Data, toDirectoryFileDescriptor directoryFD: Int32) throws {
+  let filename = "appshot.png"
+  let outputFD = openat(
+    directoryFD,
+    filename,
+    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+    mode_t(0o600)
+  )
+  guard outputFD >= 0 else { throw AppshotError.invalidOutput }
+  var keepFile = false
+  defer {
+    close(outputFD)
+    if !keepFile { unlinkat(directoryFD, filename, 0) }
+  }
+
+  var outputStatus = stat()
+  guard fstat(outputFD, &outputStatus) == 0,
+        (outputStatus.st_mode & S_IFMT) == S_IFREG,
+        (outputStatus.st_mode & 0o777) == 0o600,
+        outputStatus.st_uid == geteuid(),
+        outputStatus.st_nlink == 1 else { throw AppshotError.invalidOutput }
+  try data.withUnsafeBytes { rawBuffer in
+    guard let baseAddress = rawBuffer.baseAddress else { return }
+    var written = 0
+    while written < rawBuffer.count {
+      let count = Darwin.write(outputFD, baseAddress.advanced(by: written), rawBuffer.count - written)
+      if count < 0 {
+        if errno == EINTR { continue }
+        throw AppshotError.nativeFailure
+      }
+      guard count > 0 else { throw AppshotError.nativeFailure }
+      written += count
+    }
+  }
+  keepFile = true
+}
+
 func captureWindow(_ window: SCWindow, to outputURL: URL) async throws -> CGImage {
   let frame = window.frame
   guard isFiniteNormalFrame(frame) else { throw AppshotError.noWindow }
+  guard outputURL.lastPathComponent == "appshot.png" else { throw AppshotError.invalidOutput }
+  let directory = try openValidatedOutputDirectory(outputURL.deletingLastPathComponent().path)
+  defer { close(directory.fileDescriptor) }
   let screenScale = NSScreen.screens.first(where: { $0.frame.intersects(frame) })?.backingScaleFactor
     ?? NSScreen.main?.backingScaleFactor
     ?? 2
@@ -443,7 +574,7 @@ func captureWindow(_ window: SCWindow, to outputURL: URL) async throws -> CGImag
   }
   guard !isBlankImage(image) else { throw AppshotError.protectedContent }
   do {
-    try pngData(for: image).write(to: outputURL, options: .atomic)
+    try writePNG(pngData(for: image), toDirectoryFileDescriptor: directory.fileDescriptor)
   } catch let error as AppshotError {
     throw error
   } catch {
@@ -453,25 +584,9 @@ func captureWindow(_ window: SCWindow, to outputURL: URL) async throws -> CGImag
 }
 
 func validatedOutputURL(argument: String) throws -> URL {
-  guard argument.hasPrefix("/") else { throw AppshotError.invalidOutput }
-  let directory = URL(fileURLWithPath: argument, isDirectory: true)
-    .standardizedFileURL
-    .resolvingSymlinksInPath()
-  guard directory.path.hasPrefix("/"),
-        let values = try? directory.resourceValues(forKeys: [.isDirectoryKey]),
-        values.isDirectory == true else { throw AppshotError.invalidOutput }
-  let output = directory.appendingPathComponent("appshot.png", isDirectory: false)
-  if FileManager.default.fileExists(atPath: output.path) {
-    guard let values = try? output.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-          values.isSymbolicLink != true,
-          values.isRegularFile == true else {
-      throw AppshotError.invalidOutput
-    }
-  } else if let values = try? output.resourceValues(forKeys: [.isSymbolicLinkKey]),
-            values.isSymbolicLink == true {
-    throw AppshotError.invalidOutput
-  }
-  return output
+  let directory = try openValidatedOutputDirectory(argument)
+  close(directory.fileDescriptor)
+  return directory.url.appendingPathComponent("appshot.png", isDirectory: false)
 }
 
 private func emitJSON(_ payload: [String: Any]) throws {
@@ -532,8 +647,15 @@ private func runSelfTest() -> Bool {
   guard byteLimited.truncated, let byteText = byteLimited.text,
         byteText.lengthOfBytes(using: .utf8) <= 31 else { return false }
 
-  let deadlineLimited = serializeFixture(siblings, limits: ordinaryLimits, deadlineNode: 2)
+  var preparedRoles: [String] = []
+  let deadlineLimited = serializeFixture(
+    siblings,
+    limits: ordinaryLimits,
+    deadlineNode: 2,
+    prepareNode: { preparedRoles.append($0.role) }
+  )
   return deadlineLimited.truncated
+    && preparedRoles == ["AXWindow", "AXButton"]
     && deadlineLimited.text?.contains("button-0") == true
     && deadlineLimited.text?.contains("button-1") == false
 }
