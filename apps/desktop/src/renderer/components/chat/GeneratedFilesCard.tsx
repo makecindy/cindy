@@ -18,11 +18,11 @@
  * 复核:先按 tool_use 记录乐观呈现,verdict 回来后 nonfile/directory 摘掉;
  * unknown(断链 / 限流)保持乐观——与正文 chip 的远程点亮不变量同策。
  *
- * source==='command' 的候选(从 Bash/exec 命令文本启发式提取,见 generatedFiles.ts)
- * 额外要求文件时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内:命令里出现的
- * 既有输入文件早于下界被滤掉;后续 turn 才创建/改写同一路径时晚于上界,旧卡也
- * 不会被新的 stat 结果误点亮。尾部当前 turn 无上界,只查下界。时间窗不可得或
- * 远程会话(无法 stat)时 command 候选一律不出——宁缺毋滥。
+ * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
+ * (Write / file-change add)也不能只凭存在性:Write 可能覆盖既有文件,失败路径也可能
+ * 被后续轮次创建;因此它必须有落在窗口内的 birthtime,不可用时宁可不出。
+ * command 来源为兼容不提供 birthtime 的 Linux FS 允许 mtime 回退,但同样受完整
+ * 时间窗约束。远程会话无法读取创建时间,维持远端 stat 的存在性复核。
  */
 
 import { useEffect, useState } from 'react';
@@ -143,6 +143,39 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
 /** command 候选 mtime 下界的时钟余量:消息落库时间与文件写盘时间的抖动缓冲。 */
 const TURN_START_SLACK_MS = 120_000;
 
+interface GeneratedFileStat {
+  kind: 'dir' | 'file' | 'missing';
+  birthtimeMs?: number;
+  mtimeMs?: number;
+}
+
+/**
+ * 本地文件是否有足够证据归属于该 turn。tool 来源必须有真实创建时间:
+ * Write 也可能覆盖既有文件,仅凭成功/mtime 不能把它当成“新建”;birthtime
+ * 不可用时宁可不出。command 来源为兼容不提供 birthtime 的 Linux FS,维持
+ * mtime 回退,但仍受完整 turn 时间窗约束。
+ */
+export function isLocalGeneratedFileInTurn(
+  file: GeneratedFileRef,
+  stat: GeneratedFileStat,
+  turnStartMs: number | null,
+  turnEndMs: number | null,
+): boolean {
+  if (stat.kind !== 'file' || turnStartMs === null) return false;
+  const birthtimeMs =
+    typeof stat.birthtimeMs === 'number' && stat.birthtimeMs > 0 ? stat.birthtimeMs : null;
+  const ts = file.source === 'tool' ? birthtimeMs : (birthtimeMs ?? stat.mtimeMs);
+  // tool 来源的 birthtime 是同机 FS 事实,不放宽下界:放 2 分钟 slack 会把本轮
+  // 覆盖的旧文件误当新建。command 来源保留消息落库/执行时序抖动余量。
+  const lowerBound =
+    file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
+  return (
+    typeof ts === 'number' &&
+    ts >= lowerBound &&
+    (turnEndMs === null || ts < turnEndMs)
+  );
+}
+
 /** 折叠阈值:约两行 chip。超过则收起为「前 N 个 + 再显示 M 个文件」。 */
 const MAX_VISIBLE_FILES = 6;
 
@@ -191,22 +224,7 @@ export function GeneratedFilesCard({
         files.map(async (f) => {
           try {
             const r = await window.electronAPI.fsBrowse.statPath(f.path);
-            if (r.kind !== 'file') return false;
-            if (f.source === 'tool') return true;
-            if (turnStartMs === null) return false;
-            // command 候选:创建时间不早于本轮开始才算「本轮新建」。birthtime
-            // 优先(Windows/APFS 可靠,且能排除命令只是改写/引用的既有文件);
-            // 不可用(部分 Linux FS 恒 0)退回 mtime 下界。都只查下界,用户事后
-            // 编辑文件不会让 chip 消失。
-            const ts =
-              typeof r.birthtimeMs === 'number' && r.birthtimeMs > 0 ? r.birthtimeMs : r.mtimeMs;
-            return (
-              typeof ts === 'number' &&
-              ts >= turnStartMs - TURN_START_SLACK_MS &&
-              // 历史 turn 有下一条 user 边界:文件时间戳必须严格早于边界。
-              // 上界不加 slack——边界后的文件无论时钟抖动都不属于上一轮。
-              (turnEndMs === null || ts < turnEndMs)
-            );
+            return isLocalGeneratedFileInTurn(f, r, turnStartMs, turnEndMs);
           } catch {
             return false;
           }
