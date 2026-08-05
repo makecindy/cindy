@@ -95,13 +95,19 @@ async function runUploadInner(
 ): Promise<UploadOutcome> {
   const verdict = evaluateGate(deps.gate, request.reason);
   if (verdict.kind === 'denied') {
-    // 明确拒绝:清掉所有待补传标记(含本次认领的)。用户关闭授权后不得在下次启动偷偷补传。
-    // 「未配置」也走这里 —— 功能整体关闭时不该留着标记等某天被打开后一起传上来。
+    // 「未配置」不是用户撤回授权,而是**这个构建传不了**(典型:无版本 / dev 包没有
+    // config/log-upload.json,或注入短暂异常)。dev/正式版共享同一份 userData —— 若在这里
+    // 清标记,用户「先用一个没配上报的构建打开」就会把正式版还没来得及补传的崩溃现场永久删掉
+    // (2026-08-04 review P1)。所以只 release(保留标记),留给能上报的构建下次补;绝不 clearAll。
+    if (verdict.reason === 'not-configured') {
+      for (const claim of request.claimed) deps.markers.releaseClaimed(claim);
+      return { kind: 'skipped-not-configured' };
+    }
+    // 明确的用户 opt-out(未同意 / 关掉了崩溃自动上传):清掉所有待补传标记(含本次认领的)。
+    // 用户关闭授权后不得在下次启动偷偷补传。
     for (const claim of request.claimed) deps.markers.resolveClaimed(claim);
     deps.markers.clearAll();
     switch (verdict.reason) {
-      case 'not-configured':
-        return { kind: 'skipped-not-configured' };
       case 'no-consent':
         return { kind: 'skipped-no-consent' };
       case 'crash-auto-off':

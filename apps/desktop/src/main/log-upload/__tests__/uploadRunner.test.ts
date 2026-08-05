@@ -253,6 +253,33 @@ describe('不该上传时：零请求 + 标记处置', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  /**
+   * 2026-08-04 review P1：`not-configured` 不是用户撤回授权,而是这个构建传不了(无版本/dev 包
+   * 没有 config,或注入异常)。dev/正式版共享 userData —— 若清标记,用户先用没配上报的构建打开
+   * 就会把正式版还没补传的崩溃现场永久删掉。所以只 release(保留),绝不 clearAll。
+   */
+  it('⚠️ 未配置目标 + 崩溃补传：保留标记，不清空（dev/正式版共享 userData）', async () => {
+    const { deps, markers } = harness({
+      gate: {
+        isTargetConfigured: () => false,
+        refreshFromDisk: () => undefined,
+        readPrivacyConsentAccepted: () => true,
+        readCrashAutoUploadEnabled: () => true,
+      },
+    });
+
+    const outcome = await runUpload(deps, {
+      reason: 'crash-backfill',
+      anchors: [1_775_000_000_000],
+      claimed: [claim('t1'), claim('t2')],
+    });
+
+    expect(outcome).toEqual({ kind: 'skipped-not-configured' });
+    expect(markers.clearAll).not.toHaveBeenCalled();
+    expect(markers.resolveClaimed).not.toHaveBeenCalled();
+    expect(markers.releaseClaimed).toHaveBeenCalledTimes(2); // 两条都还原保留
+  });
+
   it('授权读不出来 ⇒ unknown：不上传但**还原**标记（不能用一次读取失败丢掉崩溃现场）', async () => {
     const { deps, markers, send } = harness({
       gate: {

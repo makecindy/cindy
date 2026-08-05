@@ -52,7 +52,10 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   // ── 网络与端点清单（需求 U6：端点清单拉取失败率）──────────────────────────
   'clientEndpoints', //      运行期端点清单解析、缓存可信性判定、离线出口
   'manifestService', //      清单拉取
-  'manifestIO', //           清单落盘/读盘
+  // 注意:`manifestIO` **不在这里** —— 名字看着像端点清单落盘,实际仓库里唯一的
+  // `createLogger('manifestIO')` 是 SkillHub 注册表存储(skillhub/registry/manifestIO.ts),
+  // 它会打 `skillhub/manifests/<skill>.json` 这类清单路径 / 文件名 = 用户装的插件身份,
+  // 与 `skillhub` 同属用户/第三方内容(2026-08-04 review)。见 NOTABLE_DENIED_ROOTS。
   'serverApiClient', //      平台 API 调用的状态码与耗时
   'heartbeat', //            在线心跳(网络可达性的连续信号)
 
@@ -151,6 +154,8 @@ const DENIED_SUB_SCOPES: readonly string[] = [
  *  - `im*` / `git-*` / `worktree*` / `learn-host*` / `goal-host`：同上。
  *  - `legacy-xdmaker-migration`：迁移每条记录都带 `rootDir`（解析后的项目工作目录），脱敏
  *    只抹家目录段、项目目录名仍外泄；设置页文案承诺不上传工作目录路径（2026-08-04 review）。
+ *  - `manifestIO`：名字像端点清单 IO，实为 SkillHub 注册表存储，打 `skillhub/manifests/<skill>.json`
+ *    清单路径/文件名 = 用户装的插件身份，与 `skillhub` 同属用户/第三方内容（2026-08-04 review）。
  */
 const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'console',
@@ -168,6 +173,7 @@ const NOTABLE_DENIED_ROOTS: readonly string[] = [
   'goal-host',
   'learn-host',
   'legacy-xdmaker-migration',
+  'manifestIO',
 ];
 
 /** scope 是否落在某个根下（精确相等，或 `<root>/` / `<root>:` 前缀）。 */

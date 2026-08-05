@@ -232,6 +232,13 @@ describe('会打路径的来源被挡在外', () => {
     expect(isAllowedScope('legacyUserDataMigration')).toBe(true);
     expect(isAllowedScope('ownerNamespaceMigration')).toBe(true);
   });
+
+  it('⚠️ manifestIO 不放行（实为 SkillHub 注册表，打 skillhub/manifests/<skill>.json）', () => {
+    expect(isAllowedScope('manifestIO')).toBe(false);
+    expect(isAllowedScope('manifestIO/read')).toBe(false);
+    // 端点清单拉取的 manifestService 是另一个 scope，仍放行。
+    expect(isAllowedScope('manifestService')).toBe(true);
+  });
 });
 
 describe('名单自身的卫生', () => {
