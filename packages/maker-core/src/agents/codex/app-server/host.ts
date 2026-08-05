@@ -1000,26 +1000,32 @@ export class AppServerHost {
 
   /**
    * 血缘边登记的共享核心:解析 root、幂等去重、写入 lineageRoots。
-   * 返回 root 的 handlers 表示本次真的建立了新边;null = 无法归属或已登记。
+   * null = 无法归属(参数非法 / root 不在 / handlers 已释放)。能归属时一定返回
+   * root 与 handlers;`establishedNewEdge` 区分本次是否真的落了新边——重复登记
+   * (spawn 路径已建边后新版 codex 补发 thread/started)不再落表,但调用方仍拿得到
+   * handlers 去转发 thread 元数据(model 等),不能把重复当成完全的 no-op 吞掉。
    * 新边落表后唤醒该子线程上等待血缘的 server request(见 waitForThreadHandlers):
    * spawn 登记与 thread/started 两条路径都可能是 waiter 等的那次解析。
    */
   private establishDescendantLineage(
     childThreadId: string,
     parentThreadId: string,
-  ): { rootThreadId: string; handlers: ThreadEventHandlers } | null {
+  ): { rootThreadId: string; handlers: ThreadEventHandlers; establishedNewEdge: boolean } | null {
     if (!childThreadId || !parentThreadId || parentThreadId === childThreadId) return null;
     const rootThreadId = this.lineageRoots.get(parentThreadId)
       ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
     if (!rootThreadId || childThreadId === rootThreadId) return null;
-    if (this.lineageRoots.get(childThreadId) === rootThreadId) return null;
 
     const handlers = this.subscribers.get(rootThreadId);
     if (!handlers) return null;
 
+    if (this.lineageRoots.get(childThreadId) === rootThreadId) {
+      return { rootThreadId, handlers, establishedNewEdge: false };
+    }
+
     this.lineageRoots.set(childThreadId, rootThreadId);
     this.notifyThreadHandlerWaiters(childThreadId);
-    return { rootThreadId, handlers };
+    return { rootThreadId, handlers, establishedNewEdge: true };
   }
 
   /**
@@ -1035,11 +1041,12 @@ export class AppServerHost {
    *
    * 调用方(codex session)从 spawn item 的 agentThreadId / receiverThreadIds
    * 拿到子线程 id 后立即登记。幂等:更新版 codex 若补发 thread/started,
-   * routeDescendantThreadStarted 的去重会把它当 no-op。
+   * routeDescendantThreadStarted 只跳过重复建边与缓冲重放,thread 元数据
+   * (model 等)仍会照常转发给订阅者。
    */
   registerDescendantLineage(childThreadId: string, parentThreadId: string): void {
     const established = this.establishDescendantLineage(childThreadId, parentThreadId);
-    if (!established) return;
+    if (!established?.establishedNewEdge) return;
     // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
     // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
     this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
@@ -1089,7 +1096,9 @@ export class AppServerHost {
     if (!parentThreadId) return;
     const established = this.establishDescendantLineage(childThreadId, parentThreadId);
     if (!established) return;
-    const { rootThreadId, handlers } = established;
+    const { rootThreadId, handlers, establishedNewEdge } = established;
+    // 血缘重复(spawn 路径已建边)也要转发:thread/started 是 thread.model 等实际
+    // 元数据的唯一载体,吞掉它会让「实际线程模型优先」永远等不到观测值(codex review)。
     if (handlers.descendantThreadStarted) {
       try {
         handlers.descendantThreadStarted(params);
@@ -1102,6 +1111,8 @@ export class AppServerHost {
         });
       }
     }
+    // 重复建边只补元数据转发:缓冲早已在首次建边时排空,重放在这里只会空转。
+    if (!establishedNewEdge) return;
     // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
     // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
     // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在

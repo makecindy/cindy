@@ -3350,7 +3350,8 @@ export class CodexAgent extends BaseAgent {
      * agentThreadId / receiverThreadIds —— 识别 spawn 的那一刻就得登记,不能等一条
      * 永远不会来的通知。等待的后果(2026-08-04 生产实测):子线程全部通知在 host 的
      * 5s TTL 缓冲里静默过期,子代理卡没有任何实时数据、终态永远不到,永久转圈。
-     * 各步幂等:更新版 codex 若补发 thread/started,descendantThreadStarted 只是 no-op。
+     * 各步幂等:更新版 codex 若补发 thread/started,重复建边是 no-op,但 host 仍会
+     * 转发该通知——它携带的 thread.model 是实际模型的唯一观测入口(codex review)。
      */
     const registerDescendantThreadRouting = (
       childThreadId: string,

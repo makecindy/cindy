@@ -253,16 +253,22 @@ export function createSubagentLiveCardTracker(opts: {
     for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
     const status = aggregateStatus(card);
     const observedModels = new Set<string>();
+    let threadsWithModel = 0;
     for (const thread of card.threads.values()) {
-      if (thread.model) observedModels.add(thread.model);
+      if (thread.model) {
+        threadsWithModel += 1;
+        observedModels.add(thread.model);
+      }
     }
     // V1 can aggregate multiple receiver threads into one card. A singular
-    // model label is truthful only when all observed values agree. If no
-    // thread has reported one yet, use Cindy's explicit configured fallback.
-    const model = observedModels.size === 1
-      ? observedModels.values().next().value
-      : observedModels.size === 0
-        ? subagentModelFallback
+    // model label is truthful only when **every** thread has reported one and
+    // all values agree — partial observation must not be projected onto the
+    // whole card (codex review). With zero reports, use Cindy's explicit
+    // configured fallback.
+    const model = threadsWithModel === 0
+      ? subagentModelFallback
+      : threadsWithModel === card.threads.size && observedModels.size === 1
+        ? observedModels.values().next().value
         : undefined;
     // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
     // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉

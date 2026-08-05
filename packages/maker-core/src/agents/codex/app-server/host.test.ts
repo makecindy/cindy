@@ -449,12 +449,16 @@ describe('AppServerHost descendant thread routing', () => {
       { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } },
     );
 
-    // 幂等:新版 codex 补发同一条边的 thread/started 是 no-op,不重复投递。
+    // 血缘重复:新版 codex 补发同一条边的 thread/started 不重复建边、不重放缓冲,
+    // 但通知本身仍要转发——它携带的 thread.model 是实际模型的唯一观测入口(codex review)。
     transport.emit({
       method: 'thread/started',
-      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' } },
     });
-    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(1);
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' },
+    });
     expect(descendantNotification).toHaveBeenCalledTimes(2);
 
     await subscription.release();

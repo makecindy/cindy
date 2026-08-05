@@ -112,13 +112,42 @@ describe('createSubagentLiveCardTracker', () => {
 
   it('retains an observed nested model when lineage arrives before attachment', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
-    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent'));
+    // 父线程从 spawn 参数拿到模型;孙线程的观测值只能靠 pendingThreadModels 保住——
+    // 徽标要求全员观测一致,retention 一丢徽标就灭。
+    tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent', undefined, 'codex/gpt-5.5'));
     expect(tracker.noteDescendantThread('t-grandchild', 't-parent', 'codex/gpt-5.5')).toBeNull();
     expect(
       tracker.handleDescendantNotification('t-grandchild', 'thread/tokenUsage/updated', {
         tokenUsage: { total: { totalTokens: 1 } },
       }),
     ).toMatchObject({ model: 'codex/gpt-5.5' });
+  });
+
+  it('hides the aggregate model badge until every thread has reported a consistent model', () => {
+    // 多 receiver 卡:只有部分线程报了模型时,不许把局部观测投影成全卡事实;
+    // 也不回退到配置兜底(已有相反观测,兜底反而更可能是错的)(codex review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))).toMatchObject({
+      model: 'gpt-5.6-terra',
+    });
+
+    const partial = tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
+    expect(partial).not.toBeNull();
+    expect(partial?.model).toBeUndefined();
+
+    // 全员报齐且一致 → 亮实际模型。
+    expect(tracker.noteDescendantThread('t-b', 'root-1', 'codex/gpt-5.5')).toMatchObject({
+      model: 'codex/gpt-5.5',
+    });
+  });
+
+  it('hides the aggregate model badge when receiver threads report different models', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
+    tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
+    const conflicting = tracker.noteDescendantThread('t-b', 'root-1', 'gpt-5.6-terra');
+    expect(conflicting).not.toBeNull();
+    expect(conflicting?.model).toBeUndefined();
   });
 
   it('counts a tool item once even when both phases arrive', () => {
