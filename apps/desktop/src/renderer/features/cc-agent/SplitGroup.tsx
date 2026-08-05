@@ -135,6 +135,11 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const observedActiveSessionIdRef = useRef(activeSessionId);
   const pendingFocusSessionIdRef = useRef<string | null>(null);
   const focusRequestSequenceRef = useRef(0);
+  const pendingOwnerCloseRef = useRef<{
+    sourceSessionId: string;
+    targetSessionId: string;
+    requestSequence: number;
+  } | null>(null);
   const pendingPaneNavigationRef = useRef<{
     sourceSessionId: string;
     targetSessionId: string;
@@ -184,18 +189,21 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     () => () => {
       focusRequestSequenceRef.current += 1;
       pendingFocusSessionIdRef.current = null;
+      pendingOwnerCloseRef.current = null;
     },
     [],
   );
 
   const focusSession = useCallback(
     (sessionId: string) => {
-      if (
-        !sessionId ||
-        sessionId === activeSessionId ||
-        pendingFocusSessionIdRef.current === sessionId
-      ) {
-        return;
+      if (!sessionId || sessionId === activeSessionId) {
+        return null;
+      }
+      if (pendingFocusSessionIdRef.current === sessionId) {
+        return focusRequestSequenceRef.current;
+      }
+      if (pendingOwnerCloseRef.current?.targetSessionId !== sessionId) {
+        pendingOwnerCloseRef.current = null;
       }
       const requestSequence = ++focusRequestSequenceRef.current;
       pendingFocusSessionIdRef.current = sessionId;
@@ -208,8 +216,12 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
         .catch(() => {
           if (focusRequestSequenceRef.current === requestSequence) {
             pendingFocusSessionIdRef.current = null;
+            if (pendingOwnerCloseRef.current?.requestSequence === requestSequence) {
+              pendingOwnerCloseRef.current = null;
+            }
           }
         });
+      return requestSequence;
     },
     [activeSessionId, navigate, sessionsById],
   );
@@ -223,6 +235,27 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     } else if (pendingFocusSessionId && activeSessionChanged) {
       pendingFocusSessionIdRef.current = null;
       focusRequestSequenceRef.current += 1;
+    }
+
+    const pendingOwnerClose = pendingOwnerCloseRef.current;
+    if (
+      pendingOwnerClose &&
+      (!panes.some((pane) => pane.sessionId === pendingOwnerClose.targetSessionId) ||
+        pendingOwnerClose.requestSequence !== focusRequestSequenceRef.current)
+    ) {
+      pendingOwnerCloseRef.current = null;
+      if (pendingFocusSessionIdRef.current === pendingOwnerClose.targetSessionId) {
+        pendingFocusSessionIdRef.current = null;
+        focusRequestSequenceRef.current += 1;
+      }
+    } else if (pendingOwnerClose && activeSessionId !== pendingOwnerClose.sourceSessionId) {
+      // Keep the route owner in the tree until its navigation request has committed.
+      // Removing it earlier lets route reconciliation restore the pane just closed.
+      pendingOwnerCloseRef.current = null;
+      if (panes.some((pane) => pane.sessionId === pendingOwnerClose.sourceSessionId)) {
+        splitGroupStore.removeSession(pendingOwnerClose.sourceSessionId);
+      }
+      return;
     }
 
     if (panes.some((pane) => pane.sessionId === activeSessionId)) {
@@ -259,6 +292,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       // it cannot race and overwrite the target route.
       pendingFocusSessionIdRef.current = null;
       focusRequestSequenceRef.current += 1;
+      pendingOwnerCloseRef.current = null;
       pendingPaneNavigationRef.current = {
         sourceSessionId,
         targetSessionId,
@@ -270,6 +304,9 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   const handleClosePane = useCallback(
     (pane: SplitPaneNode, isOwner: boolean) => {
+      if (pendingOwnerCloseRef.current?.targetSessionId === pane.sessionId) {
+        pendingOwnerCloseRef.current = null;
+      }
       if (pendingFocusSessionIdRef.current === pane.sessionId) {
         pendingFocusSessionIdRef.current = null;
         focusRequestSequenceRef.current += 1;
@@ -277,7 +314,16 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       if (isOwner) {
         const paneIndex = panes.findIndex((candidate) => candidate.key === pane.key);
         const targetPane = panes[paneIndex + 1] ?? panes[paneIndex - 1];
-        if (targetPane) focusSession(targetPane.sessionId);
+        if (targetPane) {
+          const requestSequence = focusSession(targetPane.sessionId);
+          if (requestSequence === null) return;
+          pendingOwnerCloseRef.current = {
+            sourceSessionId: pane.sessionId,
+            targetSessionId: targetPane.sessionId,
+            requestSequence,
+          };
+          return;
+        }
       }
       splitGroupStore.removeSession(pane.sessionId);
     },
@@ -497,7 +543,11 @@ function SplitPaneView({
         data-split-pane-owner={isOwner ? 'true' : 'false'}
         className="flex h-full min-h-0 w-full flex-col overflow-hidden"
         onPointerDownCapture={(event) => {
-          if (isOwner || event.button !== 0 || isSplitPaneNoFocusTarget(event.target)) {
+          if (
+            isOwner ||
+            (event.button !== 0 && event.button !== 2) ||
+            isSplitPaneNoFocusTarget(event.target)
+          ) {
             return;
           }
           focusSession(viewSessionId);
