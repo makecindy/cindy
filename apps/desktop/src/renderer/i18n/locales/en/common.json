@@ -5628,8 +5628,7 @@
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "User-turn total: {{cost}}",
-      "userTurnCostDetailsTitle": "Final SDK segment"
+      "userTurnCostDetailsTitle": "User-turn details"
     },
     "errorBanner": {
       "retryTitle": "Resend the last message",

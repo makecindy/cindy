@@ -5626,8 +5626,7 @@
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
-      "userTurnCostTotalLine": "本轮累计：{{cost}}",
-      "userTurnCostDetailsTitle": "最后一个 SDK 分段"
+      "userTurnCostDetailsTitle": "本轮明细"
     },
     "errorBanner": {
       "retryTitle": "重新发送最后一条消息",

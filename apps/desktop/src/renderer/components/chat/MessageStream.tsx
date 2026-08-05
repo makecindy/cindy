@@ -209,6 +209,8 @@ import {
 } from './autoFollowIntent';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
+import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
+import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 
 interface MessageStreamProps {
   /** Active session id — used to reset scroll state on session switch. */
@@ -2073,6 +2075,7 @@ function renderWorkGroupChild(
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
     turnFinalAssistantClientIds: ReadonlySet<string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
+    userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
   },
 ): ReactNode {
   if (item.type === 'agent_task') {
@@ -2107,6 +2110,7 @@ function renderWorkGroupChild(
         props.assistantsWithFollowingUserBoundary,
       )}
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
+      userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
       isLastUserInput={item.message.clientId === props.lastUserInputClientId}
@@ -3572,6 +3576,10 @@ export function MessageStream({
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
   const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
 
+  const userTurnUsageDetailsByAssistantId = useMemo(() => {
+    return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
+  }, [messages, turnFinalAssistantClientIds]);
+
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。
   const lastMessageClientId =
@@ -3734,6 +3742,7 @@ export function MessageStream({
                               assistantsWithFollowingUserBoundary,
                               turnFinalAssistantClientIds,
                               subagentModelByToolUseId,
+                              userTurnUsageDetailsByAssistantId,
                             }),
                         };
                       };
@@ -3846,6 +3855,7 @@ export function MessageStream({
                             assistantsWithFollowingUserBoundary,
                           )}
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
+                          userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
                           isLastUserInput={msg.clientId === lastUserInputClientId}
@@ -3940,6 +3950,7 @@ const MessageItem = memo(function MessageItem({
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
+  userTurnUsageDetails,
   isFirstUserMessage,
   isLastUserMessage,
   isLastUserInput,
@@ -3970,6 +3981,8 @@ const MessageItem = memo(function MessageItem({
    *  (collectTurnFinalAssistantClientIds). Gates the hover action bar —
    *  mid-turn texts don't mount it, keeping the stream compact. */
   assistantIsTurnFinal?: boolean;
+  /** Aggregated token/cache/model details for this assistant's visible user turn. */
+  userTurnUsageDetails?: TurnUsageDetails;
   /** True iff this message is the first user message in the visible list.
    *  UserMessage hides the Rewind button for it (no prior assistant to
    *  resumeSessionAt anchor on — backend would throw NO_PRIOR_ASSISTANT). */
@@ -4077,6 +4090,7 @@ const MessageItem = memo(function MessageItem({
           userTurnCostUsd={message.userTurnCostUsd}
           userTurnCostIsEstimate={message.userTurnCostIsEstimate}
           turnUsageDetails={message.turnUsageDetails}
+          userTurnUsageDetails={userTurnUsageDetails}
           modelMismatch={message.modelMismatch}
           ghostReplyPending={message.ghostReplyPending}
         />

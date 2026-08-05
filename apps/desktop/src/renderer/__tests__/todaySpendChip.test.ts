@@ -26,16 +26,17 @@ const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
 );
 
 describe('TodaySpendChip dashboard routing', () => {
-  it('separates the latest user-round total from final-segment token details', () => {
+  it('keeps the latest user-round total separate while aggregating token/model details', () => {
     expect(source).toContain('message.userTurnMoney?.amount');
     expect(source).toContain('const userTurnCostUsd = typeof message.userTurnCostUsd');
     expect(source).toContain('? { money: userTurnMoney }');
     expect(source).toContain('isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null)');
     expect(source).toContain("'todaySpend.tooltip.latestUserTurnTitle'");
-    expect(source).toContain('segmentMoney: message.turnMoney');
-    expect(source).toContain('segmentCostUsd: message.turnCostUsd');
-    expect(source).toContain('money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money');
-    expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
+    expect(source).toContain('aggregateAssistantTurnUsageDetails(messages, message.clientId)');
+    expect(source).toContain('Amount and token/model detail now describe the same visible user turn');
+    expect(source).toContain('money: summary.money');
+    expect(source).not.toContain('segmentMoney: message.turnMoney');
+    expect(source).not.toContain('segmentCostUsd: message.turnCostUsd');
     expect(source).toContain('inputTokensText: formatCompactTokens(details.inputTokens)');
     expect(source).toContain('outputTokensText: formatCompactTokens(details.outputTokens)');
   });
