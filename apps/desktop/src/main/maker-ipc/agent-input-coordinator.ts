@@ -24,8 +24,14 @@
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
-import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
-import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
+import {
+  isUnsupportedResponsesImageErrorPayload,
+  litellmImageErrorPayload,
+} from '@cindy/responses-chat-bridge';
+import {
+  PI_IMAGE_INPUT_UNSUPPORTED_MARKER,
+  isPiImageInputUnsupportedError,
+} from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -160,6 +166,18 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
     (item.mentions?.length ?? 0) > 0 ||
     (item.sessionRefs?.length ?? 0) > 0
   );
+}
+
+/**
+ * Converts an unsupported-image error into the stable friendly marker shared with the Pi
+ * capability guard. The marker is localized at display time (ErrorBanner / mobile projection).
+ * For litellm gateway rejections, the raw upstream message after the marker is still available to
+ * diagnostics, while every other unsupported-image shape collapses to the friendly text only.
+ */
+function friendlyImageInputUnsupportedError(raw: string | null | undefined): string {
+  if (raw?.startsWith(PI_IMAGE_INPUT_UNSUPPORTED_MARKER)) return raw;
+  const upstream = litellmImageErrorPayload(raw ?? null);
+  return upstream ?? PI_IMAGE_INPUT_UNSUPPORTED_MARKER;
 }
 
 export interface AgentInputSendOpts {
@@ -2169,22 +2187,24 @@ export class AgentInputCoordinator {
       });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
-    const previousError = state.error;
-    const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
-    if (
-      !continueItem &&
-      retryItem &&
-      isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)
-    ) {
+    const unsupportedImageError = isUnsupportedResponsesImageErrorPayload(
+      state.error ?? state.stickyError,
+    );
+    if (!continueItem && retryItem && unsupportedImageError) {
       retryItem = stripQueuedMessageImages(retryItem);
       if (!hasRetryableQueuedContent(retryItem)) {
         // An image-only turn has no truthful fallback. Keep the error/recovery intact so a later
         // text message or model switch can take over instead of inventing replacement text.
+        // The gateway rejection is normalized to the friendly marker so the banner stays clear.
+        state.error = friendlyImageInputUnsupportedError(state.error ?? state.stickyError);
+        state.stickyError = state.error;
         log.debug('image-only retry skipped for unsupported Chat bridge input', { sessionId });
         return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
       }
     }
+    const previousError = state.error;
+    const previousStickyError = state.stickyError;
     state.error = null;
     state.stickyError = null;
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
@@ -2538,6 +2558,12 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      // Normalize an upstream image-input rejection (e.g. a text-only provider behind a litellm
+      // gateway) to the friendly marker before it reaches the projection, so the very first
+      // banner is readable. The paired done path and the retry branches rely on the marker shape.
+      if (message !== undefined && isUnsupportedResponsesImageErrorPayload(message)) {
+        message = friendlyImageInputUnsupportedError(message);
+      }
       if (
         active &&
         state.recovery?.kind === 'queue-head' &&

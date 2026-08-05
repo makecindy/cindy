@@ -10,6 +10,7 @@ export { ChatBridgeToolContext, type ChatBridgeToolKind, type ChatBridgeToolSpec
 export {
   isResponsesImageContentPartType,
   isUnsupportedResponsesImageErrorPayload,
+  litellmImageErrorPayload,
   UnsupportedResponsesFeatureError,
   type ChatBridgeCapabilities,
   type ChatBridgeHandleArgs,

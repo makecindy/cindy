@@ -364,6 +364,8 @@ const UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX =
   'Responses feature is not supported by the Chat Completions bridge: ';
 const RESPONSES_IMAGE_CONTENT_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
 const CODEX_UNEXPECTED_BAD_REQUEST_PREFIX = /^unexpected status 400(?: Bad Request)?: /;
+/** litellm gateway surfaces provider-side rejection with a `BadRequestError` + `Exception` prefix. */
+const LITELLM_BAD_REQUEST_PREFIX = /^litellm\.BadRequestError: [^ ]+Exception - /;
 const CODEX_ERROR_METADATA_MARKERS = [
   ', url: ',
   ', cf-ray: ',
@@ -371,6 +373,36 @@ const CODEX_ERROR_METADATA_MARKERS = [
   ', auth error: ',
   ', auth error code: ',
 ] as const;
+/**
+ * Upstream text-only providers (e.g. DeepSeek via litellm) reject a serialized `image_url`
+ * content part with a deserialization error instead of a typed unsupported-feature code.
+ * A message that mentions both `image_url` and a body-deserialization failure is treated as an
+ * image-input rejection; the JSON body may itself wrap the real provider error, so a raw string
+ * match is used as well as the parsed-object form.
+ */
+const IMAGE_DESERIALIZATION_ERROR_PATTERN =
+  /(?:image_url|unknown variant|Failed to deserialize the JSON body|deserializ)/i;
+
+/** When the upstream rejects a serialized image, this marker carries it through the friendly path. */
+const IMAGE_INPUT_UNSUPPORTED_MARKER = '[PI_IMAGE_INPUT_UNSUPPORTED]';
+
+function isImageDeserializationError(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  return IMAGE_DESERIALIZATION_ERROR_PATTERN.test(value);
+}
+
+function isUnsupportedImageErrorObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const error = (value as Record<string, unknown>).error;
+  if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
+  const { code, message } = error as Record<string, unknown>;
+  if (code === 'unsupported_feature') {
+    if (typeof message !== 'string') return false;
+    const feature = unsupportedResponsesFeatureFromMessage(message);
+    return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  }
+  return isImageDeserializationError(message);
+}
 
 export function isResponsesImageContentPartType(
   value: unknown,
@@ -392,13 +424,7 @@ function isUnsupportedResponsesImageFeature(feature: string): boolean {
 }
 
 function isUnsupportedResponsesImageErrorObject(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const error = (value as Record<string, unknown>).error;
-  if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
-  const { code, message } = error as Record<string, unknown>;
-  if (code !== 'unsupported_feature' || typeof message !== 'string') return false;
-  const feature = unsupportedResponsesFeatureFromMessage(message);
-  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  return isUnsupportedImageErrorObject(value);
 }
 
 function parseJson(value: string): unknown {
@@ -441,16 +467,49 @@ function stripCodexErrorMetadata(value: string): string {
  */
 export function isUnsupportedResponsesImageErrorPayload(payload: string | null): boolean {
   if (!payload) return false;
+  // Already normalized by a caller (coordinator onTurnEvent): the marker alone means the
+  // upstream image rejection was recognized and the stripped retry should still apply.
+  if (payload.startsWith(IMAGE_INPUT_UNSUPPORTED_MARKER)) return true;
   if (isUnsupportedResponsesImageErrorObject(parseJson(payload))) return true;
+
+  const litellmPrefix = LITELLM_BAD_REQUEST_PREFIX.exec(payload);
+  if (litellmPrefix) {
+    const renderedBody = payload.slice(litellmPrefix[0].length);
+    if (isUnsupportedResponsesImageErrorObject(parseCodexWrappedJson(renderedBody))) return true;
+    return isImageDeserializationError(renderedBody);
+  }
 
   const codexPrefix = CODEX_UNEXPECTED_BAD_REQUEST_PREFIX.exec(payload);
   if (!codexPrefix) return false;
   const renderedBody = payload.slice(codexPrefix[0].length);
   if (isUnsupportedResponsesImageErrorObject(parseCodexWrappedJson(renderedBody))) return true;
+  if (isImageDeserializationError(renderedBody)) return true;
 
   const message = stripCodexErrorMetadata(renderedBody);
   const feature = unsupportedResponsesFeatureFromMessage(message);
   return feature !== null && isUnsupportedResponsesImageFeature(feature);
+}
+
+/**
+ * Extracts the raw upstream error from a litellm gateway rejection so the caller can display a
+ * provider message instead of the wrapper prefix. Falls back to the original payload.
+ */
+export function litellmImageErrorPayload(payload: string | null): string | null {
+  if (!payload) return null;
+  const match = LITELLM_BAD_REQUEST_PREFIX.exec(payload);
+  if (!match) return null;
+  const body = payload.slice(match[0].length);
+  const parsed = parseCodexWrappedJson(body);
+  if (parsed !== null) {
+    const error = (parsed as Record<string, unknown>)?.error;
+    if (error && typeof error === 'object' && !Array.isArray(error)) {
+      const message = (error as Record<string, unknown>).message;
+      if (typeof message === 'string' && isImageDeserializationError(message)) {
+        return `${IMAGE_INPUT_UNSUPPORTED_MARKER} ${message}`;
+      }
+    }
+  }
+  return isImageDeserializationError(body) ? `${IMAGE_INPUT_UNSUPPORTED_MARKER} ${body}` : null;
 }
 
 export class UnsupportedResponsesFeatureError extends Error {
