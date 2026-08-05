@@ -256,6 +256,15 @@ async function handlePreviewLocalHtml(
       'BROWSER_RUNTIME_LOCAL_PREVIEW_NO_WORKDIR',
     );
   }
+  if (session?.remoteHostId) {
+    // The preview server runs on this machine; an SSH remote session's
+    // workingDir is a path on the remote host and must not be resolved here.
+    return errorResult(
+      'previewLocalHtml',
+      'SSH 远程会话不支持本地预览(工作目录位于远端机器)',
+      'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE',
+    );
+  }
   if (!deps.createLocalPreviewUrl) {
     return errorResult(
       'previewLocalHtml',
@@ -274,7 +283,9 @@ async function handlePreviewLocalHtml(
     const message = err instanceof Error ? err.message : String(err);
     const code = message.includes('PATH_NOT_ALLOWED')
       ? 'BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED'
-      : 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE';
+      : message.includes('UNSUPPORTED_FILE')
+        ? 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNSUPPORTED_FILE'
+        : 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE';
     return errorResult('previewLocalHtml', `本地预览创建失败: ${message}`, code);
   }
   const runtime = getRuntime(deps);

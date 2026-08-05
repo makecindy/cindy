@@ -72,6 +72,8 @@ describe('local-html-preview-server', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('content-security-policy')).toContain("connect-src 'self'");
     expect(res.headers.get('content-security-policy')).toContain("form-action 'none'");
+    // no remote subresources: https: must appear in NO directive
+    expect(res.headers.get('content-security-policy')).not.toContain('https:');
     await res.arrayBuffer();
   });
 
@@ -152,5 +154,18 @@ describe('local-html-preview-server', () => {
 
   it('fails closed when the workingDir is missing', async () => {
     await expect(createUrl('dist/index.html', { workingDir: '' })).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it('revokes expired tokens (TTL)', async () => {
+    const ttlServer = createLocalPreviewServer({
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      applyPreviewOrigins: () => {},
+      tokenTtlMs: 30,
+    });
+    const { url } = await ttlServer.createPreviewUrl({ workingDir, localPath: 'dist/index.html' });
+    expect((await get(url)).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await get(url)).status).toBe(404); // token expired
+    ttlServer.dispose();
   });
 });

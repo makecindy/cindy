@@ -7,7 +7,9 @@
  *
  *  - one process-level HTTP listener on `127.0.0.1:<random ephemeral port>`;
  *  - each preview gets an unguessable 256-bit capability token bound to the
- *    entry's canonical directory (the serving root) + session identity;
+ *    entry's canonical directory (the serving root), with a TTL so tokens do
+ *    not live forever; `sessionId` is recorded for diagnostics only and does
+ *    NOT gate requests (per-session revocation is not implemented);
  *  - every request re-validates the path inside that root (lexical + realpath
  *    nearest-existing-ancestor, same semantics as
  *    `packages/lizi-mcps/src/shared/assertInsidePath.ts`), rejects dotfiles,
@@ -39,6 +41,8 @@ export interface LocalPreviewServerDeps {
   logger?: PreviewLogger;
   /** Host hook: (re)install the exact origins the SSRF policy may trust. */
   applyPreviewOrigins(origins: string[]): void;
+  /** Capability-token lifetime in ms. Default: 24h. */
+  tokenTtlMs?: number;
 }
 
 export interface CreatePreviewInput {
@@ -104,15 +108,26 @@ const MIME: Record<string, string> = {
 };
 
 /**
- * Page-level egress + CSRF hardening for previewed pages: the page may load
- * same-origin and https CDN subresources, but cannot exfiltrate via
- * fetch/XHR/WebSocket, cannot submit forms, and cannot rebase itself.
- * (Full `connect-src 'self'` breaks pages that legitimately call public
- * APIs — acceptable for local screenshot verification; agents can vendor
- * those resources locally.)
+ * Page-level hardening for previewed pages: NO remote subresources at all
+ * (no https: in any directive), same-origin + inline + data: only. Without
+ * this, a preview page could load a third-party script which reads
+ * same-origin files (fetch is allowed to 'self') and then exfiltrates them
+ * via img/location — closing remote loads removes that injection surface.
+ * Pages that legitimately need CDN assets must vendor them locally first
+ * (documented in browser-workflow.md).
  */
 const CSP =
-  "default-src 'self' data: https:; connect-src 'self'; form-action 'none'; base-uri 'none'";
+  "default-src 'none'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "font-src 'self' data:; " +
+  "media-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "form-action 'none'; " +
+  "base-uri 'none'; " +
+  "object-src 'none'; " +
+  "frame-src 'none'";
 
 // ── path boundary (same semantics as lizi-mcps shared/assertInsidePath) ─────
 
@@ -155,13 +170,18 @@ interface PreviewEntry {
   /** Canonical serving root = dirname(entry file). */
   root: string;
   sessionId?: string;
+  createdAt: number;
 }
 
 /** Cap on concurrently issued previews (per-process). Oldest is evicted. */
 const MAX_PREVIEWS = 1024;
 
+/** Default capability-token lifetime. */
+const DEFAULT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
 export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   const { logger, applyPreviewOrigins } = deps;
+  const tokenTtlMs = deps.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
   let server: Server | null = null;
   let origin: string | null = null;
   let starting: Promise<string> | null = null;
@@ -280,8 +300,14 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     }
     const match = /^\/preview\/([a-f0-9]{64})\/(.+)$/.exec(url.pathname);
     if (!match) return refuse(res);
-    const entry = tokens.get(match[1]);
+    const token = match[1];
+    const entry = tokens.get(token);
     if (!entry) return refuse(res);
+    // TTL: expired tokens are revoked and rejected.
+    if (Date.now() - entry.createdAt > tokenTtlMs) {
+      tokens.delete(token);
+      return refuse(res);
+    }
 
     let relPath: string;
     try {
@@ -379,7 +405,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       const oldest = tokens.keys().next().value;
       if (oldest) tokens.delete(oldest);
     }
-    tokens.set(token, { root, sessionId: input.sessionId });
+    tokens.set(token, { root, sessionId: input.sessionId, createdAt: Date.now() });
     return {
       url: `${base}/preview/${token}/${encodeURIComponent(nodePath.basename(entryAbs))}`,
     };

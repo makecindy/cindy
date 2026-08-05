@@ -747,6 +747,20 @@ describe('previewLocalHtml', () => {
     await h.cleanup();
   });
 
+  it('rejects SSH remote sessions (workingDir is on the remote host)', async () => {
+    const h = await makeHarness({
+      getSessionContext: () => ({ ...SESSION, remoteHostId: 'ssh-host-1' }),
+      createLocalPreviewUrl: async () => ({ url: PREVIEW_URL }),
+    });
+    const res = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'previewLocalHtml', localPath: 'dist/index.html' } },
+    });
+    expect(resultOf(res).errorCode).toBe('BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE');
+    expect(h.calls).toHaveLength(0);
+    await h.cleanup();
+  });
+
   it('maps a host-side PATH_NOT_ALLOWED rejection to the dedicated error code', async () => {
     const h = await makeHarness({
       getSessionContext: () => SESSION,

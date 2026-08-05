@@ -506,8 +506,9 @@ export interface BrowserMcpDeps {
   getSessionContext?(): LiziMcpSessionContext | undefined;
   /**
    * Optional sandboxed local HTML preview: map a workspace-local HTML file to a
-   * one-time managed preview URL (loopback + capability token, served from the
-   * entry's directory). Absent → `previewLocalHtml` fails with a clear error.
+   * token-scoped managed preview URL (loopback + capability token with TTL,
+   * served from the entry's directory). Absent → `previewLocalHtml` fails
+   * with a clear error.
    */
   createLocalPreviewUrl?(input: {
     workingDir: string;
