@@ -239,7 +239,12 @@ function SplitBranchView({ branch, ...childProps }: Omit<SplitNodeViewProps, 'no
 
       const handlePointerMove = (pointerEvent: PointerEvent) => {
         const position = isRow ? pointerEvent.clientX : pointerEvent.clientY;
-        setLiveFraction(baseFraction + (position - startPosition) / totalAxisSize);
+        const raw = baseFraction + (position - startPosition) / totalAxisSize;
+        const clamped = Math.min(
+          1 - MIN_SPLIT_CHILD_FRACTION,
+          Math.max(MIN_SPLIT_CHILD_FRACTION, raw),
+        );
+        setLiveFraction(clamped);
       };
 
       const finishResize = () => {
@@ -392,7 +397,7 @@ function SplitPaneView({
             sessionIdProp={viewSessionId}
             routeOwner={isOwner}
             compactToolbar
-            navigationMode={isOwner ? 'route-owner' : 'sidebar-embedded'}
+            navigationMode={isOwner ? 'route-owner' : 'split-pane'}
             sidebarTargetSessionId={viewSessionId}
             viewVisible
             chatRealtime

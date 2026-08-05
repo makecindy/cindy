@@ -77,7 +77,7 @@ export function SessionHandoffCard({
     });
   };
 
-  const interactive = navigationMode === 'route-owner';
+  const interactive = navigationMode !== 'sidebar-embedded';
   const Root = interactive ? 'button' : 'div';
 
   return (

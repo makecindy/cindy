@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 
 /** 会话视图的路由所有权；sidebar-embedded 只展示内容，不拥有窗口路由。 */
-export type SessionNavigationMode = 'route-owner' | 'sidebar-embedded';
+export type SessionNavigationMode = 'route-owner' | 'sidebar-embedded' | 'split-pane';
 
 const SessionNavigationModeContext = createContext<SessionNavigationMode>('route-owner');
 const SidebarTargetSessionIdContext = createContext<string | null>(null);

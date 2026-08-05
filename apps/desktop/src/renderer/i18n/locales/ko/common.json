@@ -8395,10 +8395,10 @@
     "closeAria": "‘{{title}}’ 창 닫기",
     "closeAll": "분할 닫기",
     "toggleDirection": "상하 / 좌우 분할 전환",
-    "sessionMissing": "작업을 찾을 수 없거나 삭제됨",
-    "dropHint": "여기에 작업을 열려면 놓으세요",
-    "loadingTask": "작업 불러오는 중…",
-    "resizeAria": "작업 창 크기 조절"
+    "sessionMissing": "세션을 찾을 수 없거나 삭제됨",
+    "dropHint": "여기에 세션을 놓아 열기",
+    "loadingTask": "세션 불러오는 중…",
+    "resizeAria": "세션 창 크기 조절"
   },
   "extraDirs": {
     "menuAria": "작업 메뉴",
