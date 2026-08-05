@@ -353,9 +353,14 @@ const stylesStatic = StyleSheet.create({
  *   (部分选择做不到,facebook/react-native#13938)。换用 react-native-uitextview
  *   (Bluesky 开源,真 UITextView):长按出系统手柄、支持块内部分选择,嵌套 span 样式与 onPress 保留。
  * - Android:RN Text selectable 本身就有系统选择手柄,维持 AppText(带全局字体缩放限幅)。
- * selectionColor 只在 RN Text 路径生效(UITextView 原生 spec 无此 prop,剥掉避免 Fabric 告警)。
+ * 选中高亮双端都刻意**不**覆写 selectionColor,交给系统:iOS UITextView 本就用系统高亮;
+ * Android 不传则回落 Activity 主题的 textColorHighlight(accent 色 ~26% 透明度的半透明
+ * tint),选区可见性与选中文字可读性天然兼得。历史教训(#1427):曾逐 view 覆写不透明
+ * token —— surfaceChip 近白,浅色主题选区与底色仅 1.04:1,选了看不见;换 inputCaret 纯蓝,
+ * 选中文字对比度跌到 2.6:1,看得见但读不了 —— 不透明覆写两头都讨不到好。props 类型
+ * Omit 掉 selectionColor 挡编译期,messageSelectionHighlight.test.ts 锁文件级不再覆写。
  */
-type MarkdownSelectableTextProps = ComponentProps<typeof Text> & {
+type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionColor'> & {
   /**
    * iOS 是否使用可部分选中的 UITextView。超长展开正文禁用它并回退 RN Text:
    * UITextView 在折叠→展开时骤增为超高复用视图会偶发只留下巨高空白容器。
@@ -366,7 +371,6 @@ type MarkdownSelectableTextProps = ComponentProps<typeof Text> & {
 function MarkdownSelectableText({
   allowIosUITextView = true,
   selectable,
-  selectionColor,
   ...rest
 }: MarkdownSelectableTextProps) {
   // chat-text-quote:宿主(MessageRenderer)启用采集时,给 iOS UITextView 传
@@ -410,7 +414,7 @@ function MarkdownSelectableText({
       />
     );
   }
-  return <Text selectable={selectable} selectionColor={selectionColor} {...rest} />;
+  return <Text selectable={selectable} {...rest} />;
 }
 
 /**
@@ -3446,7 +3450,6 @@ function MarkdownBody({
         allowIosUITextView={allowIosUITextView}
         key={group.key}
         selectable={runSelectable}
-        selectionColor={colors.selectionHighlight}
         style={styles.messageText}
         testID="message.markdownTextRun"
       >
@@ -3538,7 +3541,6 @@ function MarkdownBody({
                   allowIosUITextView={allowIosUITextView}
                   language={block.language}
                   selectable={selectable === true}
-                  selectionColor={colors.selectionHighlight}
                   styles={styles}
                   text={block.text}
                 />
@@ -3557,7 +3559,6 @@ function MarkdownBody({
               allowIosUITextView={allowIosUITextView}
               key={block.key}
               selectable={headingSelectable}
-              selectionColor={colors.selectionHighlight}
               style={headingStyle}
               testID="message.markdownHeading"
             >
@@ -3571,7 +3572,6 @@ function MarkdownBody({
               <MarkdownSelectableText
                 allowIosUITextView={allowIosUITextView}
                 selectable={inlinesSelectable(block.inlines)}
-                selectionColor={colors.selectionHighlight}
                 style={[styles.messageText, styles.markdownQuoteText]}
               >
                 {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
@@ -3597,7 +3597,6 @@ function MarkdownBody({
               <MarkdownSelectableText
                 allowIosUITextView={allowIosUITextView}
                 selectable={inlinesSelectable(block.inlines)}
-                selectionColor={colors.selectionHighlight}
                 style={[styles.messageText, styles.markdownListText]}
               >
                 {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
@@ -3627,7 +3626,6 @@ function MarkdownBody({
                         allowIosUITextView={allowIosUITextView}
                         key={`${block.key}:th:${index}`}
                         selectable={inlinesSelectable(cell)}
-                        selectionColor={colors.selectionHighlight}
                         style={[
                           styles.markdownTableCell,
                           { width: columnWidth },
@@ -3648,7 +3646,6 @@ function MarkdownBody({
                           allowIosUITextView={allowIosUITextView}
                           key={`${row.key}:td:${index}`}
                           selectable={inlinesSelectable(cell)}
-                          selectionColor={colors.selectionHighlight}
                           style={[styles.markdownTableCell, { width: columnWidth }]}
                         >
                           {renderInlines(cell, spanFor(inlinesSelectable(cell)))}
@@ -3666,7 +3663,6 @@ function MarkdownBody({
             allowIosUITextView={allowIosUITextView}
             key={block.key}
             selectable={inlinesSelectable(block.inlines)}
-            selectionColor={colors.selectionHighlight}
             style={styles.messageText}
           >
             {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
@@ -5839,7 +5835,6 @@ function HighlightedCodeText({
   allowIosUITextView,
   language,
   selectable,
-  selectionColor,
   styles,
   text,
 }: {
@@ -5847,7 +5842,6 @@ function HighlightedCodeText({
   allowIosUITextView: boolean;
   language: string | undefined;
   selectable: boolean;
-  selectionColor: string;
   styles: ReturnType<typeof makeStyles>;
   text: string;
 }) {
@@ -5856,7 +5850,6 @@ function HighlightedCodeText({
     <MarkdownSelectableText
       allowIosUITextView={allowIosUITextView}
       selectable={selectable}
-      selectionColor={selectionColor}
       style={styles.markdownCodeText}
     >
       {tokens.map((token, index) => (
