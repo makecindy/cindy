@@ -127,14 +127,19 @@ export async function resolveRemoteSessionGitDir(input: {
   host: RemoteGitHost;
 }): Promise<SessionGitDirResult> {
   const candidates = [
-    input.telemetryPath,
-    input.fallbackWorktreePath,
-    input.fallbackWorkingDir,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    { workdir: input.telemetryPath, source: 'remote' as const },
+    { workdir: input.fallbackWorktreePath, source: 'remote' as const },
+    // session.workingDir is a shared-checkout snapshot, even when the probe
+    // itself runs on the SSH host; keep it low-trust so PR refs can win.
+    { workdir: input.fallbackWorkingDir, source: 'workingDir' as const },
+  ].filter(
+    (candidate): candidate is { workdir: string; source: 'remote' | 'workingDir' } =>
+      typeof candidate.workdir === 'string' && candidate.workdir.trim().length > 0,
+  );
 
-  for (const workdir of candidates) {
+  for (const { workdir, source } of candidates) {
     const head = await probeRemoteGitDir(input.host, workdir);
-    if (head) return { workdir, head, source: 'remote' };
+    if (head) return { workdir, head, source };
   }
 
   return { workdir: null, head: null, source: null };

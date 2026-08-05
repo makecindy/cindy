@@ -83,7 +83,7 @@ describe('resolveReadyRemoteGitHost', () => {
 });
 
 describe('resolveRemoteSessionGitDir', () => {
-  it('按 worktree → workingDir 顺序尝试远端路径', async () => {
+  it('按 worktree → workingDir 顺序尝试远端路径，并保留 workingDir 低可信来源', async () => {
     const exec = vi
       .fn()
       .mockResolvedValueOnce({ stdout: '' })
@@ -100,6 +100,24 @@ describe('resolveRemoteSessionGitDir', () => {
     ).resolves.toEqual({
       workdir: '/remote/repo',
       head: { kind: 'branch', branch: 'main', shortSha: null },
+      source: 'workingDir',
+    });
+  });
+
+  it('命中远端 worktree 时保留 remote 可信来源', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'branch:feature/remote\n' });
+    const host: RemoteGitHost = { getStatus: () => 'ready', exec };
+
+    await expect(
+      resolveRemoteSessionGitDir({
+        telemetryPath: null,
+        fallbackWorktreePath: '/remote/worktree',
+        fallbackWorkingDir: '/remote/repo',
+        host,
+      }),
+    ).resolves.toEqual({
+      workdir: '/remote/worktree',
+      head: { kind: 'branch', branch: 'feature/remote', shortSha: null },
       source: 'remote',
     });
   });
