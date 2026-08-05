@@ -22,6 +22,7 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import { coerceAppshotMetadata, type AppshotMetadata } from '../../shared/appshots';
 
 export interface ImageRef {
   /** Custom-protocol URL: 'xdt-image://{sessionId}/{filename}'. */
@@ -34,6 +35,7 @@ export interface ImageRef {
   size?: number;
   /** 发送端声明的上传字节 SHA-256。 */
   sha256?: string;
+  appshot?: AppshotMetadata;
   /**
    * 非破坏性标注(可选,向后兼容):`url` 是烧录合成图(定格模型所见)时,
    * 这里指向未烧录**原图**的缓存 url。历史图"再编辑"用它 + strokes 还原
@@ -156,6 +158,7 @@ export function parseUserContent(content: unknown): UserMessageContent {
           const image = coerceImageRef({
             url: b.url,
             mimeType: b.mimeType,
+            appshot: b.appshot,
             originalName:
               typeof b.originalName === 'string'
                 ? b.originalName
@@ -245,6 +248,8 @@ function coerceImageRef(x: unknown): ImageRef | null {
     ref.size = integrity.size;
     ref.sha256 = integrity.sha256;
   }
+  const appshot = coerceAppshotMetadata(o.appshot);
+  if (appshot) ref.appshot = appshot;
   // 非破坏性标注字段:形状校验通过才成对透传(review P2:此前 coerce 只取
   // 三字段,重载 / 从存储取回后历史图丢失可再编辑数据)。半份数据没有意义,
   // 任一不合法就整体丢弃,退化为普通烧录图展示。

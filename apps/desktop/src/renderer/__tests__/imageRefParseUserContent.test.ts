@@ -28,6 +28,7 @@ import {
   type PastedTextRange,
   type SlashCommandRange,
 } from '@/lib/imageRef';
+import type { AppshotMetadata } from '../../shared/appshots';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -35,6 +36,17 @@ const validImage: ImageRef = {
   url: 'xdt-image://session-abc/img-001.png',
   mimeType: 'image/png',
   originalName: 'screenshot.png',
+};
+
+const appshot: AppshotMetadata = {
+  schemaVersion: 1,
+  captureId: 'capture-1',
+  capturedAt: '2026-08-05T00:00:00.000Z',
+  applicationName: 'A&B',
+  bundleIdentifier: 'com.example.app',
+  windowTitle: '"Draft" <1>',
+  accessibilityText: '<AXButton title="Send & close">',
+  accessibilityTruncated: false,
 };
 
 const validFile: FileRef = {
@@ -46,6 +58,23 @@ const validFile2: FileRef = {
   name: 'spec.pdf',
   path: '/Users/sam/Documents/spec.pdf',
 };
+
+describe('parseUserContent Appshot metadata', () => {
+  it('round-trips persisted Appshot metadata', () => {
+    const image: ImageRef = { ...validImage, appshot };
+    expect(parseUserContent(stringifyUserContent('inspect', [image])).images).toEqual([image]);
+  });
+
+  it('drops malformed Appshot metadata while preserving the image', () => {
+    expect(
+      parseUserContent({
+        text: 'inspect',
+        images: [{ ...validImage, appshot: { ...appshot, schemaVersion: 2 } }],
+        files: [],
+      }).images,
+    ).toEqual([validImage]);
+  });
+});
 
 // ── Branch 1: string ────────────────────────────────────────────────────────
 

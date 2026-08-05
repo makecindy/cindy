@@ -15,6 +15,11 @@ import type {
 } from '@/lib/fileTypes';
 import type { FileRef, ImageRef } from '@/lib/imageRef';
 import { getAgentInputAttachmentBlockType } from '../../shared/agentInputQueue';
+import {
+  coerceAppshotMetadata,
+  formatAppshotContext,
+  type AppshotMetadata,
+} from '../../shared/appshots';
 
 export type InlineImageAttachment = {
   base64: string;
@@ -31,6 +36,7 @@ export type SdkAttachmentBlock = {
   base64?: string;
   mimeType?: string;
   originalName?: string;
+  appshot?: AppshotMetadata;
   /**
    * 显式文件附件的原始磁盘路径(path 为 xdt-image:// 缓存 URL 时携带):
    * device-link 出方向据此识别「字节精确」语义跳过压缩;上传后即被剥掉,
@@ -74,6 +80,7 @@ export function serializeAttachedFiles(
 ): SerializedAttachedFile[] | undefined {
   return files?.map((file) => {
     const legacy = readLegacyInlineFields(file);
+    const appshot = coerceAppshotMetadata(file.appshot);
     return {
       id: file.id,
       name: file.name,
@@ -85,6 +92,7 @@ export function serializeAttachedFiles(
       originalName: file.originalName ?? file.name,
       ...(file.url ? { url: file.url } : {}),
       ...(file.annotated ? { annotated: true } : {}),
+      ...(appshot ? { appshot } : {}),
       ...(legacy.base64 ? { base64: legacy.base64 } : {}),
       ...(legacy.textContent !== undefined ? { textContent: legacy.textContent } : {}),
       ...(legacy.truncated !== undefined ? { truncated: legacy.truncated } : {}),
@@ -94,11 +102,13 @@ export function serializeAttachedFiles(
 
 function buildImageAttachment(file: AttachedFile): RenderImageAttachment | null {
   if (file.category !== 'image') return null;
+  const appshot = coerceAppshotMetadata(file.appshot);
   if (file.url) {
     return {
       url: file.url,
       mimeType: file.mimeType,
       originalName: file.originalName ?? file.name,
+      ...(appshot ? { appshot } : {}),
       // 非破坏性标注:发送物化后 url 是烧录图,原图引用与矢量笔迹随消息
       // 持久化,历史图点开可继续编辑 / 撤销(imageRef.ts 字段注释)。
       ...(file.annotated && file.annotationSourceUrl && file.annotationStrokes?.length
@@ -116,6 +126,7 @@ function buildImageAttachment(file: AttachedFile): RenderImageAttachment | null 
     base64: legacyBase64,
     mimeType: file.mimeType,
     originalName: file.originalName ?? file.name,
+    ...(appshot ? { appshot } : {}),
   };
 }
 
@@ -143,6 +154,7 @@ export function buildUserMessageAttachmentPayload(
 
 function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock | null {
   const type = getAgentInputAttachmentBlockType(file.category, file.ext);
+  const appshot = type === 'image' ? coerceAppshotMetadata(file.appshot) : null;
   if (file.url) {
     // 显式文件(选择器/拖拽)拷入缓存后 url 与原始磁盘 path 并存:把原始路径一并
     // 带上,message 形态的远程发送才能识别「字节精确」语义不压缩(队列形态的
@@ -155,6 +167,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       path: file.url,
       mimeType: file.mimeType,
       originalName: file.originalName ?? file.name,
+      ...(appshot ? { appshot } : {}),
       ...(originalPath ? { originalPath } : {}),
     };
   }
@@ -164,6 +177,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       path: file.path,
       mimeType: file.mimeType,
       originalName: file.originalName ?? file.name,
+      ...(appshot ? { appshot } : {}),
     };
   }
 
@@ -174,6 +188,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       base64: legacyBase64,
       mimeType: file.mimeType,
       originalName: file.originalName ?? file.name,
+      ...(appshot ? { appshot } : {}),
     };
   }
 
@@ -201,7 +216,12 @@ export function buildMakerUserContentBlocks(
 
   for (const file of files ?? []) {
     const block = buildAttachmentBlock(file);
-    if (block) blocks.push(block);
+    if (block) {
+      blocks.push(block);
+      if (block.type === 'image' && block.appshot) {
+        blocks.push({ type: 'text', text: formatAppshotContext(block.appshot) });
+      }
+    }
   }
 
   return blocks;
