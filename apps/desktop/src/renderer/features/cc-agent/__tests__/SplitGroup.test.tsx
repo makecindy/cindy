@@ -45,6 +45,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 }));
 
 vi.mock('@/lib/orcaSessionIdentity', () => ({
+  getSessionRouteOwnerId: (route: string) => /^\/cc-agent\/([^/?#]+)/.exec(route)?.[1] ?? null,
   resolveSessionRoute: resolveSessionRouteMock,
 }));
 
@@ -605,6 +606,71 @@ describe('SplitGroup', () => {
     });
     expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
       ['session-a', 'session-b', 'session-c'],
+    );
+  });
+
+  it('关闭到 Orca Worker pane 时等待 canonical Lead 接管后再删除 owner', async () => {
+    resolveSessionRouteMock.mockResolvedValueOnce('/cc-agent/lead-b?worker=worker-b');
+    act(() => {
+      splitGroupStore.addSession('worker-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'worker-b', 'bottom');
+    });
+    const workerPaneKey = getSplitPanes(splitGroupStore.getSnapshot().root).find(
+      (pane) => pane.sessionId === 'worker-b',
+    )?.key;
+    const view = renderSplitGroup('session-a');
+    const sessionAPane = view.container.querySelector('[data-split-pane-session-id="session-a"]');
+    const closeButton = sessionAPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-a close button missing');
+
+    await act(async () => {
+      fireEvent.click(closeButton);
+      await Promise.resolve();
+    });
+    act(() => {
+      view.rerender(
+        <MemoryRouter>
+          <SplitGroup activeSessionId="lead-b">
+            <div data-testid="route-outlet" />
+          </SplitGroup>
+        </MemoryRouter>,
+      );
+    });
+
+    const remainingPanes = getSplitPanes(splitGroupStore.getSnapshot().root);
+    expect(remainingPanes.map((pane) => pane.sessionId)).toEqual(['lead-b', 'session-c']);
+    expect(remainingPanes.find((pane) => pane.sessionId === 'lead-b')?.key).toBe(workerPaneKey);
+  });
+
+  it('关闭 route owner 期间目标 pane 被移除会取消旧导航并保留 owner', async () => {
+    let resolveRemovedTargetRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRemovedTargetRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+    const sessionAPane = view.container.querySelector('[data-split-pane-session-id="session-a"]');
+    const closeButton = sessionAPane?.querySelector('button[aria-label="splitGroup.closeAria"]');
+    if (!(closeButton instanceof HTMLElement)) throw new Error('session-a close button missing');
+
+    act(() => {
+      fireEvent.click(closeButton);
+      splitGroupStore.removeSession('session-b');
+    });
+    await act(async () => {
+      resolveRemovedTargetRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c'],
     );
   });
 

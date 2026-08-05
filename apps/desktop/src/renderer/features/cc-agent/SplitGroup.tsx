@@ -31,7 +31,7 @@ import {
 } from '@/features/device-link/remoteProjectsStore';
 import { ApiError } from '@/lib/httpClient';
 import { getSessionFor } from '@/lib/makerTransport';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
@@ -139,6 +139,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     sourceSessionId: string;
     targetSessionId: string;
     requestSequence: number;
+    routeOwnerSessionId?: string;
   } | null>(null);
   const pendingPaneNavigationRef = useRef<{
     sourceSessionId: string;
@@ -211,6 +212,10 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       void resolveSessionRoute(sessionId, session)
         .then((route) => {
           if (focusRequestSequenceRef.current !== requestSequence) return;
+          if (pendingOwnerCloseRef.current?.requestSequence === requestSequence) {
+            pendingOwnerCloseRef.current.routeOwnerSessionId =
+              getSessionRouteOwnerId(route) ?? sessionId;
+          }
           navigate(route);
         })
         .catch(() => {
@@ -230,14 +235,17 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     const pendingFocusSessionId = pendingFocusSessionIdRef.current;
     const activeSessionChanged = observedActiveSessionIdRef.current !== activeSessionId;
     observedActiveSessionIdRef.current = activeSessionId;
-    if (pendingFocusSessionId === activeSessionId) {
+    const pendingOwnerClose = pendingOwnerCloseRef.current;
+    const pendingFocusReachedRouteOwner =
+      pendingOwnerClose?.requestSequence === focusRequestSequenceRef.current &&
+      pendingOwnerClose.routeOwnerSessionId === activeSessionId;
+    if (pendingFocusSessionId === activeSessionId || pendingFocusReachedRouteOwner) {
       pendingFocusSessionIdRef.current = null;
     } else if (pendingFocusSessionId && activeSessionChanged) {
       pendingFocusSessionIdRef.current = null;
       focusRequestSequenceRef.current += 1;
     }
 
-    const pendingOwnerClose = pendingOwnerCloseRef.current;
     if (
       pendingOwnerClose &&
       (!panes.some((pane) => pane.sessionId === pendingOwnerClose.targetSessionId) ||
@@ -248,7 +256,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
         pendingFocusSessionIdRef.current = null;
         focusRequestSequenceRef.current += 1;
       }
-    } else if (pendingOwnerClose && activeSessionId !== pendingOwnerClose.sourceSessionId) {
+    } else if (pendingOwnerClose?.routeOwnerSessionId === activeSessionId) {
       // Keep the route owner in the tree until its navigation request has committed.
       // Removing it earlier lets route reconciliation restore the pane just closed.
       pendingOwnerCloseRef.current = null;
