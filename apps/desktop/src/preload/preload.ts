@@ -3622,24 +3622,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ): Promise<{ messages: Record<string, unknown>[]; invalidation?: number }> =>
-        ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
+      ): Promise<{
+        messages: Record<string, unknown>[];
+        invalidation?: number;
+        ownerToken?: string;
+        accountCounter?: number;
+      }> => ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
       /**
        * 写某 (设备, 会话) 的最近一页消息;空数组 = 清掉该条缓存。
        * `expectedInvalidation` = 取到这批内容时 main 侧的会话级作废计数(由 get / put 带回,
        * renderer 缓存):不一致说明期间**任意窗口 / 进程**作废过这个会话,main 会丢弃这次写。
+       * `expectedOwnerToken` = 取到这批内容时 main 侧的 opaque owner token(由 get 带回、renderer
+       * 原样回传):账号切换后写入侧靠它丢弃「上一个账号名下取到」的内容(见 #1783)。
+       * `expectedAccountCounter` = 取到这批内容时 main 侧的账号代际计数:同一账号登出再登录
+       * 时 token 可保持不变、但 clearAll 已自增该计数,靠它丢弃登出前取到的内容(见 codex P1)。
+       * 注意:非空写入**缺失**这两个锚点(或与当前不符)会被 main fail-closed 拒绝落盘;
+       * 只有空写(清缓存)不要求它们。
        */
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
         expectedInvalidation?: number,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ): Promise<{ ok: true; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
           deviceId,
           sessionId,
           messages,
           expectedInvalidation,
+          expectedOwnerToken,
+          expectedAccountCounter,
         }),
       /** 读侧边栏远程会话列表快照 */
       getSessionList: (): Promise<{
@@ -3648,6 +3662,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           deviceName: string;
           sessions: Record<string, unknown>[];
         }>;
+        ownerToken?: string;
+        accountCounter?: number;
       }> => ipcRenderer.invoke('device-link:mirror-cache:session-list:get'),
       /** 写侧边栏远程会话列表快照 */
       putSessionList: (
@@ -3656,8 +3672,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
           deviceName: string;
           sessions: readonly Record<string, unknown>[];
         }>,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ): Promise<{ ok: true }> =>
-        ipcRenderer.invoke('device-link:mirror-cache:session-list:put', { devices }),
+        ipcRenderer.invoke('device-link:mirror-cache:session-list:put', {
+          devices,
+          expectedOwnerToken,
+          expectedAccountCounter,
+        }),
       /**
        * 清掉一台设备的缓存(撤销 / 关被控 / 禁用控制)。deviceId 必填 ——
        * 登出的整体清理由 main 在账号边界自己做,renderer 不持有那个能力。

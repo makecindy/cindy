@@ -3359,12 +3359,19 @@ interface ElectronAPI {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ) => Promise<{ messages: Record<string, unknown>[]; invalidation?: number }>;
+      ) => Promise<{
+        messages: Record<string, unknown>[];
+        invalidation?: number;
+        ownerToken?: string;
+        accountCounter?: number;
+      }>;
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
         expectedInvalidation?: number,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ) => Promise<{ ok: true; invalidation?: number }>;
       getSessionList: () => Promise<{
         devices: Array<{
@@ -3372,6 +3379,8 @@ interface ElectronAPI {
           deviceName: string;
           sessions: Record<string, unknown>[];
         }>;
+        ownerToken?: string;
+        accountCounter?: number;
       }>;
       putSessionList: (
         devices: ReadonlyArray<{
@@ -3379,6 +3388,8 @@ interface ElectronAPI {
           deviceName: string;
           sessions: readonly Record<string, unknown>[];
         }>,
+        expectedOwnerToken?: string,
+        expectedAccountCounter?: number,
       ) => Promise<{ ok: true }>;
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
