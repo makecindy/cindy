@@ -397,7 +397,7 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
       () => order.push('broadcast'),
     );
 
-    expect(prepared).toEqual({ persistId: expect.any(String) });
+    expect(prepared).toEqual({ persistId: expect.any(String), broadcasted: true });
     expect(order).toEqual(['persist', 'broadcast']);
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
@@ -445,7 +445,7 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
         null,
         broadcast,
       ),
-    ).resolves.toEqual({ persistId: expect.any(String) });
+    ).resolves.toEqual({ persistId: expect.any(String), broadcasted: false });
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -466,7 +466,7 @@ describe('synthetic tool events:本地合成事件也返回 renderer 展示所�
         null,
         broadcast,
       ),
-    ).resolves.toEqual({ persistId: expect.any(String) });
+    ).resolves.toEqual({ persistId: expect.any(String), broadcasted: false });
     expect(broadcast).not.toHaveBeenCalled();
   });
 

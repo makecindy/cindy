@@ -12135,8 +12135,8 @@ function broadcastSyntheticToolEvent(
 async function broadcastDurableSyntheticToolUseEvent(
   sessionId: string,
   event: AgentEvent & { type: 'tool_use' },
-): Promise<void> {
-  await prepareDurableSyntheticToolUseEventForBroadcast(
+): Promise<boolean> {
+  const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
     sessionId,
     { type: event.type, data: event.data },
     (event.agentMeta as AgentMeta | null | undefined) ?? null,
@@ -12148,6 +12148,7 @@ async function broadcastDurableSyntheticToolUseEvent(
       });
     },
   );
+  return prepared.broadcasted;
 }
 
 async function materializeCodexImage(

@@ -142,6 +142,22 @@ describe('GhostPlanSlot', () => {
     expect(projector).not.toHaveBeenCalled();
   });
 
+  it('持久化期间任务边界失效、投影被抑制时不返回成功', async () => {
+    const projector = vi.fn(async () => false);
+    const slot = new GhostPlanSlot({
+      getGhost: () => ghost(),
+      getCurrentSessionContext: () => trustedContext,
+      isTrustedSessionContext: async () => true,
+      projector,
+    });
+
+    await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({
+      ok: false,
+      errorCode: 'NO_SESSION_CONTEXT',
+      message: '任务上下文已变化，Plan 未投影',
+    });
+  });
+
   it('拒绝插件伪造 sessionId，且不会投影到伪造目标', async () => {
     const { slot, projector } = harness();
     await expect(slot.handleUpdate('planner', { ...valid, sessionId: 'session-forged' })).resolves.toMatchObject({

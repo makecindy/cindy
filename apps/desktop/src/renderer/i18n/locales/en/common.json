@@ -3577,7 +3577,7 @@
         "slotNotify": "System tips",
         "slotBadge": "Unread badge",
         "slotFs": "File writing",
-        "slotPlan": "Current Plan updates",
+        "slotPlan": "Update the current task's Plan",
         "slotSkill": "Agent skills",
         "slotWorkspace": "Workspace sessions"
       },

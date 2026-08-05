@@ -630,7 +630,7 @@ export async function prepareDurableSyntheticToolUseEventForBroadcast(
   event: { type: 'tool_use'; data: unknown },
   agentMeta: AgentMeta | null,
   broadcastAfterPersist: (prepared: { persistId: string }) => void,
-): Promise<{ persistId: string }> {
+): Promise<{ persistId: string; broadcasted: boolean }> {
   if (agentMeta) noteAgentMeta(sessionId, agentMeta);
   flushAssistantBlock(sessionId, agentMeta);
 
@@ -650,6 +650,7 @@ export async function prepareDurableSyntheticToolUseEventForBroadcast(
     createdAt,
   });
 
+  let broadcasted = false;
   await enqueueDurableWrite(
     `synthetic_tool_use:${sessionId}:${persistId}`,
     async (ownerScope) => {
@@ -661,6 +662,7 @@ export async function prepareDurableSyntheticToolUseEventForBroadcast(
         return;
       }
       broadcastAfterPersist({ persistId });
+      broadcasted = true;
     },
   );
 
@@ -675,7 +677,7 @@ export async function prepareDurableSyntheticToolUseEventForBroadcast(
     }
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
-  return { persistId };
+  return { persistId, broadcasted };
 }
 
 /**

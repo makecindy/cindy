@@ -16,7 +16,7 @@ import {
 export type GhostPlanProjector = (
   sessionContext: GhostPlanSessionContext,
   update: Omit<GhostPipePlanUpdate, 'type'>,
-) => void | Promise<void>;
+) => void | boolean | Promise<void | boolean>;
 
 export interface GhostPlanSessionContext {
   sessionId: string;
@@ -114,7 +114,14 @@ export class GhostPlanSlot {
       plan: validated.value.plan,
     };
     try {
-      await this.projector(sessionContext, update);
+      const projected = await this.projector(sessionContext, update);
+      if (projected === false) {
+        return {
+          ok: false,
+          errorCode: 'NO_SESSION_CONTEXT',
+          message: '任务上下文已变化，Plan 未投影',
+        };
+      }
       return { ok: true };
     } catch (error) {
       this.deps.log?.warn('ghost plan projection failed', {
