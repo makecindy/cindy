@@ -5,7 +5,10 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { shortSessionId } from '@/lib/sessionId';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  useSessionNavigationIntent,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 
 export interface SessionHandoffCardProps {
   sessionId: string;
@@ -30,6 +33,7 @@ export function SessionHandoffCard({
 }: SessionHandoffCardProps) {
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
+  const reportSessionNavigation = useSessionNavigationIntent();
   const { t } = useTranslation();
   const displayTitle = title?.trim() || t('ccAgent.handoff.card.unnamedSession');
   // created / resumed 用实心强调样式(新建或被唤醒,值得注意);already-active 用描边弱样式。
@@ -63,6 +67,7 @@ export function SessionHandoffCard({
 
   const handleClick = () => {
     void resolveSessionRoute(sessionId).then((target) => {
+      reportSessionNavigation?.(sessionId);
       navigate(target, {
         state: dispatcherSessionId
           ? {
@@ -123,7 +128,11 @@ export function SessionHandoffCard({
         <span className="flex min-w-0 items-center gap-[6px]">
           {lastActive ? (
             <>
-              <History size={12} strokeWidth={2} className="shrink-0 text-[var(--settings-section-desc)]" />
+              <History
+                size={12}
+                strokeWidth={2}
+                className="shrink-0 text-[var(--settings-section-desc)]"
+              />
               <span className="truncate text-12 leading-4 text-[var(--settings-section-desc)]">
                 {formatLastActive(lastActive)}
               </span>

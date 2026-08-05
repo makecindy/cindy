@@ -49,9 +49,9 @@ const KEYBOARD_RESIZE_STEP = 0.05;
 
 function isSplitPaneChildActionTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
-  return Boolean(element?.closest(
-    '[data-split-pane-no-focus], button, a, [role="button"], [role="link"]',
-  ));
+  return Boolean(
+    element?.closest('[data-split-pane-no-focus], button, a, [role="button"], [role="link"]'),
+  );
 }
 
 interface SplitGroupProps {
@@ -116,10 +116,12 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   const previousActiveSessionIdRef = useRef(activeSessionId);
   const pendingFocusSessionIdRef = useRef<string | null>(null);
+  const pendingPaneNavigationRef = useRef<{
+    sourceSessionId: string;
+    targetSessionId: string;
+  } | null>(null);
   const routePane = panes.find((pane) => pane.sessionId === activeSessionId);
-  const previousPane = panes.find(
-    (pane) => pane.sessionId === previousActiveSessionIdRef.current,
-  );
+  const previousPane = panes.find((pane) => pane.sessionId === previousActiveSessionIdRef.current);
   const ownerPaneKey = routePane?.key ?? previousPane?.key ?? panes[0]?.key;
 
   const focusSession = useCallback(
@@ -144,21 +146,38 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
     if (panes.some((pane) => pane.sessionId === activeSessionId)) {
       previousActiveSessionIdRef.current = activeSessionId;
+      if (pendingPaneNavigationRef.current?.targetSessionId === activeSessionId) {
+        pendingPaneNavigationRef.current = null;
+      }
       return;
     }
 
     if (pendingFocusSessionId && pendingFocusSessionId !== activeSessionId) return;
 
-    const replaceTarget = panes.some(
-      (pane) => pane.sessionId === previousActiveSessionIdRef.current,
-    )
-      ? previousActiveSessionIdRef.current
-      : panes[0]?.sessionId;
+    const pendingPaneNavigation = pendingPaneNavigationRef.current;
+    pendingPaneNavigationRef.current = null;
+    const pendingSource =
+      pendingPaneNavigation?.targetSessionId === activeSessionId &&
+      panes.some((pane) => pane.sessionId === pendingPaneNavigation.sourceSessionId)
+        ? pendingPaneNavigation.sourceSessionId
+        : null;
+    const replaceTarget =
+      pendingSource ??
+      (panes.some((pane) => pane.sessionId === previousActiveSessionIdRef.current)
+        ? previousActiveSessionIdRef.current
+        : panes[0]?.sessionId);
     if (replaceTarget) {
       splitGroupStore.replaceSession(replaceTarget, activeSessionId);
       previousActiveSessionIdRef.current = activeSessionId;
     }
   }, [activeSessionId, panes]);
+
+  const handlePaneSessionNavigate = useCallback(
+    (sourceSessionId: string, targetSessionId: string) => {
+      pendingPaneNavigationRef.current = { sourceSessionId, targetSessionId };
+    },
+    [],
+  );
 
   const handleClosePane = useCallback(
     (pane: SplitPaneNode, isOwner: boolean) => {
@@ -186,6 +205,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
           ownerPaneKey={ownerPaneKey}
           sessionsById={sessionsById}
           focusSession={focusSession}
+          onSessionNavigate={handlePaneSessionNavigate}
           onClosePane={handleClosePane}
           unnamedTitle={t('ccAgent.common.unnamedSession')}
           loadingTitle={t('splitGroup.loadingTask')}
@@ -201,6 +221,7 @@ interface SplitNodeViewProps {
   ownerPaneKey?: string;
   sessionsById: Map<string, ReturnType<typeof useCCSessions>['sessions'][number]>;
   focusSession: (sessionId: string) => void;
+  onSessionNavigate: (sourceSessionId: string, targetSessionId: string) => void;
   onClosePane: (pane: SplitPaneNode, isOwner: boolean) => void;
   unnamedTitle: string;
   loadingTitle: string;
@@ -211,7 +232,10 @@ function SplitNodeView({ node, ...childProps }: SplitNodeViewProps) {
   return <SplitBranchView {...childProps} branch={node} />;
 }
 
-function SplitBranchView({ branch, ...childProps }: Omit<SplitNodeViewProps, 'node'> & {
+function SplitBranchView({
+  branch,
+  ...childProps
+}: Omit<SplitNodeViewProps, 'node'> & {
   branch: SplitBranchNode;
 }) {
   const { t } = useTranslation();
@@ -337,6 +361,7 @@ function SplitPaneView({
   ownerPaneKey,
   sessionsById,
   focusSession,
+  onSessionNavigate,
   onClosePane,
   unnamedTitle,
   loadingTitle,
@@ -364,11 +389,7 @@ function SplitPaneView({
         data-split-pane-owner={isOwner ? 'true' : 'false'}
         className="flex h-full min-h-0 w-full flex-col overflow-hidden"
         onPointerDownCapture={(event) => {
-          if (
-            isOwner ||
-            event.button !== 0 ||
-            isSplitPaneChildActionTarget(event.target)
-          ) {
+          if (isOwner || event.button !== 0 || isSplitPaneChildActionTarget(event.target)) {
             return;
           }
           focusSession(viewSessionId);
@@ -415,6 +436,9 @@ function SplitPaneView({
             routeOwner={isOwner}
             compactToolbar
             navigationMode={isOwner ? 'route-owner' : 'split-pane'}
+            onSessionNavigate={(targetSessionId) =>
+              onSessionNavigate(viewSessionId, targetSessionId)
+            }
             sidebarTargetSessionId={viewSessionId}
             viewVisible
             chatRealtime
@@ -478,13 +502,12 @@ function SplitDropTarget({
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'move';
-    setDropSide(
-      resolveSplitDropSide(
-        event.currentTarget.getBoundingClientRect(),
-        event.clientX,
-        event.clientY,
-      ),
+    const nextSide = resolveSplitDropSide(
+      event.currentTarget.getBoundingClientRect(),
+      event.clientX,
+      event.clientY,
     );
+    setDropSide((currentSide) => (currentSide === nextSide ? currentSide : nextSide));
   }, []);
 
   const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {

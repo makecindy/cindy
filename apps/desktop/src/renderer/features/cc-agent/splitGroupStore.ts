@@ -83,12 +83,11 @@ export function getSplitSessionIds(root: SplitNode | null): string[] {
   return getSplitPanes(root).map((pane) => pane.sessionId);
 }
 
-function mapNode(root: SplitNode, mapper: (node: SplitNode) => SplitNode): SplitNode {
-  const mapped =
-    root.type === 'split'
-      ? { ...root, first: mapNode(root.first, mapper), second: mapNode(root.second, mapper) }
-      : root;
-  return mapper(mapped);
+function collectNodeKeys(root: SplitNode, keys: Set<string>): void {
+  keys.add(root.key);
+  if (root.type === 'pane') return;
+  collectNodeKeys(root.first, keys);
+  collectNodeKeys(root.second, keys);
 }
 
 function replaceNode(
@@ -118,15 +117,12 @@ interface CoerceContext {
   paneCount: number;
 }
 
-function coerceKey(
-  value: unknown,
-  prefix: 'pane' | 'split',
-  context: CoerceContext,
-): string {
+function coerceKey(value: unknown, prefix: 'pane' | 'split', context: CoerceContext): string {
   const persisted = typeof value === 'string' ? value.trim() : '';
-  const key = persisted && !context.seenKeys.has(persisted)
-    ? persisted
-    : nextUniqueKey(prefix, context.seenKeys);
+  const key =
+    persisted && !context.seenKeys.has(persisted)
+      ? persisted
+      : nextUniqueKey(prefix, context.seenKeys);
   context.seenKeys.add(key);
   return key;
 }
@@ -278,7 +274,9 @@ function ensureHydrated(): void {
     const currentRaw = localStorage.getItem(SPLIT_GROUP_STORAGE_KEY);
     const legacyRaw = currentRaw ? null : localStorage.getItem(LEGACY_SPLIT_GROUP_STORAGE_KEY);
     if (!currentRaw && !legacyRaw) return;
-    state = currentRaw ? coerce(JSON.parse(currentRaw) as unknown) : coerceLegacy(JSON.parse(legacyRaw!) as unknown);
+    state = currentRaw
+      ? coerce(JSON.parse(currentRaw) as unknown)
+      : coerceLegacy(JSON.parse(legacyRaw!) as unknown);
     persist(state);
   } catch {
     state = EMPTY;
@@ -321,12 +319,7 @@ export const splitGroupStore = {
     }
 
     const existingKeys = new Set<string>();
-    if (state.root) {
-      mapNode(state.root, (node) => {
-        existingKeys.add(node.key);
-        return node;
-      });
-    }
+    if (state.root) collectNodeKeys(state.root, existingKeys);
     const newPane: SplitPaneNode = {
       type: 'pane',
       key: nextUniqueKey('pane', existingKeys),
@@ -375,7 +368,8 @@ export const splitGroupStore = {
     ensureHydrated();
     const currentSessionId = normalizeSessionId(currentSessionIdInput);
     const nextSessionId = normalizeSessionId(nextSessionIdInput);
-    if (!currentSessionId || !nextSessionId || currentSessionId === nextSessionId || !state.root) return;
+    if (!currentSessionId || !nextSessionId || currentSessionId === nextSessionId || !state.root)
+      return;
     const panes = getSplitPanes(state.root);
     if (panes.some((pane) => pane.sessionId === nextSessionId)) return;
     if (!panes.some((pane) => pane.sessionId === currentSessionId)) return;

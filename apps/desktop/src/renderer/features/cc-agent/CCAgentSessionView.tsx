@@ -30,10 +30,7 @@ import {
   isCodexResumeNotReadyProjectionError,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
-import {
-  connectedProvidersForAgent,
-  providerOffersModel,
-} from '@cindy/model-providers';
+import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -59,10 +56,7 @@ import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
-import {
-  useWorkerProjection,
-  useWorkerProjectionOwner,
-} from './hooks/workerProjectionStore';
+import { useWorkerProjection, useWorkerProjectionOwner } from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
@@ -366,6 +360,8 @@ interface CCAgentSessionViewProps {
   onSearchJumpConsumed?: () => void;
   /** sidebar 子窗口内嵌视图不拥有 router，所有“打开其它会话”入口必须禁用。 */
   navigationMode?: SessionNavigationMode;
+  /** split-pane 内部跳转前上报目标任务，让宿主替换发起跳转的 pane。 */
+  onSessionNavigate?: (targetSessionId: string) => void;
   /** 内嵌聊天触发侧栏动作时使用的可见 RSB bucket；消息身份仍由 sessionIdProp 决定。 */
   sidebarTargetSessionId?: string;
 }
@@ -487,6 +483,7 @@ export function CCAgentSessionView({
   searchJumpProp,
   onSearchJumpConsumed,
   navigationMode = 'route-owner',
+  onSessionNavigate,
   sidebarTargetSessionId,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
@@ -2802,8 +2799,8 @@ export function CCAgentSessionView({
         isCodexResumeNotReadyProjectionError(detail)
           ? t('chat.errorBanner.codexResumeNotReady')
           : ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
-          ? t('chat.userMessage.forkErrors.unsupportedHistory')
-          : detail,
+            ? t('chat.userMessage.forkErrors.unsupportedHistory')
+            : detail,
       );
     } finally {
       setForkStripEncryptedRunning(false);
@@ -4030,6 +4027,7 @@ export function CCAgentSessionView({
           能流到。content 内同时包含两者,所以包在外层即可。 */}
       <SessionNavigationModeProvider
         mode={navigationMode}
+        onSessionNavigate={onSessionNavigate}
         sidebarTargetSessionId={sidebarTargetSessionId}
         // 只有声明右栏在场的路由主实例(ownsRoute)才是面板宿主:右栏当前显示的
         // 就是它的 bucket。内嵌实例(worker 面板 / 文件浏览窄 rail / Orca split)

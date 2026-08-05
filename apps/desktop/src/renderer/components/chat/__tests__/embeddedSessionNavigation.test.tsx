@@ -56,6 +56,14 @@ function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   );
 }
 
+function splitPane(children: ReactNode, onSessionNavigate: (targetSessionId: string) => void) {
+  return (
+    <SessionNavigationModeProvider mode="split-pane" onSessionNavigate={onSessionNavigate}>
+      {children}
+    </SessionNavigationModeProvider>
+  );
+}
+
 function SidebarTargetProbe({ contentSessionId }: { contentSessionId?: string }) {
   return <span data-testid="sidebar-target">{useSidebarTargetSessionId(contentSessionId)}</span>;
 }
@@ -87,6 +95,26 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(chip?.getAttribute('title')).toBeNull();
     expect(mocks.resolveSessionRoute).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('reports split-pane session navigation before changing the route', async () => {
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/session-target" label="Session target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-target', undefined),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('session-target');
+    expect(onSessionNavigate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.navigate.mock.invocationCallOrder[0],
+    );
   });
 
   it('shows the persisted reference range summary without changing the link label', () => {

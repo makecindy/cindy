@@ -29,7 +29,10 @@ import { shortSessionId } from '@/lib/sessionId';
 import { resolveSessionMessageText } from '@/lib/sessionMessageText';
 import * as sessionService from '@/lib/sessionService';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  useSessionNavigationIntent,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
 import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
@@ -54,6 +57,7 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
   const { t } = useTranslation();
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
+  const reportSessionNavigation = useSessionNavigationIntent();
   const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
   const remoteSessions = useRemoteProjectSessions();
   const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
@@ -108,6 +112,7 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
     // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
     // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
     void resolveSessionRoute(sessionId, remoteSession).then((route) => {
+      reportSessionNavigation?.(sessionId);
       navigate(
         route,
         target.messageClientId
@@ -128,11 +133,12 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
   };
   // 未起名会话过投影再显示:chip 直接摆在消息流里,原样会露出内部哨兵 "New Maker"。
   const resolvedTitle = fetchedTitle ?? remoteTitle;
-  const display = explicitLabel
-    ?? (resolvedTitle
+  const display =
+    explicitLabel ??
+    (resolvedTitle
       ? projectDraftSessionTitle(resolvedTitle, t('ccAgent.common.unnamedSession'))
-      : null)
-    ?? shortSessionId(sessionId);
+      : null) ??
+    shortSessionId(sessionId);
   const referenceDetails = referenceMetadata
     ? [
         t(
@@ -143,12 +149,11 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
         t('chat.userMessage.sessionReference.messageCount', {
           count: referenceMetadata.messageCount,
         }),
-        ...(referenceMetadata.truncated
-          ? [t('chat.userMessage.sessionReference.truncated')]
-          : []),
+        ...(referenceMetadata.truncated ? [t('chat.userMessage.sessionReference.truncated')] : []),
       ]
     : [];
-  const tooltip = referenceDetails.length > 0 ? `${display}\n${referenceDetails.join(' · ')}` : display;
+  const tooltip =
+    referenceDetails.length > 0 ? `${display}\n${referenceDetails.join(' · ')}` : display;
 
   if (messageClientId) {
     const fullText = messageText ?? shortSessionId(messageClientId);
@@ -167,19 +172,24 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
       </span>
     );
     // summary 单行截断:窄气泡里退化成省略号,完整内容仍在 title / aria-label。
-    const referenceSummary = referenceDetails.length > 0 ? (
-      <span
-        data-session-reference-summary=""
-        className="ml-1 min-w-0 truncate text-[11px] text-[var(--text-tertiary)]"
-      >
-        {referenceDetails.join(' · ')}
-      </span>
-    ) : null;
+    const referenceSummary =
+      referenceDetails.length > 0 ? (
+        <span
+          data-session-reference-summary=""
+          className="ml-1 min-w-0 truncate text-[11px] text-[var(--text-tertiary)]"
+        >
+          {referenceDetails.join(' · ')}
+        </span>
+      ) : null;
     // items-center 保证 pill 保持自身高度(不被 align-items: stretch 撑成椭圆)。
     const messageClass = 'inline-flex max-w-full items-center align-middle';
     if (navigationMode === 'sidebar-embedded') {
       return (
-        <span data-session-message-link="" title={tooltip} className={cn(messageClass, 'cursor-default')}>
+        <span
+          data-session-message-link=""
+          title={tooltip}
+          className={cn(messageClass, 'cursor-default')}
+        >
           {messageContent}
           {referenceSummary}
         </span>

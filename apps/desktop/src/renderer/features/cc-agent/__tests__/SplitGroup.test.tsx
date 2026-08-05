@@ -35,10 +35,12 @@ vi.mock('../CCAgentSessionView', () => ({
     sessionIdProp,
     routeOwner,
     sidebarTargetSessionId,
+    onSessionNavigate,
   }: {
     sessionIdProp: string;
     routeOwner: boolean;
     sidebarTargetSessionId: string;
+    onSessionNavigate?: (targetSessionId: string) => void;
   }) => (
     <div
       data-testid={`session-view-${sessionIdProp}`}
@@ -48,7 +50,14 @@ vi.mock('../CCAgentSessionView', () => ({
       onDragOver={(event) => event.stopPropagation()}
       onDrop={(event) => event.stopPropagation()}
     >
-      <button type="button" data-testid={`route-action-${sessionIdProp}`} onClick={routeActionMock}>
+      <button
+        type="button"
+        data-testid={`route-action-${sessionIdProp}`}
+        onClick={() => {
+          onSessionNavigate?.('session-c');
+          routeActionMock();
+        }}
+      >
         Route action
       </button>
     </div>
@@ -174,6 +183,30 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 
+  it('非 owner pane 发起子路由跳转时替换发起跳转的 pane', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.click(screen.getByTestId('route-action-session-b'));
+    });
+
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="session-c">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('session-view-session-a')).toBeTruthy();
+    expect(screen.queryByTestId('session-view-session-b')).toBeNull();
+    expect(screen.getByTestId('session-view-session-c').dataset.routeOwner).toBe('true');
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+  });
+
   it('递归渲染左一右二与左二右二混合布局', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
@@ -260,8 +293,7 @@ describe('SplitGroup', () => {
     const dataTransfer = {
       types: ['application/x-cindy-session-id'],
       dropEffect: 'none',
-      getData: (format: string) =>
-        format === 'application/x-cindy-session-id' ? 'session-c' : '',
+      getData: (format: string) => (format === 'application/x-cindy-session-id' ? 'session-c' : ''),
     };
 
     await act(async () => {
