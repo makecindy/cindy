@@ -58,7 +58,14 @@ test("macOS WebAuthn keychain entitlement is main-only", () => {
     assert.doesNotMatch(helper, /apple-events/);
     assert.match(main, /com\.apple\.security\.automation\.apple-events/);
     assert.match(main, /<key>keychain-access-groups<\/key>/);
-    assert.match(main, new RegExp(`<string>${keychainAccessGroup}<\\/string>`));
+    assert.ok(
+      main.includes(`<string>${keychainAccessGroup}</string>`),
+      "main entitlements should contain the exact WebAuthn keychain group",
+    );
+    assert.ok(
+      !main.includes("<string>TEAM123456.com.xd.other.webauthn</string>"),
+      "main entitlements should reject a different WebAuthn keychain group",
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

@@ -17,6 +17,7 @@ import {
   type ConfigureWebAuthnOptions,
   type MessageBoxOptions,
   type WebAuthnAccount,
+  type WebContents,
   type WebFrameMain,
 } from 'electron';
 
@@ -28,6 +29,7 @@ import {
   RSB_BROWSER_WEBAUTHN_LABELS,
   type RsbBrowserWebAuthnLabels,
 } from './rsbBrowserWebAuthnLabels.js';
+import { getRsbNativePopupOwnerWebContents } from './rsb-browser-bridge/native-popup-surfaces.js';
 
 const log = createLogger('rsb-webauthn');
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
@@ -58,6 +60,7 @@ interface AccountDialogResult {
 }
 
 type AccountDialogOwner = Pick<BrowserWindow, 'isDestroyed' | 'isVisible'>;
+type NativePopupOwnerResolver = (webContentsId: number) => WebContents | null;
 type ShowAccountDialog = (
   owner: AccountDialogOwner,
   options: MessageBoxOptions,
@@ -135,14 +138,17 @@ function relyingPartyLabel(value: string): string {
 
 function defaultResolveAccountDialogOwner(
   frame: WebAuthnSelectionDetails['frame'],
+  resolveNativePopupOwner: NativePopupOwnerResolver = getRsbNativePopupOwnerWebContents,
 ): AccountDialogOwner | null {
   if (!frame || frameIsDetached(frame)) return null;
   try {
     const source = webContents.fromFrame(frame as WebFrameMain);
     if (!source || source.isDestroyed() || !source.isFocused()) return null;
+    const nativePopupOwner = resolveNativePopupOwner(source.id);
     const owner =
       BrowserWindow.fromWebContents(source) ??
-      (source.hostWebContents ? BrowserWindow.fromWebContents(source.hostWebContents) : null);
+      (source.hostWebContents ? BrowserWindow.fromWebContents(source.hostWebContents) : null) ??
+      (nativePopupOwner ? BrowserWindow.fromWebContents(nativePopupOwner) : null);
     if (!owner || owner.isDestroyed() || !owner.isVisible()) return null;
     return owner;
   } catch {
@@ -167,6 +173,7 @@ export async function selectRsbWebAuthnAccount(
     labels?: RsbBrowserWebAuthnLabels;
     showDialog?: ShowAccountDialog;
     resolveDialogOwner?: ResolveAccountDialogOwner;
+    resolveNativePopupOwner?: NativePopupOwnerResolver;
   } = {},
 ): Promise<string | undefined> {
   if (
@@ -175,7 +182,10 @@ export async function selectRsbWebAuthnAccount(
     details.accounts.length > MAX_CHOOSER_ACCOUNTS
   )
     return undefined;
-  const owner = (options.resolveDialogOwner ?? defaultResolveAccountDialogOwner)(details.frame);
+  const owner = (
+    options.resolveDialogOwner ??
+    ((frame) => defaultResolveAccountDialogOwner(frame, options.resolveNativePopupOwner))
+  )(details.frame);
   if (!owner) return undefined;
   if (details.accounts.length === 1) return details.accounts[0]?.credentialId || undefined;
 

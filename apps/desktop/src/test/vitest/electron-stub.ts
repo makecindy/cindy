@@ -308,6 +308,7 @@ export const session = {
 
 export const webContents = {
   fromId: () => null,
+  fromFrame: () => null,
   getAllWebContents: () => [],
 };
 

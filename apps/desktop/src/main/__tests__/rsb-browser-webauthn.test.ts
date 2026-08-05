@@ -1,4 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const nativePopupMocks = vi.hoisted(() => ({
+  getOwner: vi.fn(() => null),
+}));
+
+vi.mock('../rsb-browser-bridge/native-popup-surfaces.js', () => ({
+  getRsbNativePopupOwnerWebContents: nativePopupMocks.getOwner,
+}));
+
+import { BrowserWindow, webContents } from 'electron';
 
 import { BROWSER_PARTITION } from '../../shared/webviewPartition';
 import {
@@ -20,6 +30,12 @@ const visibleOwner = {
   isVisible: () => true,
 };
 const resolveVisibleOwner = () => visibleOwner;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  nativePopupMocks.getOwner.mockReset();
+  nativePopupMocks.getOwner.mockReturnValue(null);
+});
 
 function createSessionHarness() {
   let listener:
@@ -203,6 +219,93 @@ describe('selectRsbWebAuthnAccount', () => {
         { labels, showDialog, resolveDialogOwner: () => null },
       ),
     ).resolves.toBeUndefined();
+    expect(showDialog).not.toHaveBeenCalled();
+  });
+
+  it('resolves the BrowserWindow through an ordinary RSB webview host', async () => {
+    const source = {
+      id: 101,
+      hostWebContents: { id: 11 },
+      isDestroyed: () => false,
+      isFocused: () => true,
+    };
+    const fromFrame = vi.spyOn(webContents, 'fromFrame').mockReturnValue(source as never);
+    const fromWebContents = vi
+      .spyOn(BrowserWindow, 'fromWebContents')
+      .mockImplementation((candidate) =>
+        candidate === source.hostWebContents ? (visibleOwner as never) : null,
+      );
+    const showDialog = vi.fn(async () => ({ response: 0 }));
+
+    await expect(
+      selectRsbWebAuthnAccount(
+        {
+          relyingPartyId: 'example.com',
+          accounts: [{ credentialId: 'credential-1' }, { credentialId: 'credential-2' }],
+          frame: { detached: false },
+        },
+        { labels, showDialog },
+      ),
+    ).resolves.toBe('credential-1');
+
+    expect(fromFrame).toHaveBeenCalledOnce();
+    expect(fromWebContents).toHaveBeenCalledWith(source.hostWebContents);
+    expect(showDialog).toHaveBeenCalledWith(visibleOwner, expect.anything());
+  });
+
+  it('resolves an adopted native popup through the existing popup owner registry', async () => {
+    const source = {
+      id: 202,
+      isDestroyed: () => false,
+      isFocused: () => true,
+    };
+    const hostWebContents = { id: 22 };
+    nativePopupMocks.getOwner.mockReturnValue(hostWebContents as never);
+    const fromFrame = vi.spyOn(webContents, 'fromFrame').mockReturnValue(source as never);
+    const fromWebContents = vi
+      .spyOn(BrowserWindow, 'fromWebContents')
+      .mockImplementation((candidate) =>
+        candidate === hostWebContents ? (visibleOwner as never) : null,
+      );
+    const showDialog = vi.fn(async () => ({ response: 1 }));
+
+    await expect(
+      selectRsbWebAuthnAccount(
+        {
+          relyingPartyId: 'popup.example.com',
+          accounts: [{ credentialId: 'credential-1' }, { credentialId: 'credential-2' }],
+          frame: { detached: false },
+        },
+        { labels, showDialog },
+      ),
+    ).resolves.toBe('credential-2');
+
+    expect(fromFrame).toHaveBeenCalledOnce();
+    expect(nativePopupMocks.getOwner).toHaveBeenCalledWith(source.id);
+    expect(fromWebContents).toHaveBeenCalledWith(hostWebContents);
+    expect(showDialog).toHaveBeenCalledWith(visibleOwner, expect.anything());
+  });
+
+  it('fails closed when a native popup has no live owner', async () => {
+    const source = {
+      id: 303,
+      isDestroyed: () => false,
+      isFocused: () => true,
+    };
+    vi.spyOn(webContents, 'fromFrame').mockReturnValue(source as never);
+    const showDialog = vi.fn();
+
+    await expect(
+      selectRsbWebAuthnAccount(
+        {
+          relyingPartyId: 'orphan.example.com',
+          accounts: [{ credentialId: 'credential-1' }, { credentialId: 'credential-2' }],
+          frame: { detached: false },
+        },
+        { labels, showDialog },
+      ),
+    ).resolves.toBeUndefined();
+    expect(nativePopupMocks.getOwner).toHaveBeenCalledWith(source.id);
     expect(showDialog).not.toHaveBeenCalled();
   });
 
