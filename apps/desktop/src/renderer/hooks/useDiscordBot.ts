@@ -48,19 +48,25 @@ export function useDiscordBot(): UseDiscordBotReturn {
 
   useEffect(() => {
     let cancelled = false;
+    const lifecycleReadVersion = lifecycleRequestVersionRef.current;
     void (async () => {
       try {
         const state = await window.electronAPI.discordBot.getStatus();
         if (cancelled) return;
         const nextOwnerUserId = state.ownerUserId ?? '';
         const nextLifecycleAnnouncement = state.lifecycleAnnouncement !== false;
+        const lifecycleReadIsCurrent = lifecycleReadVersion === lifecycleRequestVersionRef.current;
         setStatus(state.status);
         setOwnerUserIdState(nextOwnerUserId);
-        setLifecycleAnnouncementState(nextLifecycleAnnouncement);
+        if (lifecycleReadIsCurrent) {
+          setLifecycleAnnouncementState(nextLifecycleAnnouncement);
+        }
         cachedState = {
           ownerUserId: nextOwnerUserId,
           status: state.status,
-          lifecycleAnnouncement: nextLifecycleAnnouncement,
+          lifecycleAnnouncement: lifecycleReadIsCurrent
+            ? nextLifecycleAnnouncement
+            : (cachedState?.lifecycleAnnouncement ?? lifecycleAnnouncement),
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

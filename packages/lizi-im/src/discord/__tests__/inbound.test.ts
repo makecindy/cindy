@@ -762,6 +762,7 @@ describe('DiscordIM inbound pipeline', () => {
       },
     });
 
+    im.registerIpc();
     await im.init();
     await flushMicrotasks();
 
@@ -882,6 +883,61 @@ describe('DiscordIM inbound pipeline', () => {
       'localized:disconnected',
     ]);
     expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('false');
+  });
+
+  it('rejects an invalid lifecycle announcement payload without changing the preference', async () => {
+    const host = makeHost({
+      initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
+    });
+    const im = new DiscordIM(host);
+    im.registerIpc();
+
+    await expect(host.invoke('discordBot:set-lifecycle-announcement', {}))
+      .rejects.toThrow('[INVALID_PARAMS] enabled must be a boolean');
+    await expect(host.invoke('discordBot:get-status')).resolves.toMatchObject({
+      lifecycleAnnouncement: false,
+    });
+    expect(host.readSecret('discord-bot-lifecycle-announcement')).toBe('false');
+  });
+
+  it('does not leave a dirty runtime marker when an in-flight offline notice is invalidated', async () => {
+    const offlineStarted = deferred();
+    const releaseOffline = deferred();
+    const channel = makeChannel('dm-1');
+    channel.send
+      .mockResolvedValueOnce({ id: 'm-online' })
+      .mockImplementationOnce(async (payload: unknown) => {
+        expect(payload).toBe('localized:offline');
+        offlineStarted.resolve();
+        await releaseOffline.promise;
+        return { id: 'm-offline' };
+      });
+    const gateway = makeGateway({ client: makeClient(channel) });
+    gateway.connect.mockImplementationOnce(async () => {
+      gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    });
+    const host = makeHost();
+    const im = new DiscordIM(host, {
+      ownerNoticeText: (phase) => `localized:${phase}`,
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+
+    im.registerIpc();
+    await im.init();
+    await flushMicrotasks();
+    expect(host.readSecret('discord-bot-runtime-active')).toBeTruthy();
+
+    const disposing = im.dispose();
+    await offlineStarted.promise;
+    await host.invoke('discordBot:set-lifecycle-announcement', { enabled: false });
+    await host.invoke('discordBot:set-lifecycle-announcement', { enabled: true });
+    releaseOffline.resolve();
+    await disposing;
+
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
   });
 
   it('does not repeat runtime online notice on transient gateway reconnect', async () => {

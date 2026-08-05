@@ -233,8 +233,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     }));
 
     this.host.ipc.handle('discordBot:set-lifecycle-announcement', (payload) => {
-      const config = isRecord(payload) ? payload : {};
-      const enabled = typeof config.enabled === 'boolean' ? config.enabled : true;
+      if (!isRecord(payload) || typeof payload.enabled !== 'boolean') {
+        return this.host.ipc.throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+      }
+      const enabled = payload.enabled;
       if (!this.writeLifecycleAnnouncement(enabled)) {
         return {
           ok: false,
@@ -466,7 +468,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       if (!enabled) {
         this.pendingOfflineNotice = false;
         this.clearRuntimeActiveMarker();
-      } else if (this.status.kind === 'connected' && this.ownerUserId && this.gateway.client) {
+      } else if (
+        !this.disposing &&
+        this.status.kind === 'connected' &&
+        this.ownerUserId &&
+        this.gateway.client
+      ) {
         this.markRuntimeActive();
       }
       return;
@@ -483,7 +490,12 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.clearRuntimeActiveMarker();
       return;
     }
-    if (this.status.kind === 'connected' && this.ownerUserId && this.gateway.client) {
+    if (
+      !this.disposing &&
+      this.status.kind === 'connected' &&
+      this.ownerUserId &&
+      this.gateway.client
+    ) {
       this.markRuntimeActive();
     }
   }

@@ -30,14 +30,21 @@ vi.mock('@/lib/logger', () => ({
 function installDiscordApi(
   status: DiscordBotTransportStatus = { kind: 'idle' },
   lifecycleAnnouncement = true,
+  getStatusOverride?: () => Promise<{
+    status: DiscordBotTransportStatus;
+    ownerUserId: string | null;
+    lifecycleAnnouncement: boolean;
+  }>,
 ) {
   const listeners = new Set<(update: { status: DiscordBotTransportStatus }) => void>();
   const api = {
-    getStatus: vi.fn(async () => ({
-      status,
-      ownerUserId: '12345678901234567',
-      lifecycleAnnouncement,
-    })),
+    getStatus: vi.fn(
+      getStatusOverride ?? (async () => ({
+        status,
+        ownerUserId: '12345678901234567',
+        lifecycleAnnouncement,
+      })),
+    ),
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => ({
       status: { kind: 'connecting' } as DiscordBotTransportStatus,
       saveErrorStatus: undefined as DiscordBotTransportStatus | undefined,
@@ -166,6 +173,45 @@ describe('useDiscordBot', () => {
 
     act(() => {
       result.current.setLifecycleAnnouncement(true);
+    });
+
+    expect(result.current.lifecycleAnnouncement).toBe(true);
+    expect(api.setLifecycleAnnouncement).toHaveBeenCalledWith(true);
+  });
+
+  it('does not let an in-flight status read overwrite a newer lifecycle toggle', async () => {
+    let resolveStatus!: (value: {
+      status: DiscordBotTransportStatus;
+      ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
+    }) => void;
+    const statusPromise = new Promise<{
+      status: DiscordBotTransportStatus;
+      ownerUserId: string | null;
+      lifecycleAnnouncement: boolean;
+    }>((resolve) => {
+      resolveStatus = resolve;
+    });
+    const api = installDiscordApi(
+      { kind: 'connected', appId: 'MakerBot#1234' },
+      false,
+      () => statusPromise,
+    );
+    const { result } = renderHook(() => useDiscordBot());
+
+    await waitFor(() => expect(api.getStatus).toHaveBeenCalled());
+    act(() => {
+      result.current.setLifecycleAnnouncement(true);
+    });
+
+    await act(async () => {
+      resolveStatus({
+        status: { kind: 'connected', appId: 'MakerBot#1234' },
+        ownerUserId: '12345678901234567',
+        lifecycleAnnouncement: false,
+      });
+      await statusPromise;
+      await Promise.resolve();
     });
 
     expect(result.current.lifecycleAnnouncement).toBe(true);
