@@ -3893,6 +3893,8 @@
     "controlledTooltip": "Another device signed in to the same account is remotely controlling this machine. You can revoke its access.",
     "revokeAccess": "Revoke",
     "viewControllers": "View",
+    "collapseControlledNotice": "Collapse remote control notice",
+    "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
   "accountDeletion": {
@@ -5589,7 +5591,7 @@
       "outputFile": "Output: {{path}}"
     },
     "planPill": {
-      "step": "Step {{current}} / {{total}}"
+      "step": "Step {{current}} of {{total}}"
     },
     "forkOrigin": {
       "label": "Created from another session"

@@ -3855,6 +3855,17 @@ type HydratePersistedMessageOptions = {
   preserveExistingCodexPlanContent?: boolean;
 };
 
+function isCompletedCodexPlanSnapshot(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every(
+    (item) =>
+      item !== null &&
+      typeof item === 'object' &&
+      !Array.isArray(item) &&
+      (item as { status?: unknown }).status === 'completed',
+  );
+}
+
 function hydratePersistedMessage(
   existing: ChatMessage,
   persisted: ChatMessage,
@@ -3878,7 +3889,12 @@ function hydratePersistedMessage(
     typeof persisted.toolInput === 'object' &&
     persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
-    Array.isArray((persisted.toolInput as { plan?: unknown }).plan)
+    Array.isArray((persisted.toolInput as { plan?: unknown }).plan) &&
+    // Ordinary DB echoes can lag behind the live Codex event, so keep the
+    // newer in-memory plan. A fully completed persisted snapshot is different:
+    // it is Main's terminal convergence and must close a stale plan hydrated
+    // by a renderer that mounted between `done` and the queued DB write.
+    !isCompletedCodexPlanSnapshot((persisted.toolInput as { plan?: unknown }).plan)
   ) {
     hydrated.toolInput = existing.toolInput;
     hydrated.content = existing.content;

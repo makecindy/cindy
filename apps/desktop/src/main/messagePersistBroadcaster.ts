@@ -31,8 +31,10 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
+import { resolveCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 
 import {
+  broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
   createMessage as createDbMessage,
   patchMessageAgentMetaWithResult,
@@ -567,6 +569,56 @@ export function onToolUseEvent(
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
+}
+
+/**
+ * Persist the same terminal Codex plan convergence that the renderer applies
+ * immediately on `done`. Without this DB update, switching tasks or reloading
+ * the renderer resurrects the last in-progress snapshot and leaves the pinned
+ * plan visible forever even though the turn completed successfully.
+ *
+ * The turn id is the ownership boundary: only `plan:<raw.id>` may be updated.
+ * Failed, interrupted, or unrelated turns never infer completion.
+ */
+export function persistCodexPlanOnDone(
+  sessionId: string,
+  data: { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined,
+): boolean {
+  const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
+  if (!turnId) return false;
+
+  const toolUseId = `plan:${turnId}`;
+  const infoMap = toolUseInfoBySession.get(sessionId);
+  const info = infoMap?.get(toolUseId);
+  const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
+  if (!info || info.toolName !== 'update_plan' || !persistId) return false;
+
+  const input = info.input && typeof info.input === 'object' && !Array.isArray(info.input)
+    ? info.input as Record<string, unknown>
+    : null;
+  if (!input || !Array.isArray(input.plan)) return false;
+
+  const nextPlan = resolveCodexPlanSnapshotOnDone(
+    input.plan,
+    data?.plan,
+    data?.raw?.status === 'completed',
+  );
+  if (!nextPlan || JSON.stringify(input.plan) === JSON.stringify(nextPlan)) return false;
+
+  const nextInput = { ...input, plan: nextPlan };
+  infoMap?.set(toolUseId, { ...info, input: nextInput });
+  enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, persistId, {
+      toolUseId,
+      toolName: 'update_plan',
+      input: nextInput,
+    });
+    // Reuse the existing upsert-style row broadcast so a renderer that mounts
+    // between `done` and this queued write, plus remote mirrors, receives the
+    // durable terminal snapshot instead of keeping its stale local copy.
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
+  return true;
 }
 
 /**

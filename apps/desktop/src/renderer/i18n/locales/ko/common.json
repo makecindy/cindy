@@ -3891,6 +3891,8 @@
     "controlledTooltip": "같은 계정으로 로그인한 다른 기기가 이 기기를 원격 제어하고 있습니다. 접근 권한을 철회할 수 있습니다.",
     "revokeAccess": "권한 철회",
     "viewControllers": "보기",
+    "collapseControlledNotice": "원격 제어 알림 접기",
+    "expandControlledNotice": "원격 제어 알림 펼치기: {{label}}",
     "versionMismatch": "상대 기기 버전이 달라 일부 기능이 제한될 수 있습니다"
   },
   "accountDeletion": {
@@ -5587,7 +5589,7 @@
       "outputFile": "출력: {{path}}"
     },
     "planPill": {
-      "step": "단계 {{current}} / {{total}}"
+      "step": "{{current}} / {{total}}단계"
     },
     "forkOrigin": {
       "label": "원래 세션에서 생성됨"

@@ -664,6 +664,109 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
+  it('accepts the terminal persisted plan when the renderer mounted with stale progress', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'completed' },
+              { step: 'Start dev', status: 'in_progress' },
+            ],
+          },
+        },
+      },
+      persistId: 'plan-message-1',
+    });
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: serverMessage({
+        id: 'plan-row-1',
+        clientId: 'plan-message-1',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'completed' },
+              { step: 'Start dev', status: 'completed' },
+            ],
+          },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      clientId: 'plan-message-1',
+      toolInput: {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Start dev', status: 'completed' },
+        ],
+      },
+    });
+  });
+
+  it('still ignores a stale open-plan DB echo after live progress moved forward', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'completed' },
+              { step: 'Start dev', status: 'completed' },
+            ],
+          },
+        },
+      },
+      persistId: 'plan-message-1',
+    });
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: serverMessage({
+        id: 'plan-row-1',
+        clientId: 'plan-message-1',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'completed' },
+              { step: 'Start dev', status: 'in_progress' },
+            ],
+          },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      toolInput: {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Start dev', status: 'completed' },
+        ],
+      },
+    });
+  });
+
   it('flushes pending text before a permission interaction request on the separate IPC channel', () => {
     const snapshots: Array<{ roles: string[]; pendingPermission: string | null }> = [];
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {

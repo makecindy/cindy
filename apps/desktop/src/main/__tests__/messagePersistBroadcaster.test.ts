@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
+  broadcastMessageRow: vi.fn(),
   createMessage: vi.fn(async () => ({}) as unknown),
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId, _clientId, patch) => ({
     previous: {},
@@ -45,6 +46,7 @@ vi.mock('../device-link/broadcast-tap.js', () => ({
 
 import {
   broadcastMessageAgentMetaUpdate,
+  broadcastMessageRow,
   createMessage,
   patchMessageAgentMetaWithResult,
   updateMessageContent,
@@ -55,6 +57,7 @@ import {
 } from '../mcp-integrations/mediaToolResultFallback.js';
 import {
   onToolUseEvent,
+  persistCodexPlanOnDone,
   onToolResultEvent,
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -170,6 +173,76 @@ describe('update_plan tool_use persistence', () => {
         },
       },
     );
+  });
+
+  it('persists a successful turn plan as completed so reload cannot resurrect progress', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: {
+          explanation: 'keep this field',
+          plan: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Start dev', status: 'in_progress' },
+          ],
+        },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-1', status: 'completed' },
+      plan: [
+        { step: 'Inspect', status: 'completed' },
+        { step: 'Start dev', status: 'in_progress' },
+      ],
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: {
+          explanation: 'keep this field',
+          plan: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Start dev', status: 'completed' },
+          ],
+        },
+      },
+    );
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('does not persist inferred completion for interrupted or unrelated turns', async () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-1', status: 'interrupted' },
+    })).toBe(false);
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-2', status: 'completed' },
+    })).toBe(false);
+
+    await flushWrites();
+    expect(updateMessageContent).not.toHaveBeenCalled();
   });
 
   it('does not dedupe ordinary repeated tool_use ids', async () => {

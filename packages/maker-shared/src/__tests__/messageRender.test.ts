@@ -870,6 +870,59 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
+  it('closes a historical open Codex plan at its persisted successful turn boundary', () => {
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Start dev', status: 'in_progress' },
+        ],
+      }),
+      createdAt: at(1),
+    };
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'Dev server is running.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, completedBoundary])).toMatchObject({
+      source: 'codex',
+      createdAt: at(8),
+      updatedAtMs: Date.parse(at(8)),
+      todos: [
+        { content: 'Inspect', status: 'completed' },
+        { content: 'Start dev', status: 'completed' },
+      ],
+    });
+  });
+
+  it('does not use a later turn completion to close an earlier open Codex plan', () => {
+    const plan = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Wait for user', status: 'in_progress' }],
+    });
+    const nextTurnUser: MessageRenderSourceMessageLike = {
+      role: 'user',
+      clientId: 'user-2',
+      content: 'Continue',
+      createdAt: at(7),
+      delivery: 'turn',
+    };
+    const laterBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-2',
+      content: 'Done.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, nextTurnUser, laterBoundary])).toMatchObject({
+      todos: [{ content: 'Wait for user', status: 'in_progress' }],
+    });
+  });
+
   it('findLatestMessageTodoInsertion treats empty plan updates as clearing the pinned plan', () => {
     const first = tool('todo1', 'TodoWrite', {
       todos: [{ content: 'Read code', status: 'in_progress' }],

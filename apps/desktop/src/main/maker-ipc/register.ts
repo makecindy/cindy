@@ -318,6 +318,7 @@ import {
   onAssistantTextEvent,
   onInteractionMessage,
   onInteractionResolved,
+  persistCodexPlanOnDone,
   onThinkingEvent,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -3742,6 +3743,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // A claim-bearing done seals this SDK segment, but the product turn is
         // still running and may emit another continuation segment. Reset the
         // per-SDK-turn persistence maps while deferring the logical turn marker.
+        if (!isContinuationBoundary && event.source === 'codex' && event.type === 'done') {
+          // Renderer applies this terminal snapshot immediately. Persist the
+          // same state before sealing the persist queue and clearing the
+          // turn-owned lookup maps. The drain barrier below must include this
+          // write, otherwise app exit can still leave an in-progress plan.
+          persistCodexPlanOnDone(
+            session.id,
+            event.data as
+              | {
+                  plan?: unknown;
+                  raw?: { id?: unknown; status?: unknown };
+                }
+              | null
+              | undefined,
+          );
+        }
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }

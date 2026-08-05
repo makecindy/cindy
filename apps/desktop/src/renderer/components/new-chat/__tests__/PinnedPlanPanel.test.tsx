@@ -260,6 +260,28 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
     expect(screen.queryByTestId('plan-pill')).toBeNull();
   });
 
+  it('hides a legacy open Codex plan sealed by a later completed assistant message', () => {
+    vi.setSystemTime(T0 + 10_000);
+    const completedAssistant: ChatMessage = {
+      clientId: 'answer-1',
+      role: 'assistant',
+      content: 'Dev server is running.',
+      createdAt: new Date(T0 + 1_000).toISOString(),
+      turnCompleted: true,
+    };
+
+    render(
+      <PinnedPlanPanel
+        sessionId="legacy-open-plan"
+        messages={[planMessage('in_progress'), completedAssistant]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
   it('falls back to a component-local lifetime when the completion timestamp is missing', () => {
     render(
       <PinnedPlanPanel
