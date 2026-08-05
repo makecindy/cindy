@@ -34,6 +34,11 @@ describe('local-html-preview-server', () => {
     await writeFile(nodePath.join(workingDir, 'secret.json'), '{"password":"hunter2"}');
     await writeFile(nodePath.join(workingDir, '.env'), 'TOKEN=leak');
     await writeFile(nodePath.join(workingDir, 'other', 'data.json'), '{}');
+    // hidden directories with whitelisted files — must stay unreachable
+    await mkdir(nodePath.join(workingDir, 'dist', '.github'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, 'dist', '.github', 'data.json'), '{"hidden":true}');
+    await mkdir(nodePath.join(workingDir, 'dist', '.config'), { recursive: true });
+    await writeFile(nodePath.join(workingDir, 'dist', '.config', 'app.js'), 'console.log("hidden");');
 
     previews = [];
     server = createLocalPreviewServer({
@@ -99,6 +104,15 @@ describe('local-html-preview-server', () => {
     expect((await get(`${base}/secret.json`)).status).toBe(404); // json lives outside entry dir — also covered below
     expect((await get(`${base}/..`)).status).toBe(404); // directory-ish
     expect((await get(url)).status).toBe(200); // sanity
+  });
+
+  it('rejects hidden directory segments even when the file extension is whitelisted', async () => {
+    const { url } = await createUrl();
+    const base = url.slice(0, url.lastIndexOf('/'));
+    // .github/data.json and .config/app.js are inside the serving root and
+    // extension-whitelisted, but the hidden segment must still be refused.
+    expect((await get(`${base}/.github/data.json`)).status).toBe(404);
+    expect((await get(`${base}/.config/app.js`)).status).toBe(404);
   });
 
   it('does not serve anything outside the entry directory (serving root = entry dir)', async () => {

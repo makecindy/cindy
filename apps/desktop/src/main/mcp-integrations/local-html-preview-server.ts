@@ -182,7 +182,19 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     if (failed) throw new LocalPreviewError('UNAVAILABLE', '预览服务已不可用');
     if (starting) return starting;
     starting = (async () => {
-      const srv = createServer(handleRequest);
+      // Wrap the async handler: an unhandled rejection would leave the request
+      // hanging (no response), so any internal error degrades to a 500.
+      const srv = createServer((req, res) => {
+        handleRequest(req, res).catch((err) => {
+          logger?.error?.(`[local-preview] request error: ${String(err)}`);
+          try {
+            res.writeHead(500, { 'X-Content-Type-Options': 'nosniff' });
+            res.end();
+          } catch {
+            res.destroy();
+          }
+        });
+      });
       srv.on('error', (err) => {
         logger?.error?.(`[local-preview] listener error: ${String(err)}`);
         failed = true;
@@ -223,21 +235,33 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
 
   /**
    * Resolve + verify a served path inside `root`. Returns null for every
-   * refusal (traversal, NUL, backslash variants, symlink escape, missing).
+   * refusal (traversal, NUL, backslash variants, hidden segments, symlink
+   * escape, missing).
    */
   async function resolveServedPath(root: string, relPath: string): Promise<string | null> {
     if (relPath.includes('\0')) return null;
     const segments = relPath.split('/').filter((s) => s.length > 0 && s !== '.');
     if (segments.length === 0) return null; // no directory index
     if (segments.some((s) => s === '..')) return null;
+    // Reject hidden segments (e.g. `.git/`, `.config/`, `.github/`) — not just
+    // dotfiles — so a previewed page can never read hidden-directory content
+    // that happens to match the extension whitelist.
+    if (segments.some((s) => s.startsWith('.'))) return null;
     const target = nodePath.resolve(root, ...segments);
     try {
       await assertInsideRoot(root, target);
+      // Open the REAL path: any symlink/junction along the way has been
+      // resolved, so a concurrent directory swap between this check and the
+      // open below cannot redirect the read outside the root.
+      const real = await fs.realpath(target);
+      await assertInsideRoot(root, real);
+      return real;
     } catch (err) {
       if (err instanceof LocalPreviewError && err.code === 'PATH_NOT_ALLOWED') return null;
+      // Missing file: not an anomaly, just a 404.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
-    return target;
   }
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -272,11 +296,27 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
 
     const abs = await resolveServedPath(entry.root, relPath);
     if (!abs) return refuse(res);
-    const stat = await fs.stat(abs).catch(() => null);
-    if (!stat?.isFile()) return refuse(res);
     const ext = nodePath.extname(abs).toLowerCase();
     const baseName = nodePath.basename(abs);
     if (baseName.startsWith('.') || !ALLOWED_EXTENSIONS.has(ext)) return refuse(res);
+
+    // Open by file descriptor and re-verify the HANDLE, not the path: closes
+    // the TOCTOU window between containment checks and the actual read (a
+    // concurrent directory swap cannot redirect a handle that is already open
+    // on the vetted real path).
+    const fd = await fs.open(abs, 'r').catch(() => null);
+    if (!fd) return refuse(res);
+    let stat;
+    try {
+      stat = await fd.stat();
+    } catch {
+      await fd.close().catch(() => {});
+      return refuse(res);
+    }
+    if (!stat.isFile()) {
+      await fd.close().catch(() => {});
+      return refuse(res);
+    }
 
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
@@ -286,10 +326,13 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       'Content-Security-Policy': CSP,
     });
     if (req.method === 'HEAD') {
+      await fd.close().catch(() => {});
       res.end();
       return;
     }
-    const stream = createReadStream(abs);
+    // Path is ignored at runtime when `fd` is set; passing it keeps the TS
+    // signature happy.
+    const stream = createReadStream(abs, { fd, autoClose: true });
     stream.on('error', () => res.destroy());
     stream.pipe(res);
   }
@@ -328,7 +371,9 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const entryAbs = await resolveEntryPath(input);
     // Serving root = the entry's directory: relative resources work, but the
     // page can never reach sibling workspace content outside that directory.
-    const root = nodePath.dirname(entryAbs);
+    // Normalize to the REAL path (e.g. resolves 8.3 short names on win32) so
+    // every later request-side comparison uses the same path form.
+    const root = await fs.realpath(nodePath.dirname(entryAbs));
     const token = crypto.randomBytes(32).toString('hex'); // 256-bit, unguessable
     if (tokens.size >= MAX_PREVIEWS) {
       const oldest = tokens.keys().next().value;
