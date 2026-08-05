@@ -46,7 +46,7 @@ import {
 
 const log = createLogger('maker-ipc/title');
 
-/** 自动起名素材截断长度(字符)。 */
+/** 自动起名素材截断长度(UTF-16 code unit,`String.slice` 口径;仅约束 prompt 素材上限,不是用户可见的"字数")。 */
 const AUTO_TITLE_MESSAGE_SLICE = 200;
 
 /** regenerate 素材窗口:最近 N 条非空 user/assistant 消息(不含被过滤的工具行)。 */

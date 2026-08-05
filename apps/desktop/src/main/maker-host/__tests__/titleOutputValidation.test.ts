@@ -32,6 +32,12 @@ describe('validateTitleOutput', () => {
     ['Concise title', 'English echo without verb'],
     ['簡潔なタイトル', 'Japanese echo'],
     ['간결한 제목', 'Korean echo'],
+    ['生成简洁中文标题。', 'echo with fullwidth period'],
+    ['简洁中文标题！', 'echo with fullwidth exclamation'],
+    ['Generate a concise title.', 'English echo with period'],
+    ['Concise title!', 'English echo with exclamation'],
+    ['簡潔なタイトル。', 'Japanese echo with period'],
+    ['간결한 제목.', 'Korean echo with period'],
   ])('rejects instruction echo %s (%s)', (value) => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });
@@ -39,6 +45,8 @@ describe('validateTitleOutput', () => {
   it('keeps titles that merely mention titles', () => {
     expect(validateTitleOutput('修复标题生成 bug', 20)).toBe('修复标题生成 bug');
     expect(validateTitleOutput('优化会话标题样式', 20)).toBe('优化会话标题样式');
+    // 尾部标点仅在回显探测时剥离,非回显标题原样保留。
+    expect(validateTitleOutput('优化会话标题样式。', 20)).toBe('优化会话标题样式。');
   });
 
   it('accepts a concise Unicode title and removes accidental wrapping quotes', () => {

@@ -9,7 +9,11 @@ const ROLE_LABEL_RE =
  * of the quoted message (issue #1688: the whole title was "生成简洁中文标题").
  * Reject whole-title echoes of the instruction across the supported UI languages;
  * titles merely containing these words (e.g. "修复标题生成 bug") stay accepted.
+ * Matching runs on a copy with trailing sentence punctuation stripped, so echoes
+ * like "生成简洁中文标题。" or "Generate a concise title." cannot slip past the
+ * end anchor (PR #1742 review).
  */
+const TRAILING_SENTENCE_PUNCT_RE = /[\s。．.!！?？…;；:：,，、~～]+$/u;
 const INSTRUCTION_ECHO_RES: readonly RegExp[] = [
   /^(?:请|請)?(?:(?:为|為|给|給)(?:用户|用戶|以下)?(?:消息|訊息|对话|對話|会话|會話|任务|任務)?)?(?:生成)?(?:一个|一個)?(?:简洁|簡潔)(?:的)?(?:中文|英文|日文|日语|日語|韩文|韩语|韓語)?(?:会话|會話|对话|對話|任务|任務)?(?:标题|標題)$/u,
   /^(?:generate\s+)?(?:a\s+)?concise\s+(?:conversation\s+|session\s+|task\s+)?title$/iu,
@@ -59,7 +63,8 @@ export function validateTitleOutput(
   if (!title || title.includes('```')) return null;
   if (/^#{1,6}\s/u.test(title)) return null;
   if (ROLE_LABEL_RE.test(title) || META_PREFIX_RE.test(title)) return null;
-  if (INSTRUCTION_ECHO_RES.some((re) => re.test(title))) return null;
+  const echoProbe = title.replace(TRAILING_SENTENCE_PUNCT_RE, '');
+  if (INSTRUCTION_ECHO_RES.some((re) => re.test(echoProbe))) return null;
   if (exceedsUnicodeCodePointLimit(title, maxChars)) return null;
   return title;
 }
