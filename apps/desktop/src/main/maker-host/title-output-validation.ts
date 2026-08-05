@@ -15,10 +15,10 @@ const ROLE_LABEL_RE =
  */
 const TRAILING_SENTENCE_PUNCT_RE = /[\s。．.!！?？…;；:：,，、~～]+$/u;
 const INSTRUCTION_ECHO_RES: readonly RegExp[] = [
-  /^(?:请|請)?(?:(?:为|為|给|給)(?:用户|用戶|以下)?(?:消息|訊息|对话|對話|会话|會話|任务|任務)?)?(?:生成)?(?:一个|一個)?(?:简洁|簡潔)(?:的)?(?:中文|英文|日文|日语|日語|韩文|韩语|韓語)?(?:会话|會話|对话|對話|任务|任務)?(?:标题|標題)$/u,
-  /^(?:generate\s+)?(?:a\s+)?concise\s+(?:conversation\s+|session\s+|task\s+)?title$/iu,
-  /^簡潔な(?:日本語の)?タイトル(?:を生成)?$/u,
-  /^간결한\s*(?:한국어\s*)?제목(?:\s*생성)?$/u,
+  /^(?:请|請)?(?:(?:为|為|给|給)(?:下面|以下)?(?:的)?(?:用户|用戶)?(?:消息|訊息|对话|對話|会话|會話|任务|任務)?)?(?:生成)?(?:一个|一個)?(?:简洁|簡潔)(?:的)?(?:中文|英文|日文|日语|日語|韩文|韩语|韓語)?(?:会话|會話|对话|對話|任务|任務)?(?:标题|標題)$/u,
+  /^(?:generate\s+)?(?:a\s+)?concise\s+(?:conversation\s+|session\s+|task\s+)?title(?:\s+for\s+(?:the\s+)?(?:user\s+)?(?:message|conversation)(?:\s+below)?)?$/iu,
+  /^(?:以下の|下記の)?(?:ユーザー)?(?:メッセージ|会話)?(?:の)?簡潔な(?:日本語の)?タイトル(?:を生成)?$/u,
+  /^(?:아래|다음)?\s*(?:사용자)?\s*(?:메시지|대화)?\s*(?:의)?\s*간결한\s*(?:한국어\s*)?제목(?:\s*생성)?$/u,
 ];
 
 function exceedsUnicodeCodePointLimit(value: string, maxChars: number): boolean {

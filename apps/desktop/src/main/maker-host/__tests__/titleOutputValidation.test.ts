@@ -42,6 +42,19 @@ describe('validateTitleOutput', () => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });
 
+  // one-shot 路径先用 256 上限校验再截 40 字,整行 prompt 回显必须在该口径下也被拒。
+  it.each([
+    ['Generate a concise title for the user message below.', 'verbatim auto-title prompt line'],
+    ['Generate a concise title for the conversation below', 'verbatim regenerate prompt line'],
+    ['A concise title for the user message below', 'prompt-line echo without verb'],
+    ['为下面的用户消息生成简洁中文标题', 'Chinese translation of prompt line'],
+    ['请为以下用户消息生成一个简洁的标题', 'Chinese translation with polite prefix'],
+    ['以下のユーザーメッセージの簡潔なタイトルを生成', 'Japanese translation of prompt line'],
+    ['아래 사용자 메시지의 간결한 제목', 'Korean translation of prompt line'],
+  ])('rejects full prompt-line echo %s (%s) at the one-shot limit', (value) => {
+    expect(validateTitleOutput(value, 256)).toBeNull();
+  });
+
   it('keeps titles that merely mention titles', () => {
     expect(validateTitleOutput('修复标题生成 bug', 20)).toBe('修复标题生成 bug');
     expect(validateTitleOutput('优化会话标题样式', 20)).toBe('优化会话标题样式');
