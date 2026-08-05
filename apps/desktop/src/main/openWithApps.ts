@@ -171,12 +171,15 @@ function dedupeKey(exePath: string): string {
 }
 
 export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
+  // 该模块是可注入 platform 的纯函数,单测会在 Linux runner 模拟 win32。
+  // 路径语义必须跟 deps.platform 走,不能跟测试宿主的 process.platform 走。
+  const platformPath = deps.platform === 'win32' ? path.win32 : path.posix;
   // ext → (appId → exePath)。每次 list 整体重建该 ext 的映射;open 只认最近
   // 一次枚举写入的 id。进程内存态即可——菜单打开到点击是同进程短会话。
   const appCacheByExt = new Map<string, Map<string, string>>();
 
   function assertOpenableFile(filePath: string): void {
-    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) {
+    if (typeof filePath !== 'string' || !platformPath.isAbsolute(filePath)) {
       throwIpcError('INVALID_PARAMS', 'filePath must be absolute');
     }
     if (!deps.isPathAllowed(filePath)) {
@@ -206,7 +209,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     const friendly = parseRegValues(friendlyOut)[0]?.data;
     // `@resource.dll,-123` 形态的本地化引用没有免原生的解法,回落 exe 名。
     const label =
-      friendly && !friendly.startsWith('@') ? friendly : path.basename(exePath, path.extname(exePath));
+      friendly && !friendly.startsWith('@') ? friendly : platformPath.basename(exePath, platformPath.extname(exePath));
     return { exePath, label };
   }
 
@@ -220,7 +223,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     const nameOut = await deps.regQuery(`HKCR\\${progId}`, ['/ve']);
     const friendly = parseRegValues(nameOut)[0]?.data;
     const label =
-      friendly && !friendly.startsWith('@') ? friendly : path.basename(exePath, path.extname(exePath));
+      friendly && !friendly.startsWith('@') ? friendly : platformPath.basename(exePath, platformPath.extname(exePath));
     return { exePath, label };
   }
 
@@ -251,7 +254,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     const apps: ResolvedApp[] = [];
     const push = (r: ResolvedApp | null): void => {
       if (!r) return;
-      if (HOST_EXE_DENYLIST.has(path.basename(r.exePath).toLowerCase())) return;
+      if (HOST_EXE_DENYLIST.has(platformPath.basename(r.exePath).toLowerCase())) return;
       const key = dedupeKey(r.exePath);
       if (seen.has(key)) return;
       seen.add(key);
@@ -280,7 +283,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
         // 「默认应用 / 选择其他应用…」两个平台无关项。
         return { success: true, apps: [] };
       }
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = platformPath.extname(filePath).toLowerCase();
       if (!ext) return { success: true, apps: [] };
       try {
         const resolved = await listWindowsApps(ext);
@@ -290,7 +293,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
         // resolved 保持稳定(PR #1835 review)。
         const apps: OpenWithApp[] = await Promise.all(
           resolved.map(async (r, i) => {
-            const id = `owa-${i}-${path.basename(r.exePath).toLowerCase()}`;
+            const id = `owa-${i}-${platformPath.basename(r.exePath).toLowerCase()}`;
             idMap.set(id, r.exePath);
             const iconDataUrl = (await deps.getAppIcon(r.exePath)) ?? undefined;
             return { id, label: r.label, ...(iconDataUrl ? { iconDataUrl } : {}) };
@@ -306,7 +309,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     async open({ filePath, appId }) {
       assertOpenableFile(filePath);
       if (typeof appId !== 'string' || !appId) throwIpcError('INVALID_PARAMS', 'appId required');
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = platformPath.extname(filePath).toLowerCase();
       // 只认 main 侧最近一次枚举写入的映射——查不到一律拒绝,绝不把 renderer
       // 提供的任何字符串当路径执行。
       const exePath = appCacheByExt.get(ext)?.get(appId);
