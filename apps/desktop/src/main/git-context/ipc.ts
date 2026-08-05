@@ -40,6 +40,7 @@ import {
 } from './remoteSessionDirResolver.js';
 import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
   ensurePrRefsBackfill,
@@ -157,7 +158,7 @@ export function registerGitContextIpc(): void {
   // 按 session 解析「对话真实工作目录」+ 其 HEAD + 来源:从 agent tool-call 遥测
   // 推断(Codex cwd / cc 编辑路径),拿不到才回退 worktree / working_dir。
   // renderer 用返回的 workdir 去 watch,用 source 决定分支信任度。
-  ipcMain.handle(GIT_CONTEXT_INVOKE.GET_FOR_SESSION, async (_e, payload: unknown) => {
+  ipcMain.handle(GIT_CONTEXT_INVOKE.GET_FOR_SESSION, async (event, payload: unknown) => {
     const obj = payload as {
       sessionId?: unknown;
       workingDir?: unknown;
@@ -177,6 +178,12 @@ export function registerGitContextIpc(): void {
     // device-link controller cannot override the controlled device's paths or
     // nested SSH host with a stale/forged projection.
     const deviceLinkInvoke = isDeviceLinkInvoke();
+    // The SSH branch can hydrate a persisted host and execute a command on it;
+    // only Cindy's own top-level renderer may start that privileged path.
+    // device-link invokes are authorized by their existing async context.
+    if (requestedRemoteHostId !== null && !deviceLinkInvoke) {
+      assertTrustedAppRendererEvent(event);
+    }
     if (deviceLinkInvoke || requestedRemoteHostId) {
       try {
         const db = getDbClient().drizzle;
