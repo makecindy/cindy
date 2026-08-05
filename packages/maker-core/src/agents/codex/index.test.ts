@@ -18737,6 +18737,78 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('does not keep failed nested spawn receiver ids running', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-failed-nested-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-root' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-root',
+      item: {
+        id: 'spawn-root',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread',
+      },
+    });
+
+    // V1 can report a failed nested spawn with receiver ids even though no
+    // receiver thread was actually started. It must be latched as failed, not
+    // attached as a running descendant that blocks the ancestor card forever.
+    handlers.descendantNotification('child-thread', 'item/completed', {
+      threadId: 'child-thread',
+      turnId: 'turn-child',
+      item: {
+        id: 'spawn-nested-failed',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'child-thread',
+        receiverThreadIds: ['phantom-grandchild'],
+        status: 'failed',
+        agentsStates: [],
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'phantom-grandchild',
+      'child-thread',
+    );
+
+    // Even a late lifecycle event cannot reopen the failed nested spawn.
+    handlers.descendantNotification('phantom-grandchild', 'turn/started', {
+      threadId: 'phantom-grandchild',
+      turn: { id: 'turn-phantom' },
+    });
+    handlers.descendantNotification('child-thread', 'turn/completed', {
+      threadId: 'child-thread',
+      turn: { id: 'turn-child', status: 'completed' },
+    });
+
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root')
+        .at(-1);
+      expect(last?.status).toBe('failed');
+    });
+
+    await handle.close();
+  });
+
   it('closes out running subagent cards when the transport dies (app-server crash / IO disconnect)', async () => {
     // 普通 transport 断连(app-server 崩溃 / stdio 断开)会作废订阅:后代通知**永远不会再到**,
     // 而 tracker 的终态只由后代 turn/completed 写入。原来这条路径只广播 error 并清主线程缓存,

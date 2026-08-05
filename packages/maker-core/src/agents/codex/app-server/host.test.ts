@@ -465,6 +465,64 @@ describe('AppServerHost descendant thread routing', () => {
     await host.shutdown();
   });
 
+  it('replays a buffered child thread/started before draining ordinary notifications', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    // Root subscription is late. The child metadata and lifecycle arrive first,
+    // then the root spawn item is buffered under the root id.
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'child-thread',
+          parentThreadId: 'root-thread',
+          model: 'codex/gpt-5.6-sol',
+        },
+      },
+    });
+    transport.emit({
+      method: 'turn/started',
+      params: { threadId: 'child-thread', turn: { id: 'child-turn' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: {
+        threadId: 'root-thread',
+        turnId: 'root-turn',
+        item: { id: 'spawn-1', type: 'subAgentActivity', agentThreadId: 'child-thread' },
+      },
+    });
+
+    const observed: string[] = [];
+    const subscription = host.subscribeThread('root-thread', {
+      itemStarted: () => {
+        observed.push('spawn');
+        host.registerDescendantLineage('child-thread', 'root-thread');
+      },
+      descendantThreadStarted: (params) => {
+        observed.push(`model:${params.thread.model ?? ''}`);
+      },
+      descendantNotification: (_threadId, method) => {
+        observed.push(method);
+      },
+    });
+
+    expect(observed).toEqual([
+      'spawn',
+      'model:codex/gpt-5.6-sol',
+      'turn/started',
+    ]);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
   it('registerDescendantLineage unlocks a buffered grandchild thread/started chain', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({

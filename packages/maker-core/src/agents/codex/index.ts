@@ -3383,6 +3383,7 @@ export class CodexAgent extends BaseAgent {
               grandChildThreadId,
               childThreadId,
               nested.model,
+              nested.failed === true,
             );
             if (replayedNested) emitSubagentCardUpdate(replayedNested);
           }

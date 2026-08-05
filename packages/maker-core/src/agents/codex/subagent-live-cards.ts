@@ -77,6 +77,7 @@ export interface SubagentLiveCardTracker {
     childThreadId: string,
     parentThreadId: string,
     model?: string,
+    spawnFailed?: boolean,
   ): SubagentLiveCardUpdate | null;
   /**
    * 消费一条子线程通知。返回聚合快照表示卡片需要刷新;返回 null = 与子代理卡无关
@@ -158,6 +159,8 @@ interface ThreadState {
   totalTokens: number;
   /** Model observed from thread metadata or a spawn item. */
   model?: string;
+  /** A failed nested spawn remains terminal despite late lifecycle events. */
+  spawnFailed: boolean;
 }
 
 interface TrackedCard {
@@ -205,6 +208,8 @@ export function createSubagentLiveCardTracker(opts: {
   const pendingLineage = new Map<string, Set<string>>();
   /** Model observed on thread/started before its parent spawn is registered. */
   const pendingThreadModels = new Map<string, string>();
+  /** Failed nested spawns can be observed before their parent card is attached. */
+  const pendingFailedThreads = new Set<string>();
   /**
    * 子线程**第一次被看见**的时刻(第一条缓冲通知或第一条未归属血缘边)。
    *
@@ -388,9 +393,11 @@ export function createSubagentLiveCardTracker(opts: {
         return true;
       }
       case 'turn/started':
+        if (thread.spawnFailed) return false;
         thread.status = 'running';
         return true;
       case 'turn/completed': {
+        if (thread.spawnFailed) return false;
         const turnStatus = (params as { turn?: { status?: unknown } } | null)?.turn?.status;
         thread.status = turnStatus === 'failed'
           ? 'failed'
@@ -420,26 +427,34 @@ export function createSubagentLiveCardTracker(opts: {
     childThreadId: string,
     visited: Set<string>,
     spawnModel?: string,
+    spawnFailed = false,
   ): boolean => {
     if (visited.has(childThreadId)) return false;
     visited.add(childThreadId);
 
     if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
+    const failedBeforeAttachment = pendingFailedThreads.delete(childThreadId);
+    const latchSpawnFailure = spawnFailed || failedBeforeAttachment;
     if (!card.threads.has(childThreadId)) {
       const observedModel = pendingThreadModels.get(childThreadId);
       pendingThreadModels.delete(childThreadId);
       const initialModel = observedModel ?? spawnModel;
       // 已上终态闩的卡,新并入的线程直接算失败,别让它把卡拉回 running。
       card.threads.set(childThreadId, {
-        status: card.spawnFailed ? 'failed' : 'running',
+        status: card.spawnFailed || latchSpawnFailure ? 'failed' : 'running',
         totalTokens: 0,
         ...(initialModel ? { model: initialModel } : {}),
+        spawnFailed: latchSpawnFailure,
       });
     } else if (spawnModel && !card.threads.get(childThreadId)?.model) {
       card.threads.get(childThreadId)!.model = spawnModel;
     }
     taskIdByThread.set(childThreadId, card.taskId);
     const thread = card.threads.get(childThreadId)!;
+    if (latchSpawnFailure) {
+      thread.spawnFailed = true;
+      thread.status = 'failed';
+    }
 
     let replayed = false;
     const queued = pending.get(childThreadId);
@@ -525,17 +540,27 @@ export function createSubagentLiveCardTracker(opts: {
       childThreadId: string,
       parentThreadId: string,
       model?: string,
+      spawnFailed = false,
     ): SubagentLiveCardUpdate | null {
       if (!childThreadId || !parentThreadId || childThreadId === parentThreadId) return null;
       const directTaskId = taskIdByThread.get(childThreadId);
       if (directTaskId !== undefined) {
         pendingThreadModels.delete(childThreadId);
+        pendingFailedThreads.delete(childThreadId);
         const directCard = cards.get(directTaskId);
         const directThread = directCard?.threads.get(childThreadId);
-        if (directCard && directThread && model && directThread.model !== model) {
-          directThread.model = model;
-          pendingThreadModels.delete(childThreadId);
-          return snapshot(directCard);
+        if (directCard && directThread) {
+          let changed = false;
+          if (model && directThread.model !== model) {
+            directThread.model = model;
+            changed = true;
+          }
+          if (spawnFailed && !directThread.spawnFailed) {
+            directThread.spawnFailed = true;
+            directThread.status = 'failed';
+            changed = true;
+          }
+          if (changed) return snapshot(directCard);
         }
         return null;
       }
@@ -545,6 +570,13 @@ export function createSubagentLiveCardTracker(opts: {
           if (!oldest.done) pendingThreadModels.delete(oldest.value);
         }
         pendingThreadModels.set(childThreadId, model);
+      }
+      if (spawnFailed) {
+        if (!pendingFailedThreads.has(childThreadId) && pendingFailedThreads.size >= MAX_PENDING_THREAD_MODELS) {
+          const oldest = pendingFailedThreads.values().next();
+          if (!oldest.done) pendingFailedThreads.delete(oldest.value);
+        }
+        pendingFailedThreads.add(childThreadId);
       }
       const taskId = taskIdByThread.get(parentThreadId);
       if (taskId === undefined) {
@@ -559,7 +591,7 @@ export function createSubagentLiveCardTracker(opts: {
       // 新线程并入会改变聚合状态(比如把已显示完成的卡拉回 running —— 孙线程还在跑,卡片就
       // 不该说完成),所以发帧条件不只看有没有重放内容,还看聚合状态是否因此改变。
       const before = aggregateStatus(card);
-      const replayed = attachThread(card, childThreadId, new Set<string>());
+      const replayed = attachThread(card, childThreadId, new Set<string>(), model, spawnFailed);
       return replayed || aggregateStatus(card) !== before ? snapshot(card) : null;
     },
 
@@ -594,7 +626,7 @@ export function createSubagentLiveCardTracker(opts: {
         if (card.threads.size === 0) {
           // 一个线程都还没登记上的卡(spawn 刚认出、子线程尚未 started):补一个占位线程,
           // 否则 aggregateStatus 对空集合返回 running,这张卡还是会留在转圈状态。
-          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0 });
+          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0, spawnFailed: false });
         }
         out.push(snapshot(card));
       }
@@ -607,6 +639,7 @@ export function createSubagentLiveCardTracker(opts: {
       pending.clear();
       pendingLineage.clear();
       pendingThreadModels.clear();
+      pendingFailedThreads.clear();
       firstSeenAt.clear();
     },
 

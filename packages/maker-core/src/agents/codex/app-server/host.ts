@@ -1047,6 +1047,11 @@ export class AppServerHost {
   registerDescendantLineage(childThreadId: string, parentThreadId: string): void {
     const established = this.establishDescendantLineage(childThreadId, parentThreadId);
     if (!established?.establishedNewEdge) return;
+    // `thread/started` may already be buffered under this child id when the
+    // root subscription replays a spawn item and establishes lineage late.
+    // Preserve and forward that metadata (notably thread.model) before the
+    // ordinary descendant drain deletes the whole buffer and skips starts.
+    this.replayBufferedThreadStarts(childThreadId);
     // 子线程在登记前已到达的通知缓存在它自己的 id 下,补投进 descendant 通道;
     // 它名下若已缓冲了孙线程的 thread/started,一并重建整条血缘链。
     this.drainBufferedDescendantNotifications(childThreadId, established.rootThreadId, established.handlers);
@@ -1152,6 +1157,20 @@ export class AppServerHost {
           message: (e as Error).message,
         });
       }
+    }
+  }
+
+  /**
+   * Forward buffered starts for one thread without consuming its buffer.
+   * The following ordinary drain owns deletion and skips these entries, so
+   * starts are delivered exactly once and ahead of item/usage/turn replay.
+   */
+  private replayBufferedThreadStarts(threadId: string): void {
+    const buffered = this.buffered.get(threadId);
+    if (!buffered) return;
+    for (const item of buffered) {
+      if (item.method !== 'thread/started') continue;
+      this.routeDescendantThreadStarted(item.params as ThreadStartedNotification['params']);
     }
   }
 

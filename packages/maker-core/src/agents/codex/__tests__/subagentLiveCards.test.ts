@@ -444,6 +444,28 @@ describe('createSubagentLiveCardTracker', () => {
     ).toBe('failed');
   });
 
+  it('keeps receiver ids from a failed nested spawn terminal', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+
+    // The failed nested spawn can still carry receiver ids. Buffer any real
+    // work they emitted, but never attach them as an unbounded running child.
+    tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-1'));
+    expect(tracker.noteDescendantThread('t-grand', 't-child', undefined, true)).toMatchObject({
+      status: 'running',
+      toolUses: 1,
+    });
+
+    // Late lifecycle events cannot reopen a receiver whose spawn itself failed.
+    expect(tracker.handleDescendantNotification('t-grand', 'turn/started', {})).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('failed');
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } }),
+    ).toBeNull();
+  });
+
   it('ignores lineage for threads unrelated to any subagent card', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     // 父线程不属于任何卡(例如主线程的后代未经 spawn 登记)→ 无副作用。
