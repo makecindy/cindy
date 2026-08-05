@@ -21,6 +21,7 @@ export type GhostPlanProjector = (
 export interface GhostPlanSessionContext {
   sessionId: string;
   sessionInstanceId: string;
+  planContextGeneration: number;
 }
 
 export interface GhostPlanSlotDeps {
@@ -86,7 +87,8 @@ export class GhostPlanSlot {
       !sessionContext ||
       !checkedContext ||
       contextAfterCheck?.sessionId !== sessionContext.sessionId ||
-      contextAfterCheck.sessionInstanceId !== sessionContext.sessionInstanceId
+      contextAfterCheck.sessionInstanceId !== sessionContext.sessionInstanceId ||
+      contextAfterCheck.planContextGeneration !== sessionContext.planContextGeneration
     ) {
       return {
         ok: false,

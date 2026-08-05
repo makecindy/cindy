@@ -70,6 +70,8 @@ interface PendingCall {
 export interface GhostPipeSessionContext {
   sessionId: string;
   sessionInstanceId: string;
+  /** Host-only /clear generation；插件不可见。 */
+  planContextGeneration: number;
 }
 
 /**
@@ -114,12 +116,32 @@ export function toolNotFoundMessage(
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
+  private readonly planContextGenerationBySession = new Map<string, number>();
 
   constructor(private readonly deps: PipeDispatcherDeps) {}
 
   /** 在途调用数(诊断/测试用)。 */
   pendingCount(): number {
     return this.pending.size;
+  }
+
+  /** 在可能跨 setup/OAuth await 的入口冻结当前 Plan 路由 generation。 */
+  capturePlanSessionContext(
+    sessionId: string,
+    sessionInstanceId: string,
+  ): GhostPipeSessionContext {
+    return {
+      sessionId,
+      sessionInstanceId,
+      planContextGeneration: this.planContextGenerationBySession.get(sessionId) ?? 0,
+    };
+  }
+
+  private isPlanSessionContextCurrent(context: GhostPipeSessionContext): boolean {
+    return (
+      (this.planContextGenerationBySession.get(context.sessionId) ?? 0) ===
+      context.planContextGeneration
+    );
   }
 
   /**
@@ -183,7 +205,9 @@ export class GhostPipeDispatcher {
         timeoutExtensionsAllowed: request.timeoutMs === undefined,
         deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
-        ...(request.sessionContext ? { sessionContext: request.sessionContext } : {}),
+        ...(request.sessionContext && this.isPlanSessionContextCurrent(request.sessionContext)
+          ? { sessionContext: request.sessionContext }
+          : {}),
       };
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
@@ -210,7 +234,8 @@ export class GhostPipeDispatcher {
       if (!resolved) resolved = context;
       else if (
         resolved.sessionId !== context.sessionId ||
-        resolved.sessionInstanceId !== context.sessionInstanceId
+        resolved.sessionInstanceId !== context.sessionInstanceId ||
+        resolved.planContextGeneration !== context.planContextGeneration
       ) {
         return null;
       }
@@ -223,6 +248,10 @@ export class GhostPipeDispatcher {
    * 消息没有 callId，因此旧调用与 clear 后新调用并存时 resolver 会继续 fail closed。
    */
   invalidatePendingPlanContextsForSession(sessionId: string): number {
+    this.planContextGenerationBySession.set(
+      sessionId,
+      (this.planContextGenerationBySession.get(sessionId) ?? 0) + 1,
+    );
     let invalidated = 0;
     for (const entry of this.pending.values()) {
       if (entry.sessionContext?.sessionId !== sessionId) continue;

@@ -357,7 +357,11 @@ describe('超时与收卷', () => {
 });
 
 describe('Plan 的 Host 铸造任务上下文', () => {
-  const contextA = { sessionId: 'session-a', sessionInstanceId: 'instance-a' };
+  const contextA = {
+    sessionId: 'session-a',
+    sessionInstanceId: 'instance-a',
+    planContextGeneration: 0,
+  };
 
   it('只解析同一 Ghost 唯一的在途任务 incarnation，且不下发给插件', async () => {
     const h = makeHarness();
@@ -378,7 +382,11 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     const p2 = h.dispatcher.callGhostTool({
       ...CALL,
       callId: 'call-b',
-      sessionContext: { sessionId: 'session-b', sessionInstanceId: 'instance-b' },
+      sessionContext: {
+        sessionId: 'session-b',
+        sessionInstanceId: 'instance-b',
+        planContextGeneration: 0,
+      },
     });
     expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
     h.dispatcher.handleToolResult('art', { callId: 'call-b', ok: true });
@@ -414,6 +422,23 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
 
+  it('setup 等待期间 /clear 会让尚未进入 pending 的旧上下文失效', async () => {
+    const h = makeHarness();
+    const captured = h.dispatcher.capturePlanSessionContext('session-a', 'instance-a');
+    expect(h.dispatcher.invalidatePendingPlanContextsForSession('session-a')).toBe(0);
+
+    const pending = h.dispatcher.callGhostTool({
+      ...CALL,
+      callId: 'call-after-stale-setup',
+      sessionContext: captured,
+    });
+    expect(h.dispatcher.pendingCount()).toBe(1);
+    expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
+
+    h.dispatcher.handleToolResult('art', { callId: 'call-after-stale-setup', ok: true });
+    await pending;
+  });
+
   it('只撤销目标任务；旧调用与 clear 后新调用并存时继续 fail closed', async () => {
     const h = makeHarness();
     const oldCall = h.dispatcher.callGhostTool({
@@ -424,7 +449,11 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     const otherCall = h.dispatcher.callGhostTool({
       ...CALL,
       callId: 'call-b',
-      sessionContext: { sessionId: 'session-b', sessionInstanceId: 'instance-b' },
+      sessionContext: {
+        sessionId: 'session-b',
+        sessionInstanceId: 'instance-b',
+        planContextGeneration: 0,
+      },
     });
 
     expect(h.dispatcher.invalidatePendingPlanContextsForSession('session-a')).toBe(1);
@@ -434,7 +463,10 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     const newCall = h.dispatcher.callGhostTool({
       ...CALL,
       callId: 'call-new-a',
-      sessionContext: { sessionId: 'session-a', sessionInstanceId: 'instance-after-clear' },
+      sessionContext: h.dispatcher.capturePlanSessionContext(
+        'session-a',
+        'instance-after-clear',
+      ),
     });
     expect(h.dispatcher.resolvePendingSessionForGhost('art')).toBeNull();
 
@@ -443,6 +475,7 @@ describe('Plan 的 Host 铸造任务上下文', () => {
     expect(h.dispatcher.resolvePendingSessionForGhost('art')).toEqual({
       sessionId: 'session-a',
       sessionInstanceId: 'instance-after-clear',
+      planContextGeneration: 1,
     });
     h.dispatcher.handleToolResult('art', { callId: 'call-new-a', ok: true });
     await newCall;

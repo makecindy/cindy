@@ -9,6 +9,7 @@ import {
 const trustedContext = {
   sessionId: 'session-current',
   sessionInstanceId: 'instance-current',
+  planContextGeneration: 0,
 } as const;
 
 function ghost(slots: InstalledGhost['manifest']['slots'] = ['plan']): InstalledGhost {
@@ -105,13 +106,21 @@ describe('GhostPlanSlot', () => {
   });
 
   it('会话在异步验身期间切换时 fail closed', async () => {
-    let current = { sessionId: 'session-before', sessionInstanceId: 'instance-before' };
+    let current = {
+      sessionId: 'session-before',
+      sessionInstanceId: 'instance-before',
+      planContextGeneration: 0,
+    };
     const projector = vi.fn(async () => {});
     const slot = new GhostPlanSlot({
       getGhost: () => ghost(),
       getCurrentSessionContext: () => current,
       isTrustedSessionContext: async () => {
-        current = { sessionId: 'session-after', sessionInstanceId: 'instance-after' };
+        current = {
+          sessionId: 'session-after',
+          sessionInstanceId: 'instance-after',
+          planContextGeneration: 1,
+        };
         return true;
       },
       projector,
