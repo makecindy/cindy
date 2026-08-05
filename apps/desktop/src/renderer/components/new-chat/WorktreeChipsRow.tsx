@@ -201,7 +201,7 @@ export function WorktreeChipsRow({
   // 分支入口,绝不能因加载失败而消失。OFF 显仓库当前 HEAD 分支；detached HEAD
   // 没有分支名时仍显示 HEAD，让默认未勾选用户保有开启 worktree 的入口。
   const branchLabel = effectiveWorktreeEnabled
-    ? sourceBranch || branches.current || 'HEAD'
+    ? sourceBranch || branches.current || currentBranch || 'HEAD'
     : (currentBranch ?? 'HEAD');
   const showBranchChip = !advancedHidden && !!detect.data?.isGitRepo;
   // 分支菜单只在 worktree 已勾时可交互(= 源分支选择器);未勾时分支区只读展示当前
@@ -439,7 +439,9 @@ function BranchWorktreeChip({
   const branchTipped = (
     <Tip
       text={
-        checked ? t('newChat.branchChip.sourceTooltip') : t('newChat.branchChip.currentTooltip')
+        branchInteractive
+          ? t('newChat.branchChip.sourceTooltip')
+          : t('newChat.branchChip.currentTooltip')
       }
     >
       {branchSegment}
