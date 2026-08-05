@@ -420,7 +420,7 @@ export function createSubagentLiveCardTracker(opts: {
    * itemStarted 钩子永远看不到,所以除了这条路径没有别的机会把孙线程并进卡。
    *
    * `visited` 防环:血缘理论上是树,但通知来自外部进程,不能假定它一定是树。
-   * 返回是否有内容被重放(调用方据此判断要不要发帧)。
+   * 返回是否有可见快照变化:早到通知被重放,或实际模型在本次绑定时首次落到线程上。
    */
   const attachThread = (
     card: TrackedCard,
@@ -435,10 +435,12 @@ export function createSubagentLiveCardTracker(opts: {
     if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
     const failedBeforeAttachment = pendingFailedThreads.delete(childThreadId);
     const latchSpawnFailure = spawnFailed || failedBeforeAttachment;
+    let changed = false;
     if (!card.threads.has(childThreadId)) {
       const observedModel = pendingThreadModels.get(childThreadId);
       pendingThreadModels.delete(childThreadId);
       const initialModel = observedModel ?? spawnModel;
+      changed = Boolean(initialModel);
       // 已上终态闩的卡,新并入的线程直接算失败,别让它把卡拉回 running。
       card.threads.set(childThreadId, {
         status: card.spawnFailed || latchSpawnFailure ? 'failed' : 'running',
@@ -448,6 +450,7 @@ export function createSubagentLiveCardTracker(opts: {
       });
     } else if (spawnModel && !card.threads.get(childThreadId)?.model) {
       card.threads.get(childThreadId)!.model = spawnModel;
+      changed = true;
     }
     taskIdByThread.set(childThreadId, card.taskId);
     const thread = card.threads.get(childThreadId)!;
@@ -456,12 +459,11 @@ export function createSubagentLiveCardTracker(opts: {
       thread.status = 'failed';
     }
 
-    let replayed = false;
     const queued = pending.get(childThreadId);
     if (queued) {
       pending.delete(childThreadId);
       for (const entry of queued) {
-        if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
+        if (applyNotification(card, thread, entry.method, entry.params)) changed = true;
       }
     }
 
@@ -469,10 +471,10 @@ export function createSubagentLiveCardTracker(opts: {
     if (descendants) {
       pendingLineage.delete(childThreadId);
       for (const grandChildId of descendants) {
-        if (attachThread(card, grandChildId, visited)) replayed = true;
+        if (attachThread(card, grandChildId, visited)) changed = true;
       }
     }
-    return replayed;
+    return changed;
   };
 
   return {

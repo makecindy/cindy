@@ -110,16 +110,26 @@ describe('createSubagentLiveCardTracker', () => {
     });
   });
 
+  it('emits an observed model that arrived before a quiet spawn item', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    // thread/started 先到且之后没有 item/token/turn 通知:spawn 登记本身必须把
+    // 已缓存的实际模型发出来,不能等一条可能永远不来的 descendant 通知。
+    expect(
+      tracker.noteDescendantThread('t-child', 'root-thread', 'codex/gpt-5.5'),
+    ).toBeNull();
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+      taskId: 'card-1',
+      model: 'codex/gpt-5.5',
+    });
+  });
+
   it('retains an observed nested model when lineage arrives before attachment', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
     // 父线程从 spawn 参数拿到模型;孙线程的观测值只能靠 pendingThreadModels 保住——
     // 徽标要求全员观测一致,retention 一丢徽标就灭。
     tracker.noteSpawnItem(v2SpawnItem('card-parent', 't-parent', undefined, 'codex/gpt-5.5'));
-    expect(tracker.noteDescendantThread('t-grandchild', 't-parent', 'codex/gpt-5.5')).toBeNull();
     expect(
-      tracker.handleDescendantNotification('t-grandchild', 'thread/tokenUsage/updated', {
-        tokenUsage: { total: { totalTokens: 1 } },
-      }),
+      tracker.noteDescendantThread('t-grandchild', 't-parent', 'codex/gpt-5.5'),
     ).toMatchObject({ model: 'codex/gpt-5.5' });
   });
 
