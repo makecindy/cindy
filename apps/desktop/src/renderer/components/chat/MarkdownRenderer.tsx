@@ -446,17 +446,19 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
  * <pre>, so they always act on the latest text even mid-stream. We use
  * group-hover to keep the chrome out of the way until the user reaches for it.
  *
- * 「在终端执行」按钮仅对 shell-like 语言(bash/sh/powershell/cmd...)且处于
- * 聊天会话流内(sessionId 存在)时显示:点击后复用或新建 RSB 内置 terminal tab,
- * 把整段命令写入 PTY 执行。聊天流外(设置页 / TextLightbox 等)不显示。
+ * 「在终端执行」按钮仅对 shell-like 语言(bash/sh/powershell/cmd...)且
+ * `sessionId` 存在时显示。`sessionId` 由调用方显式传入:聊天会话流内传入
+ * `currentSessionId`,TextLightbox / 设置页等不传 → 按钮不显示。不读
+ * ChatSessionFileContext,因为 TextLightbox 可能挂在会话树内、渲染的却是
+ * 与当前会话无关的文件,context 里仍可能带着外层 session id。
  */
 function CodeBlockPre({
   children,
   language,
+  sessionId,
   ...props
-}: HTMLAttributes<HTMLPreElement> & { language?: string }) {
+}: HTMLAttributes<HTMLPreElement> & { language?: string; sessionId?: string }) {
   const { t } = useTranslation();
-  const { sessionId } = useChatSessionFile();
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
@@ -562,6 +564,42 @@ function CodeBlockPre({
   );
 }
 
+/**
+ * 渲染 fenced code block:```diff → MarkdownDiffBlock,```mermaid →
+ * MarkdownMermaidBlock,其余 → CodeBlockPre。
+ *
+ * 抽成 helper 是因为 `pre` renderer 有两处入口:
+ *   - `baseComponents.pre`(模块级,doc-mode / TextLightbox 用)—— 不传
+ *     sessionId,「在终端执行」按钮不显示
+ *   - instance-level `pre` override(聊天流用,见下方 useMemo)—— 传入
+ *     currentSessionId,shell-like 代码块显示按钮
+ * 两处共享 diff / mermaid 分派逻辑,放在一起避免分叉。
+ */
+function renderCodeBlock(
+  children: ReactNode,
+  props: Record<string, unknown>,
+  sessionId?: string,
+): ReactNode {
+  const firstChild = Array.isArray(children) ? children[0] : children;
+  if (isDiffCodeChild(firstChild)) {
+    const codeChildren = (firstChild as { props: { children?: ReactNode } })
+      .props.children;
+    const raw = nodeToText(codeChildren);
+    return <MarkdownDiffBlock raw={raw} />;
+  }
+  if (isMermaidCodeChild(firstChild)) {
+    const codeChildren = (firstChild as { props: { children?: ReactNode } })
+      .props.children;
+    const raw = nodeToText(codeChildren);
+    return <MarkdownMermaidBlock raw={raw} />;
+  }
+  return (
+    <CodeBlockPre {...props} language={extractCodeLanguage(firstChild)} sessionId={sessionId}>
+      {children}
+    </CodeBlockPre>
+  );
+}
+
 const baseComponents: Components = {
   // NOTE: the `code` renderer is NOT defined here at module level anymore.
   // Inline-code path detection (text-lightbox-trigger-extension v2) needs
@@ -571,27 +609,10 @@ const baseComponents: Components = {
   // simpler renderer there. See line ~310 for the implementation.
 
   pre({ children, ...props }) {
-    // Intercept ```diff fenced blocks before they fall through to highlight.js
-    // — we render them with our own row/gutter/symbol layout (MarkdownDiffBlock)
-    // so the visual matches the Edit-tool DiffView card and the GitHub red/green
-    // tokens (`--diff-add-fg` / `--diff-del-fg`) get applied predictably.
-    // Other languages (js/ts/python/...) still go through the default pre+code
-    // path with rehype-highlight.
-    const firstChild = Array.isArray(children) ? children[0] : children;
-    if (isDiffCodeChild(firstChild)) {
-      const codeChildren = (firstChild as { props: { children?: ReactNode } })
-        .props.children;
-      const raw = nodeToText(codeChildren);
-      return <MarkdownDiffBlock raw={raw} />;
-    }
-    if (isMermaidCodeChild(firstChild)) {
-      const codeChildren = (firstChild as { props: { children?: ReactNode } })
-        .props.children;
-      const raw = nodeToText(codeChildren);
-      return <MarkdownMermaidBlock raw={raw} />;
-    }
-
-    return <CodeBlockPre {...props} language={extractCodeLanguage(firstChild)}>{children}</CodeBlockPre>;
+    // baseComponents.pre 不传 sessionId —— doc-mode(TextLightbox 等)走这条
+    // 路径,「在终端执行」按钮不应在文件预览里出现。聊天流的 instance-level
+    // override 会显式传入 currentSessionId。
+    return renderCodeBlock(children, props);
   },
 
   // Tables (GFM)。外层 CopyAsImageBlock 承载「复制为图片 / 标注」hover 工具栏,
@@ -1741,6 +1762,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
+      // 聊天流(非 doc-mode)override pre:传入 currentSessionId 让 shell-like
+      // 代码块显示「在终端执行」按钮。doc-mode(TextLightbox 等)走
+      // makeSourceLineWrappers 包装的 baseComponents.pre,不传 sessionId →
+      // 按钮不显示,避免在文件预览里出现与当前会话无关的执行入口。
+      ...(!emitSourceLines
+        ? {
+            pre: ({ children, ...props }: { children?: ReactNode } & Record<string, unknown>) =>
+              renderCodeBlock(children, props as Record<string, unknown>, currentSessionId),
+          }
+        : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
         const normalized = normalizeMarkdownImageSrc(
