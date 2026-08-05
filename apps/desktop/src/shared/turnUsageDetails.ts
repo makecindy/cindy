@@ -135,7 +135,7 @@ export function aggregateTurnUsageDetails(
       perModel.set(
         item.model,
         current
-          ? (addCompatibleRegionalMoney([current, item.money], current.currency) ?? current)
+          ? (addCompatibleRegionalMoney([current, item.money]) ?? item.money)
           : item.money,
       );
     }

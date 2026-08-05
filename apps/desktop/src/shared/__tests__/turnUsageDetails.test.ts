@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { aggregateTurnUsageDetails, buildTurnUsageDetails } from '../turnUsageDetails';
-import { usdMoney } from '../regionalMoney';
+import { DEFAULT_USAGE_CURRENCY, gatewayMoney, usdMoney } from '../regionalMoney';
 
 describe('aggregateTurnUsageDetails', () => {
   it('sums token/cache fields and merges per-model costs across segments', () => {
@@ -39,6 +39,30 @@ describe('aggregateTurnUsageDetails', () => {
       { model: 'claude-opus-5', money: usdMoney(4) },
     ]);
     expect(aggregated?.cacheHitRate).toBeCloseTo(150 / 170);
+  });
+
+  it('uses the default usage currency when the same model has mixed segment currencies', () => {
+    const staleCurrency = DEFAULT_USAGE_CURRENCY === 'USD' ? 'CNY' : 'USD';
+    const first = buildTurnUsageDetails({
+      inputTokens: 1,
+      perModelCost: [{ model: 'claude-fable-5', money: gatewayMoney(4, staleCurrency) }],
+    });
+    const second = buildTurnUsageDetails({
+      outputTokens: 1,
+      perModelCost: [
+        {
+          model: 'claude-fable-5',
+          money: gatewayMoney(6, DEFAULT_USAGE_CURRENCY),
+        },
+      ],
+    });
+
+    expect(aggregateTurnUsageDetails([first, second])?.perModelCost).toEqual([
+      {
+        model: 'claude-fable-5',
+        money: gatewayMoney(6, DEFAULT_USAGE_CURRENCY),
+      },
+    ]);
   });
 
   it('ignores empty details and returns null when no segment has usage', () => {
