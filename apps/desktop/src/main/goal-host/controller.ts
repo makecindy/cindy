@@ -382,7 +382,7 @@ export class GoalController {
    *
    * 此时不能立刻挂 listener / 改 active，否则旧 turn 的迟到终态会被算进新一代 Goal；
    * 也不能静默 return，否则用户必须猜何时 idle 后再点一次。由 turn idle observer 在
-   * 安全边界后重试，Stop / clear / setGoal 会显式取消。
+   * 安全边界后重试，Stop / clear / setGoal / session teardown 会显式取消。
    */
   private readonly deferredManualResumes = new Set<string>();
   private readonly deferredManualResumeTimers = new Map<
@@ -1069,6 +1069,15 @@ export class GoalController {
     this.scheduleContinuation(sessionId);
   }
 
+  /** Session close/replacement superseded the pending Resume; cancel it without changing Goal state. */
+  cancelDeferredManualResume(sessionId: string): void {
+    this.deferredManualResumes.delete(sessionId);
+    const timer = this.deferredManualResumeTimers.get(sessionId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.deferredManualResumeTimers.delete(sessionId);
+  }
+
   /** GET_GOAL_STATUS:返回当前状态扁平 payload(无 goal 返回 null)。 */
   async getStatus(sessionId: string): Promise<GoalStatusPayload | null> {
     const state = await this.deps.storage.get(sessionId);
@@ -1658,14 +1667,6 @@ export class GoalController {
     }, this.debounceMs);
     (timer as { unref?: () => void }).unref?.();
     this.deferredManualResumeTimers.set(sessionId, timer);
-  }
-
-  private cancelDeferredManualResume(sessionId: string): void {
-    this.deferredManualResumes.delete(sessionId);
-    const timer = this.deferredManualResumeTimers.get(sessionId);
-    if (!timer) return;
-    clearTimeout(timer);
-    this.deferredManualResumeTimers.delete(sessionId);
   }
 
   /**

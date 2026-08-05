@@ -2923,9 +2923,11 @@ export function anySessionInTurn(maker?: Pick<Maker, 'listActiveSessions'> | nul
  * /goal 生命周期旁路(setter 注入避免 register↔goal-host 环):
  *  - goalClearObserver:clear-context(INPUT_CLEAR_SESSION)时清除该会话目标(上下文已抹,目标失去依据)。
  *  - goalIdleObserver:会话 turn 收尾(idle)时让 controller 兜底续跑 active 目标(#9,race-free,见 controller.maybeContinueActiveGoal)。
+ *  - goalDeferredResumeCancelObserver:非 abort 的 session close/replacement 取消一次性 Resume，
+ *    防止同 sessionId 的后续实例被迟到 idle 误唤醒。
  *  - goalStopObserver:用户 Stop 当前 turn(ABORT_SESSION)时把 active 目标暂停。调用 observer
  *    会同步 detach 监听/续跑资格；paused 持久化与 vendor abort 并行，回执等落盘收口。
- * bootstrap 在启动期接上 getGoalController()?.clearGoal / maybeContinueActiveGoal / pauseGoal。
+ * bootstrap 在启动期接上对应 GoalController API。
  */
 let goalClearObserver: ((sessionId: string) => void) | null = null;
 export function setGoalClearObserver(observer: ((sessionId: string) => void) | null): void {
@@ -2934,6 +2936,13 @@ export function setGoalClearObserver(observer: ((sessionId: string) => void) | n
 let goalIdleObserver: ((sessionId: string) => void) | null = null;
 export function setGoalIdleObserver(observer: ((sessionId: string) => void) | null): void {
   goalIdleObserver = observer;
+}
+
+let goalDeferredResumeCancelObserver: ((sessionId: string) => void) | null = null;
+export function setGoalDeferredResumeCancelObserver(
+  observer: ((sessionId: string) => void) | null,
+): void {
+  goalDeferredResumeCancelObserver = observer;
 }
 
 /**
@@ -3229,6 +3238,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     // A runtime replacement invalidates any delayed direct-abort callback that
     // still belongs to the old Session instance.
     cancelDirectAbortReconciliation(session.id);
+    goalDeferredResumeCancelObserver?.(session.id);
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
   }
@@ -4572,6 +4582,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // is idle. Its reconciliation chain was cancelled by teardown, so
             // preserve the shared terminal wake-up before the intent is orphaned.
             notifyGoalIdleAfterTurnSettled(session.id);
+          } else {
+            // A close that did not settle this exact abort generation supersedes
+            // any Resume intent keyed by the reusable session id. Cancel it and
+            // its retry timer so a later Session instance cannot revive the Goal.
+            goalDeferredResumeCancelObserver?.(session.id);
           }
         }
       }

@@ -1890,6 +1890,25 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(0);
   });
 
+  it('lets session teardown cancel a deferred Resume timer before a reused id goes idle', async () => {
+    let sessionInTurn = true;
+    const local = makeController({ isSessionInTurn: () => sessionInTurn });
+    await local.storage.set(seededGoal({ status: 'paused', lastReason: 'old session settling' }));
+    await local.controller.pauseGoal('s1');
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.maybeContinueActiveGoal('s1'); // schedules the deferred retry timer
+    local.controller.cancelDeferredManualResume('s1');
+    local.controller.cancelDeferredManualResume('s1'); // repeated close/teardown is idempotent
+
+    sessionInTurn = false;
+    await local.controller.maybeContinueActiveGoal('s1'); // late idle from a reused session id
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(0);
+  });
+
   it('lets clearGoal cancel a deferred manual Resume without reviving the old Goal', async () => {
     let sessionInTurn = true;
     const local = makeController({ isSessionInTurn: () => sessionInTurn });

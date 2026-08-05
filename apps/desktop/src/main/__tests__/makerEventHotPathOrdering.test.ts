@@ -16,6 +16,8 @@ const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const bootstrapSourcePath = resolve(__dirname, '..', 'bootstrap-electron.ts');
+const bootstrapSource = readFileSync(bootstrapSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
@@ -622,6 +624,34 @@ describe('maker:event hot path ordering', () => {
     expect(
       closedBlock.indexOf('notifyGoalIdleAfterTurnSettled(session.id);'),
     ).toBeGreaterThan(closedBlock.indexOf('sessionTurnBoundaryGenerationById.delete(session.id);'));
+  });
+
+  it('cancels deferred Goal resumes when non-abort session teardown supersedes them', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const replacementStart = wireSessionSource.indexOf('if (existing) {');
+    const replacementEnd = wireSessionSource.indexOf(
+      '\n  }\n  advanceSessionTurnBoundaryGeneration',
+      replacementStart,
+    );
+    const replacementBlock = wireSessionSource.slice(replacementStart, replacementEnd);
+    const closedStart = wireSessionSource.indexOf("if (status === 'closed') {");
+    const closedBlock = wireSessionSource.slice(closedStart);
+
+    expect(source).toContain('let goalDeferredResumeCancelObserver:');
+    expect(source).toContain('export function setGoalDeferredResumeCancelObserver(');
+    expect(bootstrapSource).toContain('setGoalDeferredResumeCancelObserver((sid) => {');
+    expect(bootstrapSource).toContain('getGoalController()?.cancelDeferredManualResume(sid);');
+    expect(replacementStart).toBeGreaterThanOrEqual(0);
+    expect(replacementEnd).toBeGreaterThan(replacementStart);
+    expectOrder(
+      replacementBlock,
+      'cancelDirectAbortReconciliation(session.id);',
+      'goalDeferredResumeCancelObserver?.(session.id);',
+    );
+    expect(closedStart).toBeGreaterThanOrEqual(0);
+    expect(closedBlock).toMatch(
+      /if \(closedDirectAbortBoundary\) \{[\s\S]*notifyGoalIdleAfterTurnSettled\(session\.id\);[\s\S]*\} else \{[\s\S]*goalDeferredResumeCancelObserver\?\.\(session\.id\);/,
+    );
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {
