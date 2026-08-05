@@ -410,6 +410,42 @@ describe('SplitGroup', () => {
     expect(setFractionSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('页面隐藏后连续收到其它终止事件时只提交一次 resize', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const separator = view.container.querySelector('[role="separator"]') as HTMLElement;
+    const branch = separator.closest('[data-split-branch]') as HTMLElement;
+    vi.spyOn(branch, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1006,
+      top: 0,
+      bottom: 500,
+      width: 1006,
+      height: 500,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const setFractionSpy = vi.spyOn(splitGroupStore, 'setSplitFraction');
+    const visibilitySpy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+
+    act(() => {
+      fireEvent.pointerDown(separator, { button: 0, clientX: 500 });
+      fireEvent.pointerMove(document, { clientX: 650 });
+      fireEvent(document, new Event('visibilitychange'));
+      fireEvent.blur(window);
+      fireEvent.pointerCancel(document);
+      fireEvent.pointerMove(document, { clientX: 800 });
+    });
+
+    expect(document.body.classList.contains('resizing-pane')).toBe(false);
+    expect(setFractionSpy).toHaveBeenCalledTimes(1);
+    expect(setFractionSpy.mock.calls[0]?.[1]).toBeCloseTo(0.65, 5);
+    visibilitySpy.mockRestore();
+  });
+
   it('pane 内子组件阻止冒泡时仍能捕获任务拖放', async () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');

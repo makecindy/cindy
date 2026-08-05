@@ -214,6 +214,32 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
+  it('reports the canonical Lead owner for a worker handoff', async () => {
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionHandoffCard
+          sessionId="worker-target"
+          title="Worker target"
+          wake="resumed"
+          lastActive={null}
+        />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        '/cc-agent/lead-target?worker=worker-target',
+        { state: undefined },
+      ),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
+  });
+
   it('renders automation origins as static content without scheduling navigation', () => {
     render(
       embedded(
