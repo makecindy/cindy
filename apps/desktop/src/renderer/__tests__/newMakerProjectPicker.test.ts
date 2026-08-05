@@ -196,6 +196,14 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).not.toContain('worktreeMissingRepo');
   });
 
+  it('only forwards a worktree-eligible repo root to the send path', () => {
+    // linked worktree、非 Git 目录和探测失败都必须让发送侧自然降级，不能只因 repoRoot
+    // 存在就触发 main 侧必然拒绝的 createWorktree。
+    expect(worktreeChipsSource).toMatch(
+      /const baseRepo =\s*detect\.data\?\.gitInstalled === true[\s\S]*detect\.data\.isGitRepo[\s\S]*!detect\.data\.isInsideWorktree[\s\S]*detect\.data\.repoRoot \?\? null/,
+    );
+  });
+
   it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
     // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
     // 未勾时分支区只读;已勾时分支菜单 = worktree 源分支选择器。

@@ -125,9 +125,15 @@ export function WorktreeChipsRow({
     deviceLinkDeviceId,
     deviceLinkReconnectEpoch,
   );
-  const baseRepo = detect.data?.repoRoot ?? null;
+  const baseRepo =
+    detect.data?.gitInstalled === true &&
+    detect.data.isGitRepo &&
+    !detect.data.isInsideWorktree
+      ? (detect.data.repoRoot ?? null)
+      : null;
 
-  // repoRoot 参与发送侧 worktree 创建，必须在 paint / 下一次用户输入前同步收敛；
+  // 只有明确具备 worktree 资格的仓库才向发送侧提供 repoRoot；linked worktree、非 Git
+  // 目录或探测失败都传 null，让发送侧按「勾选 && baseRepo」自然降级为普通启动。
   // useDetectCwd 同时按 {cwd, deviceId} 做 render 阶段 fence，切目标时这里先写 null。
   useLayoutEffect(() => {
     onBaseRepoChange?.(baseRepo);
