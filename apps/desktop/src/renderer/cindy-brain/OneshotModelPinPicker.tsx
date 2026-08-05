@@ -27,7 +27,8 @@ export interface OneshotPinOption {
   icon?: string;
   budget: boolean;
   subscription: boolean;
-  routing?: unknown;
+  /** Provider['routing'](IPC 载荷;ProviderLogoMark 的厂牌图标判定用)。 */
+  routing?: import('@cindy/model-providers').Provider['routing'];
   agentSuffix?: string;
 }
 
@@ -35,6 +36,7 @@ export function OneshotModelPinPicker({
   value,
   defaultLabel,
   declaredLabel,
+  legacyPinLabel,
   options,
   onChange,
   ariaLabel,
@@ -46,6 +48,8 @@ export function OneshotModelPinPicker({
   defaultLabel: string;
   /** 身份卡声明的偏好模型文案(声明存在时"跟随默认"行如实显示它)。 */
   declaredLabel: string | null;
+  /** 存量轻量档位钉(目录扩展前钉下的合法档位键)的展示名;null/缺省 = 不是档位钉。 */
+  legacyPinLabel?: string | null;
   options: readonly OneshotPinOption[];
   /** null = 清除钉档(恢复跟随默认)。 */
   onChange: (pin: string | null) => void;
@@ -59,8 +63,10 @@ export function OneshotModelPinPicker({
 
   const current = value ? options.find((o) => o.id === value) : undefined;
   // 覆盖值已不在当前清单(目录演进):如实显示原值,不假装跟随默认。
-  const staleValue = value && !current ? value : null;
+  // 存量档位钉不是 stale——它合法且仍可路由,只是不再能新建,展示友好名。
+  const staleValue = value && !current && !legacyPinLabel ? value : null;
   const triggerLabel = current?.label
+    ?? legacyPinLabel
     ?? staleValue
     ?? (declaredLabel
       ? t('settings.ghosts.detail.cindyPrefs.defaultOptionDeclared', { model: declaredLabel })
@@ -86,6 +92,13 @@ export function OneshotModelPinPicker({
   }, [filtered]);
 
   const select = (pin: string | null): void => {
+    // 点中的就是当前值(含 stale 行):只收起,不回写——stale 的目录钉已不在
+    // 白名单里,回写必被 INVALID_PARAMS 拒成「操作失败」toast,且同值回写
+    // 本来就是无操作。
+    if (pin === value) {
+      setOpen(false);
+      return;
+    }
     onChange(pin);
     setOpen(false);
   };
@@ -137,36 +150,33 @@ export function OneshotModelPinPicker({
             aria-label={ariaLabel}
             className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain"
           >
-            {/* 「跟随默认」行(声明了偏好模型时如实显示声明内容)。 */}
-            {query.trim() === '' && (
-              <button
-                type="button"
-                role="option"
-                aria-selected={value === undefined}
-                className={rowClass(value === undefined)}
-                onClick={() => select(null)}
-              >
-                <span className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
-                  {declaredLabel
-                    ? t('settings.ghosts.detail.cindyPrefs.defaultOptionDeclared', { model: declaredLabel })
-                    : t('settings.ghosts.detail.cindyPrefs.defaultOption', { model: defaultLabel })}
-                </span>
-                {value === undefined && (
-                  <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
-                )}
-              </button>
-            )}
+            {/* 「跟随默认」行(声明了偏好模型时如实显示声明内容)。搜索态也保留:
+                它是唯一能清除钉档的行。 */}
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === undefined}
+              className={rowClass(value === undefined)}
+              onClick={() => select(null)}
+            >
+              <span className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
+                {declaredLabel
+                  ? t('settings.ghosts.detail.cindyPrefs.defaultOptionDeclared', { model: declaredLabel })
+                  : t('settings.ghosts.detail.cindyPrefs.defaultOption', { model: defaultLabel })}
+              </span>
+              {value === undefined && (
+                <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+              )}
+            </button>
 
             {groups.length === 0 ? (
               <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
                 {t('newChat.modelSelector.search.noResults')}
               </div>
             ) : (
-              groups.map((g, index) => (
+              groups.map((g) => (
                 <div key={g.name} role="group" aria-label={g.name}>
-                  {(index > 0 || query.trim() === '') && (
-                    <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
-                  )}
+                  <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
                   <div className="truncate px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
                     {g.name}
                   </div>
@@ -187,7 +197,7 @@ export function OneshotModelPinPicker({
                             icon={o.icon}
                             providerId={o.providerId}
                             name={o.group}
-                            routing={o.routing as never}
+                            routing={o.routing}
                             colorClass="text-[var(--text-secondary)]"
                             withMargin={false}
                             dense

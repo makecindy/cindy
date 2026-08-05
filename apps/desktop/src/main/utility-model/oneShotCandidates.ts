@@ -1027,15 +1027,20 @@ function parseChatCompletionText(raw: string): string {
 
 /**
  * chat-completions 的 message.content 归一:字符串直取;思考模型的 content 可能是
- * parts 数组([{type:'text',text:…}]),拼文本段。reasoning_content 是思维链
- * 不是答案,刻意不取——结构化调用方(expectJson)拿思维链必挂,不如如实判空。
+ * parts 数组([{type:'text',text:…}]),只拼正文段——type 为 'text' 或缺省(最老
+ * 形态),字符串元素(旧网关偶见)直取。reasoning/thinking/tool_result 等带 text
+ * 的非正文段刻意跳过,与顶层 reasoning_content 不取同一立场:思维链不是答案,
+ * 拼进去 expectJson 必挂、普通调用被思维链污染。
  */
 function chatCompletionContentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
       .map((part) => {
+        if (typeof part === 'string') return part;
         if (typeof part !== 'object' || part === null) return '';
+        const type = (part as { type?: unknown }).type;
+        if (type !== undefined && type !== 'text') return '';
         const text = (part as { text?: unknown }).text;
         return typeof text === 'string' ? text : '';
       })

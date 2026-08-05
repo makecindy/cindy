@@ -26,6 +26,7 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
 type BrowserBackendRecoveryResult = import('../shared/browserBackend').BrowserBackendRecoveryResult;
@@ -1207,11 +1208,13 @@ interface ElectronAPI {
           icon?: string;
           budget: boolean;
           subscription: boolean;
-          routing?: unknown;
+          routing?: ProviderRoutingPayload;
           agentSuffix?: string;
         }>;
         defaultModel: { id: string; label: string } | null;
         declaredModel?: { id: string; label: string } | null;
+        /** 存量轻量档位钉(目录扩展前的合法钉值)的展示名表,老钉值回显友好名用。 */
+        utilityProfiles?: Array<{ id: string; label: string }>;
       };
       /** 向量类(文本转向量):同 image/video 走目录派生。 */
       embed: {

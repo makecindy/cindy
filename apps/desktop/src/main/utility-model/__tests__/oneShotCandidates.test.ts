@@ -196,6 +196,44 @@ describe('utility one-shot candidates', () => {
     expect(result).toMatchObject({ ok: true, text: '答案' });
   });
 
+  it('parts 数组只拼正文段:reasoning/thinking 等带 text 的非正文段跳过,字符串元素直取', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: 'reasoning', text: '内部推理不给出' },
+                { type: 'text', text: '答' },
+                '字',
+                { text: '案' },
+                { type: 'tool_result', text: '工具输出不给出' },
+              ],
+            },
+          },
+        ],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: true, text: '答字案' });
+  });
+
+  it('parts 数组只有思考段(无正文)→ 如实 empty_response,不拿思维链冒充答案', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: [{ type: 'reasoning', text: '在想…' }] }, finish_reason: 'length' }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
+  });
+
   it('思考烧光预算只留下 reasoning_content(content 空)→ 如实 empty_response,不拿思维链冒充答案', async () => {
     readKey.mockReturnValue('proxy-key');
     fetchMock.mockResolvedValueOnce({

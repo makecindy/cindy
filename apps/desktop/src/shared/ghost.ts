@@ -1985,8 +1985,22 @@ export interface GhostPermissionDiff {
 }
 
 /**
- * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
- * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 权限条目指纹:key + 作者自由文本 detail + 主机固定说明(detailKey + detailArgs,
+ * args 按键序稳定化)。detailKey/detailArgs 必须在内:同一 key 的固定说明会随
+ * 声明变化(cindy text.oneshot 声明 oneshotModel、network secret 的 identity
+ * 形态),只看 key+detail 会把"说明/成本面变了"漏判成"权限面没变",更新时
+ * 用户看不到重新确认。
+ */
+function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
+  const args = item.detailArgs
+    ? Object.entries(item.detailArgs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    : [];
+  return JSON.stringify([item.key, item.detail ?? '', item.detailKey ?? '', args]);
+}
+
+/**
+ * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(条目指纹见上)。
+ * 与 diffGhostPermissionItems 同口径(按 key 对齐、指纹变化算差异),
  * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
  *
  * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
@@ -1995,7 +2009,7 @@ export interface GhostPermissionDiff {
  */
 export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
   return ghostPermissionItems(manifest)
-    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
+    .map(ghostPermissionItemFingerprint)
     .sort()
     .join('\n');
 }
@@ -2008,14 +2022,15 @@ export function diffGhostPermissionItems(
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
-  const prevDetailByKey = new Map(prevItems.map((i) => [i.key, i.detail ?? '']));
+  const prevPrintByKey = new Map(prevItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
+  const nextPrintByKey = new Map(nextItems.map((i) => [i.key, ghostPermissionItemFingerprint(i)]));
   const added: GhostPermissionItem[] = [];
   const removed: GhostPermissionItem[] = [];
   const unchanged: GhostPermissionItem[] = [];
   for (const item of nextItems) {
     if (!prevKeys.has(item.key)) {
       added.push(item);
-    } else if ((item.detail ?? '') !== prevDetailByKey.get(item.key)) {
+    } else if (ghostPermissionItemFingerprint(item) !== prevPrintByKey.get(item.key)) {
       added.push(item);
     } else {
       unchanged.push(item);
@@ -2024,7 +2039,7 @@ export function diffGhostPermissionItems(
   for (const item of prevItems) {
     if (!nextKeys.has(item.key)) {
       removed.push(item);
-    } else if ((item.detail ?? '') !== (nextItems.find((n) => n.key === item.key)?.detail ?? '')) {
+    } else if (ghostPermissionItemFingerprint(item) !== nextPrintByKey.get(item.key)) {
       removed.push(item);
     }
   }
@@ -2037,13 +2052,11 @@ export function unreviewedGhostPermissionItems(
   previouslyInstalled: GhostManifest | undefined,
   actual: GhostManifest,
 ): GhostPermissionItem[] {
-  const approvalKey = (item: GhostPermissionItem): string =>
-    JSON.stringify([item.key, item.detail ?? '']);
-  const approved = new Set(ghostPermissionItems(reviewed).map(approvalKey));
+  const approved = new Set(ghostPermissionItems(reviewed).map(ghostPermissionItemFingerprint));
   for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
-    approved.add(approvalKey(item));
+    approved.add(ghostPermissionItemFingerprint(item));
   }
-  return ghostPermissionItems(actual).filter((item) => !approved.has(approvalKey(item)));
+  return ghostPermissionItems(actual).filter((item) => !approved.has(ghostPermissionItemFingerprint(item)));
 }
 
 /**

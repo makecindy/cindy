@@ -109,6 +109,10 @@ export function CindyCapabilityPrefs({
           // 快问快答:目录全量文本模型的富列表选择器(图标/折扣与订阅徽标/分组/
           // 搜索,对齐新建对话的模型选择器);image/video 仍是原生 select。
           const textOptions: readonly OneshotPinOption[] = prefs.text?.options ?? [];
+          // 存量轻量档位钉(目录扩展前钉下的合法值)回显友好名,不当 stale 露 id。
+          const legacyPinLabel = current
+            ? (prefs.text?.utilityProfiles?.find((p) => p.id === current)?.label ?? null)
+            : null;
           return (
             <div
               key={capability}
@@ -136,6 +140,7 @@ export function CindyCapabilityPrefs({
                   value={selectValue === FOLLOW_DEFAULT_VALUE ? undefined : selectValue}
                   defaultLabel={defaultModel.label}
                   declaredLabel={declaredModel?.label ?? null}
+                  legacyPinLabel={legacyPinLabel}
                   options={textOptions}
                   onChange={(pin) => void handleChange(capability, pin ?? FOLLOW_DEFAULT_VALUE)}
                   ariaLabel={t(`settings.ghosts.detail.cindyPrefs.cap.${capability}`)}

@@ -65,4 +65,12 @@ describe('isCindyOverrideModelAllowed', () => {
   it('未知类目一律拒(IPC 层已先按 CINDY_CAPABILITY_KEYS 过滤,这里是纵深)', () => {
     expect(isCindyOverrideModelAllowed('fs.read', 'img-pro', CATALOGS)).toBe(false);
   });
+
+  it('原型继承键(toString/constructor/__proto__)不当轻量档位放行', () => {
+    // `value in UTILITY_MODEL_PROFILES` 会把继承键当真:入库后消费侧拿不到
+    // profile,该意识的快问快答持续 NO_CANDIDATE 直到清钉。
+    expect(isCindyOverrideModelAllowed('text.oneshot', 'toString', CATALOGS)).toBe(false);
+    expect(isCindyOverrideModelAllowed('text.oneshot', 'constructor', CATALOGS)).toBe(false);
+    expect(isCindyOverrideModelAllowed('text.oneshot', '__proto__', CATALOGS)).toBe(false);
+  });
 });

@@ -1550,6 +1550,42 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       expect(v.ok, JSON.stringify(bad)).toBe(false);
     }
   });
+
+  // 2026-08-05 review:权限指纹必须含 detailKey/detailArgs——同一 key 的固定说明
+  // 随声明变(新增/改/删 oneshotModel),只看 key+detail 会把变化漏判成"权限面
+  // 没变",更新时用户看不到重新确认。
+  it('oneshotModel 新增/变更/移除都算权限面变化(diff/基线/未审三条路径)', () => {
+    const plain = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    const declared = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    const declared2 = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'gpt-5.5' }));
+    if (!plain.ok || !declared.ok || !declared2.ok) throw new Error('fixture 应合法');
+
+    // 新增声明:diff 标 added+removed(key 同、说明变),基线不同,未审列出。
+    const addDiff = diffGhostPermissionItems(plain.manifest, declared.manifest);
+    expect(addDiff.added.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(addDiff.removed.map((i) => i.key)).toEqual(['cindy:text.oneshot']);
+    expect(ghostPermissionBaselineKey(plain.manifest)).not.toBe(ghostPermissionBaselineKey(declared.manifest));
+    expect(
+      unreviewedGhostPermissionItems(plain.manifest, plain.manifest, declared.manifest).map((i) => i.key),
+    ).toEqual(['cindy:text.oneshot']);
+
+    // 改模型:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, declared2.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 移除声明:同样算变化。
+    expect(diffGhostPermissionItems(declared.manifest, plain.manifest).added.map((i) => i.key)).toEqual([
+      'cindy:text.oneshot',
+    ]);
+
+    // 声明原样:三条路径都认为无变化。
+    const same = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    if (!same.ok) throw new Error('fixture 应合法');
+    expect(diffGhostPermissionItems(declared.manifest, same.manifest).added).toEqual([]);
+    expect(ghostPermissionBaselineKey(declared.manifest)).toBe(ghostPermissionBaselineKey(same.manifest));
+    expect(unreviewedGhostPermissionItems(declared.manifest, declared.manifest, same.manifest)).toEqual([]);
+  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {

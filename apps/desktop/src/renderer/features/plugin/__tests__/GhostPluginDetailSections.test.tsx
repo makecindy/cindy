@@ -599,6 +599,125 @@ describe('Ghost plugin detail sections', () => {
     vi.unstubAllEnvs();
   });
 
+  // 2026-08-05 review:存量轻量档位钉(目录扩展前的合法钉值)回显友好名,
+  // 不当 stale 露原始 id。
+  it('text capability shows a friendly label for a legacy utility-profile pin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [{ id: 'litellm-kimi-k2.6', label: 'kimi-k2.6 · Gateway' }],
+            },
+          }),
+          setCindyPref: vi.fn(async () => ({ overrides: {} })),
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    const trigger = screen.getByRole('button', {
+      name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot',
+    });
+    expect(trigger.textContent).toContain('kimi-k2.6 · Gateway');
+    expect(trigger.textContent).not.toContain('litellm-kimi-k2.6');
+    vi.unstubAllEnvs();
+  });
+
+  // 2026-08-05 review:stale 目录钉(模型已下架)点中 = 当前值,只收起不回写
+  // (回写必被白名单拒成「操作失败」);清钉走「跟随默认」行。
+  it('stale catalog pin row closes without rewriting; clearing goes through the default row', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [],
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const listbox = await screen.findByRole('listbox');
+    // stale 行如实显示原值且为当前选中;点它不回写。
+    const staleRow = within(listbox).getByText('cat:gone:codex:retired-model').closest('button')!;
+    expect(staleRow.getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(staleRow);
+    expect(setCindyPref).not.toHaveBeenCalled();
+
+    // 重新展开,点「跟随默认」清钉(model=null)。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const reopened = await screen.findByRole('listbox');
+    fireEvent.click(within(reopened).getAllByRole('option')[0]!);
+    expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null);
+    vi.unstubAllEnvs();
+  });
+
   it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,

@@ -4704,8 +4704,10 @@ export function registerGhostIpc(): void {
       ? null
       : (utilityModelPinOptions().find((o) => o.id === textDefaultId)?.label ?? textDefaultId);
     const textOptions = buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides());
+    // 纯展示口径,不走 findAvailableGhost 的"当前会话可用"闸:插件被当前项目
+    // 停用时卡片的其余部分(overrides/options)照常渲染,声明偏好也不该凭空消失。
     const declaredRaw = typeof ghostId === 'string'
-      ? findAvailableGhost(ghostId)?.manifest.cindy?.oneshotModel
+      ? getGhostManager().list().find((g) => g.manifest.id === ghostId)?.manifest.cindy?.oneshotModel
       : undefined;
     const declaredResolved = declaredRaw
       ? resolveOneshotCatalogModel(getActiveCatalog(), readModelDisableOverrides(), declaredRaw)
@@ -4726,6 +4728,9 @@ export function registerGhostIpc(): void {
               label: declaredRaw,
             }
           : null,
+        // 存量轻量档位钉(目录扩展前钉下的合法值)的展示名表:渲染层据此给
+        // 老钉值回显友好名,而不是把合法档位钉当 stale 原样露出 id。
+        utilityProfiles: utilityModelPinOptions(),
       },
       // 向量类与图像/视频同源(都走目录派生),不同于文本类的轻量链档位。
       embed: byKind(getCatalogEmbedConfig()),

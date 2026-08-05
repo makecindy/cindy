@@ -19,6 +19,7 @@
 
 import {
   classifyModel,
+  isAgentSelectableModel,
   isModelDisabled,
   isProviderDisabled,
   type AgentKind,
@@ -82,11 +83,12 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
   );
 }
 
-/** 只收文本/聊天模型:网关动态条目带 mode 时只放聊天能态('chat'/'responses',
- *  与 classification 的 CHAT_CAPABLE_MODES 同口径——Codex 走 Responses API 的也是
- *  语言模型);mode 缺省(静态内置目录的 models 本来就全是聊天模型)直接放行。 */
-function isChatModel(model: CatalogModel): boolean {
-  return model.mode === undefined || model.mode === 'chat' || model.mode === 'responses';
+/** 只收对话模型:与新建对话/开协同的模型清单同一判据(classification 的
+ *  isAgentSelectableModel——mode 权威,缺省时要 group/厂商前缀佐证;自建一份
+ *  更宽的判据会把 mode 缺省、group='image' 的网关条目放进钉档清单,钉死
+ *  不回落 = 恒失败)。userProvider 标记镜像模型选择器的自定义供应商放行。 */
+function isChatModel(model: CatalogModel, provider: Provider): boolean {
+  return isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
 }
 
 const AGENT_LABEL: Record<(typeof ONESHOT_ROUTE_AGENTS)[number], string> = {
@@ -132,21 +134,22 @@ export function buildTextOneshotPinOptions(
     for (const agentKind of ONESHOT_ROUTE_AGENTS) {
       if (!isRoutableForOneshot(provider, agentKind)) continue;
       for (const model of provider.models[agentKind] ?? []) {
-        if (!isChatModel(model)) continue;
+        if (!isChatModel(model, provider)) continue;
         if (isModelDisabled(overrides, provider.id, model.id)) continue;
         entries.push({ provider, agentKind, model });
       }
     }
   }
   // 同供应商同模型 id 跨 agent 重复时,两边都补 agent 后缀(否则两行同名选不中)。
+  // 键带分隔符:裸拼接 ('ab','cd') 与 ('a','bcd') 会撞键误判重复。
   const counts = new Map<string, number>();
   for (const e of entries) {
-    const key = `${e.provider.id}${e.model.id}`;
+    const key = `${e.provider.id}\n${e.model.id}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return entries.map((e) => {
     const base = `${e.model.name} · ${e.provider.name}`;
-    const dup = (counts.get(`${e.provider.id}${e.model.id}`) ?? 0) > 1;
+    const dup = (counts.get(`${e.provider.id}\n${e.model.id}`) ?? 0) > 1;
     return {
       id: encodeCatalogPin(e.provider.id, e.agentKind, e.model.id),
       label: dup ? `${base} · ${AGENT_LABEL[e.agentKind]}` : base,
@@ -181,7 +184,7 @@ export function resolveOneshotCatalogModel(
     for (const agentKind of ONESHOT_ROUTE_AGENTS) {
       if (!isRoutableForOneshot(provider, agentKind)) continue;
       const hit = (provider.models[agentKind] ?? []).find(
-        (m) => m.id === wanted && isChatModel(m) && !isModelDisabled(overrides, provider.id, m.id),
+        (m) => m.id === wanted && isChatModel(m, provider) && !isModelDisabled(overrides, provider.id, m.id),
       );
       if (hit) return { providerId: provider.id, agentKind, model: hit.id };
     }

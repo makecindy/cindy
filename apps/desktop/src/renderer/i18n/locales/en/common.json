@@ -3428,6 +3428,7 @@
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
         "cindyTextOneshotModelDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply. The plugin declares a preferred model: {{model}} (your pin takes precedence).",
+        "cindyTextOneshotModelDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply. The plugin declares a preferred model: {{model}} (effective when available in the current catalog; your pin takes precedence).",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",

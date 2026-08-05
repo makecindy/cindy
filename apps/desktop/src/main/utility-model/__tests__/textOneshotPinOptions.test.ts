@@ -120,15 +120,15 @@ describe('buildTextOneshotPinOptions', () => {
   it('停用轴:供应商级与逐模型停用都过滤', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
-        provider({ id: 'xd', models: { codex: [chat('a'), chat('b')] } }),
-        provider({ id: 'openai', agents: ['codex'], models: { codex: [chat('c')] } }),
+        provider({ id: 'xd', models: { codex: [chat('gpt-a'), chat('gpt-b')] } }),
+        provider({ id: 'openai', agents: ['codex'], models: { codex: [chat('claude-c')] } }),
       ),
-      { disabledProviders: { openai: true }, disabledModels: { 'xd:a': true } },
+      { disabledProviders: { openai: true }, disabledModels: { 'xd:gpt-a': true } },
     );
-    expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:b']);
+    expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:gpt-b']);
   });
 
-  it('非聊天模型(mode=embedding 等)过滤;mode 缺省与 responses 按聊天对待', () => {
+  it('非聊天模型过滤:mode 非聊天能态、mode 缺省但 group 是已知非聊天分类', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({
@@ -136,16 +136,26 @@ describe('buildTextOneshotPinOptions', () => {
           models: {
             codex: [
               chat('embed-1', { mode: 'embedding' }),
-              chat('plain-1'),
+              chat('gpt-plain'),
               chat('img-1', { mode: 'image_generation' }),
               chat('codex/gpt-5.5', { mode: 'responses' }),
+              // mode 缺省 + group 是已知非聊天分类:权威判据(isChatEligible)拒,
+              // 自建宽判据曾会放行进钉档清单(钉死不回落 = 恒失败)。
+              chat('seedream-5', { group: 'image' }),
+              // mode/group 都缺、id 也不认识的条目:权威判据按厂商兜底组**放行**
+              // (宁放勿拦,与新建对话清单同口径),这里如实锁定该行为。
+              chat('mystery-1'),
             ],
           },
         }),
       ),
       undefined,
     );
-    expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:plain-1', 'cat:xd:codex:codex/gpt-5.5']);
+    expect(options.map((o) => o.id)).toEqual([
+      'cat:xd:codex:gpt-plain',
+      'cat:xd:codex:codex/gpt-5.5',
+      'cat:xd:codex:mystery-1',
+    ]);
   });
 
   it('pi-only 供应商与缺 routing 的 agent 不进清单', () => {
@@ -156,17 +166,25 @@ describe('buildTextOneshotPinOptions', () => {
           id: 'half',
           agents: ['codex', 'claude-code'],
           routing: { codex: { upstream: 'https://up.example.com', authStrategy: 'api-key-header' } },
-          models: { codex: [chat('m-codex')], 'claude-code': [chat('m-cc')] },
+          models: { codex: [chat('gpt-m-codex')], 'claude-code': [chat('m-cc')] },
         }),
       ),
       undefined,
     );
-    expect(options.map((o) => o.id)).toEqual(['cat:half:codex:m-codex']);
+    expect(options.map((o) => o.id)).toEqual(['cat:half:codex:gpt-m-codex']);
   });
 
   it('自定义供应商:routing 禁用 / 鉴权策略不支持 / 缺上游 → 排除;结构完整 → 收', () => {
+    // group 镜像 buildUserProvider 的 custom:<id>:未知组 + 用户供应商 = 用户显式
+    // 配置的对话模型,权威判据直接放行(不再吃 id 启发式)。
     const custom = (id: string, routing: Provider['routing']) =>
-      provider({ id, source: 'user', agents: ['codex'], routing, models: { codex: [chat(`${id}-m`)] } });
+      provider({
+        id,
+        source: 'user',
+        agents: ['codex'],
+        routing,
+        models: { codex: [chat(`${id}-m`, { group: `custom:${id}` })] },
+      });
     const options = buildTextOneshotPinOptions(
       catalogOf(
         custom('ok-key', { codex: { upstream: 'https://up.example.com', authStrategy: 'api-key-header' } }),
@@ -216,9 +234,9 @@ describe('resolveOneshotCatalogModel', () => {
   });
 
   it('目录没有 / 空白声明 / 供应商整体停用 → null(按未声明处理)', () => {
-    const catalog = catalogOf(provider({ id: 'xd', models: { codex: [chat('a')] } }));
+    const catalog = catalogOf(provider({ id: 'xd', models: { codex: [chat('gpt-a')] } }));
     expect(resolveOneshotCatalogModel(catalog, undefined, 'no-such-model')).toBeNull();
     expect(resolveOneshotCatalogModel(catalog, undefined, '   ')).toBeNull();
-    expect(resolveOneshotCatalogModel(catalog, { disabledProviders: { xd: true } }, 'a')).toBeNull();
+    expect(resolveOneshotCatalogModel(catalog, { disabledProviders: { xd: true } }, 'gpt-a')).toBeNull();
   });
 });
