@@ -173,6 +173,21 @@ export interface ThreadEventHandlers {
   autoApprovalReviewCompleted?: (params: ItemGuardianApprovalReviewCompletedNotification) => void;
   guardianWarning?: (params: GuardianWarningNotification) => void;
   error?: (params: ErrorNotification['params']) => void;
+  /**
+   * Host 被永久替换（强制退役，如账号切换 / auth 失效）时发给每个订阅者的结构化
+   * 生命周期信号。订阅者按自身真实状态收口：
+   *
+   * - 空闲 / 已完成的订阅者静默失效，不产生任何错误事件——不应把一次内部 host 替换
+   *   渲染成历史会话的终止错误（#1391 场景：闲置数小时的已完成会话在切账号时被打
+   *   永久红框）。
+   * - 真实在飞（turn in-flight / turn/start pending / overload retry）的订阅者清理
+   *   在途状态并产生一次终态 error + Done，保证 isTurnRunning 复位、上层 busy 判定 /
+   *   Stop 锁 / 输入队列不卡死（2026-07-19 auth app_session_terminated 实排）。
+   *
+   * 提供该回调时，host **不再**广播 transport error（否则空 turnId 的错误无法被
+   * pending/retry 会话收口）。未提供时保持旧行为（广播 transport error）。
+   */
+  hostForcedRetire?: (signal: { reason: string }) => void;
 
   // ── ServerRequest (Phase 2 approval) ─────────────────────────────────────
   // server → client 的 request, 必须返回 response (否则 server 卡 turn)。
@@ -739,7 +754,7 @@ export class AppServerHost {
   }
 
   /**
-   * 强制收割前把终态 transport error 广播给仍在订阅的 session。
+   * 强制收割前通知订阅者（结构化生命周期信号）。
    *
    * retire()/shutdown() 会静默清空 subscribers —— 常规路径(凭证切换/app 退出)由
    * 上层先 Session.close 收尾,这是对的;但 auth 失效等强制路径会带着 in-flight turn
@@ -747,14 +762,61 @@ export class AppServerHost {
    * 的输入队列 / Stop 的 queueAbortPending 锁 / 凭证切换 busy 判定全部永久卡死
    * (2026-07-19 实排:auth app_session_terminated 触发 retire 后会话假 busy 数小时)。
    * 只广播、不清订阅 —— 紧随其后的 retire() 负责清理。
+   *
+   * 但**不能**对每个订阅者广播 transport error：空闲/已完成的订阅者（没有 in-flight
+   * turn，例如闲置数小时的已完成会话）收到终态 error 后会被写入永久红框，而它并没有
+   * 任何真实工作被中断——这只是一次内部 host 替换（#1391 场景）。而真实在飞的
+   * turn/start pending / overload retry 订阅者若只收到**空 turnId** 的 transport
+   * error，现有 error handler 的 `targetsPendingTurn`（要求非空 turnId）与
+   * `wasTurnRunning`（不含 overload retry）无法把它收口，busy 状态会永久卡死。
+   *
+   * 因此改为发送结构化 `hostForcedRetire` 信号，由每个订阅者按自身完整状态收口
+   * （空闲→静默失效；在飞→终态 error + Done）。未提供该回调的订阅者退回旧行为
+   * （广播 transport error），保证兼容。
    */
   notifySubscribersOfForcedRetire(reason: string): void {
     if (this.subscribers.size === 0) return;
-    this.logger.warn('forced retire with live subscribers — broadcasting terminal transport error', {
+    let notified = 0;
+    let fellBack = 0;
+    for (const [threadId, handlers] of this.subscribers) {
+      if (handlers.hostForcedRetire) {
+        notified += 1;
+        try {
+          handlers.hostForcedRetire({ reason });
+          continue;
+        } catch (e) {
+          // handler 抛错 → 该订阅者收不到结构化信号, 强退场景最需要兜底:
+          // 回退到旧 transport-error 广播, 至少保证有一条终态错误触发收口,
+          // 否则 busy 永久卡死 (copilot review on #1720)。
+          this.logger.warn('forced retire handler threw — falling back to transport error', {
+            threadId,
+            message: (e as Error).message,
+          });
+        }
+      }
+      // 旧订阅者（未接 hostForcedRetire）保持旧行为：广播 transport error。
+      fellBack += 1;
+      try {
+        handlers.error?.({
+          threadId,
+          turnId: '',
+          willRetry: false,
+          scope: 'transport',
+          error: { message: `app-server force-retired: ${reason}` },
+        });
+      } catch (e) {
+        this.logger.warn('forced retire broadcast handler threw', {
+          threadId,
+          message: (e as Error).message,
+        });
+      }
+    }
+    this.logger.warn('forced retire with live subscribers — notifying session lifecycles', {
       subscribers: this.subscribers.size,
+      notified,
+      fellBack,
       reason,
     });
-    this.broadcastTransportErrorToSubscribers(`app-server force-retired: ${reason}`);
   }
 
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────

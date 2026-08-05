@@ -4304,6 +4304,198 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('silently invalidates idle sessions when the local host is force-retired, while still notifying busy ones', async () => {
+    // 回归:切账号/auth 失效触发 force-retire 时,旧实现把终态 transport error 广播给
+    // 所有订阅者——闲置/已完成的会话也会收到永久红框(#1391 场景,用户侧实测:闲置
+    // 4 小时的已完成会话被写 app-server force-retired 错误)。修复后 host 发结构化
+    // hostForcedRetire 信号,由每个 session 按自身状态收口:空闲订阅者静默失效,
+    // 真实在飞的订阅者收到终态错误 + Done。
+    const agent = new CodexAgent(createDeps());
+
+    const idleHandle = await agent.startSession({
+      sessionId: 'session-force-retire-idle',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const busyHandle = await agent.startSession({
+      sessionId: 'session-force-retire-busy',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+
+    // 两个会话共用一个 app-server host(共享 codex app-server)。
+    expect(createdTransports).toHaveLength(1);
+    const transport = createdTransports[0];
+
+    const idleEvents: Array<Record<string, unknown>> = [];
+    const busyEvents: Array<Record<string, unknown>> = [];
+    const collectIdle = (async () => {
+      for await (const event of idleHandle.events()) idleEvents.push(event as Record<string, unknown>);
+    })();
+    const collectBusy = (async () => {
+      for await (const event of busyHandle.events()) busyEvents.push(event as Record<string, unknown>);
+    })();
+
+    // busy 会话先进入 in-flight turn;idle 会话保持空闲。
+    // threadSeq 从 1 递增:第一个 startSession(idle)拿到 thread-1,第二个(busy)拿到 thread-2。
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-2', turn: { id: 'turn-forced-retire-busy' } },
+    });
+    await waitForExpectation(() => {
+      expect(busyHandle.isTurnRunning?.()).toBe(true);
+    });
+    expect(idleHandle.isTurnRunning?.()).toBe(false);
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with idle subscriber');
+
+    // busy 会话:照旧收到一次终态 transport error + Done,isTurnRunning 复位。
+    expect(busyHandle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      expect(busyEvents.some((e) => e.type === 'error')).toBe(true);
+      expect(busyEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+
+    // idle 会话:不产生任何 error/终态事件(否则 UI 会留下永久红框)。
+    // 断言放在事件流结束后(await collectIdle 之后),不用固定 sleep 赌时序。
+    await idleHandle.close();
+    await busyHandle.close();
+    await collectIdle;
+    await collectBusy;
+    expect(idleEvents.some((e) => e.type === 'error')).toBe(false);
+    expect(idleEvents.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(false);
+
+    await agent.dispose();
+  });
+
+  it('idle session send after force-retire rejects with stale-host error', async () => {
+    // P2 (chatgpt-codex-connector on #1720): 静默失效的空闲会话在 force-retire 后
+    // 下次 send 会因 isCurrentHost()===false 抛 stale-host 错误, 不会透明重建。
+    // 这是本 PR 的已知边界: 透明重建(换 host + 重新 thread)属于独立改动, 这里
+    // 只把行为钉死, 防止未来无意的语义漂移。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-idle-then-send',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire idle then send');
+
+    await expect(
+      handle.send({ type: 'user', content: 'hello after retire' }),
+    ).rejects.toThrow(/Codex session expired/);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('collapses a pending turn/start session with terminal error + Done when the local host is force-retired', async () => {
+    // 回归(Greptile P1 on #1720):空 turnId 的 transport error 无法收口
+    // turn/start pending 的会话(handler 的 targetsPendingTurn 要求非空 turnId),
+    // busy 会永久卡死。修复后由 hostForcedRetire 信号在 session 侧统一收口:
+    // 清理在途状态并推终态。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-pending-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // 模拟 turn/start 已发出但响应未回:send 前 handle 先推初始 status,
+    // 断言按顺序(初始 status → error → Done),不用 nextEvent 逐个取值。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with pending turn/start');
+
+    // pending turn/start 的会话必须收到一次终态 error + Done,且不残留 busy。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await waitForExpectation(() => {
+      const errorIdx = events.findIndex((e) => e.type === 'error');
+      expect(errorIdx).toBeGreaterThan(0);
+      // 信号路径直接推 app-server-force-retired(reason 精确匹配);RPC 被 reject
+      // 时复用既有墓碑路径推 turn/start failed(无 reason 字段)。两者都必须是一次
+      // 终态,否则 UI 卡红框。willRetry 只有信号路径带 false,这里不强求。
+      expect(events[errorIdx]).toMatchObject({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true }),
+      });
+      const doneIdx = events.findIndex((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done');
+      expect(doneIdx).toBeGreaterThan(errorIdx);
+      expect(events[doneIdx]).toMatchObject({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Done', isRunning: false }),
+      });
+    });
+    expect(transport.closed).toBe(true);
+
+    await sendPromise.catch(() => undefined);
+    await collectEvents;
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('does not re-activate a force-retired session when a late turn/start success response arrives', async () => {
+    // 回归 (Greptile P1 on #1720): 强退发生在 turn/start 尚无 turnId 时, 迟到的
+    // 成功响应不得重新激活已终态收口的会话 (currentTurnId / isTurnInFlight 复活,
+    // 事件队列已 end → 上层 busy 永久卡死)。
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-force-retire-late-start-resp',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+    })();
+    const transport = createdTransports[0];
+
+    // turn/start 发出但响应不立即回 (挂起 RPC)。
+    const sendPromise = handle.send({ type: 'user', content: 'pending turn start' });
+    await waitForExpectation(() => {
+      expect(transport.lines.some((line) => line.includes('turn/start'))).toBe(true);
+    });
+
+    // 强退: notifySubscribersOfForcedRetire 同步执行 → quarantine + 终态收口。
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire with late start response');
+
+    // 收口先发生: 终态 error + Done, 不再 busy。
+    await waitForExpectation(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+      expect(events.some((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done')).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // 迟到成功响应随后到达 (挂起 RPC 在 close/reject 之前 resolve 的竞态窗口)。
+    const line = transport.lines.find((l) => l.includes('turn/start'));
+    const req = line ? JSON.parse(line) : null;
+    if (req?.id !== undefined) {
+      transport.emitMockLine({ id: req.id, result: { turn: { id: 'late-success-turn' } } });
+    }
+    await sendPromise.catch(() => undefined);
+    // 事件流结束(collectEvents 完成)后再统一断言, 不用固定 sleep 赌时序:
+    // 全程只能有一次 error + 一次 Done, 迟到响应不得新增第二组终态。
+    await collectEvents;
+
+    // 不得复活 busy, 也不得新增第二组终态事件。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    const errorCount = events.filter((e) => e.type === 'error').length;
+    expect(errorCount).toBe(1);
+    const doneCount = events.filter((e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done').length;
+    expect(doneCount).toBe(1);
+
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('keeps shared Codex sessions usable when ordinary stderr contains auth keywords', async () => {
     const invalidate = vi.fn(async () => undefined);
     const agent = new CodexAgent(createDeps({}, {

@@ -33,31 +33,40 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[Telegram 回复格式]');
   });
 
-  it('X 平台名正确且给出单条纯文本回帖格式约束, 不复用 Telegram/Slack 提示', () => {
+  it('X 渠道使用中性回复说明, 明确付费账号不受 280 字符限制', () => {
     const x = buildHookPromptNote('x');
     expect(x).toContain('本会话来自 X。');
-    expect(x).toContain('[X 回复格式]');
-    expect(x).toContain('转换为纯文本');
-    expect(x).toContain('标题、列表、表格');
+    expect(x).toContain('[X 回复说明]');
+    expect(x).not.toContain('回答方式与普通任务及其他渠道保持一致');
+    expect(x).toContain('当前账号为付费账号');
+    expect(x).toContain('不受 280 个字符限制');
+    expect(x).toContain('无需针对当前渠道调整回答篇幅');
+    expect(x).not.toContain('不要主动压缩或删减必要内容');
+    expect(x).toContain('按桌面版规则拼出正式正文');
+    expect(x).toContain('以一条回复发回 X');
+    expect(x).toContain('正文可以使用标题、列表、表格');
+    expect(x).toContain('发布时会转换为纯文本');
     expect(x).toContain('上述附件引用除外');
+    expect(x).toContain('在 X 中除上述附件引用外,尽量避免输出其他 URL 链接');
     expect(x).toContain('不要解释或复述这些格式要求');
-    const xFormat = x.slice(x.indexOf('[X 回复格式]'));
-    expect(xFormat).not.toMatch(/280|字数|字符|长度|简短|压缩|截断|篇幅|不超过|以内/i);
+    expect(x).toContain('作为 X 附件发回');
+    expect(x).not.toContain('X (Twitter)');
+    expect(x).not.toContain('公开回帖');
+    expect(x).not.toContain('最后一条助手消息');
     expect(x).not.toContain('[Telegram 回复格式]');
     expect(x).not.toContain('本会话来自 Slack');
-    // 未接线前的回归写法: x 曾被三元兜底误标成 Slack。
-    expect(buildHookPromptNote('slack')).not.toContain('[X 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('[X 回复说明]');
   });
 
-  it('X 提示词陈述取文机制, 而不是要求模型自律(与 turnTextsFor 同一约定)', () => {
+  it('X 提示词保留渠道名和正式正文拼接机制', () => {
     const x = buildHookPromptNote('x');
     // 机制侧: session-runner 的 turnTextsFor 对所有 IM 取 observer.finalText() 当
-    // 公开正文; X 的单条限制只在发送层生效。提示词要说明正文会按桌面规则拼出,
-    // 让模型不要把结论拆成多条彼此不完整的公开回帖。
+    // 公开正文; X 的单条限制只在发送层生效。提示词只陈述这条必要机制。
+    expect(x).toContain('本会话来自 X。');
     expect(x).toContain('按桌面版规则拼出正式正文');
-    expect(x).toContain('以一条回帖发布');
-    expect(x).toContain('短过程旁白会被折叠');
+    expect(x).toContain('以一条回复发回 X');
     expect(x).not.toContain('只有你的最后一条消息会被发出');
+    expect(x).not.toContain('最后一条助手消息');
   });
 
   it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {

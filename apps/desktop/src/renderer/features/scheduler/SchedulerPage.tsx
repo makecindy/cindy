@@ -64,6 +64,10 @@ import {
   buildUsageLimitScheduleFormOverrides,
   readUsageLimitScheduleCreateIntent,
 } from './lib/usageLimitScheduleCreateIntent';
+import {
+  buildPluginScheduleFormOverrides,
+  readPluginScheduleCreateIntent,
+} from './lib/pluginScheduleCreateIntent';
 
 function scheduleToUserCreateInput(
   schedule: Schedule,
@@ -154,6 +158,13 @@ export function SchedulerPage() {
   // 项目分组"+"按钮的预填 workingDir：用户级 schedule，仅省去选项目目录这一步，
   // 不强制写 schedules.json（要"提升为项目自动化"走右键菜单 promoteToProject）。
   const [createPrefillWorkingDir, setCreatePrefillWorkingDir] = useState<string | null>(null);
+  // 本次创建面板是由哪个插件请求打开的(agent 槽 schedule 加档)。只做面板上的
+  // 来源标注 —— 让用户看清是谁请求建这条任务;不落库(见 pluginScheduleCreateIntent
+  // 里 ghostId 的注释:落库要新增 DB 列 + 不可回退的 migration)。
+  const [pluginScheduleOrigin, setPluginScheduleOrigin] = useState<{
+    ghostId: string;
+    ghostName: string;
+  } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Status 筛选默认 'all'(默认展示全部任务,含 paused);用户在 popover 主动
   // 切换后持久化,重进页面恢复上次选择(issue #75)。
@@ -213,6 +224,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(focused);
     setFormOpen(true);
   }, [editToken, focusId, schedules]);
@@ -236,6 +248,48 @@ export function SchedulerPage() {
     const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
     navigate(path, { replace: true, state: null });
   }, [location.pathname, location.search, location.state, navigate, t]);
+
+  // 插件请求新建自动化(agent 槽 schedule 加档):形态与上面 usage-limit 那条
+  // 完全一致 —— 一次性导航意图 → 预填打开面板 → 用完立刻清掉 state。
+  // 与它共用 handledScheduleCreateRequestRef:两种意图不该叠开两个面板。
+  // ⚠️ 这里只 setCreateInitialValues + 打开面板,**不创建任务**。落库仍然只发生在
+  // 用户点保存后走 handleSubmit —— 插件全程没有直接建任务的通道。
+  useEffect(() => {
+    const intent = readPluginScheduleCreateIntent(location.state);
+    if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
+    handledScheduleCreateRequestRef.current = intent.requestId;
+    const consumeState = () => {
+      const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
+      navigate(path, { replace: true, state: null });
+    };
+    // 表单已经开着 → **不覆盖**,提示后把这次请求丢掉(review #1715 的 Codex P2)。
+    // ⚠️ PR 号写成 `review` 紧跟编号的语序不是随手排版:scheduler-ci-guard 的
+    // 色值白名单规则会把「井号 + 4 位数字」当成 RGBA 简写色值,它只豁免紧跟
+    // `PR ` / `review ` 的写法(见 scripts/scheduler-ci-guard.mjs)。
+    //
+    // 为什么不能直接往下走:ScheduleFormDialog 的 reset effect 依赖 initialValues 且
+    // 守卫只有 `if (!open) return`(components/ScheduleFormDialog.tsx 的那个 effect),
+    // 所以在表单已 open 时换一份 initialValues 会**静默 reset 掉用户正在填的内容**。
+    // 插件请求可以在任何时刻到达,这条路径是本 PR 打开的,必须由本 PR 兜住。
+    //
+    // 语义选"拒绝 + 提示"而不是"延后"或"弹确认":延后要引入待处理队列与过期判定,
+    // 弹确认会在用户填表中途再插一层模态——两者都比"让用户存完再点一次"更重。用户
+    // 输入绝不丢是硬要求,一次插件请求丢掉只需再点一次,代价不对称。
+    //
+    // 只可能在用户正停在自动化页时命中:formOpen 是本页 state,离开页面即卸载归 false。
+    if (formOpen) {
+      toast.warning(t('scheduler.toast.pluginDraftIgnoredFormOpen', { name: intent.ghostName }));
+      consumeState();
+      return;
+    }
+    setCreatePrefillWorkingDir(null);
+    setCreateInitialTemplate(null);
+    setEditing(null);
+    setCreateInitialValues(buildPluginScheduleFormOverrides(intent));
+    setPluginScheduleOrigin({ ghostId: intent.ghostId, ghostName: intent.ghostName });
+    setFormOpen(true);
+    consumeState();
+  }, [formOpen, location.pathname, location.search, location.state, navigate, t]);
 
   // workingDir filter（URL ?workingDir=...）
   const scopedByDir = useMemo(() => {
@@ -299,6 +353,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -307,6 +362,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(template);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -315,6 +371,7 @@ export function SchedulerPage() {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setEditing(s);
     setFormOpen(true);
   }, []);
@@ -323,6 +380,7 @@ export function SchedulerPage() {
     setEditing(null);
     setCreateInitialTemplate(null);
     setCreateInitialValues(null);
+    setPluginScheduleOrigin(null);
     setCreatePrefillWorkingDir(workingDir);
     setFormOpen(true);
   }, []);
@@ -469,6 +527,7 @@ export function SchedulerPage() {
   const handleEditProjectSchedule = useCallback((s: Schedule) => {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
+    setPluginScheduleOrigin(null);
     setEditing(s);
     setFormOpen(true);
   }, []);
@@ -638,12 +697,14 @@ export function SchedulerPage() {
             setCreatePrefillWorkingDir(null);
             setCreateInitialTemplate(null);
             setCreateInitialValues(null);
+            setPluginScheduleOrigin(null);
           }
         }}
         initial={editing}
         initialTemplate={createInitialTemplate}
         initialValues={createInitialValues}
         initialWorkingDir={createPrefillWorkingDir}
+        requestedByGhostName={pluginScheduleOrigin?.ghostName ?? null}
         editProjectSchedule={editing?.source === 'project'}
         onSubmit={handleSubmit}
       />

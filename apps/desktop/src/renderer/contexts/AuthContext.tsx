@@ -70,6 +70,8 @@ export interface AuthContextValue {
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
   accountDeletionRestored: boolean;
+  /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);全局警示条据此显隐。 */
+  credentialStoreUnavailable: boolean;
   getAccountDeletionAvailability: ReturnType<
     typeof createAuthService
   >['getAccountDeletionAvailability'];
@@ -109,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
+  const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
   const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
@@ -182,6 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setDeviceId(state.deviceId);
       setHasAccountDeletionReceipt(state.hasAccountDeletionReceipt);
       setAccountDeletionRestored(state.accountDeletionRestored);
+      setCredentialStoreUnavailable(state.credentialStoreUnavailable);
       if (state.user) {
         setLoginState(null);
         if (ownerChanged) {
@@ -239,6 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoginState(null);
         clearWorkersCache();
         setUser(null);
+        setCredentialStoreUnavailable(false);
       })
       .finally(() => setIsInitializing(false));
 
@@ -296,6 +301,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsAuthenticated(false);
         setIsCanary(false);
         setLoginState(null);
+        setCredentialStoreUnavailable(false);
         handling = false;
       });
     });
@@ -412,6 +418,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       exitLocalMode,
       hasAccountDeletionReceipt,
       accountDeletionRestored,
+      credentialStoreUnavailable,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,
@@ -437,6 +444,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       exitLocalMode,
       hasAccountDeletionReceipt,
       accountDeletionRestored,
+      credentialStoreUnavailable,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,

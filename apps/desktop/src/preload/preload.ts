@@ -499,6 +499,8 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
+// 插件自动化草稿(agent 槽 schedule 加档:renderer 开自动化创建面板并预填)。
+const fanOutGhostScheduleDraft = createIpcFanOut('ghosts:schedule-draft');
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut('voice-input:modifier-shortcut-keys');
 // 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。设置页不在,它的 toast 也就
 // 不在,所以由常挂载的 MainLayout 接这条并提示。main 侧一次 App 运行只推一次。
@@ -1068,6 +1070,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
     onPreviewOpen: fanOutGhostPreviewOpen,
+    onScheduleDraft: fanOutGhostScheduleDraft,
     getCard: (
       callId: string,
     ): Promise<{
