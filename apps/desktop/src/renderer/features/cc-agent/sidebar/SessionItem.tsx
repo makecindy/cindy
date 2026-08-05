@@ -442,7 +442,8 @@ export const SessionItem = memo(function SessionItem({
   // SortableJS（置顶/项目手动排序，forceFallback 指针手势）与原生 HTML5 拖拽会争抢
   // 同一次手势：行带 `draggable` 时浏览器可能启动原生拖拽并中断 fallback 排序。这些
   // 行保持原有排序拖拽，分屏拖拽源只留给非 Sortable 容器（时间排序的对话列表等）。
-  const [inSortableContainer, setInSortableContainer] = useState(false);
+  // 首帧先按 Sortable 容器处理，避免 ref effect 运行前短暂开启原生分屏拖拽。
+  const [inSortableContainer, setInSortableContainer] = useState(true);
   useEffect(() => {
     setInSortableContainer(Boolean(rowRef.current?.closest('[data-sortable-id]')));
   }, []);

@@ -206,6 +206,7 @@ describe('SessionCard review regressions', () => {
       "splitDragEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'",
     );
     expect(sessionItemSource).toContain('draggable={splitDragEnabled}');
+    expect(sessionItemSource).toContain('useState(true)');
   });
 
   it('PR-123 greptile: card 路径的绑定徽章与 Timer 进反白体系', () => {
