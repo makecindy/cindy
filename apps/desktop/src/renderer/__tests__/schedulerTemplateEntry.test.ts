@@ -156,6 +156,15 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
           efforts: ['medium', 'high'],
           defaultEffort: 'medium',
         },
+        // 第二个模型专供「所见即所存」那条用例:它需要一个**不等于 fallback**
+        // (claude-sonnet-4-6)、又确实在可用目录里的模型 —— 否则要么测不出问题,
+        // 要么被 isExplicitScheduleModelUnavailable 拦在提交前。
+        {
+          id: 'claude-opus-4-9',
+          displayName: 'Claude Opus 4.9',
+          efforts: ['medium', 'high'],
+          defaultEffort: 'medium',
+        },
       ],
       hasFastMode: false,
     },
@@ -381,5 +390,64 @@ describe('Scheduler template entry', () => {
     expect(screen.queryByDisplayValue('第二次请求的名字')).toBeNull();
     expect(screen.queryByDisplayValue('第二次请求的提示词。')).toBeNull();
     expect(createSchedule).not.toHaveBeenCalled();
+  });
+
+  /**
+   * review #1715 的回归:**所见即所存**。
+   *
+   * 插件请求的任务是「用户不改模型、直接点保存」的高频路径(插件把内容都预填好了,
+   * 用户只是确认一下),所以模型默认值这条链路对它尤其值得钉死:一旦"显示的模型"与
+   * "落库的模型"漂移,用户就会以为在用 A、实际每次跑 B(2026-06 真踩过)。
+   *
+   * 本用例钉的是**端到端结果**而非某条实现路径:当前由 ScheduleFormDialog 的
+   * "form.model 为空时回填默认模型" effect 保证;将来若有人改成从 intent 直接给值,
+   * 或反过来删掉那个 effect,只要最终"显示 === 落库"成立就仍然通过 —— 用户可见的
+   * 正确性才是契约。
+   *
+   * 这里刻意把「记忆的模型」设成**不同于 fallback**(claude-sonnet-4-6)的值,
+   * 否则两者恰好相等时这个 bug 根本测不出来。
+   */
+  it('插件请求:用户不碰模型 chip 直接保存,存下的模型与表单显示的一致', async () => {
+    const REMEMBERED = 'claude-opus-4-9';
+    expect(REMEMBERED).not.toBe('claude-sonnet-4-6'); // 必须区别于 fallback,否则测不出问题
+    localStorageData.set(
+      'xdt:scheduleFormPrefs:v1',
+      JSON.stringify({
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        workingDir: '',
+        useWorktree: false,
+        lastByAgent: {
+          'claude-code': { model: REMEMBERED, providerId: '', effort: '', fastMode: false },
+        },
+      }),
+    );
+
+    routerMocks.location.state = pluginScheduleNavigationState({
+      kind: 'plugin-schedule-draft',
+      requestId: 'plugin-model-default',
+      ghostId: 'codex-reset-planner',
+      ghostName: 'Codex 重置管家',
+      name: 'Codex 重置提醒',
+      prompt: '检查重置时间,快到了提醒我。',
+      intervalMs: 3_600_000,
+    });
+
+    render(createElement(SchedulerPage));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+
+    // 表单显示的就是记忆值(不是空、也不是 fallback)。
+    expect(screen.getByTestId('model-value').textContent).toBe(REMEMBERED);
+
+    // 用户什么都不改,直接保存。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }),
+    );
+
+    // 存下去的模型 === 表单上显示的那个,不省略、不回退。
+    await waitFor(() => expect(createSchedule).toHaveBeenCalled());
+    expect(createSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ model: REMEMBERED, agentKind: 'claude-code' }),
+    );
   });
 });
