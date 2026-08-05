@@ -224,10 +224,10 @@ describe('composer structured list input rules', () => {
 
     const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
     const baseListRule = css.match(
-      /\[data-chat-input-root\] \.ProseMirror :is\(ul, ol\) \{([\s\S]*?)\n\}/,
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
     )?.[1];
     const cjkMarkerRule = css.match(
-      /\[data-chat-input-root\] \.ProseMirror ol\[data-marker='、'\] \{([\s\S]*?)\n\}/,
+      /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
     )?.[1];
     expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
     expect(baseListRule).toContain(
