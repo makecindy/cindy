@@ -175,23 +175,20 @@ describe('Shared create project picker', () => {
     );
   });
 
-  it('keeps the worktree checkbox owned by the user alone (2026-07-29 invariant, v2)', () => {
-    // 用户裁决(实测后第二版):勾选状态只属于用户——
+  it('keeps the worktree checkbox owned by the user alone (2026-08-05 invariant)', () => {
+    // 用户裁决:勾选状态只属于用户——
     //  1) 组件内不存在任何 useEffect 自动改写 enabled 的路径(资格变化只禁用、
     //     不改状态;旧 handleAutoDisable 机制不得复活);
-    //  2) 用户点击 checkbox(source='chip')→ 写穿工作端记忆(本地专用单字段 setter /
+    //  2) 用户点击 checkbox → 写穿工作端记忆(本地专用单字段 setter /
     //     device-link 远程 apply-new-maker-worktree-pref);
-    //  3) 用户选分支(source='branch-pick')→ 勾选双向联动但仅本次草稿、不落记忆
-    //     (route 侧 source !== 'chip' 直接 return);
+    //  3) 用户选分支→ 不会隐式修改勾选状态;
     //  4) checkbox 原样直出记忆(播种无 baseRepo 点亮门槛),发送侧按
     //     「勾选 && baseRepo 就绪」静默降级,不报错拦截。
     expect(worktreeChipsSource).not.toContain('handleAutoDisable');
     expect(worktreeChipsSource).not.toMatch(/useEffect\([^)]*onEnabledChange/s);
-    expect(worktreeChipsSource).toContain("onToggle={(v) => onEnabledChange(v, 'chip')}");
-    expect(worktreeChipsSource).toContain("onEnabledChange(true, 'branch-pick')");
-    expect(worktreeChipsSource).toContain("onEnabledChange(false, 'branch-pick')");
-    expect(branchPickSource).toContain("kind: 'disable-worktree'");
-    expect(newMakerDraftRouteSource).toContain("if (source !== 'chip') return;");
+    expect(worktreeChipsSource).toContain('onToggle={onEnabledChange}');
+    expect(worktreeChipsSource).not.toContain("'branch-pick'");
+    expect(branchPickSource).not.toContain("kind: 'disable-worktree'");
     expect(newMakerDraftRouteSource).toContain("'maker:apply-new-maker-worktree-pref'");
     expect(newMakerDraftRouteSource).toContain('setWorktreePreference(enabled)');
     expect(newMakerDraftRouteSource).toContain('setWtEnabled(worktreePref)');
@@ -199,14 +196,29 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).not.toContain('worktreeMissingRepo');
   });
 
+  it('only forwards a worktree-eligible repo root to the send path', () => {
+    // linked worktree、非 Git 目录和探测失败都必须让发送侧自然降级，不能只因 repoRoot
+    // 存在就触发 main 侧必然拒绝的 createWorktree。
+    expect(worktreeChipsSource).toMatch(
+      /const baseRepo =\s*detect\.data\?\.gitInstalled === true[\s\S]*detect\.data\.isGitRepo[\s\S]*!detect\.data\.isInsideWorktree[\s\S]*detect\.data\.repoRoot \?\? null/,
+    );
+  });
+
   it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
     // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
-    // 分支菜单永远可点(worktree 开不了的仓库除外);悬停任一半区时分隔线隐去。
+    // 未勾时分支区只读;已勾时分支菜单 = worktree 源分支选择器。
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
     expect(worktreeChipsSource).toContain(
-      'const branchInteractive = !disabled && (effectiveWorktreeEnabled || !switchDisabled)',
+      'const branchInteractive = !disabled && effectiveWorktreeEnabled && baseRepo !== null',
     );
+    expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
+    expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
+    expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
+    expect(worktreeChipsSource).toContain(
+      "sourceBranch || branches.current || currentBranch || 'HEAD'",
+    );
+    expect(worktreeChipsSource).toContain('checked\n          ? t(\'newChat.branchChip.sourceTooltip\')');
     expect(worktreeChipsSource).toContain('group-hover:opacity-0');
     expect(worktreeChipsSource).not.toContain('function BranchChip');
     expect(worktreeChipsSource).not.toContain('function WorktreeChip(');
@@ -220,7 +232,9 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',
     );
-    expect(worktreeChipsSource).toContain("sourceBranch || branches.current || 'HEAD'");
+    expect(worktreeChipsSource).toContain(
+      "sourceBranch || branches.current || currentBranch || 'HEAD'",
+    );
     expect(worktreeChipsSource).not.toContain("sourceBranch || branches.current || 'main'");
   });
 

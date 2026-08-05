@@ -3163,6 +3163,8 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "installedSection": "Installed",
+        "installedExpand": "Show all {{count}} installed plugins",
+        "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
@@ -3202,10 +3204,12 @@
         },
         "install": "Install",
         "details": "Details",
+        "detailsAria": "View details for {{name}}",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
         "conflict": "Plugin ID conflict",
+        "conflictAria": "{{name}} has a plugin ID conflict",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
@@ -5184,9 +5188,7 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch",
-      "worktreeHint": "Picking another branch starts this chat in an isolated worktree",
-      "exitWorktreeHint": "Picking the current branch leaves worktree and starts directly on it"
+      "sourceTooltip": "Worktree source branch"
     },
     "folderPicker": {
       "selectFolder": "Select folder",

@@ -14,6 +14,7 @@ import {
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
   sortGhostPluginItemsByRecentUse,
+  installedVisibleCount,
   sortInstalledForDisplay,
   toGhostPluginDetail,
   toGhostPluginListItem,
@@ -185,6 +186,25 @@ describe('ghostPluginViewModel', () => {
           ]),
         }).map((item) => item.id),
       ).toEqual(['b', 'd', 'a', 'c']);
+    });
+  });
+
+  describe('installedVisibleCount (unread never folded)', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ id: `p-${index}` }));
+
+    it('keeps the base cap when unread count is within it', () => {
+      expect(installedVisibleCount(items, new Map([['p-0', 9]]), 8)).toBe(8);
+      expect(installedVisibleCount(items, new Map(), 8)).toBe(8);
+    });
+
+    it('expands the window to cover every unread plugin beyond the cap', () => {
+      const unread = new Map(Array.from({ length: 10 }, (_, i) => [`p-${i}`, i]));
+      // 10 unread > cap 8 → window grows to 10 so no unread plugin is folded.
+      expect(installedVisibleCount(items, unread, 8)).toBe(10);
+    });
+
+    it('ignores unread ids that are not in the installed list', () => {
+      expect(installedVisibleCount(items, new Map([['not-installed', 1]]), 8)).toBe(8);
     });
   });
 

@@ -628,25 +628,27 @@ export function WorkspacePrefsEditor({
             setFast: setProviderModelFast,
           }}
           currentProviderId={state.providerSourceFor(alias)}
-          // 分段行原子选择:model/effort 走远端 prefs, 成功后来源落本地(串联,
-          // 见 applyPatch 的 alsoProviderSource 注释)。effort 取该 (来源, 模型) 的
-          // 全局预设记忆(用户 hover 非选中行改过的档位, codex review;ModelSelector
-          // 的 onProviderChange 只回传 provider+model 两参, 记忆值需自取), 该模型
-          // 支持时进 patch, 否则维持 patchForModelChange 的模型默认校准。
-          onProviderChange={(providerId, modelId) => {
+          // 分段行原子选择:model/effort 走远端 prefs,成功后来源落本地(串联,
+          // 见 applyPatch 的 alsoProviderSource 注释)。目标行的 provider-specific
+          // effort 由共享 ModelSelector 回传;旧调用方未提供时才回落本地记忆。
+          onProviderChange={(providerId, modelId, reconciledEffort) => {
             if (eff.agentKind.id === null) return;
             const caps = toPrefsCaps(effAgentCaps);
             if (modelId) {
               const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
-              const remembered =
-                providerId && isKnownAgent(eff.agentKind.id)
-                  ? getProviderModelEffort(eff.agentKind.id, providerId, modelId)
-                  : undefined;
-              if (
-                remembered &&
-                caps?.models.find((m) => m.id === modelId)?.efforts.includes(remembered)
-              ) {
-                patch.effort = remembered;
+              if (reconciledEffort !== undefined) {
+                patch.effort = reconciledEffort || null;
+              } else {
+                const remembered =
+                  providerId && isKnownAgent(eff.agentKind.id)
+                    ? getProviderModelEffort(eff.agentKind.id, providerId, modelId)
+                    : undefined;
+                if (
+                  remembered &&
+                  caps?.models.find((m) => m.id === modelId)?.efforts.includes(remembered)
+                ) {
+                  patch.effort = remembered;
+                }
               }
               state.applyPatch(alias, patch, providerId);
             } else {

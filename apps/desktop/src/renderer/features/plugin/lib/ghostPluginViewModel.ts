@@ -213,6 +213,22 @@ export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'
 }
 
 /**
+ * Size of the always-visible installed window: at least `cap`, expanded to also cover every
+ * plugin carrying an unread notification. Because `sortInstalledForDisplay` ranks unread items
+ * first, taking this many from the front guarantees no unread plugin is ever folded away — even
+ * when the user has many plugins. Updatable-but-read plugins can still fold (the banner surfaces
+ * updates).
+ */
+export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id'>>(
+  items: readonly T[],
+  unreadAtById: ReadonlyMap<string, number>,
+  cap: number,
+): number {
+  const unreadCount = items.reduce((count, item) => count + (unreadAtById.has(item.id) ? 1 : 0), 0);
+  return Math.max(cap, unreadCount);
+}
+
+/**
  * 将安装清单转换成列表卡片需要的最小字段。
  *
  * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
