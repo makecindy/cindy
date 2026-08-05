@@ -1513,10 +1513,42 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     );
   });
 
+  // 2026-08-05:oneshotModel 快问快答偏好模型(标量意图键,不是类目;
+  // 必须与 text.oneshot 成对;权限行说明换带模型版本,装入即知情)。
+  it('oneshotModel 合法声明:落 cindy.oneshotModel,权限行说明带模型', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          detailKey: 'cindyTextOneshotModelDetail',
+          detailArgs: { model: 'codex/gpt-5.5' },
+        }),
+      ]),
+    );
+  });
+
   it('search.web 缺少 tool 槽或工具声明时拒装', () => {
     const withoutTool = validateGhostManifest(chipWithModel({ search: ['web'] }));
     expect(withoutTool.ok).toBe(false);
     expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
+  });
+
+  it('oneshotModel 形态非法 / 无 text.oneshot 本体单挂 → 拒', () => {
+    for (const bad of [
+      { text: ['oneshot'], oneshotModel: '' },
+      { text: ['oneshot'], oneshotModel: '   ' },
+      { text: ['oneshot'], oneshotModel: 42 },
+      { text: ['oneshot'], oneshotModel: 'x'.repeat(129) },
+      { oneshotModel: 'codex/gpt-5.5' },
+      { image: ['generate'], oneshotModel: 'gpt-5.5' },
+    ]) {
+      const v = validateGhostManifest(chipWithModel(bad));
+      expect(v.ok, JSON.stringify(bad)).toBe(false);
+    }
   });
 });
 

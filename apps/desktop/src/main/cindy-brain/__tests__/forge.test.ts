@@ -758,6 +758,8 @@ describe('FORGE_GUIDE', () => {
       // 2026-07-31 快问快答(cindy.text.oneshot)与派活取件(agent.errand)。
       'oneshot_text',
       'NO_CANDIDATE',
+      // 2026-08-05 快问快答偏好模型声明(目录模型 id;用户钉档 > 插件声明 > 默认链)。
+      'oneshotModel',
       'expectJson',
       // 2026-08-04 文本转向量(cindy.embed.text):作者最容易踩的是"换模型 =
       // 换向量空间",手册必须讲到 model + dim 要跟向量一起存。

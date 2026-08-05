@@ -512,6 +512,93 @@ describe('Ghost plugin detail sections', () => {
     expect(select.className).toContain('max-w-[60%]');
   });
 
+  // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
+  // 分组 / 折扣与订阅徽标 / 搜索),身份卡声明偏好时"跟随默认"行如实展示。
+  it('text capability renders the rich pin picker with provider groups and budget badge', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: {},
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+                {
+                  id: 'cat:openai:codex:gpt-5.5',
+                  label: 'GPT 5.5 · OpenAI',
+                  group: 'OpenAI',
+                  providerId: 'openai',
+                  agentKind: 'codex',
+                  modelId: 'gpt-5.5',
+                  modelName: 'GPT 5.5',
+                  budget: false,
+                  subscription: true,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              declaredModel: { id: 'cat:xd:codex:codex/gpt-5.5', label: 'codex/gpt-5.5' },
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+
+    const listbox = await screen.findByRole('listbox');
+    // 分组标题 + 首行是声明版"跟随默认"(i18n mock 透传 key)。
+    expect(within(listbox).getByText('GW')).toBeTruthy();
+    expect(within(listbox).getByText('OpenAI')).toBeTruthy();
+    const defaultRow = within(listbox).getAllByRole('option')[0]!;
+    expect(defaultRow.textContent).toContain(
+      'settings.ghosts.detail.cindyPrefs.defaultOptionDeclared',
+    );
+    // 折扣徽标只出现在预算行;订阅徽标只出现在订阅行。
+    const budgetRow = within(listbox).getByText('GPT 5.5 折扣').closest('button')!;
+    expect(within(budgetRow).getByText('settings.ghosts.detail.cindyPrefs.budgetBadge')).toBeTruthy();
+    const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest('button')!;
+    expect(
+      within(plainRow).queryByText('settings.ghosts.detail.cindyPrefs.budgetBadge'),
+    ).toBeNull();
+    expect(within(plainRow).getByText('settings.providers.models.subscription')).toBeTruthy();
+    // 点行钉档:写回 cat: 编码钉值。
+    fireEvent.click(plainRow);
+    expect(setCindyPref).toHaveBeenCalledWith(
+      'xdt-knowledge',
+      'text.oneshot',
+      'cat:openai:codex:gpt-5.5',
+    );
+    vi.unstubAllEnvs();
+  });
+
   it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,

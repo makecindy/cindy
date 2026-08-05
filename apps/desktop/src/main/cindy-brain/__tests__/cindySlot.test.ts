@@ -29,6 +29,7 @@ function fakeGhost(
       text?: string[];
       embed?: string[];
       search?: string[];
+      oneshotModel?: string;
     } | null;
   } = {},
 ): InstalledGhost {
@@ -1752,6 +1753,73 @@ describe('快问快答(oneshot_text)', () => {
       maxTokens: 1024,
       timeoutMs: 60_000,
     });
+  });
+
+  // 2026-08-05:选型优先级 = 用户钉档 > 身份卡声明(oneshotModel)> 系统默认链。
+  it('选型优先级:用户钉档 > 身份卡声明 > 系统默认链', async () => {
+    const oneshotText = vi.fn(async (_params: { route?: unknown }) => ({ ok: true as const, text: 'ok' }));
+    const declared = { model: { text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' } };
+    const resolveOneshotModel = vi.fn(() => ({ providerId: 'xd', agentKind: 'codex' as const, model: 'codex/gpt-5.5' }));
+
+    // ① 用户钉了轻量档位键:原样下传,声明不生效(resolve 不调用)。
+    const pinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'litellm-kimi-k2.6',
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await pinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ route: { kind: 'utility-profile', profileId: 'litellm-kimi-k2.6' } }),
+    );
+    expect(resolveOneshotModel).not.toHaveBeenCalled();
+
+    // ② 用户钉了目录钉(cat: 编码):解码成 供应商×agent×模型。
+    const catalogPinned = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => 'cat:openai:codex:gpt-5.5',
+      oneshotText,
+    });
+    await catalogPinned.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'openai', agentKind: 'codex', model: 'gpt-5.5' },
+      }),
+    );
+
+    // ③ 无钉档 + 声明可解析:走声明路由。
+    const declaredOnly = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel,
+      oneshotText,
+    });
+    await declaredOnly.slot.handleModelRequest('art', ONESHOT);
+    expect(resolveOneshotModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(oneshotText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        route: { kind: 'catalog', providerId: 'xd', agentKind: 'codex', model: 'codex/gpt-5.5' },
+      }),
+    );
+
+    // ④ 无钉档 + 声明解析不到(目录没有/已停用):按未声明,跟随默认链。
+    const unresolved = makeSlot({
+      getGhost: () => fakeGhost(declared),
+      getOverride: () => null,
+      resolveOneshotModel: () => null,
+      oneshotText,
+    });
+    await unresolved.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
+
+    // ⑤ 无钉档无声明:route 缺省,跟随默认链。
+    const plain = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      getOverride: () => null,
+      oneshotText,
+    });
+    await plain.slot.handleModelRequest('art', ONESHOT);
+    expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
   });
 
   it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {

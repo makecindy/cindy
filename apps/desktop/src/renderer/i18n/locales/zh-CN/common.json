@@ -3426,6 +3426,7 @@
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "cindySearchWeb": "可使用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",
+        "cindyTextOneshotModelDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。插件声明了偏好模型：{{model}}(你的钉档优先)。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -3551,6 +3552,9 @@
             "embed.text": "文本转向量"
           },
           "defaultOption": "{{model}}(默认)",
+          "defaultOptionDeclared": "{{model}}(插件声明)",
+          "searchPlaceholder": "搜索模型或供应商",
+          "budgetBadge": "折扣",
           "noModels": "暂无可用模型"
         },
         "errandPrefs": {
