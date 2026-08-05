@@ -154,6 +154,24 @@ describe('SplitGroup', () => {
     expect(screen.getByTestId('route-outlet')).toBeTruthy();
   });
 
+  it('权威核验确认远程 session 已归档时清理持久化 pane', async () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],
+      isLoading: false,
+      error: null,
+    });
+    sessionGetMock.mockResolvedValue({ id: 'remote-session-archived', status: 'archived' });
+    act(() => {
+      splitGroupStore.addSession('remote-session-archived', 'session-a', 'right');
+    });
+
+    renderSplitGroup('session-a');
+
+    await waitFor(() => expect(splitGroupStore.getSnapshot().root).toBeNull());
+    expect(sessionGetMock).toHaveBeenCalledWith('remote-session-archived');
+    expect(screen.getByTestId('route-outlet')).toBeTruthy();
+  });
+
   it('目录刷新期间会权威核验并保留刚创建的 session pane', async () => {
     useCCSessionsMock.mockReturnValue({
       sessions: [{ id: 'session-a', title: 'Session A', status: 'active' }],

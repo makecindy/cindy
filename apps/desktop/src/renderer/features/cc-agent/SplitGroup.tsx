@@ -153,12 +153,13 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
     // The merged catalog is eventually consistent while local refreshes and
     // device-link mirrors rebuild. Only prune after the session's owning side
-    // confirms deletion or absence; getSessionFor preserves remote routing.
+    // confirms the pane is no longer active or is absent; getSessionFor
+    // preserves remote routing.
     void Promise.all(
       missingSessionIds.map(async (sessionId) => {
         try {
           const session = await getSessionFor(sessionId);
-          return session.status === 'deleted' ? sessionId : null;
+          return session.status === 'archived' || session.status === 'deleted' ? sessionId : null;
         } catch (error) {
           const errorCode = error instanceof ApiError ? error.code : extractIpcError(error)?.code;
           return errorCode === 'NOT_FOUND' ? sessionId : null;
