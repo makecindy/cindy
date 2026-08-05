@@ -36,6 +36,7 @@ interface ScanResult {
     codex: number;
     claude: number;
     existing: number;
+    managedDialogue?: number;
     claudeReasons?: {
       unreadable: number;
       internal: number;
@@ -454,7 +455,7 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
       />
       <SummaryCell
         label={t('settings.sessionImport.summary.filtered')}
-        value={scan.rejected.codex + scan.rejected.claude}
+        value={scan.rejected.codex + scan.rejected.claude + (scan.rejected.managedDialogue ?? 0)}
         hint={t('settings.sessionImport.summary.filteredHint')}
       />
     </div>
