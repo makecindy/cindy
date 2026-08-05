@@ -171,7 +171,7 @@ describe('F3 — MarkdownRenderer routes ```diff to MarkdownDiffBlock', () => {
 
   it('default pre fallthrough still renders <pre className=...> for non-diff blocks', () => {
     // 非 diff 代码块现在先落到 CodeBlockPre,再由 CodeBlockPre 渲染真实 <pre>。
-    expect(rendererSrc).toMatch(/return\s+<CodeBlockPre\s+\{\.\.\.props\}>\{children\}<\/CodeBlockPre>/);
+    expect(rendererSrc).toMatch(/return\s+<CodeBlockPre\s+\{\.\.\.props\}\s+language=\{extractCodeLanguage\(firstChild\)\}>\{children\}<\/CodeBlockPre>/);
     expect(rendererSrc).toMatch(/function\s+CodeBlockPre[\s\S]*<pre[\s\S]*className=\{cn\(/);
     expect(rendererSrc).toMatch(/border-\[var\(--msg-code-block-border\)\]/);
   });

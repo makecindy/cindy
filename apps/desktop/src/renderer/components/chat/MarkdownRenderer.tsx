@@ -35,7 +35,7 @@ import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMark
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
-import { Check, Copy, FolderOpen } from 'lucide-react';
+import { Check, Copy, FolderOpen, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -108,6 +108,7 @@ import {
   openUrlByPreference,
   useOpenWithMenu,
 } from './useOpenWithMenu';
+import { runInTerminal } from './runInTerminal';
 
 /**
  * Recursively flatten an arbitrary react-markdown children tree into a
@@ -152,6 +153,33 @@ function isMermaidCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
   return /\b(language-)?mermaid\b/.test(className);
+}
+
+/**
+ * 从 `<code>` 子元素提取 rehype-highlight 注入的语言标记(class `language-xxx`)。
+ * 无语言标注(裸围栏 / 4 空格缩进)返回 undefined。
+ */
+function extractCodeLanguage(child: ReactNode): string | undefined {
+  if (!isValidElement(child)) return undefined;
+  const className = (child.props as { className?: string })?.className ?? '';
+  const match = /language-([\w-]+)/.exec(className);
+  return match?.[1]?.toLowerCase();
+}
+
+/**
+ * 命令行类语言集合 —— 这些语言的代码块才显示「在终端执行」按钮。
+ * bash/sh/zsh/fish 等 unix shell + powershell/cmd 系列。其它语言(python/js/...)
+ * 即便能写进终端,语义也不是「逐行执行命令」,不显示按钮避免误用。
+ */
+const SHELL_LIKE_LANGUAGES = new Set([
+  'bash', 'sh', 'shell', 'zsh', 'fish', 'dash', 'ksh',
+  'powershell', 'pwsh', 'ps1', 'ps',
+  'cmd', 'bat', 'batch',
+]);
+
+function isShellLikeLanguage(language: string | undefined): boolean {
+  if (!language) return false;
+  return SHELL_LIKE_LANGUAGES.has(language.toLowerCase());
 }
 
 // Module-level constants — defined once, never recreated across renders.
@@ -419,16 +447,28 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
- * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * CodeBlockPre — fenced code block with hover-revealed chrome (copy + run-in-
+ * terminal) at the top-right corner. Buttons read `innerText` from the live
+ * <pre>, so they always act on the latest text even mid-stream. We use
+ * group-hover to keep the chrome out of the way until the user reaches for it.
+ *
+ * 「在终端执行」按钮仅对 shell-like 语言(bash/sh/powershell/cmd...)且处于
+ * 聊天会话流内(sessionId 存在)时显示:点击后复用或新建 RSB 内置 terminal tab,
+ * 把整段命令写入 PTY 执行。聊天流外(设置页 / TextLightbox 等)不显示。
  */
-function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
+function CodeBlockPre({
+  children,
+  language,
+  ...props
+}: HTMLAttributes<HTMLPreElement> & { language?: string }) {
   const { t } = useTranslation();
+  const { sessionId } = useChatSessionFile();
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
   const timerRef = useRef<number | null>(null);
+
+  const canRunInTerminal = isShellLikeLanguage(language) && !!sessionId;
 
   useEffect(() => {
     return () => {
@@ -452,6 +492,21 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
     }
   }
 
+  async function handleRun() {
+    if (!sessionId || running) return;
+    const text = preRef.current?.innerText ?? '';
+    if (!text) return;
+    setRunning(true);
+    try {
+      const ok = await runInTerminal(sessionId, text);
+      if (!ok) toast.error(t('chat.markdownRenderer.runInTerminalFailed'));
+    } catch {
+      toast.error(t('chat.markdownRenderer.runInTerminalFailed'));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <div className="group relative my-3">
       <pre
@@ -469,22 +524,46 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
+      <div
         className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+          'absolute right-2 top-2 flex items-center gap-1',
           'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+          'group-hover:opacity-100 focus-within:opacity-100',
         )}
       >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+        {canRunInTerminal && (
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={running}
+            aria-label={t('chat.markdownRenderer.runInTerminal')}
+            title={t('chat.markdownRenderer.runInTerminal')}
+            className={cn(
+              'inline-flex h-7 w-7 items-center justify-center',
+              'rounded-md border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+              'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            )}
+          >
+            <Terminal className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
+          className={cn(
+            'inline-flex h-7 w-7 items-center justify-center',
+            'rounded-md border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
     </div>
   );
 }
@@ -518,7 +597,7 @@ const baseComponents: Components = {
       return <MarkdownMermaidBlock raw={raw} />;
     }
 
-    return <CodeBlockPre {...props}>{children}</CodeBlockPre>;
+    return <CodeBlockPre {...props} language={extractCodeLanguage(firstChild)}>{children}</CodeBlockPre>;
   },
 
   // Tables (GFM)。外层 CopyAsImageBlock 承载「复制为图片 / 标注」hover 工具栏,
