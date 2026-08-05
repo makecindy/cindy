@@ -39,8 +39,8 @@ export interface SubagentLiveCardUpdate {
   taskId: string;
   status: SubagentLiveCardStatus;
   agentPath?: string;
-  /** Observed child-thread model, or Cindy's explicit display fallback. */
-  model?: string;
+  /** Observed child-thread model, or Cindy's explicit display fallback. `null` clears a stale badge. */
+  model?: string | null;
   /** 本卡全部子线程的累计 token 之和;未知为 0。 */
   totalTokens: number;
   /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
@@ -269,7 +269,7 @@ export function createSubagentLiveCardTracker(opts: {
       ? subagentModelFallback
       : threadsWithModel === card.threads.size && observedModels.size === 1
         ? observedModels.values().next().value
-        : undefined;
+        : null;
     // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
     // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉
     // 之后那条迟到的 completed 会被当成一个新工具再加一次,卡片最终工具数虚高(review)。
@@ -278,7 +278,7 @@ export function createSubagentLiveCardTracker(opts: {
       taskId: card.taskId,
       status,
       ...(card.agentPath ? { agentPath: card.agentPath } : {}),
-      ...(model ? { model } : {}),
+      ...(model !== undefined ? { model } : {}),
       totalTokens,
       toolUses: card.toolUses,
       durationMs: Math.max(0, now() - card.startedAt),

@@ -134,9 +134,13 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
   // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
   // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
-  // item.model)。默认继承主模型时 spawn 无 model 字段——不猜继承值,不渲染。
+  // item.model)。`model: null` 是实时聚合卡的显式清除指令,不能再落到历史/输入兜底,
+  // 否则多 receiver 模型冲突时旧徽标会被重新显示。默认继承主模型时 spawn 无 model
+  // 字段——不猜继承值,不渲染。
   const modelLabel = formatModelShortLabel(
-    update?.model ?? subagentModel ?? readInputString(toolCall?.toolInput, ['model']),
+    update?.model === null
+      ? undefined
+      : update?.model ?? subagentModel ?? readInputString(toolCall?.toolInput, ['model']),
   );
   // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
   // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。

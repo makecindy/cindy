@@ -3327,7 +3327,7 @@ export class CodexAgent extends BaseAgent {
           parentToolUseId: update.taskId,
           status: update.status,
           ...(update.agentPath ? { title: update.agentPath } : {}),
-          ...(update.model ? { model: update.model } : {}),
+          ...(update.model !== undefined ? { model: update.model } : {}),
           usage: {
             ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),

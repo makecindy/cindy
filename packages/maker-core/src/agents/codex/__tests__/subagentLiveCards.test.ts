@@ -133,7 +133,7 @@ describe('createSubagentLiveCardTracker', () => {
 
     const partial = tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
     expect(partial).not.toBeNull();
-    expect(partial?.model).toBeUndefined();
+    expect(partial?.model).toBeNull();
 
     // 全员报齐且一致 → 亮实际模型。
     expect(tracker.noteDescendantThread('t-b', 'root-1', 'codex/gpt-5.5')).toMatchObject({
@@ -147,7 +147,7 @@ describe('createSubagentLiveCardTracker', () => {
     tracker.noteDescendantThread('t-a', 'root-1', 'codex/gpt-5.5');
     const conflicting = tracker.noteDescendantThread('t-b', 'root-1', 'gpt-5.6-terra');
     expect(conflicting).not.toBeNull();
-    expect(conflicting?.model).toBeUndefined();
+    expect(conflicting?.model).toBeNull();
   });
 
   it('counts a tool item once even when both phases arrive', () => {
