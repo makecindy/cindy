@@ -206,7 +206,7 @@ export function WorktreeChipsRow({
   const showBranchChip = !advancedHidden && !!detect.data?.isGitRepo;
   // 分支菜单只在 worktree 已勾时可交互(= 源分支选择器);未勾时分支区只读展示当前
   // HEAD——选分支不再承担任何隐式开关语义(状态不变量,见文件头)。
-  const branchInteractive = !disabled && effectiveWorktreeEnabled;
+  const branchInteractive = !disabled && effectiveWorktreeEnabled && baseRepo !== null;
 
   const handleBranchPick = useCallback(
     (picked: string) => {

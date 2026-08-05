@@ -210,7 +210,7 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
     expect(worktreeChipsSource).toContain(
-      'const branchInteractive = !disabled && effectiveWorktreeEnabled',
+      'const branchInteractive = !disabled && effectiveWorktreeEnabled && baseRepo !== null',
     );
     expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
