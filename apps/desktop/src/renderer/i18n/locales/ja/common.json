@@ -5950,6 +5950,9 @@
       "duplicateFiles": "同名のファイルが {{count}} 件見つかりました。絶対パスを使用してください",
       "copyFile": "コピー",
       "copyFilePath": "ファイルパスをコピー",
+      "openWith": "アプリで開く",
+      "chooseOtherApp": "ほかのアプリを選択…",
+      "openWithAppFailed": "選択したアプリで開けませんでした",
       "revealFile": "ファイルの場所を開く",
       "openInBrowser": "ブラウザで開く",
       "fileCopied": "ファイルをコピーしました",
@@ -6082,6 +6085,9 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
+    },
+    "generatedFiles": {
+      "title": "このターンで生成されたファイル"
     },
     "agentActions": {
       "part": {

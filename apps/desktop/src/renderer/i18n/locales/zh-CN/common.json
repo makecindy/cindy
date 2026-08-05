@@ -5950,6 +5950,9 @@
       "duplicateFiles": "找到 {{count}} 个同名文件，请改用绝对路径",
       "copyFile": "复制",
       "copyFilePath": "复制文件路径",
+      "openWith": "打开方式",
+      "chooseOtherApp": "选择其他应用…",
+      "openWithAppFailed": "无法用所选应用打开",
       "revealFile": "打开文件所在目录",
       "openInBrowser": "在浏览器中查看",
       "fileCopied": "文件已复制",
@@ -6082,6 +6085,9 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
+    },
+    "generatedFiles": {
+      "title": "本轮生成的文件"
     },
     "agentActions": {
       "part": {

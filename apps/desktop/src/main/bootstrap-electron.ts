@@ -243,6 +243,7 @@ import {
   isPathAllowedAgainst,
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
+import { createOpenWithHandlers } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
@@ -5124,6 +5125,75 @@ const registerIpcHandlers = () => {
       }
     },
   );
+
+  // 文件 chip 右键「打开方式」:枚举 / 指定应用打开 / 系统选择对话框。
+  // 业务体在 openWithApps.ts(依赖注入,单测直接调 handler body);appId → exe
+  // 映射只存 main 侧,renderer 传路径执行在结构上不可表达(该文件头注释)。
+  {
+    // app.getFileIcon 会偶发挂死(见 fileThumbnail.ts),这里同款硬超时 + 按
+    // exe 路径的进程内缓存(打开方式菜单反复展开不重复付原生调用成本)。
+    const appIconCache = new Map<string, string | null>();
+    const getAppIcon = async (exePath: string): Promise<string | null> => {
+      const key = exePath.toLowerCase();
+      const cached = appIconCache.get(key);
+      if (cached !== undefined) return cached;
+      try {
+        const icon = await Promise.race([
+          app.getFileIcon(exePath, { size: 'small' }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+        ]);
+        const dataUrl = icon && !icon.isEmpty() ? icon.toDataURL() : null;
+        appIconCache.set(key, dataUrl);
+        return dataUrl;
+      } catch {
+        appIconCache.set(key, null);
+        return null;
+      }
+    };
+    const openWith = createOpenWithHandlers({
+      platform: process.platform,
+      isPathAllowed,
+      fileExists: (p) => fs.existsSync(p),
+      regQuery: (keyPath, args = []) =>
+        new Promise<string>((resolve) => {
+          execFile(
+            'reg.exe',
+            ['query', keyPath, ...args],
+            { windowsHide: true, timeout: 5000 },
+            (err, stdout) => resolve(err ? '' : (stdout ?? '')),
+          );
+        }),
+      getAppIcon,
+      spawnDetached: (command, args) => {
+        spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+      },
+      showOpenAppDialog: async () => {
+        const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
+        const opts: Electron.OpenDialogOptions = {
+          properties: ['openFile'],
+          ...(process.platform === 'darwin'
+            ? { defaultPath: '/Applications', filters: [{ name: 'Applications', extensions: ['app'] }] }
+            : {}),
+        };
+        const result = targetWin
+          ? await dialog.showOpenDialog(targetWin, opts)
+          : await dialog.showOpenDialog(opts);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    });
+    ipcMain.handle('open-with:list', (event, params: { filePath: string }) => {
+      assertTrustedAppRendererEvent(event);
+      return openWith.list(params);
+    });
+    ipcMain.handle('open-with:open', (event, params: { filePath: string; appId: string }) => {
+      assertTrustedAppRendererEvent(event);
+      return openWith.open(params);
+    });
+    ipcMain.handle('open-with:choose', (event, params: { filePath: string }) => {
+      assertTrustedAppRendererEvent(event);
+      return openWith.choose(params);
+    });
+  }
 
   // 安全降级附件“另存为”：源文件必须通过统一路径策略，解析真实路径后还要
   // 位于聊天附件/远程文件缓存内；建议名在 main 侧清洗，复制完成后不调用

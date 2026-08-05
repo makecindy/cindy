@@ -5950,6 +5950,9 @@
       "duplicateFiles": "동일한 이름의 파일 {{count}}개를 찾았습니다. 절대 경로를 사용해 주세요",
       "copyFile": "복사",
       "copyFilePath": "파일 경로 복사",
+      "openWith": "앱으로 열기",
+      "chooseOtherApp": "다른 앱 선택…",
+      "openWithAppFailed": "선택한 앱으로 열 수 없습니다",
       "revealFile": "파일 위치 열기",
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
@@ -6082,6 +6085,9 @@
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
+    },
+    "generatedFiles": {
+      "title": "이번 턴에 생성된 파일"
     },
     "agentActions": {
       "part": {

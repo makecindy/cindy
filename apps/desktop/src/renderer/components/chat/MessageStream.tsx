@@ -48,6 +48,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
+import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -154,6 +155,7 @@ import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
+import { GeneratedFilesCard } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -314,6 +316,13 @@ type ForkOriginRenderItem = {
   parentSessionId: string;
   forkedAtMessageId: string;
 };
+type GeneratedFilesRenderItem = {
+  /** 每个 user turn 结尾聚合的「本轮 agent 新建文件」卡(Codex artifact 卡对标)。
+   *  纯派生自 turn 内 tool_use;存在性过滤在组件里做,全不存在则整卡不渲染。 */
+  type: 'generated_files';
+  key: string;
+  files: GeneratedFileRef[];
+};
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
 export type WorkChildItem = ToolSegmentRenderItem | AgentTaskRenderItem | MessageRenderItem;
@@ -343,6 +352,7 @@ export type RenderItem =
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
+  | GeneratedFilesRenderItem
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
@@ -889,6 +899,8 @@ export function buildRenderItems(
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
      */
     historyWindowIncomplete?: boolean;
+    /** 会话工作目录:把 tool_use 里的相对路径解析成绝对路径供「本轮产出文件」卡使用。 */
+    workingDir?: string;
   },
 ): {
   items: RenderItem[];
@@ -1033,9 +1045,30 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
+  // 「本轮产出文件」卡:按 user turn 切片派生新建文件,在**下一个** user 边界
+  // (或流末尾)把上一轮的产出 flush 到该轮所有内容之下。turnStartIdx 指向当前
+  // turn 的首条消息。workingDir 缺省时跳过(无从解析相对路径,不出卡)。
+  const workingDir = opts?.workingDir ?? '';
+  let turnStartIdx = 0;
+  const flushGeneratedFiles = (lo: number, hi: number): void => {
+    if (!workingDir || hi <= lo) return;
+    const files = collectGeneratedFiles(messages.slice(lo, hi), workingDir);
+    if (files.length === 0) return;
+    // key 锚定该 turn 首条消息 clientId,窗口滚动 / 流式增量下稳定。
+    items.push({ type: 'generated_files', key: `genfiles-${messages[lo].clientId}`, files });
+  };
+
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
+
+    // user turn 边界(非 steer、非合成触发):先 flush 上一轮的产出文件卡,
+    // 再进入常规处理。第一条 user 消息时 lo==hi,flushGeneratedFiles 自身 no-op。
+    if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
+      flushSegment();
+      flushGeneratedFiles(turnStartIdx, i);
+      turnStartIdx = i;
+    }
 
     // ask_user: pending lives in the bottom input overlay; expired/unanswered
     // questions have no user selection to show. Only the answered state surfaces
@@ -1331,6 +1364,8 @@ export function buildRenderItems(
   // Flush trailing segment — important for streaming, where the turn often
   // ends mid-segment (no closing text yet).
   flushSegment();
+  // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
+  flushGeneratedFiles(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
@@ -2351,8 +2386,9 @@ export function MessageStream({
     () =>
       buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
         historyWindowIncomplete: Boolean(hasMoreMessages),
+        workingDir,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, workingDir],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -3655,6 +3691,16 @@ export function MessageStream({
                   {visibleRenderItems.map((item) => {
                     if (item.type === 'fork_origin') {
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
+                    }
+
+                    if (item.type === 'generated_files') {
+                      return (
+                        <GeneratedFilesCard
+                          key={item.key}
+                          files={item.files}
+                          workingDir={workingDir}
+                        />
+                      );
                     }
 
                     if (item.type === 'tool_segment') {

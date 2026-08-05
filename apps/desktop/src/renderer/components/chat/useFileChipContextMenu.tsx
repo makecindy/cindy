@@ -10,12 +10,15 @@
  * Menu items:
  *   0. 在侧边栏文件浏览器中打开 → select/reveal the file in the RSB file browser
  *   1. 在侧边栏浏览器中打开(可选,sidebarOpenSessionId 提供时;html chip 用)
- *   2. 复制              → copy the file itself as a clipboard file reference
+ *   2. 打开方式 ▸        →(文件 + 本地会话)默认应用 / 枚举出的可用应用
+ *                          (Windows 注册表,见 main/openWithApps.ts)/ 选择
+ *                          其他应用…。应用列表在子菜单展开时懒加载。
+ *   3. 复制              → copy the file itself as a clipboard file reference
  *                          (pasteable into Explorer / Finder / chat apps)
- *   3. 复制文件路径      → copy the absolute path string
- *   4. 打开文件所在目录  → reveal in the OS file manager
- *   5. 在浏览器中查看    →(可选,canOpenInBrowser)file:// 交给系统浏览器
- *   6. 查看源文件        →(可选,onViewSource 提供时;html chip 左键改为按
+ *   4. 复制文件路径      → copy the absolute path string
+ *   5. 打开文件所在目录  → reveal in the OS file manager
+ *   6. 在浏览器中查看    →(可选,canOpenInBrowser)file:// 交给系统浏览器
+ *   7. 查看源文件        →(可选,onViewSource 提供时;html chip 左键改为按
  *                          偏好直开后,TextLightbox 从这里进)
  *
  * Returns `onContextMenu` (attach to the chip button) and `menu` (render once
@@ -28,7 +31,17 @@
  */
 
 import { useState, type ReactElement } from 'react';
-import { ClipboardCopy, Copy, FileCode, FolderOpen, FolderTree, Globe, PanelRight } from 'lucide-react';
+import {
+  AppWindow,
+  ClipboardCopy,
+  Copy,
+  FileCode,
+  FolderOpen,
+  FolderTree,
+  Globe,
+  MousePointerClick,
+  PanelRight,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -37,6 +50,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -93,6 +110,12 @@ export function useFileChipContextMenu({
 }): UseFileChipContextMenu {
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  // 打开方式子菜单的应用列表:null = 未加载;子菜单展开时懒加载(枚举 + 图标
+  // 提取都在 main,未展开不付成本)。root 菜单关闭即重置,注册表变化能被下次
+  // 展开看到。
+  const [openWithApps, setOpenWithApps] = useState<
+    Array<{ id: string; label: string; iconDataUrl?: string }> | null
+  >(null);
   // 远程会话(device-link / SSH):文件字节在远端机器,「复制文件 / 定位」改走
   // 取回缓存副本;「复制路径」保留远端原始路径;浏览器 / 侧边栏项(读本机
   // file://)隐藏。聊天流外 context 是 local 默认值 → 行为与引入前逐字节一致。
@@ -201,6 +224,55 @@ export function useFileChipContextMenu({
     await onViewSource?.();
   }
 
+  async function loadOpenWithApps(): Promise<void> {
+    if (openWithApps !== null) return;
+    const abs = await getAbsPath();
+    const res = await window.electronAPI.listOpenWithApps({ filePath: abs });
+    // 枚举失败不挡菜单:空列表 = 只显示「默认应用 / 选择其他应用…」。
+    setOpenWithApps(res.success ? res.apps : []);
+  }
+
+  async function handleOpenWithDefault(): Promise<void> {
+    setMenuPos(null);
+    const abs = await getAbsPath();
+    const res = await window.electronAPI.openPath(abs);
+    if (!res.success) toast.error(res.error ?? t('chat.markdownRenderer.openWithAppFailed'));
+  }
+
+  async function handleOpenWithApp(appId: string): Promise<void> {
+    setMenuPos(null);
+    const abs = await getAbsPath();
+    try {
+      await window.electronAPI.openFileWithApp({ filePath: abs, appId });
+    } catch (error) {
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            namespace: 'chat.markdownRenderer',
+            fallback: 'chat.markdownRenderer.openWithAppFailed',
+          }),
+        ),
+      );
+    }
+  }
+
+  async function handleChooseOtherApp(): Promise<void> {
+    setMenuPos(null);
+    const abs = await getAbsPath();
+    try {
+      await window.electronAPI.chooseOpenWithApp({ filePath: abs });
+    } catch (error) {
+      toast.error(
+        t(
+          mapIpcErrorToI18nKey(error, {
+            namespace: 'chat.markdownRenderer',
+            fallback: 'chat.markdownRenderer.openWithAppFailed',
+          }),
+        ),
+      );
+    }
+  }
+
   const openAt = (x: number, y: number): void => {
     setMenuPos({ x, y });
   };
@@ -215,7 +287,10 @@ export function useFileChipContextMenu({
     <DropdownMenu
       open={menuPos !== null}
       onOpenChange={(open) => {
-        if (!open) setMenuPos(null);
+        if (!open) {
+          setMenuPos(null);
+          setOpenWithApps(null);
+        }
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -253,6 +328,54 @@ export function useFileChipContextMenu({
             <PanelRight className="mr-2 h-4 w-4" />
             {t('chat.markdownRenderer.openInSidebarBrowser')}
           </DropdownMenuItem>
+        ) : null}
+        {sidebarFileBrowserKind === 'file' && !remoteOrigin ? (
+          // 打开方式:仅文件 + 本地会话。远程会话的字节在远端机器,本机应用
+          // 枚举与执行都无意义(与「在浏览器中查看」同一门控口径)。
+          <DropdownMenuSub
+            onOpenChange={(open) => {
+              if (open) void loadOpenWithApps();
+            }}
+          >
+            <DropdownMenuSubTrigger>
+              <AppWindow className="mr-2 h-4 w-4" />
+              {t('chat.markdownRenderer.openWith')}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem onClick={handleOpenWithDefault}>
+                <AppWindow className="mr-2 h-4 w-4" />
+                {t('chat.media.openWithApp')}
+              </DropdownMenuItem>
+              {openWithApps && openWithApps.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  {openWithApps.map((appEntry) => (
+                    <DropdownMenuItem
+                      key={appEntry.id}
+                      onClick={() => void handleOpenWithApp(appEntry.id)}
+                    >
+                      {appEntry.iconDataUrl ? (
+                        <img
+                          src={appEntry.iconDataUrl}
+                          alt=""
+                          aria-hidden
+                          className="mr-2 h-4 w-4"
+                        />
+                      ) : (
+                        <AppWindow className="mr-2 h-4 w-4" />
+                      )}
+                      {appEntry.label}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleChooseOtherApp}>
+                <MousePointerClick className="mr-2 h-4 w-4" />
+                {t('chat.markdownRenderer.chooseOtherApp')}
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
         ) : null}
         <DropdownMenuItem onClick={handleCopyFile}>
           <Copy className="mr-2 h-4 w-4" />
