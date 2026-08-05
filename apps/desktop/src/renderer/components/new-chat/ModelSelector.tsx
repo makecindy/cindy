@@ -1010,9 +1010,14 @@ function ModelSelectorContentView({
         ? t('newChat.modelSelector.subscriptionDirectDisabled.xai')
         : t('newChat.modelSelector.subscriptionDirectDisabled.generic');
   };
-  const modelDisabledOf = (id: string): boolean => {
+  const modelDisabledOf = (provider: ProviderView | null, id: string): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
+      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
+      // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
+      // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
+      // 为 null,无供应商概念)与内置来源保持原前缀判定。
+      if (provider?.source === 'user') return false;
       return id.startsWith('codex/') && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -1601,7 +1606,7 @@ function ModelSelectorContentView({
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
-    const disabled = interactionDisabled || modelDisabledOf(model.id);
+    const disabled = interactionDisabled || modelDisabledOf(provider, model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
