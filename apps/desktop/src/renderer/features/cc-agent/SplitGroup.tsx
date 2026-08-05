@@ -367,7 +367,14 @@ function SplitPaneView({
           focusSession(viewSessionId);
         }}
         onFocusCapture={(event) => {
-          if (isOwner || event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          const target = event.target instanceof Element ? event.target : null;
+          if (
+            isOwner ||
+            event.currentTarget.contains(event.relatedTarget as Node | null) ||
+            target?.closest('[data-split-pane-no-focus]')
+          ) {
+            return;
+          }
           focusSession(viewSessionId);
         }}
       >

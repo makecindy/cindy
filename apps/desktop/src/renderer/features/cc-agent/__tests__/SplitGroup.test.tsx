@@ -123,6 +123,33 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).toHaveBeenCalledWith('session-b', null);
   });
 
+  it('键盘焦点进入非活动 pane 的关闭按钮时不切换路由主权', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const sessionAView = screen.getByTestId('session-view-session-a');
+    const sessionBView = screen.getByTestId('session-view-session-b');
+    const closeButton = sessionBView
+      .closest('[data-split-pane-key]')
+      ?.querySelector<HTMLButtonElement>('[data-split-pane-no-focus]');
+    expect(closeButton).toBeTruthy();
+
+    act(() => {
+      fireEvent.focus(closeButton as HTMLButtonElement, { relatedTarget: sessionAView });
+    });
+
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.click(closeButton as HTMLButtonElement);
+    });
+
+    expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(0);
+    expect(screen.getByTestId('route-outlet')).toBeTruthy();
+    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+  });
+
   it('递归渲染左一右二与左二右二混合布局', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
