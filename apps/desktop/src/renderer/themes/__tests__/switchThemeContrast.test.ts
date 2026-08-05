@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { contrastRatio, hslToRgb, type Rgb } from '../../../shared/theme-import/color';
 import { buildThemeColorsFromPalette } from '../../../shared/theme-import/palette';
 import { colorRegistry } from '../color-registry';
 import '../colors';
@@ -7,24 +8,43 @@ import { builtinThemes } from '../registry';
 import { resolveThemeValue } from '../theme-service';
 import type { ColorIdentifier, Theme } from '../types';
 
-type RGB = readonly [number, number, number];
-
-function parseHex(value: string): RGB {
+function parseHex(value: string): Rgb {
   if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) {
     throw new Error(`Unsupported color format in contrast test: ${value}`);
   }
   const hex = value.slice(1);
   const normalized = hex.length === 3 ? [...hex].map((digit) => digit.repeat(2)).join('') : hex;
   const number = Number.parseInt(normalized, 16);
-  return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
+  return { r: (number >> 16) & 255, g: (number >> 8) & 255, b: number & 255 };
 }
 
-const UNCHECKED_SURFACES = [
+/** hex 或 HSL 三元组(开启态默认链路解析到 --text-primary-hsl 用)→ RGB;其余格式 fail closed。 */
+function toRgb(value: string): Rgb {
+  const t = value.trim();
+  if (t.startsWith('#')) return parseHex(t);
+  const triplet = t.match(/^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/);
+  if (triplet) {
+    return hslToRgb(parseFloat(triplet[1]), parseFloat(triplet[2]) / 100, parseFloat(triplet[3]) / 100);
+  }
+  throw new Error(`Unsupported color format in contrast test: ${value}`);
+}
+
+function contrast(first: string, second: string): number {
+  return contrastRatio(toRgb(first), toRgb(second));
+}
+
+const SURFACES = [
   'surface',
   'surface-elevated',
   'surface-card-ivory',
   'surface-hover',
   'surface-hover-soft',
+] as const;
+
+/** 开/关两态共用一套守卫:轨道×滑块、轨道×全部表面均 ≥3:1(非文字组件底线)。 */
+const CONTROL_STATES = [
+  { state: 'unchecked', trackId: 'switch-track-off', thumbId: 'switch-thumb-off' },
+  { state: 'checked', trackId: 'switch-track-on', thumbId: 'background' },
 ] as const;
 
 const importedDarkTheme: Theme = {
@@ -48,21 +68,6 @@ const importedDarkTheme: Theme = {
   }, 'dark'),
 };
 
-function luminance(value: string): number {
-  const channels = parseHex(value).map((channel) => {
-    const normalized = channel / 255;
-    return normalized <= 0.03928
-      ? normalized / 12.92
-      : ((normalized + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-}
-
-function contrast(first: string, second: string): number {
-  const [lighter, darker] = [luminance(first), luminance(second)].sort((a, b) => b - a);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
 function resolveColor(theme: Theme, id: ColorIdentifier, seen = new Set<string>()): string {
   if (seen.has(id)) {
     throw new Error(`Circular color token reference: ${[...seen, id].join(' -> ')}`);
@@ -74,20 +79,33 @@ function resolveColor(theme: Theme, id: ColorIdentifier, seen = new Set<string>(
     throw new Error(`Theme '${theme.id}' does not resolve --${id}`);
   }
 
-  const reference = value.match(/^var\(--([^)]+)\)$/);
+  // 认两种引用形态:var(--x) 与 hsl(var(--x))(开启态默认值 hsl(var(--primary)))。
+  const reference = value.match(/^(?:hsl\()?var\(--([^)]+)\)\)?$/);
   return reference ? resolveColor(theme, reference[1], seen) : value;
 }
 
-describe('unchecked Switch contrast', () => {
+describe('Switch contrast', () => {
   it('registers dedicated track and thumb tokens', () => {
     expect(colorRegistry.resolveDefault('switch-track-off', 'light')).toBe('var(--text-secondary)');
     expect(colorRegistry.resolveDefault('switch-track-off', 'dark')).toBe('var(--text-secondary)');
     expect(colorRegistry.resolveDefault('switch-thumb-off', 'light')).toBe('var(--surface-on-card)');
     expect(colorRegistry.resolveDefault('switch-thumb-off', 'dark')).toBe('var(--surface-on-card)');
+    // 开启态轨道默认沿用 primary:不覆盖的主题(Classic/导入)外观零变化
+    expect(colorRegistry.resolveDefault('switch-track-on', 'light')).toBe('hsl(var(--primary))');
+    expect(colorRegistry.resolveDefault('switch-track-on', 'dark')).toBe('hsl(var(--primary))');
+    // 禁用态两级弱化的全局定稿值(用户裁决 2026-08-05):整体 0.3 × 滑块 0.5
+    for (const [id, expected] of [
+      ['switch-disabled-opacity', '0.3'],
+      ['switch-disabled-thumb-opacity', '0.5'],
+    ] as const) {
+      expect(colorRegistry.resolveDefault(id, 'light'), id).toBe(expected);
+      expect(colorRegistry.resolveDefault(id, 'dark'), id).toBe(expected);
+    }
   });
 
   it('fails closed for unsupported color formats', () => {
     expect(() => parseHex('rgb(130, 130, 130)')).toThrow('Unsupported color format');
+    expect(() => toRgb('rgba(130, 130, 130, 0.5)')).toThrow('Unsupported color format');
   });
 
   it('resolves unchecked colors through imported theme palette aliases', () => {
@@ -98,21 +116,24 @@ describe('unchecked Switch contrast', () => {
     expect(thumb).toBe(importedDarkTheme.colors['surface-on-card']);
     expect(contrast(thumb, track), 'imported dark: thumb x track').toBeGreaterThanOrEqual(3);
 
-    for (const surface of UNCHECKED_SURFACES) {
+    for (const surface of SURFACES) {
       const background = resolveColor(importedDarkTheme, surface);
       expect(contrast(track, background), `imported dark: track x ${surface}`).toBeGreaterThanOrEqual(3);
     }
   });
 
-  it.each(Object.values(builtinThemes))('$name keeps the unchecked control distinguishable', (theme) => {
-    const track = resolveColor(theme, 'switch-track-off');
-    const thumb = resolveColor(theme, 'switch-thumb-off');
+  it.each(Object.values(builtinThemes))('$name keeps both switch states distinguishable', (theme) => {
+    const surfaces = SURFACES.map((id) => [id, resolveColor(theme, id)] as const);
 
-    expect(contrast(thumb, track), `${theme.id}: thumb x track`).toBeGreaterThanOrEqual(3);
+    for (const { state, trackId, thumbId } of CONTROL_STATES) {
+      const track = resolveColor(theme, trackId);
+      const thumb = resolveColor(theme, thumbId);
 
-    for (const surface of UNCHECKED_SURFACES) {
-      const background = resolveColor(theme, surface);
-      expect(contrast(track, background), `${theme.id}: track x ${surface}`).toBeGreaterThanOrEqual(3);
+      expect(contrast(thumb, track), `${theme.id}: ${state} thumb x track`).toBeGreaterThanOrEqual(3);
+
+      for (const [surfaceId, surface] of surfaces) {
+        expect(contrast(track, surface), `${theme.id}: ${state} track x ${surfaceId}`).toBeGreaterThanOrEqual(3);
+      }
     }
   });
 });

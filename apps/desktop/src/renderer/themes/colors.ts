@@ -262,6 +262,18 @@ registerColor('switch-thumb-off', {
   light: 'var(--surface-on-card)',
   dark: 'var(--surface-on-card)',
 }, '共享 Switch 未选中滑块；跟随主题反相前景，与未选中轨道保持至少 3:1 非文字组件对比度');
+registerColor('switch-disabled-opacity', {
+  light: '0.3',
+  dark: '0.3',
+}, '共享 Switch 禁用态整体不透明度(纯数值 token,非颜色);全局 0.3(用户裁决 2026-08-05,自出货值 0.5 调深),各皮肤仍可覆盖');
+registerColor('switch-disabled-thumb-opacity', {
+  light: '0.5',
+  dark: '0.5',
+}, '共享 Switch 禁用态滑块自身不透明度(纯数值 token,叠加在整体不透明度之上);全局 0.5(用户裁决 2026-08-05)——禁用态滑块与轨道趋近、削掉立体感,「不可用」区别于「关」的关键');
+registerColor('switch-track-on', {
+  light: 'hsl(var(--primary))',
+  dark: 'hsl(var(--primary))',
+}, '共享 Switch 开启态轨道;默认沿用 primary(不覆盖的主题外观不变),移植主题覆盖为各自主题色、CINDY 冻结于决策表;每个覆盖值须过 switchThemeContrast 的 ≥3:1 守卫(用户裁决 2026-08-05)');
 registerColor('ring', {
   light: 'var(--text-primary-hsl)',
   dark: 'var(--text-primary-hsl)',
