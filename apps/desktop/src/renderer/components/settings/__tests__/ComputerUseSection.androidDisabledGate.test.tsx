@@ -6,7 +6,7 @@
  * 一个 daemon)。禁用态只展示提示文案;启用态保持原有 prepareAdb → status 链路。
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -53,7 +53,7 @@ function installElectronApi(options: { androidEnabled: boolean }) {
       maker: {
         plugins: {
           getState: pluginsGetState,
-          setEnabled: vi.fn(),
+          setEnabled: vi.fn(async () => ({ codexMcpRefreshed: true })),
           setProjectEnabled: vi.fn(),
         },
         browser: {
@@ -138,5 +138,29 @@ describe('ComputerUseSection android disabled gate (#1806)', () => {
     expect(
       screen.queryByText('settings.computerUse.android.status.disabled'),
     ).toBeNull();
+  });
+
+  it('clears the stale probe result when the android plugin is toggled off', async () => {
+    const api = installElectronApi({ androidEnabled: true });
+
+    render(<ComputerUseSection workingDir="/repo" />);
+
+    await waitFor(() => {
+      expect(api.androidStatus).toHaveBeenCalledOnce();
+    });
+
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'settings.computerUse.android.toggleAria' }),
+    );
+
+    // 关闭后状态区回到禁用提示,不残留旧的就绪/设备状态。
+    await waitFor(() => {
+      expect(
+        screen.getByText('settings.computerUse.android.status.disabled'),
+      ).toBeTruthy();
+    });
+    // 关闭动作本身不得触发新的 adb 探测。
+    expect(api.androidStatus).toHaveBeenCalledOnce();
+    expect(api.androidPrepareAdb).toHaveBeenCalledOnce();
   });
 });

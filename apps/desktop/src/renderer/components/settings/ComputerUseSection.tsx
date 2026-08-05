@@ -442,7 +442,8 @@ export function ComputerUseSection({
             if (!cancelled && status) setAndroidStatus(status);
           })
           .catch((err) => {
-            log.warn('android.prepareAdb failed', err);
+            // 这个 catch 同时兜 prepareAdb 与后续 status 的失败,文案别写死单边。
+            log.warn('android adb probe (prepareAdb/status) failed', err);
             if (!cancelled) setAndroidStatus(androidStatusFallback(err));
           })
           .finally(() => {
@@ -890,6 +891,10 @@ export function ComputerUseSection({
           setAndroidPreparePending(true);
           await window.electronAPI.maker.android.prepareAdb();
           await handleRefreshAndroidStatus(false);
+        } else {
+          // 关闭时清掉旧探测结果:状态区回到禁用提示,设备选择入口一并禁用,
+          // 不再展示已过时的就绪/设备状态(#1829 review)。
+          setAndroidStatus(null);
         }
         toast.success(
           next
