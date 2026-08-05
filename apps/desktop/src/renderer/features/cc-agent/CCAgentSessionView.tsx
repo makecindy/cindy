@@ -364,6 +364,8 @@ interface CCAgentSessionViewProps {
   onSessionNavigate?: (targetSessionId: string) => void;
   /** 内嵌聊天触发侧栏动作时使用的可见 RSB bucket；消息身份仍由 sessionIdProp 决定。 */
   sidebarTargetSessionId?: string;
+  /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
+  disableAutofocus?: boolean;
 }
 
 /**
@@ -485,12 +487,14 @@ export function CCAgentSessionView({
   navigationMode = 'route-owner',
   onSessionNavigate,
   sidebarTargetSessionId,
+  disableAutofocus = false,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
+  const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const location = useLocation();
   useEffect(() => {
     return window.electronAPI.ghosts.onSetupNavigate((payload) => {
@@ -2780,7 +2784,7 @@ export function CCAgentSessionView({
 
   const handleForkStripEncrypted = useCallback(async () => {
     if (!sessionId || session?.agentKind !== 'codex') return;
-    if (!ownsWindowRoute) {
+    if (!canNavigateSession) {
       log.info('encrypted-session fork ignored by embedded sidebar view', { sessionId });
       return;
     }
@@ -2791,6 +2795,7 @@ export function CCAgentSessionView({
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
+      onSessionNavigate?.(newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const ipcError = extractIpcError(err);
@@ -2805,7 +2810,15 @@ export function CCAgentSessionView({
     } finally {
       setForkStripEncryptedRunning(false);
     }
-  }, [navigate, ownsWindowRoute, refreshServerSession, session?.agentKind, sessionId, t]);
+  }, [
+    canNavigateSession,
+    navigate,
+    onSessionNavigate,
+    refreshServerSession,
+    session?.agentKind,
+    sessionId,
+    t,
+  ]);
 
   // M35: Vendor fallback —— 会话的 model 与它(固定不变的)agent vendor 明确错配时,
   // 回退到该 vendor 的默认模型。守的是「绕过模型选择器写入 session.model」的脏数据路径
@@ -3483,7 +3496,7 @@ export function CCAgentSessionView({
                     canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                   }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                  onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
+                  onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -3531,7 +3544,7 @@ export function CCAgentSessionView({
                 onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                 errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
+                onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
                 style={{ width: inputWidth }}
                 className="py-1"
@@ -3779,7 +3792,7 @@ export function CCAgentSessionView({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail}
+                  disableAutofocus={isCompactRail || disableAutofocus}
                   focusOnStorageKeyChange={ownsRoute}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话

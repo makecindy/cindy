@@ -7,10 +7,16 @@ import { MemoryRouter } from 'react-router-dom';
 import { SplitGroup } from '../SplitGroup';
 import { splitGroupStore } from '../splitGroupStore';
 
-const { resolveSessionRouteMock, routeActionMock } = vi.hoisted(() => ({
+const { navigateMock, resolveSessionRouteMock, routeActionMock } = vi.hoisted(() => ({
+  navigateMock: vi.fn(),
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   routeActionMock: vi.fn(),
 }));
+
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateMock };
+});
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -36,29 +42,36 @@ vi.mock('../CCAgentSessionView', () => ({
     routeOwner,
     sidebarTargetSessionId,
     onSessionNavigate,
+    disableAutofocus,
   }: {
     sessionIdProp: string;
     routeOwner: boolean;
     sidebarTargetSessionId: string;
     onSessionNavigate?: (targetSessionId: string) => void;
+    disableAutofocus?: boolean;
   }) => (
     <div
       data-testid={`session-view-${sessionIdProp}`}
       data-session-id={sessionIdProp}
       data-route-owner={routeOwner ? 'true' : 'false'}
       data-sidebar-target-session-id={sidebarTargetSessionId}
+      data-disable-autofocus={disableAutofocus ? 'true' : 'false'}
       onDragOver={(event) => event.stopPropagation()}
       onDrop={(event) => event.stopPropagation()}
     >
       <button
         type="button"
         data-testid={`route-action-${sessionIdProp}`}
+        data-split-pane-route-action=""
         onClick={() => {
           onSessionNavigate?.('session-c');
           routeActionMock();
         }}
       >
         Route action
+      </button>
+      <button type="button" data-testid={`composer-action-${sessionIdProp}`}>
+        Composer action
       </button>
     </div>
   ),
@@ -77,6 +90,7 @@ function renderSplitGroup(activeSessionId: string) {
 describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
+    navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
     routeActionMock.mockClear();
     splitGroupStore.__resetForTest();
@@ -102,6 +116,8 @@ describe('SplitGroup', () => {
     const sessionBView = screen.getByTestId('session-view-session-b');
     expect(sessionAView.dataset.routeOwner).toBe('true');
     expect(sessionBView.dataset.routeOwner).toBe('false');
+    expect(sessionAView.dataset.disableAutofocus).toBe('false');
+    expect(sessionBView.dataset.disableAutofocus).toBe('true');
     expect(sessionAView.dataset.sidebarTargetSessionId).toBe('session-a');
     expect(sessionBView.dataset.sidebarTargetSessionId).toBe('session-b');
 
@@ -165,7 +181,7 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 
-  it('pane 内子路由操作不会被焦点切换导航覆盖', () => {
+  it('pane 内子路由操作先尝试切换 pane，再由子操作接管目标路由', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
     });
@@ -180,7 +196,55 @@ describe('SplitGroup', () => {
     });
 
     expect(routeActionMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionRouteMock).not.toHaveBeenCalled();
+    expect(resolveSessionRouteMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('新的 pane 路由主权会取消仍在解析的旧焦点请求', async () => {
+    let resolveStaleRoute: ((route: string) => void) | undefined;
+    resolveSessionRouteMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStaleRoute = resolve;
+        }),
+    );
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+    });
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="session-c">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      resolveStaleRoute?.('/cc-agent/session-b');
+      await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('pane 内普通 composer 按钮会先切换 pane 主权', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    renderSplitGroup('session-a');
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId('composer-action-session-b'), { button: 0 });
+      await Promise.resolve();
+    });
+
+    expect(resolveSessionRouteMock).toHaveBeenCalledWith('session-b', null);
   });
 
   it('非 owner pane 发起子路由跳转时替换发起跳转的 pane', () => {

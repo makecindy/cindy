@@ -47,11 +47,9 @@ import {
 const GUTTER_PX = 6;
 const KEYBOARD_RESIZE_STEP = 0.05;
 
-function isSplitPaneChildActionTarget(target: EventTarget | null): boolean {
+function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
-  return Boolean(
-    element?.closest('[data-split-pane-no-focus], button, a, [role="button"], [role="link"]'),
-  );
+  return Boolean(element?.closest('[data-split-pane-no-focus]'));
 }
 
 interface SplitGroupProps {
@@ -115,7 +113,9 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const panes = useMemo(() => getSplitPanes(root), [root]);
 
   const previousActiveSessionIdRef = useRef(activeSessionId);
+  const observedActiveSessionIdRef = useRef(activeSessionId);
   const pendingFocusSessionIdRef = useRef<string | null>(null);
+  const focusRequestSequenceRef = useRef(0);
   const pendingPaneNavigationRef = useRef<{
     sourceSessionId: string;
     targetSessionId: string;
@@ -126,13 +126,25 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   const focusSession = useCallback(
     (sessionId: string) => {
-      if (!sessionId || sessionId === activeSessionId) return;
+      if (
+        !sessionId ||
+        sessionId === activeSessionId ||
+        pendingFocusSessionIdRef.current === sessionId
+      ) {
+        return;
+      }
+      const requestSequence = ++focusRequestSequenceRef.current;
       pendingFocusSessionIdRef.current = sessionId;
       const session = sessionsById.get(sessionId) ?? null;
       void resolveSessionRoute(sessionId, session)
-        .then((route) => navigate(route))
+        .then((route) => {
+          if (focusRequestSequenceRef.current !== requestSequence) return;
+          navigate(route);
+        })
         .catch(() => {
-          pendingFocusSessionIdRef.current = null;
+          if (focusRequestSequenceRef.current === requestSequence) {
+            pendingFocusSessionIdRef.current = null;
+          }
         });
     },
     [activeSessionId, navigate, sessionsById],
@@ -140,8 +152,13 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   useEffect(() => {
     const pendingFocusSessionId = pendingFocusSessionIdRef.current;
+    const activeSessionChanged = observedActiveSessionIdRef.current !== activeSessionId;
+    observedActiveSessionIdRef.current = activeSessionId;
     if (pendingFocusSessionId === activeSessionId) {
       pendingFocusSessionIdRef.current = null;
+    } else if (pendingFocusSessionId && activeSessionChanged) {
+      pendingFocusSessionIdRef.current = null;
+      focusRequestSequenceRef.current += 1;
     }
 
     if (panes.some((pane) => pane.sessionId === activeSessionId)) {
@@ -151,8 +168,6 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
       }
       return;
     }
-
-    if (pendingFocusSessionId && pendingFocusSessionId !== activeSessionId) return;
 
     const pendingPaneNavigation = pendingPaneNavigationRef.current;
     pendingPaneNavigationRef.current = null;
@@ -174,6 +189,12 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
   const handlePaneSessionNavigate = useCallback(
     (sourceSessionId: string, targetSessionId: string) => {
+      // Child route actions (session links, handoff cards, encrypted recovery) are
+      // allowed to focus their pane on pointer/keyboard entry, but once the child
+      // announces its own target, suppress that pending source-pane navigation so
+      // it cannot race and overwrite the target route.
+      pendingFocusSessionIdRef.current = null;
+      focusRequestSequenceRef.current += 1;
       pendingPaneNavigationRef.current = { sourceSessionId, targetSessionId };
     },
     [],
@@ -389,7 +410,7 @@ function SplitPaneView({
         data-split-pane-owner={isOwner ? 'true' : 'false'}
         className="flex h-full min-h-0 w-full flex-col overflow-hidden"
         onPointerDownCapture={(event) => {
-          if (isOwner || event.button !== 0 || isSplitPaneChildActionTarget(event.target)) {
+          if (isOwner || event.button !== 0 || isSplitPaneNoFocusTarget(event.target)) {
             return;
           }
           focusSession(viewSessionId);
@@ -398,7 +419,7 @@ function SplitPaneView({
           if (
             isOwner ||
             event.currentTarget.contains(event.relatedTarget as Node | null) ||
-            isSplitPaneChildActionTarget(event.target)
+            isSplitPaneNoFocusTarget(event.target)
           ) {
             return;
           }
@@ -440,6 +461,7 @@ function SplitPaneView({
               onSessionNavigate(viewSessionId, targetSessionId)
             }
             sidebarTargetSessionId={viewSessionId}
+            disableAutofocus={!isOwner}
             viewVisible
             chatRealtime
           />

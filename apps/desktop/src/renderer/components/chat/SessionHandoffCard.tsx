@@ -87,6 +87,7 @@ export function SessionHandoffCard({
 
   return (
     <Root
+      data-split-pane-route-action={interactive ? '' : undefined}
       {...(interactive ? { type: 'button' as const, onClick: handleClick } : {})}
       className={cn(
         'my-2 flex w-full min-w-0 items-center gap-[14px] rounded-[12px]',

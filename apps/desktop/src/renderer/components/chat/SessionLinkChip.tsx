@@ -199,6 +199,7 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
       <button
         type="button"
         data-session-message-link=""
+        data-split-pane-route-action=""
         aria-label={
           referenceDetails.length > 0
             ? `${visibleMessageLabel} (${referenceDetails.join(' · ')})`
@@ -233,6 +234,7 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
       tooltip={tooltip}
       ariaLabel={display}
       onClick={handleClick}
+      splitPaneRouteAction
       className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
     />
   );
