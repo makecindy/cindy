@@ -582,8 +582,19 @@ export interface GhostSecretExchangeDecl {
   ttlSeconds?: number;
 }
 
-/** OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。 */
-export const GHOST_OAUTH_SCOPES_MAX = 32;
+/**
+ * OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。
+ * 32→48(2026-08):原值按当时最大存量顶格(xd-feishu 老登录链全集 32 条),
+ * xd-feishu 补审批/表情/导入等能力到 41 条后,上限随最大存量演进。注意本校验
+ * 取值级"严出"(plugin-security-and-authoring.md §7):超 32 条的包在旧版客户端
+ * 拒装,插件市场铺开须等携带本值的客户端先行发布。
+ *
+ * 涨过 64 前必须同步两处只留了防御余量的 64 上限,否则会拒绝合法的缺权上报
+ * /静默判废 assessment:insufficient-scopes 端点的整包条数上限
+ * (runtime/ghostOauthEndpoint.ts)与 cindy-tools 的 SETUP_REAUTH_SCOPE_MAX
+ * (ghost/mcpServer.ts,包依赖方向不允许直接引用本常量)。
+ */
+export const GHOST_OAUTH_SCOPES_MAX = 48;
 /** OAuth broker 模式可声明的备用 clientId 上限(默认 clientId 不计入)。 */
 export const GHOST_OAUTH_CLIENT_ID_ALTERNATIVES_MAX = 8;
 /** OAuth 凭证:extraAuthorizeParams 条数上限。 */
@@ -635,7 +646,7 @@ export interface GhostSecretOauthDecl {
   clientIdAlternatives?: string[];
   /** 可选:内置 client 的 secret(与 clientId 成对;纯 PKCE 服务商可省略)。 */
   clientSecret?: string;
-  /** 申请的 scope 列表(0–32 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
+  /** 申请的 scope 列表(0–48 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
   scopes?: string[];
   /**
    * 可选:authorize URL 里 scope 参数的拼接分隔符。OAuth 标准是空格(缺省),
@@ -1076,6 +1087,26 @@ export interface GhostSetupAssessmentGroup {
 }
 
 /**
+ * 插件仍可调用、但默认 OAuth 账号的全量授权面落后于当前清单时的非阻塞建议。
+ * 只含 scope 名称与 Host 生成的动作引用，不含令牌或 client 凭证。
+ */
+export interface GhostSetupReauthSuggest {
+  ghostId: string;
+  secretKey: string;
+  missingScopes: string[];
+  missingScopeCount: number;
+  requirement: {
+    ref: string;
+    kind: 'oauth';
+    label: string;
+    action: {
+      id: string;
+      kind: 'oauth_connect';
+    };
+  };
+}
+
+/**
  * Setup Runtime 的完整判定结果。groups 之间 all-of，组内 any-of；
  * revision 由 Host 变更总线维护，用于丢弃过期卡片更新。
  */
@@ -1083,6 +1114,8 @@ export interface GhostSetupAssessment {
   state: 'ready' | 'required';
   revision: number;
   groups: GhostSetupAssessmentGroup[];
+  /** ready 语义不变；Agent 可据此建议用户重新连接，但不得拦截当前调用。 */
+  reauthSuggest?: GhostSetupReauthSuggest;
 }
 
 /** Agent 可选提供的展示编排；身份、Action 和完成状态仍由 Host 决定。 */
@@ -1314,6 +1347,11 @@ export interface InstalledGhost {
    * 文件缺失或超限时缺省)。renderer 直接作 <img src> 用,无需 loading 态。
    */
   iconDataUrl?: string;
+  /** 插件详情页宿主角标所需的最小陈旧授权投影；不含账号或 scope 明细。 */
+  oauthScopeStale?: {
+    secretKey: string;
+    missingScopeCount: number;
+  };
 }
 
 /** 插件包的来源与审核等级；决定 UI 徽标，不改变运行时 slot 权限。 */

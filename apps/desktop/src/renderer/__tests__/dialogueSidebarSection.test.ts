@@ -106,6 +106,20 @@ describe('Dialogue sidebar section', () => {
     );
   });
 
+  it('keeps remote background loading from changing the sidebar layout', () => {
+    // Existing local/cached rows must stay in place while remote bootstrap runs in the background.
+    // A partial loading notice in the scroll flow makes every row jump when it mounts/unmounts.
+    expect(sidebarSource).toContain(
+      '远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示',
+    );
+    expect(sidebarSource).not.toMatch(
+      /remoteDeviceDirectoryStatus === 'loading'\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\/\>\s*\)/,
+    );
+    expect(sidebarSource).not.toMatch(
+      /remoteSessionBootstrapLoadingDevices\.length > 0\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\n?\s*\/\>\s*\)/,
+    );
+  });
+
   it('has a Dialogue-owned runtime sort setting instead of using project manual order or renderer storage', () => {
     expect(dialogueSectionSource).toContain('DIALOGUE_SORT_OPTIONS');
     expect(dialogueSectionSource).not.toMatch(/manualProjectOrder/);

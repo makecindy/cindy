@@ -34,7 +34,7 @@ export interface CompactMetadataRepair {
   removedPreservedMessages: boolean;
 }
 
-function isRecord(value: unknown): value is JsonObject {
+export function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -298,12 +298,28 @@ function backupTimestamp(): string {
   return new Date().toISOString().replace(/[-:.]/g, '').replace('T', '-').replace('Z', '');
 }
 
-async function createJsonlBackup(filePath: string, original: string): Promise<string> {
+/**
+ * 为会话 jsonl 创建 `.bak.<timestamp>` 备份(写不进就换个后缀重试)。
+ * fork 修复与 jsonl-tool-id-normalize 共用同一份备份语义。
+ */
+export async function createClaudeJsonlBackup(
+  filePath: string,
+  original: string,
+  mode?: number,
+): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = `${backupTimestamp()}${attempt === 0 ? '' : `-${attempt}`}`;
     const backupPath = `${filePath}.bak.${suffix}`;
     try {
-      await fs.writeFile(backupPath, original, { encoding: 'utf8', flag: 'wx' });
+      // mode 沿用源文件权限(转录可能 0600,备份不应变 0644 暴露给同机用户)。
+      await fs.writeFile(backupPath, original, {
+        encoding: 'utf8',
+        flag: 'wx',
+        ...(mode !== undefined ? { mode } : {}),
+      });
+      // writeFile 的 mode 受进程 umask 影响,创建后 chmod 才能真正还原权限
+      // (codex-connector review: Apply chmod after creating transcript copies)。
+      if (mode !== undefined) await fs.chmod(backupPath, mode).catch(() => undefined);
       return backupPath;
     } catch (error) {
       if (isRecord(error) && error.code === 'EEXIST') continue;
@@ -326,7 +342,9 @@ export async function repairForkedClaudeSessionJsonl(
   let backupPath: string | undefined;
 
   if (repaired.changed) {
-    backupPath = await createJsonlBackup(filePath, original);
+    // 备份沿用源转录权限: 0600 转录不得被备份成 0644(Copilot review)。
+    const originalMode = (await fs.stat(filePath)).mode & 0o777;
+    backupPath = await createClaudeJsonlBackup(filePath, original, originalMode);
     await fs.writeFile(filePath, repaired.text, 'utf8');
   }
 

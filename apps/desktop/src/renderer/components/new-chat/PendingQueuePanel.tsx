@@ -109,7 +109,10 @@ function equalIds(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((id, idx) => id === right[idx]);
 }
 
-function resolveSingleMove(oldIds: string[], nextIds: string[]): { clientId: string; targetIndex: number } | null {
+function resolveSingleMove(
+  oldIds: string[],
+  nextIds: string[],
+): { clientId: string; targetIndex: number } | null {
   if (oldIds.length !== nextIds.length || equalIds(oldIds, nextIds)) return null;
 
   for (let oldIndex = 0; oldIndex < oldIds.length; oldIndex += 1) {
@@ -173,7 +176,10 @@ export function PendingQueuePanel({
   const onInteractionLockRef = useRef(onInteractionLock);
 
   const visibleQueue = useMemo(
-    () => (expanded || queue.length <= COLLAPSE_THRESHOLD_ROWS ? queue : queue.slice(0, COLLAPSED_VISIBLE_ROWS)),
+    () =>
+      expanded || queue.length <= COLLAPSE_THRESHOLD_ROWS
+        ? queue
+        : queue.slice(0, COLLAPSED_VISIBLE_ROWS),
     [expanded, queue],
   );
   const hiddenCount = Math.max(0, queue.length - visibleQueue.length);
@@ -264,9 +270,7 @@ export function PendingQueuePanel({
     const trimmed = editingDraft.trim();
     if (trimmed.length > 0) {
       const entry = queue.find((item) => item.clientId === editingClientId);
-      const submission = entry
-        ? resolvePendingQueueEditSubmission(entry, editingDraft)
-        : null;
+      const submission = entry ? resolvePendingQueueEditSubmission(entry, editingDraft) : null;
       if (submission !== null) onEdit?.(editingClientId, submission);
     }
     releaseEditLock(editingClientId);
@@ -316,10 +320,11 @@ export function PendingQueuePanel({
         className="pending-queue-scroll flex max-h-[196px] flex-col gap-0 overflow-y-auto overscroll-contain px-1 pb-0.5 pt-1.5 [scrollbar-gutter:stable_both-edges]"
         renderItem={(entry, originalIdx) => {
           const rowPresentation = getPendingQueueRowPresentation(entry);
+          const isPendingEnqueue = entry.isPendingEnqueue === true;
           const isRowActive = isPendingQueueRowActive(rowActivity, entry.clientId);
           const isRowEditing = entry.clientId === editingClientId;
           const isSteering = steeringClientIds.includes(entry.clientId);
-          const showActions = isRowActive || isSteering || isRowEditing;
+          const showActions = !isPendingEnqueue && (isRowActive || isSteering || isRowEditing);
           const canSteerRow = Boolean(onSteer) && rowPresentation.canSteer;
           const canEditRow = Boolean(onEdit) && rowPresentation.canEdit;
           const chatMessageContent = entry.chatMessage.content ?? entry.text;
@@ -335,12 +340,20 @@ export function PendingQueuePanel({
               agentReferences.length > 0 ||
               (entry.mentions?.length ?? 0) > 0);
           const actionSlotWidth = canSteerRow
-            ? (canEditRow ? 'w-[68px]' : 'w-[44px]')
-            : (canEditRow ? 'w-[44px]' : 'w-5');
-          const dragDisabled = !onReorder || isRowEditing || isSteering;
+            ? canEditRow
+              ? 'w-[68px]'
+              : 'w-[44px]'
+            : canEditRow
+              ? 'w-[44px]'
+              : 'w-5';
+          const dragDisabled = !onReorder || isPendingEnqueue || isRowEditing || isSteering;
           const steerTipText = (() => {
             if (isSteering) return t('newChat.pendingQueue.steeringAction');
-            const base = t(turnRunning ? 'newChat.pendingQueue.steerRunningTip' : 'newChat.pendingQueue.steerPausedTip');
+            const base = t(
+              turnRunning
+                ? 'newChat.pendingQueue.steerRunningTip'
+                : 'newChat.pendingQueue.steerPausedTip',
+            );
             return steerShortcutLabel ? `${base} · ${steerShortcutLabel}` : base;
           })();
           // The surrounding <p> owns the queue row's single-line nowrap +
@@ -424,7 +437,7 @@ export function PendingQueuePanel({
           return (
             <div
               role="listitem"
-              tabIndex={canSteerRow ? 0 : undefined}
+              tabIndex={canSteerRow && !isPendingEnqueue ? 0 : undefined}
               aria-keyshortcuts={canSteerRow ? 'Meta+Enter Control+Enter' : undefined}
               onKeyDown={handleRowKeyDown}
               onMouseEnter={() => {
@@ -472,7 +485,8 @@ export function PendingQueuePanel({
                   'pending-queue-drag-handle flex h-5 w-5 shrink-0 touch-none select-none items-center justify-center rounded-[6px]',
                   'appearance-none border-0 bg-transparent p-0',
                   'text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity',
-                  !dragDisabled && 'cursor-grab group-hover:opacity-100 focus:opacity-100 active:cursor-grabbing',
+                  !dragDisabled &&
+                    'cursor-grab group-hover:opacity-100 focus:opacity-100 active:cursor-grabbing',
                   dragDisabled && 'cursor-default',
                 )}
               >
@@ -530,9 +544,11 @@ export function PendingQueuePanel({
                     )}
                   >
                     {rowPresentation.isSyntheticTrigger
-                      ? t(rowPresentation.syntheticKind === 'continue'
+                      ? t(
+                          rowPresentation.syntheticKind === 'continue'
                           ? 'newChat.pendingQueue.syntheticContinueLabel'
-                          : 'newChat.pendingQueue.syntheticTriggerLabel')
+                          : 'newChat.pendingQueue.syntheticTriggerLabel',
+                        )
                       : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
                   </span>
                 </div>
@@ -550,7 +566,14 @@ export function PendingQueuePanel({
                 </p>
               )}
 
-              {isRowEditing ? (
+              {isPendingEnqueue ? (
+                <span
+                  aria-hidden
+                  className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--cmd-palette-item-meta)]"
+                >
+                  <Spinner size={12} strokeWidth={2.25} />
+                </span>
+              ) : isRowEditing ? (
                 <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
@@ -573,12 +596,11 @@ export function PendingQueuePanel({
                   </button>
                 </div>
               ) : showActions ? (
-                <div className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}>
+                <div
+                  className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}
+                >
                   {canSteerRow && onSteer && (
-                    <Tip
-                      text={steerTipText}
-                      side="top"
-                    >
+                    <Tip text={steerTipText} side="top">
                       <button
                         type="button"
                         onClick={() => {
@@ -591,7 +613,10 @@ export function PendingQueuePanel({
                             : 'newChat.pendingQueue.steerAria',
                           { index: originalIdx + 1 },
                         )}
-                        className={cn(iconButtonClassName, 'disabled:cursor-wait disabled:opacity-70')}
+                        className={cn(
+                          iconButtonClassName,
+                          'disabled:cursor-wait disabled:opacity-70',
+                        )}
                       >
                         {isSteering ? (
                           <Spinner size={12} strokeWidth={2.25} />
@@ -618,7 +643,9 @@ export function PendingQueuePanel({
                       <button
                         type="button"
                         onClick={() => onRemove(entry.clientId)}
-                        aria-label={t('newChat.pendingQueue.removeAria', { index: originalIdx + 1 })}
+                        aria-label={t('newChat.pendingQueue.removeAria', {
+                          index: originalIdx + 1,
+                        })}
                         className={iconButtonClassName}
                       >
                         <Trash2 size={11} strokeWidth={2.25} aria-hidden />
@@ -659,7 +686,11 @@ export function PendingQueuePanel({
               {expanded
                 ? t('newChat.pendingQueue.showLess')
                 : t('newChat.pendingQueue.showMore', { count: hiddenCount })}
-              {expanded ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+              {expanded ? (
+                <ChevronUp size={13} aria-hidden />
+              ) : (
+                <ChevronDown size={13} aria-hidden />
+              )}
             </button>
           ) : (
             <span aria-hidden className="col-start-2 h-5" />

@@ -74,6 +74,10 @@ class NotificationTransport implements Transport {
   private readonly closeHandlers = new Set<CloseHandler>();
   readonly lines: string[] = [];
 
+  constructor(
+    private readonly resultForMethod?: (method: string) => unknown,
+  ) {}
+
   async writeLine(line: string): Promise<void> {
     this.lines.push(line);
     const msg = JSON.parse(line) as { id?: unknown; method?: string };
@@ -84,7 +88,7 @@ class NotificationTransport implements Transport {
           codexHome: '/tmp/codex-home',
           platformOs: 'linux',
         }
-      : {};
+      : this.resultForMethod?.(msg.method ?? '') ?? {};
     this.emit({ id: msg.id, result });
   }
 
@@ -111,6 +115,70 @@ class NotificationTransport implements Transport {
     for (const handler of this.lineHandlers) handler(line);
   }
 }
+
+describe('AppServerHost MCP readiness', () => {
+  it('retries a negative tool probe instead of permanently caching it', async () => {
+    let available = false;
+    const transport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{
+              name: 'node_repl',
+              tools: available ? { js: {} } : {},
+              authStatus: 'notApplicable',
+            }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexBrowserUseStartupTimeoutMs: 10,
+    });
+
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
+    available = true;
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+
+    await host.shutdown();
+  });
+
+  it('re-probes MCP readiness after the app-server respawns', async () => {
+    const firstTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: { js: {} }, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const secondTransport = new NotificationTransport((method) => (
+      method === 'mcpServerStatus/list'
+        ? {
+            data: [{ name: 'node_repl', tools: {}, authStatus: 'notApplicable' }],
+            nextCursor: null,
+          }
+        : {}
+    ));
+    const transports = [firstTransport, secondTransport];
+    const createTransport = vi.fn(() => transports.shift() ?? secondTransport);
+    const host = new AppServerHost({
+      createTransport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexBrowserUseStartupTimeoutMs: 10,
+    });
+
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+    await host.shutdown();
+    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
+
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+});
 
 const logger: Logger = {
   trace: vi.fn(),
@@ -478,6 +546,98 @@ describe('AppServerHost descendant thread routing', () => {
       expect.objectContaining({ threadId: 'child-thread' }),
       { requestId: 'server-tool' },
     );
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('briefly waits for descendant lineage before declining an MCP elicitation', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const mcpServerElicitation = vi.fn(async () => ({
+      action: 'accept' as const,
+      content: { value: 'ok' },
+      _meta: null,
+    }));
+    const subscription = host.subscribeThread('root-thread', { mcpServerElicitation });
+    const initialLineCount = transport.lines.length;
+
+    // The request is dispatched asynchronously. Emit the lineage notification
+    // immediately afterwards to reproduce the observed cross-message race.
+    transport.emit({
+      id: 'early-elicitation',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'child-thread',
+        turnId: 'turn-1',
+        serverName: 'node_repl',
+        mode: 'form',
+        _meta: null,
+        message: 'Confirm',
+        requestedSchema: {},
+      },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    await vi.waitFor(() => {
+      expect(transport.lines.length).toBe(initialLineCount + 1);
+    });
+    expect(JSON.parse(transport.lines.at(-1)!)).toEqual({
+      id: 'early-elicitation',
+      result: { action: 'accept', content: { value: 'ok' }, _meta: null },
+    });
+    expect(mcpServerElicitation).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread', serverName: 'node_repl' }),
+    );
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('declines an MCP elicitation whose lineage stays unknown for the bounded window', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 20,
+    });
+    await host.ensureStarted();
+
+    const mcpServerElicitation = vi.fn();
+    const subscription = host.subscribeThread('root-thread', { mcpServerElicitation });
+    const initialLineCount = transport.lines.length;
+    transport.emit({
+      id: 'unknown-elicitation',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'unknown-thread',
+        turnId: 'turn-1',
+        serverName: 'node_repl',
+        mode: 'form',
+        _meta: null,
+        message: 'Confirm',
+        requestedSchema: {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(transport.lines.length).toBe(initialLineCount + 1);
+    });
+    expect(JSON.parse(transport.lines.at(-1)!)).toEqual({
+      id: 'unknown-elicitation',
+      result: { action: 'decline', content: null, _meta: null },
+    });
+    expect(mcpServerElicitation).not.toHaveBeenCalled();
 
     await subscription.release();
     await host.shutdown();

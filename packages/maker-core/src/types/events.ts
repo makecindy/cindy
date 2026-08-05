@@ -124,6 +124,13 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Provider-owned claim attached synchronously to a `done` boundary when that
+   * boundary has an automatic continuation. Consumers pass it back to the
+   * session lifecycle API; unlike a live task-map sample it cannot race later
+   * task notifications or a fast result-only continuation turn.
+   */
+  turnContinuationId?: number;
+  /**
    * Vendor-specific 元数据透传 (claude-code 的 SDK uuid / parentUuid / sdkSessionId /
    * model / stopReason / requestId / usage 等)。host 落库时塞进 messages.agent_meta 列,
    * rewind / fork 反向找 prior assistant 时按 uuid 锚定。

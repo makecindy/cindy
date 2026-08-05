@@ -1,8 +1,8 @@
 /**
  * pi auto 档 dispatcher + spawn 配置回归 —— mock PiRpcProcess(不 spawn 真 pi),
  * 捕获构造参数与 send() 帧,验证:
- *   1. spawn args:改用 --append-system-prompt(保留 pi 默认 prompt),不再 --system-prompt;
- *   2. spawn env:PI_OFFLINE=1(嵌入式不做启动期联网)、PI_CACHE_RETENTION=long、
+ *   1. spawn args:保留 pi 默认 prompt，不用 --tools 筛掉动态 MCP/subagent;
+ *   2. spawn env:PI_OFFLINE=1(嵌入式不做启动期联网)、受管工具绝对路径、PI_CACHE_RETENTION=long、
  *      NO_PROXY 含 loopback 且吞并小写 no_proxy;
  *   3. auto 档:区内写静默 confirmed:true;灰区交当前模型 reviewer,仅 reviewer 明确
  *      ask / 本地红线才弹 resolver;reviewer 缺失时 fail-closed deny;
@@ -86,6 +86,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
+  let managedRipgrepPath = '';
   let savedNoProxy: string | undefined;
   let savedNoProxyLower: string | undefined;
 
@@ -103,6 +104,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.closed = false;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-cwd-'));
+    managedRipgrepPath = path.join(
+      agentHome,
+      'managed-tools',
+      process.platform === 'win32' ? 'rg.exe' : 'rg',
+    );
+    mkdirSync(path.dirname(managedRipgrepPath), { recursive: true });
+    writeFileSync(managedRipgrepPath, 'fake managed ripgrep');
     savedNoProxy = process.env.NO_PROXY;
     savedNoProxyLower = process.env.no_proxy;
   });
@@ -147,7 +155,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         logout: async () => {},
         getAuthEnv: async () => ({}),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9', systemPrompt: 'You are Cindy.' },
+      runtimeConfig: {
+        endpoint: 'http://127.0.0.1:9',
+        systemPrompt: 'You are Cindy.',
+        managedExecutablePaths: { ripgrep: managedRipgrepPath },
+      },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -219,7 +231,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   }
 
-  it('spawns with --append-system-prompt (default pi prompt preserved) and offline/no-proxy env', async () => {
+  it('spawns with a private managed rg path, default prompt and no restrictive tool allowlist', async () => {
     if (process.platform === 'win32') {
       // Windows 的环境变量键不区分大小写，无法同时构造“仅有小写键”的进程环境。
       process.env.NO_PROXY = 'corp.internal';
@@ -232,8 +244,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const idx = captured.args.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThan(-1);
     expect(captured.args[idx + 1]).toBe('You are Cindy.');
+    expect(captured.args).not.toContain('--tools');
     expect(captured.env.PI_OFFLINE).toBe('1');
     expect(captured.env.PI_CACHE_RETENTION).toBe('long');
+    const privateRgPath = captured.env.CINDY_PI_MANAGED_RG_PATH;
+    expect(privateRgPath).toBe(path.join(
+      captured.env.PI_CODING_AGENT_DIR!,
+      'bin',
+      process.platform === 'win32' ? 'rg.exe' : 'rg',
+    ));
+    expect(path.isAbsolute(privateRgPath!)).toBe(true);
+    expect(readFileSync(privateRgPath!, 'utf8')).toBe('fake managed ripgrep');
     expect(captured.proxyRegistration).toEqual({
       sessionId: 's1',
       token: captured.env.CINDY_PI_SESSION_TOKEN,
@@ -244,6 +265,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         'CINDY_PI_API_KEY',
         'CINDY_PI_SESSION_ID',
         'CINDY_PI_SESSION_TOKEN',
+        'CINDY_PI_MANAGED_RG_PATH',
         // 子代理路由快照是**控制面**:一次获批的 bash 拿到路径就能改写 provider/model,
         // 让后续每次委派打到攻击者选定的 endpoint。与 permission file 同类,必须从
         // bash/模型工具的 spawn 边界剥离(review)。
@@ -255,6 +277,26 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+  it('does not inherit an unmanaged ripgrep path from the host process env', async () => {
+    const previous = process.env.CINDY_PI_MANAGED_RG_PATH;
+    process.env.CINDY_PI_MANAGED_RG_PATH = path.join(cwd, 'rogue-rg');
+    let handle: AgentSessionHandle | undefined;
+    try {
+      const deps = buildDeps();
+      delete deps.runtimeConfig.managedExecutablePaths;
+      handle = await new PiAgent(deps).startSession({
+        sessionId: 'unmanaged-rg',
+        workingDir: cwd,
+        model: 'm',
+      });
+      expect(captured.env.CINDY_PI_MANAGED_RG_PATH).toBeUndefined();
+    } finally {
+      await handle?.close();
+      if (previous === undefined) delete process.env.CINDY_PI_MANAGED_RG_PATH;
+      else process.env.CINDY_PI_MANAGED_RG_PATH = previous;
+    }
   });
 
 
@@ -485,7 +527,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const { readFileSync } = await import('node:fs');
     const configHome = captured.env.PI_CODING_AGENT_DIR as string;
     const bridge = readFileSync(path.join(configHome, 'extensions', 'cindy-bridge.ts'), 'utf8');
-    expect(bridge).toContain("import { createBashTool } from '@earendil-works/pi-coding-agent'");
+    expect(bridge).toContain('createBashTool,');
+    expect(bridge).toContain('createFindTool,');
+    expect(bridge).toContain('createGrepTool,');
+    expect(bridge).toContain('createLsTool,');
     expect(bridge).toContain('env: withoutPiSecrets(env)');
     expect(bridge).toContain('exposeSessionEnvironment: false');
     expect(bridge).toContain("'CINDY_PI_PERMISSION_FILE'");

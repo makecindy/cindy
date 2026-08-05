@@ -19,10 +19,16 @@ import {
   extractMessagePreview,
 } from '../mapper';
 import { throwIpcError, requireString } from '../../utils/ipcValidate';
-import { tapWindowBroadcast } from '../../device-link/broadcast-tap';
+import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
-import { commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
-import { removeRefs as removeMediaRefs } from '../../cindy-media/ledger';
+import {
+  collectCindyMediaHashes,
+  commitMessageMediaRefs,
+} from '../../cindy-media/chatAttachments';
+import {
+  removeRefs as removeMediaRefs,
+  removeSessionAttachmentRefIfUnreferencedByLiveMessage,
+} from '../../cindy-media/ledger';
 import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
 import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
@@ -57,11 +63,53 @@ const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 const messageRowid = sql<number>`rowid`;
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
+type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
+
+function captureOwnerBroadcastScope(): DataOwnerBroadcastScope | null {
+  try {
+    const capture = broadcastTap.captureDataOwnerBroadcastScope;
+    return capture ? capture() : null;
+  } catch {
+    // Narrow unit-test mocks may intentionally expose only the legacy tap API.
+    return null;
+  }
+}
+
+function isOwnerBroadcastScopeCurrent(scope: DataOwnerBroadcastScope | null | undefined): boolean {
+  if (scope === null || scope === undefined) return true;
+  try {
+    const isCurrent = broadcastTap.isDataOwnerBroadcastScopeCurrent;
+    return isCurrent ? isCurrent(scope) : true;
+  } catch {
+    return true;
+  }
+}
+
+function getSafeOwnerPushStamp(): ReturnType<typeof broadcastTap.getSafeDataOwnerPushStamp> {
+  try {
+    return broadcastTap.getSafeDataOwnerPushStamp?.();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the stamp for a synchronous broadcast. A captured scope is never
+ * relabeled with the current owner after an await; stale scopes are dropped.
+ */
+function ownerStampForBroadcast(
+  scope: DataOwnerBroadcastScope | null | undefined,
+): DataOwnerBroadcastScope['ownerStamp'] | null {
+  if (!isOwnerBroadcastScopeCurrent(scope)) return null;
+  if (scope !== undefined && scope !== null) return scope.ownerStamp;
+  return getSafeOwnerPushStamp();
+}
 
 const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT m.content
    FROM messages AS m
    JOIN sessions AS s ON s.id = m.session_id
   WHERE s.status != 'deleted'
+    AND m.rewind_at IS NULL
     AND m.content LIKE '%chat-attachment-cache%'`;
 
 export interface EstimatedSessionValueEntry {
@@ -102,7 +150,7 @@ export async function listSessionPersistedChatAttachmentPaths(
   const rows = await getDbClient().drizzle
     .select({ content: messages.content })
     .from(messages)
-    .where(eq(messages.sessionId, sessionId));
+    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt)));
   return uniqueStrings(
     rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
   );
@@ -131,7 +179,13 @@ export async function listPersistedChatAttachmentPathsForOtherSessions(
     .select({ content: messages.content })
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-    .where(and(ne(messages.sessionId, sessionId), ne(sessions.status, 'deleted')));
+    .where(
+      and(
+        ne(messages.sessionId, sessionId),
+        ne(sessions.status, 'deleted'),
+        isNull(messages.rewindAt),
+      ),
+    );
   return uniqueStrings(
     rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
   );
@@ -607,12 +661,31 @@ export async function runMessagesListImportSideEffects(
  * handleMessageCreatedRaw 对已存在 clientId 走 merge/替换语义,因此**更新**行
  * (如 dismiss)复用同一事件即可让 peer 视图刷新,无需新增 onUpdated 通道。
  */
-export function broadcastMessageRow(sessionId: string, msg: Message): void {
-  tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
+export function broadcastMessageRow(
+  sessionId: string,
+  msg: Message,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  const ownerStamp = ownerStampForBroadcast(ownerScope);
+  if (ownerStamp === null) return;
+  if (ownerScope !== undefined && ownerScope !== null) {
+    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+  } else if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
+  } else {
+    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+  }
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:messages:created', { sessionId, message: msg });
+      if (hasCapturedScope) {
+        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+      } else if (ownerStamp === undefined) {
+        win.webContents.send('local-db:messages:created', { sessionId, message: msg });
+      } else {
+        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+      }
     } catch {
       /* swallow per-window broadcast failures */
     }
@@ -933,22 +1006,137 @@ export async function commitMessageDeletion(
   };
 }
 
-export function broadcastMessageDeleted(payload: MessageDeletedPayload): void {
-  tapWindowBroadcast('local-db:messages:deleted', payload);
+export function broadcastMessageDeleted(
+  payload: MessageDeletedPayload,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  const ownerStamp = ownerStampForBroadcast(ownerScope);
+  if (ownerStamp === null) return;
+  if (ownerScope !== undefined && ownerScope !== null) {
+    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
+  } else if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload);
+  } else {
+    broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
+  }
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:messages:deleted', payload);
+      if (hasCapturedScope) win.webContents.send('local-db:messages:deleted', payload, ownerStamp);
+      else if (ownerStamp === undefined) win.webContents.send('local-db:messages:deleted', payload);
+      else win.webContents.send('local-db:messages:deleted', payload, ownerStamp);
     } catch {
       /* swallow per-window broadcast failures */
     }
   }
 }
 
+/**
+ * Hide a user row that was persisted after the session crossed `/clear`.
+ *
+ * This is deliberately narrower than `commitMessageDeletion`: a clear-race
+ * cleanup must not create a context-rebuild marker, reset the native session,
+ * or touch any other turn.  The row stays as a rewind tombstone so the same
+ * clientId remains idempotent across a weak-link retry.
+ */
+export async function rewindPersistedUserMessageAfterClear(
+  sessionId: string,
+  clientId: string,
+): Promise<void> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  const [row] = await db
+    .select({ id: messages.id, clientId: messages.clientId, content: messages.content })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, clientId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+      ),
+    )
+    .limit(1);
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  if (!row) return;
+
+  const rewoundAt = Date.now();
+  const updated = await dbClient.exec(
+    `UPDATE messages
+        SET rewind_at = ?
+      WHERE session_id = ?
+        AND client_id = ?
+        AND role = 'user'
+        AND rewind_at IS NULL`,
+    [rewoundAt, sessionId, clientId],
+  );
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  if (updated.changes === 0) return;
+
+  const attachmentPaths = extractChatAttachmentPathsFromPersistedContent(row.content);
+  const mediaCleanup = await Promise.allSettled(
+    [...new Set([row.id, row.clientId])].map((refId) =>
+      removeMediaRefs({ refKind: 'message', refId }),
+    ),
+  );
+  for (const [index, cleanup] of mediaCleanup.entries()) {
+    if (cleanup.status === 'fulfilled') continue;
+    log.warn('clear-race user media ref cleanup failed', {
+      sessionId,
+      clientId,
+      refId: [row.id, row.clientId][index],
+      error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
+    });
+  }
+  const mediaHashes = collectCindyMediaHashes(row.content);
+  const mediaHashCleanup = await Promise.allSettled(
+    mediaHashes.map((hash) =>
+      removeSessionAttachmentRefIfUnreferencedByLiveMessage({ sessionId, hash }),
+    ),
+  );
+  for (const [index, cleanup] of mediaHashCleanup.entries()) {
+    if (cleanup.status === 'fulfilled') continue;
+    log.warn('clear-race session media ref reconcile failed', {
+      sessionId,
+      clientId,
+      hash: mediaHashes[index],
+      error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
+    });
+  }
+  if (attachmentPaths.length > 0) {
+    try {
+      const [remaining, retainedByOtherSessions] = await Promise.all([
+        listSessionPersistedChatAttachmentPaths(sessionId),
+        listPersistedChatAttachmentPathsForOtherSessions(sessionId),
+      ]);
+      const remainingSet = new Set(remaining);
+      const retainedSet = new Set(retainedByOtherSessions);
+      await cleanupStagedChatAttachments(
+        attachmentPaths.filter(
+          (filePath) => !remainingSet.has(filePath) && !retainedSet.has(filePath),
+        ),
+      );
+    } catch (error) {
+      log.warn('clear-race staged attachment cleanup failed', {
+        sessionId,
+        clientId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
+  void recomputePrRefsForSession(sessionId).catch(() => undefined);
+}
+
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
 ): Promise<Message | null> {
+  const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
   const [row] = await db
     .select()
@@ -965,7 +1153,9 @@ export async function dismissErrorMessage(
   // 窗口的内存 errorDismissed 仍为 false,stale 尾部 banner 留着还能对已忽略的
   // 错误重复 enqueue 续跑。peer 端 handleMessageCreatedRaw 按 clientId merge,
   // banner 判定即时熄灭;发起端自身的乐观更新早已生效,重复广播幂等。
-  if (updated) broadcastMessageRow(sessionId, updated);
+  if (updated && isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageRow(sessionId, updated, ownerScope);
+  }
   return updated;
 }
 
@@ -999,6 +1189,7 @@ export async function supersedeRetriedUserTurn(
   sessionId: string,
   args: { supersededUserClientId: string; retryUserClientId: string },
 ): Promise<string[]> {
+  const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
   const [oldRow] = await db
     .select({
@@ -1047,6 +1238,7 @@ export async function supersedeRetriedUserTurn(
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
   const clientIds = [oldRow.clientId, ...errorRows.map((r) => r.clientId)];
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return [];
   await db
     .update(messages)
     .set({ rewindAt: Date.now() })
@@ -1057,7 +1249,9 @@ export async function supersedeRetriedUserTurn(
         isNull(messages.rewindAt),
       ),
     );
-  broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds });
+  if (isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds }, ownerScope);
+  }
   return clientIds;
 }
 
@@ -1182,30 +1376,147 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
+    /**
+     * Optional clear-boundary compare-and-set for optimistic user sends.  The
+     * insert is accepted only while the session still has this exact
+     * `clearedAt` value.  This closes the window where `/clear` wins the DB
+     * update while an already-accepted `Session.send()` is still awaiting its
+     * durable user row.
+     */
+    expectedClearBoundaryMs?: number | null;
+    /**
+     * Owner scope captured before an async main-side write.  A stale scope
+     * must not broadcast a row into the next signed-in owner.
+     */
+    broadcastOwnerScope?: DataOwnerBroadcastScope | null;
   },
 ): Promise<Message> {
-  const db = getDbClient().drizzle;
-  const existing = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-    .limit(1);
-  if (existing.length > 0) {
-    return messageToCamel(existing[0]);
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  const guarded = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+  const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
+  if (
+    guarded &&
+    expected !== null &&
+    (typeof expected !== 'number' || !Number.isFinite(expected) || expected < 0)
+  ) {
+    throw new Error('expectedClearBoundaryMs must be null or a non-negative finite number');
+  }
+
+  // The unguarded API keeps its historical fast idempotency read. Guarded
+  // optimistic sends must skip it: a pre-clear row can otherwise be returned
+  // before the compare-and-set boundary is checked.
+  if (!guarded) {
+    const existing = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+      .limit(1);
+    if (existing.length > 0) return messageToCamel(existing[0]);
   }
 
   const id = createId();
   const now = Date.now();
-  const insertRow = messageCreateToRow(id, sessionId, body, now);
+  const visibleCreatedAt =
+    guarded && expected !== null && expected !== undefined
+      ? Math.max(body.createdAt ?? now, expected + 1)
+      : body.createdAt ?? now;
+  const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
-    await db.insert(messages).values(insertRow);
+    if (guarded) {
+      // Keep the session compare and message insert in one SQLite statement.
+      // A separate SELECT would allow /clear to win between the check and the
+      // INSERT on the DB worker.
+      const inserted = await dbClient.exec(
+        `INSERT INTO messages (
+           id, client_id, session_id, role, content, tool_use_id,
+           agent_meta, agent_kind, created_at
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+           FROM sessions AS s
+          WHERE s.id = ?
+            AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1)
+         ON CONFLICT(session_id, client_id) DO NOTHING`,
+        [
+          insertRow.id,
+          insertRow.clientId,
+          insertRow.sessionId,
+          insertRow.role,
+          insertRow.content,
+          insertRow.toolUseId,
+          insertRow.agentMeta,
+          insertRow.agentKind,
+          insertRow.createdAt,
+          sessionId,
+          expected,
+        ],
+      );
+      if (inserted.changes === 0) {
+        const [existingAfterGuard] = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+          .limit(1);
+        const [sessionAfterGuard] = await db
+          .select({ clearedAt: sessions.clearedAt })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        const actual = sessionAfterGuard?.clearedAt ?? null;
+        if (
+          existingAfterGuard &&
+          actual === expected &&
+          existingAfterGuard.rewindAt === null &&
+          (expected === null || existingAfterGuard.createdAt > expected)
+        ) {
+          return messageToCamel(existingAfterGuard);
+        }
+        if (actual !== expected) {
+          throw Object.assign(
+            new Error(
+              `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
+            ),
+            { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
+          );
+        }
+        throw new Error('Message insert skipped without a clear-boundary change');
+      }
+    } else {
+      await db.insert(messages).values(insertRow);
+    }
   } catch (err) {
     const after = await db
       .select()
       .from(messages)
       .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
       .limit(1);
-    if (after.length > 0) return messageToCamel(after[0]);
+    if (guarded) {
+      const [sessionAfterError] = await db
+        .select({ clearedAt: sessions.clearedAt })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const actual = sessionAfterError?.clearedAt ?? null;
+      const existingAfterError = after[0];
+      if (
+        existingAfterError &&
+        actual === expected &&
+        existingAfterError.rewindAt === null &&
+        (expected === null || existingAfterError.createdAt > expected)
+      ) {
+        return messageToCamel(existingAfterError);
+      }
+      if (actual !== expected) {
+        throw Object.assign(
+          new Error(
+            `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
+          ),
+          { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
+        );
+      }
+    } else if (after.length > 0) {
+      return messageToCamel(after[0]);
+    }
     throw err;
   }
   const [row] = await db.select().from(messages).where(eq(messages.id, id));
@@ -1216,25 +1527,38 @@ export async function createMessage(
   // tool_result)。生成产物(art/mivo/codex)入仓时零引用,在这里补挂
   // session-attachment 引用;用户附件已在发送链路 commit 过,hasRef 幂等跳过。
   // 传 insertRow.content(已序列化字符串)避免二次 stringify(review P2)。
-  // fire-and-forget:挂账失败只警告,绝不影响消息落库本身。
-  void commitMessageMediaRefs({
-    sessionId,
-    role: body.role,
-    content: insertRow.content,
-  }).catch((err) => {
-    log.warn('message media ref commit failed', {
-      sessionId,
-      clientId: body.clientId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
+  const commitMediaRefs = async (): Promise<void> => {
+    try {
+      await commitMessageMediaRefs({
+        sessionId,
+        role: body.role,
+        content: insertRow.content,
+      });
+    } catch (err) {
+      log.warn('message media ref commit failed', {
+        sessionId,
+        clientId: body.clientId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  // Optimistic user rows carry the clear token and are written through the
+  // durable FIFO. Await their media commit so a later clear/rewind cannot be
+  // overtaken by a fire-and-forget session-attachment ref. Other message roles
+  // stay non-blocking on the hot event path.
+  const shouldAwaitMediaRefs =
+    body.role === 'user' &&
+    opts !== undefined &&
+    Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+  if (shouldAwaitMediaRefs) await commitMediaRefs();
+  else void commitMediaRefs();
   // Broadcast 给所有 renderer window — 用于 main 端创建消息 (e.g. feishu /ctr
   // 接管路径下 persistUserMessage / persistAssistantMessage) 时让 renderer
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
   // Renderer 自己调 createMessage IPC 时也会触发这个 broadcast, 但因为它已经
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
   if (opts?.shouldBroadcast?.() !== false) {
-    broadcastMessageRow(sessionId, msg);
+    broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
   }
   // chat-history-embedder hook (Phase 1.2) —— fire-and-forget, 不 await。
   // 内部已有 enabled / cutoff / role / size 守卫; 关闭状态下零成本直接 return。
@@ -1375,6 +1699,7 @@ export async function patchMessageAgentMeta(
 export async function broadcastMessageAgentMetaUpdate(
   sessionId: string,
   clientId: string,
+  ownerScope?: DataOwnerBroadcastScope | null,
 ): Promise<boolean> {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -1389,7 +1714,8 @@ export async function broadcastMessageAgentMetaUpdate(
     )
     .limit(1);
   if (!row) return false;
-  broadcastMessageRow(sessionId, messageToCamel(row));
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
   return true;
 }
 
@@ -1975,15 +2301,19 @@ export async function updateAgentSwitchBoundaryContent(
   sessionId: string,
   clientId: string,
   content: unknown,
+  ownerScope: DataOwnerBroadcastScope | null = captureOwnerBroadcastScope(),
 ): Promise<boolean> {
   const updated = await updateMessageContent(sessionId, clientId, content);
   if (!updated) return false;
-  broadcastMessageRow(sessionId, updated);
+  if (isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageRow(sessionId, updated, ownerScope);
+  }
   return true;
 }
 
 /** vendor accepted 后持久化最新 handoff 消费位；内存 registry 不等待这笔辅助写。 */
 export async function markLatestAgentHandoffConsumed(sessionId: string): Promise<void> {
+  const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
   const [sessRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -2019,7 +2349,7 @@ export async function markLatestAgentHandoffConsumed(sessionId: string): Promise
   if (parsed.consumed === true) return;
   const nextContent = { ...parsed, consumed: true };
   if (boundary.role === 'agent_switch') {
-    await updateAgentSwitchBoundaryContent(sessionId, boundary.clientId, nextContent);
+    await updateAgentSwitchBoundaryContent(sessionId, boundary.clientId, nextContent, ownerScope);
     return;
   }
   await getDbClient()
@@ -2038,6 +2368,7 @@ export async function markLatestAgentHandoffConsumed(sessionId: string): Promise
 export async function rebroadcastAgentSwitchBoundary(
   sessionId: string,
   boundaryClientId: string,
+  ownerScope: DataOwnerBroadcastScope | null = captureOwnerBroadcastScope(),
 ): Promise<void> {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -2045,5 +2376,7 @@ export async function rebroadcastAgentSwitchBoundary(
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, boundaryClientId)))
     .limit(1);
-  if (row) broadcastMessageRow(sessionId, messageToCamel(row));
+  if (row && isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
+  }
 }

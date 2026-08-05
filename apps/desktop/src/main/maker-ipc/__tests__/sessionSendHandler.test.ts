@@ -40,6 +40,48 @@ describe('maker session SEND IPC handler', () => {
     expect(sendToAgentAccepted).toHaveBeenCalledWith('session-1', message, createOpts, sendOpts);
   });
 
+  it('runs the clear-boundary fence before a legacy direct send', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
+    const assertRemoteInputControlBoundary = vi.fn().mockReturnValue({
+      expectedClearBoundaryMs: 456,
+      expectedInputGeneration: 9,
+    });
+    const sendOpts = { expectedClearBoundaryMs: 123 };
+
+    registerMakerSessionSendHandler(harness, {
+      sendToAgentAccepted,
+      assertRemoteInputControlBoundary,
+    });
+
+    await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'hello', undefined, sendOpts);
+
+    expect(assertRemoteInputControlBoundary).toHaveBeenCalledWith('session-1', sendOpts);
+    expect(sendToAgentAccepted).toHaveBeenCalledWith(
+      'session-1',
+      'hello',
+      undefined,
+      { expectedClearBoundaryMs: 456, expectedInputGeneration: 9 },
+    );
+  });
+
+  it('keeps a validated clear token when the optional boundary hook is absent', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
+    const sendOpts = { expectedClearBoundaryMs: 123, messageUuid: 'msg-1' };
+
+    registerMakerSessionSendHandler(harness, { sendToAgentAccepted });
+
+    await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'hello', undefined, sendOpts);
+
+    expect(sendToAgentAccepted).toHaveBeenCalledWith(
+      'session-1',
+      'hello',
+      undefined,
+      sendOpts,
+    );
+  });
+
   it('keeps empty string sessionId on the send transaction path for compatibility', async () => {
     const harness = new IpcHarness();
     const result = { accepted: false, reason: 'NOT_FOUND' };

@@ -876,13 +876,23 @@ export class DeviceLinkClient {
   }
 
   /** 被控端:广播转发 push 帧(fire-and-forget;失败由上层缓冲策略兜底) */
-  sendPush(dst: string, channel: string, payload: unknown): void {
+  sendPush(
+    dst: string,
+    channel: string,
+    payload: unknown,
+    ownerStamp?: import('./protocol.js').PushOwnerStamp,
+  ): void {
     if (this.status !== 'online') return;
+    const pushPayload = {
+      channel,
+      payload,
+      ...(ownerStamp ? { ownerStamp } : {}),
+    };
     if (channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL) {
-      this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: { channel, payload } });
+      this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
       return;
     }
-    this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: { channel, payload } });
+    this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
   }
 
   /**

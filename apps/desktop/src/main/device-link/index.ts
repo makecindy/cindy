@@ -34,6 +34,7 @@ import {
   INVOKE_TIMEOUT_OVERRIDES_MS,
 } from '@cindy/device-link';
 import * as authManager from '../authManager';
+import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { tryGetDbClient } from '../localDb/client/current';
@@ -623,6 +624,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       deviceId: env.src,
       channel: p.channel,
       payload: p.payload,
+      ...(p.ownerStamp ? { ownerStamp: p.ownerStamp } : {}),
     });
   });
 
@@ -1572,10 +1574,12 @@ export function sendMobileSessionNotify(payload: {
 }
 
 export function broadcast(channel: string, payload: unknown): void {
+  const ownerStamp = getActiveDataOwnerPushStamp();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send(channel, payload);
+      if (ownerStamp === undefined) win.webContents.send(channel, payload);
+      else win.webContents.send(channel, payload, ownerStamp);
     } catch (err) {
       log.warn(`broadcast '${channel}' failed (non-fatal)`, err);
     }

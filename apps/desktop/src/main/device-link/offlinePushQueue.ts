@@ -3,6 +3,8 @@ export interface OfflinePushQueueItem {
   payload: unknown;
   /** The topic that controls whether this item may be replayed. */
   topic: string;
+  /** Source app-session boundary for late-frame ingress fencing. */
+  ownerStamp?: { dataOwnerId: string | null; ownerGeneration: number };
 }
 
 interface QueuedPush extends OfflinePushQueueItem {
@@ -99,17 +101,32 @@ export function createOfflinePushQueue(options: OfflinePushQueueOptions = {}): O
       const queue = prune(deviceId);
       if (!topics || topics.includes(LEGACY_TOPIC)) {
         byDevice.delete(deviceId);
-        return queue.map(({ channel, payload, topic }) => ({ channel, payload, topic }));
+        return queue.map(({ channel, payload, topic, ownerStamp }) => ({
+          channel,
+          payload,
+          topic,
+          ...(ownerStamp ? { ownerStamp } : {}),
+        }));
       }
       const allowed = new Set(topics);
       const selected = queue.filter((item) => allowed.has(item.topic));
       const remaining = queue.filter((item) => !allowed.has(item.topic));
       if (remaining.length > 0) byDevice.set(deviceId, remaining);
       else byDevice.delete(deviceId);
-      return selected.map(({ channel, payload, topic }) => ({ channel, payload, topic }));
+      return selected.map(({ channel, payload, topic, ownerStamp }) => ({
+        channel,
+        payload,
+        topic,
+        ...(ownerStamp ? { ownerStamp } : {}),
+      }));
     },
     snapshot(deviceId): OfflinePushQueueItem[] {
-      return prune(deviceId).map(({ channel, payload, topic }) => ({ channel, payload, topic }));
+      return prune(deviceId).map(({ channel, payload, topic, ownerStamp }) => ({
+        channel,
+        payload,
+        topic,
+        ...(ownerStamp ? { ownerStamp } : {}),
+      }));
     },
     clear(deviceId): void {
       if (deviceId) byDevice.delete(deviceId);

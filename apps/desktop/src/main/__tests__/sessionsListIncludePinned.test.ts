@@ -61,7 +61,10 @@ vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.f
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
-vi.mock('../device-link/broadcast-tap', () => ({ tapWindowBroadcast: vi.fn() }));
+vi.mock('../device-link/broadcast-tap', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  tapWindowBroadcast: vi.fn(),
+}));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => ({ handleSessionMetadataPatch: vi.fn() }),
 }));

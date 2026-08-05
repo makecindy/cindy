@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 自足组件(仿 UpgradeBanner):按 sessionId 自查 worktree:restore-status,两种
  * 状态渲染(其余自渲染 null,父级无需条件编排):
- *   - restorable(目录没了但 xdt/<name> 分支还在)→「工作区已被回收 → 恢复工作区」;
+ *   - restorable(目录没了但 cindy/<name> 或历史 xdt/<name> 分支还在)→恢复入口;
  *   - present + hasSnapshot(目录还在,但残留待 apply 的快照——典型是回收时
  *     stash 成功但目录删除失败,或上次恢复只重建了目录、快照 apply 失败)
  *     →「有未应用的更改快照 → 恢复更改」,文案不再谎称"目录不存在"。
@@ -154,9 +154,11 @@ export function WorktreeRestoreBanner({
         }
         void refreshWorktrees();
       } else {
-        toast.error(t('chat.worktreeRestoreBanner.failed', {
-          message: t(restoreFailureKey(result.reason as RestoreFailureReason | undefined)),
-        }));
+        toast.error(
+          t('chat.worktreeRestoreBanner.failed', {
+            message: t(restoreFailureKey(result.reason as RestoreFailureReason | undefined)),
+          }),
+        );
         setPhase('restorable');
       }
     } catch {

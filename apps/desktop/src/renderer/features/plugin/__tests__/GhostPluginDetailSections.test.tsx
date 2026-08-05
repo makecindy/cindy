@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
+vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
+  GhostSettingsWebview: () => <div data-testid="ghost-settings-webview" />,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -46,6 +49,8 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
         'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
+        'settings.ghosts.detail.oauthScopeStale':
+          'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
       return labels[key] ?? key;
     },
@@ -127,6 +132,50 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('shows a non-blocking stale OAuth scope badge inside the configuration section', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    render(
+      <GhostPluginDetailView
+        ghost={{
+          manifest: {
+            schemaVersion: 2,
+            id: detail.id,
+            name: detail.name,
+            version: detail.version,
+            kind: 'chip',
+            entry: 'main.js',
+            slots: [],
+            settingsHtml: 'settings.html',
+          },
+          dir: detail.installDir ?? '/tmp/plugin',
+          enabled: true,
+          oauthScopeStale: { secretKey: 'account', missingScopeCount: 2 },
+        }}
+        detail={{ ...detail, hasSettingsUi: true }}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    const badge = screen.getByRole('status');
+    expect(badge.textContent).toContain('newly added permissions');
+    expect(badge.className).toContain('bg-[var(--warning-bg-soft)]');
+    expect(screen.getByTestId('ghost-settings-webview')).toBeTruthy();
+  });
+
   it('keeps the detail surface on one centered content grid', () => {
     vi.stubGlobal(
       'ResizeObserver',
