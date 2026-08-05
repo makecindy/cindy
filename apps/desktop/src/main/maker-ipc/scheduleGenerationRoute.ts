@@ -1,5 +1,6 @@
 import {
   actualSourceIdForModel,
+  effectiveSourceIdForModel,
   isAgentSelectableModel,
   type AgentKind,
   type ProviderView,
@@ -44,8 +45,9 @@ export function resolveBoundSessionGenerationRoute(input: {
   if (!agentKind || !model) return null;
 
   // An explicit task provider overrides the bound session provider. When the
-  // task leaves providerId empty, preserve the session's route before falling
-  // back to the currently effective provider for an explicit task model.
+  // task leaves providerId empty, preserve the session's route for inherited
+  // models, but resolve an explicit task model as a new route so retired or
+  // disabled copies do not pin generation to the stale session source.
   const explicitProviderId = input.requestedProviderId?.trim()
     || input.sessionProviderId?.trim()
     || null;
@@ -68,7 +70,9 @@ export function resolveBoundSessionGenerationRoute(input: {
   // the generation request to another gateway.
   const providerId = explicitProviderId
     ? explicitProvider?.id ?? null
-    : actualSourceIdForModel(input.providers, null, model, agentKind);
+    : input.requestedModel?.trim()
+      ? effectiveSourceIdForModel(input.providers, null, model, agentKind)
+      : actualSourceIdForModel(input.providers, null, model, agentKind);
   if (!providerId) return null;
   return { providerId, agentKind, model };
 }

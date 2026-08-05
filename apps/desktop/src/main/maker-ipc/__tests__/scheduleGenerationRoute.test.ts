@@ -79,6 +79,36 @@ describe('resolveBoundSessionGenerationRoute', () => {
     })).toEqual({ providerId: 'xd', agentKind: 'claude-code', model: 'claude-connect-4-6' });
   });
 
+  it('uses a new-route provider when only the task model is explicit and the session has no provider', () => {
+    const providersWithRetiredDefault = providers.map((provider) => provider.id === 'xd'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': [
+            ...(provider.models['claude-code'] ?? []),
+            { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000, status: 'retired' as const },
+          ],
+        },
+      }
+      : provider.id === 'custom-claude'
+        ? {
+          ...provider,
+          models: {
+            'claude-code': [
+              ...(provider.models['claude-code'] ?? []),
+              { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000 },
+            ],
+          },
+        }
+        : provider) as unknown as ProviderView[];
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: null,
+      requestedModel: 'claude-connect-4-6',
+      providers: providersWithRetiredDefault,
+    })).toEqual({ providerId: 'custom-claude', agentKind: 'claude-code', model: 'claude-connect-4-6' });
+  });
+
   it('materializes the effective provider when the session follows the default source', () => {
     expect(resolveBoundSessionGenerationRoute({
       session: { agentKind: 'claude-code', model: 'claude-sonnet' },
