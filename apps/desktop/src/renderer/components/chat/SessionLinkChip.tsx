@@ -24,7 +24,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveSessionMessageText } from '@/lib/sessionMessageText';
 import * as sessionService from '@/lib/sessionService';
@@ -112,7 +112,7 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
     // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
     // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
     void resolveSessionRoute(sessionId, remoteSession).then((route) => {
-      reportSessionNavigation?.(sessionId);
+      reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
       navigate(
         route,
         target.messageClientId

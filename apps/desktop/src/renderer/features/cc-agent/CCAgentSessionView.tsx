@@ -241,6 +241,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import {
   SessionNavigationModeProvider,
+  type SessionNavigationIntentReporter,
   type SessionNavigationMode,
 } from './embeddedSessionNavigation';
 import {
@@ -361,7 +362,7 @@ interface CCAgentSessionViewProps {
   /** sidebar 子窗口内嵌视图不拥有 router，所有“打开其它会话”入口必须禁用。 */
   navigationMode?: SessionNavigationMode;
   /** split-pane 内部跳转前上报目标任务，让宿主替换发起跳转的 pane。 */
-  onSessionNavigate?: (targetSessionId: string) => void;
+  onSessionNavigate?: SessionNavigationIntentReporter;
   /** 内嵌聊天触发侧栏动作时使用的可见 RSB bucket；消息身份仍由 sessionIdProp 决定。 */
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
@@ -2795,7 +2796,7 @@ export function CCAgentSessionView({
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
-      onSessionNavigate?.(newSession.id);
+      onSessionNavigate?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const ipcError = extractIpcError(err);

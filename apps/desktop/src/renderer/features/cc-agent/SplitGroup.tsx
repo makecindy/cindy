@@ -49,9 +49,7 @@ const KEYBOARD_RESIZE_STEP = 0.05;
 
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
-  return Boolean(
-    element?.closest('[data-split-pane-no-focus], [data-split-pane-route-action]'),
-  );
+  return Boolean(element?.closest('[data-split-pane-no-focus], [data-split-pane-route-action]'));
 }
 
 interface SplitGroupProps {
@@ -121,6 +119,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   const pendingPaneNavigationRef = useRef<{
     sourceSessionId: string;
     targetSessionId: string;
+    routeOwnerSessionId: string;
   } | null>(null);
   const routePane = panes.find((pane) => pane.sessionId === activeSessionId);
   const previousPane = panes.find((pane) => pane.sessionId === previousActiveSessionIdRef.current);
@@ -165,7 +164,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
 
     if (panes.some((pane) => pane.sessionId === activeSessionId)) {
       previousActiveSessionIdRef.current = activeSessionId;
-      if (pendingPaneNavigationRef.current?.targetSessionId === activeSessionId) {
+      if (pendingPaneNavigationRef.current?.routeOwnerSessionId === activeSessionId) {
         pendingPaneNavigationRef.current = null;
       }
       return;
@@ -174,7 +173,7 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
     const pendingPaneNavigation = pendingPaneNavigationRef.current;
     pendingPaneNavigationRef.current = null;
     const pendingSource =
-      pendingPaneNavigation?.targetSessionId === activeSessionId &&
+      pendingPaneNavigation?.routeOwnerSessionId === activeSessionId &&
       panes.some((pane) => pane.sessionId === pendingPaneNavigation.sourceSessionId)
         ? pendingPaneNavigation.sourceSessionId
         : null;
@@ -190,14 +189,18 @@ function SplitGroupActive({ activeSessionId, root }: SplitGroupActiveProps) {
   }, [activeSessionId, panes]);
 
   const handlePaneSessionNavigate = useCallback(
-    (sourceSessionId: string, targetSessionId: string) => {
+    (sourceSessionId: string, targetSessionId: string, routeOwnerSessionId?: string) => {
       // Child route actions (session links, handoff cards, encrypted recovery) are
       // allowed to focus their pane on pointer/keyboard entry, but once the child
       // announces its own target, suppress that pending source-pane navigation so
       // it cannot race and overwrite the target route.
       pendingFocusSessionIdRef.current = null;
       focusRequestSequenceRef.current += 1;
-      pendingPaneNavigationRef.current = { sourceSessionId, targetSessionId };
+      pendingPaneNavigationRef.current = {
+        sourceSessionId,
+        targetSessionId,
+        routeOwnerSessionId: routeOwnerSessionId ?? targetSessionId,
+      };
     },
     [],
   );
@@ -244,7 +247,11 @@ interface SplitNodeViewProps {
   ownerPaneKey?: string;
   sessionsById: Map<string, ReturnType<typeof useCCSessions>['sessions'][number]>;
   focusSession: (sessionId: string) => void;
-  onSessionNavigate: (sourceSessionId: string, targetSessionId: string) => void;
+  onSessionNavigate: (
+    sourceSessionId: string,
+    targetSessionId: string,
+    routeOwnerSessionId?: string,
+  ) => void;
   onClosePane: (pane: SplitPaneNode, isOwner: boolean) => void;
   unnamedTitle: string;
   loadingTitle: string;
@@ -264,6 +271,7 @@ function SplitBranchView({
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const liveFractionRef = useRef<number | null>(null);
   const [liveFraction, setLiveFraction] = useState<number | null>(null);
   const isRow = branch.direction === 'row';
   const fraction = liveFraction ?? branch.fraction;
@@ -298,25 +306,35 @@ function SplitBranchView({
           1 - MIN_SPLIT_CHILD_FRACTION,
           Math.max(MIN_SPLIT_CHILD_FRACTION, raw),
         );
+        liveFractionRef.current = clamped;
         setLiveFraction(clamped);
       };
 
       const finishResize = () => {
+        if (resizeCleanupRef.current !== finishResize) return;
         document.removeEventListener('pointermove', handlePointerMove);
         document.removeEventListener('pointerup', finishResize);
         document.removeEventListener('pointercancel', finishResize);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('blur', finishResize);
         document.body.classList.remove('resizing-pane');
         resizeCleanupRef.current = null;
-        setLiveFraction((current) => {
-          if (current !== null) splitGroupStore.setSplitFraction(branch.key, current);
-          return null;
-        });
+        const finalFraction = liveFractionRef.current;
+        liveFractionRef.current = null;
+        setLiveFraction(null);
+        if (finalFraction !== null) splitGroupStore.setSplitFraction(branch.key, finalFraction);
+      };
+
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'hidden') finishResize();
       };
 
       resizeCleanupRef.current = finishResize;
       document.addEventListener('pointermove', handlePointerMove);
       document.addEventListener('pointerup', finishResize);
       document.addEventListener('pointercancel', finishResize);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('blur', finishResize);
     },
     [branch.fraction, branch.key, isRow],
   );
@@ -459,8 +477,8 @@ function SplitPaneView({
             routeOwner={isOwner}
             compactToolbar
             navigationMode={isOwner ? 'route-owner' : 'split-pane'}
-            onSessionNavigate={(targetSessionId) =>
-              onSessionNavigate(viewSessionId, targetSessionId)
+            onSessionNavigate={(targetSessionId, routeOwnerSessionId) =>
+              onSessionNavigate(viewSessionId, targetSessionId, routeOwnerSessionId)
             }
             sidebarTargetSessionId={viewSessionId}
             disableAutofocus={!isOwner}

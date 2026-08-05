@@ -119,7 +119,7 @@ export function useForkAtMessage({
       // remoteProjectsStore 注册新 sessionId,否则 navigate 会把它当本地会话 404(等轮询太慢)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
-      reportSessionNavigation?.(newSession.id);
+      reportSessionNavigation?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'UNKNOWN';

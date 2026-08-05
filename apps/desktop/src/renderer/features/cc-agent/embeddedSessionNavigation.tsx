@@ -4,9 +4,11 @@ import { createContext, useContext, type ReactNode } from 'react';
 export type SessionNavigationMode = 'route-owner' | 'sidebar-embedded' | 'split-pane';
 
 const SessionNavigationModeContext = createContext<SessionNavigationMode>('route-owner');
-const SessionNavigationIntentContext = createContext<((targetSessionId: string) => void) | null>(
-  null,
-);
+export type SessionNavigationIntentReporter = (
+  targetSessionId: string,
+  routeOwnerSessionId?: string,
+) => void;
+const SessionNavigationIntentContext = createContext<SessionNavigationIntentReporter | null>(null);
 const SidebarTargetSessionIdContext = createContext<string | null>(null);
 const SidebarPanelHostSessionIdContext = createContext<string | null>(null);
 
@@ -19,7 +21,7 @@ export function SessionNavigationModeProvider({
 }: {
   mode: SessionNavigationMode;
   /** 分屏 pane 在真正改路由前上报目标任务，供 SplitGroup 选择被替换的来源 pane。 */
-  onSessionNavigate?: (targetSessionId: string) => void;
+  onSessionNavigate?: SessionNavigationIntentReporter;
   /** 内嵌内容触发 RSB 动作时使用的可见 bucket；不传则沿用内容 session。 */
   sidebarTargetSessionId?: string;
   /**
@@ -47,7 +49,7 @@ export function useSessionNavigationMode(): SessionNavigationMode {
 }
 
 /** 在组件调用 navigate 前记录目标任务；普通路由与 sidebar-embedded 默认无需处理。 */
-export function useSessionNavigationIntent(): ((targetSessionId: string) => void) | null {
+export function useSessionNavigationIntent(): SessionNavigationIntentReporter | null {
   return useContext(SessionNavigationIntentContext);
 }
 

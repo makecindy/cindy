@@ -33,6 +33,7 @@ vi.mock('@/lib/sessionMessageText', () => ({
 }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: mocks.resolveSessionRoute,
+  getSessionRouteOwnerId: (route: string) => /^\/cc-agent\/([^/?#]+)/.exec(route)?.[1] ?? null,
 }));
 
 import {
@@ -56,7 +57,10 @@ function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   );
 }
 
-function splitPane(children: ReactNode, onSessionNavigate: (targetSessionId: string) => void) {
+function splitPane(
+  children: ReactNode,
+  onSessionNavigate: (targetSessionId: string, routeOwnerSessionId?: string) => void,
+) {
   return (
     <SessionNavigationModeProvider mode="split-pane" onSessionNavigate={onSessionNavigate}>
       {children}
@@ -111,10 +115,31 @@ describe('sidebar-embedded session navigation boundary', () => {
     await waitFor(() =>
       expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-target', undefined),
     );
-    expect(onSessionNavigate).toHaveBeenCalledWith('session-target');
+    expect(onSessionNavigate).toHaveBeenCalledWith('session-target', 'session-target');
     expect(onSessionNavigate.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0],
     );
+  });
+
+  it('reports the canonical Lead owner for a worker deep link', async () => {
+    mocks.resolveSessionRoute.mockResolvedValueOnce('/cc-agent/lead-target?worker=worker-target');
+    const onSessionNavigate = vi.fn();
+    render(
+      splitPane(
+        <SessionLinkChip href="xdt-maker://session/worker-target" label="Worker target" />,
+        onSessionNavigate,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        '/cc-agent/lead-target?worker=worker-target',
+        undefined,
+      ),
+    );
+    expect(onSessionNavigate).toHaveBeenCalledWith('worker-target', 'lead-target');
   });
 
   it('shows the persisted reference range summary without changing the link label', () => {

@@ -20,6 +20,17 @@ export function formatOrcaWorkerTitle(title: string | null | undefined): string 
   return t ? `Orca Worker: ${t}` : 'Orca Worker: Ready';
 }
 
+/** Extract the session that owns the canonical `/cc-agent/:sessionId` route. */
+export function getSessionRouteOwnerId(route: string): string | null {
+  const match = /^\/cc-agent\/([^/?#]+)(?:[?#]|$)/.exec(route);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
 /**
  * Resolve the canonical chat route for a session before navigating from generic
  * entry points such as notifications, deep links, and sidebar clicks. Orca lead

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { shortSessionId } from '@/lib/sessionId';
 import {
   useSessionNavigationIntent,
@@ -67,7 +67,7 @@ export function SessionHandoffCard({
 
   const handleClick = () => {
     void resolveSessionRoute(sessionId).then((target) => {
-      reportSessionNavigation?.(sessionId);
+      reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(target) ?? sessionId);
       navigate(target, {
         state: dispatcherSessionId
           ? {

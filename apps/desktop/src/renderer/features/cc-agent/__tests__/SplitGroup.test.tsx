@@ -47,7 +47,7 @@ vi.mock('../CCAgentSessionView', () => ({
     sessionIdProp: string;
     routeOwner: boolean;
     sidebarTargetSessionId: string;
-    onSessionNavigate?: (targetSessionId: string) => void;
+    onSessionNavigate?: (targetSessionId: string, routeOwnerSessionId?: string) => void;
     disableAutofocus?: boolean;
   }) => (
     <div
@@ -64,11 +64,22 @@ vi.mock('../CCAgentSessionView', () => ({
         data-testid={`route-action-${sessionIdProp}`}
         data-split-pane-route-action=""
         onClick={() => {
-          onSessionNavigate?.('session-c');
+          onSessionNavigate?.('session-c', 'session-c');
           routeActionMock();
         }}
       >
         Route action
+      </button>
+      <button
+        type="button"
+        data-testid={`worker-route-action-${sessionIdProp}`}
+        data-split-pane-route-action=""
+        onClick={() => {
+          onSessionNavigate?.('worker-c', 'lead-c');
+          routeActionMock();
+        }}
+      >
+        Worker route action
       </button>
       <button type="button" data-testid={`composer-action-${sessionIdProp}`}>
         Composer action
@@ -271,6 +282,29 @@ describe('SplitGroup', () => {
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
 
+  it('Orca worker 深链规范化到 Lead 路由时仍替换来源 pane', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+
+    act(() => {
+      fireEvent.click(screen.getByTestId('worker-route-action-session-b'));
+    });
+
+    view.rerender(
+      <MemoryRouter>
+        <SplitGroup activeSessionId="lead-c">
+          <div data-testid="route-outlet" />
+        </SplitGroup>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('session-view-session-a')).toBeTruthy();
+    expect(screen.queryByTestId('session-view-session-b')).toBeNull();
+    expect(screen.getByTestId('session-view-lead-c').dataset.routeOwner).toBe('true');
+  });
+
   it('递归渲染左一右二与左二右二混合布局', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
@@ -333,6 +367,47 @@ describe('SplitGroup', () => {
     root = splitGroupStore.getSnapshot().root;
     if (root?.type !== 'split') throw new Error('root split missing');
     expect(root.fraction).toBeCloseTo(0.9, 5);
+  });
+
+  it('窗口失焦时结束分割线拖动并清理全局 resize 状态', () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const separator = view.container.querySelector('[role="separator"]') as HTMLElement;
+    const branch = separator.closest('[data-split-branch]') as HTMLElement;
+    vi.spyOn(branch, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1006,
+      top: 0,
+      bottom: 500,
+      width: 1006,
+      height: 500,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const setFractionSpy = vi.spyOn(splitGroupStore, 'setSplitFraction');
+
+    act(() => {
+      fireEvent.pointerDown(separator, { button: 0, clientX: 500 });
+      fireEvent.pointerMove(document, { clientX: 600 });
+    });
+    expect(document.body.classList.contains('resizing-pane')).toBe(true);
+
+    act(() => {
+      fireEvent.blur(window);
+    });
+
+    expect(document.body.classList.contains('resizing-pane')).toBe(false);
+    expect(setFractionSpy).toHaveBeenCalledTimes(1);
+    expect(setFractionSpy.mock.calls[0]?.[1]).toBeCloseTo(0.6, 5);
+
+    act(() => {
+      fireEvent.blur(window);
+      fireEvent.pointerMove(document, { clientX: 800 });
+    });
+    expect(setFractionSpy).toHaveBeenCalledTimes(1);
   });
 
   it('pane 内子组件阻止冒泡时仍能捕获任务拖放', async () => {

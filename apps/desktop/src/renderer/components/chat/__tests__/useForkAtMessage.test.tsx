@@ -82,7 +82,7 @@ describe('useForkAtMessage introduction dialog', () => {
     await act(async () => result.current());
     expect(mocks.forkAtMessage).toHaveBeenCalledWith('source-session', 'message-1');
     expect(mocks.emitRefresh).toHaveBeenCalledTimes(1);
-    expect(mocks.reportSessionNavigation).toHaveBeenCalledWith('new-session');
+    expect(mocks.reportSessionNavigation).toHaveBeenCalledWith('new-session', 'new-session');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new-session');
   });
 });
