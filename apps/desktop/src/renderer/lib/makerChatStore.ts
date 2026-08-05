@@ -3855,8 +3855,8 @@ type HydratePersistedMessageOptions = {
   preserveExistingCodexPlanContent?: boolean;
 };
 
-function isCompletedCodexPlanSnapshot(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length === 0) return false;
+function isTerminalCodexPlanSnapshot(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
   return value.every(
     (item) =>
       item !== null &&
@@ -3894,7 +3894,7 @@ function hydratePersistedMessage(
     // newer in-memory plan. A fully completed persisted snapshot is different:
     // it is Main's terminal convergence and must close a stale plan hydrated
     // by a renderer that mounted between `done` and the queued DB write.
-    !isCompletedCodexPlanSnapshot((persisted.toolInput as { plan?: unknown }).plan)
+    !isTerminalCodexPlanSnapshot((persisted.toolInput as { plan?: unknown }).plan)
   ) {
     hydrated.toolInput = existing.toolInput;
     hydrated.content = existing.content;

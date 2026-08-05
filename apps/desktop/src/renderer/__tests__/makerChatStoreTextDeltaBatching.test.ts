@@ -716,6 +716,43 @@ describe('makerChatStore text delta batching', () => {
     });
   });
 
+  it('accepts a terminal persisted empty plan instead of restoring stale progress', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'plan:turn-clear',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+        },
+      },
+      persistId: 'plan-message-clear',
+    });
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: serverMessage({
+        id: 'plan-row-clear',
+        clientId: 'plan-message-clear',
+        sessionId: SESSION_ID,
+        role: 'tool_use',
+        content: {
+          toolUseId: 'plan:turn-clear',
+          toolName: 'update_plan',
+          input: { plan: [] },
+        },
+        createdAt: '2026-08-05T00:00:00.000Z',
+      }),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      clientId: 'plan-message-clear',
+      toolInput: { plan: [] },
+    });
+  });
+
   it('still ignores a stale open-plan DB echo after live progress moved forward', () => {
     onEvent?.({
       sessionId: SESSION_ID,
