@@ -204,6 +204,8 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain(
       'const branchInteractive = !disabled && effectiveWorktreeEnabled',
     );
+    expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
+    expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
     expect(worktreeChipsSource).toContain('group-hover:opacity-0');
     expect(worktreeChipsSource).not.toContain('function BranchChip');
     expect(worktreeChipsSource).not.toContain('function WorktreeChip(');
