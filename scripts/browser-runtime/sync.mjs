@@ -55,9 +55,15 @@ function resolveRef(repoSlug, ref) {
   }).trim();
 }
 function shHide(cmd) {
-  // Windows (msys) compatibility: GNU tar treats `C:\` drive letters as remote
-  // hosts and does not glob by default, so quoted Windows paths are converted
-  // to /c/... and tar gets --wildcards. No-op on POSIX paths / Linux.
+  // Windows (msys) compatibility ONLY. On win32, msys GNU tar treats `C:\`
+  // drive letters as remote hosts and does not glob by default, so quoted
+  // Windows paths are converted to /c/... and tar gets --wildcards. On POSIX
+  // (incl. macOS BSD/libarchive tar) the command runs UNCHANGED — no
+  // GNU-only flags are injected, so other platforms keep upstream behavior.
+  if (process.platform !== 'win32') {
+    execFileSync('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'inherit'] });
+    return;
+  }
   const toMsys = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
   const posix = cmd
     .replace(/"((?:[A-Za-z]:)?[^"]*)"/g, (m, p) => JSON.stringify(toMsys(p)))
