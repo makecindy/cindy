@@ -15,10 +15,12 @@ import {
 } from '../../../shared/mainLogRecordFormat';
 import {
   collectLogs,
+  computeCoveredAnchors,
   earliestAnchorOnDay,
   resolveLookbackDays,
   trimByAnchors,
   type CollectDeps,
+  type FileCoverageMap,
 } from '../collect';
 import { MAX_LOOKBACK_DAYS_CAP, MAX_RECORDS } from '../limits';
 import type { ParsedRecord } from '../types';
@@ -314,6 +316,66 @@ describe('崩溃锚点覆盖 coveredAnchors', () => {
     expect(result.stats.mainFilesStoppedAtViolation).toBe(1);
     // 停止点之后没读到 ⇒ 崩溃锚点(在污染段)未被整份覆盖。
     expect(result.coveredAnchors).not.toContain(crashAt);
+  });
+});
+
+/**
+ * 2026-08-04 review P1：覆盖判定必须**按文件**（天+流类型），不能按天合并。崩溃现场主体在
+ * main 流,agent 只是补充上下文 —— 一个整份读到的小 agent 文件不能替一个只读了靠前窗口的
+ * 超大 main 文件背书,否则同日靠后那次崩溃会被误判已覆盖、标记被误清。
+ */
+describe('computeCoveredAnchors：以 main 为准，agent 不得冒充覆盖', () => {
+  const DAY = '2026-08-04';
+  const A_EARLY = new Date(2026, 7, 4, 2, 0, 0).getTime();
+  const A_LATE = new Date(2026, 7, 4, 22, 0, 0).getTime();
+  const both = { hasMain: () => true, hasAgent: () => true };
+
+  it('⚠️ main 只覆盖靠前窗口、agent 整份读到：靠后的崩溃仍判未覆盖', () => {
+    // main 窗口只读到 [A_EARLY-preroll, 稍后],没够到 A_LATE;agent 整份(whole)覆盖全天。
+    const coverage: FileCoverageMap = new Map([
+      [`${DAY}|main`, { whole: false, minTs: A_EARLY - 60_000, maxTs: A_EARLY + 60_000 }],
+      [`${DAY}|agent`, { whole: true, minTs: 0, maxTs: 0 }],
+    ]);
+    const covered = computeCoveredAnchors([A_EARLY, A_LATE], { coverage, ...both });
+    expect(covered).toContain(A_EARLY);
+    expect(covered).not.toContain(A_LATE); // ← 修复前会被 agent 的 whole 冒充成已覆盖
+  });
+
+  it('main 整份读到 ⇒ 当天锚点都覆盖', () => {
+    const coverage: FileCoverageMap = new Map([
+      [`${DAY}|main`, { whole: true, minTs: 0, maxTs: 0 }],
+    ]);
+    expect(computeCoveredAnchors([A_EARLY, A_LATE], { coverage, ...both })).toEqual([
+      A_EARLY,
+      A_LATE,
+    ]);
+  });
+
+  it('main 在但没读到（预算耗尽/跳过/污染停止）⇒ 未覆盖', () => {
+    expect(
+      computeCoveredAnchors([A_EARLY], { coverage: new Map(), ...both }),
+    ).toEqual([]);
+  });
+
+  it('那天既没 main 也没 agent ⇒ 覆盖（没东西可补）', () => {
+    const covered = computeCoveredAnchors([A_EARLY], {
+      coverage: new Map(),
+      hasMain: () => false,
+      hasAgent: () => false,
+    });
+    expect(covered).toEqual([A_EARLY]);
+  });
+
+  it('agent-only（没有 main）时退回用 agent 覆盖判定', () => {
+    const coverage: FileCoverageMap = new Map([
+      [`${DAY}|agent`, { whole: true, minTs: 0, maxTs: 0 }],
+    ]);
+    const covered = computeCoveredAnchors([A_EARLY], {
+      coverage,
+      hasMain: () => false,
+      hasAgent: () => true,
+    });
+    expect(covered).toEqual([A_EARLY]);
   });
 });
 
