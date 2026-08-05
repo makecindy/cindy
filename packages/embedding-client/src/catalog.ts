@@ -1,7 +1,8 @@
 /**
  * Embedding 模型 catalog — 硬编码的可用 model 元信息。
  *
- * XD Gateway /v1/embeddings 当前支持的 7 个模型 (2026-05-24)。
+ * XD Gateway /v1/embeddings 当前支持的模型以**本表为准**(不在这里记数量与快照日期:
+ * 每次增删都要同步改一处无关的数字, 漏改就成了误导维护者的过期描述)。
  * 价格 / dim / maxTokens 均来自 provider 官方文档对齐 XD Gateway。
  *
  * `dim` 的语义是**不显式请求维度时上游返回的默认维度** —— client.ts 只发
@@ -94,8 +95,8 @@ const CATALOG: ReadonlyArray<EmbeddingModelMeta> = [
     notes:
       '上下文化检索:同一文档的多个 chunk 互为上下文,检索质量优于逐块独立嵌入。' +
       '网关经同一 OpenAI 形态端点支持,索引侧把 input 传成二维数组(每个内层数组 = ' +
-      '一个文档的 chunk 序列),查询侧传一维。当前客户端只发一维 —— 即只用到查询侧' +
-      '形态,尚未发挥 chunk 互为上下文的能力(见 client.ts 头注的待办)。',
+      '一个文档的 chunk 序列),查询侧传一维。两侧客户端都已接通:索引侧走 ' +
+      'EmbeddingClient.embedDocuments()(不走缓存,见其头注),查询侧走 embed()。',
   },
 ];
 
