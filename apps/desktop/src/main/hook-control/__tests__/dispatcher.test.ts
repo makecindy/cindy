@@ -1824,6 +1824,46 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('同 socket 能力降级且回落发送失败 -> 旧退避 timer 被缴械, 不再向老 server 重放', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '降级前完成' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1); // ACK 世代已发送并武装退避 timer
+
+      // 同一 socket 上 welcome 重新协商为无 ACK(refreshHello), 不经过
+      // onDisconnected; 回落补发这一次恰好发送失败。
+      let sendable = false;
+      const downgraded: HookMessage[] = [];
+      d.onConnected('conn-1', (message) => {
+        if (!sendable) return false;
+        downgraded.push(message);
+        return true;
+      });
+
+      // 旧 timer 若未被缴械, 到点会经 sendFns 向老 server 重放 turn.end。
+      sendable = true;
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(downgraded).toHaveLength(0);
+
+      // 条目仍保留, 下次重连按当次协商结果正常收口。
+      const recovered = collector();
+      d.onConnected('conn-1', recovered.send);
+      expect(recovered.ofType('turn.end')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(recovered.ofType('turn.end')).toHaveLength(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('ACK 模式重投终态 -> 回放经 ACK 缓冲退避重发, 账本保持 pending 直到回执', async () => {
     vi.useFakeTimers();
     const terminalLedger = memoryTerminalLedger();

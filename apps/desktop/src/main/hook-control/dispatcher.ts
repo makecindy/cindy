@@ -2207,7 +2207,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (pending.connectionId !== connectionId) continue;
         if (deliveryAck) {
           sendPendingDelivery(key, pending, send);
-        } else if (send(pending.message)) {
+          continue;
+        }
+        // 同 socket 能力降级(refreshHello/welcome 重新协商为无 ACK)不经过
+        // onDisconnected, ACK 世代武装的退避 timer 可能仍在计时; 若下面这次
+        // 回落发送恰好失败, 到点的 timer 会向永远不回 turn.delivery 的老
+        // server 无限重放。进入无 ACK 世界先无条件缴械。
+        if (pending.timer) {
+          clearTimeout(pending.timer);
+          pending.timer = null;
+        }
+        if (send(pending.message)) {
           // 滚动发布回落到老 server：按历史 fire-and-forget 语义收口。
           clearPendingDelivery(key);
         }
