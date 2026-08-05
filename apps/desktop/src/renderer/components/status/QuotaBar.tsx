@@ -39,11 +39,12 @@ const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
 };
 
 /**
- * 空值或 normal 才是无告警；未知非空值至少保留为 warn。
+ * 非字符串按缺失处理；字符串空值或 normal 才是无告警，未知非空值至少保留为 warn。
  * 与共享告警谓词“任何非 normal severity 均告警”保持一致，避免上游新增级别被静默降级。
  */
-function serverQuotaSeverity(value: string | null | undefined): QuotaSeverity {
-  const normalized = value?.trim().toLowerCase();
+function serverQuotaSeverity(value: unknown): QuotaSeverity {
+  if (typeof value !== 'string') return 'normal';
+  const normalized = value.trim().toLowerCase();
   if (!normalized || normalized === 'normal') return 'normal';
   if (normalized === 'warning') return 'warn';
   const parts = normalized.split(/[^a-z]+/).filter(Boolean);
@@ -54,7 +55,7 @@ function serverQuotaSeverity(value: string | null | undefined): QuotaSeverity {
 /** 本地利用率与服务端告警等级取更严重者，作为窗口的最终等级。 */
 export function effectiveQuotaSeverity(
   usedPercent: number,
-  serverSeverity: string | null | undefined,
+  serverSeverity: unknown,
 ): QuotaSeverity {
   const localSeverity = quotaSeverity(usedPercent);
   const upstreamSeverity = serverQuotaSeverity(serverSeverity);

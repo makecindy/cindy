@@ -1060,7 +1060,12 @@ function getClaudeSubscriptionAlertSeverity(
   modelId: string | null | undefined,
 ): QuotaSeverity {
   if (!isClaudeSubscriptionAlerting(snapshot, modelId)) return 'normal';
-  if (snapshot?.rateLimitStatus?.trim().toLowerCase() === 'rejected') return 'crit';
+  // rateLimitStatus 可能来自脏的持久化/IPC 快照;非字符串按缺失处理。
+  const rawRateLimitStatus = snapshot?.rateLimitStatus;
+  if (
+    typeof rawRateLimitStatus === 'string'
+    && rawRateLimitStatus.trim().toLowerCase() === 'rejected'
+  ) return 'crit';
 
   const sessionWindows: Array<ClaudeUsageWindow | null | undefined> = [
     snapshot?.fiveHour,

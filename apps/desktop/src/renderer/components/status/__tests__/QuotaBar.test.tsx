@@ -66,6 +66,13 @@ describe('QuotaBar', () => {
     },
   );
 
+  // 脏快照可能把 severity 写成非字符串;按缺失处理,本地利用率等级不受影响。
+  it('treats non-string dirty server severity as missing without throwing', () => {
+    expect(effectiveQuotaSeverity(50, 123)).toBe('normal');
+    expect(effectiveQuotaSeverity(93, { level: 'exceeded' })).toBe('crit');
+    expect(effectiveQuotaSeverity(50, ['critical'])).toBe('normal');
+  });
+
   it('renders distinct regular and mini size classes', () => {
     const { getByRole, rerender } = render(<QuotaBar usedPercent={1} />);
     const regular = getByRole('progressbar');
