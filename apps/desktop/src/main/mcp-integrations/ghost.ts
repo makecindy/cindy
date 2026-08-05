@@ -916,14 +916,12 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
-      // setup/OAuth 可以等待数分钟；在任何 await 前冻结 /clear generation。
-      // 真正进入 dispatcher 时会再次校验，clear 期间尚未创建 pending call 也能失效。
       const planSessionContext =
         sessionIdForConfirm && sessionInstanceIdForGrant
-          ? getGhostPipeDispatcher().capturePlanSessionContext(
-              sessionIdForConfirm,
-              sessionInstanceIdForGrant,
-            )
+          ? {
+              sessionId: sessionIdForConfirm,
+              sessionInstanceId: sessionInstanceIdForGrant,
+            }
           : null;
       // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
       // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆

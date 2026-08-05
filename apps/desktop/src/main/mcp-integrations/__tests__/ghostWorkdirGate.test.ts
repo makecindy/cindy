@@ -83,14 +83,6 @@ vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => alsSessionContex
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
-const planContextGenerationBySession = new Map<string, number>();
-const capturePlanSessionContextMock = vi.fn(
-  (sessionId: string, sessionInstanceId: string) => ({
-    sessionId,
-    sessionInstanceId,
-    planContextGeneration: planContextGenerationBySession.get(sessionId) ?? 0,
-  }),
-);
 const setupAssessmentMock = vi.fn((_ghostId: string) => {
   void _ghostId;
   return {
@@ -116,10 +108,7 @@ const sessionSnapshotMock = vi.fn(async () => ({
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
-  getGhostPipeDispatcher: () => ({
-    callGhostTool: dispatchMock,
-    capturePlanSessionContext: capturePlanSessionContextMock,
-  }),
+  getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: () => true,
@@ -217,8 +206,6 @@ beforeEach(() => {
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   dispatchMock.mockClear();
-  capturePlanSessionContextMock.mockClear();
-  planContextGenerationBySession.clear();
   setupAssessmentMock.mockReset();
   setupAssessmentMock.mockReturnValue({ state: 'ready', revision: 0, groups: [] });
   ensureReadyMock.mockReset();
@@ -453,32 +440,6 @@ describe('ghost_call 兜底拒绝', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it('在 setup await 前冻结 Plan generation，供 dispatcher 拒绝跨 /clear 的旧上下文', async () => {
-    ensureReadyMock.mockImplementationOnce(async () => {
-      planContextGenerationBySession.set('s1', 1);
-      return {
-        ok: true,
-        assessment: { state: 'ready', revision: 0, groups: [] },
-      };
-    });
-
-    await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
-
-    expect(capturePlanSessionContextMock).toHaveBeenCalledWith('s1', 's1-instance');
-    expect(capturePlanSessionContextMock.mock.invocationCallOrder[0]).toBeLessThan(
-      ensureReadyMock.mock.invocationCallOrder[0],
-    );
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionContext: {
-          sessionId: 's1',
-          sessionInstanceId: 's1-instance',
-          planContextGeneration: 0,
-        },
-      }),
-    );
-  });
-
   it('grant_only 在任何附件授权副作用前完成 setup gate，且忽略 tool', async () => {
     ensureReadyMock.mockResolvedValueOnce({
       ok: false,
@@ -606,7 +567,6 @@ describe('session-context 宿主铸造', () => {
         sessionContext: {
           sessionId: 's1',
           sessionInstanceId: 's1-instance',
-          planContextGeneration: 0,
         },
         args: {
           session_context: {

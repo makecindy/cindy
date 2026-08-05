@@ -113,16 +113,12 @@ function createVisibleDbMessage(
       ? {}
       : {
           shouldBroadcast: () => {
-            return isCreatedAfterClearBoundary(sessionId, createdAt);
+            const latestBoundary = clearBoundaryBySession.get(sessionId);
+            return latestBoundary === undefined || createdAt > latestBoundary;
           },
         }),
     broadcastOwnerScope: ownerScope,
   });
-}
-
-function isCreatedAfterClearBoundary(sessionId: string, createdAt: number): boolean {
-  const latestBoundary = clearBoundaryBySession.get(sessionId);
-  return latestBoundary === undefined || createdAt > latestBoundary;
 }
 
 /**
@@ -615,69 +611,6 @@ export function prepareSyntheticToolEventForBroadcast(
     agentMeta,
   );
   return { persistId: r?.persistId, resolvedContent: r?.content };
-}
-
-/**
- * 需要把“已接受”绑定到落库成功的合成 tool_use 专用入口。
- *
- * 与热路径 helper 不同，本函数等待同一 writeChain 上此前写入和本次 create 完成，
- * 并把入队前 owner scope 失效或数据库错误透传给调用方。落库期间边界变化会保留
- * 已提交结果、压掉广播。广播必须通过 broadcastAfterPersist 在同一个 owner/clear
- * guard 内同步完成，不能在 Promise resolve 后另行广播。
- */
-export async function prepareDurableSyntheticToolUseEventForBroadcast(
-  sessionId: string,
-  event: { type: 'tool_use'; data: unknown },
-  agentMeta: AgentMeta | null,
-  broadcastAfterPersist: (prepared: { persistId: string }) => void,
-): Promise<{ persistId: string; broadcasted: boolean }> {
-  if (agentMeta) noteAgentMeta(sessionId, agentMeta);
-  flushAssistantBlock(sessionId, agentMeta);
-
-  const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown };
-  const createdAt = Date.now();
-  const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
-  const toolName = typeof data.toolName === 'string' ? data.toolName : '';
-  const persistId = createId();
-  const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  noteAssistantTranscriptUuid(sessionId, meta);
-  const body = withAgentKindStamp(sessionId, {
-    clientId: persistId,
-    role: 'tool_use',
-    content: { toolUseId, toolName, input: data.input },
-    toolUseId: toolUseId || undefined,
-    agentMeta: meta,
-    createdAt,
-  });
-
-  let broadcasted = false;
-  await enqueueDurableWrite(
-    `synthetic_tool_use:${sessionId}:${persistId}`,
-    async (ownerScope) => {
-      await createVisibleDbMessage(sessionId, body, ownerScope);
-      // createMessage 自己会用同一组 guard 压掉 local-db 广播；这里还必须在
-      // 同一个 owner-scoped durable closure 内重验一次，再同步发 maker:event。
-      // callback 前没有 await，故 owner/clear 不能在验身与广播之间插队。
-      if (!isOwnerScopeCurrent(ownerScope) || !isCreatedAfterClearBoundary(sessionId, createdAt)) {
-        return;
-      }
-      broadcastAfterPersist({ persistId });
-      broadcasted = true;
-    },
-  );
-
-  if (toolUseId) {
-    rememberToolUseId(sessionId, toolUseId, createdAt);
-    getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {
-      toolName,
-      input: data.input,
-    });
-    if (isUpdatableToolUse(toolName)) {
-      rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
-    }
-  }
-  notePersistedMessage(sessionId, 'tool_use', persistId);
-  return { persistId, broadcasted };
 }
 
 /**

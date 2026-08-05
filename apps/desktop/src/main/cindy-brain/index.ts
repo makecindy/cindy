@@ -206,9 +206,9 @@ import {
 } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
 import {
-  GhostPlanSlot,
-  type GhostPlanProjector,
-  type GhostPlanSessionContext,
+  PlanSlot,
+  type PlanUpdateProjector,
+  type PlanUpdateSessionContext,
 } from './planSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
@@ -1789,43 +1789,38 @@ export function noteGhostSessionFocused(sessionId: string | null): void {
   ghostSessionFocusTracker.note(sessionId);
 }
 
-let planSlotSingleton: GhostPlanSlot | null = null;
-let ghostPlanLiveSessionValidator:
-  | ((context: GhostPlanSessionContext) => boolean | Promise<boolean>)
+let planSlotSingleton: PlanSlot | null = null;
+let planUpdateLiveSessionValidator:
+  | ((context: PlanUpdateSessionContext) => boolean | Promise<boolean>)
   | null = null;
 
 /** plan 槽单例:当前任务身份、完整快照校验与现有 Plan UI 投影的统一守门点。 */
-export function getGhostPlanSlot(): GhostPlanSlot {
+export function getPlanSlot(): PlanSlot {
   if (!planSlotSingleton) {
-    planSlotSingleton = new GhostPlanSlot({
+    planSlotSingleton = new PlanSlot({
       getGhost: findAvailableGhost,
       getCurrentSessionContext: (ghostId) =>
         getGhostPipeDispatcher().resolvePendingSessionForGhost(ghostId),
       isTrustedSessionContext: async (context) =>
         (await isGhostEligibleSession(context.sessionId)).outcome === 'eligible' &&
-        Boolean(ghostPlanLiveSessionValidator) &&
-        (await ghostPlanLiveSessionValidator!(context)),
+        Boolean(planUpdateLiveSessionValidator) &&
+        (await planUpdateLiveSessionValidator!(context)),
       log,
     });
   }
   return planSlotSingleton;
 }
 
-/** maker-ipc 初始化后注入现有 update_plan 投影链；不在 Ghost 子系统另存 Plan。 */
-export function setGhostPlanProjector(projector: GhostPlanProjector | null): void {
-  getGhostPlanSlot().setProjector(projector);
+/** maker-ipc 初始化后注入 Cindy 现有 update_plan 信号入口。 */
+export function setPlanUpdateProjector(projector: PlanUpdateProjector | null): void {
+  getPlanSlot().setProjector(projector);
 }
 
 /** maker-ipc 注入 live session incarnation 校验，防 business id 复用或过期。 */
-export function setGhostPlanLiveSessionValidator(
-  validator: ((context: GhostPlanSessionContext) => boolean | Promise<boolean>) | null,
+export function setPlanUpdateLiveSessionValidator(
+  validator: ((context: PlanUpdateSessionContext) => boolean | Promise<boolean>) | null,
 ): void {
-  ghostPlanLiveSessionValidator = validator;
-}
-
-/** /clear 同步撤销该任务 clear 前在途调用的 Plan 路由资格。 */
-export function invalidateGhostPlanContextsForSession(sessionId: string): number {
-  return getGhostPipeDispatcher().invalidatePendingPlanContextsForSession(sessionId);
+  planUpdateLiveSessionValidator = validator;
 }
 
 let cindySlotSingleton: GhostCindySlot | null = null;
@@ -4382,7 +4377,7 @@ export function registerGhostIpc(): void {
     // plan-update = 当前可信任务的完整 Codex update_plan 快照。与 tool-progress
     // 完全独立:不接 callId、不续命、不接受 sessionId,结构化拒因原样回给作者。
     if (type === 'plan-update') {
-      return getGhostPlanSlot().handleUpdate(id, payload);
+      return getPlanSlot().handleUpdate(id, payload);
     }
     // host-request = 读取宿主公开上下文;不要求卡槽,只返回构建 region,
     // 不含登录态/路径/设备信息。未知 kind 明确拒绝,避免接口悄悄扩面。

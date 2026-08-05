@@ -28,21 +28,12 @@ describe('/clear:墓碑 → cleared_at 落库 → 封 clear 边界', () => {
   const handlerEnd = registerSource.indexOf('MAKER_INVOKE.ABORT_SESSION', handlerStart);
   const handler = registerSource.slice(handlerStart, handlerEnd);
 
-  it('墓碑、Ghost Plan 路由撤销、落库与封边界都在同一个 handler 内', () => {
+  it('三步都在同一个 handler 内', () => {
     expect(handlerStart).toBeGreaterThan(-1);
     expect(handlerEnd).toBeGreaterThan(handlerStart);
     expect(handler).toContain('agentHandoffPending.invalidate(sid)');
-    expect(handler).toContain('invalidateGhostPlanContextsForSession(sid)');
     expect(handler).toContain('await clearSessionContextInDb(sid, clearBoundaryMs)');
     expect(handler).toContain('agentHandoffPending.sealClearBoundary(sid)');
-  });
-
-  it('Ghost Plan 路由资格在 cleared_at await 前同步撤销', () => {
-    const clearAt = handler.indexOf('inputCoordinator.clearSession(sid, clearBoundary)');
-    const invalidateAt = handler.indexOf('invalidateGhostPlanContextsForSession(sid)');
-    const persistAt = handler.indexOf('await clearSessionContextInDb(sid, clearBoundaryMs)');
-    expect(clearAt).toBeLessThan(invalidateAt);
-    expect(invalidateAt).toBeLessThan(persistAt);
   });
 
   it('顺序不可颠倒:纪元推进排在 cleared_at 落库之后,墓碑排在最前', () => {

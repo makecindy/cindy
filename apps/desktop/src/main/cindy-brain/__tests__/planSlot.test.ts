@@ -2,14 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import {
-  GHOST_PLAN_RATE_MAX_UPDATES,
-  GhostPlanSlot,
+  PLAN_UPDATE_RATE_MAX_UPDATES,
+  PlanSlot,
 } from '../planSlot';
 
 const trustedContext = {
   sessionId: 'session-current',
   sessionInstanceId: 'instance-current',
-  planContextGeneration: 0,
 } as const;
 
 function ghost(slots: InstalledGhost['manifest']['slots'] = ['plan']): InstalledGhost {
@@ -34,7 +33,7 @@ function harness(options: {
   trusted?: boolean;
 } = {}) {
   const projector = vi.fn(async () => {});
-  const slot = new GhostPlanSlot({
+  const slot = new PlanSlot({
     getGhost: () => ghost(options.slots),
     getCurrentSessionContext: () =>
       options.context === undefined ? trustedContext : options.context,
@@ -54,7 +53,7 @@ const valid = {
   ],
 } as const;
 
-describe('GhostPlanSlot', () => {
+describe('PlanSlot', () => {
   it('把合法 plan-update 投影到 Host 当前可信任务', async () => {
     const { slot, projector } = harness();
     await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({ ok: true });
@@ -109,17 +108,15 @@ describe('GhostPlanSlot', () => {
     let current = {
       sessionId: 'session-before',
       sessionInstanceId: 'instance-before',
-      planContextGeneration: 0,
     };
     const projector = vi.fn(async () => {});
-    const slot = new GhostPlanSlot({
+    const slot = new PlanSlot({
       getGhost: () => ghost(),
       getCurrentSessionContext: () => current,
       isTrustedSessionContext: async () => {
         current = {
           sessionId: 'session-after',
           sessionInstanceId: 'instance-after',
-          planContextGeneration: 1,
         };
         return true;
       },
@@ -135,7 +132,7 @@ describe('GhostPlanSlot', () => {
   it('异步验身期间 /clear 撤销上下文时 fail closed', async () => {
     let current: typeof trustedContext | null = trustedContext;
     const projector = vi.fn(async () => {});
-    const slot = new GhostPlanSlot({
+    const slot = new PlanSlot({
       getGhost: () => ghost(),
       getCurrentSessionContext: () => current,
       isTrustedSessionContext: async () => {
@@ -149,22 +146,6 @@ describe('GhostPlanSlot', () => {
       errorCode: 'NO_SESSION_CONTEXT',
     });
     expect(projector).not.toHaveBeenCalled();
-  });
-
-  it('持久化期间任务边界失效、投影被抑制时不返回成功', async () => {
-    const projector = vi.fn(async () => false);
-    const slot = new GhostPlanSlot({
-      getGhost: () => ghost(),
-      getCurrentSessionContext: () => trustedContext,
-      isTrustedSessionContext: async () => true,
-      projector,
-    });
-
-    await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({
-      ok: false,
-      errorCode: 'NO_SESSION_CONTEXT',
-      message: '任务上下文已变化，Plan 未投影',
-    });
   });
 
   it('拒绝插件伪造 sessionId，且不会投影到伪造目标', async () => {
@@ -211,22 +192,22 @@ describe('GhostPlanSlot', () => {
     let now = 1_000;
     const projector = vi.fn(async () => {});
     const isTrustedSessionContext = vi.fn(() => true);
-    const slot = new GhostPlanSlot({
+    const slot = new PlanSlot({
       getGhost: () => ghost(),
       getCurrentSessionContext: () => trustedContext,
       isTrustedSessionContext,
       projector,
       now: () => now,
     });
-    for (let index = 0; index < GHOST_PLAN_RATE_MAX_UPDATES; index += 1) {
+    for (let index = 0; index < PLAN_UPDATE_RATE_MAX_UPDATES; index += 1) {
       await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({ ok: true });
     }
     await expect(slot.handleUpdate('planner', valid)).resolves.toMatchObject({
       ok: false,
       errorCode: 'RATE_LIMITED',
     });
-    expect(isTrustedSessionContext).toHaveBeenCalledTimes(GHOST_PLAN_RATE_MAX_UPDATES);
-    expect(projector).toHaveBeenCalledTimes(GHOST_PLAN_RATE_MAX_UPDATES);
+    expect(isTrustedSessionContext).toHaveBeenCalledTimes(PLAN_UPDATE_RATE_MAX_UPDATES);
+    expect(projector).toHaveBeenCalledTimes(PLAN_UPDATE_RATE_MAX_UPDATES);
     now += 1_000;
     await expect(slot.handleUpdate('planner', valid)).resolves.toEqual({ ok: true });
   });

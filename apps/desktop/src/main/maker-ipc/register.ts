@@ -324,7 +324,6 @@ import {
   onToolUseEvent,
   markAutoResumeOutcome,
   onTurnErrorEvent,
-  prepareDurableSyntheticToolUseEventForBroadcast,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
@@ -719,10 +718,9 @@ import {
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
   setGhostErrandRunner,
-  setGhostPlanLiveSessionValidator,
-  setGhostPlanProjector,
+  setPlanUpdateLiveSessionValidator,
+  setPlanUpdateProjector,
   setGhostWorkspaceSessionService,
-  invalidateGhostPlanContextsForSession,
   notifyGhostSessionEvent,
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
@@ -733,7 +731,6 @@ import {
 } from '../cindy-brain/errandPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
-import { buildGhostPlanProjectionEvent } from './ghostPlanProjection.js';
 import {
   createGhostErrandSession,
   createPluginDraftSession,
@@ -7048,17 +7045,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return tracked;
   }
 
-  // Ghost plan 槽只负责守门；投影复用 Codex update_plan 的 synthetic
-  // tool_use → main 单写持久化 → maker:event → Renderer Plan UI 既有链路。
-  setGhostPlanLiveSessionValidator((context) =>
+  // plan 槽只负责接口守门；通过 Cindy 现有 synthetic update_plan 信号入口投影。
+  setPlanUpdateLiveSessionValidator((context) =>
     maker.getSession(context.sessionId)?.instanceId === context.sessionInstanceId,
   );
-  setGhostPlanProjector((context, update) =>
-    broadcastDurableSyntheticToolUseEvent(
-      context.sessionId,
-      buildGhostPlanProjectionEvent(update),
-    ),
-  );
+  setPlanUpdateProjector((context, update) => {
+    broadcastSyntheticToolEvent(context.sessionId, {
+      type: 'tool_use',
+      source: 'codex',
+      data: {
+        toolUseId: `plan:update:${createId()}`,
+        toolName: 'update_plan',
+        input: update,
+      },
+    });
+  });
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -10833,9 +10834,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
-        // /clear 只撤销 clear 前在途 Ghost 调用的 Plan 路由资格；工具本身仍可
-        // 继续心跳、返回或超时，且 clear 后新调用会取得新的可信上下文。
-        invalidateGhostPlanContextsForSession(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
         // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
         // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
@@ -12129,26 +12127,6 @@ function broadcastSyntheticToolEvent(
     persistId: prepared.persistId,
     resolvedContent: prepared.resolvedContent,
   });
-}
-
-/** Ghost Plan 的 ok:true 必须晚于持久化成功，避免只在当前 Renderer 暂时可见。 */
-async function broadcastDurableSyntheticToolUseEvent(
-  sessionId: string,
-  event: AgentEvent & { type: 'tool_use' },
-): Promise<boolean> {
-  const prepared = await prepareDurableSyntheticToolUseEventForBroadcast(
-    sessionId,
-    { type: event.type, data: event.data },
-    (event.agentMeta as AgentMeta | null | undefined) ?? null,
-    ({ persistId }) => {
-      broadcastToAllWindows(MAKER_PUSH.EVENT, {
-        sessionId,
-        event,
-        persistId,
-      });
-    },
-  );
-  return prepared.broadcasted;
 }
 
 async function materializeCodexImage(

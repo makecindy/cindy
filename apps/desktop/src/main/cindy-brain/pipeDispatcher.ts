@@ -70,8 +70,6 @@ interface PendingCall {
 export interface GhostPipeSessionContext {
   sessionId: string;
   sessionInstanceId: string;
-  /** Host-only /clear generation；插件不可见。 */
-  planContextGeneration: number;
 }
 
 /**
@@ -116,32 +114,12 @@ export function toolNotFoundMessage(
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
-  private readonly planContextGenerationBySession = new Map<string, number>();
 
   constructor(private readonly deps: PipeDispatcherDeps) {}
 
   /** 在途调用数(诊断/测试用)。 */
   pendingCount(): number {
     return this.pending.size;
-  }
-
-  /** 在可能跨 setup/OAuth await 的入口冻结当前 Plan 路由 generation。 */
-  capturePlanSessionContext(
-    sessionId: string,
-    sessionInstanceId: string,
-  ): GhostPipeSessionContext {
-    return {
-      sessionId,
-      sessionInstanceId,
-      planContextGeneration: this.planContextGenerationBySession.get(sessionId) ?? 0,
-    };
-  }
-
-  private isPlanSessionContextCurrent(context: GhostPipeSessionContext): boolean {
-    return (
-      (this.planContextGenerationBySession.get(context.sessionId) ?? 0) ===
-      context.planContextGeneration
-    );
   }
 
   /**
@@ -205,9 +183,7 @@ export class GhostPipeDispatcher {
         timeoutExtensionsAllowed: request.timeoutMs === undefined,
         deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
-        ...(request.sessionContext && this.isPlanSessionContextCurrent(request.sessionContext)
-          ? { sessionContext: request.sessionContext }
-          : {}),
+        ...(request.sessionContext ? { sessionContext: request.sessionContext } : {}),
       };
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
@@ -234,31 +210,12 @@ export class GhostPipeDispatcher {
       if (!resolved) resolved = context;
       else if (
         resolved.sessionId !== context.sessionId ||
-        resolved.sessionInstanceId !== context.sessionInstanceId ||
-        resolved.planContextGeneration !== context.planContextGeneration
+        resolved.sessionInstanceId !== context.sessionInstanceId
       ) {
         return null;
       }
     }
     return found ? resolved : null;
-  }
-
-  /**
-   * /clear 后撤销 clear 前调用的 Plan 路由资格，但不结算调用、不改超时或心跳语义。
-   * 消息没有 callId，因此旧调用与 clear 后新调用并存时 resolver 会继续 fail closed。
-   */
-  invalidatePendingPlanContextsForSession(sessionId: string): number {
-    this.planContextGenerationBySession.set(
-      sessionId,
-      (this.planContextGenerationBySession.get(sessionId) ?? 0) + 1,
-    );
-    let invalidated = 0;
-    for (const entry of this.pending.values()) {
-      if (entry.sessionContext?.sessionId !== sessionId) continue;
-      delete entry.sessionContext;
-      invalidated += 1;
-    }
-    return invalidated;
   }
 
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */

@@ -1,5 +1,5 @@
 /**
- * planSlot.ts — Ghost 当前任务 Plan 投影槽。
+ * planSlot.ts — Ghost `plan-update` 接口槽。
  *
  * 插件只提交完整 Codex update_plan 快照；目标任务来自 Host 当前可信上下文。
  * 本槽不保存 Plan、不做推理，也不提供读取、独立清空命令或任意 session 控制能力；
@@ -13,41 +13,40 @@ import {
   validateGhostPlanUpdatePayload,
 } from '../../shared/ghost.js';
 
-export type GhostPlanProjector = (
-  sessionContext: GhostPlanSessionContext,
+export type PlanUpdateProjector = (
+  sessionContext: PlanUpdateSessionContext,
   update: Omit<GhostPipePlanUpdate, 'type'>,
-) => void | boolean | Promise<void | boolean>;
+) => void | Promise<void>;
 
-export interface GhostPlanSessionContext {
+export interface PlanUpdateSessionContext {
   sessionId: string;
   sessionInstanceId: string;
-  planContextGeneration: number;
 }
 
-export interface GhostPlanSlotDeps {
+export interface PlanSlotDeps {
   getGhost(id: string): InstalledGhost | null;
-  getCurrentSessionContext(ghostId: string): GhostPlanSessionContext | null;
-  isTrustedSessionContext(context: GhostPlanSessionContext): boolean | Promise<boolean>;
-  projector?: GhostPlanProjector | null;
+  getCurrentSessionContext(ghostId: string): PlanUpdateSessionContext | null;
+  isTrustedSessionContext(context: PlanUpdateSessionContext): boolean | Promise<boolean>;
+  projector?: PlanUpdateProjector | null;
   now?: () => number;
   log?: {
     warn(message: string, meta?: Record<string, unknown>): void;
   };
 }
 
-/** 每个 Ghost 允许短时连发，但拒绝无界紧循环刷新持久化 Plan。 */
-export const GHOST_PLAN_RATE_WINDOW_MS = 1_000;
-export const GHOST_PLAN_RATE_MAX_UPDATES = 20;
+/** 每个插件允许短时连发，但拒绝无界紧循环发送 plan-update。 */
+export const PLAN_UPDATE_RATE_WINDOW_MS = 1_000;
+export const PLAN_UPDATE_RATE_MAX_UPDATES = 20;
 
-export class GhostPlanSlot {
-  private projector: GhostPlanProjector | null;
+export class PlanSlot {
+  private projector: PlanUpdateProjector | null;
   private readonly acceptedAtByGhost = new Map<string, number[]>();
 
-  constructor(private readonly deps: GhostPlanSlotDeps) {
+  constructor(private readonly deps: PlanSlotDeps) {
     this.projector = deps.projector ?? null;
   }
 
-  setProjector(projector: GhostPlanProjector | null): void {
+  setProjector(projector: PlanUpdateProjector | null): void {
     this.projector = projector;
   }
 
@@ -65,9 +64,9 @@ export class GhostPlanSlot {
     // 否则有权限的故障插件仍能用拒绝路径持续压垮 Main。
     const now = this.deps.now?.() ?? Date.now();
     const attempts = (this.acceptedAtByGhost.get(ghostId) ?? []).filter(
-      (timestamp) => now - timestamp < GHOST_PLAN_RATE_WINDOW_MS,
+      (timestamp) => now - timestamp < PLAN_UPDATE_RATE_WINDOW_MS,
     );
-    if (attempts.length >= GHOST_PLAN_RATE_MAX_UPDATES) {
+    if (attempts.length >= PLAN_UPDATE_RATE_MAX_UPDATES) {
       this.acceptedAtByGhost.set(ghostId, attempts);
       return {
         ok: false,
@@ -87,8 +86,7 @@ export class GhostPlanSlot {
       !sessionContext ||
       !checkedContext ||
       contextAfterCheck?.sessionId !== sessionContext.sessionId ||
-      contextAfterCheck.sessionInstanceId !== sessionContext.sessionInstanceId ||
-      contextAfterCheck.planContextGeneration !== sessionContext.planContextGeneration
+      contextAfterCheck.sessionInstanceId !== sessionContext.sessionInstanceId
     ) {
       return {
         ok: false,
@@ -116,17 +114,10 @@ export class GhostPlanSlot {
       plan: validated.value.plan,
     };
     try {
-      const projected = await this.projector(sessionContext, update);
-      if (projected === false) {
-        return {
-          ok: false,
-          errorCode: 'NO_SESSION_CONTEXT',
-          message: '任务上下文已变化，Plan 未投影',
-        };
-      }
+      await this.projector(sessionContext, update);
       return { ok: true };
     } catch (error) {
-      this.deps.log?.warn('ghost plan projection failed', {
+      this.deps.log?.warn('plan-update projection failed', {
         ghostId,
         sessionId: sessionContext.sessionId,
         error: error instanceof Error ? error.message : String(error),
