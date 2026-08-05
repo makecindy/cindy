@@ -38,6 +38,10 @@ export function useSessionNavigationMode(): SessionNavigationMode {
   return useContext(SessionNavigationModeContext);
 }
 
+export function isInteractiveSessionNavigationMode(mode: SessionNavigationMode): boolean {
+  return mode !== 'sidebar-embedded';
+}
+
 /**
  * 返回显式可见 RSB bucket；普通会话未注入时回退内容 session。
  * contentSessionId 缺失仍表示调用点没有侧栏动作能力，Provider 只改目标、不负责启用动作。

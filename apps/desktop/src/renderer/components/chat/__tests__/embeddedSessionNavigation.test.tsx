@@ -36,6 +36,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
 }));
 
 import {
+  isInteractiveSessionNavigationMode,
   SessionNavigationModeProvider,
   useSidebarTargetSessionId,
 } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -285,5 +286,15 @@ describe('sidebar-embedded session navigation boundary', () => {
 
     expect(mocks.getSession).toHaveBeenCalledWith('session-f');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-f');
+  });
+});
+
+describe('session navigation interaction policy', () => {
+  it.each([
+    ['route-owner', true],
+    ['split-pane', true],
+    ['sidebar-embedded', false],
+  ] as const)('%s interactive=%s', (mode, expected) => {
+    expect(isInteractiveSessionNavigationMode(mode)).toBe(expected);
   });
 });
