@@ -1797,9 +1797,10 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
 let windowsTray: Tray | null = null;
-// 当前的托盘菜单。我们自己 popUp(见 popUpWindowsTrayMenu 的注释),菜单对象必须由
-// JS 侧持有,不能只作为实参交出去。语言切换时置 null,下一次右键按新语言重建。
+// 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
+// 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
+const activeWindowsTrayMenus = new Set<Menu>();
 const windowsTrayLog = createLogger('windows-tray');
 const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
@@ -1836,6 +1837,12 @@ function openWindowsTrayMenu(): void {
     buildMenu: buildWindowsTrayMenu,
     retainMenu: (menu) => {
       windowsTrayMenu = menu;
+    },
+    retainActiveMenu: (menu) => {
+      activeWindowsTrayMenus.add(menu);
+    },
+    releaseActiveMenu: (menu) => {
+      activeWindowsTrayMenus.delete(menu);
     },
     onUnavailable: (reason) => {
       windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
