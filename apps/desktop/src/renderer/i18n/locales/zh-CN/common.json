@@ -8359,6 +8359,7 @@
       "customRolePredefinedError": "自定义角色不能使用预设角色名",
       "agentLabel": "Agent",
       "modelLabel": "模型",
+      "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
       "effortLabel": "Effort",
       "initialTaskLabel": "初始任务",
