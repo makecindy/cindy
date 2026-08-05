@@ -944,6 +944,7 @@ describe('DiscordIM inbound pipeline', () => {
       initialSecrets: [
         ['discord-bot-token', 'token'],
         ['discord-owner-user-id', 'user-1'],
+        ['discord-bot-runtime-active', 'previous-run'],
         ['discord-bot-lifecycle-announcement', 'false'],
       ],
     });
@@ -960,6 +961,8 @@ describe('DiscordIM inbound pipeline', () => {
       token: 'new-token',
       ownerUserId: 'user-1',
     });
+
+    expect(host.readSecret('discord-bot-runtime-active')).toBeNull();
     await host.invoke('discordBot:disconnect');
 
     expect(channel.send.mock.calls.map(([payload]) => payload)).toEqual([

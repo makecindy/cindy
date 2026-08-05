@@ -161,6 +161,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     });
 
     this.host.ipc.handle('discordBot:set-config', async (payload) => {
+      // IPC handlers are registered before init(). Sync the persisted preference
+      // before any gateway status can queue a lifecycle notice or write its marker.
+      this.applyLifecycleAnnouncement(this.readLifecycleAnnouncement());
       const config = isRecord(payload) ? payload : {};
       const token = typeof config.token === 'string' ? config.token.trim() : '';
       const ownerUserId =
