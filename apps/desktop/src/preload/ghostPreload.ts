@@ -66,8 +66,10 @@ contextBridge.exposeInMainWorld('cindy', {
     queryErrand: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'query' }),
     // 请用户新建一条自动化(agent.schedule 加档):只能**打开预填好的创建面板**,
-    // 建不建由用户在面板上选好模型后亲手保存。返回 { ok:true } 只表示面板已打开,
-    // 拿不到"用户存没存"——资格审 / 净化 / 频率钳制 / 限速在主机 scheduleSlot。
+    // 建不建由用户在面板上选好模型后亲手保存。{ ok:true } 只表示"请求已被接受并投递",
+    // 既不保证面板真开了(用户正编辑另一个表单时本次草稿会被丢弃),也不表示任务已创建
+    // ——本版没有回执通道,绑定与查改由后续版本提供(语义见 GhostPipeScheduleDraftResult)。
+    // 资格审 / 净化 / 频率钳制 / 限速都在主机 scheduleSlot。
     requestSchedule: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'schedule-request' }),
   },
