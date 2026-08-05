@@ -68,7 +68,8 @@ export interface ClaudeCodeSessionScanSummary {
 interface ClaudeScanSummaryCacheEntry {
   mtimeMs: number;
   size: number;
-  summary: ClaudeCodeSessionScanSummary | null;
+  /** 缓存完整结果:拒绝原因也一并缓存,避免未变化文件重扫时分类漂移成 noEvents。 */
+  result: ClaudeCodeSessionScanSummaryResult;
 }
 
 /** Summary of one top-level Claude Code JSONL file as an XD session row. */
@@ -407,16 +408,14 @@ export async function readClaudeCodeSessionScanSummaryResult(
   if (!stat) return { kind: 'rejected', reason: 'unreadable' };
   const cached = claudeScanSummaryCache.get(file);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.summary
-      ? { kind: 'ok', summary: cached.summary }
-      : { kind: 'rejected', reason: 'noEvents' };
+    return cached.result;
   }
 
   const result = await readScanSummaryFromHead(file, stat.mtimeMs);
   const cacheEntry = {
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    summary: result.kind === 'ok' ? result.summary : null,
+    result,
   };
   if (claudeScanSummaryCache.size >= SCAN_SUMMARY_CACHE_MAX_ENTRIES) claudeScanSummaryCache.clear();
   claudeScanSummaryCache.set(file, cacheEntry);
@@ -445,6 +444,7 @@ async function readScanSummaryFromHead(
   let sawTopLevelEvent = false;
   let removedIdeContextWithoutTitle = false;
   let hitLineLimitBeforeTitle = false;
+  let readFailed = false;
   let lineCount = 0;
 
   try {
@@ -480,12 +480,15 @@ async function readScanSummaryFromHead(
       if (title) break;
     }
   } catch {
-    /* 读取中途出错(文件被并发轮转等):按已读到的内容收尾 */
+    // 读取中途出错(文件被并发轮转 / IO 失败等):未读到任何顶层事件时按「不可读」
+    // 分类,而非误判为 noEvents —— noEvents 语义是「文件可读但没有有效内容」。
+    readFailed = true;
   } finally {
     rl.close();
     input.destroy();
   }
 
+  if (readFailed && !sawTopLevelEvent) return { kind: 'rejected', reason: 'unreadable' };
   if (!sawTopLevelEvent) return { kind: 'rejected', reason: 'noEvents' };
   if (hitLineLimitBeforeTitle) return { kind: 'rejected', reason: 'windowLimit' };
   if (!isLikelySessionId(sdkSessionId)) return { kind: 'rejected', reason: 'invalidId' };

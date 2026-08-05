@@ -1304,6 +1304,39 @@ describe('parseClaudeCodeMessageLine', () => {
     }
   });
 
+  it('keeps the rejection reason across cache hits for unchanged files (no drift to noEvents)', async () => {
+    // 回归(PR #1807 review):拒绝原因只缓存 summary:null 会导致未变化文件重扫时
+    // 分类漂移成 noEvents。internal 会话首次扫描后,缓存命中必须仍返回 internal。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cache-reason-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-review-cached',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content:
+            '<channel source="review-session-channel" id="review-1">\nReview this change',
+        },
+      })}\n`,
+    );
+    const mtime = new Date(7_000_000);
+    fs.utimesSync(file, mtime, mtime);
+
+    try {
+      // 首次扫描:拒绝为 internal
+      const first = await readClaudeCodeSessionScanSummaryResult(file);
+      expect(first).toEqual({ kind: 'rejected', reason: 'internal' });
+      // 再次扫描(同 mtime/size,缓存命中):必须仍为 internal,不漂移成 noEvents
+      const cached = await readClaudeCodeSessionScanSummaryResult(file);
+      expect(cached).toEqual({ kind: 'rejected', reason: 'internal' });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not upsert an imported row when a native Claude session already owns the sdk session id', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-local-home-'));
     const projectsDir = path.join(home, '.claude', 'projects', '-tmp-project');
