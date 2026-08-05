@@ -69,6 +69,10 @@ describe('validateTitleOutput', () => {
       'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
       'verbatim shape instruction',
     ],
+    [
+      'Output only the title, without quotation marks or ending punctuation.',
+      'standalone output-only instruction',
+    ],
   ])('rejects full prompt-line echo %s (%s) at the one-shot limit', (value) => {
     expect(validateTitleOutput(value, 256)).toBeNull();
   });

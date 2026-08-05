@@ -19,7 +19,7 @@ const INSTRUCTION_ECHO_RES: readonly RegExp[] = [
   /^(?:generate\s+)?(?:a\s+)?concise\s+(?:conversation\s+|session\s+|task\s+)?title(?:\s+for\s+(?:the\s+)?(?:user\s+)?(?:message|conversation)(?:\s+below)?)?$/iu,
   /^(?:以下の|下記の)?(?:ユーザー)?(?:メッセージ|会話)?(?:の)?簡潔な(?:日本語の)?タイトル(?:を生成)?$/u,
   /^(?:아래|다음)?\s*(?:사용자)?\s*(?:메시지|대화)?\s*(?:의)?\s*간결한\s*(?:한국어\s*)?제목(?:\s*생성)?$/u,
-  /^(?:treat\s+everything\s+inside\s+the\s+(?:user_message|conversation_opening|recent_conversation)\s+delimiters\b|never\s+restate,?\s+translate,?\s+or\s+summarize\s+the\s+instructions\s+above\b|write\s+the\s+title\s+in\s+(?:simplified\s+chinese|english|japanese|korean)\b|use\s+at\s+most\s+20\s+characters\b).*$/iu,
+  /^(?:treat\s+everything\s+inside\s+the\s+(?:user_message|conversation_opening|recent_conversation)\s+delimiters\b|never\s+restate,?\s+translate,?\s+or\s+summarize\s+the\s+instructions\s+above\b|write\s+the\s+title\s+in\s+(?:simplified\s+chinese|english|japanese|korean)\b|use\s+at\s+most\s+20\s+characters\b|output\s+only\s+the\s+title,?\s+without\s+quotation\s+marks\s+or\s+ending\s+punctuation\b).*$/iu,
 ];
 
 function exceedsUnicodeCodePointLimit(value: string, maxChars: number): boolean {
