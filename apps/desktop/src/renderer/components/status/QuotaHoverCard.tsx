@@ -182,7 +182,7 @@ function WindowBlock({
   window: ClaudeUsageWindow;
   paceWindowMinutes?: number;
   nowMs: number;
-  paceNowMs: number;
+  paceNowMs: number | null;
   locale: string | undefined;
   t: TFunction;
 }) {
@@ -202,7 +202,7 @@ function WindowBlock({
     Number.isFinite(window.resetsAt) &&
     nowMs > window.resetsAt * 1000;
   const pace =
-    paceWindowMinutes === undefined || resetPassed
+    paceWindowMinutes === undefined || paceNowMs === null || resetPassed
       ? null
       : computeQuotaPace({
           utilization: window.utilization,
@@ -413,12 +413,13 @@ export function QuotaHoverCard({
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const planLabel = formatPlanType(snapshot?.subscriptionType);
-  // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移。
+  // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移；
+  // 缺有效观测时刻则不算节奏——回退渲染时刻会让趋势随倒计时重渲染无新数据自跳档。
   const paceNowMs = snapshot
     && typeof snapshot.updatedAt === 'number'
     && Number.isFinite(snapshot.updatedAt)
     ? snapshot.updatedAt
-    : nowMs;
+    : null;
 
   const windows: DisplayWindow[] = [];
   if (isDisplayableWindow(snapshot?.fiveHour)) {

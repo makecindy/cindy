@@ -669,7 +669,7 @@ describe('QuotaHoverCard', () => {
   ])('renders the $label weekly pace trend', ({ utilization, expected }) => {
     render(
       <QuotaHoverCard
-        snapshot={makeSnapshot({ sevenDay: weeklyAtProgress(utilization, 0.25) })}
+        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(utilization, 0.25) })}
         nowMs={NOW_MS}
       />,
     );
@@ -680,7 +680,7 @@ describe('QuotaHoverCard', () => {
   it('keeps the pace line muted at a 68-point critical delta', () => {
     render(
       <QuotaHoverCard
-        snapshot={makeSnapshot({ sevenDay: weeklyAtProgress(93, 0.25) })}
+        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(93, 0.25) })}
         nowMs={NOW_MS}
       />,
     );
@@ -690,6 +690,18 @@ describe('QuotaHoverCard', () => {
     expect(pace.getAttribute('data-severity')).toBeNull();
     expect(pace.classList.contains('text-[var(--text-secondary)]')).toBe(true);
     expect(pace.className).not.toContain('quota-bar-crit');
+  });
+
+  it('hides the pace line when the snapshot has no valid updatedAt observation time', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ sevenDay: weeklyAtProgress(31, 0.25) })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    // 没有观测时刻就无法把利用率钉在时间轴上;不算节奏,避免趋势随重渲染自跳档。
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
 
   it('keeps the pace trend stable when the same snapshot renders 30 minutes later', () => {
