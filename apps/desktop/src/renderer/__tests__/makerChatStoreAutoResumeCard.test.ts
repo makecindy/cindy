@@ -464,6 +464,53 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
     );
   });
 
+  it('重连期间无关任务更新和工具结果不会提前清除原生活动行', () => {
+    const reconnecting = handleStreamEvent(
+      EMPTY_SESSION_STATE,
+      reconnectEvent('Reconnecting... 1/5', false),
+    );
+    const withTaskUpdate = handleStreamEvent(reconnecting, {
+      sessionId: SID,
+      type: 'agent_task_update',
+      source: 'codex',
+      data: { provider: 'codex', taskId: 'task-1', status: 'running' },
+    });
+    const withToolResult = handleStreamEvent(withTaskUpdate, {
+      sessionId: SID,
+      type: 'tool_result',
+      source: 'codex',
+      data: { toolUseIds: ['tool-1'] },
+    });
+
+    expect(withToolResult.messages.some((m) => m.clientId === '__codex_reconnect_pending__')).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ['认证', 'Reconnecting... 1/5 (401 Missing bearer)', { errorStatus: 401 }, /missing bearer/i],
+    [
+      '额度',
+      'Reconnecting... 1/5 (rate limit)',
+      { usageLimit: true, errorStatus: 429 },
+      /rate limit/i,
+    ],
+  ])('无关任务更新不会吞掉%s类可操作错误', (_label, message, extra, expected) => {
+    const event = reconnectEvent(message, false);
+    const actionable = handleStreamEvent(EMPTY_SESSION_STATE, {
+      ...event,
+      data: { ...event.data, ...extra },
+    });
+    const afterTaskUpdate = handleStreamEvent(actionable, {
+      sessionId: SID,
+      type: 'agent_task_update',
+      source: 'codex',
+      data: { provider: 'codex', taskId: 'task-1', status: 'running' },
+    });
+
+    expect(afterTaskUpdate.recoverableError).toMatch(expected);
+  });
+
   it('已有 Cindy 接管活动行时,迟到的非终态重连继续保持接管态', () => {
     const next = handleStreamEvent(
       stateWithCindyPending(),
@@ -542,7 +589,7 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
         errorStatus: 401,
       },
     });
-    expect(next.error).toContain('Missing Bearer');
+    expect(next.error).toMatch(/missing bearer/i);
     expect(next.messages.some((m) => m.clientId === PENDING_CARD_ID)).toBe(false);
   });
 

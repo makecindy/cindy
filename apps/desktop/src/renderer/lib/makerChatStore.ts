@@ -3427,6 +3427,21 @@ function isCodexUserActionableRetryError(data: unknown): boolean {
   return authError || extractUsageLimitRecoveryHint(data) !== null;
 }
 
+/**
+ * Codex 原生重连行只应在真正的 turn 进展或明确收尾时让位。
+ *
+ * `maker:event` 里还混着后台任务更新、tool_result、thinking 等旁路事件；它们
+ * 可能属于同一会话但不代表重连已经恢复。这里与 main 的
+ * `isSubstantiveProgressEvent` 共用可见文本判据，避免空白 delta 也误报恢复。
+ */
+function isCodexReconnectRecoveryOutput(event: CCAgentStreamEvent): boolean {
+  if (event.type === 'text') {
+    const text = (event.data as { text?: unknown } | null | undefined)?.text;
+    return hasUserVisibleText(text);
+  }
+  return event.type === 'tool_use' || event.type === 'done';
+}
+
 /** Main 的接管 projection 与随后 maker:event 来自两个 channel。只有活动行里保存的
  * 原始错误与终态 event 完全一致，才把 event 视为同一次接管的广播回声；不能仅凭存在
  * 一张 pending 卡就吞掉后来其它 turn 的错误。 */
@@ -4271,13 +4286,16 @@ export function handleStreamEvent(
     !isTerminalErrorData(event.data) &&
     reconnectAttempt !== null &&
     !isCodexUserActionableRetryError(event.data);
+  const hasCodexReconnectRecoveryOutput = isCodexReconnectRecoveryOutput(event);
+  const shouldClearCodexReconnectPendingCard =
+    event.type === 'error' ? !isCodexReconnectProgress : hasCodexReconnectRecoveryOutput;
   const stateBeforeReconnectCleanup =
-    event.type === 'error' || inputState.recoverableError == null
+    !hasCodexReconnectRecoveryOutput || inputState.recoverableError == null
       ? inputState
       : { ...inputState, recoverableError: null };
-  const messagesAfterReconnectCleanup = isCodexReconnectProgress
-    ? stateBeforeReconnectCleanup.messages
-    : removeCodexReconnectPendingCard(stateBeforeReconnectCleanup.messages);
+  const messagesAfterReconnectCleanup = shouldClearCodexReconnectPendingCard
+    ? removeCodexReconnectPendingCard(stateBeforeReconnectCleanup.messages)
+    : stateBeforeReconnectCleanup.messages;
   const state =
     messagesAfterReconnectCleanup === stateBeforeReconnectCleanup.messages
       ? stateBeforeReconnectCleanup
