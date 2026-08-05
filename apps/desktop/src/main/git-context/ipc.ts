@@ -293,8 +293,18 @@ export function registerGitContextIpc(): void {
       // from querying an unrelated private repository with the controlled
       // device's gh token; intentionally mentioning a PR in the task remains
       // part of the existing remote-control product behavior.
-      const refs = await listPrRefs(remoteSessionId);
-      parsed = filterPrStatusQueriesForRefs(parsed, refs);
+      try {
+        const refs = await listPrRefs(remoteSessionId);
+        parsed = filterPrStatusQueriesForRefs(parsed, refs);
+      } catch (err) {
+        // DB failures must not turn into an unfiltered token-bearing request;
+        // fail closed and let the remote renderer retry on its next refresh.
+        log.warn('remote PR refs lookup failed (fail closed)', {
+          sessionId: remoteSessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return [];
+      }
     }
     return prStatusService!.getStatuses(parsed);
   });
