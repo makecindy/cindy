@@ -213,6 +213,7 @@ describe('Shared create project picker', () => {
       'const branchInteractive = !disabled && effectiveWorktreeEnabled && baseRepo !== null',
     );
     expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
+    expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
     expect(worktreeChipsSource).toContain(
       "sourceBranch || branches.current || currentBranch || 'HEAD'",

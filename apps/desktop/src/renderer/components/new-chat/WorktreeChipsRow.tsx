@@ -407,6 +407,7 @@ function BranchWorktreeChip({
     <button
       type="button"
       aria-disabled={!branchInteractive}
+      tabIndex={branchInteractive ? 0 : -1}
       data-testid="create-agent-branch-chip"
       className={cn(
         'inline-flex h-full min-w-0 items-center transition-colors',
