@@ -43,7 +43,7 @@ import { registerScheduleSilenceCurrentRunTool } from '../scheduler/silenceCurre
 import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
-import type { LiziMcpSessionContext } from '../types.js';
+import type { CodexAutomationRecord, LiziMcpSessionContext } from '../types.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -154,6 +154,10 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  codexAutomation?: {
+    list(): Promise<CodexAutomationRecord[]>;
+    get(id: string): Promise<CodexAutomationRecord | null>;
+  };
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -174,6 +178,7 @@ async function makeHarness(opts?: {
       }
       return scheduler;
     },
+    ...(opts?.codexAutomation ? { codexAutomation: opts.codexAutomation } : {}),
   });
 
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
@@ -258,6 +263,54 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_silence_current_run',
       'schedule_update',
     ]);
+    await h.cleanup();
+  });
+
+  it('exposes read-only Codex automation list/get tools when the host injects a reader', async () => {
+    const record: CodexAutomationRecord = {
+      id: 'ddl',
+      name: 'DDL patrol',
+      prompt: '\u8bfb\u53d6 AGENTS.md',
+      status: 'ACTIVE',
+      rrule: 'FREQ=WEEKLY;BYDAY=FR;BYHOUR=11;BYMINUTE=20',
+      model: 'gpt-5.5',
+      reasoningEffort: 'medium',
+      executionEnvironment: 'local',
+      cwds: ['C:\\newlife'],
+      sourcePath: 'C:\\Users\\XD\\.codex\\automations\\ddl\\automation.toml',
+      diagnostics: [],
+    };
+    await h.cleanup();
+    h = await makeHarness({
+      codexAutomation: {
+        list: async () => [record],
+        get: async (id) => (id === record.id ? record : null),
+      },
+    });
+
+    const listed = parseToolResult(
+      (await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'codex_automation_list', args: {} },
+      })) as { content: unknown[]; isError?: boolean },
+    );
+    expect(listed.envelope).toEqual({ ok: true, data: [record] });
+
+    const fetched = parseToolResult(
+      (await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'codex_automation_get', args: { id: 'ddl' } },
+      })) as { content: unknown[]; isError?: boolean },
+    );
+    expect(fetched.envelope).toEqual({ ok: true, data: record });
+
+    const missing = parseToolResult(
+      (await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'codex_automation_get', args: { id: 'missing' } },
+      })) as { content: unknown[]; isError?: boolean },
+    );
+    expect(missing.envelope).toMatchObject({ ok: false, code: 'NOT_FOUND' });
     await h.cleanup();
   });
 
