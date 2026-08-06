@@ -427,7 +427,10 @@ function buildImportListItems(candidates: ImportCandidate[]): ImportListItem[] {
   return listItems.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 }
 
-/** 构造「无法读取」hint:基础文案 + Claude 拒绝原因明细(非零项)。括号/分隔符走 i18n,不硬编码。 */
+/** 构造「已跳过」hint:基础文案 + Claude 拒绝原因明细(非零项)。
+ * 明细只覆盖 Claude 侧(有分类);codex 侧只有 rejectedCount 无分类,
+ * 故用「Claude:」前缀标明范围,避免与总数(codex+claude)混淆。
+ * 括号/分隔符走 i18n,不硬编码。 */
 function buildFilteredHint(
   rejected: ScanResult['rejected'],
   t: ReturnType<typeof useTranslation>['t'],
@@ -445,6 +448,7 @@ function buildFilteredHint(
   // 括号与分隔符本地化:中英日韩的样式不同,不能硬编码全角括号。
   return (
     `${base}${t('settings.sessionImport.summary.reasonListOpen')}`
+    + t('settings.sessionImport.summary.reasonListSource')
     + parts.join(t('settings.sessionImport.summary.reasonListSep'))
     + t('settings.sessionImport.summary.reasonListClose')
   );

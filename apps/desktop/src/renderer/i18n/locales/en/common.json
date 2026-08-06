@@ -1113,6 +1113,7 @@
         "reasonListOpen": " (",
         "reasonListSep": ", ",
         "reasonListClose": ")",
+        "reasonListSource": "Claude: ",
         "reasonInternal": "Internal",
         "reasonNoEvents": "No events",
         "reasonWindowLimit": "Scan window",

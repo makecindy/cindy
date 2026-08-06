@@ -1113,6 +1113,7 @@
         "reasonListOpen": " (",
         "reasonListSep": ", ",
         "reasonListClose": ")",
+        "reasonListSource": "Claude: ",
         "reasonInternal": "내부 세션",
         "reasonNoEvents": "유효한 내용 없음",
         "reasonWindowLimit": "스캔 범위 밖",

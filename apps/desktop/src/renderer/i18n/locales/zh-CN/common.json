@@ -1113,6 +1113,7 @@
         "reasonListOpen": "（",
         "reasonListSep": " · ",
         "reasonListClose": "）",
+        "reasonListSource": "Claude：",
         "reasonInternal": "内部 Agent",
         "reasonNoEvents": "无有效内容",
         "reasonWindowLimit": "超出扫描窗口",

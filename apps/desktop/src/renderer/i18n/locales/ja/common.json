@@ -1113,6 +1113,7 @@
         "reasonListOpen": "（",
         "reasonListSep": "・",
         "reasonListClose": "）",
+        "reasonListSource": "Claude：",
         "reasonInternal": "内部セッション",
         "reasonNoEvents": "有効な内容なし",
         "reasonWindowLimit": "スキャンウィンドウ外",
