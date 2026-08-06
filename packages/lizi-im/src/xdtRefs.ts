@@ -59,6 +59,19 @@ function refStartsAt(text: string, openBracket: number): boolean {
 function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
   let cursor = 0;
+  // ')' 查找的单调缓存。搜索起点跨候选严格递增(scheme 不匹配的路径根本不查
+  // 括号; 恢复后新候选的 urlStart 在恢复点之后; 收下引用后 cursor = endParen
+  // + 1 > 上次命中), 且 [上次起点, 上次命中) 区间内必无 ')' —— 所以起点仍
+  // ≤ 上次命中时可直接复用, 与每次重新 indexOf 等价, 每个文本位置至多被扫
+  // 一次。没有它, 形如 '[a](xdt-file://x'.repeat(N) + ')' 的对抗输入会让 N 个
+  // 候选各自重扫同一个尾括号, 退化成 Θ(n²)(#1856 review 第三轮: 这条平方
+  // 向量是畸形恢复引入的, 收敛前的解析器一次扫到 ')' 就整体跳过)。
+  let cachedParen = -2; // -2 = 尚无缓存
+  const nextParen = (from: number): number => {
+    if (cachedParen >= from) return cachedParen;
+    cachedParen = text.indexOf(')', from);
+    return cachedParen;
+  };
 
   while (cursor < text.length) {
     const openBracket = text.indexOf('[', cursor);
@@ -99,7 +112,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
 
-    const endParen = text.indexOf(')', urlStart + scheme.length);
+    const endParen = nextParen(urlStart + scheme.length);
     if (endParen === -1) break;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
@@ -110,10 +123,10 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     // 一个都不命中就照常收下, URL 里的 '['/']' 原样保留。
     //
     // cursor 仍严格前进: recovery ≥ urlStart + scheme.length > openBracket。
-    // 仍是线性(本解析器防 ReDoS/防回扫的前提): refStartsAt 的 alt 扫描天然停在
-    // 下一个 '[', 一段里相邻 '[' 的间距之和 ≤ 段长, 故单个候选的整轮判定是线性;
-    // 且恢复点是本段第一个引用起点, 下一候选的 URL 段从它之后才开始, 因此各候选
-    // 判定扫过的区间互不重叠, 合计仍是线性, 无平方级最坏情况。
+    // 恢复判定本身是线性(本解析器防 ReDoS/防回扫的前提): refStartsAt 的 alt
+    // 扫描天然停在下一个 '[', 一段里相邻 '[' 的间距之和 ≤ 段长; 且恢复点是本段
+    // 第一个引用起点, 下一候选的 URL 段从它之后才开始, 各候选扫过的区间互不
+    // 重叠。恢复带来的 ')' 重复定位由上面的 nextParen 单调缓存兜住。
     let recovery = -1;
     for (
       let bracket = text.indexOf('[', urlStart + scheme.length);

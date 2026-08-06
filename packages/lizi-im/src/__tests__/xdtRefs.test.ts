@@ -82,6 +82,31 @@ describe('linear managed-media parser', () => {
     expect(stripXdtForStreaming(nearUrl)).toBe(nearUrl);
   });
 
+  it('大量嵌套未闭合候选 + 单个尾括号仍是线性(#1856 review 第三轮: 畸形恢复曾退化成 Θ(n²))', () => {
+    // 每次恢复把 cursor 挪到下一个 '[', 无缓存实现让 N 个候选各自重扫同一个
+    // 尾括号。实测(本机, N=200k / 3.2MB): 平方实现 ~4.8s, 线性实现 ~31ms ——
+    // 靠本用例 2s 的超时预算把回归钉死, 而不是脆弱的墙钟断言。
+    const nested = '[a](xdt-file://x'.repeat(200_000) + ')';
+
+    expect(collectXdtFileRefs(nested)).toEqual([
+      {
+        alt: 'a',
+        url: 'xdt-file://x',
+        start: nested.lastIndexOf('['),
+        end: nested.length,
+      },
+    ]);
+    expect(stripXdtForStreaming(nested).endsWith('[📎 a · 准备发送...]')).toBe(true);
+  }, 2_000);
+
+  it('URL 段密集非起点方括号 + 单个尾括号: 照常收下, 不逐个重扫', () => {
+    const url = `xdt-file://${'[x]'.repeat(30_000)}`;
+    const dense = `[a](${url})`;
+
+    expect(collectXdtFileRefs(dense)).toEqual([{ alt: 'a', url, start: 0, end: dense.length }]);
+    expect(stripXdtForStreaming(dense)).toBe('[📎 a · 准备发送...]');
+  });
+
   it('still finds a valid ref after malformed Markdown', () => {
     const text = `broken [ prefix ![chart](${BLOB})`;
 
