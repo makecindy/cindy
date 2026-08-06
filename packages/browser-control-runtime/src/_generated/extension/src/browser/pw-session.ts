@@ -1439,6 +1439,31 @@ export async function gotoPageWithNavigationGuard(
   }
   previewRouteGuards.set(opts.page, handler);
   await opts.page.route("**", handler);
+  // LOCAL PATCH (Cindy, via sync.mjs): kill WebRTC on preview pages.
+  // CSP cannot constrain RTCPeerConnection ICE/STUN/TURN traffic (a
+  // previewed page could exfiltrate data chunked into TURN
+  // credentials); --disable-webrtc was probed INEFFECTIVE (API still
+  // constructable), so the constructor is shadowed before ANY page
+  // script runs (addInitScript runs on every navigation, incl. the
+  // first).
+  if (previewOrigin !== null) {
+    await opts.page
+      .addInitScript(() => {
+        try {
+          Object.defineProperty(window, "RTCPeerConnection", {
+            value: undefined,
+            configurable: true,
+          });
+          Object.defineProperty(window, "webkitRTCPeerConnection", {
+            value: undefined,
+            configurable: true,
+          });
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {});
+  }
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {

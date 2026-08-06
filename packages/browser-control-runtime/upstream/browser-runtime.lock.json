@@ -63,6 +63,10 @@
       "desc": "unroute the previous guard before installing the new one, and record the new handler for the next takeover"
     },
     {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "disable RTCPeerConnection on preview pages via addInitScript: CSP connect-src does not constrain WebRTC ICE/STUN/TURN traffic, so previewed pages could exfiltrate data chunked into TURN credentials (codex-connector P1, round 7; --disable-webrtc probed INEFFECTIVE in real Chrome, API still constructable)"
+    },
+    {
       "file": "extension/src/infra/net/ssrf.ts",
       "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
     },
@@ -72,7 +76,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "8911516363e4e83d367f7ff2fb99ae29d47c62f7659e3cd989e14e4181a6d7f5",
+  "contentHash": "08d8d87ba5039132598103d7484fe3cb098076a2d34b2f03b37d318874f2e60a",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

@@ -94,6 +94,7 @@ describe('persistent navigation guard (preview origin)', () => {
         unrouteCalls.push({ pattern, handler });
       },
       goto: async () => null,
+      addInitScript: async () => {},
     };
     return {
       unrouteCalls,

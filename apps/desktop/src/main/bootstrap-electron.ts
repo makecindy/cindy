@@ -172,6 +172,7 @@ import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
+  installBrowserPreviewWebRtcGuard,
   installWebviewHardener,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
@@ -1140,6 +1141,10 @@ if (!app.isPackaged) {
 // ready 前注册也有效,内部缓冲到 fire 时才投递,确保主窗 / 任何 webContents
 // 首次 attach webview 都走 hardener。详见 webview-security.ts。
 installWebviewHardener();
+// 预览页 WebRTC 禁用（codex-connector P1, round 7）：CSP 管不住
+// RTCPeerConnection 的 ICE/STUN/TURN 流量，经 session 级 preload 在
+// BROWSER_PARTITION 全量禁用（agent 专用浏览器，无 WebRTC 需求）。
+installBrowserPreviewWebRtcGuard();
 
 // ── RSB browser bridge (browser-backend Phase 2) ────────────────────────
 // Renderer → main 桥,把 RSB `<webview>` 注册到 main 端 TabRegistry,future

@@ -473,8 +473,50 @@ const LOCAL_PATCHES = {
         '  previewRouteGuards.set(opts.page, handler);\n' +
         '  await opts.page.route("**", handler);',
     },
+    {
+      desc: 'disable RTCPeerConnection on preview pages via addInitScript: CSP connect-src does not constrain WebRTC ICE/STUN/TURN traffic, so previewed pages could exfiltrate data chunked into TURN credentials (codex-connector P1, round 7; --disable-webrtc probed INEFFECTIVE in real Chrome, API still constructable)',
+      find:
+        '  const previousGuard = previewRouteGuards.get(opts.page);\n' +
+        '  if (previousGuard) {\n' +
+        '    await opts.page.unroute("**", previousGuard).catch(() => {});\n' +
+        '  }\n' +
+        '  previewRouteGuards.set(opts.page, handler);\n' +
+        '  await opts.page.route("**", handler);',
+      replace:
+        '  const previousGuard = previewRouteGuards.get(opts.page);\n' +
+        '  if (previousGuard) {\n' +
+        '    await opts.page.unroute("**", previousGuard).catch(() => {});\n' +
+        '  }\n' +
+        '  previewRouteGuards.set(opts.page, handler);\n' +
+        '  await opts.page.route("**", handler);\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): kill WebRTC on preview pages.\n' +
+        '  // CSP cannot constrain RTCPeerConnection ICE/STUN/TURN traffic (a\n' +
+        '  // previewed page could exfiltrate data chunked into TURN\n' +
+        '  // credentials); --disable-webrtc was probed INEFFECTIVE (API still\n' +
+        '  // constructable), so the constructor is shadowed before ANY page\n' +
+        '  // script runs (addInitScript runs on every navigation, incl. the\n' +
+        '  // first).\n' +
+        '  if (previewOrigin !== null) {\n' +
+        '    await opts.page\n' +
+        '      .addInitScript(() => {\n' +
+        '        try {\n' +
+        '          Object.defineProperty(window, "RTCPeerConnection", {\n' +
+        '            value: undefined,\n' +
+        '            configurable: true,\n' +
+        '          });\n' +
+        '          Object.defineProperty(window, "webkitRTCPeerConnection", {\n' +
+        '            value: undefined,\n' +
+        '            configurable: true,\n' +
+        '          });\n' +
+        '        } catch {\n' +
+        '          /* ignore */\n' +
+        '        }\n' +
+        '      })\n' +
+        '      .catch(() => {});\n' +
+        '  }',
+    }
   ],
-  'extension/src/infra/net/ssrf.ts': [
+'extension/src/infra/net/ssrf.ts': [
     {
       desc: 're-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)',
       find:
