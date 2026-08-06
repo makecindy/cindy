@@ -3096,7 +3096,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }
-        await resetGroupContextCursors();
+        // 普通账号边界只清内存热缓存；明确删除账号数据时才清官方群 durable cursor。
+        await resetGroupContextCursors({ clearPersisted: false });
         resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());

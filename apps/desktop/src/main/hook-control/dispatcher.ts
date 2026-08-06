@@ -240,9 +240,10 @@ export interface HookDispatcherDeps {
    * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
    * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
    */
-  buildContextPrefix?: (
-    payload: TaskDispatchPayload,
-  ) => Promise<{ prefix: string; commit: () => void | Promise<void> }>;
+  buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
+    prefix: string;
+    commit: (guard?: () => boolean | Promise<boolean>) => void | Promise<void>;
+  }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
@@ -616,6 +617,34 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     void stored.finally(() => {
       if (keyChains.get(key) === stored) keyChains.delete(key);
     });
+  }
+  /** 同一 session 的受理段串行化，避免不同 externalKey 在 commit await 期间同时占槽。 */
+  const sessionAdmissionChains = new Map<string, Promise<void>>();
+  async function serializeSessionAdmission(
+    sessionId: string,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const previous = sessionAdmissionChains.get(sessionId);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stored = previous
+      ? previous.then(
+          () => current,
+          () => current,
+        )
+      : current;
+    sessionAdmissionChains.set(sessionId, stored);
+    try {
+      if (previous !== undefined) await previous;
+      await fn();
+    } finally {
+      release();
+      if (sessionAdmissionChains.get(sessionId) === stored) {
+        sessionAdmissionChains.delete(sessionId);
+      }
+    }
   }
   /** 每连接当前发送函数(transport 重建后由 onConnected / handleDispatch 刷新)。 */
   const sendFns = new Map<string, (m: HookMessage) => boolean>();
@@ -1929,7 +1958,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
-        let commitContextCursor: () => void | Promise<void> = () => undefined;
+        let commitContextCursor: (
+          guard?: () => boolean | Promise<boolean>,
+        ) => void | Promise<void> = () => undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
@@ -1970,50 +2001,53 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
         };
         const sessionId = resolved.run.sessionId;
-        const queue = queues.get(sessionId) ?? [];
-
-        if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
-          if (queue.length >= MAX_QUEUE_PER_SESSION) {
+        await serializeSessionAdmission(sessionId, async () => {
+          if (!isCurrentGeneration(admittedGeneration)) return;
+          const initialQueue = queues.get(sessionId) ?? [];
+          const initiallyBusy =
+            running.has(sessionId) || runner.isBusy(sessionId) || initialQueue.length > 0;
+          if (initiallyBusy && initialQueue.length >= MAX_QUEUE_PER_SESSION) {
             reply(connectionId, send, rejected(payload.requestId, 'invalid'));
             log.warn(`dispatch queue overflow: session=${sessionId}`);
             return;
           }
+
+          // 代次守卫覆盖写库前后；账号边界若在 await 期间失效，commit 会回滚
+          // 自己的 durable cursor，下面也不会留下 queue/running/ACK 副作用。
+          await commitContextCursor(() => isCurrentGeneration(admittedGeneration));
+          if (!isCurrentGeneration(admittedGeneration)) return;
+
+          const queue = queues.get(sessionId) ?? [];
+          if (running.has(sessionId) || runner.isBusy(sessionId) || queue.length > 0) {
+            const ack: TaskAckPayload = {
+              requestId: payload.requestId,
+              result: 'queued',
+              reason: null,
+              sessionId,
+              queuePosition: queue.length,
+            };
+            const task: PendingTask = { ...taskBase, ack };
+            queue.push(task);
+            queues.set(sessionId, queue);
+            reply(connectionId, send, ack);
+            // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
+            // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
+            if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
+            return;
+          }
+
+          running.add(sessionId);
           const ack: TaskAckPayload = {
             requestId: payload.requestId,
-            result: 'queued',
+            result: 'accepted',
             reason: null,
             sessionId,
-            queuePosition: queue.length,
+            queuePosition: null,
           };
           const task: PendingTask = { ...taskBase, ack };
-          queue.push(task);
-          queues.set(sessionId, queue);
-          const queuedCommit = commitContextCursor();
-          if (queuedCommit !== undefined && typeof queuedCommit.then === 'function') {
-            await queuedCommit;
-          }
           reply(connectionId, send, ack);
-          // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
-          // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
-          if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
-          return;
-        }
-
-        running.add(sessionId);
-        const acceptedCommit = commitContextCursor();
-        if (acceptedCommit !== undefined && typeof acceptedCommit.then === 'function') {
-          await acceptedCommit;
-        }
-        const ack: TaskAckPayload = {
-          requestId: payload.requestId,
-          result: 'accepted',
-          reason: null,
-          sessionId,
-          queuePosition: null,
-        };
-        const task: PendingTask = { ...taskBase, ack };
-        reply(connectionId, send, ack);
-        startExecution(task);
+          startExecution(task);
+        });
       } catch (err) {
         if (!isCurrentGeneration(admittedGeneration)) return;
         log.warn(`handleDispatch failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2101,7 +2135,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
         }
         await Promise.allSettled(aborts);
-        await Promise.allSettled([...keyChains.values()]);
+        await Promise.allSettled([...keyChains.values(), ...sessionAdmissionChains.values()]);
         await Promise.allSettled([...executing]);
 
         ackHistory.clear();
@@ -2115,6 +2149,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         awaitingPersist.clear();
         staleTakeoverReplacements.clear();
         keyChains.clear();
+        sessionAdmissionChains.clear();
       })();
       accountDeactivation = drain.finally(() => {
         accountDeactivation = null;

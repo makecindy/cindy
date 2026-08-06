@@ -184,6 +184,7 @@ function makeDispatcher(overrides?: {
   terminalLedger?: HookRequestLedger;
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
+  buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
@@ -204,6 +205,7 @@ function makeDispatcher(overrides?: {
     terminalLedger: overrides?.terminalLedger,
     runner,
     prepareWorktree: overrides?.prepareWorktree,
+    buildContextPrefix: overrides?.buildContextPrefix,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
@@ -1655,6 +1657,46 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
+  it('账号边界与异步群游标 commit 重叠时不确认受理也不启动 runner', async () => {
+    let releaseCommit!: () => void;
+    const commitPending = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    let commitGuard: (() => boolean | Promise<boolean>) | undefined;
+    let persisted = false;
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>背景</group_chat_context>',
+        commit: async (guard) => {
+          commitGuard = guard;
+          await commitPending;
+          if (guard !== undefined && !(await guard())) return;
+          persisted = true;
+        },
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'stale-commit', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    for (let i = 0; i < 20 && commitGuard === undefined; i += 1) await Promise.resolve();
+    expect(commitGuard).toBeDefined();
+
+    const deactivation = d.deactivateAccount();
+    releaseCommit();
+    await deactivation;
+    await tick();
+
+    expect(persisted).toBe(false);
+    expect(c.ofType('task.ack')).toHaveLength(0);
+    expect(fr.calls).toHaveLength(0);
+  });
+
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
@@ -1677,7 +1719,8 @@ describe('dispatcher 核心语义', () => {
     // 同一同步 tick 内连发(ws 同步 emit 场景) —— 修复前会各开一个新 session
     d.handleDispatch('conn-1', dispatch({ requestId: 'r1' }), c.send);
     d.handleDispatch('conn-1', dispatch({ requestId: 'r2' }), c.send);
-    await tick(6);
+    // 受理前会等待 durable-context commit；多给几轮微任务，不改变 FIFO 语义。
+    await tick(30);
 
     const acks = c.ofType('task.ack').map((m) => m.payload);
     expect(acks).toHaveLength(2);
@@ -1981,7 +2024,8 @@ describe('dispatcher 核心语义', () => {
     await tick();
     for (let i = 0; i < 21; i++) {
       d.handleDispatch('conn-1', dispatch({ requestId: `q${i}` }), c.send);
-      await tick();
+      // 受理前会等待 durable-context commit；多给几轮微任务，不改变 FIFO 语义。
+      await tick(30);
     }
     const acks = c.ofType('task.ack').map((m) => m.payload);
     const overflow = acks[acks.length - 1];

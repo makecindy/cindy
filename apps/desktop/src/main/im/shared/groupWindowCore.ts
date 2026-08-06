@@ -28,8 +28,14 @@ export interface GroupWindowEntryInput {
 export interface GroupContextAssembly {
   prefix: string;
   /** 任务/消息被实际受理后调用；拒绝时不调用，未读批次留给下次触发。 */
-  commit: () => void | Promise<void>;
+  commit: (guard?: GroupContextCommitGuard) => void | Promise<void>;
 }
+
+/**
+ * 可选的受理代次守卫。持久游标写入前后都会检查它；账号边界在中途失效时，
+ * commit 必须回滚自己刚写入的游标，避免“任务没跑但上下文已跳过”。
+ */
+export type GroupContextCommitGuard = () => boolean | Promise<boolean>;
 
 interface GroupWindowRow {
   id: number;
@@ -137,6 +143,32 @@ async function persistCursor(provider: string, cursorKey: string, cursorId: numb
       },
     });
   return readPersistedCursor(provider, cursorKey);
+}
+
+/**
+ * 仅在该行仍等于本次 commit 写入的 maxId 时回滚，避免覆盖并发任务已经推进的
+ * 更高游标。旧值为 0 时删除行，保持空游标的原始形态。
+ */
+async function rollbackPersistedCursor(
+  provider: string,
+  cursorKey: string,
+  maxId: number,
+  previousCursor: number,
+): Promise<void> {
+  const db = getDbClient().drizzle;
+  const rowFilter = and(
+    eq(hookGroupContextCursors.provider, provider),
+    eq(hookGroupContextCursors.cursorKey, cursorKey),
+    eq(hookGroupContextCursors.cursorId, maxId),
+  );
+  if (previousCursor > 0) {
+    await db
+      .update(hookGroupContextCursors)
+      .set({ cursorId: previousCursor, updatedAt: Date.now() })
+      .where(rowFilter);
+    return;
+  }
+  await db.delete(hookGroupContextCursors).where(rowFilter);
 }
 
 function rememberCursor(cursors: Map<string, number>, cursorKey: string, cursor: number): void {
@@ -255,11 +287,25 @@ export async function assembleGroupWindowContext(args: {
 
   const commit =
     maxId > cursor
-      ? async (): Promise<void> => {
+      ? async (guard?: GroupContextCommitGuard): Promise<void> => {
           const current = args.cursors.get(args.cursorKey) ?? 0;
           if (maxId <= current) return;
+          if (guard !== undefined && !(await guard())) return;
           try {
+            const previousDurableCursor = await readPersistedCursor(args.provider, args.cursorKey);
             const durableCursor = await persistCursor(args.provider, args.cursorKey, maxId);
+            if (guard !== undefined && !(await guard())) {
+              await rollbackPersistedCursor(
+                args.provider,
+                args.cursorKey,
+                maxId,
+                previousDurableCursor,
+              );
+              if ((args.cursors.get(args.cursorKey) ?? 0) === maxId) {
+                rememberCursor(args.cursors, args.cursorKey, current);
+              }
+              return;
+            }
             const latest = args.cursors.get(args.cursorKey) ?? 0;
             if (durableCursor > latest) rememberCursor(args.cursors, args.cursorKey, durableCursor);
           } catch (error) {

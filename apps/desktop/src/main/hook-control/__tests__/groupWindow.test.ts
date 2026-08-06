@@ -190,6 +190,91 @@ describe('recordGroupMessage', () => {
     ).toEqual({ cursor_id: 99 });
   });
 
+  it('受理代次在写库前失效时不推进内存或持久游标', async () => {
+    await recordGroupMessage(frame({ messageId: 'guard-before', text: '待受理消息' }));
+    const first = await buildGroupContextPrefix({
+      requestId: 'guard-before-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+
+    await first.commit(() => false);
+    expect(
+      sqlite
+        .prepare('SELECT 1 FROM hook_group_context_cursors WHERE provider = ?')
+        .get('telegram:9'),
+    ).toBeUndefined();
+    const replay = await buildGroupContextPrefix({
+      requestId: 'guard-before-replay',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    expect(replay.prefix).toContain('待受理消息');
+  });
+
+  it('写库后代次失效会回滚本次推进', async () => {
+    await recordGroupMessage(frame({ messageId: 'guard-rollback', text: '仍待受理' }));
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'guard-rollback-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    let guardCalls = 0;
+    await assembly.commit(() => ++guardCalls === 1);
+    expect(guardCalls).toBe(2);
+    expect(
+      sqlite
+        .prepare('SELECT 1 FROM hook_group_context_cursors WHERE provider = ?')
+        .get('telegram:9'),
+    ).toBeUndefined();
+    const replay = await buildGroupContextPrefix({
+      requestId: 'guard-rollback-replay',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    expect(replay.prefix).toContain('仍待受理');
+  });
+
+  it('写库后代次失效只回滚本次写入, 不覆盖更高游标', async () => {
+    await recordGroupMessage(frame({ messageId: 'guard-after', text: '待回滚消息' }));
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'guard-after-context',
+      externalKey: 'telegram:group:1:-900:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    let guardCalls = 0;
+    await assembly.commit(() => {
+      guardCalls += 1;
+      if (guardCalls === 1) return true;
+      sqlite
+        .prepare(
+          `INSERT INTO hook_group_context_cursors
+            (provider, cursor_key, cursor_id, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(provider, cursor_key) DO UPDATE SET cursor_id = excluded.cursor_id`,
+        )
+        .run('telegram:9', 'telegram:group:1:-900:9', 99, Date.now());
+      return false;
+    });
+    expect(guardCalls).toBe(2);
+    expect(
+      sqlite
+        .prepare(
+          'SELECT cursor_id FROM hook_group_context_cursors WHERE provider = ? AND cursor_key = ?',
+        )
+        .get('telegram:9', 'telegram:group:1:-900:9'),
+    ).toEqual({ cursor_id: 99 });
+  });
+
   it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));
