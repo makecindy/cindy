@@ -190,6 +190,7 @@ describe('IssueConfirmCard submission identity', () => {
         .getByRole('button', { name: 'issueAgent.confirm.identityPlatform' })
         .getAttribute('aria-pressed'),
     ).toBe('true');
+    expect(screen.getByText('issueAgent.confirm.privacyHint')).not.toBeNull();
     expect(screen.getByText('issueAgent.confirm.identityPlatformHint')).not.toBeNull();
     expect(screen.getByLabelText('issueAgent.confirm.publicNameLabel')).not.toBeNull();
 

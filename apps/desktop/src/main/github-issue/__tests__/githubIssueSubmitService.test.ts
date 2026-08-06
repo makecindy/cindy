@@ -106,7 +106,39 @@ describe('submitGithubIssueWithConfirm', () => {
       issueUrl: 'https://github.com/makecindy/cindy/issues/80',
       finalTitle: '用户改过的标题',
       editedByUser: true,
+      privacyRedacted: false,
     });
+  });
+
+  it('agent 初稿中的常见敏感信息在确认前自动脱敏,并标记隐私处理', async () => {
+    const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(
+      async (_sessionId, draft) => ({
+        confirmed: true,
+        title: draft.title,
+        body: draft.body,
+        type: draft.type,
+        publicName: 'Carol',
+        uiLanguage: 'zh-CN',
+      }),
+    );
+    const postIssue = vi.fn<GithubIssueSubmitServiceDeps['postIssue']>(async () => ({
+      githubIssue: { number: 81, url: 'https://github.com/makecindy/cindy/issues/81' },
+    }));
+    const { deps } = makeDeps({ confirm, postIssue });
+    const fakeApiKey = ['sk', 'abcdefghijklmnopqrstuvwx'].join('-');
+    const req = {
+      ...REQ,
+      title: `崩溃日志含 ${fakeApiKey}`,
+      body: '邮箱 carol@example.com，日志位于 /Users/carol/project/app.log',
+    };
+
+    const result = await submitGithubIssueWithConfirm(deps, req);
+    expect(confirm.mock.calls[0]![1]).toMatchObject({
+      title: '崩溃日志含 [REDACTED:api-key]',
+      body: '邮箱 [REDACTED:email]，日志位于 ~/project/app.log',
+    });
+    expect(postIssue).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: true, privacyRedacted: true });
   });
 
   it('env 块只标注非默认区域: cn → CN / dev → Dev,global 省略该行', async () => {
