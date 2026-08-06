@@ -208,6 +208,32 @@ describe('XD 网关权威模型清单重建', () => {
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
   });
 
+  it('把网关图片输入 modalities 投影到 Pi 的 provider-model 能力', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'gateway-vision',
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+      {
+        id: 'gateway-text',
+        modalities: { input: ['text'], output: ['text'] },
+      },
+      { id: 'gateway-unknown' },
+    ]);
+
+    const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
+    expect(pi.find((model) => model.id === 'gateway-vision')).toMatchObject({
+      supportsImageInput: true,
+    });
+    expect(pi.find((model) => model.id === 'gateway-text')).toMatchObject({
+      supportsImageInput: false,
+    });
+    expect(pi.find((model) => model.id === 'gateway-unknown')).not.toHaveProperty(
+      'supportsImageInput',
+    );
+  });
+
   it('把标准 token 价投影为每百万 token 的折后展示价', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

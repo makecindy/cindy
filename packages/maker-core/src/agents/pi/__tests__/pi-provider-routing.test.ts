@@ -570,26 +570,64 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
-  it('guards image prompts by the actual provider-model capability and follows model switches', async () => {
-    const agent = new PiAgent(byomDeps(async () => ({
-      providers: [
-        {
-          id: 'native-text',
-          name: 'Native Text',
-          baseUrl: 'http://text.test',
-          api: 'openai-completions',
-          models: [{ id: 'local-model', input: ['text'] }],
-        },
-        {
-          id: 'native-vision',
-          name: 'Native Vision',
-          baseUrl: 'http://vision.test',
-          api: 'openai-completions',
-          models: [{ id: 'local-model', input: ['text', 'image'] }],
-        },
-      ],
-      env: {},
-    })));
+  it('guards image prompts by the startup provider-model capability and follows model switches', async () => {
+    const gatewayModels: ModelDescriptor[] = [
+      {
+        id: 'gateway-text',
+        displayName: 'Gateway Text',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: false,
+      },
+      {
+        id: 'gateway-vision',
+        displayName: 'Gateway Vision',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+      {
+        id: 'gateway-unknown',
+        displayName: 'Gateway Unknown',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'local-model',
+        displayName: 'Local',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+    const resolveGatewayModel = vi.fn((modelId: string) =>
+      gatewayModels.find((candidate) => candidate.id === modelId) ?? null,
+    );
+    const agent = new PiAgent({
+      ...byomDeps(async () => ({
+        providers: [
+          {
+            id: 'native-text',
+            name: 'Native Text',
+            baseUrl: 'http://text.test',
+            api: 'openai-completions',
+            models: [{ id: 'local-model', input: ['text'] }],
+          },
+          {
+            id: 'native-vision',
+            name: 'Native Vision',
+            baseUrl: 'http://vision.test',
+            api: 'openai-completions',
+            models: [{ id: 'local-model', input: ['text', 'image'] }],
+          },
+        ],
+        env: {},
+      }), gatewayModels),
+      resolvePiGatewayModelDescriptor: resolveGatewayModel,
+    });
     const handle = await agent.startSession({
       sessionId: 'image-capability',
       workingDir: cwd,
@@ -608,6 +646,37 @@ describe('Pi provider-aware model routing', () => {
       type: 'user' as const,
       content: [{ type: 'image' as const, path: imagePath }],
     };
+    const mixedMessage = {
+      type: 'user' as const,
+      content: [
+        { type: 'text' as const, text: 'describe this image' },
+        { type: 'image' as const, path: imagePath },
+      ],
+    };
+    const instructedMessage = {
+      type: 'user' as const,
+      content: [
+        { type: 'text' as const, text: '$识图 请读取附件' },
+        { type: 'image' as const, path: imagePath },
+      ],
+    };
+    const multiImageMessage = {
+      type: 'user' as const,
+      content: [
+        { type: 'image' as const, path: imagePath },
+        { type: 'image' as const, path: imagePath },
+      ],
+    };
+    const modelsJson = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+    };
+    expect(modelsJson.providers.cindy?.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gateway-text', input: ['text'] }),
+      expect.objectContaining({ id: 'gateway-vision', input: ['text', 'image'] }),
+      expect.objectContaining({ id: 'gateway-unknown', input: ['text'] }),
+    ]));
 
     captured.requests.length = 0;
     await expect(handle.send(imageMessage)).rejects.toMatchObject({
@@ -627,11 +696,42 @@ describe('Pi provider-aware model routing', () => {
       images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
     }));
 
-    // 显式清除来源后实际路由回到 cindy 网关；同名 BYOM 不能抢走能力判断。
-    await handle.setModel!('local-model', { providerId: null });
+    // 网关纯文本模型在 Pi/provider 调用前拒绝所有带图形态；文本指令不能绕过能力门。
+    await handle.setModel!('gateway-text', { providerId: null });
     captured.requests.length = 0;
-    await handle.send(imageMessage);
-    expect(captured.requests.some((request) => request.type === 'prompt')).toBe(true);
+    for (const message of [imageMessage, mixedMessage, instructedMessage, multiImageMessage]) {
+      await expect(handle.send(message)).rejects.toMatchObject({
+        code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+      });
+    }
+    await expect(handle.steer!(mixedMessage)).rejects.toMatchObject({
+      code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+    });
+    expect(captured.requests.some((request) => request.type === 'prompt' || request.type === 'steer'))
+      .toBe(false);
+
+    // 能力未知同样 fail closed；活动会话只认启动时写入 models.json 的能力快照。
+    await handle.setModel!('gateway-unknown', { providerId: null });
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+    });
+    gatewayModels[0]!.supportsImageInput = true;
+    await handle.setModel!('gateway-text', { providerId: null });
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+    });
+
+    // 明确支持图片的网关模型保留全部图片块，多图不被剥离或改写。
+    await handle.setModel!('gateway-vision', { providerId: null });
+    captured.requests.length = 0;
+    await handle.send(multiImageMessage);
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'prompt',
+      images: [
+        expect.objectContaining({ type: 'image', mimeType: 'image/png' }),
+        expect.objectContaining({ type: 'image', mimeType: 'image/png' }),
+      ],
+    }));
 
     // 文件读失败不会生成 image block，仍保留既有的“图片不可读”文本语义。
     await handle.setModel!('local-model', { providerId: 'native-text' });

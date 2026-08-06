@@ -23,6 +23,11 @@ const defaultFetcher: Fetcher = (apiPath, options) =>
   serverApiFetch(apiPath, {
     ...options,
     baseUrl: () => getClientEndpoint('pluginApiBaseUrl'),
+    // 插件市场的 path 都带用户装的插件 ID(`/api/plugins/<pluginId>[/releases/<id>/download]`),
+    // 4xx/5xx 落进 serverApiClient 的日志会外泄第三方插件身份。redactErrorDetails 压掉响应
+    // 详情,logLabel 用不含 ID 的路由模板代替真实 path(2026-08-06 review)。
+    redactErrorDetails: true,
+    logLabel: '/api/plugins',
   });
 
 /** plugin-server 普通客户端 API；每个响应都经过共享 v2 parser fail-closed。 */
