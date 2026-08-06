@@ -1311,6 +1311,12 @@ export function CCAgentSessionView({
   // 异步执行中读 ref.current 才能拿到切换后的最新通道,且无需重建回调。
   const compactChannelRef = useRef(compactChannel);
   compactChannelRef.current = compactChannel;
+  // 最新 session 快照的可变镜像(与 compactChannelRef 同款):确认框 await 期间同会话
+  // 切换 agent 后,model/effort/permissionMode/workingDir 全部可能变化——claude-input
+  // 分支必须用切换后的快照,否则会用旧 Pi 的模型/权限去执行 Claude 的 /compact
+  // (greptile P1 / codex P2 review)。compact-session 分支只依赖 sessionId,无需此快照。
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -2762,12 +2768,16 @@ export function CCAgentSessionView({
       }
       // 真实 Claude Code:输入协调器的 maker:input:compact(旧行为不变)。
       if (channelNow !== 'claude-input') return;
-      if (!sourceSession.workingDir) return; // claude 通道硬前提:输入协调器需要工作目录
+      // 参数必须用**最新** session 快照(与 channel 同源):同会话切换 agent 后
+      // model/effort/permissionMode/workingDir 已变化,旧快照会按错误配置执行压缩,
+      // 且旧快照 workingDir 缺失时会在用户确认后静默放弃(greptile P1 / codex P2)。
+      const sessionNow = sessionRef.current;
+      if (!sessionNow?.workingDir) return; // claude 通道硬前提:输入协调器需要工作目录
       await compactSession(
-        sourceSession.model,
-        sourceSession.effort as Effort,
-        sourceSession.permissionMode as PermissionMode,
-        sourceSession.workingDir,
+        sessionNow.model,
+        sessionNow.effort as Effort,
+        sessionNow.permissionMode as PermissionMode,
+        sessionNow.workingDir,
       );
     } finally {
       compactRequestGuard.finish(sourceSessionId);

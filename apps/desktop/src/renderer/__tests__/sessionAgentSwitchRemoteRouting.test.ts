@@ -956,9 +956,15 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     expect(viewSource).toContain('compactChannelRef.current = compactChannel;');
     expect(viewSource).toContain('const channelNow = compactChannelRef.current;');
     expect(viewSource).toContain('if (channelNow === null) return;');
-    // claude 通道执行前才校验 workingDir(输入协调器硬前提)。
+    // claude 通道执行前才校验 workingDir(输入协调器硬前提),且参数必须来自**最新**
+    // session 快照——同会话切换 agent 后 model/effort/permission/workingDir 已变化,
+    // 旧快照会按错误配置执行(greptile P1 / codex P2)。
+    expect(viewSource).toContain('const sessionRef = useRef(session);');
+    expect(viewSource).toContain('sessionRef.current = session;');
+    expect(viewSource).toContain('const sessionNow = sessionRef.current;');
     expect(viewSource).toContain("if (channelNow !== 'claude-input') return;");
-    expect(viewSource).toContain('if (!sourceSession.workingDir) return;');
+    expect(viewSource).toContain('if (!sessionNow?.workingDir) return;');
+    expect(viewSource).toContain('sessionNow.model,');
   });
 });
 
