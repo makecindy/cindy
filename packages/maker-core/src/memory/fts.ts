@@ -174,7 +174,7 @@ export class MemoryFts {
    */
   private searchLike(query: string, opts: SearchOptions): SearchHit[] {
     const pattern = `%${escapeLikePattern(query.trim())}%`;
-    let sql = `SELECT filename, type, title, body
+    let sql = `SELECT filename, type, title, description, body
                FROM ${TABLE}
                WHERE (title LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')`;
     const params: unknown[] = [pattern, pattern, pattern];
@@ -189,13 +189,15 @@ export class MemoryFts {
         filename: string;
         type: string;
         title: string;
+        description: string;
         body: string;
       }>;
       return rows.map((r) => ({
         filename: r.filename,
         type: r.type as MemoryType,
         title: r.title,
-        snippet: r.body ? truncate(r.body, SNIPPET_FALLBACK_LEN) : r.title,
+        // snippet 优先取实际命中的字段 (title/description/body), 保证与命中原因相关
+        snippet: truncate(hitField(r, query) ?? r.title, SNIPPET_FALLBACK_LEN),
         // LIKE 兜底无 bm25: 用大值表示"未排名", 排在所有 MATCH 命中之后 (score 越小越相关)
         score: Number.MAX_SAFE_INTEGER,
       }));
@@ -253,6 +255,12 @@ function escapeFtsQuery(q: string): string {
  */
 function escapeLikePattern(q: string): string {
   return q.replace(/[!%_]/g, (c) => `!${c}`);
+}
+
+/** LIKE 命中字段优先: title/description/body 中第一个包含 query 子串的字段 (ASCII 大小写不敏感) */
+function hitField(r: { title: string; description: string; body: string }, query: string): string | undefined {
+  const ql = query.trim().toLowerCase();
+  return [r.title, r.description, r.body].find((f) => f && f.toLowerCase().includes(ql));
 }
 
 function truncate(s: string, maxLen: number): string {
