@@ -19285,6 +19285,102 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('registers a nested spawn completed after its parent turn already settled', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-late-nested-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-root' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-root',
+      item: {
+        id: 'spawn-root-late-nested',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'child-thread-late-nested',
+      },
+    });
+
+    handlers.descendantNotification('child-thread-late-nested', 'turn/completed', {
+      threadId: 'child-thread-late-nested',
+      turn: { id: 'child-turn-late-nested', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+    });
+
+    // App-server may deliver the spawning item's completed frame after the
+    // parent turn terminal. It remains authoritative for 0.145 lineage even
+    // though late tool provenance for the parent turn stays blocked.
+    handlers.descendantNotification('child-thread-late-nested', 'item/completed', {
+      threadId: 'child-thread-late-nested',
+      turnId: 'child-turn-late-nested',
+      item: {
+        id: 'spawn-grandchild-late',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'child-thread-late-nested',
+        receiverThreadIds: ['grandchild-thread-late'],
+        status: 'completed',
+        agentsStates: [],
+      },
+    });
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'grandchild-thread-late',
+      'child-thread-late-nested',
+    );
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('running');
+    });
+
+    handlers.descendantNotification('grandchild-thread-late', 'thread/tokenUsage/updated', {
+      threadId: 'grandchild-thread-late',
+      tokenUsage: { total: { totalTokens: 2_468 } },
+    });
+    handlers.descendantNotification('grandchild-thread-late', 'turn/completed', {
+      threadId: 'grandchild-thread-late',
+      turn: { id: 'grandchild-turn-late', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      const last = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as {
+          taskId?: string;
+          status?: string;
+          usage?: { totalTokens?: number };
+        })
+        .filter((update) => update.taskId === 'spawn-root-late-nested')
+        .at(-1);
+      expect(last?.status).toBe('completed');
+      expect(last?.usage?.totalTokens).toBe(2_468);
+    });
+
+    await handle.close();
+  });
+
   it('closes out running subagent cards when the transport dies (app-server crash / IO disconnect)', async () => {
     // 普通 transport 断连(app-server 崩溃 / stdio 断开)会作废订阅:后代通知**永远不会再到**,
     // 而 tracker 的终态只由后代 turn/completed 写入。原来这条路径只广播 error 并清主线程缓存,

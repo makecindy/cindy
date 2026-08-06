@@ -3500,10 +3500,12 @@ export class CodexAgent extends BaseAgent {
           : undefined;
       const isItemNotification =
         method === 'item/started' || method === 'item/updated' || method === 'item/completed';
+      const descendantTurnIsTerminal = turnId !== undefined
+        && terminalDescendantTurnIds.has(turnId);
 
       if (method === 'turn/started') {
         bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
-      } else if (isItemNotification && !terminalDescendantTurnIds.has(turnId ?? '')) {
+      } else if (isItemNotification && !descendantTurnIsTerminal) {
         bindCapabilitySelectionToDescendantTurn(childThreadId, turnId);
         noteActiveToolContext(record?.item, turnId);
       }
@@ -3511,7 +3513,9 @@ export class CodexAgent extends BaseAgent {
       // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
       // itemStarted 永远看不到。0.145 又没有 thread/started 可等,这里就是孙线程
       // 唯一的入卡(和 approval 路由)入口。
-      if (isItemNotification && !terminalDescendantTurnIds.has(turnId ?? '')) {
+      // turn/completed 可以先于后台收尾的 item/completed。迟到 item 不得重建工具
+      // provenance,但 completed spawn 仍是 0.145 的权威血缘来源,不能一起被终态闩挡掉。
+      if (isItemNotification && (!descendantTurnIsTerminal || method === 'item/completed')) {
         const nested = readCodexSubagentSpawnRegistration(
           record?.item,
         );
