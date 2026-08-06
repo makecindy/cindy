@@ -232,6 +232,11 @@ export function ImDefaultSettingsSection({
     selectedAgentCaps.error === null &&
     selectedAgentCaps.capabilities !== null &&
     selectedAgentCaps.capabilities.turnPermissionPolicy?.supported.supported !== true;
+  // 渠道默认权限模式若是换 Agent 后仍不兼容的档位(Claude Code / Codex 的
+  // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits),仅换 Agent
+  // 会在新会话(/new)上再次命中权限模式错误,警告需附加 /permission 提示。
+  const modeUnsupportedAfterSwitch =
+    settings.permissionMode === 'bypassPermissions' || settings.permissionMode === 'acceptEdits';
   const agentUnsupportedOnChannel =
     channel !== undefined &&
     isUnconditionalTurnPolicyChannel(channel) &&
@@ -368,11 +373,18 @@ export function ImDefaultSettingsSection({
             className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
             aria-hidden
           />
-          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
-              agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
-            })}
-          </p>
+          <div className="min-w-0">
+            <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+              {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
+                agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
+              })}
+            </p>
+            {modeUnsupportedAfterSwitch && (
+              <p className="mt-1 text-11 leading-[1.45] text-[var(--text-secondary)]">
+                {t('settings.imBot.defaults.agentUnsupportedOnChannelModeHint')}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </section>

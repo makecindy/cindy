@@ -3034,6 +3034,7 @@
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent 不支持此渠道的逐条权限确认，消息将无法处理。请改用 Claude Code 或 Codex。",
+        "agentUnsupportedOnChannelModeHint": "切换 Agent 后发送 /new，若新的 Agent 仍提示权限模式问题，请再发送 /permission 调整权限模式。",
         "modelLabel": "模型配置",
         "loading": "正在读取新对话配置…",
         "loadFailed": "读取新对话配置失败",

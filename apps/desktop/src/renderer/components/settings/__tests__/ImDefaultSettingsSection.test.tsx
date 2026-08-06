@@ -107,6 +107,32 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     expect(status.getAttribute('aria-atomic')).toBe('true');
   });
 
+  it('appends the permission-mode hint when the channel default mode is incompatible with the replacement agents', async () => {
+    window.electronAPI = {
+      maker: {
+        imDefaultSettingsGet: vi.fn(async () => ({ ...defaults('pi'), permissionMode: 'bypassPermissions' })),
+      },
+    } as unknown as typeof window.electronAPI;
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toContain(
+      'settings.imBot.defaults.agentUnsupportedOnChannelHint',
+    );
+    expect(status.textContent).toContain(
+      'settings.imBot.defaults.agentUnsupportedOnChannelModeHint',
+    );
+  });
+
+  it('omits the permission-mode hint for a compatible default mode', async () => {
+    render(<ImDefaultSettingsSection channel="wechat" />);
+
+    const status = await screen.findByRole('status');
+    expect(status.textContent).not.toContain(
+      'settings.imBot.defaults.agentUnsupportedOnChannelModeHint',
+    );
+  });
+
   it('does not warn for a supported agent on wechat', async () => {
     window.electronAPI = {
       maker: {

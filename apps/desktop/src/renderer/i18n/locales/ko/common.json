@@ -3034,6 +3034,7 @@
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent는 이 채널에서 메시지별 권한 확인을 지원하지 않아 메시지를 처리할 수 없습니다. Claude Code 또는 Codex로 전환하세요.",
+        "agentUnsupportedOnChannelModeHint": "Agent를 전환하고 /new를 보낸 후에도 새 Agent에서 권한 모드 문제가 표시되면 /permission을 보내 권한 모드를 조정하세요.",
         "modelLabel": "모델 설정",
         "loading": "새 대화 설정을 불러오는 중…",
         "loadFailed": "새 대화 설정을 불러오지 못했습니다",

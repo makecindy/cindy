@@ -3035,6 +3035,7 @@
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent does not support per-message permission confirmations on this channel; messages cannot be processed. Switch to Claude Code or Codex.",
+        "agentUnsupportedOnChannelModeHint": "After switching the Agent and sending /new, if the new Agent still reports a permission-mode issue, send /permission to adjust the permission mode.",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
         "loadFailed": "Failed to load new conversation configuration",
