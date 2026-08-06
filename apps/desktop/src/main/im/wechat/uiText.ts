@@ -85,7 +85,7 @@ export const ui = {
       '若新的 Agent 仍提示权限模式问题，请在微信发送 /permission 调整权限模式后重试。',
     permissionModeUnsupported:
       '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
-      '请在 desktop 设置里调整权限模式（或发 /permission），再重试。',
+      '请在微信发送 /permission 切换权限模式后重试。',
   },
   cards: {
     permission: {
