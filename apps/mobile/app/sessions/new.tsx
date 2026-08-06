@@ -62,6 +62,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { fetchDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -266,6 +267,7 @@ import {
 import {
   buildMobileModelSections,
   flattenProviderSections,
+  isFastRestorable,
   resolveRowSelection,
   type ProviderModelRow,
 } from '@/session/providerModelSections';
@@ -736,9 +738,11 @@ export default function NewRemoteSessionScreen() {
           // 上次明确选择过的权限直接沿用；内置默认若升级到 Full access 仍需确认。
           permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
           providerId: next.providerId,
-          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false——新组合未必支持旧
-          // fastMode(codex review P2);语义与手动选行(resolveRowSelection)一致。
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
+          // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
+          // UI 显示关、实际发 true 的矛盾态)。
           fastMode: next.providerId
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, capabilities?.hasFastMode === true)
             ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
             : false,
         };
@@ -2347,9 +2351,11 @@ export default function NewRemoteSessionScreen() {
           // 切到该 agent 时沿用其上次明确选择；无记忆的内置默认仍按升级规则确认。
           permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
           providerId: next.providerId,
-          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false——新组合未必支持旧
-          // fastMode(codex review P2);语义与手动选行(resolveRowSelection)一致。
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
+          // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
+          // UI 显示关、实际发 true 的矛盾态)。
           fastMode: next.providerId
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, capabilities?.hasFastMode === true)
             ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
             : false,
         };
@@ -2638,6 +2644,10 @@ export default function NewRemoteSessionScreen() {
     try {
       if (!isCurrentOwner()) return;
       let effectiveDraft = draft;
+      // 本调用内是否发生过供应商目录驱逐(鉴权门现拉后清缓存):发生后提交终检必须
+      // 等在途重拉、用新目录校验(codex review P1:代际通知只调度渲染,本轮 ref
+      // 仍是刚被驱逐的旧目录)。
+      let catalogEvictedThisCall = false;
       if (voiceRecordingActiveRef.current || voiceState === 'listening') {
         const latestDraftText = await finishVoiceRecording();
         if (!isCurrentOwner()) return;
@@ -2667,6 +2677,7 @@ export default function NewRemoteSessionScreen() {
           return;
         }
         if (!isCurrentOwner()) return;
+        catalogEvictedThisCall = true;
         evictDeviceProviders(selectedDeviceId);
       }
       if (!isCurrentOwner()) return;
@@ -2822,18 +2833,33 @@ export default function NewRemoteSessionScreen() {
       // 保守置 false(codex review P2)。
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       {
+        // ㉔ 跨设备残留:对当前设备有任何目录知识(含缓存)即校验,只有一无所知才信任。
+        let rowsForGuard = modelRowsRef.current;
+        let catalogKnown = catalogReadyRef.current || rowsForGuard.length > 0;
+        // ㉕ 本调用内发生过驱逐 → 等在途重拉,用新目录终检(缓存层 inflight 去重)。
+        if (catalogEvictedThisCall) {
+          try {
+            const fresh = await fetchDeviceProviders(selectedDeviceId, () => maker.listProviders());
+            rowsForGuard = flattenProviderSections(buildMobileModelSections({
+              providers: fresh.providers,
+              agentKind: effectiveDraft.agentKind,
+              visibilityOverrides: fresh.modelVisibilityOverrides,
+            }).sections);
+            catalogKnown = true;
+          } catch { /* 重拉失败:退回缓存目录 + 上述判定 */ }
+        }
         const resolved = resolveRecentModelAndProvider(
-          modelRowsRef.current,
+          rowsForGuard,
           { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
           effectiveDraft.agentKind,
-          catalogReadyRef.current,
+          catalogKnown,
         );
         const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
         effectiveDraft = {
           ...effectiveDraft,
           ...resolved,
           ...(pairChanged ? {
-            effort: reconcileEffortAfterFallback(modelRowsRef.current, resolved, effectiveDraft.effort),
+            effort: reconcileEffortAfterFallback(rowsForGuard, resolved, effectiveDraft.effort),
             ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
           } : {}),
         };
@@ -2952,6 +2978,7 @@ export default function NewRemoteSessionScreen() {
     setCreating(true);
     setGoalBusy(true);
     setGoalError(null);
+    let catalogEvictedThisCall = false;
     try {
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
@@ -2961,6 +2988,7 @@ export default function NewRemoteSessionScreen() {
           setGoalError(agentAuthGateHint(draft.agentKind));
           return;
         }
+        catalogEvictedThisCall = true;
         evictDeviceProviders(selectedDeviceId);
       }
       const freshUnauthenticated: Promise<boolean> = agentAuthVerdict === 'unauthenticated'
@@ -2976,18 +3004,32 @@ export default function NewRemoteSessionScreen() {
       // 提交点联合终检(同 create()):守卫不依赖渲染后的清理 effect,来源失效时
       // model 随之一并回退并同步校准 effort、组合变化时 fastMode 保守置 false;
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
+      // ㉔㉕ 同 create():有任何目录知识即校验;本调用内发生过驱逐则等在途重拉。
+      let rowsForGuard = modelRowsRef.current;
+      let catalogKnown = catalogReadyRef.current || rowsForGuard.length > 0;
+      if (catalogEvictedThisCall) {
+        try {
+          const fresh = await fetchDeviceProviders(selectedDeviceId, () => maker.listProviders());
+          rowsForGuard = flattenProviderSections(buildMobileModelSections({
+            providers: fresh.providers,
+            agentKind: draft.agentKind,
+            visibilityOverrides: fresh.modelVisibilityOverrides,
+          }).sections);
+          catalogKnown = true;
+        } catch { /* 重拉失败:退回缓存目录 + 上述判定 */ }
+      }
       const resolved = resolveRecentModelAndProvider(
-        modelRowsRef.current,
+        rowsForGuard,
         { model: draft.model, providerId: draft.providerId },
         draft.agentKind,
-        catalogReadyRef.current,
+        catalogKnown,
       );
       const pairChanged = resolved.model !== draft.model || resolved.providerId !== draft.providerId;
       const finalDraft = {
         ...draft,
         ...resolved,
         ...(pairChanged ? {
-          effort: reconcileEffortAfterFallback(modelRowsRef.current, resolved, draft.effort),
+          effort: reconcileEffortAfterFallback(rowsForGuard, resolved, draft.effort),
           ...(draft.fastMode ? { fastMode: false } : {}),
         } : {}),
       };
