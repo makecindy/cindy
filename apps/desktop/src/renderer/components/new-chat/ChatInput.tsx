@@ -1105,6 +1105,7 @@ export function ChatInput({
             sessionId,
             agentKind: runtimeAgentKind,
             messages: contextMsgs,
+            workingDir: workingDir ?? undefined,
           })
           .then((result) => {
             // 请求往返期间用户可能已经切换会话、发起新 turn 或开始打字 —— 落地前

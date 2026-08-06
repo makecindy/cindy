@@ -14,7 +14,6 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 
-import { getResolvedMainLocale } from '../i18n.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { runProviderOneShot } from '../maker-host/provider-one-shot.js';
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
@@ -68,24 +67,35 @@ function escapeReferenceData(value: string): string {
   });
 }
 
-function buildPredictionPrompt(context: string, locale: string): string {
-  const languageHints: Record<string, string> = {
-    'zh-CN': 'Match the user\'s language. The user types in Simplified Chinese.',
-    en: 'Match the user\'s language. The user types in English.',
-    ja: 'Match the user\'s language. The user types in Japanese.',
-    ko: 'Match the user\'s language. The user types in Korean.',
-  };
+function buildPredictionPrompt(
+  context: string,
+  workingDir?: string,
+): { system: string; user: string } {
+  const wdLine = workingDir ? `Current working directory: ${workingDir}` : null;
 
-  return [
-    'You are a terse predictive text engine for a coding chat input.',
-    'Return only the predicted next user message — no quotes, markdown, commentary, or multiple options.',
-    'Keep it under 140 characters. Make it actionable for a coding agent.',
-    languageHints[locale] ?? 'Match the user\'s language and tone.',
+  const system = [
+    'You are a terse predictive text engine. Return only the predicted user prompt.',
+  ].join('\n');
+
+  const user = [
+    'Predict the next message the user is likely to type.',
+    wdLine,
     '',
     '<recent_conversation>',
     escapeReferenceData(context),
     '</recent_conversation>',
-  ].join('\n');
+    '',
+    'Return exactly one concise user prompt.',
+    'Match the user\'s tone, brevity, phrasing, and terminology based on their recent messages.',
+    'Do not copy prior messages verbatim.',
+    'Make it actionable.',
+    'Keep it under 140 characters.',
+    'No quotes, markdown, commentary, explanations, or multiple options.',
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n');
+
+  return { system, user };
 }
 
 /** 从 DB 读 sessions.provider_id。失败/空串 → null。 */
@@ -135,11 +145,18 @@ export async function generatePromptPrediction(
     return null;
   }
 
-  const locale = getResolvedMainLocale();
-  const prompt = buildPredictionPrompt(context, locale);
+  const { system, user } = buildPredictionPrompt(context, params.workingDir);
 
   // 截断到上限(char 数),防止超长上下文撑爆 prompt
-  const truncated = prompt.slice(0, PREDICTION_CONTEXT_MAX_CHARS + 1024); // prompt 固定部分 ~200 chars
+  const userPrompt = user.slice(0, PREDICTION_CONTEXT_MAX_CHARS + 1024); // prompt 固定部分 ~200 chars
+
+  log.debug('prompt prediction params', {
+    context,
+    system,
+    user: userPrompt,
+    agentKind: params.agentKind,
+    sessionId: params.sessionId,
+  });
 
   // 复用 title one-shot 通路,但覆盖 token/校验参数以适配预测场景:
   //   - maxTokens=96: 标题仅需 32 token,预测 ≤140 chars 需要更多
@@ -150,7 +167,7 @@ export async function generatePromptPrediction(
     {
       sessionId: params.sessionId,
       agentKind: params.agentKind,
-      prompt: truncated,
+      prompt: userPrompt,
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,
@@ -162,6 +179,7 @@ export async function generatePromptPrediction(
         'Output only the predicted next user message — no quotes, markdown, or commentary.',
       maxOutputChars: 0,
       maxVisualChars: 140,
+      systemPrompt: system,
     },
   );
 }

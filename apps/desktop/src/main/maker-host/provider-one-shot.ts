@@ -251,7 +251,12 @@ async function fetchAnthropicTitle(
   fetchImpl: FetchImpl,
   signal: AbortSignal,
   maxTokens: number = ONE_SHOT_DEFAULT_MAX_TOKENS,
+  systemPrompt?: string,
 ): Promise<string> {
+  const messages: Array<{ role: string; content: string }> = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: prompt });
+
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/v1/messages`, {
     method: 'POST',
     signal,
@@ -264,7 +269,7 @@ async function fetchAnthropicTitle(
     body: JSON.stringify({
       model: toSdkModelString(modelId),
       max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
+      messages,
     }),
   });
   if (!res.ok) throw new Error(`anthropic messages HTTP ${res.status}`);
@@ -286,10 +291,14 @@ async function fetchCodexTitle(
   fetchImpl: FetchImpl,
   signal: AbortSignal,
   instructions: string = CODEX_DEFAULT_INSTRUCTIONS,
+  systemPrompt?: string,
 ): Promise<string> {
+  const effectiveInstructions = systemPrompt
+    ? `${systemPrompt}\n\n${instructions}`
+    : instructions;
   const body: Record<string, unknown> = {
     model: modelId,
-    instructions,
+    instructions: effectiveInstructions,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     tools: [],
     tool_choice: 'auto',
@@ -326,7 +335,12 @@ async function fetchGatewayTitle(
   fetchImpl: FetchImpl,
   signal: AbortSignal,
   maxTokens: number = ONE_SHOT_DEFAULT_MAX_TOKENS,
+  systemPrompt?: string,
 ): Promise<string> {
+  const messages: Array<{ role: string; content: string }> = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: prompt });
+
   const res = await fetchImpl(`${trimTrailingSlash(upstream)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -337,7 +351,7 @@ async function fetchGatewayTitle(
     body: JSON.stringify({
       model: modelId,
       max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
+      messages,
     }),
   });
   if (!res.ok) throw new Error(`gateway chat HTTP ${res.status}`);
@@ -391,6 +405,8 @@ export interface OneShotOpts {
   maxOutputChars?: number;
   /** 校验通过后的 Unicode 截断长度(标题默认 40)。0 跳过截断。 */
   maxVisualChars?: number;
+  /** 可选的 system 消息:有值时各 wire 在 user prompt 前追加一条 system role 消息。 */
+  systemPrompt?: string;
 }
 
 /**
@@ -406,6 +422,13 @@ export async function runProviderOneShot(
   deps: ProviderOneShotDeps = {},
   opts?: OneShotOpts,
 ): Promise<string | null> {
+  log.debug('oneShot args', {
+    sessionId: args.sessionId,
+    agentKind: args.agentKind,
+    prompt: args.prompt,
+    opts,
+  });
+
   // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
   const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
@@ -524,6 +547,11 @@ export async function runProviderOneShot(
           return null;
         }
         if (!canDispatchNow('after-credential-refresh')) return null;
+        log.debug('oneShot request body (anthropic)', {
+          model: toSdkModelString(target.model),
+          maxTokens,
+          prompt: args.prompt,
+        });
         text = await fetchAnthropicTitle(
           target.upstream,
           target.model,
@@ -532,6 +560,7 @@ export async function runProviderOneShot(
           fetchImpl,
           controller.signal,
           maxTokens,
+          opts?.systemPrompt,
         );
         break;
       }
@@ -542,6 +571,12 @@ export async function runProviderOneShot(
           return null;
         }
         if (!canDispatchNow('after-credential-read')) return null;
+        log.debug('oneShot request body (codex)', {
+          model: target.model,
+          effort: target.effort,
+          instructions: codexInstructions,
+          prompt: args.prompt,
+        });
         text = await fetchCodexTitle(
           target.upstream,
           target.model,
@@ -551,6 +586,7 @@ export async function runProviderOneShot(
           fetchImpl,
           controller.signal,
           codexInstructions,
+          opts?.systemPrompt,
         );
         break;
       }
@@ -561,6 +597,11 @@ export async function runProviderOneShot(
           return null;
         }
         if (!canDispatchNow('after-credential-read')) return null;
+        log.debug('oneShot request body (gateway-chat)', {
+          model: target.model,
+          maxTokens,
+          prompt: args.prompt,
+        });
         text = await fetchGatewayTitle(
           target.upstream,
           target.model,
@@ -569,10 +610,16 @@ export async function runProviderOneShot(
           fetchImpl,
           controller.signal,
           maxTokens,
+          opts?.systemPrompt,
         );
         break;
       }
     }
+    log.debug('oneShot raw response', {
+      wire: target.wire,
+      model: target.model,
+      response: text,
+    });
     // The prompt is advisory; never persist a transcript continuation, role-labelled
     // response, Markdown wrapper, or multiline answer. Validate the complete response
     // before applying the truncation, so a bad suffix cannot hide beyond the slice boundary.
