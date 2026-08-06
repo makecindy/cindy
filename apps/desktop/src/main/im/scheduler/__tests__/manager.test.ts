@@ -246,7 +246,7 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
-  it('stays fail-closed when an online peer has no fresh Discord advertisement', async () => {
+  it('stays fail-closed when an online legacy peer cannot confirm the scheduler protocol', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
       deviceId: 'a',
@@ -258,6 +258,8 @@ describe('Discord scheduler manager', () => {
     const manager = createManager(discord);
 
     await manager.start();
+    // A legacy Desktop never replies to scheduler probes. It remains an
+    // unknown candidate because it may already be running the same Bot.
     await finishDiscovery(manager);
 
     expect(discord.init).not.toHaveBeenCalled();
