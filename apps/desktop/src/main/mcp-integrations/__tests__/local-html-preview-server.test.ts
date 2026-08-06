@@ -114,11 +114,14 @@ describe('local-html-preview-server', () => {
     await import('node:fs/promises').then(({ rename }) => rename(renamed, entryDir));
   });
 
-  it('refuses a served fd whose dev/ino differs from the pre-open snapshot (swap-and-restore)', async () => {
-    // Simulates the round-10 attack: the pre-open `stat` snapshot is forged to
+  it('refuses a served fd whose dev/ino differs from the post-open path stat (swap-and-restore)', async () => {
+    // Simulates the round-10/13 attack: the post-open path `stat` is forged to
     // carry the victim file's size/timestamps but a DIFFERENT filesystem-object
     // identity (dev/ino), while `fs.open` really opens the outside file. The
     // size/timestamp comparison alone would pass; the dev/ino check must refuse.
+    // Identity is compared against the path stat taken AFTER open + realpath
+    // recheck (round 13): a pre-open snapshot could itself be taken inside a
+    // swap window and would then describe the same outside file as the fd.
     const { url } = await createUrl();
     const realStat = await fsPromises.stat(
       nodePath.join(workingDir, 'dist', 'index.html'),
@@ -133,7 +136,11 @@ describe('local-html-preview-server', () => {
       ino: realStat.ino + 1n,
       isFile: () => true,
     };
-    const statSpy = vi.spyOn(fsPromises, 'stat').mockResolvedValueOnce(forged as never);
+    // call order: pre-open snapshot (normal) → post-open path stat (forged)
+    const statSpy = vi
+      .spyOn(fsPromises, 'stat')
+      .mockResolvedValueOnce(realStat as never)
+      .mockResolvedValueOnce(forged as never);
     try {
       expect((await get(url)).status).toBe(404);
     } finally {

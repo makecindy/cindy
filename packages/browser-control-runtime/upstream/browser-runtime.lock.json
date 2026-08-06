@@ -76,7 +76,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "84ee4ee56c9de9590abb4e9eca93c6a0730a43383504b2a423c1bb2fac393a6a",
+  "contentHash": "a825839013dd7e63509687a48fdcb0276b49364104691c33ab1a5397f17ca4fe",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

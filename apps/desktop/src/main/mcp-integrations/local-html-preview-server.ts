@@ -391,21 +391,31 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       await fd.close().catch(() => {});
       return refuse(res);
     }
+    // Tie the identity comparison to the path AS OF AFTER open + realpath
+    // recheck (codex-connector P1, round 13): a watcher that swaps `abs` to
+    // an outside symlink BEFORE preStat, then restores it before the
+    // realpath recheck, would make preStat AND the fd describe the SAME
+    // outside file — every preStat-vs-fd comparison (including dev/ino and
+    // nlink) would then pass. postStat can only describe the restored
+    // (vetted) path, so any mismatch with the fd is refused.
+    const postStat = await fs.stat(abs, { bigint: true }).catch(() => null);
+    if (!postStat?.isFile() || postStat.nlink > 1n) {
+      await fd.close().catch(() => {});
+      return refuse(res);
+    }
     if (
       !stat.isFile() ||
-      stat.size !== preStat.size ||
-      stat.mtimeNs !== preStat.mtimeNs ||
-      stat.birthtimeNs !== preStat.birthtimeNs ||
+      stat.size !== postStat.size ||
+      stat.mtimeNs !== postStat.mtimeNs ||
+      stat.birthtimeNs !== postStat.birthtimeNs ||
       // Filesystem-object identity: size + timestamps can be forged by a
       // swap-and-restore attacker; dev/ino cannot. Without this, an fd opened
       // on an outside file (same size/timestamps) would still be served
       // (Greptile P1, round 10).
-      stat.dev !== preStat.dev ||
-      stat.ino !== preStat.ino ||
-      // Hard-link count must also match the pre-open snapshot: a swap to a
-      // hard-linked outside inode between the two stats keeps dev/ino equal
-      // while changing the file under the same path (round 12).
-      stat.nlink !== preStat.nlink
+      stat.dev !== postStat.dev ||
+      stat.ino !== postStat.ino ||
+      // Hard-link count must also match the post-open path snapshot (round 12).
+      stat.nlink !== postStat.nlink
     ) {
       await fd.close().catch(() => {});
       return refuse(res);

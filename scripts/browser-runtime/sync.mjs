@@ -519,8 +519,11 @@ const LOCAL_PATCHES = {
         '        } catch {\n' +
         '          /* ignore */\n' +
         '        }\n' +
-        '      })\n' +
-        '      .catch(() => {});\n' +
+        '      });\n' +
+        '      // Fail-closed (round 13): a failed addInitScript (CDP / target\n' +
+        '      // error) must REFUSE the preview navigation — matches the RSB\n' +
+        '      // backend; an unguarded preview would reopen the WebRTC\n' +
+        '      // exfiltration channel.\n' +
         '  }',
     }
   ],

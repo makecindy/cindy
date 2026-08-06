@@ -108,6 +108,14 @@ const localPreviewServer = createLocalPreviewServer({
   logger,
   applyPreviewOrigins: (previewOrigins) => {
     setBrowserControlRuntimeConfig(buildManagedConfig({ previewOrigins }));
+    // Revocation (listener error/close, dispose) must close still-open
+    // preview tabs at the SAME moment the grant disappears: the vendored
+    // persistent guard cannot re-read the live policy, so a freed port
+    // could otherwise be seized by another local process and the stale tab
+    // would load same-origin content (Copilot P1, round 13).
+    if (previewOrigins.length === 0) {
+      void closePreviewTabs();
+    }
   },
 });
 
@@ -487,8 +495,11 @@ export function disposeBrowserRuntime(): Promise<void> {
   localPreviewServer.dispose();
   // Close preview tabs BEFORE stopping the runtime: their persistent guard
   // would otherwise outlive the revoked grant (port-seizure window,
-  // Copilot P1, round 11). Best-effort.
-  void closePreviewTabs();
+  // Copilot P1, round 11). AWAIT the closure (bounded, so quit cannot hang
+  // on a stuck tabs/close round-trip): starting it fire-and-forget and
+  // stopping the runtime immediately races the tabs/close calls against
+  // shutdown, and an orphaned preview tab could survive
+  // (codex-connector P1, round 13).
   // Always stop the vendored Chrome directly, NOT through the active controller.
   // The controller may currently point at RsbWebviewBackend, whose dispose only
   // releases control listeners and does not own the external Chrome process. If
@@ -503,5 +514,13 @@ export function disposeBrowserRuntime(): Promise<void> {
   // the browser runtime, an unconditional stop would START services during
   // quit, which is an exit-hang amplifier. If the runtime WAS used, `stop` is
   // idempotent and safe regardless of which backend is currently active.
-  return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
+  return (async () => {
+    // Bounded await so a stuck tabs/close round-trip cannot hang quit
+    // (codex-connector P1, round 13).
+    await Promise.race([
+      closePreviewTabs().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    return stopRuntimeForQuitIfUsed(vendoredRuntime, logger);
+  })();
 }

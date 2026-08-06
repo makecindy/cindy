@@ -1469,8 +1469,11 @@ export async function gotoPageWithNavigationGuard(
         } catch {
           /* ignore */
         }
-      })
-      .catch(() => {});
+      });
+      // Fail-closed (round 13): a failed addInitScript (CDP / target
+      // error) must REFUSE the preview navigation — matches the RSB
+      // backend; an unguarded preview would reopen the WebRTC
+      // exfiltration channel.
   }
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
