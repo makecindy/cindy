@@ -16338,10 +16338,12 @@ describe('CodexAgent turn lifecycle', () => {
     expect(handlers).toBeDefined();
     const iterator = handle.events()[Symbol.asyncIterator]();
 
+    const turnStartedWindowStart = Date.now();
     handlers!.turnStarted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent' },
     });
+    const turnStartedWindowEnd = Date.now();
     handlers!.turnCompleted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-parent', status: 'completed' },
@@ -16367,7 +16369,8 @@ describe('CodexAgent turn lifecycle', () => {
       },
     } as never);
 
-    expect(await nextEvent(iterator)).toMatchObject({
+    const reconstructedToolUse = await nextEvent(iterator);
+    expect(reconstructedToolUse).toMatchObject({
       type: 'tool_use',
       turnScope: 'background',
       data: {
@@ -16375,7 +16378,11 @@ describe('CodexAgent turn lifecycle', () => {
         toolName: 'collab:spawnAgent',
       },
     });
-    expect(await nextEvent(iterator)).toMatchObject({
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeGreaterThanOrEqual(turnStartedWindowStart);
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeLessThanOrEqual(turnStartedWindowEnd);
+    const reconstructedFullResult = await nextEvent(iterator);
+    expect(reconstructedFullResult).toMatchObject({
       type: 'tool_result_full',
       turnScope: 'background',
       data: {
@@ -16383,16 +16390,27 @@ describe('CodexAgent turn lifecycle', () => {
         fullText: 'child-thread: completed',
       },
     });
-    expect(await nextEvent(iterator)).toMatchObject({
+    const reconstructedResult = await nextEvent(iterator);
+    expect(reconstructedResult).toMatchObject({
       type: 'tool_result',
       turnScope: 'background',
       data: { toolUseIds: ['collab-completed-only'] },
     });
-    expect(await nextEvent(iterator)).toMatchObject({
+    const reconstructedTaskUpdate = await nextEvent(iterator);
+    expect(reconstructedTaskUpdate).toMatchObject({
       type: 'agent_task_update',
       turnScope: 'background',
       data: { taskId: 'collab-completed-only', status: 'completed' },
     });
+    expect([
+      reconstructedFullResult.backgroundTurnStartedAt,
+      reconstructedResult.backgroundTurnStartedAt,
+      reconstructedTaskUpdate.backgroundTurnStartedAt,
+    ]).toEqual([
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+    ]);
 
     await handle.close();
   });

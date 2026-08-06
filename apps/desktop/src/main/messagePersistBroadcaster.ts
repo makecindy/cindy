@@ -76,6 +76,23 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   }
 }
 
+/**
+ * Background work belongs to an earlier provider turn, so its local turn-start
+ * time—not the late event's arrival time—decides whether a /clear boundary
+ * hides it. Missing/non-finite ownership is fail-closed only when a clear
+ * boundary exists; sessions that were never cleared keep the legacy behavior.
+ */
+export function backgroundTurnPredatesSessionClear(
+  sessionId: string,
+  turnStartedAt: unknown,
+): boolean {
+  const clearBoundary = clearBoundaryBySession.get(sessionId);
+  if (clearBoundary === undefined) return false;
+  return typeof turnStartedAt !== 'number'
+    || !Number.isFinite(turnStartedAt)
+    || turnStartedAt <= clearBoundary;
+}
+
 type CreateDbMessageBody = Parameters<typeof createDbMessage>[1];
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
@@ -658,12 +675,16 @@ export function onToolUseEvent(
   data: { toolUseId?: unknown; toolName?: unknown; input?: unknown },
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
-): string {
+  backgroundTurnStartedAt?: number,
+): string | undefined {
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
 
   if (scope === 'background') {
+    if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
+      return undefined;
+    }
     // A late completed-only collab item has no live-turn tool_use to snapshot.
     // Give its background result an isolated context instead of touching the
     // next turn's maps, metadata, or adjacent-message dedup state.

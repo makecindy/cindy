@@ -433,6 +433,98 @@ describe('background tool_result persistence', () => {
     );
   });
 
+  it('drops a completed-only background collab context owned by a pre-clear turn', async () => {
+    const turnStartedAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-cleared-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-cleared-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toBeUndefined();
+    expect(fullResult).toBeNull();
+    expect(result).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a completed-only background collab context owned by a post-clear turn', async () => {
+    const clearAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const turnStartedAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-post-clear-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-post-clear-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-post-clear-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toEqual(expect.any(String));
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-post-clear-child',
+      }),
+      broadcastGuard(),
+    );
+  });
+
   it('keeps the completed turn context after the next turn resets live state', async () => {
     const oldMeta = { uuid: 'old-turn' };
     const nextMeta = { uuid: 'new-turn' };

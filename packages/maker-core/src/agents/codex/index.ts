@@ -2641,6 +2641,7 @@ export class CodexAgent extends BaseAgent {
       terminalSettled: boolean;
       capabilitySelectionText: string;
       sendGen: number;
+      startedAtMs: number;
     }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
     let turnStartSeq = 0;
@@ -2665,6 +2666,7 @@ export class CodexAgent extends BaseAgent {
         terminalSettled: false,
         capabilitySelectionText,
         sendGen: ownerSendGen,
+        startedAtMs: Date.now(),
       });
       isTurnStartPending = true;
       return seq;
@@ -2708,7 +2710,11 @@ export class CodexAgent extends BaseAgent {
      * 每一处清理同步, 漏一处就读到上一个 turn 的归属 —— 本 PR 已经在别的标量上踩过。
      * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
      */
-    const turnOriginByTurnId = new Map<string, { startSeq: number | null; sendGen: number }>();
+    const turnOriginByTurnId = new Map<string, {
+      startSeq: number | null;
+      sendGen: number;
+      startedAtMs: number;
+    }>();
 
     const hasOtherInFlightStart = (seq: number): boolean => {
       for (const other of inFlightStarts.keys()) if (other !== seq) return true;
@@ -7827,9 +7833,15 @@ export class CodexAgent extends BaseAgent {
         const startedOwner = startedOwnerEntries.length === 1
           ? startedOwnerEntries[0]
           : undefined;
+        const existingTurnOrigin = turnOriginByTurnId.get(params.turn.id);
         turnOriginByTurnId.set(params.turn.id, {
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
+          startedAtMs:
+            startedOwner?.[1].startedAtMs
+            ?? (existingTurnOrigin
+              ? existingTurnOrigin.startedAtMs
+              : (startedOwnerEntries.length === 0 ? Date.now() : 0)),
         });
         // Notifications may arrive before the turn/start RPC response. Bind the
         // selector at the same unique-owner boundary as turnOrigin so an early
@@ -8082,7 +8094,13 @@ export class CodexAgent extends BaseAgent {
         );
         const itemEventQueue = isLateCollabTerminal
           ? {
-            push: (event: AgentEvent) => eventQueue.push({ ...event, turnScope: 'background' }),
+            push: (event: AgentEvent) => eventQueue.push({
+              ...event,
+              turnScope: 'background',
+              // Missing ownership fails closed only if a later /clear exists.
+              backgroundTurnStartedAt:
+                turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+            }),
             end: () => eventQueue.end(),
             clear: () => eventQueue.clear(),
             get pending() { return eventQueue.pending; },
@@ -8759,6 +8777,7 @@ export class CodexAgent extends BaseAgent {
               turnOriginByTurnId.set(resp.turn.id, {
                 startSeq: ownerSeq,
                 sendGen: startEntry.sendGen,
+                startedAtMs: startEntry.startedAtMs,
               });
             }
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
@@ -8841,7 +8860,14 @@ export class CodexAgent extends BaseAgent {
                 capabilitySelectionText,
               );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
-              turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
+              turnOriginByTurnId.set(resp.turn.id, {
+                startSeq: ownerSeq,
+                sendGen: mySendGen,
+                startedAtMs:
+                  startEntry?.startedAtMs
+                  ?? turnOriginByTurnId.get(resp.turn.id)?.startedAtMs
+                  ?? Date.now(),
+              });
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
               turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"

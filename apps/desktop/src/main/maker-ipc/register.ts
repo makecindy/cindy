@@ -300,6 +300,7 @@ import {
   readSessionWorkingDirFromDb,
 } from '../maker-host/session-storage.js';
 import {
+  backgroundTurnPredatesSessionClear,
   clearSessionPersistState,
   consumeLastAssistantPersistId,
   consumeLastTopLevelAssistantPersistId,
@@ -3275,6 +3276,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 让 renderer chat store 不必扫所有 vendor-raw 找它。
   registration.disposers.push(
     session.onEvent((event: AgentEvent) => {
+      if (
+        event.turnScope === 'background'
+        && Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt')
+        && backgroundTurnPredatesSessionClear(session.id, event.backgroundTurnStartedAt)
+      ) {
+        return;
+      }
       // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
       // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
       // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
@@ -3569,6 +3577,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
+          event.backgroundTurnStartedAt,
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(
@@ -12363,6 +12372,7 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   // event used for bookkeeping but never expose them through the raw renderer channel.
   const rendererEvent = { ...event };
   delete rendererEvent.turnAttemptToken;
+  delete rendererEvent.backgroundTurnStartedAt;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;
