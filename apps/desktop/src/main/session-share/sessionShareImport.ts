@@ -452,20 +452,35 @@ export async function commitShareImport(
     }
   }
 
-  // 如果冲突行本身是旧 Orca lead，覆盖语义必须替换它的完整图，而不是只删
-  // manifest 本次碰巧探测到的 resume ids。把旧 team 下全部 Worker session 纳入
-  // 同一事务，防止旧隐藏 Worker/关系残留成孤儿或与新图并存。
+  // 无论冲突行是旧 Orca lead 还是 Worker，覆盖语义都必须替换它所属的
+  // 完整图，而不是只删 manifest 本次碰巧探测到的 resume ids。从 lead
+  // 命中其历次 team，从 Worker 反查所属 team，再把对应 lead 与全部 Worker
+  // session 纳入同一事务，防止旧隐藏 Worker/关系残留成孤儿或与新图并存。
   for (const existing of [...conflictExisting]) {
     const graphRows = await getDbClient().query<{
       id: string;
       status: 'active' | 'archived';
     }>(
-      `SELECT s.id, s.status
-       FROM orca_teams t
-       JOIN orca_workers w ON w.team_id = t.id
-       JOIN sessions s ON s.id = w.session_id
-       WHERE t.lead_session_id = ? AND s.status != 'deleted'`,
-      [existing.id],
+      `WITH related_leads AS (
+         SELECT lead_session_id AS id FROM orca_teams WHERE lead_session_id = ?
+         UNION
+         SELECT t.lead_session_id AS id
+         FROM orca_workers w
+         JOIN orca_teams t ON t.id = w.team_id
+         WHERE w.session_id = ?
+       ), related_sessions AS (
+         SELECT id FROM related_leads
+         UNION
+         SELECT w.session_id AS id
+         FROM related_leads l
+         JOIN orca_teams t ON t.lead_session_id = l.id
+         JOIN orca_workers w ON w.team_id = t.id
+       )
+       SELECT s.id, s.status
+       FROM related_sessions r
+       JOIN sessions s ON s.id = r.id
+       WHERE s.status != 'deleted'`,
+      [existing.id, existing.id],
     );
     for (const row of graphRows) {
       if (!conflictExisting.some((candidate) => candidate.id === row.id)) {

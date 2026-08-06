@@ -58,7 +58,10 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
     query: async (sql: string, params: unknown[]) => {
       dbMock.queryCalls.push({ sql, params });
-      if (typeof sql === 'string' && sql.includes('FROM orca_teams t')) {
+      if (
+        typeof sql === 'string' &&
+        (sql.includes('FROM orca_teams t') || sql.includes('WITH related_leads AS'))
+      ) {
         return dbMock.conflictGraphRows;
       }
       return [];
@@ -1264,6 +1267,46 @@ describe('sessionShareImport', () => {
     expect(txArgs.replaceSessions).toEqual([
       { id: 'existing-worker-session', status: 'active' },
     ]);
+  });
+
+  it('overwrite expands a conflicting Orca Worker to its complete previous graph', async () => {
+    dbMock.conflictForResumeId = WORKER_SID;
+    dbMock.conflictGraphRows = [
+      { id: 'existing-lead', status: 'active' },
+      { id: 'existing-worker-session', status: 'active' },
+      { id: 'old-worker-archived', status: 'archived' },
+    ];
+    const filePath = await writeBundleFile(await buildBundle({ orcaWorker: { agentKind: 'codex' } }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      overwrite: true,
+    });
+
+    expect(result.replacedSessions).toEqual([
+      { id: 'existing-worker-session', status: 'active' },
+      { id: 'existing-lead', status: 'active' },
+      { id: 'old-worker-archived', status: 'archived' },
+    ]);
+    expect(
+      dbMock.queryCalls.some(
+        ({ sql, params }) =>
+          sql.includes('JOIN orca_teams t ON t.id = w.team_id') &&
+          sql.includes('WHERE w.session_id = ?') &&
+          sql.includes('JOIN orca_teams t ON t.lead_session_id = l.id') &&
+          params[0] === 'existing-worker-session' &&
+          params[1] === 'existing-worker-session',
+      ),
+    ).toBe(true);
+    const txArgs = dbMock.txCalls[0].args as {
+      replaceSessions?: Array<{ id: string; status: string }>;
+    };
+    expect(txArgs.replaceSessions).toEqual(result.replacedSessions);
   });
 
   it('overwrite expands a conflicting Orca lead to its complete previous Worker graph', async () => {
