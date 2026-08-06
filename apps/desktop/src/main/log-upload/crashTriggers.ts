@@ -67,3 +67,25 @@ export function crashAtFromMarker(marker?: {
   }
   return null;
 }
+
+/**
+ * 多个待补传标记合并成一次上报时的**归组元数据**:令牌与崩溃时刻都取「最早那次崩溃」的标记。
+ * 后台按 `crashToken` 把崩溃即时上报与这次启动补传归成同一次崩溃(需求 §4.5)。
+ *
+ * ⚠️ token 与 crashAtMs 必须来自**同一个**标记(2026-08-06 review):`claimAll()` 按文件系统
+ * `readdir` 顺序返回,`claimed[0]` 不一定是最早那次。若 token 取 `claimed[0]`、crashAtMs 取
+ * `min(anchors)`,两者会来自不同崩溃——补传就带着「最早崩溃的时刻 + 另一次崩溃的令牌」,既归不
+ * 进最早那次的即时上报,又把另一次的令牌占用掉。这里先选出拥有**最早 crashAtMs** 的标记,token
+ * 与 crashAtMs 都从它取。并列最早时取先出现的那个(稳定,不依赖 readdir 顺序之外的东西)。
+ *
+ * 空数组返回两个 `undefined`(调用方在无标记时本就不会走到上报)。
+ */
+export function selectBackfillGrouping(
+  claimed: readonly { marker: { token: string; crashAtMs: number } }[],
+): { crashToken: string | undefined; crashAtMs: number | undefined } {
+  let earliest: { marker: { token: string; crashAtMs: number } } | undefined;
+  for (const c of claimed) {
+    if (!earliest || c.marker.crashAtMs < earliest.marker.crashAtMs) earliest = c;
+  }
+  return { crashToken: earliest?.marker.token, crashAtMs: earliest?.marker.crashAtMs };
+}

@@ -40,7 +40,11 @@ import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { collectLogs, type CollectDeps } from './collect';
-import { crashAtFromMarker, shouldBackfillForReportKind } from './crashTriggers';
+import {
+  crashAtFromMarker,
+  selectBackfillGrouping,
+  shouldBackfillForReportKind,
+} from './crashTriggers';
 import type { ConsentGateDeps } from './consentGate';
 import { evaluateGate } from './consentGate';
 import { sendLogs } from './logSink';
@@ -327,13 +331,15 @@ async function runStartupBackfill(): Promise<void> {
   if (claimed.length === 0) return;
   const anchors = claimed.map((c) => c.marker.crashAtMs);
   log.info(`startup log-upload backfill: ${claimed.length} pending crash marker(s)`);
+  // 归组令牌与崩溃时刻都取**最早那次崩溃**的同一个标记(claimAll 按 readdir 顺序返回,
+  // claimed[0] 不一定是最早那次——token 与 crashAtMs 取自不同标记会归错组,见 selectBackfillGrouping)。
+  const grouping = selectBackfillGrouping(claimed);
   const outcome = await runUpload(runnerDeps(), {
     reason: 'crash-backfill',
     anchors,
     claimed,
-    // 多个崩溃合并成一次上报时,归组令牌取最早那次(后台按它找到崩溃即时那半)。
-    crashToken: claimed[0]?.marker.token,
-    crashAtMs: Math.min(...anchors),
+    crashToken: grouping.crashToken,
+    crashAtMs: grouping.crashAtMs,
   });
   log.info(`startup log-upload backfill outcome=${outcome.kind}`);
 }

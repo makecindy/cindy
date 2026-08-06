@@ -15,6 +15,7 @@ import { UPLOAD_CODE_ALPHABET, isFormattedUploadCode } from '../../../shared/log
 import {
   crashAtFromMarker,
   isFatalCrashReason,
+  selectBackfillGrouping,
   shouldBackfillForReportKind,
 } from '../crashTriggers';
 import { generateUploadCode } from '../uploadCode';
@@ -90,6 +91,37 @@ describe('crashAtFromMarker', () => {
     expect(crashAtFromMarker(undefined)).toBeNull();
     expect(crashAtFromMarker({})).toBeNull();
     expect(crashAtFromMarker({ heartbeatAt: 'not-a-date' })).toBeNull();
+  });
+});
+
+describe('selectBackfillGrouping', () => {
+  const mk = (token: string, crashAtMs: number) => ({ marker: { token, crashAtMs } });
+
+  it('⚠️ token 与 crashAtMs 取自同一个「最早」标记，不受 claimAll 的 readdir 顺序影响', () => {
+    // readdir 顺序把较晚那次排在最前(claimed[0]),但最早崩溃是 t-early。
+    const claimed = [mk('t-late', 2_000), mk('t-early', 1_000), mk('t-mid', 1_500)];
+    const g = selectBackfillGrouping(claimed);
+    // 修复前:crashToken 会取 claimed[0] = 't-late',与 crashAtMs=1_000 来自不同崩溃。
+    expect(g).toEqual({ crashToken: 't-early', crashAtMs: 1_000 });
+  });
+
+  it('单个标记：原样返回它的 token 与 crashAtMs', () => {
+    expect(selectBackfillGrouping([mk('only', 42)])).toEqual({
+      crashToken: 'only',
+      crashAtMs: 42,
+    });
+  });
+
+  it('并列最早时取先出现的那个（稳定）', () => {
+    const g = selectBackfillGrouping([mk('first', 1_000), mk('second', 1_000)]);
+    expect(g).toEqual({ crashToken: 'first', crashAtMs: 1_000 });
+  });
+
+  it('空数组返回两个 undefined', () => {
+    expect(selectBackfillGrouping([])).toEqual({
+      crashToken: undefined,
+      crashAtMs: undefined,
+    });
   });
 });
 

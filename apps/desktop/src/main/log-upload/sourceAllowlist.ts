@@ -69,6 +69,9 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
 
   // ── 鉴权 ──────────────────────────────────────────────────────────────────
   'authManager', //          登录/续期/失效/realm 切换
+  // 各登录方式适配层。其中全局 skill/plugin/marketplace 资产准备的告警会带用户自选的
+  // skill/marketplace 名与绝对路径,那几条已改走独立的 `auth-adapters:asset-prep` 子 scope 并
+  // 排除(见 DENIED_SUB_SCOPES);根这里只剩不带用户身份/路径的凭证生命周期诊断。
   'auth-adapters', //        各登录方式适配层
   // 登录 / 账号切换时的服务拆卸序列(shutdown-hang / 账号切换排查必需)。其中镜像缓存清理
   // 失败会打本地缓存路径,那几条已改走独立的 `auth-boundary:mirror-cache-purge` 子 scope 并
@@ -125,6 +128,9 @@ const DENIED_SUB_SCOPES: readonly string[] = [
   // 路径写进日志(bootstrap-electron 的 teardownAuthAccountBoundary)。这几条走独立子 scope,
   // 从 `auth-boundary` 根放行里排除掉,根上只剩不带路径的服务停止诊断(2026-08-04 review)。
   'auth-boundary:mirror-cache-purge', //   同 device-link:ipc,带本地镜像缓存路径
+  // 全局 skill/plugin 资产准备失败/告警,带用户自选 skill·marketplace 名与绝对路径
+  // (shared-global-skills / codex-global-plugins 的 warnings,经 auth-adapters.ts 转发)。
+  'auth-adapters:asset-prep', //           带 skill/marketplace 身份与本地路径结构
   'device-link:ipc', //                    镜像缓存清理失败时把 root / remaining 缓存路径写进日志
   'device-link:mediaFetch', //             抓取本地媒体,日志带绝对路径
   'device-link:mediaTransfer', //          传输进度,带文件名

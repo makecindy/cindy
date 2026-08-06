@@ -223,6 +223,19 @@ describe('会打路径的来源被挡在外', () => {
     expect(isAllowedScope('auth-boundary:mirror-cache-purge:retry')).toBe(false);
   });
 
+  it('auth-adapters 根放行（凭证生命周期诊断，不带用户身份/路径）', () => {
+    expect(isAllowedScope('auth-adapters')).toBe(true);
+    expect(isAllowedScope('auth-adapters:codex')).toBe(true); // 其它子 scope 跟随根
+  });
+
+  it('⚠️ auth-adapters:asset-prep 不放行（带 skill/marketplace 名与绝对路径），两种分隔符都挡', () => {
+    // 2026-08-06 review：全局 skill/plugin 资产准备的告警会带用户自选 skill·marketplace 名
+    // 与绝对路径(cannot link skill X from <path> to <path>),拆到独立子 scope 并排除。
+    expect(isAllowedScope('auth-adapters:asset-prep')).toBe(false);
+    expect(isAllowedScope('auth-adapters/asset-prep')).toBe(false);
+    expect(isAllowedScope('auth-adapters:asset-prep:codex')).toBe(false);
+  });
+
   it('⚠️ legacy-xdmaker-migration 整个 scope 不放行（每条都带 rootDir 工作目录）', () => {
     expect(isAllowedScope('legacy-xdmaker-migration')).toBe(false);
     expect(isAllowedScope('legacy-xdmaker-migration/x')).toBe(false);

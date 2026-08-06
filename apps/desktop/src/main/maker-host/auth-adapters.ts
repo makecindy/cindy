@@ -97,6 +97,14 @@ import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 
 const execFileP = promisify(execFile);
 const log = createLogger('auth-adapters');
+/**
+ * 全局 skill / plugin / marketplace 资产准备的告警与失败。这些消息来自
+ * `prepareSharedGlobalSkillLinks()` / Codex 全局 skill·plugin 桥接的 `warnings`，会带
+ * **用户自选的 skill / marketplace 名**与**绝对路径**（如 `cannot link skill X from <path> to <path>`）。
+ * 它们是第三方身份 + 本地路径结构，不该进日志上报：单独走一个默认被排除的子 scope
+ * （见 `log-upload/sourceAllowlist` 的 `DENIED_SUB_SCOPES`）。本机日志照常写全，只是不上报。
+ */
+const assetPrepLog = createLogger('auth-adapters:asset-prep');
 
 /**
  * Host-injected provider sessions only need a non-empty credential to pass Claude Code's
@@ -478,10 +486,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     try {
       const result = await prepareSharedGlobalSkillLinks();
       for (const warning of result.warnings) {
-        log.warn('shared global skill warning', { warning });
+        assetPrepLog.warn('shared global skill warning', { warning });
       }
     } catch (error) {
-      log.warn('prepare shared global skills failed', {
+      assetPrepLog.warn('prepare shared global skills failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1069,14 +1077,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
     for (const outcome of [sharedOutcome, skillsOutcome, rulesOutcome, pluginsOutcome]) {
       if (!outcome.ok) {
-        log.warn('prepare Codex global asset failed', {
+        assetPrepLog.warn('prepare Codex global asset failed', {
           asset: outcome.label,
           error: outcome.err.message,
         });
         continue;
       }
       for (const warning of outcome.warnings) {
-        log.warn('Codex global asset warning', { asset: outcome.label, warning });
+        assetPrepLog.warn('Codex global asset warning', { asset: outcome.label, warning });
       }
     }
     if (!pluginsOutcome.ok) {
@@ -1089,7 +1097,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
     if (pluginsOutcome.ok && pluginsOutcome.routingFailures.length > 0) {
       for (const failure of pluginsOutcome.routingFailures) {
-        log.error('Codex capability routing enforcement failed', { failure });
+        // failure 串可能带下游插件能力 / marketplace 身份,同资产准备告警一并不上报。
+        assetPrepLog.error('Codex capability routing enforcement failed', { failure });
       }
       throw new Error(
         `Cannot start Codex safely because Cindy could not isolate a downstream plugin capability: ${pluginsOutcome.routingFailures.join('; ')}`,
