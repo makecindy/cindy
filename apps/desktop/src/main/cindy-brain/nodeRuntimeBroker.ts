@@ -263,6 +263,16 @@ export function createUtilityNodeWorkerProcess(
     'TMP',
     'LANG',
     'LC_ALL',
+    // 用户身份路径变量（是路径不是秘密）：gh / git 等 CLI 依赖它们定位用户级
+    // 配置。Windows 上的 gh（Go 实现）只认 APPDATA → USERPROFILE，两者都缺时
+    // 家目录解析失败、配置路径退化成相对 cwd 的 .config/gh，keyring 里明明有
+    // 登录也会误报“未登录”。HOME 是 Unix 侧同义变量，一并透传。
+    'HOME',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'HOMEDRIVE',
+    'HOMEPATH',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,

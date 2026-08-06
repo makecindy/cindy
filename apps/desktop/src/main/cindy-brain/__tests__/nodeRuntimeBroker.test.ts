@@ -115,6 +115,8 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     vi.stubEnv('PATH', '/usr/bin');
     vi.stubEnv('NODE_OPTIONS', '--inspect=0.0.0.0:9229');
     vi.stubEnv('ANTHROPIC_API_KEY', 'secret');
+    vi.stubEnv('USERPROFILE', 'C:\\Users\\demo');
+    vi.stubEnv('APPDATA', 'C:\\Users\\demo\\AppData\\Roaming');
     const child = new FakeUtilityProcess();
     const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
       void modulePath;
@@ -146,6 +148,10 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(forkOptions.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
     expect(forkOptions.env).not.toHaveProperty('NODE_OPTIONS');
     expect(forkOptions.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    // 用户身份路径变量必须透传——Windows 上的 gh 靠 APPDATA / USERPROFILE 定位
+    // 登录配置，裁掉会让 worker 里的 gh 误报“未登录”（keyring 登录读不到）。
+    expect(forkOptions.env.USERPROFILE).toBe('C:\\Users\\demo');
+    expect(forkOptions.env.APPDATA).toBe('C:\\Users\\demo\\AppData\\Roaming');
 
     const spawned = vi.fn();
     worker.once('spawn', spawned);
