@@ -1053,17 +1053,20 @@ export function ChatInput({
   if (turnStarting) {
     turnGenRef.current += 1;
   }
-  // sessionId 切换时重置预测相关 ref,防止旧 session 的推荐/ref 残留。
+  // sessionId 切换时在 render 阶段同步更新预测相关 ref，关闭 useEffect 延迟空窗：
+  // 若旧 session 的预测请求在 render→commit 之间返回，prevSessionIdRef 已指向
+  // 新 session，落地校验会拒绝该结果，不会让旧会话推荐词写入新会话输入框。
   const prevSessionIdRef = useRef(sessionId);
+  if (prevSessionIdRef.current !== sessionId) {
+    prevSessionIdRef.current = sessionId;
+    prevShowStopRef.current = false;
+    turnGenRef.current = 0;
+    prevShowStopRender.current = false;
+    showRecommendationRef.current = false;
+  }
   useEffect(() => {
-    if (prevSessionIdRef.current !== sessionId) {
-      prevSessionIdRef.current = sessionId;
-      prevShowStopRef.current = false;
-      turnGenRef.current = 0;
-      prevShowStopRender.current = false;
-      showRecommendationRef.current = false;
-      setRecommendedPrompt(null);
-    }
+    // sessionId 变化时清除推荐 UI（ref 已在 render 阶段同步更新）
+    setRecommendedPrompt(null);
   }, [sessionId]);
   // messages 是可选 prop,缺省按空历史处理(空历史不发预测请求)。
   const messagesRef = useRef(messages ?? []);

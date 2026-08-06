@@ -367,17 +367,17 @@ const PREDICTION_WORKDIR_MAX = 512;
 
 function parsePredictPromptRequest(raw: unknown): PromptPredictionParams {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('predict-prompt request required');
+    throwIpcError('INVALID_PARAMS', 'predict-prompt request must be a non-null object');
   }
   const { sessionId, agentKind, messages, workingDir } = raw as Record<string, unknown>;
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
-    throw new Error('invalid sessionId');
+    throwIpcError('INVALID_PARAMS', 'invalid or missing sessionId for predict-prompt');
   }
   if (!TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
-    throw new Error('invalid agentKind');
+    throwIpcError('INVALID_PARAMS', `invalid agentKind for predict-prompt: ${String(agentKind)}`);
   }
   if (!Array.isArray(messages)) {
-    throw new Error('messages must be an array');
+    throwIpcError('INVALID_PARAMS', 'messages must be an array for predict-prompt');
   }
   const sliced = messages.slice(-PREDICTION_MESSAGES_MAX).map((m: unknown) => {
     if (typeof m !== 'object' || m === null) {
