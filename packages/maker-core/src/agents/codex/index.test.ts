@@ -421,7 +421,9 @@ function installFakeHost(
     getThreadHandlers: () => threadHandlers,
     // 0.145 不给 spawn 子线程发 thread/started,session 层改为从 spawn item 主动
     // 登记血缘;fake 里只记录调用,路由行为由 host.test.ts 的真 transport 覆盖。
+    reserveDescendantLineage: vi.fn(),
     registerDescendantLineage: vi.fn(),
+    discardPendingDescendantLineage: vi.fn(),
   };
 
   Object.defineProperty(agent, 'getHost', {
@@ -14177,10 +14179,11 @@ describe('CodexAgent turn lifecycle', () => {
         agentPath: '/root/slow-child',
       },
     });
-    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+    expect(host.reserveDescendantLineage).toHaveBeenCalledWith(
       'child-buffered-v2',
       'start-thread-id',
     );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalled();
     expect(events.some((event) => event.type === 'agent_task_update')).toBe(false);
 
     // child 用量与终态在父 spawn 重放前到达:tracker 先缓冲,对账后必须和 spawn
@@ -14196,6 +14199,10 @@ describe('CodexAgent turn lifecycle', () => {
 
     secondStart.resolve({ turn: { id: 'turn-buffered-spawn' } });
     await send2;
+    expect(host.registerDescendantLineage).toHaveBeenCalledWith(
+      'child-buffered-v2',
+      'start-thread-id',
+    );
     await vi.waitFor(() => {
       const last = events
         .filter((event) => event.type === 'agent_task_update')
@@ -14209,6 +14216,70 @@ describe('CodexAgent turn lifecycle', () => {
       expect(last?.status).toBe('completed');
       expect(last?.usage?.totalTokens).toBe(7_777);
     });
+
+    await handle.close();
+  });
+
+  it('discards provisional spawn lineage when turn reconciliation proves the parent orphan', async () => {
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-orphaned-subagent-spawn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    await vi.waitFor(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-parent-turn' } });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-parent-turn',
+      item: {
+        id: 'orphan-spawn',
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'orphan-child-thread',
+      },
+    });
+    expect(host.reserveDescendantLineage).toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalled();
+
+    // A different response proves the buffered parent turn is an orphan. Its child route
+    // must be discarded rather than left attached to the live replacement turn.
+    secondStart.resolve({ turn: { id: 'replacement-parent-turn' } });
+    await send2;
+    expect(host.discardPendingDescendantLineage).toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
+    expect(host.registerDescendantLineage).not.toHaveBeenCalledWith(
+      'orphan-child-thread',
+      'start-thread-id',
+    );
 
     await handle.close();
   });

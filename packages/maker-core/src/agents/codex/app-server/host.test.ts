@@ -792,6 +792,122 @@ describe('AppServerHost descendant thread routing', () => {
     await subscription.release();
     await host.shutdown();
   });
+
+  it('holds all descendant server requests behind a pending spawn claim until commit', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 20,
+    });
+    await host.ensureStarted();
+
+    const subscription = host.subscribeThread('root-thread', {
+      commandExecutionApproval: vi.fn(async () => ({ decision: 'accept' as const })),
+      fileChangeApproval: vi.fn(async () => ({ decision: 'accept' as const })),
+      permissionsApproval: vi.fn(async () => ({ permissions: { network: true }, scope: 'turn' as const })),
+      requestUserInput: vi.fn(async () => ({ answers: { q1: { answers: ['ok'] } } })),
+      dynamicToolCall: vi.fn(async () => ({
+        contentItems: [{ type: 'inputText' as const, text: 'ok' }],
+        success: true,
+      })),
+      mcpServerElicitation: vi.fn(async () => ({
+        action: 'accept' as const,
+        content: { value: 'ok' },
+        _meta: null,
+      })),
+    });
+
+    const requests = [
+      { id: 'pending-command', method: 'item/commandExecution/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'command' } },
+      { id: 'pending-file', method: 'item/fileChange/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'file' } },
+      { id: 'pending-permissions', method: 'item/permissions/requestApproval', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'permissions', permissions: { network: true } } },
+      { id: 'pending-input', method: 'item/tool/requestUserInput', params: { threadId: 'child-thread', turnId: 'child-turn', itemId: 'input', questions: [] } },
+      { id: 'pending-tool', method: 'item/tool/call', params: { threadId: 'child-thread', turnId: 'child-turn', callId: 'tool', namespace: null, tool: 'test', arguments: {} } },
+      { id: 'pending-elicitation', method: 'mcpServer/elicitation/request', params: { threadId: 'child-thread', turnId: 'child-turn', serverName: 'test-mcp', mode: 'form', _meta: null, message: 'Confirm', requestedSchema: {} } },
+    ] as const;
+    const initialLineCount = transport.lines.length;
+    for (const request of requests) transport.emit(request);
+
+    // The parent spawn is known, but not yet accepted by turn reconciliation.
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    await Promise.resolve();
+    expect(transport.lines).toHaveLength(initialLineCount);
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    await vi.waitFor(() => {
+      expect(transport.lines).toHaveLength(initialLineCount + requests.length);
+    });
+
+    const responses = transport.lines
+      .slice(initialLineCount)
+      .map((line) => JSON.parse(line) as { id: string; result: unknown });
+    expect(responses.map((response) => response.id)).toEqual(requests.map((request) => request.id));
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('keeps pending child buffers alive until commit and drops them on discard', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      notificationBufferTtlMs: 10,
+    });
+    await host.ensureStarted();
+
+    const descendantThreadStarted = vi.fn();
+    const descendantNotification = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+      descendantNotification,
+    });
+
+    host.reserveDescendantLineage('child-thread', 'root-thread');
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' } },
+    });
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 'child-turn', status: 'completed' } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(descendantThreadStarted).not.toHaveBeenCalled();
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    host.registerDescendantLineage('child-thread', 'root-thread');
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: { id: 'child-thread', parentThreadId: 'root-thread', model: 'gpt-5.6-terra' },
+    });
+    expect(descendantNotification).toHaveBeenCalledWith(
+      'child-thread',
+      'turn/completed',
+      { threadId: 'child-thread', turn: { id: 'child-turn', status: 'completed' } },
+    );
+
+    host.reserveDescendantLineage('orphan-child', 'root-thread');
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'orphan-child', turn: { id: 'orphan-turn', status: 'completed' } },
+    });
+    host.discardPendingDescendantLineage('orphan-child', 'root-thread');
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'orphan-child', turn: { id: 'late-turn', status: 'completed' } },
+    });
+    expect(descendantNotification).not.toHaveBeenCalledWith(
+      'orphan-child',
+      expect.anything(),
+      expect.anything(),
+    );
+
+    await subscription.release();
+    await host.shutdown();
+  });
 });
 
 describe('AppServerHost descendant notification routing', () => {
