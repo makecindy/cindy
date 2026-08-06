@@ -340,16 +340,17 @@ export function validateModelProviderId(
 }
 
 /**
- * 联合解析「跟随最近会话」的 (model, providerId)(codex review P1:provider 失效时
- * model 必须一起回退——只清 provider 保留裸模型 id 会回落默认网关,正是 #1898 的
- * 400 Invalid model name):
- *   1) 继承来源仍有效 → 原样跟随;
+ * 联合解析 (model, providerId)(codex review P1:provider 失效时 model 必须一起回退——
+ * 只清 provider 保留裸模型 id 会回落默认网关,正是 #1898 的 400 Invalid model name):
+ *   1) 来源仍有效(或本来就走默认路由)→ 原样保留;
  *   2) 失效但仍有其他已连接来源提供该模型 → 顶替为该来源(模型照用);
  *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
  *   4) 目录为空 → 该 agent 内置默认模型 + 默认路由;
  * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
+ * 通用于「跟随最近会话」的自动默认与「提交点 / 目录就绪」的草稿终检(codex review P2:
+ * 提交终检时同样联合回退)。
  */
-function resolveRecentModelAndProvider(
+export function resolveRecentModelAndProvider(
   modelRows: readonly ProviderModelRow[],
   recent: { model: string; providerId: string | null },
   agentKind: NewSessionAgentKind,

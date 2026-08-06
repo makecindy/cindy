@@ -143,7 +143,7 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
-  validateModelProviderId,
+  resolveRecentModelAndProvider,
   validateNewSessionDraft,
   type NewSessionAgentKind,
   type NewSessionDraft,
@@ -811,14 +811,22 @@ export default function NewRemoteSessionScreen() {
   }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
 
   // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
-  // (provider 被删/断开/模型下架),就绪后必须复核——找不到 (provider, model) 匹配行即清空
-  // 回默认路由,保证失效来源不会直达创建请求。无变化时返回原引用,不触发额外渲染。
+  // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
+  // (其他来源顶替 / 首项 / 内置默认),不留裸模型回落默认网关(codex review P2)。
+  // 无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
     if (!deviceProviders.ready) return;
     setDraft((current) => {
       if (!current.providerId) return current;
-      const valid = validateModelProviderId(modelRows, current.providerId, current.model, true);
-      return valid === current.providerId ? current : { ...current, providerId: valid };
+      const resolved = resolveRecentModelAndProvider(
+        modelRows,
+        { model: current.model, providerId: current.providerId },
+        current.agentKind,
+        true,
+      );
+      return (resolved.model === current.model && resolved.providerId === current.providerId)
+        ? current
+        : { ...current, model: resolved.model, providerId: resolved.providerId };
     });
   }, [deviceProviders.ready, modelRows]);
 
@@ -2781,12 +2789,18 @@ export default function NewRemoteSessionScreen() {
           return;
         }
       }
-      // 提交点来源终检(Greptile review P1):目录就绪后的清理 effect 跑在渲染后,
-      // 用户可能在清理生效前点创建——创建路径自身必须守卫,失效来源即清空回默认路由。
+      // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
+      // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
+      // 回退(其他来源顶替 / 首项 / 内置默认),不留裸模型回落默认网关。
       // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       effectiveDraft = {
         ...effectiveDraft,
-        providerId: validateModelProviderId(modelRowsRef.current, effectiveDraft.providerId, effectiveDraft.model, catalogReadyRef.current),
+        ...resolveRecentModelAndProvider(
+          modelRowsRef.current,
+          { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
+          effectiveDraft.agentKind,
+          catalogReadyRef.current,
+        ),
       };
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
@@ -2923,11 +2937,16 @@ export default function NewRemoteSessionScreen() {
           name: selectedDeviceName || selectedDeviceId,
         },
       });
-      // 提交点来源终检(同 create(),Greptile review P1):守卫不依赖渲染后的清理 effect,
-      // modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
+      // 提交点联合终检(同 create()):守卫不依赖渲染后的清理 effect,来源失效时
+      // model 随之一并回退;modelRows/ready 走 ref 取最新值(useCallback 闭包可能停在旧渲染)。
       const finalDraft = {
         ...draft,
-        providerId: validateModelProviderId(modelRowsRef.current, draft.providerId, draft.model, catalogReadyRef.current),
+        ...resolveRecentModelAndProvider(
+          modelRowsRef.current,
+          { model: draft.model, providerId: draft.providerId },
+          draft.agentKind,
+          catalogReadyRef.current,
+        ),
       };
       const createOpts = buildRemoteCreateSessionOptions(finalDraft);
       await withTransientRemoteRetry(async () => {
