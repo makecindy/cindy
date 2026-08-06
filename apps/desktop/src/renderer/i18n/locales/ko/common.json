@@ -4289,6 +4289,7 @@
     "maximize": "최대화",
     "close": "닫기",
     "menuItems": {
+      "settings": "설정",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"

@@ -4289,6 +4289,7 @@
     "maximize": "最大化",
     "close": "閉じる",
     "menuItems": {
+      "settings": "設定",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"

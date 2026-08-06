@@ -4289,6 +4289,7 @@
     "maximize": "最大化",
     "close": "关闭",
     "menuItems": {
+      "settings": "设置",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"

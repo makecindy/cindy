@@ -4291,6 +4291,7 @@
     "maximize": "Maximize",
     "close": "Close",
     "menuItems": {
+      "settings": "Settings",
       "help": "Help",
       "issues": "Issues",
       "checkForUpdates": "Check for Updates"
