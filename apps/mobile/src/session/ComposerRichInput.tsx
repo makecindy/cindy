@@ -416,13 +416,9 @@ async function deleteComposerPastedImageUris(uris: readonly string[]): Promise<v
 const styles = StyleSheet.create({
   webView: {
     backgroundColor: 'transparent',
-    // react-native-webview defaults the native child to flex: 1. Override flex
-    // grow/shrink because this composer drives height explicitly; keep width
-    // stretched so placeholder/text start at the inputFrame's left edge instead
-    // of leaving a dead gap when leading (model pill / attachment) is present.
-    alignSelf: 'stretch',
+    // react-native-webview defaults the native child to flex: 1. Override it
+    // because this composer drives the child with an explicit measured height.
     flex: 0,
     minHeight: COMPOSER_SINGLE_LINE_HEIGHT,
-    width: '100%',
   },
 });

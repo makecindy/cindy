@@ -17,6 +17,8 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
+  /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
+  turnCompleted?: boolean;
 }
 
 export type MessageRenderNormalizedMessageKind =
@@ -548,6 +550,29 @@ export interface CodexPlanSnapshotApplyResult<
   toolUseId: string | null;
 }
 
+/**
+ * Resolve the plan payload that should survive a Codex turn terminal event.
+ * A successful turn is authoritative even when Codex only returns its last
+ * cached in-progress snapshot: every remaining item belongs to that finished
+ * turn and must converge to completed. Other terminal states may only apply an
+ * explicit snapshot; they must never infer completion from stale progress.
+ */
+export function resolveCodexPlanSnapshotOnDone(
+  currentPlan: readonly unknown[],
+  snapshot: unknown,
+  inferCompletion: boolean,
+): unknown[] | null {
+  const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
+  if (!authoritativeSnapshot && !inferCompletion) return null;
+
+  const snapshotSource = authoritativeSnapshot ?? currentPlan;
+  if (!inferCompletion) return authoritativeSnapshot;
+  return snapshotSource.map((item) => {
+    const record = readRecord(item);
+    return record ? { ...record, status: 'completed' } : item;
+  });
+}
+
 export function applyCodexPlanSnapshotOnDone<
   TMessage extends MessageRenderSourceMessageLike,
 >(
@@ -564,10 +589,6 @@ export function applyCodexPlanSnapshotOnDone<
     return { messages, changed: false, toolUseId: null };
   }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
-  const shouldInferCompletion = canInferCompletion && (
-    !hasAuthoritativeSnapshot
-    || authoritativeSnapshot.some((item) => readRecord(item)?.status !== 'completed')
-  );
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -586,13 +607,11 @@ export function applyCodexPlanSnapshotOnDone<
     // matching, explicitly successful turn. Without a turn id, an array can
     // still be applied as supplied but completion must never be inferred for an
     // unrelated last plan row.
-    const snapshotSource = authoritativeSnapshot ?? input.plan;
-    const nextSnapshot = shouldInferCompletion
-      ? snapshotSource.map((item) => {
-          const record = readRecord(item);
-          return record ? { ...record, status: 'completed' } : item;
-        })
-      : authoritativeSnapshot;
+    const nextSnapshot = resolveCodexPlanSnapshotOnDone(
+      input.plan,
+      authoritativeSnapshot,
+      canInferCompletion,
+    );
     if (!nextSnapshot) {
       return { messages, changed: false, toolUseId: null };
     }

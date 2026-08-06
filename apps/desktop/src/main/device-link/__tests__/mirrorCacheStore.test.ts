@@ -1146,10 +1146,26 @@ describe('clearDevice / clearAll', () => {
   );
 
   it('clearAll 之后到达的在途写入不会把内容写回(代际闸)', async () => {
-    const c = cache();
+    // 必须用 rawCache + 显式令牌,不能用 withAutoToken(cache()):withAutoToken 会在
+    // writeMessages 调用时才异步补读作废计数,若清理恰在此之前完成,它拿到的是清理后
+    // 的新计数 —— 携带清理前旧数据的写入反而被当成新写入放行落盘(实测在 CI 慢环境下
+    // 偶发把 #1538 判红)。生产里令牌在远端请求**发起时**捕获(invalidationAtRequestStart),
+    // 早于任何清理;这里等价地在清理前捕获旧计数当令牌。
+    const c = rawCache();
     const rows = [row('m1', '2026-01-01T00:00:00.000Z')];
-    // 模拟并发:写入发起后、落盘前发生了登出清理。
-    const inFlight = c.writeMessages('dev-1', 'sess-1', rows);
+    // 模拟并发:写入发起后、落盘前发生了登出清理。令牌取清理前计数(请求发起时捕获)。
+    // 非空写入需同时提供 invalidation / ownerRoot / accountCounter,否则 canCommitNonEmpty
+    // 会 fail-closed 拒写,测试就不再真正验证「清理前发起的在途写入被代际闸作废」(
+    // review: Copilot)。
+    const cap = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    const inFlight = c.writeMessages(
+      'dev-1',
+      'sess-1',
+      rows,
+      cap.invalidation,
+      cap.ownerRoot,
+      cap.accountCounter,
+    );
     await c.clearAll();
     await inFlight;
 
@@ -1178,8 +1194,19 @@ describe('clearDevice / clearAll', () => {
   // review(codex P1):clearDevice 与 clearAll 同构 —— 在途写入的原子 rename 会在删除之后
   // 完成,把刚被撤销的设备正文重建出来。
   it('clearDevice 之后到达的在途写入不会重建该设备的消息', async () => {
-    const c = cache();
-    const inFlight = c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    // 同代际闸用例:用 rawCache + 清理前捕获的显式令牌(模拟真实客户端在远端请求
+    // 发起时捕获 invalidationAtRequestStart),避免 withAutoToken 在清理后补读拿到
+    // 新计数、把清理前旧数据的写入误放行。
+    const c = rawCache();
+    const cap = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    const inFlight = c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      cap.invalidation,
+      cap.ownerRoot,
+      cap.accountCounter,
+    );
     await c.clearDevice('dev-1');
     await inFlight;
     expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);

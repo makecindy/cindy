@@ -2003,12 +2003,7 @@ export function diffGhostPermissionItems(
   return { added, removed, unchanged };
 }
 
-/**
- * 返回未被发布清单或已批准旧版本覆盖的包权限。
- *
- * 第二个来源用于兼容旧市场元数据：旧详情投影可能漏掉已存在的权限，
- * 但这些权限此前已经被用户批准，更新时应继续保留。
- */
+/** 返回真实包中既未在安装前展示、也未被当前已装版本覆盖的权限。 */
 export function unreviewedGhostPermissionItems(
   reviewed: GhostManifest,
   previouslyInstalled: GhostManifest | undefined,

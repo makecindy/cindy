@@ -31,8 +31,10 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
+import { resolveCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 
 import {
+  broadcastMessageRow,
   broadcastMessageAgentMetaUpdate,
   createMessage as createDbMessage,
   patchMessageAgentMetaWithResult,
@@ -280,6 +282,20 @@ export function markAssistantTurnFailed(
   clientId: string | undefined,
 ): Promise<boolean> {
   return markAssistantTurnBoundary(sessionId, clientId, false);
+}
+
+/**
+ * Codex emits `done` for every terminal turn, including user interruption and
+ * failure. Only the successful variant may create a persisted completion seal;
+ * otherwise historical plan recovery would later treat partial work as done.
+ */
+export function isSuccessfulCodexDoneEventData(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const done = data as { cancelled?: unknown; raw?: unknown };
+  if (done.cancelled === true) return false;
+  if (!done.raw || typeof done.raw !== 'object' || Array.isArray(done.raw)) return false;
+  const status = (done.raw as { status?: unknown }).status;
+  return status === 'completed';
 }
 
 /**
@@ -567,6 +583,65 @@ export function onToolUseEvent(
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
+}
+
+/**
+ * Persist the same terminal Codex plan convergence that the renderer applies
+ * immediately on `done`. Without this DB update, switching tasks or reloading
+ * the renderer resurrects the last in-progress snapshot and leaves the pinned
+ * plan visible forever even though the turn completed successfully.
+ *
+ * The turn id is the ownership boundary: only `plan:<raw.id>` may be updated.
+ * Failed, interrupted, or unrelated turns never infer completion. A matching
+ * failed turn still stamps `turnCompleted: false` on its plan row because the
+ * turn may have ended before any assistant row existed to carry that seal.
+ */
+export function persistCodexPlanOnDone(
+  sessionId: string,
+  data:
+    | { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+    | null
+    | undefined,
+): boolean {
+  const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
+  if (!turnId) return false;
+
+  const toolUseId = `plan:${turnId}`;
+  const infoMap = toolUseInfoBySession.get(sessionId);
+  const info = infoMap?.get(toolUseId);
+  const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
+  if (!info || info.toolName !== 'update_plan' || !persistId) return false;
+
+  const input = info.input && typeof info.input === 'object' && !Array.isArray(info.input)
+    ? info.input as Record<string, unknown>
+    : null;
+  if (!input || !Array.isArray(input.plan)) return false;
+
+  const isSuccessfulTerminal = isSuccessfulCodexDoneEventData(data);
+  const nextPlan =
+    resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal) ??
+    (isSuccessfulTerminal ? null : input.plan);
+  if (!nextPlan) return false;
+  // Even when Codex already emitted the exact completed/empty plan, stamp the
+  // durable row at done. Renderer must distinguish this authoritative write
+  // from an older ordinary DB echo that merely happens to look completed.
+  const nextInput = { ...input, plan: nextPlan };
+  infoMap?.set(toolUseId, { ...info, input: nextInput });
+  enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, persistId, {
+      toolUseId,
+      toolName: 'update_plan',
+      input: nextInput,
+      ...(isSuccessfulTerminal
+        ? { terminalPlanSnapshot: true }
+        : { turnCompleted: false }),
+    });
+    // Reuse the existing upsert-style row broadcast so a renderer that mounts
+    // between `done` and this queued write, plus remote mirrors, receives the
+    // durable terminal snapshot instead of keeping its stale local copy.
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
+  return true;
 }
 
 /**

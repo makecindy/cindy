@@ -30,10 +30,7 @@ import {
   isCodexResumeNotReadyProjectionError,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
-import {
-  connectedProvidersForAgent,
-  providerOffersModel,
-} from '@cindy/model-providers';
+import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -59,10 +56,7 @@ import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
-import {
-  useWorkerProjection,
-  useWorkerProjectionOwner,
-} from './hooks/workerProjectionStore';
+import { useWorkerProjection, useWorkerProjectionOwner } from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
@@ -128,7 +122,11 @@ import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSess
 import { RemoteSessionBanner } from './RemoteSessionBanner';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
-import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
+import {
+  ControlledBanner,
+  useComposerCollapsed,
+  useControlledBy,
+} from '@/features/remote-device/ControlledBanner';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { loadAllCommands, dispatchCommand, type UnifiedCommand } from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
@@ -325,7 +323,7 @@ interface CCAgentSessionViewProps {
   sessionIdProp?: string;
   compact?: boolean;
   orcaMode?: boolean;
-  /** 在输入区状态栏中央显示被控端 Banner。普通路由自动显示；协同 Lead pane 显式传入。 */
+  /** 在输入区显示被控端提示。普通路由自动显示；完整态居中，折叠态位于 token 左侧。 */
   showControlledBanner?: boolean;
   /**
    * 工具行采用紧凑布局 (flex-wrap 兜底)。
@@ -586,7 +584,11 @@ export function CCAgentSessionView({
   // 「全屏聊天视图」这个实例拥有右栏开关 / 声明右栏在场;内嵌复用实例(doc 模式
   // chat rail / 协同 worker 面板,带 sessionIdProp 或处于 compact/orca 语境)不参与。
   const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;
-  const showInlineControlledBanner = ownsRoute || showControlledBanner;
+  const showComposerControlledBanner = ownsRoute || showControlledBanner;
+  const controlledBy = useControlledBy();
+  const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
+  const controlledBannerCollapsed = useComposerCollapsed(sessionId ?? null);
+  const showExpandedControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // 平台分流:mac 右栏开关放在 ContentHeader 右端(见 ContentHeader.tsx),Windows
   // 放在下方 chip 栈第一行。两端都靠 ownsRoute 限定只在全屏聊天视图出现。
   const isMac = window.electronAPI?.platform === 'darwin';
@@ -2786,8 +2788,8 @@ export function CCAgentSessionView({
         isCodexResumeNotReadyProjectionError(detail)
           ? t('chat.errorBanner.codexResumeNotReady')
           : ipcError?.code === 'FORK_UNSUPPORTED_HISTORY'
-          ? t('chat.userMessage.forkErrors.unsupportedHistory')
-          : detail,
+            ? t('chat.userMessage.forkErrors.unsupportedHistory')
+            : detail,
       );
     } finally {
       setForkStripEncryptedRunning(false);
@@ -3372,38 +3374,81 @@ export function CCAgentSessionView({
 
           {/* Solid background zone */}
           <div className="pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
-            {/* Running Status Bar (F-SDK-3) — hidden while a plan review is pending (FP-7)。
-              turn 结束但后台子任务仍在调模型时,状态栏保持点亮(shimmer 呼吸)显示
-              后台运行文案 + 右侧「全部停止」入口 —— 替代原独立横幅(Lizi 拍板:
-              不新增信息栏,复用状态栏)。 */}
-            {!pendingPlanReview && (
-              <RunningStatusBar
-                key={sessionId}
-                status={agentStatus.status}
-                tokenUsage={agentStatus.tokenUsage}
-                startedAt={agentStatus.startedAt}
-                visible={agentStatus.isRunning || backgroundTasksActive}
-                inputWidth={inputWidth}
-                sideTaskRunning={agentStatus.sideTaskRunning ?? false}
-                backgroundTasksRunning={backgroundTasksActive}
-                // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
-                // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
-                // (关子进程止损,bash 任务随之终止,无需再逐个停)。
-                backgroundBashOnlyCount={
-                  backgroundActivity.active ? 0 : backgroundBash.tasks.length
-                }
-                backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
-                onStopBackgroundTasks={() => {
-                  if (backgroundActivity.active) void backgroundActivity.stopAll();
-                  else void backgroundBash.stopAll();
-                }}
-                // 被控端可见性 chip 嵌进状态栏中央槽位,与 thinking / 时间 token 同行
-                // (不再单独占一行)。中央槽位独立于状态栏淡入淡出 → 空闲时仍显示。
-                centerSlot={
-                  showInlineControlledBanner ? <ControlledBanner placement="statusbar" /> : null
-                }
-              />
-            )}
+            {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
+              展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
+              向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}
+            <div
+              className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
+              style={{ width: inputWidth }}
+            >
+              {(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (
+                <RunningStatusBar
+                  key={sessionId}
+                  status={agentStatus.status}
+                  tokenUsage={agentStatus.tokenUsage}
+                  startedAt={agentStatus.startedAt}
+                  visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
+                  inputWidth={inputWidth}
+                  sideTaskRunning={agentStatus.sideTaskRunning ?? false}
+                  backgroundTasksRunning={backgroundTasksActive}
+                  // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
+                  // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
+                  // (关子进程止损,bash 任务随之终止,无需再逐个停)。
+                  backgroundBashOnlyCount={
+                    backgroundActivity.active ? 0 : backgroundBash.tasks.length
+                  }
+                  backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
+                  suppressContent={Boolean(pendingPlanReview)}
+                  onStopBackgroundTasks={() => {
+                    if (backgroundActivity.active) void backgroundActivity.stopAll();
+                    else void backgroundBash.stopAll();
+                  }}
+                  rightLeadingSlot={
+                    hasControlledBanner && controlledBannerCollapsed ? (
+                      <ControlledBanner
+                        placement="composer"
+                        maxWidth={controlledBannerMaxWidth}
+                        sessionId={sessionId ?? null}
+                      />
+                    ) : null
+                  }
+                  className="col-start-1 row-start-1"
+                />
+              )}
+              <div
+                data-composer-center-group="true"
+                className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
+              >
+                <PinnedPlanPanel
+                  sessionId={sessionId ?? null}
+                  messages={messages}
+                  animated={isStreaming}
+                  width={inputWidth}
+                  taskHistoryMayBeIncomplete={
+                    !historyLoaded || hasMoreMessages || historyWindowHasIsland
+                  }
+                  visible={
+                    !(
+                      pendingPlanReview ||
+                      pendingPermission ||
+                      pendingAskUser ||
+                      pendingPluginSetup ||
+                      pendingIssueConfirm ||
+                      pendingRenameSessionsConfirm ||
+                      pendingGhostGrantConfirm
+                    )
+                  }
+                  className="mb-0"
+                />
+                {showExpandedControlledBanner && (
+                  <ControlledBanner
+                    placement="composer"
+                    maxWidth={controlledBannerMaxWidth}
+                    sessionId={sessionId ?? null}
+                  />
+                )}
+              </div>
+            </div>
 
             {/* Error display.
               - agentKind 传到 ErrorBanner 让 codex 401 / Missing bearer 不仅在远端
@@ -3559,13 +3604,6 @@ export function CCAgentSessionView({
               className="mx-auto flex flex-col items-center gap-[10px]"
               style={{ width: inputWidth }}
             >
-              {/* 被控端可见性:常规情况下 chip 已并入 RunningStatusBar 中央槽位(见上)。
-                plan-review 时 RunningStatusBar 不渲染,这里回退到独占一行的 inline,
-                让被控提示在 plan 卡片上方仍可见。 */}
-              {showInlineControlledBanner && pendingPlanReview && (
-                <ControlledBanner placement="inline" maxWidth={controlledBannerMaxWidth} />
-              )}
-
               {/* FP-7 / F-PERM-2 / F7.4: mutually exclusive prompts.
                  Plan review takes precedence — the SDK won't interleave it with
                  other tool calls, but explicit priority guards against layout
@@ -3654,31 +3692,6 @@ export function CCAgentSessionView({
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
-              {/* Codex IDE 扩展式常驻计划面板 —— 计划在流内不再渲染,这里是唯一
-                 呈现处:钉在输入框上方原地更新。任意 pending interaction(计划
-                 审核 / 权限 / 提问 / 插件配置 / 各类确认卡)接管底部区时隐藏:
-                 胶囊的悬停浮层向上展开,会盖住交互卡内容(条件集与下方 ternary
-                 的静默判定保持一致)。 */}
-              <PinnedPlanPanel
-                sessionId={sessionId ?? null}
-                messages={messages}
-                animated={isStreaming}
-                width={inputWidth}
-                taskHistoryMayBeIncomplete={
-                  !historyLoaded || hasMoreMessages || historyWindowHasIsland
-                }
-                visible={
-                  !(
-                    pendingPlanReview ||
-                    pendingPermission ||
-                    pendingAskUser ||
-                    pendingPluginSetup ||
-                    pendingIssueConfirm ||
-                    pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm
-                  )
-                }
-              />
               {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
                  全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
                  Takeover ? : ChatInput) 的语义一致。
@@ -4110,17 +4123,14 @@ function HandoffSourcePill({
 // ---------------------------------------------------------------------------
 
 const STATUS_BAR_FADE_MS = 400;
-const STATUS_BAR_CENTER_SLOT_MAX_WIDTH = 420;
-const STATUS_BAR_CENTER_SLOT_WIDTH_RATIO = 0.5;
+const CONTROLLED_BANNER_MAX_WIDTH = 420;
+const CONTROLLED_BANNER_WIDTH_RATIO = 0.5;
 
 function getControlledBannerMaxWidth(inputWidth?: number): number {
-  if (inputWidth == null) return STATUS_BAR_CENTER_SLOT_MAX_WIDTH;
+  if (inputWidth == null) return CONTROLLED_BANNER_MAX_WIDTH;
   return Math.max(
     0,
-    Math.min(
-      (inputWidth - 16) * STATUS_BAR_CENTER_SLOT_WIDTH_RATIO,
-      STATUS_BAR_CENTER_SLOT_MAX_WIDTH,
-    ),
+    Math.min((inputWidth - 16) * CONTROLLED_BANNER_WIDTH_RATIO, CONTROLLED_BANNER_MAX_WIDTH),
   );
 }
 
@@ -4135,7 +4145,9 @@ function RunningStatusBar({
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
   onStopBackgroundTasks,
-  centerSlot = null,
+  rightLeadingSlot = null,
+  suppressContent = false,
+  className,
 }: {
   status: string;
   tokenUsage: number;
@@ -4166,20 +4178,16 @@ function RunningStatusBar({
   backgroundStopping?: boolean;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
   onStopBackgroundTasks?: () => void;
-  /**
-   * 中央槽位 —— 渲染在左侧状态与右侧 elapsed/tokens 之间、水平居中。
-   * 关键:它**独立于**左右两段的淡入淡出/隐藏(下方 fadeStyle 只作用于左右),
-   * 所以即便 agent 空闲、状态栏整体淡出占位时,这里的内容(被控提示 chip)仍
-   * 持续可见。左右两段只是低优先级信息,窄宽时允许收缩 / 被中央 chip 覆盖。
-   */
-  centerSlot?: ReactNode;
+  /** 独立于运行态淡出的右侧前置槽位；折叠后的被控呼吸灯固定在 token 统计左侧。 */
+  rightLeadingSlot?: ReactNode;
+  /** 交互卡接管 composer 时立即隐藏旧运行文案/token，只保留折叠呼吸灯。 */
+  suppressContent?: boolean;
+  className?: string;
 }) {
   const { t } = useTranslation();
-  // `showContent` controls whether real content is rendered.
-  // We intentionally NEVER return null — instead we fall back to a fixed-height
-  // placeholder so the overlay's ResizeObserver sees a stable height and
-  // MessageStream's bottomPadding doesn't change, eliminating the layout jump
-  // that was visible when the status bar disappeared.
+  // `showContent` controls whether real content is rendered. During the short
+  // linger/fade window we keep the row's height stable; once it is fully idle the
+  // component returns null below so the composer does not retain an empty line.
   const [showContent, setShowContent] = useState(visible);
   const [fading, setFading] = useState(false);
 
@@ -4216,7 +4224,7 @@ function RunningStatusBar({
     return () => clearInterval(interval);
   }, [startedAt]);
 
-  const isHidden = !showContent && !visible;
+  const isHidden = suppressContent || (!showContent && !visible);
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
@@ -4249,35 +4257,29 @@ function RunningStatusBar({
       ? `${(animatedTokens / 1000).toFixed(1)}k tokens`
       : `${animatedTokens} tokens`;
 
-  // 淡入淡出/隐藏占位样式 —— 只作用于左(状态)、右(elapsed/tokens)两段;
-  // 中央槽位(centerSlot)不套此样式,故空闲淡出时其内容(被控提示 chip)仍可见。
-  // visibility:hidden 只隐藏不收高 → 左右两段始终占位,外层高度恒定,overlay 的
-  // ResizeObserver 看到的高度不变,MessageStream 的 bottomPadding 不抖。
+  // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
+  // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
+  // RunningStatusBar 才收起为 null。
   const fadeStyle: CSSProperties = {
     visibility: isHidden ? 'hidden' : 'visible',
     opacity: isHidden ? 0 : fading ? 0 : 1,
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
-  const centerSlotMaxWidth = getControlledBannerMaxWidth(inputWidth);
+  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
+  // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
+  if (isHidden && !rightLeadingSlot) return null;
 
-  // Always render the full DOM structure — never return null or a differently-
-  // shaped placeholder. Height is determined by real content + padding, so it
-  // never changes regardless of visibility state.  The overlay ResizeObserver
-  // therefore sees a stable height and MessageStream's bottomPadding stays put.
-  //
-  // 三段式布局:左(状态)/ 中(centerSlot)/ 右(elapsed·tokens)。
-  // 中央槽位用三列 grid 居中:左右列都是 minmax(0,1fr),中列 minmax(0,auto)。
-  // 中列再用输入框宽度比例 + 明确 maxWidth 封顶,避免长设备名把 banner 撑成超长条;
-  // 同时它仍参与正常文档流,会按 chip 高度撑出原有上下留白。
+  // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
   //   claude tool 进度会拼成 `mcp__x__y running...` 长串,窄宽时左段靠 span truncate;
-  // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出
-  //   但不会改变中列几何中心;中列 z-10 让 chip 视觉优先。
-  // 外层只管布局 / 宽度 / 高度,恒可见。
+  // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出。
   return (
     <div
-      className="mx-auto grid select-none grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-center px-2 py-[6px]"
+      className={cn(
+        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]',
+        className,
+      )}
       style={{ width: inputWidth }}
     >
       <div
@@ -4317,63 +4319,60 @@ function RunningStatusBar({
         )}
         <span className="truncate text-[13px] font-medium">{displayStatus}</span>
       </div>
-      {/* 中央槽位(几何真居中):被控提示 chip 等。maxWidth 封顶 + max-w-full 让长设备名
-          在窄宽时收缩,chip 靠自带 max-w-full + 内部 truncate 截断;不套 fadeStyle
-          故空闲淡出时仍持续可见。 */}
-      <div
-        className="z-10 flex min-w-0 max-w-full items-center justify-center px-2"
-        style={{ maxWidth: centerSlotMaxWidth }}
-      >
-        {centerSlot}
-      </div>
-      {/* pen 里右侧是分离的 4 个节点：elapsed / · / arrow-down / tokens，gap 6px。
+      {/* 右侧先放不随运行态淡出的被控呼吸灯,再放 elapsed / · / arrow-down / tokens。
           side-task (mivo 等) 运行时只显示 elapsed, 不带 token 行 —— 这类任务不
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
-      <div
-        className="flex min-w-0 items-center justify-self-end gap-[6px]"
-        style={fadeStyle}
-        aria-hidden={isHidden}
-      >
-        {backgroundTasksRunning ? (
-          // 后台子任务模式:elapsed 是上一轮 turn 的残留计时、tokens 是残留计数,
-          // 都不成立 —— 整段换成「全部停止」入口(原横幅唯一操作,横幅已删)。
-          <button
-            type="button"
-            onClick={onStopBackgroundTasks}
-            disabled={backgroundStopping || !onStopBackgroundTasks}
-            className={cn(
-              'flex shrink-0 items-center gap-1 text-[13px] font-medium',
-              'text-[var(--text-primary)] hover:opacity-70 transition-opacity',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-            )}
-            title={t(
-              backgroundBashOnlyCount > 0
-                ? 'chat.backgroundActivity.stopBashTitle'
-                : 'chat.backgroundActivity.stopAllTitle',
-            )}
+      <div className="flex min-w-0 items-center justify-self-end gap-2">
+        {rightLeadingSlot}
+        {!isHidden && (
+          <div
+            data-running-status-meta="true"
+            className="flex min-w-0 items-center gap-[6px]"
+            style={fadeStyle}
+            aria-hidden={isHidden}
           >
-            <Square size={12} />
-            {backgroundStopping
-              ? t('chat.backgroundActivity.stopping')
-              : t('chat.backgroundActivity.stopAll')}
-          </button>
-        ) : (
-          <>
-            <span className="text-[13px] font-medium text-[var(--status-bar-meta)]">
-              {elapsedText}
-            </span>
-            {!sideTaskRunning && (
+            {backgroundTasksRunning ? (
+              // 后台子任务模式:elapsed 是上一轮 turn 的残留计时、tokens 是残留计数,
+              // 都不成立 —— 整段换成「全部停止」入口(原横幅唯一操作,横幅已删)。
+              <button
+                type="button"
+                onClick={onStopBackgroundTasks}
+                disabled={backgroundStopping || !onStopBackgroundTasks}
+                className={cn(
+                  'flex shrink-0 items-center gap-1 text-[13px] font-medium',
+                  'text-[var(--text-primary)] hover:opacity-70 transition-opacity',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+                title={t(
+                  backgroundBashOnlyCount > 0
+                    ? 'chat.backgroundActivity.stopBashTitle'
+                    : 'chat.backgroundActivity.stopAllTitle',
+                )}
+              >
+                <Square size={12} />
+                {backgroundStopping
+                  ? t('chat.backgroundActivity.stopping')
+                  : t('chat.backgroundActivity.stopAll')}
+              </button>
+            ) : (
               <>
                 <span className="text-[13px] font-medium text-[var(--status-bar-meta)]">
-                  &middot;
+                  {elapsedText}
                 </span>
-                <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                <span className="text-[13px] font-medium text-[var(--status-bar-meta)]">
-                  {tokenText}
-                </span>
+                {!sideTaskRunning && (
+                  <>
+                    <span className="text-[13px] font-medium text-[var(--status-bar-meta)]">
+                      &middot;
+                    </span>
+                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                    <span className="text-[13px] font-medium text-[var(--status-bar-meta)]">
+                      {tokenText}
+                    </span>
+                  </>
+                )}
               </>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -296,6 +296,11 @@ export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpEntry
 
 let _store: RunMarkerStore | null = null;
 let _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * 本次启动的尸检结论,供日志上报的「原生崩溃兜底」路径消费(它要知道上次运行有没有
+ * 「异常退出且无任何退出记录」)。只读快照,消费方不得改动。
+ */
+let _previousRunReports: PreviousRunReport[] = [];
 
 function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
   let hadAbnormal = false;
@@ -417,6 +422,7 @@ export function initStartupDiagnostics(): void {
       version: app.getVersion(),
     });
     const reports = store.analyzePreviousRuns();
+    _previousRunReports = reports;
     const hadAbnormal = logPreviousRunReports(reports);
     logCrashDumpScan(hadAbnormal);
     store.begin();
@@ -431,6 +437,17 @@ export function initStartupDiagnostics(): void {
   } catch (err) {
     log.warn('startup diagnostics init failed (non-fatal)', err);
   }
+}
+
+/**
+ * 本次启动的退出尸检结论。
+ *
+ * 此前这些结论只写进日志、没有任何程序化出口,「上次是原生崩溃」这个事实无法被别的模块
+ * 消费。日志上报的原生崩溃兜底路径需要它(需求 §4.1 的第四条触发路径)。
+ * `initStartupDiagnostics()` 之前调用返回空数组。
+ */
+export function getPreviousRunReports(): readonly PreviousRunReport[] {
+  return _previousRunReports;
 }
 
 /** lifecycle.beginShutdown → 记录 shutdown 入口。init 前调用是 no-op。 */

@@ -17,7 +17,6 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
-  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
@@ -124,38 +123,6 @@ describe('ghost · id 规则', () => {
 });
 
 describe('ghost · 清单校验', () => {
-  it('更新保留已安装清单中已批准的权限，即使发布元数据遗漏这些权限', () => {
-    const makeToolManifest = (tools: Array<{ name: string; description: string }>) => {
-      const raw = { ...goodManifest(), slots: ['tool'], tools } as Record<string, unknown>;
-      delete raw.panel;
-      const result = validateGhostManifest(raw);
-      if (!result.ok) throw new Error(result.reason);
-      return result.manifest;
-    };
-    const installed = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const reviewed = makeToolManifest([{ name: 'gen_image', description: 'Projected description' }]);
-    const samePackage = makeToolManifest([{ name: 'gen_image', description: 'Generate images' }]);
-    const expandedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'Generate images' },
-      { name: 'edit_image', description: 'Edit images' },
-    ]);
-    const changedPackage = makeToolManifest([
-      { name: 'gen_image', description: 'A third, unreviewed description' },
-    ]);
-
-    expect(unreviewedGhostPermissionItems(reviewed, installed, samePackage)).toEqual([]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, expandedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:edit_image',
-    ]);
-    expect(
-      unreviewedGhostPermissionItems(reviewed, installed, changedPackage).map((item) => item.key),
-    ).toEqual([
-      'tool:gen_image',
-    ]);
-  });
-
   it('全字段合法清单通过,并按已知字段收窄输出', () => {
     const v = validateGhostManifest({ ...goodManifest(), unknownField: 'ignored' });
     expect(v.ok).toBe(true);

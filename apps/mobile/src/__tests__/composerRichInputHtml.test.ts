@@ -55,18 +55,6 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('border-radius: 4px');
   });
 
-  it('stretches the editor across the inputFrame width when leading chrome is present', () => {
-    // row 里 WebView flex:0 不拉宽时,placeholder 会离开 inputFrame 左缘留下死白;
-    // HTML #editor 与 RN 外壳都钉 width:100%。
-    expect(html).toContain('width: 100%;');
-    const inputSource = readFileSync(
-      resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    expect(inputSource).toContain("width: '100%'");
-    expect(inputSource).toContain("alignSelf: 'stretch'");
-  });
-
   it('keeps the WebKit caret in an editable text anchor after every atom', () => {
     expect(html).toContain("const CARET_ANCHOR = '\\u200B'");
     expect(html).toContain('return node.type === \'text\' ? [element] : [element, makeCaretAnchor()]');

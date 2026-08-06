@@ -1640,18 +1640,21 @@ Agent 做检索增强)时,用这个能力把文字算成向量:
 // 需声明:"slots": [..., "cindy"], "cindy": { "embed": ["text"] }
 
 // 1) 入库:把你的内容算成向量,自己存起来
+const requestedDim = undefined; // 传 dimensions 时改成具体数字;不传就是 undefined
 const doc = await cindy.send({
   type: 'cindy-request',
   kind: 'embed_text',
   texts: ['第一段内容…', '第二段内容…'],
   inputType: 'document',   // 可选:这批是"被检索的内容"
-  // dimensions: 1024,     // 可选:降维省存储与传输(默认随型号)
+  ...(requestedDim !== undefined ? { dimensions: requestedDim } : {}),
   // tier: 'best',         // 可选:档位意图(draft/standard/best)
   callId: msg.callId,
 });
 // 成功:{ ok:true, embeddings:[[…],[…]], model:'…', dim:1024, modelLabel:'…' }
-// 把 embeddings 连同 model + dim 一起存进你自己的 kv / 文件
-// (下面检索时要用这两个值,记作 storedModel / storedDim)
+// 把 embeddings 连同 model + dim + requestedDim 一起存进你自己的 kv / 文件
+// requestedDim 来自这次请求而不是回执;没传 dimensions 时保持 undefined。
+// dim 只用于兼容性校验(例如比对存量向量长度),不是检索请求的回放依据。
+// (下面检索时要用 storedModel / storedRequestedDim; storedDim 可继续用于校验)
 // 回执里的 model 一定是可以原样回传的那个 id;偶尔还会多一个 upstreamModel
 // (上游带版本号的实际型号),那个只用来看"后端是不是换了实现",别回传。
 
@@ -1665,7 +1668,7 @@ const q = await cindy.send({
   // 入库时传过 dimensions 就必须**原样再传一次**:不传等于要该型号的默认维度,
   // 默认值往往不是你入库时那个,拿到的查询向量和存量长度都不一样,没法比。
   // 入库时没传过,这里也别传(两边都用默认)。
-  ...(storedDim !== undefined ? { dimensions: storedDim } : {}),
+  ...(storedRequestedDim !== undefined ? { dimensions: storedRequestedDim } : {}),
   callId: msg.callId,
 });
 \`\`\`

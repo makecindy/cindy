@@ -110,6 +110,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: vi.fn(async () => null),
+  getSessionRowSnapshotStrict: vi.fn(async () => null),
   setSessionProviderIdInDb: h.setSessionProviderIdInDb,
   setSessionSourceInDb: h.setSessionSourceInDb,
   setWorktreePathInDb: vi.fn(async () => undefined),
@@ -373,6 +374,21 @@ beforeEach(() => {
 });
 
 describe('hook session 精确接管边界', () => {
+  it('inspect 的数据库读取失败向上抛出, 不伪装成不存在', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockRejectedValueOnce(new Error('database unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    await expect(runner.inspect('session-under-test')).rejects.toThrow('database unavailable');
+  });
+
+  it('inspect 的 maker metadata 读取失败向上抛出, 不伪装成不存在', async () => {
+    fakeMaker.getSessionMeta.mockRejectedValueOnce(new Error('metadata unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+
+    await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)

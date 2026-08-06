@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
+  broadcastMessageRow: vi.fn(),
   createMessage: vi.fn(async () => ({}) as unknown),
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId, _clientId, patch) => ({
     previous: {},
@@ -45,6 +46,7 @@ vi.mock('../device-link/broadcast-tap.js', () => ({
 
 import {
   broadcastMessageAgentMetaUpdate,
+  broadcastMessageRow,
   createMessage,
   patchMessageAgentMetaWithResult,
   updateMessageContent,
@@ -55,6 +57,7 @@ import {
 } from '../mcp-integrations/mediaToolResultFallback.js';
 import {
   onToolUseEvent,
+  persistCodexPlanOnDone,
   onToolResultEvent,
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -63,6 +66,7 @@ import {
   onThinkingEvent,
   flushAssistantBlock,
   flushOrphanToolResults,
+  isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
   resetTurnPersistState,
   clearSessionPersistState,
@@ -85,6 +89,16 @@ const SUMMARY = 'tool finished';
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
+
+describe('Codex done completion boundary', () => {
+  it('only treats successful terminal data as a completed turn', () => {
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'completed' } })).toBe(true);
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'interrupted' } })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ raw: { status: 'failed' } })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ cancelled: true })).toBe(false);
+    expect(isSuccessfulCodexDoneEventData({ raw: { id: 'legacy-turn' } })).toBe(false);
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -168,6 +182,124 @@ describe('update_plan tool_use persistence', () => {
           query: 'https://example.com/final',
           action: { type: 'openPage', url: 'https://example.com/final' },
         },
+      },
+    );
+  });
+
+  it('persists a successful turn plan as completed so reload cannot resurrect progress', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: {
+          explanation: 'keep this field',
+          plan: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Start dev', status: 'in_progress' },
+          ],
+        },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-1', status: 'completed' },
+      plan: [
+        { step: 'Inspect', status: 'completed' },
+        { step: 'Start dev', status: 'in_progress' },
+      ],
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: {
+          explanation: 'keep this field',
+          plan: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Start dev', status: 'completed' },
+          ],
+        },
+        terminalPlanSnapshot: true,
+      },
+    );
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('stamps an already-completed plan as terminal at the successful done boundary', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-complete',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-complete', status: 'completed' },
+      plan: [{ step: 'Ship', status: 'completed' }],
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-complete',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+        terminalPlanSnapshot: true,
+      },
+    );
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('persists non-success boundaries without inferring completion or touching unrelated turns', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-1', status: 'interrupted' },
+    })).toBe(true);
+    expect(persistCodexPlanOnDone(SESSION, {
+      cancelled: true,
+      raw: { id: 'turn-1', status: 'completed' },
+    })).toBe(true);
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-2', status: 'completed' },
+    })).toBe(false);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Wait for user', status: 'in_progress' }] },
+        turnCompleted: false,
       },
     );
   });

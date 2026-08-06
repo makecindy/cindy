@@ -53,7 +53,15 @@ export {
   chunkWecomMarkdown,
   escapeWecomMarkdown,
 } from './wecom/codec.js';
-export { stripXdtFileLinks, stripXdtImageLinks } from './xdtRefs.js';
+export {
+  collectXdtFileRefs,
+  collectXdtImageRefs,
+  normalizeXdtAbsPath,
+  stripXdtFileLinks,
+  stripXdtImageLinks,
+  transformXdtRefs,
+} from './xdtRefs.js';
+export type { XdtFileRef, XdtImageRef, XdtRefTransform } from './xdtRefs.js';
 export {
   decodeLaneUserId as decodeTelegramLaneUserId,
   encodeLaneUserId as encodeTelegramLaneUserId,

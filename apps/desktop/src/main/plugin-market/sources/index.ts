@@ -744,6 +744,8 @@ export class MarketSourceManager {
         : {
             ...entry.config,
             pluginCount: 0,
+            skippedCount: 0,
+            unreadableCount: 0,
             status: 'error' as const,
             errorCode: entry.result.code,
           },
@@ -799,6 +801,8 @@ export class MarketSourceManager {
     return {
       ...config,
       pluginCount: marketplace.plugins.length,
+      skippedCount: marketplace.skippedCount,
+      unreadableCount: marketplace.unreadableCount,
       status: 'ok',
       errorCode: null,
     };
