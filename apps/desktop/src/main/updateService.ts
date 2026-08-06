@@ -993,7 +993,7 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
   child.on('spawn', () => {
     clearTimeout(spawnTimeout);
     child.unref();
-    forceQuit();
+    void forceQuit();
   });
 
   child.on('error', (err: NodeJS.ErrnoException) => {
@@ -1008,15 +1008,20 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
  * fire async cleanups whose throws would pop a native dialog and block exit —
  * which would block the update script (it polls until our PID disappears).
  */
-function forceQuit(): void {
+async function forceQuit(): Promise<void> {
   log.info('forceQuit() — destroying windows and exiting');
   // 本路径绕过 lifecycle 的 before-quit 链 —— 显式给 run marker 打上「更新重启」
   // 标记,否则下次启动的退出尸检会把这次强退误判成异常退出 (issue #758)。
   noteExpectedExit('update-relaunch');
   // 预览清理同 onQuit 链一样被绕过——同步撤销预览 origin 并启动预览标签
   // 关闭,否则外置 Chrome 会保留指向已释放端口的预览标签、RSB 持久记录
-  // 也会在重启后恢复旧 URL (codex-connector P1, round 19)。
-  revokePreviewState();
+  // 也会在重启后恢复旧 URL (codex-connector P1, round 19)。有界等待清理
+  // 完成:更新脚本轮询 PID 消失,等待必须短且有界 (round 20)。
+  const previewCleanup = revokePreviewState();
+  await Promise.race([
+    previewCleanup.catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, 1000)),
+  ]);
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();
@@ -1065,7 +1070,7 @@ function executeUpdateMacOS(zipPath: string): void {
     detached: true,
     stdio: 'ignore',
   }).unref();
-  forceQuit();
+  void forceQuit();
 }
 
 function executeRelaunch(theme: 'light' | 'dark'): void {

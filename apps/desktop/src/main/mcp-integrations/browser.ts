@@ -533,9 +533,12 @@ async function closePreviewTabs(): Promise<void> {
  * and RSB persistent tab rows would reload the stale URL after restart
  * (codex-connector P1, round 19).
  */
-export function revokePreviewState(): void {
+export function revokePreviewState(): Promise<void> {
   localPreviewServer.dispose();
-  void closePreviewTabs();
+  // Return the tab-close promise so callers that bypass before-quit (updater
+  // force-quit) can boundedly await it before exiting (codex-connector P1,
+  // round 20).
+  return closePreviewTabs();
 }
 
 export function disposeBrowserRuntime(): Promise<void> {
