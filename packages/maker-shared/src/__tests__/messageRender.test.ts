@@ -870,7 +870,7 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
-  it('closes a historical open Codex plan at its persisted successful turn boundary', () => {
+  it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
     const plan = {
       ...tool('plan1', 'update_plan', {
         plan: [
@@ -890,142 +890,33 @@ describe('message render todo grouping', () => {
 
     expect(findLatestMessageTodoInsertion([plan, completedBoundary])).toMatchObject({
       source: 'codex',
-      createdAt: at(8),
-      updatedAtMs: Date.parse(at(8)),
+      createdAt: at(1),
       todos: [
         { content: 'Inspect', status: 'completed' },
-        { content: 'Start dev', status: 'completed' },
+        { content: 'Start dev', status: 'in_progress' },
       ],
     });
   });
 
-  it('keeps a historical Codex plan open at an interrupted turn boundary', () => {
-    const plan = tool('plan1', 'update_plan', {
-      plan: [{ step: 'Wait for user', status: 'in_progress' }],
-    });
-    const interruptedBoundary: MessageRenderSourceMessageLike = {
-      role: 'assistant',
-      clientId: 'partial-answer-1',
-      content: 'Partial work before the user stopped the turn.',
-      createdAt: at(8),
-      turnCompleted: false,
-    };
-
-    expect(findLatestMessageTodoInsertion([plan, interruptedBoundary])).toMatchObject({
-      todos: [{ content: 'Wait for user', status: 'in_progress' }],
-    });
-  });
-
-  it('does not let a later successful turn close a plan after an interrupted seal', () => {
-    const plan = tool('plan1', 'update_plan', {
-      plan: [{ step: 'Wait for user', status: 'in_progress' }],
-    });
-    const interruptedBoundary: MessageRenderSourceMessageLike = {
-      role: 'assistant',
-      clientId: 'partial-answer-1',
-      content: 'Partial work before the user stopped the turn.',
-      createdAt: at(6),
-      turnCompleted: false,
-    };
-    const continuedAsSteer: MessageRenderSourceMessageLike = {
-      role: 'user',
-      clientId: 'user-2',
-      content: 'Continue',
-      createdAt: at(7),
-      delivery: 'steer',
-    };
-    const laterBoundary: MessageRenderSourceMessageLike = {
-      role: 'assistant',
-      clientId: 'answer-2',
-      content: 'The later turn is done.',
-      createdAt: at(8),
-      turnCompleted: true,
-    };
-
-    expect(
-      findLatestMessageTodoInsertion([
-        plan,
-        interruptedBoundary,
-        continuedAsSteer,
-        laterBoundary,
-      ]),
-    ).toMatchObject({
-      todos: [{ content: 'Wait for user', status: 'in_progress' }],
-    });
-  });
-
-  it('does not let a later successful turn close a failed plan with no assistant row', () => {
-    const plan = {
-      ...tool('plan1', 'update_plan', {
-        plan: [{ step: 'Wait for user', status: 'in_progress' }],
-      }),
-      turnCompleted: false,
-    };
-    const continuedAsSteer: MessageRenderSourceMessageLike = {
-      role: 'user',
-      clientId: 'user-2',
-      content: 'Continue',
-      createdAt: at(7),
-      delivery: 'steer',
-    };
-    const laterBoundary: MessageRenderSourceMessageLike = {
-      role: 'assistant',
-      clientId: 'answer-2',
-      content: 'The later turn is done.',
-      createdAt: at(8),
-      turnCompleted: true,
-    };
-
-    expect(findLatestMessageTodoInsertion([plan, continuedAsSteer, laterBoundary])).toMatchObject({
-      todos: [{ content: 'Wait for user', status: 'in_progress' }],
-    });
-  });
-
-  it('keeps a steer inside a still-running Codex plan ownership window', () => {
-    const plan = tool('plan1', 'update_plan', {
-      plan: [{ step: 'Apply the requested adjustment', status: 'in_progress' }],
-    });
-    const steer: MessageRenderSourceMessageLike = {
-      role: 'user',
-      clientId: 'user-steer',
-      content: 'Keep the existing layout.',
-      createdAt: at(7),
-      delivery: 'steer',
-    };
+  it('does not infer completion when an ambiguous legacy seal precedes the final plan update', () => {
     const completedBoundary: MessageRenderSourceMessageLike = {
       role: 'assistant',
       clientId: 'answer-1',
-      content: 'Done.',
-      createdAt: at(8),
-      turnCompleted: true,
-    };
-
-    expect(findLatestMessageTodoInsertion([plan, steer, completedBoundary])).toMatchObject({
-      todos: [{ content: 'Apply the requested adjustment', status: 'completed' }],
-    });
-  });
-
-  it('does not use a later turn completion to close an earlier open Codex plan', () => {
-    const plan = tool('plan1', 'update_plan', {
-      plan: [{ step: 'Wait for user', status: 'in_progress' }],
-    });
-    const nextTurnUser: MessageRenderSourceMessageLike = {
-      role: 'user',
-      clientId: 'user-2',
-      content: 'Continue',
+      content: 'The work is complete.',
       createdAt: at(7),
-      delivery: 'turn',
-    };
-    const laterBoundary: MessageRenderSourceMessageLike = {
-      role: 'assistant',
-      clientId: 'answer-2',
-      content: 'Done.',
-      createdAt: at(8),
       turnCompleted: true,
     };
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Record the final state', status: 'in_progress' }],
+      }),
+      createdAt: at(8),
+    };
 
-    expect(findLatestMessageTodoInsertion([plan, nextTurnUser, laterBoundary])).toMatchObject({
-      todos: [{ content: 'Wait for user', status: 'in_progress' }],
+    expect(findLatestMessageTodoInsertion([completedBoundary, plan])).toMatchObject({
+      source: 'codex',
+      createdAt: at(8),
+      todos: [{ content: 'Record the final state', status: 'in_progress' }],
     });
   });
 

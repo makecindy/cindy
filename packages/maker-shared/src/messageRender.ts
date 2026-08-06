@@ -19,8 +19,6 @@ export interface MessageRenderSourceMessageLike {
   toolUseId?: string | null;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
-  /** User messages sent mid-turn do not start a new plan ownership window. */
-  delivery?: 'turn' | 'steer';
 }
 
 export type MessageRenderNormalizedMessageKind =
@@ -532,31 +530,8 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
     latestPlanMessage !== null &&
     (isExplicitPlanClearEvent(latestPlanMessage) ||
       latestTaskEventClearsPlan(messages, latestPlanIndex));
-  const persistedCodexCompletionBoundary =
-    insertionBelongsToLatestEvent &&
-    latest?.source === 'codex' &&
-    // A Codex turn can be interrupted before it emits any assistant text. Main
-    // stamps that failed boundary on the owning plan row so a later steer turn
-    // cannot lend its successful assistant seal to this unfinished plan.
-    latestPlanMessage?.turnCompleted !== false &&
-    latest.todos.some((todo) => todo.status !== 'completed')
-      ? findPersistedCodexCompletionBoundary(messages, latestPlanIndex)
-      : null;
-  const persistedCodexCompletionAtMs = Date.parse(
-    persistedCodexCompletionBoundary?.createdAt ?? '',
-  );
-  const resolvedLatest = latest && persistedCodexCompletionBoundary
-    ? {
-        ...latest,
-        todos: latest.todos.map((todo) => ({ ...todo, status: 'completed' as const })),
-        createdAt: persistedCodexCompletionBoundary.createdAt ?? latest.createdAt,
-        ...(Number.isFinite(persistedCodexCompletionAtMs)
-          ? { updatedAtMs: persistedCodexCompletionAtMs }
-          : {}),
-      }
-    : latest;
   return {
-    insertion: insertionBelongsToLatestEvent ? resolvedLatest : null,
+    insertion: insertionBelongsToLatestEvent ? latest : null,
     hasPlanEvent,
     isResolved:
       !hasPlanEvent ||
@@ -565,28 +540,6 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
     latestPlanIndex,
     latestInsertionIndex: latestIndex,
   };
-}
-
-/**
- * Historical compatibility for plans written before terminal convergence was
- * persisted. A successful assistant seal before the next normal user turn is
- * the durable proof that this Codex plan's ownership window ended. Steer
- * messages remain inside a still-running product turn and therefore do not cut
- * the search window. An explicit interrupted/failed assistant seal does end
- * that ownership window, so no later turn may complete the old plan.
- */
-function findPersistedCodexCompletionBoundary<
-  TMessage extends MessageRenderSourceMessageLike,
->(messages: readonly TMessage[], planIndex: number): TMessage | null {
-  for (let index = planIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (message.role === 'user' && message.delivery !== 'steer') return null;
-    if (message.role === 'assistant') {
-      if (message.turnCompleted === false) return null;
-      if (message.turnCompleted === true) return message;
-    }
-  }
-  return null;
 }
 
 export interface CodexPlanSnapshotApplyResult<
