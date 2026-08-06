@@ -450,6 +450,17 @@ export const GHOST_CINDY_TEXT_ACTIONS = ['oneshot'] as const;
 export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
 
 /**
+ * cindy 槽·搜索类可申请的动作。
+ *
+ * `web` = Cindy 托管的公网搜索:意识只递查询词与结果数，主机固定走当前
+ * model-access 下发的 XD endpoint + XD user key，通过固定模型别名调用
+ * Anthropic Messages 原生网页搜索，不把网关 key、模型名或工具定义暴露给
+ * 意识。它与 network 槽里的 BYO Brave/Tavily 是两条独立凭证与计费路径。
+ */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
  * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
@@ -464,6 +475,8 @@ export interface GhostCindyNeeds {
   media?: GhostCindyMediaAction[];
   /** 文本类:oneshot=快问快答(轻量任务模型链直答一次,无 agent 无工具)。 */
   text?: GhostCindyTextAction[];
+  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
+  search?: GhostCindySearchAction[];
 }
 
 /**
@@ -1532,6 +1545,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'video.edit': 'cindyVideoEdit',
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
+  'search.web': 'cindySearchWeb',
 };
 
 /**
@@ -1542,6 +1556,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
 const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   'media.deposit': 'cindyMediaDepositDetail',
   'text.oneshot': 'cindyTextOneshotDetail',
+  'search.web': 'cindySearchWebDetail',
 };
 
 /**
@@ -2986,6 +3001,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       video: GHOST_MODEL_VIDEO_ACTIONS,
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
+      search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       const allowed = actionTable[category];
@@ -3017,13 +3033,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
+      else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
     }
     if (
       cindy.image === undefined &&
       cindy.video === undefined &&
       cindy.media === undefined &&
-      cindy.text === undefined
+      cindy.text === undefined &&
+      cindy.search === undefined
     ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
@@ -5407,6 +5425,11 @@ export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
 /** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
 export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 
+/** Cindy 托管 Web Search 的请求边界。 */
+export const GHOST_CINDY_SEARCH_MAX_QUERY_CHARS = 2000;
+export const GHOST_CINDY_SEARCH_DEFAULT_RESULTS = 5;
+export const GHOST_CINDY_SEARCH_MAX_RESULTS = 10;
+
 /**
  * 上行:cindy 槽代办请求(请 Cindy 本体出图 / 改图)。协议 type 为
  * 'cindy-request'(2026-07-11 由 'model-request' 更名,主机对旧名保持
@@ -5533,6 +5556,27 @@ export type GhostPipeCindyRequest =
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
       mode?: 'submit';
+    }
+  | {
+      /**
+       * Cindy 托管 Web Search:主机固定使用当前 XD endpoint、XD user key
+       * 与内置 Anthropic Messages 搜索模型，不接受意识传入
+       * api_base/header/key/model/tool。
+       * `provider` 固定为 cindy，用于与插件 network 槽的 BYO Brave/Tavily
+       * 明确分账。
+       *
+       * 须声明 'cindy' 卡槽 + `cindy.search: ["web"]`。
+       */
+      type: 'cindy-request';
+      kind: 'search_web';
+      /** 用户原话查询，trim 后 1–2000 字符。 */
+      query: string;
+      /** 结果条数，1–10，缺省 5。 */
+      limit?: number;
+      /** 固定为 cindy；其它值明拒。 */
+      provider: 'cindy';
+      /** 搜索只由 tool-call 触发，必须透传本次 callId 用于账单与日志归因。 */
+      callId: string;
     }
   | {
       type: 'cindy-request';
@@ -5719,13 +5763,25 @@ export type GhostPipeModelResult =
       model?: string;
     }
   | {
+      /** search_web 成功；逻辑 Provider 恒为 cindy，不暴露内部模型路由。 */
+      ok: true;
+      provider: 'cindy';
+      results: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+      }>;
+    }
+  | {
       ok: false;
       message: string;
       /**
        * 结构化错误码(2026-07-31 起 oneshot_text 填写;媒体代办暂只有
        * message)。稳定值:'NO_CANDIDATE'(快速通道无可用模型/凭证)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'。
+       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * search_web 另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
+       * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
       errorCode?: string;
     };
