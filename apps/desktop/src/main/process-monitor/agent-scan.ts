@@ -45,12 +45,14 @@ export interface OsProcessSnapshot {
 }
 
 /**
- * pi 二进制路径 marker(与 claude/codex 的 marker 同构;pi 安装在
- * `<userData>/pi/<version>/`,Linux 无 agent-runtime 布局 —— 见
- * agent-binaries/factory.ts 对 kind==='pi' 的分支)。
+ * pi 二进制路径 marker(与 claude/codex 的 marker 同构):生产二进制安装在
+ * `<userData>/pi/<version>/`,dev/sandbox 则从仓库 `apps/pi-bin/` 启动。
  */
 export function buildPiPathMarkers(dirNames: readonly string[]): string[] {
-  return dirNames.flatMap((dirName) => {
+  return [
+    'apps\\pi-bin\\',
+    'apps/pi-bin/',
+    ...dirNames.flatMap((dirName) => {
     const dir = dirName.toLowerCase();
     return [
       `appdata\\roaming\\${dir}\\pi\\`,
@@ -58,7 +60,8 @@ export function buildPiPathMarkers(dirNames: readonly string[]): string[] {
       `/library/application support/${dir}/pi/`,
       `/.config/${dir}/pi/`,
     ];
-  });
+    }),
+  ];
 }
 
 const PI_MARKERS = buildPiPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION));

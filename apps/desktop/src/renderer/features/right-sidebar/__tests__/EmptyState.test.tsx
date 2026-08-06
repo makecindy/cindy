@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -10,12 +10,13 @@ import { EmptyState } from '../EmptyState';
 
 afterEach(() => cleanup());
 
-function renderEmptyState() {
+function renderEmptyState(onAddResourceUsageTab = vi.fn()) {
   return render(
     <EmptyState
       onAddFileTab={vi.fn()}
       onAddReviewTab={vi.fn()}
       onAddBackgroundTasksTab={vi.fn()}
+      onAddResourceUsageTab={onAddResourceUsageTab}
       onAddBrowserTab={vi.fn()}
       onAddTerminalTab={vi.fn()}
     />,
@@ -40,5 +41,12 @@ describe('EmptyState 面板收束(2026-08)', () => {
     renderEmptyState();
     expect(screen.queryByText('rightSidebar.tabs.empty.pluginGroup')).toBeNull();
     expect(screen.queryByText('rightSidebar.tabs.empty.pluginSub')).toBeNull();
+  });
+
+  it('提供资源用量快捷入口', () => {
+    const onAddResourceUsageTab = vi.fn();
+    renderEmptyState(onAddResourceUsageTab);
+    fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openResourceUsage'));
+    expect(onAddResourceUsageTab).toHaveBeenCalledOnce();
   });
 });

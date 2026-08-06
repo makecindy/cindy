@@ -4371,7 +4371,7 @@
         "terminal": "Terminal",
         "review": "Review",
         "backgroundTasks": "Background tasks",
-        "resourceUsage": "Resource usage",
+        "resourceUsage": "Resource Usage",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel"
@@ -4390,13 +4390,14 @@
       "empty": {
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
-        "desc": "Open a file tree, review, built-in browser, or terminal here to work alongside the chat on the left.",
+        "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "Open Resource Usage",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -4776,8 +4777,14 @@
     },
     "resourceUsage": {
       "sections": {
-        "agents": "Agent processes",
-        "app": "App processes"
+        "agents": "Agent Processes",
+        "app": "App Processes"
+      },
+      "columns": {
+        "process": "Process",
+        "cpu": "CPU",
+        "memory": "Memory",
+        "pid": "PID"
       },
       "kinds": {
         "main": "Main process",
@@ -4785,12 +4792,31 @@
         "gpu": "GPU process",
         "utility": "Service process"
       },
-      "processCount_one": "{{count}} process",
-      "processCount_other": "{{count}} processes",
+      "agentRoles": {
+        "codexTask": "Codex Task",
+        "codexService": "Codex Service"
+      },
+      "agentRoleDetails": {
+        "task": "Task runtime",
+        "service": "Accounts and models"
+      },
+      "services": {
+        "audio": "Audio Service",
+        "network": "Network Service",
+        "storage": "Storage Service",
+        "videoCapture": "Video Capture"
+      },
+      "processCount_one": "Process tree: {{count}} process",
+      "processCount_other": "Process tree: {{count}} processes",
       "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
-      "terminate": "Stop process",
+      "tableLabel": "Resource Usage by process",
+      "sortBy": "Sort by {{column}}",
+      "loading": "Reading resource usage…",
+      "selectHint": "Select a process",
+      "readOnlyHint": "Only Agent processes used for tasks can be stopped",
+      "terminate": "Stop Process",
       "terminateConfirmTitle": "Stop {{name}} process?",
-      "terminateConfirmDescription": "This force-stops the agent process and all of its child processes. Work in progress will be interrupted; send another message in the task to start the agent again.",
+      "terminateConfirmDescription": "This force-stops the agent process and all of its child processes. Every task using this process will be interrupted; send another message in an affected task to start an agent again.",
       "terminated": "Stopped the {{name}} process",
       "terminateFailed": "Couldn't stop this process — it may have already exited. The list updates with the next sample."
     }

@@ -180,6 +180,7 @@ import {
   resolveCodexSubagentModelFallback,
 } from './codex-subagent-config.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import { registerCodexProcessRole } from '../process-monitor/codex-process-registry.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
@@ -999,6 +1000,8 @@ export function getMaker(): Maker {
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
       logger: desktopMakerLogger,
+      registerLocalCodexAppServerProcess: ({ pid, role }) =>
+        registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。

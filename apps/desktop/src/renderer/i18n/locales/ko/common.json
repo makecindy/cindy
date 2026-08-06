@@ -4388,13 +4388,14 @@
       "empty": {
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
-        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일 트리, 리뷰, 내장 브라우저, 터미널을 여기에 여세요.",
+        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
         "openFile": "파일 열기",
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "리소스 사용량 열기",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -4777,18 +4778,43 @@
         "agents": "Agent 프로세스",
         "app": "앱 프로세스"
       },
+      "columns": {
+        "process": "프로세스",
+        "cpu": "CPU",
+        "memory": "메모리",
+        "pid": "PID"
+      },
       "kinds": {
         "main": "메인 프로세스",
         "renderer": "UI 프로세스",
         "gpu": "GPU 프로세스",
         "utility": "서비스 프로세스"
       },
-      "processCount_one": "프로세스 {{count}}개",
-      "processCount_other": "프로세스 {{count}}개",
+      "agentRoles": {
+        "codexTask": "Codex 작업",
+        "codexService": "Codex 서비스"
+      },
+      "agentRoleDetails": {
+        "task": "작업 실행",
+        "service": "계정 및 모델"
+      },
+      "services": {
+        "audio": "오디오 서비스",
+        "network": "네트워크 서비스",
+        "storage": "스토리지 서비스",
+        "videoCapture": "비디오 캡처"
+      },
+      "processCount_one": "프로세스 트리: {{count}}개",
+      "processCount_other": "프로세스 트리: {{count}}개",
       "agentsEmpty": "실행 중인 Agent 프로세스가 없습니다. 작업을 시작하면 여기에 표시됩니다.",
+      "tableLabel": "프로세스별 리소스 사용량",
+      "sortBy": "{{column}} 기준 정렬",
+      "loading": "리소스 사용량을 불러오는 중…",
+      "selectHint": "프로세스 선택",
+      "readOnlyHint": "작업용 Agent 프로세스만 종료할 수 있습니다",
       "terminate": "프로세스 종료",
       "terminateConfirmTitle": "{{name}} 프로세스를 종료할까요?",
-      "terminateConfirmDescription": "이 Agent 프로세스와 모든 하위 프로세스를 강제 종료합니다. 진행 중인 작업이 중단되며, 해당 작업에서 메시지를 보내면 Agent를 다시 시작할 수 있습니다.",
+      "terminateConfirmDescription": "이 Agent 프로세스와 모든 하위 프로세스를 강제 종료합니다. 이 프로세스를 사용하는 모든 작업이 중단되며, 영향을 받은 작업에서 메시지를 보내면 필요할 때 Agent를 다시 시작할 수 있습니다.",
       "terminated": "{{name}} 프로세스를 종료했습니다",
       "terminateFailed": "프로세스를 종료하지 못했습니다. 이미 종료되었을 수 있습니다. 목록은 다음 샘플링 때 자동으로 업데이트됩니다."
     }

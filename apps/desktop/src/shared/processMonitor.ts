@@ -25,6 +25,9 @@ export type ProcessUsageKind =
   | 'agent-codex'
   | 'agent-pi';
 
+/** Codex 本地 app-server 的产品职责；仅传枚举，不暴露 host key / 凭据 / 命令行。 */
+export type AgentProcessRole = 'task-host' | 'control-plane-service';
+
 export interface ProcessUsageEntry {
   /** 根进程 pid(agent 条目 = 树根;Chromium 条目 = 进程本身)。 */
   pid: number;
@@ -39,10 +42,15 @@ export interface ProcessUsageEntry {
   cpuPercent: number;
   /** 内存 working set(KB;agent 条目为整棵子进程树求和)。 */
   memoryKb: number;
-  /** 该条目聚合的进程数(agent 树含根;Chromium 条目恒为 1)。 */
+  /**
+   * 该条目聚合的可见进程数(agent 树含根，但不含 conhost 等 OS 辅助进程；
+   * Chromium 条目恒为 1)。CPU / 内存仍聚合完整进程树。
+   */
   processCount: number;
   /** true = 可被「结束进程」终止(仅本产品 spawn 的 agent 根进程)。 */
   terminable: boolean;
+  /** 仅 Codex 条目可有；普通任务共享宿主与账户/模型控制面服务据此消歧。 */
+  agentRole?: AgentProcessRole;
 }
 
 export interface ProcessMonitorSample {

@@ -4388,13 +4388,14 @@
       "empty": {
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
-        "desc": "ファイルツリー、レビュー、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
         "reviewSub": "Review",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
+        "openResourceUsage": "リソース使用量を開く",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -4777,18 +4778,43 @@
         "agents": "Agent プロセス",
         "app": "アプリプロセス"
       },
+      "columns": {
+        "process": "プロセス",
+        "cpu": "CPU",
+        "memory": "メモリ",
+        "pid": "PID"
+      },
       "kinds": {
         "main": "メインプロセス",
         "renderer": "UI プロセス",
         "gpu": "GPU プロセス",
         "utility": "サービスプロセス"
       },
-      "processCount_one": "{{count}} 個のプロセス",
-      "processCount_other": "{{count}} 個のプロセス",
+      "agentRoles": {
+        "codexTask": "Codex タスク",
+        "codexService": "Codex サービス"
+      },
+      "agentRoleDetails": {
+        "task": "タスク実行",
+        "service": "アカウントとモデル"
+      },
+      "services": {
+        "audio": "オーディオサービス",
+        "network": "ネットワークサービス",
+        "storage": "ストレージサービス",
+        "videoCapture": "ビデオキャプチャ"
+      },
+      "processCount_one": "プロセスツリー：{{count}} 個",
+      "processCount_other": "プロセスツリー：{{count}} 個",
       "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
+      "tableLabel": "プロセス別のリソース使用量",
+      "sortBy": "{{column}}で並べ替え",
+      "loading": "リソース使用量を読み込んでいます…",
+      "selectHint": "プロセスを選択",
+      "readOnlyHint": "終了できるのはタスク用の Agent プロセスだけです",
       "terminate": "プロセスを終了",
       "terminateConfirmTitle": "{{name}} プロセスを終了しますか？",
-      "terminateConfirmDescription": "この Agent プロセスとすべての子プロセスを強制終了します。進行中の作業は中断されます。対応するタスクでメッセージを送信すると Agent を再起動できます。",
+      "terminateConfirmDescription": "この Agent プロセスとすべての子プロセスを強制終了します。このプロセスを使用しているすべてのタスクが中断されます。影響を受けたタスクでメッセージを送信すると、必要に応じて Agent を再起動できます。",
       "terminated": "{{name}} プロセスを終了しました",
       "terminateFailed": "プロセスを終了できませんでした。すでに終了している可能性があります。リストは次回のサンプリングで自動的に更新されます"
     }

@@ -75,6 +75,17 @@ describe('classifyMonitoredAgentCommandLine', () => {
     expect(classifyMonitoredAgentCommandLine('/usr/local/bin/pi serve')).toBeNull();
   });
 
+  it('识别 dev/sandbox 的 apps/pi-bin 二进制路径', () => {
+    expect(
+      classifyMonitoredAgentCommandLine(
+        'd:\\projects\\cindy\\apps\\pi-bin\\win32-x64\\pi.exe --rpc',
+      ),
+    ).toBe('pi');
+    expect(
+      classifyMonitoredAgentCommandLine('/repo/apps/pi-bin/darwin-arm64/pi --rpc'),
+    ).toBe('pi');
+  });
+
   it('识别运行时 userData 派生的 pi marker(userData 重定向场景)', () => {
     registerPiUserDataMarkers('/custom/data-home/CindyBrand');
     expect(

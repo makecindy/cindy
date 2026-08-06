@@ -1,25 +1,21 @@
-/**
- * ResourceUsageBody —— 「资源用量」tab 的内容区。
- *
- * 视图:两个分区 —— Agent 进程(本产品 spawn 的 claude/codex/pi 树,聚合值,
- * 可结束)与应用进程(Electron 自家 main/renderer/GPU/utility,只读)。
- * 各分区按 CPU 降序。
- *
- * 数据约束:
- *  - 可见(激活 tab 且壳子可见)才订阅;不可见即退订 —— main 侧无订阅者就
- *    完全不采样。同窗口多实例经 subscription.ts 引用计数聚合。
- *  - 数据由 main 周期推送(~2s),本地即时,无 loading 态;首帧到达前渲染
- *    空容器(订阅后 main 立即补推一帧,间隙不可感知)。
- *  - 结束进程:仅 terminable 条目;确认弹窗(destructive)→ IPC → 结果 toast。
- *    归属校验在 main,此处的按钮可见性只是 UX,不是权限边界。
- */
+/** 「资源用量」：单层紧凑进程表，数据与终止授权均由 main 提供。 */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { AppWindow, Bot, Cog, Cpu, PanelsTopLeft, type LucideIcon } from 'lucide-react';
+import {
+  AppWindow,
+  ArrowDown,
+  ArrowUp,
+  Bot,
+  Cog,
+  Cpu,
+  PanelsTopLeft,
+  type LucideIcon,
+} from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
 import type {
   ProcessMonitorSample,
@@ -31,6 +27,10 @@ import {
   acquireProcessMonitorSubscription,
   releaseProcessMonitorSubscription,
 } from './subscription';
+import './resource-usage.css';
+
+type SortKey = 'name' | 'cpu' | 'memory' | 'pid';
+type SortDirection = 'asc' | 'desc';
 
 const KIND_ICON: Record<ProcessUsageEntry['kind'], LucideIcon> = {
   main: AppWindow,
@@ -42,11 +42,17 @@ const KIND_ICON: Record<ProcessUsageEntry['kind'], LucideIcon> = {
   'agent-pi': Bot,
 };
 
-/** agent 产品名不是 i18n 资源,固定英文展示(术语表:Agent 保留英文)。 */
 const AGENT_NAME: Record<string, string> = {
   'agent-claude': 'Claude Code',
   'agent-codex': 'Codex',
   'agent-pi': 'Pi',
+};
+
+const UTILITY_LABEL_KEY: Record<string, string> = {
+  'audio.mojom.AudioService': 'audio',
+  'network.mojom.NetworkService': 'network',
+  'storage.mojom.StorageService': 'storage',
+  'video_capture.mojom.VideoCaptureService': 'videoCapture',
 };
 
 function formatCpu(cpuPercent: number): string {
@@ -58,65 +64,149 @@ function formatMemory(memoryKb: number): string {
   return `${Math.round(memoryKb / 1024)} MB`;
 }
 
-function byCpuDesc(a: ProcessUsageEntry, b: ProcessUsageEntry): number {
-  return b.cpuPercent - a.cpuPercent || b.memoryKb - a.memoryKb;
+function entryName(entry: ProcessUsageEntry, t: TFunction): string {
+  if (entry.kind === 'agent-codex') {
+    if (entry.agentRole === 'task-host') {
+      return t('rightSidebar.resourceUsage.agentRoles.codexTask');
+    }
+    if (entry.agentRole === 'control-plane-service') {
+      return t('rightSidebar.resourceUsage.agentRoles.codexService');
+    }
+  }
+  if (entry.kind.startsWith('agent-')) return AGENT_NAME[entry.kind] ?? 'Agent';
+  if (entry.kind === 'utility' && entry.label) {
+    const serviceKey = UTILITY_LABEL_KEY[entry.label];
+    if (serviceKey) return t(`rightSidebar.resourceUsage.services.${serviceKey}`);
+  }
+  return entry.label ?? t(`rightSidebar.resourceUsage.kinds.${entry.kind}`);
 }
 
-function SectionHeader({ label }: { label: string }) {
+function entryDetails(entry: ProcessUsageEntry, t: TFunction): string | null {
+  if (entry.kind.startsWith('agent-')) {
+    // 单根进程是常态，不重复陈述“1 个进程”；只有实际出现子进程时才提示
+    // 进程树规模。CPU / 内存始终是完整树汇总，与此展示取舍无关。
+    const processCount = entry.processCount > 1
+      ? t('rightSidebar.resourceUsage.processCount', { count: entry.processCount })
+      : null;
+    if (entry.agentRole === 'task-host') {
+      const role = t('rightSidebar.resourceUsage.agentRoleDetails.task');
+      return processCount ? `${role} · ${processCount}` : role;
+    }
+    if (entry.agentRole === 'control-plane-service') {
+      const role = t('rightSidebar.resourceUsage.agentRoleDetails.service');
+      return processCount ? `${role} · ${processCount}` : role;
+    }
+    return processCount;
+  }
+  return entry.label ? t(`rightSidebar.resourceUsage.kinds.${entry.kind}`) : null;
+}
+
+function compareEntries(
+  a: ProcessUsageEntry,
+  b: ProcessUsageEntry,
+  key: SortKey,
+  direction: SortDirection,
+  t: TFunction,
+): number {
+  let value = 0;
+  if (key === 'name') value = entryName(a, t).localeCompare(entryName(b, t));
+  if (key === 'cpu') value = a.cpuPercent - b.cpuPercent;
+  if (key === 'memory') value = a.memoryKb - b.memoryKb;
+  if (key === 'pid') value = a.pid - b.pid;
+  if (value === 0) value = a.pid - b.pid;
+  return direction === 'asc' ? value : -value;
+}
+
+function SortHeader({
+  column,
+  label,
+  activeKey,
+  direction,
+  className,
+  onSort,
+}: {
+  column: SortKey;
+  label: string;
+  activeKey: SortKey;
+  direction: SortDirection;
+  className?: string;
+  onSort: (key: SortKey) => void;
+}) {
+  const { t } = useTranslation();
+  const active = column === activeKey;
+  const Icon = direction === 'asc' ? ArrowUp : ArrowDown;
   return (
-    <div className="px-2 pb-1 pt-3 text-11 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-      {label}
+    <div
+      role="columnheader"
+      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={className}
+    >
+      <button
+        type="button"
+        className="resource-usage-sort-button"
+        aria-label={t('rightSidebar.resourceUsage.sortBy', { column: label })}
+        onClick={() => onSort(column)}
+      >
+        <span>{label}</span>
+        {active ? <Icon aria-hidden size={10} strokeWidth={1.75} /> : null}
+      </button>
     </div>
   );
 }
 
+function SectionHeader({ label }: { label: string }) {
+  return <div className="resource-usage-section">{label}</div>;
+}
+
 function EntryRow({
   entry,
-  onTerminate,
+  selected,
+  onSelect,
 }: {
   entry: ProcessUsageEntry;
-  onTerminate: (entry: ProcessUsageEntry) => void;
+  selected: boolean;
+  onSelect: (entry: ProcessUsageEntry) => void;
 }) {
   const { t } = useTranslation();
   const Icon = KIND_ICON[entry.kind];
-  const isAgent = entry.kind.startsWith('agent-');
-  const name = isAgent
-    ? AGENT_NAME[entry.kind]
-    : (entry.label ?? t(`rightSidebar.resourceUsage.kinds.${entry.kind}`));
-  const sub = isAgent
-    ? t('rightSidebar.resourceUsage.processCount', { count: entry.processCount })
-    : entry.label
-      ? t(`rightSidebar.resourceUsage.kinds.${entry.kind}`)
-      : null;
+  const name = entryName(entry, t);
+  const details = entryDetails(entry, t);
+  const select = () => onSelect(entry);
   return (
-    <div className="group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-[var(--surface-hover)]">
-      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <Icon size={12} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-13 leading-5 text-[var(--text-primary)]">{name}</div>
-        {sub && (
-          <div className="truncate text-11 leading-4 text-[var(--text-tertiary)]">{sub}</div>
-        )}
-      </div>
-      <span className="shrink-0 text-11 tabular-nums leading-4 text-[var(--text-tertiary)]">
-        {formatCpu(entry.cpuPercent)} · {formatMemory(entry.memoryKb)}
-      </span>
-      {entry.terminable && (
-        <button
-          type="button"
-          onClick={() => onTerminate(entry)}
-          className={cn(
-            'inline-flex shrink-0 items-center rounded-full border border-[var(--border-default)] px-2 py-0.5',
-            'text-11 leading-4 text-[var(--text-secondary)] transition-colors',
-            'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
-            'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+    <div
+      role="row"
+      tabIndex={0}
+      aria-selected={selected}
+      className="resource-usage-row resource-usage-grid"
+      data-selected={selected ? 'true' : 'false'}
+      data-kind={entry.kind}
+      data-agent-role={entry.agentRole}
+      onClick={select}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        select();
+      }}
+    >
+      <div role="cell" className="resource-usage-name-cell">
+        <Icon className="resource-usage-icon" aria-hidden size={14} strokeWidth={1.6} />
+        <div className="resource-usage-name-copy">
+          <div className="resource-usage-name" title={name}>{name}</div>
+          {details ? (
+            <div className="resource-usage-details">
+              <span>{details}</span>
+              <span className="resource-usage-pid-inline"> · PID {entry.pid}</span>
+            </div>
+          ) : (
+            <div className="resource-usage-details resource-usage-pid-only">
+              PID {entry.pid}
+            </div>
           )}
-        >
-          {t('rightSidebar.resourceUsage.terminate')}
-        </button>
-      )}
+        </div>
+      </div>
+      <div role="cell" className="resource-usage-number">{formatCpu(entry.cpuPercent)}</div>
+      <div role="cell" className="resource-usage-number">{formatMemory(entry.memoryKb)}</div>
+      <div role="cell" className="resource-usage-number resource-usage-pid">{entry.pid}</div>
     </div>
   );
 }
@@ -133,8 +223,13 @@ export function ResourceUsageBody({
   const { t } = useTranslation();
   const visible = (active ?? true) && (shellVisible ?? true);
   const [sample, setSample] = useState<ProcessMonitorSample | null>(null);
+  const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [pendingKill, setPendingKill] = useState<ProcessUsageEntry | null>(null);
   const [killing, setKilling] = useState(false);
+  const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
+    key: 'cpu',
+    direction: 'desc',
+  });
 
   useEffect(() => {
     if (!visible) return;
@@ -150,10 +245,33 @@ export function ResourceUsageBody({
     };
   }, [visible]);
 
-  const agents = (sample?.entries ?? []).filter((e) => e.kind.startsWith('agent-')).sort(byCpuDesc);
-  const app = (sample?.entries ?? []).filter((e) => !e.kind.startsWith('agent-')).sort(byCpuDesc);
+  useEffect(() => {
+    if (selectedPid == null || !sample) return;
+    if (!sample.entries.some((entry) => entry.pid === selectedPid)) setSelectedPid(null);
+  }, [sample, selectedPid]);
 
-  const confirmTarget = pendingKill ? (AGENT_NAME[pendingKill.kind] ?? '') : '';
+  const sortedEntries = useMemo(() => {
+    const entries = sample?.entries ?? [];
+    const sorter = (a: ProcessUsageEntry, b: ProcessUsageEntry) =>
+      compareEntries(a, b, sort.key, sort.direction, t);
+    return {
+      agents: entries.filter((entry) => entry.kind.startsWith('agent-')).sort(sorter),
+      app: entries.filter((entry) => !entry.kind.startsWith('agent-')).sort(sorter),
+    };
+  }, [sample, sort, t]);
+
+  const selected = sample?.entries.find((entry) => entry.pid === selectedPid) ?? null;
+  const confirmTarget = pendingKill ? entryName(pendingKill, t) : '';
+
+  const handleSort = (key: SortKey) => {
+    setSort((current) => ({
+      key,
+      direction:
+        current.key === key
+          ? current.direction === 'asc' ? 'desc' : 'asc'
+          : key === 'name' ? 'asc' : 'desc',
+    }));
+  };
 
   const handleConfirmTerminate = async () => {
     if (!pendingKill || killing) return;
@@ -162,8 +280,6 @@ export function ResourceUsageBody({
       await window.electronAPI.processMonitor.terminate(pendingKill.pid);
       toast.success(t('rightSidebar.resourceUsage.terminated', { name: confirmTarget }));
     } catch {
-      // 典型失败:进程已自行退出(NOT_FOUND)。下一帧推送会自动纠正列表,
-      // 文案只说事实与下一步,不区分错误细类。
       toast.error(t('rightSidebar.resourceUsage.terminateFailed'));
     } finally {
       setKilling(false);
@@ -171,32 +287,106 @@ export function ResourceUsageBody({
     }
   };
 
+  const actionHint = !selected
+    ? t('rightSidebar.resourceUsage.selectHint')
+    : selected.terminable
+      ? `${entryName(selected, t)} · PID ${selected.pid}`
+      : t('rightSidebar.resourceUsage.readOnlyHint');
+
   return (
-    <div className="h-full select-none overflow-y-auto px-2 py-1">
-      {agents.length > 0 && (
-        <>
-          <SectionHeader label={t('rightSidebar.resourceUsage.sections.agents')} />
-          {agents.map((entry) => (
-            <EntryRow key={entry.pid} entry={entry} onTerminate={setPendingKill} />
-          ))}
-        </>
-      )}
-      {sample && agents.length === 0 && (
-        <>
-          <SectionHeader label={t('rightSidebar.resourceUsage.sections.agents')} />
-          <div className="px-2 py-1.5 text-12 leading-5 text-[var(--text-tertiary)]">
-            {t('rightSidebar.resourceUsage.agentsEmpty')}
+    <div className="resource-usage-root">
+      <div
+        className="resource-usage-table"
+        role="table"
+        aria-label={t('rightSidebar.resourceUsage.tableLabel')}
+      >
+        <div role="row" className="resource-usage-header resource-usage-grid">
+        <SortHeader
+          column="name"
+          label={t('rightSidebar.resourceUsage.columns.process')}
+          activeKey={sort.key}
+          direction={sort.direction}
+          onSort={handleSort}
+        />
+        <SortHeader
+          column="cpu"
+          label={t('rightSidebar.resourceUsage.columns.cpu')}
+          activeKey={sort.key}
+          direction={sort.direction}
+          className="resource-usage-header-number"
+          onSort={handleSort}
+        />
+        <SortHeader
+          column="memory"
+          label={t('rightSidebar.resourceUsage.columns.memory')}
+          activeKey={sort.key}
+          direction={sort.direction}
+          className="resource-usage-header-number"
+          onSort={handleSort}
+        />
+        <SortHeader
+          column="pid"
+          label={t('rightSidebar.resourceUsage.columns.pid')}
+          activeKey={sort.key}
+          direction={sort.direction}
+          className="resource-usage-header-number resource-usage-pid"
+          onSort={handleSort}
+        />
+        </div>
+
+        <div role="rowgroup" className="resource-usage-body">
+        {sample === null ? (
+          <div className="resource-usage-loading">
+            <Spinner size={13} />
+            <span>{t('rightSidebar.resourceUsage.loading')}</span>
           </div>
-        </>
-      )}
-      {app.length > 0 && (
-        <>
-          <SectionHeader label={t('rightSidebar.resourceUsage.sections.app')} />
-          {app.map((entry) => (
-            <EntryRow key={entry.pid} entry={entry} onTerminate={setPendingKill} />
-          ))}
-        </>
-      )}
+        ) : (
+          <>
+            <SectionHeader label={t('rightSidebar.resourceUsage.sections.agents')} />
+            {sortedEntries.agents.length > 0 ? sortedEntries.agents.map((entry) => (
+              <EntryRow
+                key={entry.pid}
+                entry={entry}
+                selected={selectedPid === entry.pid}
+                onSelect={(next) => setSelectedPid(next.pid)}
+              />
+            )) : (
+              <div className="resource-usage-empty">
+                {t('rightSidebar.resourceUsage.agentsEmpty')}
+              </div>
+            )}
+            {sortedEntries.app.length > 0 ? (
+              <>
+                <SectionHeader label={t('rightSidebar.resourceUsage.sections.app')} />
+                {sortedEntries.app.map((entry) => (
+                  <EntryRow
+                    key={entry.pid}
+                    entry={entry}
+                    selected={selectedPid === entry.pid}
+                    onSelect={(next) => setSelectedPid(next.pid)}
+                  />
+                ))}
+              </>
+            ) : null}
+          </>
+        )}
+        </div>
+      </div>
+
+      <div className="resource-usage-footer">
+        <div className="resource-usage-action-hint" title={actionHint}>{actionHint}</div>
+        <button
+          type="button"
+          className="resource-usage-terminate"
+          disabled={!selected?.terminable}
+          onClick={() => {
+            if (selected?.terminable) setPendingKill(selected);
+          }}
+        >
+          {t('rightSidebar.resourceUsage.terminate')}
+        </button>
+      </div>
+
       <ConfirmDialog
         open={pendingKill !== null}
         onOpenChange={(open) => {

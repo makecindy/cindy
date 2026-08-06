@@ -17,6 +17,7 @@
  */
 
 import type {
+  AgentProcessRole,
   ProcessMonitorSample,
   ProcessUsageEntry,
   ProcessUsageKind,
@@ -49,6 +50,8 @@ export interface ProcessMonitorSamplerDeps {
   /** pid → renderer 展示标签(webContents 标题);查不到返回 null。 */
   describeRendererProcess(pid: number): string | null;
   classify(cmdLineLower: string): MonitoredAgentKind | null;
+  /** 仅本地 Codex 根进程有角色；未知时返回 null，并按不可终止处理。 */
+  resolveCodexProcessRole?(pid: number): AgentProcessRole | null;
   selfPid: number;
   log: SamplerLogger;
   /** OS 扫描的最小间隔;快 tick 之间复用缓存。 */
@@ -141,6 +144,11 @@ export function createProcessMonitorSampler(
     return computedCpuPercentByPid.get(row.pid) ?? 0;
   }
 
+  /** Windows 控制台宿主只是系统辅助进程，不应被用户误读成另一个 Agent 实例。 */
+  function isOsHelperProcess(row: OsProcessRow): boolean {
+    return /(?:^|[\\/])conhost\.exe(?:\s|$)/i.test(row.cmdLineLower);
+  }
+
   function collectAgentEntries(): ProcessUsageEntry[] {
     const { rows, childrenByParent } = cachedSnapshot;
     const rowByPid = new Map(rows.map((r) => [r.pid, r]));
@@ -149,6 +157,7 @@ export function createProcessMonitorSampler(
       if (row.ppid !== deps.selfPid) continue;
       const kind = deps.classify(row.cmdLineLower);
       if (!kind) continue;
+      const agentRole = kind === 'codex' ? deps.resolveCodexProcessRole?.(row.pid) ?? null : null;
       let cpuPercent = 0;
       let memoryKb = 0;
       let processCount = 0;
@@ -157,7 +166,7 @@ export function createProcessMonitorSampler(
         if (!member) continue;
         cpuPercent += rowCpuPercent(member);
         memoryKb += member.memoryKb;
-        processCount += 1;
+        if (!isOsHelperProcess(member)) processCount += 1;
       }
       entries.push({
         pid: row.pid,
@@ -166,7 +175,9 @@ export function createProcessMonitorSampler(
         cpuPercent,
         memoryKb,
         processCount,
-        terminable: true,
+        // Codex 只有明确登记为任务宿主才允许终止；registry 未命中时 fail closed。
+        terminable: kind === 'codex' ? agentRole === 'task-host' : true,
+        ...(agentRole ? { agentRole } : {}),
       });
     }
     return entries;

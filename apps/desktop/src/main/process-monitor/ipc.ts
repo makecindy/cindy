@@ -38,6 +38,7 @@ import {
   type MonitoredAgentKind,
   type OsProcessSnapshot,
 } from './agent-scan.js';
+import { resolveCodexProcessRole } from './codex-process-registry.js';
 import {
   createProcessMonitorSampler,
   type ProcessMonitorSampler,
@@ -57,6 +58,7 @@ export interface ProcessMonitorIpcOptions {
   /** terminate 校验用的**新鲜**扫描(不走 sampler 缓存)。 */
   scanOsProcesses?: () => Promise<OsProcessSnapshot>;
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
+  resolveCodexProcessRole?: (pid: number) => 'task-host' | 'control-plane-service' | null;
   killProcessTree?: (pid: number, childrenByParent: Map<number, number[]>) => boolean;
   selfPid?: number;
   sampleIntervalMs?: number;
@@ -72,6 +74,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
   const log = opts.log ?? createLogger('process-monitor');
   const selfPid = opts.selfPid ?? process.pid;
   const classify = opts.classify ?? classifyMonitoredAgentCommandLine;
+  const resolveCodexRole = opts.resolveCodexProcessRole ?? resolveCodexProcessRole;
   const freshScan = opts.scanOsProcesses ?? scanOsProcesses;
   const killTree = opts.killProcessTree ?? killProcessTree;
   const sampleIntervalMs = opts.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
@@ -97,6 +100,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       scanOsProcesses: freshScan,
       describeRendererProcess: describeRendererProcessByPid,
       classify,
+      resolveCodexProcessRole: resolveCodexRole,
       selfPid,
       log,
     });
@@ -168,11 +172,24 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       throwIpcError('INVALID_PARAMS', 'pid is not a terminable process');
     }
     // 归属校验用新鲜扫描:renderer 手里的快照可能已过期(进程退出、pid 复用)。
-    const snapshot = await freshScan();
+    let snapshot: OsProcessSnapshot;
+    try {
+      snapshot = await freshScan();
+    } catch (err) {
+      log.warn('process monitor ownership scan failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to inspect process ownership');
+    }
     const row = snapshot.rows.find((r) => r.pid === pid);
     const kind = row && row.ppid === selfPid ? classify(row.cmdLineLower) : null;
     if (!row || row.ppid !== selfPid || !kind) {
       throwIpcError('NOT_FOUND', 'process is not an agent process owned by this app');
+    }
+    // registry 只收紧动作范围，不扩大授权；新鲜扫描 + PPID + marker 仍是首要边界。
+    // Codex 角色未登记时也拒绝，避免观察器异常/生命周期竞争导致控制面被误杀。
+    if (kind === 'codex' && resolveCodexRole(pid) !== 'task-host') {
+      throwIpcError('NOT_FOUND', 'process is not a terminable Codex task host');
     }
     if (!killTree(pid, snapshot.childrenByParent)) {
       throwIpcError('INTERNAL', 'failed to terminate the agent process tree');

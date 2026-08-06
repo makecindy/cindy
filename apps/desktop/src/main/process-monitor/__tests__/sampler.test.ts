@@ -114,6 +114,68 @@ describe('createProcessMonitorSampler', () => {
     expect(entryByPid(sample, 601)).toBeUndefined();
   });
 
+  it('Codex 任务宿主与控制面服务带角色，控制面不可终止', async () => {
+    const { sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({ pid: 701, ppid: SELF_PID, cmdLineLower: 'codex-marker task' }),
+        osRow({ pid: 702, ppid: SELF_PID, cmdLineLower: 'codex-marker service' }),
+      ]),
+      deps: {
+        resolveCodexProcessRole: (pid) =>
+          pid === 701 ? 'task-host' : 'control-plane-service',
+      },
+    });
+    const sample = await sampler.sample();
+    expect(entryByPid(sample, 701)).toMatchObject({
+      agentRole: 'task-host',
+      terminable: true,
+    });
+    expect(entryByPid(sample, 702)).toMatchObject({
+      agentRole: 'control-plane-service',
+      terminable: false,
+    });
+  });
+
+  it('Codex 角色未知时按不可终止处理', async () => {
+    const { sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({ pid: 703, ppid: SELF_PID, cmdLineLower: 'codex-marker unknown' }),
+      ]),
+      deps: { resolveCodexProcessRole: () => null },
+    });
+    expect(entryByPid(await sampler.sample(), 703)).toMatchObject({
+      kind: 'agent-codex',
+      terminable: false,
+    });
+  });
+
+  it('Windows conhost 不计入可见进程数，但资源仍计入整棵树', async () => {
+    const { sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({
+          pid: 801,
+          ppid: SELF_PID,
+          cmdLineLower: 'c:\\cindy\\codex-marker.exe app-server',
+          cpuPercent: 4,
+          memoryKb: 100,
+        }),
+        osRow({
+          pid: 802,
+          ppid: 801,
+          cmdLineLower: '\\??\\c:\\windows\\system32\\conhost.exe 0x4',
+          cpuPercent: 1,
+          memoryKb: 20,
+        }),
+      ]),
+    });
+    const entry = entryByPid(await sampler.sample(), 801);
+    expect(entry).toMatchObject({
+      processCount: 1,
+      cpuPercent: 5,
+      memoryKb: 120,
+    });
+  });
+
   it('OS 扫描按周期缓存:未过期不重扫,过期后重扫', async () => {
     const { state, sampler } = makeHarness();
     await sampler.sample();

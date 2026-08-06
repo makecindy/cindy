@@ -2413,6 +2413,14 @@ export class CodexAgent extends BaseAgent {
         binaryPath,
         env,
         extraArgs,
+        onProcessSpawned: (pid) =>
+          this.deps.registerLocalCodexAppServerProcess?.({
+            pid,
+            role:
+              hostPurpose === 'control-plane'
+                ? 'control-plane-service'
+                : 'task-host',
+          }),
       });
     }
 

@@ -60,6 +60,7 @@ function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {
     sampler: { sample: vi.fn().mockResolvedValue({ capturedAtMs: 1, entries: [] }) },
     scanOsProcesses: vi.fn().mockResolvedValue({ rows: [], childrenByParent: new Map() }),
     classify: () => null,
+    resolveCodexProcessRole: () => null,
     killProcessTree: vi.fn().mockReturnValue(true),
     selfPid: SELF_PID,
     log: { info: vi.fn(), warn: vi.fn() },
@@ -170,5 +171,47 @@ describe('terminate ownership validation', () => {
     await expect(
       handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 900),
     ).rejects.toThrow('INTERNAL');
+  });
+
+  it('归属扫描失败时包装为 IPC INTERNAL 且不泄露原始错误', async () => {
+    const kill = vi.fn().mockReturnValue(true);
+    const log = { info: vi.fn(), warn: vi.fn() };
+    register({
+      scanOsProcesses: vi.fn().mockRejectedValue(new Error('private powershell details')),
+      classify,
+      killProcessTree: kill,
+      log,
+    });
+    await expect(
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 900),
+    ).rejects.toThrow('INTERNAL');
+    expect(kill).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'process monitor ownership scan failed',
+      expect.objectContaining({ error: 'private powershell details' }),
+    );
+  });
+
+  it.each([
+    ['控制面服务', 'control-plane-service' as const],
+    ['角色未知', null],
+  ])('Codex %s 即使归属校验通过也不可终止', async (_description, role) => {
+    const rows = [
+      osRow({ pid: 970, ppid: SELF_PID, cmdLineLower: 'codex-marker service' }),
+    ];
+    const kill = vi.fn().mockReturnValue(true);
+    register({
+      scanOsProcesses: vi.fn().mockResolvedValue({
+        rows,
+        childrenByParent: buildChildrenByParent(rows),
+      }),
+      classify: () => 'codex',
+      resolveCodexProcessRole: () => role,
+      killProcessTree: kill,
+    });
+    await expect(
+      handlerFor(PROCESS_MONITOR_TERMINATE_CHANNEL)({ sender: fakeSender() }, 970),
+    ).rejects.toThrow('NOT_FOUND');
+    expect(kill).not.toHaveBeenCalled();
   });
 });
