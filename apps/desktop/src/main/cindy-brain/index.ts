@@ -4711,7 +4711,18 @@ export function registerGhostIpc(): void {
       // kv 与单次 setup-status 同策略:同插件同次判定内最多读一次磁盘。
       let kvSnapshot: Record<string, unknown> | null = null;
       const status = evaluateGhostSetup(runtimeManifest, {
-        secretSaved: (key) => ghostSecretSaved(ghostId, key),
+        secretSaved: (key) => {
+          try {
+            return ghostSecretSaved(ghostId, key);
+          } catch (err) {
+            // 单个插件 secret 检查异常不中止整批查询:权限错误/磁盘故障时
+            // 退化为 false(视为未保存),不让一个插件的 I/O 故障拖垮整批 IPC。
+            if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              log.warn('[ghosts:setup-profiles] secret check failed', { ghostId, key, err });
+            }
+            return false;
+          }
+        },
         oauthStatus: (key) => {
           const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
           const accounts = oauthManager.listAccounts(ghostId, key);
