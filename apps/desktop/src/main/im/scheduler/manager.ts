@@ -194,7 +194,7 @@ export class ImSchedulerManager {
     const devices = [{
       deviceId: self,
       online: true,
-      platform: process.platform,
+      platform: process.platform as string,
       lastSeenAt: now,
       channels: [{ channel: 'discord' as const, identity }],
     }];
