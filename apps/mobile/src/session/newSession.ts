@@ -304,13 +304,41 @@ export interface NewSessionRuntime {
   agentKind: NewSessionAgentKind;
   model: string;
   effort: string;
+  /**
+   * 来源(供应商)id;null = 跟随被控端默认路由。跟随最近会话 / 取模型列表首项时连同
+   * model 一起带出 —— 只带 model 不带来源会把自定义供应商模型(如 deepseek-v4-flash)
+   * 回落到默认网关,网关无该裸 id → 400 Invalid model name(#1898)。
+   */
+  providerId: string | null;
 }
 
 /**
- * 从现有会话列表挑"最近一次"的整套运行配置(agent + model + effort),用于新建对话默认跟随最近会话。
+ * 继承最近会话来源时的安全校验:
+ * - modelRows 已加载(非空):来源必须仍连接且仍提供该模型才继承,否则清空回默认路由 ——
+ *   provider 被删 / 模型下架后盲目继承会把创建参数钉到失效来源上;
+ * - modelRows 未加载(空,providers 仍在拉取):无法校验,信任最近会话的来源 —— 同设备
+ *   最近会话是当时最强的证据,且被控端是最终路由真相;此处清空反而会把绑定丢掉(#1898)。
+ */
+function inheritRecentProviderId(
+  modelRows: readonly ProviderModelRow[],
+  providerId: string | null | undefined,
+  modelId: string,
+): string | null {
+  if (!providerId) return null;
+  if (modelRows.length === 0) return providerId;
+  const stillOffered = modelRows.some(
+    (row) => row.provider.id === providerId && row.model.id === modelId,
+  );
+  return stillOffered ? providerId : null;
+}
+
+/**
+ * 从现有会话列表挑"最近一次"的整套运行配置(agent + model + effort + providerId),用于新建对话
+ * 默认跟随最近会话。providerId 取自该会话在被控端落盘的来源选择(null = 默认路由)。
  * 过滤:排除 status==='deleted'、无 model;可选 `deviceId`(只看该设备——模型列表 per-device,跨设备 model 可能
- * 在目标设备不存在);可选 `agentKind`(只看该 agent)。排序:按活动时间(userSendAt ?? updatedAt ?? createdAt)
- * 降序取第一条。映射 `RemoteSession.agentKind`('cc'|'codex') → NewSessionDraft 的 'claude-code'|'codex'。无匹配→null。
+ * 在目标设备不存在,来源同理——同设备过滤保证继承的来源在目标设备存在);可选 `agentKind`(只看该 agent)。
+ * 排序:按活动时间(userSendAt ?? updatedAt ?? createdAt)降序取第一条。
+ * 映射 `RemoteSession.agentKind`('cc'|'codex') → NewSessionDraft 的 'claude-code'|'codex'。无匹配→null。
  * deviceId 过滤口径对齐 buildRecentWorkspaceOptions:仅当 session 带了 deviceLinkDeviceId 且与目标不符才排除。
  */
 export function pickMostRecentSessionRuntime(
@@ -330,7 +358,7 @@ export function pickMostRecentSessionRuntime(
     const activityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
     if (!best || activityAt.localeCompare(best.activityAt) > 0) {
       best = {
-        runtime: { agentKind, model, effort: session.effort?.trim() ?? '' },
+        runtime: { agentKind, model, effort: session.effort?.trim() ?? '', providerId: session.providerId ?? null },
         activityAt,
       };
     }
@@ -339,16 +367,21 @@ export function pickMostRecentSessionRuntime(
 }
 
 /**
- * 算"切到某 agent 后的默认运行配置(model + effort)",供新建对话「切 agent」入口复用,
+ * 算"切到某 agent 后的默认运行配置(model + effort + providerId)",供新建对话「切 agent」入口复用,
  * 与初始自动默认共用同一套 fallback 口径。纯函数:所有输入显式传入,不读 react / 设备状态。
  * model 优先级:
  *   1) 该 agent 的最近一次会话模型(pickMostRecentSessionRuntime,按 deviceId scope);
  *   2) 否则该 agent 的模型列表最上面那个(modelRows[0] —— providers 已加载时同步可得,
  *      与下拉渲染的第一项一致);
  *   3) 否则该 agent 的内置默认 DEFAULT_MODELS[agentKind]。
+ * providerId 跟随 model 同源:
+ *   1) 跟随最近会话 → 继承该会话的来源(inheritRecentProviderId 校验:来源已删/不再提供
+ *      该模型时清空回默认路由;同设备+同 agent 范围,供应商集天然兼容);
+ *   2) 取列表首项 → 该行的 provider(modelRows[0].provider.id);
+ *   3) 内置默认兜底 → null(默认路由)。
  * effort:reconcile 到目标 model 的合法档(reconcileEffortForModel,base = 最近会话 effort ?? 当前 effort);
  *   拿不到目标 model 对应的 SectionModel(model 不在 modelRows 里,如走了 DEFAULT_MODELS 兜底或历史模型已下架)
- *   时保留 base effort 不动。providerId 由调用方统一置 null(各 agent 供应商集不同,回默认路由)。
+ *   时保留 base effort 不动。
  */
 export function pickAgentDefaultRuntime(args: {
   agentKind: NewSessionAgentKind;
@@ -361,19 +394,23 @@ export function pickAgentDefaultRuntime(args: {
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId, agentKind });
   const baseEffort = recent?.effort ?? currentEffort;
   let model: string;
+  let providerId: string | null;
   let sectionModel = recent?.model
     ? modelRows.find((row) => row.model.id === recent.model)?.model
     : undefined;
   if (recent?.model) {
     model = recent.model;
+    providerId = inheritRecentProviderId(modelRows, recent.providerId, recent.model);
   } else if (modelRows[0]) {
     sectionModel = modelRows[0].model;
     model = sectionModel.id;
+    providerId = modelRows[0].provider.id;
   } else {
     model = DEFAULT_MODELS[agentKind];
+    providerId = null;
   }
   const effort = sectionModel ? reconcileEffortForModel(sectionModel, baseEffort) : baseEffort;
-  return { agentKind, model, effort };
+  return { agentKind, model, effort, providerId };
 }
 
 /**
@@ -381,9 +418,10 @@ export function pickAgentDefaultRuntime(args: {
  * 返回 null = 本次不动 draft(已手动选过 / 无 selectedDevice / 该设备已应用过 / modelRows 未就绪且无 recent);
  * 返回 { patch, appliedDeviceId } = 调用方 setDraft(prev => ({ ...prev, ...patch })) 并记录 appliedDeviceId。
  * 三条意图与 effect 完全一致:
- *   1) 有最近会话(按 selectedDeviceId scope)→ 整套跟随(agentKind + model + effort,effort reconcile 同
- *      pickAgentDefaultRuntime 口径:model 命中 modelRows 才 reconcile,否则保留;providerId 置 null);
- *   2) 无最近会话但 modelRows 就绪 → 取列表最上面(model + effort reconcile + providerId:null,不动 agentKind);
+ *   1) 有最近会话(按 selectedDeviceId scope)→ 整套跟随(agentKind + model + effort + providerId,
+ *      effort reconcile 同 pickAgentDefaultRuntime 口径:model 命中 modelRows 才 reconcile,否则保留;
+ *      providerId 经 inheritRecentProviderId 校验后继承);
+ *   2) 无最近会话但 modelRows 就绪 → 取列表最上面(model + effort reconcile + 该行 provider,不动 agentKind);
  *   3) 无最近会话且 modelRows 未就绪(providers 加载中)→ null(等下次 modelRows 就绪再设,绝不误设)。
  * currentEffort = 当前 draft.effort,作为 reconcile 的 base(与 effect 里 setDraft updater 读 current.effort 等价)。
  */
@@ -411,7 +449,7 @@ export function resolveNewSessionAutoDefault(input: {
           ? reconcileEffortForModel(sectionModel, recent.effort || currentEffort)
           : recent.effort || currentEffort,
         permissionMode: defaultPermissionModeForNewSessionAgent(recent.agentKind),
-        providerId: null,
+        providerId: inheritRecentProviderId(modelRows, recent.providerId, recent.model),
       },
     };
   }
@@ -423,7 +461,7 @@ export function resolveNewSessionAutoDefault(input: {
     patch: {
       model: top.model.id,
       effort: reconcileEffortForModel(top.model, currentEffort),
-      providerId: null,
+      providerId: top.provider.id,
     },
   };
 }
