@@ -103,7 +103,8 @@ describe('process monitor IPC authorization', () => {
 
   it('订阅后立即推送一帧;窗口不再可信时不推', async () => {
     const sample = { capturedAtMs: 7, entries: [] };
-    register({ sampler: { sample: vi.fn().mockResolvedValue(sample) } });
+    const sampleNow = vi.fn().mockResolvedValue(sample);
+    register({ sampler: { sample: sampleNow } });
     const sender = fakeSender();
     await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
     await vi.waitFor(() => {
@@ -116,6 +117,11 @@ describe('process monitor IPC authorization', () => {
     // 等一个微任务链走完:采样发生但没有 send。
     await new Promise((r) => setTimeout(r, 0));
     expect(sender.send).not.toHaveBeenCalled();
+
+    // 失信 sender 已从订阅集合移除；恢复可信后会重新登记 destroyed 监听。
+    mocks.isTrustedAppRendererWindow.mockReturnValue(true);
+    await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    await vi.waitFor(() => expect(sender.once).toHaveBeenCalledTimes(2));
   });
 });
 

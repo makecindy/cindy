@@ -4809,7 +4809,7 @@
       "processCount_one": "Process tree: {{count}} process",
       "processCount_other": "Process tree: {{count}} processes",
       "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
-      "tableLabel": "Resource Usage by process",
+      "tableLabel": "Resource Usage by Process",
       "sortBy": "Sort by {{column}}",
       "loading": "Reading resource usage…",
       "selectHint": "Select a process",

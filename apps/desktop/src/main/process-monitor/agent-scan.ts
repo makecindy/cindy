@@ -76,7 +76,11 @@ const PI_MARKERS = buildPiPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION))
 let runtimePiMarkers: string[] = [];
 
 export function registerPiUserDataMarkers(userDataPath: string): void {
-  const lower = userDataPath.toLowerCase();
+  const lower = userDataPath.trim().toLowerCase();
+  if (!lower) {
+    runtimePiMarkers = [];
+    return;
+  }
   const variants = new Set([lower.replace(/\\/g, '/'), lower.replace(/\//g, '\\')]);
   runtimePiMarkers = [...variants].map((v) => {
     const sep = v.includes('\\') ? '\\' : '/';

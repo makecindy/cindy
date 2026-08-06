@@ -137,7 +137,10 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
           continue;
         }
         // 出站闸:快照含页面标题(用户内容),窗口导航离开 Cindy 页面后不再推。
-        if (!isTrustedAppRendererWindow(BrowserWindow.fromWebContents(wc))) continue;
+        if (!isTrustedAppRendererWindow(BrowserWindow.fromWebContents(wc))) {
+          dropSubscriber(wc);
+          continue;
+        }
         try {
           wc.send(PROCESS_MONITOR_SAMPLE_CHANNEL, sample);
         } catch {

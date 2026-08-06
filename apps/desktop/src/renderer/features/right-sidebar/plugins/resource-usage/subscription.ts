@@ -12,13 +12,13 @@ let refCount = 0;
 export function acquireProcessMonitorSubscription(): void {
   refCount += 1;
   if (refCount === 1) {
-    void window.electronAPI.processMonitor.subscribe();
+    void window.electronAPI.processMonitor.subscribe().catch(() => undefined);
   }
 }
 
 export function releaseProcessMonitorSubscription(): void {
   refCount = Math.max(0, refCount - 1);
   if (refCount === 0) {
-    void window.electronAPI.processMonitor.unsubscribe();
+    void window.electronAPI.processMonitor.unsubscribe().catch(() => undefined);
   }
 }

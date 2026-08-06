@@ -104,8 +104,9 @@ describe('classifyMonitoredAgentCommandLine', () => {
     expect(
       classifyMonitoredAgentCommandLine('/custom/data-home/cindybrand/pi/2.0/pi --rpc'),
     ).toBe('pi');
-    // 恢复默认组,避免污染其它用例(整组替换语义)。
+    // 空路径显式清空，不能退化成会命中所有 `/pi/` 路径的宽泛 marker。
     registerPiUserDataMarkers('');
+    expect(classifyMonitoredAgentCommandLine('/opt/pi/2.0/pi --rpc')).toBeNull();
   });
 });
 
