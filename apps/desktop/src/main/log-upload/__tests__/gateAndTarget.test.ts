@@ -250,6 +250,27 @@ describe('resolveLogUploadTarget（构建期注入）', () => {
     }
   });
 
+  // ⚠️ 2026-08-06 review P1:project / logstore 也必须钉死在 SLS 名字集内。project 拼在
+  // buildTrackUrl 的**子域**位置(https://<project>.<endpointHost>/...),含 `.`/`/` 的 project
+  // 能把 host 顶成任意域,endpointHost 校验通过也照样改投他人域;logstore 含 `/` 能改写请求路径。
+  it.each([
+    ['project 改投域名 evil.com/p', 'evil.com/p', 'l'],
+    ['project 含点', 'evil.com', 'l'],
+    ['project 含斜杠', 'p/x', 'l'],
+    ['project 大写(非 SLS 名)', 'Cindy', 'l'],
+    ['logstore 含斜杠改写路径', 'p', 'l/../track'],
+    ['logstore 含点', 'p', 'a.b'],
+    ['logstore 空白细工', 'p', 'l l'],
+  ])('%s ⇒ null（project/logstore 非 SLS 名一律 fail closed）', (_case, project, logstore) => {
+    const payload = JSON.stringify({
+      region: 'cn',
+      project,
+      logstore,
+      endpointHost: 'cn-shanghai.log.aliyuncs.com',
+    });
+    expect(resolveLogUploadTarget({ region: 'cn', raw: payload })).toBeNull();
+  });
+
   it('未注入时（vitest / dev server 的真实情形）默认读环境变量并判未配置', () => {
     const saved = process.env.XDT_LOG_UPLOAD_TARGET;
     delete process.env.XDT_LOG_UPLOAD_TARGET;

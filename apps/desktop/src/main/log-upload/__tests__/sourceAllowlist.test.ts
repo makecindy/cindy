@@ -236,6 +236,14 @@ describe('会打路径的来源被挡在外', () => {
     expect(isAllowedScope('auth-adapters:asset-prep:codex')).toBe(false);
   });
 
+  it('⚠️ auth-adapters:cred-path 不放行（带 auth.json 等凭证文件绝对路径），两种分隔符都挡', () => {
+    // 2026-08-06 review：凭证文件 icacls/chmod/rm/硬链失败诊断带绝对路径(脱敏只抹用户名段),
+    // 拆到独立子 scope 并排除;根 auth-adapters 只剩不带路径的凭证生命周期诊断。
+    expect(isAllowedScope('auth-adapters:cred-path')).toBe(false);
+    expect(isAllowedScope('auth-adapters/cred-path')).toBe(false);
+    expect(isAllowedScope('auth-adapters:cred-path:codex')).toBe(false);
+  });
+
   it('⚠️ legacy-xdmaker-migration 整个 scope 不放行（每条都带 rootDir 工作目录）', () => {
     expect(isAllowedScope('legacy-xdmaker-migration')).toBe(false);
     expect(isAllowedScope('legacy-xdmaker-migration/x')).toBe(false);

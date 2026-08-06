@@ -105,6 +105,15 @@ const log = createLogger('auth-adapters');
  * （见 `log-upload/sourceAllowlist` 的 `DENIED_SUB_SCOPES`）。本机日志照常写全，只是不上报。
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
+/**
+ * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
+ * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
+ * 的绝对路径**——脱敏只抹用户名段,`.codex/auth.json`、隔离 codexHome 的目录结构仍会外泄
+ * (2026-08-06 review)。这类路径不该进上报:单独走一个默认被排除的子 scope
+ * (见 `log-upload/sourceAllowlist` 的 `DENIED_SUB_SCOPES`)。本机日志照常写全,只是不上报;
+ * 不带路径的凭证生命周期诊断(失效/绑定/状态转换)仍留在根 `auth-adapters` 上。
+ */
+const credPathLog = createLogger('auth-adapters:cred-path');
 
 /**
  * Host-injected provider sessions only need a non-empty credential to pass Claude Code's
@@ -338,7 +347,7 @@ async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean
   try {
     await fsp.rm(cachePath, { force: true });
   } catch (err) {
-    log.warn('remove stale Codex models_cache.json failed', {
+    credPathLog.warn('remove stale Codex models_cache.json failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -360,7 +369,7 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
     try {
       await fsp.rm(authPath, { force: true });
     } catch (err) {
-      log.warn('remove suppressed Codex auth.json before login failed', {
+      credPathLog.warn('remove suppressed Codex auth.json before login failed', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -381,7 +390,7 @@ async function tightenAclWindows(file: string): Promise<void> {
   try {
     await execFileP('icacls', [file, '/inheritance:r', '/grant:r', `${username}:F`]);
   } catch (err) {
-    log.warn('icacls failed', { file, error: (err as Error).message });
+    credPathLog.warn('icacls failed', { file, error: (err as Error).message });
   }
 }
 
@@ -1014,23 +1023,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         break;
       case 'link-unsupported':
         // 跨分区 / 权限 → 建不出硬链, myAuth 一字未动, xdt-maker 继续走自己的隔离 auth。
-        log.warn('hardlink to ~/.codex failed, fallback to isolated auth', {
+        credPathLog.warn('hardlink to ~/.codex failed, fallback to isolated auth', {
           error: error?.message,
         });
         break;
       case 'swap-failed-intact':
         // 替换失败但 myAuth 完好 (多半并发的另一次已放好) —— 无需补救。
-        log.warn('reconcile swap failed, auth.json left intact', { error: error?.message });
+        credPathLog.warn('reconcile swap failed, auth.json left intact', { error: error?.message });
         break;
       case 'recovered':
         // 替换中途 myAuth 一度丢失但已从 ~/.codex 重建 —— 用户无感, 仅记一笔。
-        log.warn('reconcile swap failed but auth.json recovered from ~/.codex', {
+        credPathLog.warn('reconcile swap failed but auth.json recovered from ~/.codex', {
           error: error?.message,
         });
         break;
       case 'lost':
         // 极端: myAuth 丢了且 systemAuth 也读不回 —— 这次只能让用户重新登录。
-        log.error('reconcile swap failed and auth.json lost; user must re-login', {
+        credPathLog.error('reconcile swap failed and auth.json lost; user must re-login', {
           error: error?.message,
         });
         break;
@@ -1598,11 +1607,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (existsSync(authPath)) {
       if (process.platform === 'win32') {
         await tightenAclWindows(authPath).catch((e: unknown) => {
-          log.warn('icacls auth.json failed', { error: String(e) });
+          credPathLog.warn('icacls auth.json failed', { error: String(e) });
         });
       } else {
         await fsp.chmod(authPath, 0o600).catch((e: unknown) => {
-          log.warn('chmod auth.json failed', { error: String(e) });
+          credPathLog.warn('chmod auth.json failed', { error: String(e) });
         });
       }
     }

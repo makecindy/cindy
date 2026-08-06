@@ -83,12 +83,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
   排除表挡住了 media / mirror 那几个，却漏了 `device-link:ipc`（它在镜像缓存清理失败时把本地
   缓存文件路径写进日志）。`DENIED_SUB_SCOPES` 现在只作为纵深防御保留。
 - 需要某个 scope 里的一部分诊断信息、而它整体又混着用户内容时，**拆 scope**，不要整体放行。
-  已有三个先例：`renderer-console` 从 `renderer-guard` 拆出（前者是渲染进程任意 console 正文，
-  后者只有加载失败信号）；device-link 的连接层与 IPC 层分开对待；`auth-adapters:asset-prep` 从
-  `auth-adapters` 拆出——全局 skill/plugin/marketplace 资产准备的告警会带用户自选的
-  skill·marketplace 名与绝对路径（`cannot link skill X from <path> to <path>`），拆到独立子 scope
-  并入 `DENIED_SUB_SCOPES`，根 `auth-adapters` 只剩不带用户身份/路径的凭证生命周期诊断
-  （2026-08-06 review）。**拆 scope 只改上报可见性，本机日志照常写全**。
+  已有先例：`renderer-console` 从 `renderer-guard` 拆出（前者是渲染进程任意 console 正文，
+  后者只有加载失败信号）；device-link 的连接层与 IPC 层分开对待；`auth-adapters` 拆出**两个**
+  denied 子 scope——`auth-adapters:asset-prep`（全局 skill/plugin/marketplace 资产准备的告警，带
+  用户自选 skill·marketplace 名与绝对路径 `cannot link skill X from <path> to <path>`）与
+  `auth-adapters:cred-path`（凭证文件 icacls/chmod/rm/硬链失败诊断，带 `auth.json` 等绝对路径——
+  脱敏只抹用户名段、路径其余部分仍在），根 `auth-adapters` 只剩不带用户身份/路径的凭证生命周期
+  诊断（2026-08-06 review）。**拆 scope 只改上报可见性，本机日志照常写全**。
 - 渲染进程转发的日志整类不放行——`writeFromRenderer()` 强制 `r:` 前缀，而匹配是根锚定的。
   不要把匹配改成裸 `startsWith`。
 

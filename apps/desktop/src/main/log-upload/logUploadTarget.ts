@@ -61,6 +61,18 @@ function isNonEmptyString(value: unknown): value is string {
 const SLS_ENDPOINT_HOST_RE = /^[a-z0-9][a-z0-9-]*\.log\.aliyuncs\.com$/;
 
 /**
+ * SLS project / logstore 命名：小写字母数字与连字符，首字符不能是连字符。与构建脚本
+ * `SLS_NAME_RE` 逐字对应。
+ *
+ * 同 endpointHost，这也是运行期第二道：`buildTrackUrl` 把 project 拼成
+ * `https://<project>.<endpointHost>/logstores/<logstore>/track` 的**子域**位置——project 若含
+ * `.` 或 `/`（如 `evil.com/p`），host 就被顶成 `evil.com`，endpointHost 校验通过也照样把日志
+ * 改投他人域（2026-08-06 review）。logstore 含 `/` 则能改写请求路径。名字集限死后，注入串任一
+ * 字段被写坏 / 被绕过塞进畸形值,都在这里判成"未配置"而不是照用。
+ */
+const SLS_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
  * 解析注入串。任何不合法形态都返回 null（不抛）——调用点在启动路径上，
  * 一个配置问题不该让 App 起不来。
  */
@@ -87,11 +99,16 @@ export function parseInjectedTarget(raw: string): InjectedTarget | null {
   // 都该在这里判成"未配置"而不是照用,免得把用户日志改投他人域。
   const endpointHost = r.endpointHost.trim();
   if (!SLS_ENDPOINT_HOST_RE.test(endpointHost)) return null;
+  // project / logstore 同样钉死在 SLS 名字集内(见 SLS_NAME_RE):否则 project 里的 `.`/`/`
+  // 能把 buildTrackUrl 的 host 顶成任意域、把日志改投出去,单靠 endpointHost 校验挡不住。
+  const project = r.project.trim();
+  const logstore = r.logstore.trim();
+  if (!SLS_NAME_RE.test(project) || !SLS_NAME_RE.test(logstore)) return null;
 
   return {
     region: r.region.trim() as CindyRegion,
-    project: r.project.trim(),
-    logstore: r.logstore.trim(),
+    project,
+    logstore,
     endpointHost,
   };
 }
