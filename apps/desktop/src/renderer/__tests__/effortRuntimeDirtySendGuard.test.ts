@@ -17,7 +17,11 @@ describe('effort runtime send guard', () => {
     expect(chatInputSource).toContain('editable: !composerEditorLocked');
     expect(chatInputSource).toContain('if (composerMutationLockedRef.current) return true;');
     expect(chatInputSource).toContain('if (composerMutationLocked) return;');
-    expect(chatInputSource).toContain('localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined');
+    expect(chatInputSource).toContain("id: 'attach-files'");
+    expect(chatInputSource).toContain(
+      'disabled: composerMutationLocked,\n        run: () => suggestionFileInputRef.current?.click(),',
+    );
+    expect(chatInputSource).toContain('ref={suggestionFileInputRef}');
     expect(chatInputSource).toContain('disabled={composerMutationLocked}');
     expect(chatInputSource).toContain('setSendDispatchInFlight(true);');
     expect(chatInputSource).toContain('setSendDispatchInFlight(false);');
