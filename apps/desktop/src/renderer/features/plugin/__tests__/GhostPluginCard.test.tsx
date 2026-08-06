@@ -1,6 +1,6 @@
 /**
- * Regression coverage for installed Plugin card actions (redesigned card:
- * whole-card primary action, kind-specific primary button, manage entry),
+ * Coverage for installed Plugin card actions (redesigned 2026-08-06:
+ * card body → detail, toggle switch for enable/disable, auth-status color),
  * market card actions, and the legacy recovery notice.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
@@ -55,7 +55,10 @@ const commandPlugin: GhostPluginListItem = {
   enabled: true,
   canUse: true,
   tabPanel: false,
-  hostCapability: null,
+hostCapability: null,
+  hasSetupRequirements: false,
+  setupReady: true,
+  setupState: 'ready',
 };
 
 const panelPlugin: GhostPluginListItem = {
@@ -102,61 +105,63 @@ describe('GhostPluginCard', () => {
   // 未读是模块级 store,用例间必须互不串味。
   afterEach(() => __resetGhostUnreadForTest());
 
-  it('fires the primary action from the whole card for a command plugin', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+  it('点击卡片主体进入详情(不再区分主动作/管理)', () => {
+    const onOpenDetail = vi.fn();
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-    // 指令型主按钮 = 「对话」。
-    expect(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' })).toBeTruthy();
+    expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
 
-  it('labels the primary button 使用 for a tab-panel plugin', () => {
-    const onPrimary = vi.fn();
-    render(<GhostPluginCard item={panelPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+  it('渲染启用开关并可通过开关切换', () => {
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
+expect(screen.getByRole('switch')).toBeTruthy();
   });
 
   it('offers a conversation entry for a Host capability plugin', () => {
-    const onPrimary = vi.fn();
-    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+    const onOpenDetail = vi.fn();
+    render(
+      <GhostPluginCard
+        item={simulatorPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'iOS Simulator' }));
+    expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
-
-  it('routes the manage icon to detail without firing the primary action', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.manageAria' }));
-    expect(onManage).toHaveBeenCalledTimes(1);
-    expect(onPrimary).not.toHaveBeenCalled();
   });
 
   it('shows the update pill and keeps it from triggering the card action', () => {
-    const onPrimary = vi.fn();
+    const onOpenDetail = vi.fn();
     const onUpdate = vi.fn();
     render(
       <GhostPluginCard
         item={commandPlugin}
         updateVersion="1.1.0"
-        onPrimary={onPrimary}
-        onManage={vi.fn()}
+        onToggle={vi.fn()}
+        onOpenDetail={onOpenDetail}
         onUpdate={onUpdate}
       />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' }));
     expect(onUpdate).toHaveBeenCalledTimes(1);
-    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onOpenDetail).not.toHaveBeenCalled();
     // 有更新时不显示「已是最新」。
     expect(screen.queryByText(/upToDate/)).toBeNull();
   });
@@ -167,8 +172,8 @@ describe('GhostPluginCard', () => {
         item={commandPlugin}
         updateVersion="1.1.0"
         updateBusy
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
         onUpdate={vi.fn()}
       />,
     );
@@ -182,35 +187,21 @@ describe('GhostPluginCard', () => {
     ).toBe(true);
   });
 
-  it('sends a tool-only plugin to manage and renders no primary button', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={toolPlugin} onPrimary={onPrimary} onManage={onManage} />);
-
-    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Pure Tool' }));
-    expect(onManage).toHaveBeenCalledTimes(1);
-    expect(onPrimary).not.toHaveBeenCalled();
-  });
-
-  it('sends a disabled plugin to manage and shows no enable switch on the card', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
+  it('停用插件点击卡片同样进入详情', () => {
+    const onOpenDetail = vi.fn();
     render(
       <GhostPluginCard
         item={{ ...commandPlugin, enabled: false }}
         effectiveEnabled={false}
-        onPrimary={onPrimary}
-        onManage={onManage}
+        onToggle={vi.fn()}
+        onOpenDetail={onOpenDetail}
       />,
     );
 
-    // 启用开关收进详情页(设计定稿):卡片上不再有 switch。
-    expect(screen.queryByRole('switch')).toBeNull();
+    // 卡片上仍然有开关(允许重新启用)。
+    expect(screen.getByRole('switch')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
-    expect(onManage).toHaveBeenCalledTimes(1);
-    expect(onPrimary).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'settings.ghosts.page.manageAction' })).toBeTruthy();
+    expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
 
   it('routes projected icon failures to market recovery', () => {
@@ -222,8 +213,8 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard
         item={projected}
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
         onIconLoadError={onIconLoadError}
       />,
     );
@@ -236,8 +227,8 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard
         item={{ ...commandPlugin, id: 'lizi-mivo', name: 'Lizi Mivo' }}
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
       />,
     );
 
@@ -249,8 +240,8 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard
         item={{ ...commandPlugin, id: 'cindy-mermaid', name: 'Cindy Mermaid' }}
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
       />,
     );
 
@@ -262,7 +253,11 @@ describe('GhostPluginCard', () => {
   // ── 未读角标(badge 槽)────────────────────────────────────────────
   it('无未读时不画点,描述位仍是静态描述', () => {
     const { container } = render(
-      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
     );
     expect(container.querySelector('.session-card-dot')).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
@@ -271,7 +266,11 @@ describe('GhostPluginCard', () => {
   it('有未读时:呼吸绿点 + 摘要顶替静态描述', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, summary: '2 封新邮件', at: 1 });
     const { container } = render(
-      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
     );
     // 单条卡片走呼吸形态(session-card-dot 带呼吸关键帧),绿色走 done token。
     const dot = container.querySelector('.session-card-dot');
@@ -285,7 +284,11 @@ describe('GhostPluginCard', () => {
   it('有未读但插件没给摘要:只点亮,静态描述保留(不留空白)', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, at: 1 });
     const { container } = render(
-      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
     );
     expect(container.querySelector('.session-card-dot')).toBeTruthy();
     expect(screen.getByText('Google services')).toBeTruthy();
@@ -294,7 +297,11 @@ describe('GhostPluginCard', () => {
   it('未读只认本插件的 id:别的插件亮着不影响本卡', () => {
     __ingestGhostBadgeForTest('signoff-board', { unread: true, summary: '别人的', at: 1 });
     const { container } = render(
-      <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
+      <GhostPluginCard
+        item={commandPlugin}
+        onToggle={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
     );
     expect(container.querySelector('.session-card-dot')).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();

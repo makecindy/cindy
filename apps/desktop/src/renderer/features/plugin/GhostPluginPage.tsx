@@ -14,19 +14,17 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowUp,
-  Bot,
   Check,
   ChevronDown,
   ChevronRight,
-  MessageCircle,
   Plus,
-  SlidersHorizontal,
   Sparkles,
   Store,
   Upload,
@@ -56,6 +54,7 @@ import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -72,6 +71,7 @@ import {
   ghostPermissionBaselineKey,
   ghostPermissionItems,
   isOfficialGhostId,
+  type GhostSetupProfile,
   type GhostSetupStatus,
   type InstalledGhost,
 } from '../../../shared/ghost';
@@ -435,6 +435,29 @@ export function GhostPluginPage() {
       }),
     [],
   );
+  // ── 插件列表授权状态批量查询(卡片开关颜色 + 账号名展示) ──
+  const [setupProfiles, setSetupProfiles] = useState<Record<string, GhostSetupProfile>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const ids = ghosts.map((ghost) => ghost.manifest.id);
+    if (ids.length === 0) {
+      setSetupProfiles({});
+      return;
+    }
+    void window.electronAPI.ghosts
+      .setupProfiles(ids)
+      .then((result) => {
+        if (cancelled) return;
+        setSetupProfiles(result as Record<string, GhostSetupProfile>);
+      })
+      .catch(() => {
+        // 查询失败不阻塞列表渲染;卡片回退到默认颜色。
+        if (!cancelled) setSetupProfiles({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ghosts]);
   useEffect(() => {
     legacyRecoveryStatusRequestRef.current += 1;
     legacyRecoveryRetryRequestRef.current += 1;
@@ -506,15 +529,19 @@ export function GhostPluginPage() {
         .map((ghost) => {
           const marketItem = marketByGhostId.get(ghost.manifest.id) ?? null;
           const presentation = marketPresentationForInstalledGhost(ghost, marketItem);
+          const profile = setupProfiles[ghost.manifest.id];
           return {
             ...toGhostPluginListItem(ghost, presentation),
+            hasSetupRequirements: profile?.hasSetupRequirements ?? false,
+            setupReady: profile?.setupReady ?? true,
+            setupState: profile?.setupState ?? 'ready',
             origin: pluginPresentationOrigin(marketItem),
             // 同版本展示刷新由 main 标成 installed;legacy-unresolved 仍保留
             // update-available,以便用户用市场包替换未验证的本地字节。
             marketUpdate: pluginUpdateForInstalledVersion(marketItem),
           };
         }),
-    [ghosts, marketByGhostId],
+    [ghosts, marketByGhostId, setupProfiles],
   );
   const installedItems = useMemo(
     () =>
@@ -1459,8 +1486,8 @@ export function GhostPluginPage() {
                           item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                         }
                         effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                        onPrimary={() => handlePrimaryAction(item)}
-                        onManage={() => setSelectedId(item.id)}
+                        onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
+                        onOpenDetail={() => setSelectedId(item.id)}
                         onIconLoadError={handleMarketIconLoadError}
                       />
                     ))}
@@ -1487,8 +1514,8 @@ export function GhostPluginPage() {
                               item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                             }
                             effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
-                            onPrimary={() => handlePrimaryAction(item)}
-                            onManage={() => setSelectedId(item.id)}
+                            onToggle={(enabled) => void handleToggle(item.id, enabled, item.name)}
+                            onOpenDetail={() => setSelectedId(item.id)}
                             onIconLoadError={handleMarketIconLoadError}
                           />
                         ))}
@@ -1938,10 +1965,11 @@ function GhostPluginActions({
 }
 
 /**
- * 已安装插件卡片(设计定稿):
- * - 整卡可点 = 主动作(面板「使用」/ 指令「对话」/ 工具型与停用态进管理);
- * - 无启用开关(收进详情页);滑杆图标 = 管理入口;
- * - 更新 = 文字胶囊「更新到 vX」,无任何小圆点(绿点专职未读语义,PR-B 接入)。
+ * 已安装插件卡片(设计定稿 2026-08-06):
+ * - 整卡可点 → 进入插件详情;
+ * - 右上角:更新胶囊 + 启用开关(开关颜色:已授权/无需授权 = 绿色,未授权 = 红色);
+ * - 无设置按钮、无对话按钮(这些交互统一收进详情页);
+ * - 开关颜色按授权状态区分:已就绪=默认色,未配置=--warning-fg,过期/失败=--error-fg。
  */
 export function GhostPluginCard({
   item,
@@ -1950,8 +1978,8 @@ export function GhostPluginCard({
   updateBusy = false,
   onUpdate,
   effectiveEnabled,
-  onPrimary,
-  onManage,
+  onToggle,
+  onOpenDetail,
   onIconLoadError,
 }: {
   item: GhostPluginListItem;
@@ -1961,8 +1989,8 @@ export function GhostPluginCard({
   updateBusy?: boolean;
   onUpdate?: () => void;
   effectiveEnabled?: boolean;
-  onPrimary: () => void;
-  onManage: () => void;
+  onToggle: (enabled: boolean) => void;
+  onOpenDetail: () => void;
   onIconLoadError?: () => void;
 }) {
   const { t } = useTranslation();
@@ -1971,57 +1999,37 @@ export function GhostPluginCard({
   // 静态、单条呼吸)。有摘要时顶替静态描述:用户扫一眼就知道新内容是什么。
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
-  const primary = ghostPrimaryAction(item);
-  const cardAction = enabled && primary !== 'manage' ? onPrimary : onManage;
+
+  // 开关颜色判定(已启用时),全部走设计系统语义 token:
+  // - 已就绪/无需授权 → 不覆盖(走 Switch 默认 --switch-track-on)
+  // - 声明了需求但未配置 → --warning-fg(琥珀/橙色)
+  // - 已配置但授权过期/失败 → --error-fg(语义红)
+  const toggleTrackColor: string | undefined = (() => {
+    if (!enabled) return undefined;
+    if (!item.hasSetupRequirements) return undefined;
+    if (item.setupState === 'missing') return 'var(--warning-fg)';
+    if (item.setupState === 'failed') return 'var(--error-fg)';
+    return undefined; // ready: 不覆盖,用 Switch 默认色
+  })();
+
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    cardAction();
+    onOpenDetail();
   };
-  let primaryControl: ReactNode;
-  if (!enabled) {
-    primaryControl = (
-      <CardPillButton onClick={onManage} label={t('settings.ghosts.page.manageAction')} />
-    );
-  } else if (primary === 'panel') {
-    primaryControl = (
-      <CardPillButton
-        onClick={onPrimary}
-        label={t('settings.ghosts.page.usePanelAction')}
-        ariaLabel={t('settings.ghosts.page.useAria', { name: item.name })}
-      />
-    );
-  } else if (primary === 'command' || primary === 'capability') {
-    primaryControl = (
-      <CardPillButton
-        onClick={onPrimary}
-        icon={<MessageCircle size={13} aria-hidden="true" />}
-        label={t('settings.ghosts.page.chatAction')}
-        ariaLabel={t('settings.ghosts.page.chatAria', { name: item.name })}
-      />
-    );
-  } else {
-    primaryControl = (
-      <span className="flex items-center gap-1.5 whitespace-nowrap text-11 text-[var(--text-tertiary)]">
-        <Bot size={13} aria-hidden="true" />
-        {t('settings.ghosts.page.agentInvoked')}
-      </span>
-    );
-  }
-  return (
+return (
     <article
       role="button"
       tabIndex={0}
-      onClick={cardAction}
+      onClick={onOpenDetail}
       onKeyDown={handleCardKeyDown}
       aria-label={item.name}
       className={cn(
         'group flex min-h-[108px] w-full cursor-pointer select-none items-start gap-4 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-left',
-        'transition-[background-color,border-color,transform] duration-150 ease-out',
-        'hover:-translate-y-px hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)]',
-        'active:translate-y-0 active:scale-[0.992]',
-        'motion-reduce:transform-none motion-reduce:transition-none',
+        'transition-[background-color,border-color] duration-150 ease-out',
+        'hover:bg-[var(--surface-hover-soft)]',
+        'motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         !enabled && 'opacity-60',
       )}
@@ -2037,7 +2045,7 @@ export function GhostPluginCard({
           <span className="truncate text-15 font-medium text-[var(--text-primary)]">
             {item.name}
           </span>
-          {unread ? <AttentionDot breathing size={6} className="mt-px" /> : null}
+          {unread ? <AttentionDot breathing size={6} className="mt-px shrink-0" /> : null}
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
@@ -2062,9 +2070,9 @@ export function GhostPluginCard({
           {unreadSummary || item.description || item.id}
         </span>
       </span>
-      {/* 右列控制区:自行消费点击,不冒泡到整卡主动作(纯冒泡拦截层,无独立语义)。 */}
+      {/* 右列控制区:更新按钮 + 启用开关;自行消费点击,不冒泡到整卡。 */}
       <span
-        className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch"
+        className="flex shrink-0 flex-col items-end justify-start gap-2 self-stretch"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
@@ -2089,46 +2097,18 @@ export function GhostPluginCard({
               {t('settings.ghosts.page.updateTo', { version: updateVersion })}
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={onManage}
-            aria-label={t('settings.ghosts.page.manageAria', { name: item.name })}
-            title={t('settings.ghosts.page.manageAction')}
-            className="grid size-7 place-items-center rounded-full text-[var(--text-tertiary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          >
-            <SlidersHorizontal size={14} aria-hidden="true" />
-          </button>
+          <Switch
+            checked={enabled}
+            onCheckedChange={onToggle}
+            aria-label={t('settings.ghosts.enableAria', { name: item.name })}
+            style={
+              toggleTrackColor
+                ? ({ '--switch-track-on': toggleTrackColor } as CSSProperties)
+                : undefined
+            }
+          />
         </span>
-        {primaryControl}
       </span>
     </article>
-  );
-}
-
-function CardPillButton({
-  onClick,
-  label,
-  icon,
-  ariaLabel,
-}: {
-  onClick: () => void;
-  label: string;
-  icon?: ReactNode;
-  ariaLabel?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={ariaLabel ?? label}
-      className={cn(
-        'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
-        'transition-[background-color,transform] duration-150 hover:bg-[var(--surface-hover)] active:scale-[0.98]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-      )}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

@@ -1015,6 +1015,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:clear-unread', id, seenAt),
     /** 配置就绪检查(插件页「使用」前置门;main 现查凭证/账号/连接/kv)。 */
     setupStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('ghosts:setup-status', id),
+    /** 批量授权状态查询(插件列表卡片颜色 + 账号名展示;返回 id→GhostSetupProfile)。 */
+    setupProfiles: (ids: string[]): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke('ghosts:setup-profiles', ids),
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },

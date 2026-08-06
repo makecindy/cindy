@@ -40,6 +40,12 @@ export interface GhostPluginListItem {
   hostCapability: 'ios-simulator' | null;
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
+  /** 是否需要授权配置(有 secrets / connections / oauth 声明)。 */
+  hasSetupRequirements: boolean;
+  /** 授权是否已就绪(不需要授权的插件也为 true)。 */
+  setupReady: boolean;
+  /** 'ready' = 已就绪/无需授权, 'missing' = 声明了但未配置, 'failed' = 已配置但过期/失败。 */
+  setupState: 'ready' | 'missing' | 'failed';
 }
 
 /**
@@ -271,6 +277,9 @@ export function toGhostPluginListItem(
       publisherVerified: false,
       reviewed: false,
     },
+    hasSetupRequirements: false,
+    setupReady: true,
+    setupState: 'ready',
     ...(display.iconDataUrl !== undefined ? { iconDataUrl: display.iconDataUrl } : {}),
   };
 }
