@@ -82,6 +82,36 @@ describe('start_team tool', () => {
     });
   });
 
+  it.each(['USER_CANCELLED', 'CONFIRM_TIMEOUT'] as const)(
+    'preserves the host confirmation error %s without claiming the team started',
+    async (errorCode) => {
+      const startTeam = vi.fn().mockResolvedValue({
+        ok: false,
+        errorCode,
+        message:
+          errorCode === 'USER_CANCELLED'
+            ? '用户未确认 Worker Full access。'
+            : 'Worker Full access 确认超时。',
+      });
+      const registry = new XdtHelperToolRegistry();
+      registerStartTeamTool(registry, {
+        sessionId: 'lead-1',
+        vendorOptions: {},
+        startTeam,
+      });
+
+      const result = await registry.call('start_team', {
+        worker_permission_mode: 'bypassPermissions',
+      });
+
+      expect(parse(result)).toMatchObject({
+        ok: false,
+        errorCode,
+      });
+      expect(result.isError).toBe(true);
+    },
+  );
+
   it('omits the host override and reports Auto-review when no mode is specified', async () => {
     const startTeam = vi.fn(async () => ({
       ok: true as const,

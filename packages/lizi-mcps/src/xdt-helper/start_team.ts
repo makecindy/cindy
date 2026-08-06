@@ -27,15 +27,15 @@ export interface StartTeamDeps {
       teamId: string;
       workerPermissionMode: 'auto' | 'bypassPermissions';
       reused?: boolean;
-    }>
+    }, 'USER_CANCELLED' | 'CONFIRM_TIMEOUT'>
   >;
 }
 
 const DESCRIPTION =
   '为当前 session 创建 orca team, 进入多 worker 协同模式。' +
-  '失败码: LEAD_NOT_SUPPORTED / WORKER_CANNOT_NEST / ALREADY_ENABLED。' +
+  '失败码: LEAD_NOT_SUPPORTED / WORKER_CANNOT_NEST / ALREADY_ENABLED / USER_CANCELLED / CONFIRM_TIMEOUT。' +
   'worker_permission_mode 可选:auto(Auto-review)或 bypassPermissions(Full access);省略时沿用上次 Worker 创建偏好,首次使用默认 auto。当前 session 已是 Lead 时,必须显式指定模式才能更新默认值。' +
-  '显式指定后,它会成为 UI 与 agent tool 后续创建 Worker 的共同默认权限;不改变 Lead 自己的权限。' +
+  '显式指定后,它会成为 UI 与 agent tool 后续创建 Worker 的共同默认权限;不改变 Lead 自己的权限。从 auto 升级到 bypassPermissions 时,主机会等待用户确认;取消或超时不会更新偏好、也不会开启 team。' +
   '注:start_team 开启的是 session 级、持久、UI 可见的多 worker 协同。若用户要的是一个 subagent(一次性、用完即弃的子任务执行体),请用你自己的原生 subagent 机制(如 Codex 的 spawn_agent、Claude Code 的 Task 工具),不要为此 start_team 开协同。' +
   'Orca 协同永远不是 subagent 的替代品;你没有原生 subagent 机制时,如实告知用户并请他决定,不要拿 Orca 顶替,也不要自己起进程冒充。';
 
@@ -82,8 +82,12 @@ export function registerStartTeamTool(
         workerPermissionMode: worker_permission_mode,
       });
       if (!result.ok) {
-        if (result.errorCode === 'HOST_NOT_READY') {
-          return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程协同服务尚未就绪。`);
+        if (
+          result.errorCode === 'HOST_NOT_READY' ||
+          result.errorCode === 'USER_CANCELLED' ||
+          result.errorCode === 'CONFIRM_TIMEOUT'
+        ) {
+          return errorPayload(result.errorCode, result.message);
         }
         return errorPayload('INTERNAL', result.message);
       }

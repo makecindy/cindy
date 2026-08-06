@@ -83,7 +83,7 @@ export interface OrcaMcpDeps {
       teamId: string;
       workerPermissionMode: 'auto' | 'bypassPermissions';
       reused?: boolean;
-    }>
+    }, 'USER_CANCELLED' | 'CONFIRM_TIMEOUT'>
   >;
   /** 在 workflow 内创建新 worker session。 */
   createWorker: (params: {
